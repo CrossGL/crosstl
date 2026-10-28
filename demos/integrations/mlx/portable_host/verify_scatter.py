@@ -9,7 +9,8 @@ import unittest
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import scatter_workloads as workloads
-from demos.integrations.mlx.portable_host.gather_workloads import words
+from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
+from demos.integrations.mlx.portable_host.copy_packages import CopyPackageCache
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
@@ -18,8 +19,8 @@ from demos.integrations.mlx.portable_host.verify_gather import validate_upstream
 UPSTREAM_TESTS = ("test_array.TestArray.test_setitem_with_list",)
 
 
-def validate_records(np, records, *, native, float32=False):
-    cases = list(workloads.float_cases() if float32 else workloads.cases())
+def validate_records(np, records, *, native, profile="integer"):
+    cases = list(workloads.profile_cases(profile))
     if len(records) != len(cases):
         raise ValueError("Scatter evidence does not cover every workload")
     cursor = 0
@@ -27,7 +28,8 @@ def validate_records(np, records, *, native, float32=False):
         *_, expected = workloads.reference(np, case)
         if (
             any(record.get(key) != value for key, value in case.items())
-            or record.get("actual") != words(np, expected)
+            or record.get("actual")
+            != workloads.storage_words(np, case["dtype"], expected)
             or record.get("shape") != list(expected.shape)
             or record.get("resultDtype") != "mlx.core." + case["dtype"]
             or record.get("inputUnchanged") is not True
@@ -60,30 +62,32 @@ def worker(args):
         mx.set_default_device(mx.cpu)
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     records = []
-    for case in workloads.float_cases() if args.float32 else workloads.cases():
+    for case in workloads.profile_cases(args.profile):
         start = host.dispatch_count if host else 0
         source, result = workloads.expression(mx, np, case)
         expected_source, _, _, expected = workloads.reference(np, case)
-        actual = np.array(result)
         record = {
             **case,
-            "actual": words(np, actual),
-            "shape": list(actual.shape),
+            "actual": workloads.host_words(mx, np, result),
+            "shape": list(result.shape),
             "resultDtype": str(result.dtype),
-            "inputUnchanged": words(np, np.array(source)) == words(np, expected_source),
+            "inputUnchanged": (
+                workloads.host_words(mx, np, source)
+                == workloads.storage_words(np, case["dtype"], expected_source)
+            ),
             "dispatchStart": start,
             "dispatchCount": host.dispatch_count - start if host else 0,
         }
         records.append(record)
         (args.output_dir / "results.json").write_text(json.dumps(records, indent=2))
         if (
-            actual.shape != expected.shape
-            or record["actual"] != words(np, expected)
+            tuple(result.shape) != expected.shape
+            or record["actual"] != workloads.storage_words(np, case["dtype"], expected)
             or not record["inputUnchanged"]
         ):
             raise RuntimeError(f"Scatter numerical mismatch: {case['id']}")
         print(case["id"], flush=True)
-    validate_records(np, records, native=host is not None, float32=args.float32)
+    validate_records(np, records, native=host is not None, profile=args.profile)
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.defaultTestLoader.loadTestsFromNames(UPSTREAM_TESTS)
     start = host.dispatch_count if host else 0
@@ -129,8 +133,7 @@ def verify(args):
                 ["--" + name.replace("_", "-"), str(getattr(args, name).resolve())]
             )
         command.extend(["--output-dir", str(args.output_dir.resolve() / mode)])
-        if args.float32:
-            command.append("--float32")
+        command.extend(["--profile", args.profile])
         with (args.output_dir / f"{mode}.stdout").open("w") as stdout, (
             args.output_dir / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -144,7 +147,7 @@ def verify(args):
             (args.output_dir / mode / "results.json").read_text()
         )
         validate_records(
-            np, records[mode], native=mode == "native", float32=args.float32
+            np, records[mode], native=mode == "native", profile=args.profile
         )
         upstream[mode] = json.loads(
             (args.output_dir / mode / "upstream.json").read_text()
@@ -154,8 +157,25 @@ def verify(args):
         json.loads(line)
         for line in (args.output_dir / "native/dispatch.jsonl").read_text().splitlines()
     ]
+    index = json.loads((args.packages / "index.json").read_text(encoding="utf-8"))
+    # The base and integer64 families are installed; other copies run lazily.
+    installed = set(index["descriptors"]) | set(
+        json.loads((args.integer64 / "index.json").read_text(encoding="utf-8"))[
+            "descriptors"
+        ]
+    )
     audit = validate(
-        np, records["native"], trace, upstream["native"], float32=args.float32
+        np,
+        records["native"],
+        trace,
+        upstream["native"],
+        profile=args.profile,
+        lazy_copies=(
+            installed,
+            CopyPackageCache(
+                args.mlx_root, args.packages / COPY_CACHE, index["target"]
+            ),
+        ),
     )
     if (
         verify_prepared(args.mlx_root) != before
@@ -170,7 +190,7 @@ def verify(args):
         "upstreamTests": list(UPSTREAM_TESTS),
         "upstreamTestsPerPath": len(UPSTREAM_TESTS),
         "casesPerPath": len(records["native"]),
-        "workloadProfile": "float32" if args.float32 else "integer",
+        "workloadProfile": args.profile,
         "numericalParity": True,
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
@@ -184,6 +204,6 @@ if __name__ == "__main__":
     for name in ("mlx-root", "packages", "integer64", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--worker", choices=("cpu", "native"))
-    parser.add_argument("--float32", action="store_true")
+    parser.add_argument("--profile", choices=workloads.PROFILES, default="integer")
     args = parser.parse_args()
     worker(args) if args.worker else verify(args)

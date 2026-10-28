@@ -23,6 +23,8 @@ union Flags { uint word; bool4 lanes; };
 union FloatPair { float2 values; uint2 words; float scalars[2]; int signed_words[2]; };
 union Lanes { uint word; uchar bytes[4]; char signed_bytes[4]; ushort halves[2]; short signed_halves[2]; half floats[2]; };
 union WideLanes { uint2 words; uchar bytes[8]; };
+union BfloatLanes { uint word; bfloat values[2]; };
+typedef bfloat bfloat16_t;
 template <typename T> constexpr constant uint lanes_per_word = sizeof(uint) / sizeof(T);
 template <typename T> union Packed { T val[lanes_per_word<T>]; uint bits; };
 struct Holder { Bits values[2]; };
@@ -165,6 +167,21 @@ CASES = {
         "Packed<ushort> value; value.bits = 0x00020001u; value.val[1] = ushort(7u);",
         ["value.bits", "uint(value.val[0])"],
         [0x00070001, 1],
+    ),
+    "bfloat_lanes": (
+        "BfloatLanes value; value.word = 0x3F80C000u; uint count = 0u; value.values[next_index(count)] = bfloat(0.5f); bfloat high = value.values[1];",
+        [
+            "value.word",
+            "uint(float(high) * 8.0f)",
+            "as_type<uint>(float(value.values[0]))",
+            "count",
+        ],
+        [0x3F803F00, 8, 0x3F000000, 1],
+    ),
+    "bfloat_template_lanes": (
+        "Packed<bfloat16_t> value; value.bits = 0x3F80C000u; value.val[0] = value.val[0] + value.val[1]; bfloat16_t chained = value.val[1] = bfloat16_t(-0.25f);",
+        ["value.bits", "as_type<uint>(float(chained))"],
+        [0xBE80BF80, 0xBE800000],
     ),
     "member_pointer_views": (
         "Lanes lanes; lanes.word = 0x04030201u; bump_word(&lanes.word); WordBox box; box.bits = 5u; box.other = 9u; bump_word(&(box.bits));",

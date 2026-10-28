@@ -4368,6 +4368,15 @@ jobs:
           - os: xcode-27
             target: metal
             profile: float32
+          - os: windows-2025
+            target: directx
+            profile: narrow
+          - os: ubuntu-24.04
+            target: opengl
+            profile: narrow
+          - os: macos-26
+            target: metal
+            profile: narrow
     defaults:
       run:
         shell: bash
@@ -4476,7 +4485,7 @@ jobs:
           python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX general scatter verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_scatter --mlx-root mlx-upstream \
               --packages .mlx-portable-scatter/base/base/packages --integer64 .mlx-portable-scatter/base/integer64-packages \
-              ${{ matrix.profile == 'float32' && '--float32' || '' }} \
+              --profile ${{ matrix.profile }} \
               --output-dir .mlx-portable-scatter/scatter-evidence \
               2>&1 | tee .mlx-portable-scatter/scatter-verification.log
       - name: Retain general scatter execution evidence

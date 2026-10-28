@@ -7,6 +7,12 @@ as the union contract requires). Reads extract and sign- or bit-convert the
 lane; writes replace only that lane and return the stored lane value, so an
 assignment keeps its value in expression context.
 
+A bfloat16 lane holds the value's 16 storage bits. HLSL already carries a
+bfloat16 value as those bits in the low half of a ``uint``, so the lane moves
+them unchanged; GLSL carries it as the float32 whose high half they are, so
+the lane takes and restores that high half. Both are exact for every value,
+NaN payloads included.
+
 The helpers take the whole storage and the lane index once, so an index with
 side effects is evaluated exactly once.
 """
@@ -57,6 +63,7 @@ class LaneHelpers:
                 "uint16": {"uint", "uint16_t"},
                 "int16": {"int", "int16_t"},
                 "float16": {"float", "half", "float16_t"},
+                "bfloat16": {"uint"},
             }[element]
         else:
             allowed = {
@@ -65,6 +72,7 @@ class LaneHelpers:
                 "uint16": {"uint"},
                 "int16": {"int"},
                 "float16": {"float"},
+                "bfloat16": {"float"},
             }[element]
         if mapped not in allowed:
             reject(
@@ -78,6 +86,10 @@ class LaneHelpers:
             mask = "255u" if bits == 8 else "65535u"
         if element in INTEGER_ELEMENTS:
             return f"(uint(selected) & {mask})"
+        if element == "bfloat16":
+            if self.dialect == "glsl":
+                return "(floatBitsToUint(selected) >> 16u)"
+            return f"(selected & {mask})"
         if self.dialect == "glsl":
             return f"(packHalf2x16(vec2(selected, 0.0)) & {mask})"
         if mapped == "float":
@@ -93,6 +105,10 @@ class LaneHelpers:
             return signed if mapped == "int" else f"{mapped}({signed})"
         if element in INTEGER_ELEMENTS:
             return value if mapped == "uint" else f"{mapped}({value})"
+        if element == "bfloat16":
+            if self.dialect == "glsl":
+                return f"uintBitsToFloat({value} << 16u)"
+            return value
         if self.dialect == "glsl":
             return f"unpackHalf2x16({value}).x"
         if mapped == "float":

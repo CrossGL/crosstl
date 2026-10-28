@@ -96,6 +96,9 @@ def test_float_scatter_requires_distinct_native_ci_profiles():
         ("metal", "float32"),
         ("directx", "float32"),
         ("opengl", "float32"),
+        ("metal", "narrow"),
+        ("directx", "narrow"),
+        ("opengl", "narrow"),
     }
     assert (
         next(
@@ -108,7 +111,7 @@ def test_float_scatter_requires_distinct_native_ci_profiles():
     steps = {step.get("name"): step for step in job["steps"]}
     assert "Xcode_27.1.app" in steps["Select float scatter Metal toolchain"]["run"]
     step = steps["Execute general scatter host operations"]
-    assert "matrix.profile == 'float32' && '--float32'" in step["run"]
+    assert "--profile ${{ matrix.profile }}" in step["run"]
     assert "if" not in step and "continue-on-error" not in step
     upload = steps["Retain general scatter execution evidence"]
     assert "matrix.profile" in upload["with"]["name"]
@@ -136,11 +139,13 @@ def test_float_scatter_records_require_the_complete_profile(native):
                 "dispatchCount": int(native),
             }
         )
-    verify_scatter.validate_records(np, records, native=native, float32=True)
+    verify_scatter.validate_records(np, records, native=native, profile="float32")
     with pytest.raises(ValueError):
         verify_scatter.validate_records(np, records, native=native)
     with pytest.raises(ValueError):
-        verify_scatter.validate_records(np, records[:-1], native=native, float32=True)
+        verify_scatter.validate_records(
+            np, records[:-1], native=native, profile="float32"
+        )
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["id"])

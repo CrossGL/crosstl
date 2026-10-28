@@ -8,11 +8,15 @@
 // slabs that rebase the index and update views; each slab takes MLX's
 // work-per-thread choice for its own rows.
 //
-// Native atomics apply contending updates in an unspecified order. A float32
-// sum that some order would round is therefore issued as successive launches
-// whose rows never share a destination, so every destination receives its
-// updates in index order, as the CPU reference applies them. Every other
-// contention keeps MLX's single launch.
+// The 8- and 16-bit element types update one lane of a packed atomic word,
+// as MLX's mlx_atomic<T> does, so the host carries their destinations as
+// those words.
+//
+// Native atomics apply contending updates in an unspecified order. A float32,
+// float16 or bfloat16 sum that some order would round is therefore issued as
+// successive launches whose rows never share a destination, so every
+// destination receives its updates in index order, as the CPU reference
+// applies them. Every other contention keeps MLX's single launch.
 
 #include <cstring>
 #include <unordered_map>
@@ -69,10 +73,14 @@ int64_t scatter_index(const array& index, uint64_t row, int64_t extent) {
   }
 }
 
-// Whether a float32 sum is exact in every order. Every finite float32 is an
-// integer multiple of 2^-149; when the terms share a coarser power-of-two step
-// and their magnitudes sum to fewer than 2^24 steps, no partial sum rounds.
-bool exact_in_every_order(const std::vector<float>& terms) {
+// Whether a sum in a binary floating type of ``precision`` significand bits
+// is exact in every order. Every term is a finite value of that type held
+// exactly as a float32, so it is an integer multiple of the type's smallest
+// step; when the terms share a coarser power-of-two step and their magnitudes
+// sum to fewer than 2^precision steps, no partial sum rounds. No partial sum
+// overflows either: such a sum is at most the type's largest finite value,
+// because no term's step exceeds the step of that value.
+bool exact_in_every_order(const std::vector<float>& terms, int precision = 24) {
   std::vector<std::pair<uint32_t, int>> parts;
   int step = std::numeric_limits<int>::max();
   for (const float value : terms) {
@@ -92,11 +100,11 @@ bool exact_in_every_order(const std::vector<float>& terms) {
   uint64_t total = 0;
   for (const auto& [mantissa, exponent] : parts) {
     const int shift = exponent - step;
-    if (shift >= 24) {
+    if (shift >= precision) {
       return false;
     }
     total += shift >= 0 ? uint64_t(mantissa) << shift : mantissa >> -shift;
-    if (total >= (uint64_t(1) << 24)) {
+    if (total >= (uint64_t(1) << precision)) {
       return false;
     }
   }
@@ -138,18 +146,20 @@ class ScatterDestinations {
   const std::vector<int32_t>& slices_;
 };
 
-// Whether native contention could land a float32 sum differently from the
+// Whether native contention could land a sum of T differently from the
 // index-order reference.
+template <typename T>
 bool scatter_order_dependent(
     const ScatterDestinations& destinations,
     const array& updates,
     const array& out,
     uint64_t rows,
-    uint64_t slice_size) {
+    uint64_t slice_size,
+    int precision) {
   std::unordered_map<int64_t, std::vector<float>> terms;
   bool contended = false;
-  const float* initial = out.data<float>();
-  const float* data = updates.data<float>();
+  const T* initial = out.data<T>();
+  const T* data = updates.data<T>();
   for (uint64_t row = 0; row < rows; ++row) {
     const int64_t base = destinations.base(row);
     for (uint64_t element = 0; element < slice_size; ++element) {
@@ -160,7 +170,7 @@ bool scatter_order_dependent(
       }
       auto [slot, inserted] = terms.try_emplace(destination);
       if (inserted) {
-        slot->second.push_back(initial[destination]);
+        slot->second.push_back(static_cast<float>(initial[destination]));
       }
       // elem_to_loc of the flat update element over the update view.
       uint64_t flat = row * slice_size + element;
@@ -169,7 +179,7 @@ bool scatter_order_dependent(
         location += int64_t(flat % updates.shape(axis)) * updates.strides()[axis];
         flat /= updates.shape(axis);
       }
-      slot->second.push_back(data[location]);
+      slot->second.push_back(static_cast<float>(data[location]));
       contended = contended || slot->second.size() > 2;
     }
   }
@@ -177,11 +187,49 @@ bool scatter_order_dependent(
     return false;
   }
   for (const auto& [destination, sums] : terms) {
-    if (sums.size() > 2 && !exact_in_every_order(sums)) {
+    if (sums.size() > 2 && !exact_in_every_order(sums, precision)) {
       return true;
     }
   }
   return false;
+}
+
+// Whether a floating sum must run in index order; integer sums wrap and
+// every other operation is independent of the order.
+bool scatter_sum_order_dependent(
+    const ScatterDestinations& destinations,
+    const array& updates,
+    const array& out,
+    uint64_t rows,
+    uint64_t slice_size) {
+  switch (out.dtype()) {
+    case float32:
+      return scatter_order_dependent<float>(destinations, updates, out, rows, slice_size, 24);
+    case float16:
+      return scatter_order_dependent<float16_t>(destinations, updates, out, rows, slice_size, 11);
+    case bfloat16:
+      return scatter_order_dependent<bfloat16_t>(destinations, updates, out, rows, slice_size, 8);
+    default:
+      return false;
+  }
+}
+
+// Whether ``dtype`` is an element type the host's scatter specializations carry.
+bool scatter_value_type(Dtype dtype) {
+  switch (dtype) {
+    case int32:
+    case uint32:
+    case float32:
+    case uint8:
+    case int8:
+    case uint16:
+    case int16:
+    case float16:
+    case bfloat16:
+      return true;
+    default:
+      return false;
+  }
 }
 
 // Rectangular slabs of at most max_scatter_rows rows.
@@ -241,13 +289,15 @@ std::vector<ScatterTile> scatter_runs(
 void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   if (inputs.size() < 3 || inputs.size() > 12 || axes_.size() != inputs.size() - 2 ||
-      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32) ||
+      !scatter_value_type(out.dtype()) ||
       inputs[0].dtype() != out.dtype() || inputs.back().dtype() != out.dtype() ||
       inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
       out.size() > max_scatter_storage || inputs.back().size() > max_scatter_storage ||
       (reduce_type_ != None && reduce_type_ != Sum && reduce_type_ != Prod &&
        reduce_type_ != Min && reduce_type_ != Max)) {
-    throw std::invalid_argument("CrossTL scatter requires bounded int32, uint32 or float32 indexed updates.");
+    throw std::invalid_argument(
+        "CrossTL scatter requires bounded indexed updates of 8-, 16- or 32-bit "
+        "integers, float16, bfloat16 or float32.");
   }
   const auto index_dtype = inputs[1].dtype();
   if (index_dtype != int32 && index_dtype != uint32 &&
@@ -317,16 +367,15 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   const std::vector<int> index_shape(inputs[1].shape().begin(), inputs[1].shape().end());
   const std::vector<int32_t> slices(update_shape.begin() + index_rank, update_shape.end());
   const ScatterDestinations destinations(indices, axes_, out, slices);
-  const bool ordered = index_rank > 0 && idx_size > 1 && out.dtype() == float32 &&
-      reduce_type_ == Sum &&
-      scatter_order_dependent(destinations, upd, out, idx_size, upd_size);
+  const bool ordered = index_rank > 0 && idx_size > 1 && reduce_type_ == Sum &&
+      scatter_sum_order_dependent(destinations, upd, out, idx_size, upd_size);
   const auto tiles = ordered ? scatter_runs(destinations, index_shape, idx_size, upd_size)
                              : scatter_slabs(index_shape, idx_size);
   int32_t idx_ndim = index_rank;
   uint64_t tile_size = idx_size;
   std::vector<CrosstlMlxBuffer> buffers = {
-      {"updates", storage_type(upd.dtype()), const_cast<void*>(upd.data<void>()), update_span, 0},
-      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
+      {"updates", cast_type(upd.dtype()), const_cast<void*>(upd.data<void>()), update_span, 0},
+      {"out", cast_type(out.dtype()), out.data<void>(), out.size(), 1},
       {"upd_shape", "int32", update_shape.data(), update_shape.size(), 0},
       {"upd_strides", "int64", update_strides.data(), update_strides.size(), 0},
       {"upd_ndim", "uint64", &upd_ndim, 1, 0},
@@ -398,7 +447,7 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
       buffers[0].count = span;
     }
     const int work = scatter_work(index_rank, tile_size, out.size());
-    const std::string entry = std::string("scatter") + storage_type(out.dtype()) +
+    const std::string entry = std::string("scatter") + cast_type(out.dtype()) +
         storage_type(index_dtype) + "_" + operation + "_" + std::to_string(count) +
         "_updc_" + (upd.flags().row_contiguous ? "true" : "false") +
         "_nwork" + std::to_string(work) + "_int";
