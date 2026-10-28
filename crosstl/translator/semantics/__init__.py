@@ -106,6 +106,7 @@ from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
@@ -315,7 +316,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     Row-major struct members are stored as their column-major transpose, with every use rewritten, for targets
-    whose structs cannot carry a matrix layout (:mod:`.row_major_members`).
+    whose structs cannot carry a matrix layout (:mod:`.row_major_members`), and so are the row-major members of
+    Metal's unmarked constant blocks (:mod:`.row_major_constant_members`).
     Mutable stage-scope values become module-scope ``static`` variables for the targets that declare per-invocation
     storage at module scope (:mod:`.stage_private_variables`).
     For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
@@ -358,6 +360,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
     store_row_major_members_transposed(program, report.target)
+    store_row_major_constant_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
