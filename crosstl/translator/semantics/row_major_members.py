@@ -20,7 +20,8 @@ struct keeps its bytes:
 Uses the rewrite cannot keep exact raise :class:`RowMajorMemberError`: a write to a column or to components of one,
 a matrix or column passed to an ``out``, ``inout`` or reference parameter, an array member used without selecting
 one matrix, and a write through an object or index with side effects. Constant buffer members keep the row-major
-handling of each generator and are left alone. HLSL and Slang declare ``row_major`` themselves, so for them only the
+handling of each generator and are left alone, except on Metal, whose unmarked constant blocks
+:mod:`.row_major_constant_members` stores the same way. HLSL and Slang declare ``row_major`` themselves, so for them only the
 types of GLSL buffer blocks, which their generators lower to byte-address buffers read column by column, change.
 """
 
@@ -289,7 +290,7 @@ class _Rewriter:
             node = node.array_expr
         if isinstance(node, A.PointerAccessNode):
             node.pointer_expr = self.expression(node.pointer_expr)
-        else:
+        elif isinstance(node, A.MemberAccessNode):
             node.object_expr = node.object = self.expression(node.object_expr)
 
     def expression(self, node):
