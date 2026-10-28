@@ -49,6 +49,7 @@ from .array_utils import (
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
 from .c_float_literals import c_float_literal_text
+from .c_pointer_math import generate_pointer_math_call
 from .c_reference_parameters import (
     is_output_parameter,
     multi_component_swizzle_arguments,
@@ -4341,6 +4342,12 @@ class HipCodeGen(
         if is_user_function:
             args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
+
+        pointer_math_call = generate_pointer_math_call(
+            self, HipLoweringRefused, func_name, raw_args, args
+        )
+        if pointer_math_call is not None:
+            return pointer_math_call
 
         library_call = generate_hip_library_call(self, func_name, raw_args, args)
         if library_call is not None:

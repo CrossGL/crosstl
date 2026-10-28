@@ -21,6 +21,7 @@ from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .binding_constants import BindingIndexUnresolvedError, fold_binding_constants
+from .boolean_reductions import lower_boolean_reductions
 from .buffer_strides import materialize_buffer_strides
 from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
@@ -268,7 +269,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
     structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
-    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V,
+    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For GLSL, WGSL and MSL, ``any``
+    and ``all`` of a numeric vector reduce its conversion to a boolean vector, and of a scalar become the scalar
+    converted to ``bool`` (:mod:`.boolean_reductions`). For OpenGL, SPIR-V,
     Metal, CUDA and HIP, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
@@ -373,6 +376,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     expand_scalar_swizzles(program)
     lower_aggregate_equality(program, report.target)
     lower_vector_logic(program, report.target)
+    lower_boolean_reductions(program, report.target)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
