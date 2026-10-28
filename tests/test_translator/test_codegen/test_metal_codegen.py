@@ -16900,7 +16900,8 @@ def test_void_function_return_semantics_are_rejected(stage, semantic):
     ("stage", "return_type", "semantic", "metal_semantic", "expected_type"),
     [
         ("vertex", "int", "gl_Position", "position", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "color\\(0\\)", "float4"),
+        # MSL takes any scalar or vector colour value, so only a bool is refused.
+        ("fragment", "bool", "gl_FragColor", "color\\(0\\)", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "depth\\(any\\)", "float"),
         ("fragment", "int", "gl_SampleMask", "sample_mask", "uint"),
     ],
@@ -16909,6 +16910,7 @@ def test_function_return_builtin_types_are_validated(
     stage, return_type, semantic, metal_semantic, expected_type
 ):
     value = {
+        "bool": "true",
         "int": "0",
         "vec2": "vec2(0.0)",
         "vec3": "vec3(0.0)",
