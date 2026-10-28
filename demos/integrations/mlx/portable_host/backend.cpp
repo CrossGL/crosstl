@@ -805,12 +805,16 @@ void dispatch_column_pass(
   // The two-pass kernel counts its outputs per column; the long-column kernel
   // offsets each block's partials by the whole output.
   uint64_t out_size = long_column ? outer * reduction_stride : outer;
+  // col_reduce_longcolumn reads its stride as size_t, the other column
+  // kernels as int64_t; the bounds check above keeps it positive.
+  uint64_t long_stride = uint64_t(reduction_stride);
   out.set_data(mlx::core::allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
   CrosstlMlxBuffer buffers[] = {
       {"in", dtype, const_cast<void*>(in.data<void>()), span, 0},
       {"out", output, out.data<void>(), out.size(), 1},
       {"reduction_size", "uint64", &reduction_size, 1, 0},
-      {"reduction_stride", "int64", &reduction_stride, 1, 0},
+      long_column ? CrosstlMlxBuffer{"reduction_stride", "uint64", &long_stride, 1, 0}
+                  : CrosstlMlxBuffer{"reduction_stride", "int64", &reduction_stride, 1, 0},
       {"shape", "int32", shape.data(), shape.size(), 0},
       {"strides", "int64", strides.data(), strides.size(), 0},
       {"ndim", "int32", &ndim, 1, 0},

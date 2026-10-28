@@ -29,6 +29,9 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 )
 
 ENTRY_PREFIX = "col_reduce_longcolumn_"
+# col_reduce_longcolumn binds col_reduce_2pass's metadata, but reads the
+# reduction stride as size_t rather than int64_t.
+LONG_COLUMN = {**TWO_PASS, "reduction_stride": "uint64"}
 # reduce.metal instantiates the long-column kernel beside col_reduce_small for
 # every type; these are the float32, int32, uint32, Boolean and 16-bit float
 # ones the looped and two-pass column passes also run. 16-bit floats
@@ -50,7 +53,7 @@ SEPARATOR = "@"
 def signature(entry):
     if entry not in LONG_COLUMN_ENTRIES:
         raise ValueError("Unsupported long column reduction entry")
-    return TWO_PASS
+    return LONG_COLUMN
 
 
 def outer_blocks(total):

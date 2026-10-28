@@ -36,7 +36,7 @@ def _buffers(rows=1024, columns=3, outer=2, dimension=1, *, partials=None):
         "in": ("float32", [1.0] * extent),
         "out": ("float32", [0.0] * (outer * columns * blocks)),
         "reduction_size": ("uint64", [rows]),
-        "reduction_stride": ("int64", [columns]),
+        "reduction_stride": ("uint64", [columns]),
         "shape": ("int32", [outer]),
         "strides": ("int64", [span]),
         "ndim": ("int32", [1]),
@@ -195,3 +195,17 @@ def test_backend_runs_the_long_column_plan_and_its_second_pass():
     assert '"col_reduce_longcolumn_"' in source
     assert "total >= 32768 ? 128 : 32" in source
     assert "ColumnPass::LongColumn" in source
+
+
+def test_long_column_binds_its_reduction_stride_as_size_t():
+    # reduce_col.h declares col_reduce_longcolumn's reduction_stride as
+    # size_t and col_reduce_2pass's as int64_t; the native runtime refuses a
+    # binding whose type differs from the reflected one.
+    entry = next(iter(column_long_layout.LONG_COLUMN_ENTRIES))
+    assert column_long_layout.signature(entry)["reduction_stride"] == "uint64"
+    assert column_long_layout.TWO_PASS["reduction_stride"] == "int64"
+    source = (HOST / "backend.cpp").read_text()
+    assert re.search(
+        r'long_column \? CrosstlMlxBuffer\{"reduction_stride", "uint64", &long_stride',
+        source,
+    )
