@@ -28,7 +28,35 @@ CASES = (
     "index-shadow",
     "readonly",
     "direct",
+    "kernel-readonly",
+    "kernel-mutable",
+    "kernel-loop",
+    "kernel-nested",
 )
+# Bindings in the entry point itself rather than in a member function.
+KERNEL_CALLS = {
+    # A const view of writable storage observes later writes and keeps the
+    # element selected at the binding.
+    "kernel-readonly": (
+        "uint index = 1u; thread const auto& view = engine.tile.at(index); "
+        "index = 0u; engine.tile.fragments[1][0] += 3u; "
+        "engine.tile.fragments[1][1] = view[1] * 3u; "
+        "engine.seen = view[0] - 3u + index;"
+    ),
+    "kernel-mutable": (
+        "uint index = 1u; thread auto& accum = engine.tile.at(index); "
+        "index = 0u; accum[0] += 3u; accum[1] *= 3u; engine.seen = index;"
+    ),
+    "kernel-loop": (
+        "for (short i = 0; i < 2; i++) { "
+        "thread const auto& view = engine.tile.at(i); "
+        "for (short k = 0; k < 2; k++) { engine.seen += view[k]; } }"
+    ),
+    "kernel-nested": (
+        "uint index = 1u; thread const auto& view = engine.holder.tile.at(index); "
+        "index = 0u; engine.seen = view[0] + view[1] + index;"
+    ),
+}
 INPUTS = (0, 11, 0xFFFFFFFF, 0x80000000, 0x89ABCDEF)
 GUARD = [0x58A5B6C7] * 4
 
@@ -50,7 +78,7 @@ def _source(case):
         after_binding = "index = 0u;"
     if case == "side-effect":
         argument = "index++"
-    if case == "nested":
+    if case in ("nested", "kernel-nested"):
         members = "Holder holder;"
         receiver = "holder.tile"
     if case == "field-index":
@@ -92,6 +120,8 @@ def _source(case):
         call = "engine.seen = engine.update(3u);"
     if case == "direct":
         body = "tile.at(1u)[0] += uint(delta); tile.at(1u)[1] *= 3u; seen = 1u;"
+    if case in KERNEL_CALLS:
+        call = KERNEL_CALLS[case]
     return f"""#include <metal_stdlib>
 using namespace metal;
 struct Tile {{
@@ -141,6 +171,14 @@ def _expected(case, initial):
         other_first, other_second, seen = 102, 303, 2
     if case == "readonly":
         first, second, seen = initial, 7, initial + 10
+    if case == "kernel-readonly":
+        seen = initial
+    if case == "kernel-mutable":
+        seen = 0
+    if case == "kernel-loop":
+        first, second, seen = initial, 7, initial + 207
+    if case == "kernel-nested":
+        first, second, seen = initial, 7, initial + 7
     return [
         value & 0xFFFFFFFF for value in (first, second, other_first, other_second, seen)
     ]
@@ -252,6 +290,24 @@ def test_reference_capture_rejects_unproven_alias_uses(operation):
     source = _source("stable").replace(
         "accum[0] += uint(delta); accum[1] *= 3u;", operation
     )
+    with pytest.raises(MetalStructMethodError) as error:
+        MetalPreprocessor().preprocess(source)
+    assert error.value.missing_capabilities == ("struct.reference-return",)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    (
+        "thread const uint2* escaped = &view; engine.seen = (*escaped)[0];",
+        "view[0] += 1u;",
+        "{ uint2 view = uint2(0); engine.seen = view[0]; }",
+    ),
+)
+def test_entry_reference_capture_rejects_unproven_alias_uses(operation):
+    source = _source("kernel-loop").replace(
+        "for (short k = 0; k < 2; k++) { engine.seen += view[k]; }", operation
+    )
+    assert operation in source
     with pytest.raises(MetalStructMethodError) as error:
         MetalPreprocessor().preprocess(source)
     assert error.value.missing_capabilities == ("struct.reference-return",)

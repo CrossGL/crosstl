@@ -667,7 +667,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
     ]
     assert deadlines == [
         1800,
-        4000,
+        3500,
         900,
         1200,
         600,
@@ -680,6 +680,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
         600,
         600,
         2200,
+        1680,
     ]
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60
     triggers = workflow.get("on", workflow.get(True))
