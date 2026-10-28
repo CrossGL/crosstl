@@ -22430,6 +22430,7 @@ class GLSLCodeGen(
             or mapped_type == "sampler"
             or self.is_opaque_resource_type(mapped_type)
             or self.is_structured_buffer_type(vtype)
+            or self.is_constant_buffer_type(vtype)
             or self.is_glsl_buffer_block_variable(node, vtype)
         )
 

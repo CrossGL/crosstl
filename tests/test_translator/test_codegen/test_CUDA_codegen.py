@@ -249,7 +249,7 @@ class TestCudaCodeGen:
 
         assert "const float PI = 3.14159f;" in cuda_code
         assert "const int WARP_SIZE = 32;" in cuda_code
-        assert "const float3 UP_VECTOR = make_float3(0.0f, 1.0f, 0.0f);" in cuda_code
+        assert "__device__ const float3 UP_VECTOR = {0.0f, 1.0f, 0.0f};" in cuda_code
         assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in cuda_code
 
     def test_compute_shader_to_kernel(self):
@@ -10116,35 +10116,35 @@ class TestCudaCodeGen:
             if line.strip().endswith(";")
         }
 
-        assert "cudaTextureObject_t linearState;" in declarations
-        assert "cudaTextureObject_t ramp;" in declarations
-        assert "cudaTextureObject_t colorMap;" in declarations
-        assert "cudaTextureObject_t volumeMap;" in declarations
-        assert "cudaTextureObject_t environmentMap;" in declarations
-        assert "cudaTextureObject_t layers;" in declarations
-        assert "cudaTextureObject_t shadowMap;" in declarations
-        assert "cudaTextureObject_t cascades;" in declarations
-        assert "cudaTextureObject_t cubeShadow;" in declarations
-        assert "cudaTextureObject_t probes;" in declarations
-        assert "cudaTextureObject_t shadowProbes;" in declarations
-        assert "cudaTextureObject_t msTex;" in declarations
-        assert "cudaTextureObject_t msArray;" in declarations
-        assert "cudaSurfaceObject_t signedImage;" in declarations
-        assert "cudaSurfaceObject_t signedVolume;" in declarations
-        assert "cudaSurfaceObject_t signedLayers;" in declarations
-        assert "cudaSurfaceObject_t signedMs;" in declarations
-        assert "cudaSurfaceObject_t signedMsLayers;" in declarations
-        assert "cudaSurfaceObject_t unsignedImage;" in declarations
-        assert "cudaSurfaceObject_t unsignedVolume;" in declarations
-        assert "cudaSurfaceObject_t unsignedLayers;" in declarations
-        assert "cudaSurfaceObject_t unsignedMs;" in declarations
-        assert "cudaSurfaceObject_t unsignedMsLayers;" in declarations
-        assert "cudaSurfaceObject_t outputImage;" in declarations
-        assert "cudaSurfaceObject_t volumeImage;" in declarations
-        assert "cudaSurfaceObject_t cubeImage;" in declarations
-        assert "cudaSurfaceObject_t layerImage;" in declarations
-        assert "cudaSurfaceObject_t outputMs;" in declarations
-        assert "cudaSurfaceObject_t layerMs;" in declarations
+        assert "__device__ cudaTextureObject_t linearState;" in declarations
+        assert "__device__ cudaTextureObject_t ramp;" in declarations
+        assert "__device__ cudaTextureObject_t colorMap;" in declarations
+        assert "__device__ cudaTextureObject_t volumeMap;" in declarations
+        assert "__device__ cudaTextureObject_t environmentMap;" in declarations
+        assert "__device__ cudaTextureObject_t layers;" in declarations
+        assert "__device__ cudaTextureObject_t shadowMap;" in declarations
+        assert "__device__ cudaTextureObject_t cascades;" in declarations
+        assert "__device__ cudaTextureObject_t cubeShadow;" in declarations
+        assert "__device__ cudaTextureObject_t probes;" in declarations
+        assert "__device__ cudaTextureObject_t shadowProbes;" in declarations
+        assert "__device__ cudaTextureObject_t msTex;" in declarations
+        assert "__device__ cudaTextureObject_t msArray;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedVolume;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedMsLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedVolume;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedMsLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t outputImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t volumeImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t cubeImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t layerImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t outputMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t layerMs;" in declarations
 
         raw_resource_types = [
             "sampler",
