@@ -509,6 +509,51 @@ def test_uniform_bool_probes_store_each_boolean_in_a_32_bit_word():
         assert "uniform-bool" in names and "uniform-bool-vector" not in names, language
 
 
+def test_packing_probes_name_the_layout_rule_and_declare_its_offsets():
+    for name, rule in (
+        ("uniform-std140-vector", "std140"),
+        ("uniform-cbuffer-vector", "hlsl_cbuffer"),
+        ("uniform-std140-array", "std140"),
+    ):
+        crossgl = probes.build(_feature("glsl", name), "crossgl").source
+        assert f"cbuffer Params @binding(3) @buffer_layout({rule}) {{" in crossgl, name
+    # slangc lays out a plain cbuffer by std140 for SPIR-V, so HLSL and Slang name every member's offset.
+    for language in ("hlsl", "slang"):
+        std140 = probes.build(_feature(language, "uniform-std140-vector"), language)
+        assert (
+            "float3 b : packoffset(c1);\n    float c : packoffset(c1.w);"
+            in std140.source
+        )
+        cbuffer = probes.build(_feature(language, "uniform-cbuffer-vector"), language)
+        assert (
+            "float3 b : packoffset(c0.y);\n    float c : packoffset(c1);"
+            in cbuffer.source
+        )
+        array = probes.build(_feature(language, "uniform-std140-array"), language)
+        assert "float d : packoffset(c2);" in array.source
+    # No GLSL, WGSL or OpenCL C rule puts a three-component vector at offset 4, so those declare its components.
+    for language, member, build in (
+        ("glsl", "float b0;", "vec3 b = vec3(b0, b1, b2);"),
+        ("wgsl", "b0: f32,", "let b = vec3<f32>(params.b0, params.b1, params.b2);"),
+        (
+            "opencl",
+            "float b0;",
+            "float3 b = (float3)(params.b0, params.b1, params.b2);",
+        ),
+    ):
+        source = probes.build(_feature(language, "uniform-cbuffer-vector"), language)
+        assert member in source.source and build in source.source, language
+    # The languages without std140 rules declare its padding.
+    for language, padded in (
+        ("metal", "float pad2;\n    packed_float3 b;"),
+        ("cuda", "float pad2;\n    float3 b;"),
+        ("rust", "pad2: f32,\n    b: Vec3,"),
+        ("mojo", "var pad2: Float32\n    var b0: Float32"),
+    ):
+        source = probes.build(_feature(language, "uniform-std140-vector"), language)
+        assert padded in source.source and "pad3" in source.source, language
+
+
 def test_uniform_integer_probes_keep_each_member_s_signedness_in_every_language():
     crossgl = probes.build(_feature("glsl", "uniform-integer"), "crossgl").source
     assert "cbuffer Params @binding(3) {\n        int n0;" in crossgl

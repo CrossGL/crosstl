@@ -33,6 +33,7 @@ from .integers import WEBGL as _INTEGERS
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
+from .packing import WEBGL as _PACKING
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
@@ -101,6 +102,7 @@ WEBGL = {
     **_INTEGERS,
     **_COLUMNS,
     **_BOOLEANS,
+    **_PACKING,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

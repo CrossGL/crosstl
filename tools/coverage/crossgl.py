@@ -66,6 +66,7 @@ from .templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
 from .templates.lexical import FILL, SPREAD4, reserved
+from .templates.packing import CROSSGL as PACKING_CROSSGL
 from .templates.portability import FAMILY as PORTABILITY
 from .templates.portability import (
     GLSL_ARRAY,
@@ -613,6 +614,7 @@ CONSTRUCTS: dict[str, Template] = {
     **INTEGERS_CROSSGL,
     **COLUMNS_CROSSGL,
     **BOOLEANS_CROSSGL,
+    **PACKING_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

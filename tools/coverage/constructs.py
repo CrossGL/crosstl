@@ -569,6 +569,24 @@ def _curated() -> list[Construct]:
             "OpINotEqual",
             "OpTypeBool",
         ),
+        c(
+            "resource",
+            "uniform-std140-vector",
+            "StorageClass.Uniform",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-cbuffer-vector",
+            "StorageClass.Uniform",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-std140-array",
+            "StorageClass.Uniform",
+            "Decoration.ArrayStride",
+        ),
     ]
 
 
