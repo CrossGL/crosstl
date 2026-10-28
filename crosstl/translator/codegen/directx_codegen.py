@@ -165,6 +165,12 @@ from .builtin_result_types import (
 )
 from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
+from .comma_expressions import (
+    c_family_comma_expression,
+    comma_result_operand,
+    is_comma_expression,
+    split_comma_initializer,
+)
 from .constant_guards import (
     constant_bool_locals,
     constant_branch_guards,
@@ -267,6 +273,13 @@ from .hlsl_bfloat16_vectors import (
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
+from .hlsl_extension_builtins import (
+    HLSL_GLSL_SYSTEM_VALUES,
+    HLSL_NOPERSPECTIVE_BARYCENTRICS,
+    hlsl_builtin_input_parameter,
+    hlsl_stage_builtin_read,
+    refuse_unmapped_hlsl_builtin,
+)
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
@@ -284,6 +297,11 @@ from .hlsl_ray_queries import (
 )
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_render_targets import is_render_target_value_type
+from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
+from .hlsl_storage_array_views import (
+    storage_array_pointer_type,
+    view_storage_array_parameters,
+)
 from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
@@ -503,6 +521,7 @@ from .pointer_reinterpret import (
     same_scalar_lane_view,
     scalar_storage_layout,
 )
+from .private_member_views import hlsl_aliased_scalar_view, hlsl_member_view_root
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases, references_provably_disjoint
 from .relational_builtins import lower_relational_builtins
@@ -578,7 +597,12 @@ from .texture_residency import (
     TEXTURE_RESIDENT_OPERATION,
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
-from .union_layout import UnionLayoutCollector
+from .union_lanes import (
+    hlsl_lane_call,
+    hlsl_lane_helper_definitions,
+    hlsl_lane_helpers,
+)
+from .union_layout import UnionLayoutCollector, is_lane_kind
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 # Specialization contract for a workgroup pointer parameter bound to ``nullptr``.
@@ -1736,6 +1760,7 @@ class _DirectXResourceRegisterAllocator(dict):
 class HLSLCodeGen(
     HlslGlslBlockRegisters,
     HLSLNarrowIntegerMixin,
+    HLSLResourceAccessVariantsMixin,
     LoweringRefusalMixin,
     HLSLBfloat16Vectors,
 ):
@@ -2552,6 +2577,7 @@ class HLSLCodeGen(
         self.function_hlsl_resource_pointer_array_parameter_indices = {}
         self.function_hlsl_resource_pointer_array_mutated_parameters = {}
         self.hlsl_resource_pointer_analysis_call_source_types = {}
+        self.hlsl_view_storage_array_parameters = {}
         self.hlsl_omitted_resource_pointer_parameter_keys = set()
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
@@ -3037,6 +3063,7 @@ class HLSLCodeGen(
             "hit_attribute": "hit_attribute",
             "callable_data": "callable_data",
             "shader_record": "shader_record",
+            **HLSL_GLSL_SYSTEM_VALUES,
         }
 
     def normalize_directx_target_profile(self, target_profile):
@@ -3577,7 +3604,7 @@ class HLSLCodeGen(
             ast,
         )
         try:
-            code = self.generate_hlsl_program_with_narrow_pointer_layouts(
+            code = self.generate_hlsl_program_with_resource_access_variants(
                 ast, target_stage
             )
         finally:
@@ -3949,6 +3976,7 @@ class HLSLCodeGen(
         self.function_hlsl_resource_pointer_array_parameter_indices = {}
         self.function_hlsl_resource_pointer_array_mutated_parameters = {}
         self.hlsl_resource_pointer_analysis_call_source_types = {}
+        self.hlsl_view_storage_array_parameters = {}
         self.hlsl_omitted_resource_pointer_parameter_keys = set()
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
@@ -4223,6 +4251,10 @@ class HLSLCodeGen(
             self.collect_hlsl_struct_buffer_resource_types(global_vars)
         )
         self.global_variable_types = self.collect_global_variable_types(global_vars)
+        for constant in getattr(ast, "constants", []) or []:
+            constant_type = self.type_name_string(getattr(constant, "const_type", None))
+            if getattr(constant, "name", None) and constant_type:
+                self.global_variable_types.setdefault(constant.name, constant_type)
         self.global_variable_types.update(self.directx_specialization_constant_types)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
@@ -4333,6 +4365,7 @@ class HLSLCodeGen(
         )
         self.remove_hlsl_static_struct_member_types(structs)
         self.hlsl_union_layouts = self.collect_hlsl_union_layouts(structs)
+        self.hlsl_union_lanes = hlsl_lane_helpers(self)
         self.refresh_hlsl_fixed_array_return_struct_member_types()
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
@@ -5436,6 +5469,17 @@ class HLSLCodeGen(
 
             prototype = deepcopy(function)
             prototype.body = None
+            # The copy's parameters are new objects; carry the view analysis.
+            for original, copied in zip(
+                getattr(function, "parameters", None) or [],
+                getattr(prototype, "parameters", None) or [],
+            ):
+                view = self.hlsl_view_storage_array_parameters.get(id(original))
+                if view is not None and view[0] is original:
+                    self.hlsl_view_storage_array_parameters[id(copied)] = (
+                        copied,
+                        view[1],
+                    )
             declaration = self.generate_function(prototype)
             if declaration in seen_declarations:
                 continue
@@ -10344,7 +10388,7 @@ bool __crossgl_union_set_bool4_lane(
 }
 
 """
-        return code
+        return code + hlsl_lane_helper_definitions(self)
 
     def generate_hlsl_complex64_helpers(self):
         if not getattr(self, "required_hlsl_complex64_helpers", set()):
@@ -11091,6 +11135,8 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         info = self.hlsl_union_array_access_info(expression)
         if info is None:
             return None
+        if is_lane_kind(info["member"]["kind"]):
+            return hlsl_lane_call(self, info, "get")
         storage = self.hlsl_union_storage_expression(info, info["index"])
         kind = info["member"]["kind"]
         if kind == "uint32_array":
@@ -11210,6 +11256,15 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         array_info = self.hlsl_union_array_access_info(target)
         if array_info is not None:
             kind = array_info["member"]["kind"]
+            if is_lane_kind(kind):
+                if operator != "=":
+                    raise self.hlsl_union_usage_error(
+                        array_info,
+                        target,
+                        "lane-compound-write-unsupported",
+                        "compound lane writes need a read-modify-write contract",
+                    )
+                return hlsl_lane_call(self, array_info, "set", value)
             storage = self.hlsl_union_storage_expression(
                 array_info, array_info["index"]
             )
@@ -12539,8 +12594,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return
 
-        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
-            mapped_type
+        if (
+            self.is_scalar_value_type(mapped_type)
+            or self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
         ):
             return
 
@@ -12579,8 +12636,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def directx_compile_time_constructor_type(self, type_name):
         mapped_type = self.map_type(type_name)
-        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
-            mapped_type
+        if (
+            self.is_scalar_value_type(mapped_type)
+            or self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
         ):
             return mapped_type
         if self.hlsl_struct_constructor_fields(mapped_type) is not None:
@@ -12980,6 +13039,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if isinstance(expression, ArrayLiteralNode):
             return self.hlsl_contextual_aggregate_initializer(expression, mapped_type)
+        if self.hlsl_matrix_shape(mapped_type) is not None:
+            # Matrix constructors take CrossGL's column-major operand order; the
+            # expression generator owns that reordering.
+            return self.generate_constant_expression(expression, expected_type)
         if isinstance(expression, CastNode):
             target_type = self.map_type(expression.target_type)
             operand = self.hlsl_compile_time_initializer_expression(
@@ -13643,6 +13706,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         stage_node=None,
         _private_pointer_variant=None,
         _workgroup_pointer_variant=None,
+        _resource_access_variant=None,
     ):
         """Render a function or stage entry point with HLSL semantics."""
         function_name = getattr(func, "name", None)
@@ -13708,6 +13772,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             finally:
                 self.current_hlsl_workgroup_pointer_variant = previous_variant
                 self.current_hlsl_workgroup_pointer_base_names = previous_base_names
+            return code
+
+        access_variants = self.hlsl_resource_access_function_variants(func)
+        if _resource_access_variant is None and access_variants:
+            previous_promotions = self.current_hlsl_resource_access_promotions
+            code = ""
+            try:
+                for variant in (frozenset(), *access_variants):
+                    self.current_hlsl_resource_access_promotions = (
+                        self.hlsl_resource_access_promotions_for(func, variant)
+                    )
+                    code += self.generate_function(
+                        func,
+                        indent=indent,
+                        shader_type=shader_type,
+                        execution_config=execution_config,
+                        entry_name=entry_name,
+                        stage_output_lowering=stage_output_lowering,
+                        stage_node=stage_node,
+                        _private_pointer_variant=_private_pointer_variant,
+                        _workgroup_pointer_variant=_workgroup_pointer_variant,
+                        _resource_access_variant=variant,
+                    )
+            finally:
+                self.current_hlsl_resource_access_promotions = previous_promotions
             return code
 
         code = ""
@@ -14058,6 +14147,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             semantic = self.semantic_from_node(p)
             if semantic is None:
                 semantic = default_vertex_parameter_semantics.get(id(p))
+            builtin_input = hlsl_builtin_input_parameter(
+                self,
+                p,
+                param_type,
+                semantic,
+                effective_shader_type,
+                emitted_param_names,
+            )
+            if builtin_input is not None:
+                declaration, prologue = builtin_input
+                if declaration is not None:
+                    params.append(declaration)
+                parameter_prologue_statements.append(prologue)
+                continue
             dispatch_thread_id_bridge = None
             if effective_shader_type == "compute":
                 dispatch_thread_id_bridge = (
@@ -15034,6 +15137,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
+            comma_initializer = split_comma_initializer(stmt)
+            if comma_initializer is not None:
+                effects, declaration = comma_initializer
+                return "".join(
+                    self.generate_statement(statement, indent)
+                    for statement in (*effects, declaration)
+                )
             source_vtype = self.hlsl_source_variable_declared_type(stmt)
             vtype = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = self.type_name_string(vtype)
@@ -15751,6 +15861,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "maybe_unused",
             "source_resource",
             "precise",
+            # GLSL's invariance qualifier decorates an output (GLSL 4.60 section 4.8.1); it never names one.
+            "invariant",
             # GLSL precision qualifiers set a minimum precision (GLSL ES 3.00 section 4.5.2); HLSL's 32-bit types
             # meet it, so they carry no semantic and must not become one.
             "highp",
@@ -18625,6 +18737,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if is_comma_expression(expr):
+            return self.expression_result_type(comma_result_operand(expr))
         if isinstance(expr, PointerReinterpretNode):
             target_type = getattr(expr.target_type, "pointee_type", None)
             return self.map_type(self.type_name_string(target_type))
@@ -20187,6 +20301,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "offset": "0",
                         "root_kind": "scalar",
                     }
+            if isinstance(operand, MemberAccessNode):
+                excluded = (
+                    set(local_extents)
+                    | set(scalar_parameters)
+                    | set(self.current_hlsl_private_pointer_base_names)
+                )
+                if hlsl_member_view_root(self, operand, excluded) is None:
+                    return None
+                return {
+                    "backing": self.generate_expression(operand),
+                    "offset": "0",
+                    "root_kind": "scalar",
+                    "member_view": True,
+                }
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.hlsl_private_pointer_view_binding(operand.array)
@@ -20647,7 +20775,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parameter_type = getattr(
             parameter, "param_type", getattr(parameter, "vtype", None)
         )
-        return parameter_type if isinstance(parameter_type, PointerType) else None
+        if isinstance(parameter_type, PointerType):
+            return parameter_type
+        # A storage array parameter that receives a view into a buffer is a
+        # storage pointer; see hlsl_storage_array_views.
+        view = self.hlsl_view_storage_array_parameters.get(id(parameter))
+        return view[1] if view is not None and view[0] is parameter else None
 
     def hlsl_resource_pointer_parameter_address_space(self, parameter):
         pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
@@ -20667,6 +20800,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ),
                 "",
             )
+            # CrossGL spells a storage-buffer pointer parameter `buffer T* p`.
+            if not address_space and "buffer" in qualifiers:
+                address_space = "storage"
         return address_space or None
 
     def hlsl_resource_pointer_parameter(self, parameter):
@@ -20678,6 +20814,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
 
     def hlsl_resource_pointer_parameter_access(self, parameter):
+        if self.hlsl_resource_access_promoted(parameter):
+            return "read_write"
         pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
         access_mode = str(getattr(pointer_type, "access_mode", None) or "").lower()
         access_aliases = {
@@ -20708,6 +20846,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return "read_write"
 
     def hlsl_resource_pointer_offset_parameter_direction(self, parameter):
+        if id(parameter) in self.hlsl_view_storage_array_parameters:
+            # An array parameter decays to a pointer passed by value; its
+            # ``inout`` qualifier covers the elements, not the view.
+            return None
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(parameter, "qualifiers", []) or []
@@ -21093,6 +21235,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def collect_hlsl_resource_pointer_parameters(self, functions):
         functions = list(functions or [])
+        self.hlsl_view_storage_array_parameters = {
+            key: (parameter, storage_array_pointer_type(parameter))
+            for key, parameter in view_storage_array_parameters(
+                functions, self.function_call_name
+            ).items()
+        }
         parameters_by_function = {}
         indices_by_function = {}
         array_parameters_by_function = {}
@@ -27493,6 +27641,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """Render an expression whose value is unused, such as a for update."""
         if isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
+        if is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr,
+                self.generate_expression,
+                self.generate_discarded_expression,
+                discarded=True,
+            )
         return self.generate_expression(expr)
 
     def hlsl_helper_invocation_expression(self, expr):
@@ -27531,6 +27686,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         helper_lane = self.hlsl_helper_invocation_expression(expr)
         if helper_lane is not None:
             return helper_lane
+        builtin_read = hlsl_stage_builtin_read(self, expr)
+        if builtin_read is not None:
+            return builtin_read
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
@@ -27569,6 +27727,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return str(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.hlsl_array_literal_expression(expr)
+        elif is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr, self.generate_expression, self.generate_discarded_expression
+            )
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value
@@ -34859,7 +35021,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 mode = self.HLSL_INTERPOLATION_MODE_MODIFIERS.get(name)
             if sampling is None:
                 sampling = self.HLSL_INTERPOLATION_SAMPLING_MODIFIERS.get(name)
-        if mode is None and self.semantic_from_node(node) == "gl_BaryCoordNoPerspEXT":
+        if (
+            mode is None
+            and self.semantic_from_node(node) in HLSL_NOPERSPECTIVE_BARYCENTRICS
+        ):
             mode = "noperspective"
 
         modifiers = []
@@ -36244,6 +36409,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "SV_INSTANCEID",
             "SV_SAMPLEINDEX",
             "SV_GSINSTANCEID",
+            "SV_SHADINGRATE",
         }
     )
 
@@ -43361,6 +43527,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             scalar_parameters[call["callee"]].add(parameter_name)
                             changed = True
         self.function_private_pointer_scalar_parameters = scalar_parameters
+        aliased = hlsl_aliased_scalar_view(view_calls, scalar_parameters)
+        if aliased is not None:
+            call, first, second, root = aliased
+            raise DirectXPrivatePointerParameterError(
+                f"DirectX private pointer call to '{call['callee']}' binds "
+                f"parameters '{first}' and '{second}' to the same backing object "
+                f"'{root}'; HLSL inout copy-out cannot preserve aliased views",
+                function_name=call["callee"],
+                parameter_name=second,
+                reason="aliased-view-backing",
+                source_location=getattr(call.get("node"), "source_location", None),
+            )
 
         for calls in view_calls.values():
             for call in calls:
@@ -44150,6 +44328,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "offset": (0, 0),
                         "side_effecting": False,
                     }
+            if isinstance(operand, MemberAccessNode):
+                root = hlsl_member_view_root(
+                    self, operand, set(parameter_names) | set(local_extents)
+                )
+                if root is None:
+                    return None
+                return {
+                    "root_kind": "scalar",
+                    "root": root,
+                    "extent": 1,
+                    "offset": (0, 0),
+                    "side_effecting": False,
+                    "member_view": True,
+                }
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.hlsl_private_pointer_static_binding(
@@ -47274,6 +47466,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if resource_binding is not None:
                 resource_bindings[index] = resource_binding
+        self.record_hlsl_resource_access_call(
+            workgroup_pointer_func_name, resource_bindings
+        )
         self.hlsl_validate_resource_pointer_call_aliases(
             workgroup_pointer_func_name,
             args,
@@ -56249,6 +56444,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to an HLSL semantic suffix."""
         if semantic:
-            return f": {self.hlsl_semantic_name(semantic)}"
+            mapped = refuse_unmapped_hlsl_builtin(
+                self, semantic, self.hlsl_semantic_name(semantic)
+            )
+            return f": {mapped}"
         else:
             return ""  # Handle None by returning an empty string

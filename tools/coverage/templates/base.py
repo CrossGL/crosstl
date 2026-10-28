@@ -13,6 +13,7 @@ class Template:
     params: str = ""
     program: str = ""
     entry: str = ""
+    output: str = ""
 
 
 ABSENT = Template(entry="<absent>")

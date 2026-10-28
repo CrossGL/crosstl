@@ -11,6 +11,13 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .c_wide_integer_vectors import (
+    WIDE_INTEGER_COMPONENT_C_TYPES,
+    integer_vector_component_signedness,
+    is_integer_vector_component,
+    wide_integer_vector_details,
+    wide_integer_vector_prefix,
+)
 
 # C scalar types the CUDA and HIP generators write, keyed by the type names
 # their own mappings produce. ``min`` and ``max`` pick their intrinsic from
@@ -372,6 +379,7 @@ class VectorArithmeticMixin:
             "uchar3": ("make_uchar3", "bool", ("x", "y", "z")),
             "uchar4": ("make_uchar4", "bool", ("x", "y", "z", "w")),
         }
+        vector_details.update(wide_integer_vector_details())
         details = vector_details.get(mapped_type)
         if details is None:
             return None
@@ -541,10 +549,30 @@ class VectorArithmeticMixin:
         return pieces, helper_needed
 
     def vector_constructor_scalar_parameter_type(self, type_name, fallback_type):
+        # A 64-bit lane or a 64-bit scalar keeps its width in the helper
+        # parameter: the component classes below would narrow it to ``int``.
+        wide_scalar = self.wide_integer_scalar_c_type(type_name)
+        if wide_scalar is not None:
+            return wide_scalar
+        if fallback_type in WIDE_INTEGER_COMPONENT_C_TYPES:
+            return WIDE_INTEGER_COMPONENT_C_TYPES[fallback_type]
         component_type = self.scalar_component_type(type_name) or fallback_type
         if component_type == "uint":
             return "unsigned int"
         return component_type
+
+    def wide_integer_scalar_c_type(self, type_name):
+        """``long long`` or ``unsigned long long`` for a 64-bit integer scalar type, else None."""
+        if type_name is None:
+            return None
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        mapped_type = MIN_MAX_SCALAR_TYPES.get(
+            self.map_vector_arithmetic_type(type_name)
+        )
+        if mapped_type in {"long long", "unsigned long long"}:
+            return mapped_type
+        return None
 
     def require_vector_constructor_helper(self, vector_info, pieces):
         vector_type = vector_info["type"]
@@ -878,7 +906,9 @@ class VectorArithmeticMixin:
             "uint": "uvec",
             "bool": "bvec",
         }
-        prefix = prefixes.get(component_type)
+        prefix = prefixes.get(component_type) or wide_integer_vector_prefix(
+            component_type
+        )
         if prefix is None:
             return None
         return f"{prefix}{component_count}"
@@ -910,8 +940,12 @@ class VectorArithmeticMixin:
         right_expr,
         operator,
     ):
-        """Lower vector binary arithmetic into a helper call when required."""
-        if operator not in {"+", "-", "*", "/", "%"}:
+        """Lower vector binary arithmetic into a helper call when required.
+
+        ``%`` is the C, HLSL and CrossGL remainder, truncated toward zero on floating components; the pseudo-operator
+        ``mod`` is GLSL's ``mod``, which floors the quotient.
+        """
+        if operator not in {"+", "-", "*", "/", "%", "mod"}:
             return None
         left_type = self.expression_result_type(left_node)
         right_type = self.expression_result_type(right_node)
@@ -1131,7 +1165,6 @@ class VectorArithmeticMixin:
         right_info,
         operator,
     ):
-        integer_components = {"int", "uint"}
         left_component = (
             left_info["component_type"]
             if left_info
@@ -1142,9 +1175,11 @@ class VectorArithmeticMixin:
             if right_info
             else self.scalar_component_type(right_type)
         )
-        if left_component not in integer_components:
+        if not is_integer_vector_component(left_component):
             return None
-        if right_component not in {None, "int", "uint"}:
+        if right_component is not None and not is_integer_vector_component(
+            right_component
+        ):
             return None
 
         if left_info is not None:
@@ -1154,7 +1189,7 @@ class VectorArithmeticMixin:
         else:
             return None
 
-        if result_info["component_type"] not in integer_components:
+        if not is_integer_vector_component(result_info["component_type"]):
             return None
 
         if right_info is not None:
@@ -1165,14 +1200,20 @@ class VectorArithmeticMixin:
             ):
                 return None
 
+        # A scalar operand is classed ``int`` or ``uint`` even when it is 64
+        # bits wide, so it has to match the vector's signedness, not its width.
+        result_signedness = integer_vector_component_signedness(
+            result_info["component_type"]
+        )
         if left_info is not None and right_info is None:
-            if operator in {"&", "|", "^"} and right_component not in {
-                None,
-                result_info["component_type"],
-            }:
-                return None
+            if operator in {"&", "|", "^"} and right_component is not None:
+                if (
+                    integer_vector_component_signedness(right_component)
+                    != result_signedness
+                ):
+                    return None
         elif left_info is None and right_info is not None:
-            if left_component != result_info["component_type"]:
+            if integer_vector_component_signedness(left_component) != result_signedness:
                 return None
 
         return result_info
@@ -1569,6 +1610,7 @@ class VectorArithmeticMixin:
             "*": "mul",
             "/": "div",
             "%": "mod",
+            "mod": "glsl_mod",
         }
         operation_name = operator_names[operator]
         helper_name = f"cgl_{vector_info['type']}_{operation_name}"
@@ -1632,19 +1674,24 @@ class VectorArithmeticMixin:
         if operator == "%" and component_type in {"float", "double"}:
             func_name = "fmod" if component_type == "double" else "fmodf"
             return f"{func_name}({left}, {right})"
-        if operator == "%" and component_type == "half":
+        if operator == "mod" and component_type in {"float", "double"}:
+            # GLSL mod floors the quotient; the operands are parameter names.
+            floor_name = "floor" if component_type == "double" else "floorf"
+            return f"({left} - {right} * {floor_name}({left} / {right}))"
+        if operator in {"%", "mod"} and component_type == "half":
             # ``__half`` has no ``%`` operator: take the remainder of the
-            # components converted to ``float`` the way float vectors do, so
-            # the GLSL floor semantics of the CUDA and HIP generators carry
-            # over, and round the result back to half.
+            # components converted to ``float`` the way float vectors do and
+            # round the result back to half.
             remainder = self.format_vector_binary_component(
                 "float", operator, f"__half2float({left})", f"__half2float({right})"
             )
             return f"__float2half({remainder})"
+        if operator == "mod":
+            operator = "%"
         return f"({left} {operator} {right})"
 
     def generate_mod_call(self, raw_args, args):
-        """Lower vector mod builtins through the same path as binary modulo."""
+        """Lower vector GLSL ``mod`` builtins, which floor the quotient."""
         if len(raw_args) != 2 or len(args) != 2:
             return None
         return self.lower_vector_binary_operation(
@@ -1652,12 +1699,21 @@ class VectorArithmeticMixin:
             args[0],
             raw_args[1],
             args[1],
-            "%",
+            "mod",
         )
+
+    def is_floating_value_type(self, vtype):
+        """Whether ``vtype`` is a floating-point scalar or vector."""
+        if vtype is None:
+            return False
+        vector_info = self.vector_type_info(vtype)
+        if vector_info is not None:
+            return vector_info["component_type"] in {"float", "double", "half"}
+        return self.scalar_component_type(vtype) in {"float", "double", "half"}
 
     def require_vector_negation_helper(self, vector_info):
         """Register and return a helper function for vector unary negation."""
-        if vector_info["component_type"] in {"bool", "uint"}:
+        if vector_info["component_type"] in {"bool", "uint", "u64"}:
             return None
 
         vector_type = vector_info["type"]
@@ -1861,8 +1917,10 @@ class VectorArithmeticMixin:
             return f"fabs({value})"
         if component_type == "float" or component_type is None:
             return f"fabsf({value})"
-        if component_type == "uint":
+        if component_type in {"uint", "u64"}:
             return value
+        if component_type == "i64":
+            return f"llabs({value})"
         return f"abs({value})"
 
     def generate_sign_call(self, raw_args, args):
@@ -1909,6 +1967,8 @@ class VectorArithmeticMixin:
     def format_sign_component(self, component_type, value):
         if component_type == "uint":
             return f"(({value}) > 0u ? 1u : 0u)"
+        if component_type == "u64":
+            return f"(({value}) > 0ull ? 1ull : 0ull)"
 
         if component_type == "double":
             zero = "0.0"
@@ -2420,4 +2480,6 @@ class VectorArithmeticMixin:
     def vector_scalar_parameter_type(self, vector_info):
         if vector_info["component_type"] == "uint":
             return "unsigned int"
+        if vector_info["component_type"] in WIDE_INTEGER_COMPONENT_C_TYPES:
+            return WIDE_INTEGER_COMPONENT_C_TYPES[vector_info["component_type"]]
         return vector_info["component_type"]

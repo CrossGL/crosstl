@@ -882,7 +882,7 @@ def test_list_comprehension_codegen_from_current_mojo_docs():
     generated_code = generate_code(ast)
 
     assert "[(x * x) for x in range(5) if ((x % 2) == 0)]" in generated_code
-    assert "[(x, y) for x in range(3) for y in range(2) if (x != y)]" in generated_code
+    assert "[(x, y,) for x in range(3) for y in range(2) if (x != y)]" in generated_code
     assert "Unhandled expression: ListComprehensionNode" not in generated_code
 
 
@@ -1307,8 +1307,8 @@ def test_identifier_tuple_declaration_and_assignment_codegen_from_layout_tensor_
     ast = parse_code(tokenize_code(code))
     generated_code = generate_code(ast)
 
-    assert "var (row, col) = (0, 1);" in generated_code
-    assert "(row, col) = (0, 0);" in generated_code
+    assert "var (row, col,) = (0, 1,);" in generated_code
+    assert "(row, col,) = (0, 0,);" in generated_code
 
 
 def test_parenthesized_tuple_var_declaration_codegen_from_modular_sm90_matmul():
@@ -1331,7 +1331,7 @@ def test_parenthesized_tuple_var_declaration_codegen_from_modular_sm90_matmul():
 
     assert (
         "var (warp_group_idx, warp_group_thread_idx, rank_m, rank_n, warp_id, "
-        "lane_predicate) = Self.common_kernel_init();"
+        "lane_predicate,) = Self.common_kernel_init();"
     ) in generated_code
 
 
@@ -1793,7 +1793,7 @@ def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
     assert "if ((!has_accelerator()))" in generated_code
     assert (
         "ctx.enqueue_function[print_threads, print_threads]"
-        "(grid_dim = (2, 2, 1), block_dim = (4, 4, 2));"
+        "(grid_dim = (2, 2, 1,), block_dim = (4, 4, 2,));"
     ) in generated_code
     assert "ctx.synchronize();" in generated_code
     assert "comptime" not in generated_code
@@ -2260,7 +2260,7 @@ def test_tuple_assignment_with_index_targets_codegen_reparses_crossgl():
     generated_code = generate_code(ast)
 
     assert (
-        "(self.k_array[a], self.k_array[b]) = " "(self.k_array[b], self.k_array[a]);"
+        "(self.k_array[a], self.k_array[b],) = " "(self.k_array[b], self.k_array[a],);"
     ) in generated_code
     assert "Unhandled expression" not in generated_code
     parse_crossgl(generated_code)
@@ -2537,7 +2537,7 @@ def test_tuple_for_target_codegen_from_modular_pmpp_examples():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "for (row, col) in product(range(height), range(width)) {" in generated_code
+    assert "for (row, col,) in product(range(height), range(width)) {" in generated_code
     assert "sink(row, col);" in generated_code
 
 

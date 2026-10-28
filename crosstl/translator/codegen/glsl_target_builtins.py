@@ -12,12 +12,17 @@ _VIEW_INDEX = (
     "GL_OVR_multiview also needs the view count (layout(num_views)), which the source does not state"
 )
 
+_QUAD_GROUP = "GLSL has no quad-group index; only a compute shader derives it, from gl_LocalInvocationIndex"
+
 # Desktop OpenGL GLSL 4.60 (GL_KHR_vulkan_glsl section "Removed features" lists the Vulkan-only additions).
 OPENGL_UNAVAILABLE_BUILTINS = {
     "gl_ViewIndex": _VIEW_INDEX,
     "gl_DeviceIndex": (
         "the device-group index exists only in Vulkan GLSL (GL_EXT_device_group)"
     ),
+    # Metal's quad-group indices; compute shaders read them from gl_LocalInvocationIndex instead.
+    "gl_QuadGroupID": _QUAD_GROUP,
+    "gl_QuadGroupInvocationID": _QUAD_GROUP,
 }
 
 _ES_CLIP = "GLSL ES 3.00 has no clip or cull distances"
@@ -55,6 +60,28 @@ WEBGL_UNAVAILABLE_BUILTINS = {
     "gl_FragInvocationCountEXT": _ES_DENSITY,
     "gl_ShadingRateEXT": _ES_SHADING_RATE,
     "gl_PrimitiveShadingRateEXT": _ES_SHADING_RATE,
+    # Vendor extensions of desktop GLSL that are not WebGL 2 extensions.
+    **{
+        name: (
+            "GLSL ES 3.00 has no explicit vertex parameters (GL_AMD_shader_explicit_vertex_parameter)"
+        )
+        for name in (
+            "gl_BaryCoordNoPerspAMD",
+            "gl_BaryCoordNoPerspCentroidAMD",
+            "gl_BaryCoordNoPerspSampleAMD",
+            "gl_BaryCoordSmoothAMD",
+            "gl_BaryCoordSmoothCentroidAMD",
+            "gl_BaryCoordSmoothSampleAMD",
+            "gl_BaryCoordPullModelAMD",
+        )
+    },
+    **{
+        name: "GLSL ES 3.00 has no SM built-ins (GL_NV_shader_sm_builtins)"
+        for name in ("gl_WarpIDNV", "gl_SMIDNV", "gl_WarpsPerSMNV", "gl_SMCountNV")
+    },
+    "gl_FragFullyCoveredNV": (
+        "GLSL ES 3.00 has no full-coverage query (GL_NV_conservative_raster_underestimation)"
+    ),
 }
 
 WEBGL_UNAVAILABLE_FUNCTION_PATTERNS = (

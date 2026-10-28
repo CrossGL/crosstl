@@ -20,6 +20,7 @@ from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import hip_partial_output
 
 EXTERNAL_FIXTURE_SOURCES = {
     "rocm_examples": {
@@ -218,7 +219,12 @@ shader MatrixConstructorComputeShader {
 
 
 def assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
-    hip_code = generate_hip_from_crossgl(source)
+    return assert_hip_reverse_codegen_prunes_generated_matrix_helpers(
+        generate_hip_from_crossgl(source)
+    )
+
+
+def assert_hip_reverse_codegen_prunes_generated_matrix_helpers(hip_code):
     assert "struct float2x2" in hip_code
 
     _, crossgl = generate_crossgl_from_hip(hip_code)
@@ -230,12 +236,17 @@ def assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
     return crossgl
 
 
-def test_compiler_manual_sampler_fixture_reverse_codegen_prunes_hip_helpers():
+def test_compiler_manual_sampler_fixture_refuses_hip_depth_compare_and_prunes_helpers():
     # Reduced from CrossGL-Compiler/tests/fixtures/
-    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl.
-    crossgl = assert_hip_fixture_reverse_codegen_prunes_generated_matrix_helpers(
-        COMPILER_MANUAL_SAMPLER_FIXTURE
-    )
+    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl. A HIP texture object has no
+    # depth comparison, so the program is refused; its partial output still round-trips.
+    program = CrossGLParser(
+        CrossGLLexer(COMPILER_MANUAL_SAMPLER_FIXTURE).tokens
+    ).parse()
+    hip_code, refusal = hip_partial_output(HipCodeGen().generate, program)
+    assert "HIP shadow resource call: textureCompare on sampler2DShadow" in refusal
+
+    crossgl = assert_hip_reverse_codegen_prunes_generated_matrix_helpers(hip_code)
 
     assert len(crossgl) < 2_000
     assert "textureCompareLodManual(" in crossgl

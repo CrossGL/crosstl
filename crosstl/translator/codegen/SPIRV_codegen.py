@@ -76,6 +76,7 @@ from .array_utils import (
 from .ast_walk import walk_ast_values
 from .bitfield_builtins import BITFIELD_ARITIES, spirv_bitfield_call
 from .call_graph import validate_recursion_free
+from .comma_expressions import is_comma_expression, spirv_comma_expression
 from .enum_utils import (
     collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
@@ -111,6 +112,7 @@ from .image_access_contracts import (
     image_access_requirement_label,
     image_access_satisfies_requirement,
 )
+from .interface_qualifiers import INTERFACE_QUALIFIER_ATTRIBUTES
 from .pack_builtins import PACK_FUNCTIONS, spirv_pack_call, spirv_pack_result_type
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -140,6 +142,13 @@ from .spirv_exponent_builtins import (
     spirv_ldexp_call,
     spirv_output_operand_call,
 )
+from .spirv_extension_builtins import BUILTIN_ALIASES as SPIRV_EXTENSION_BUILTIN_ALIASES
+from .spirv_extension_builtins import (
+    extension_any_stage_builtin_info,
+    extension_builtin_info,
+    require_extension_builtin_capability,
+    unmapped_builtin_reason,
+)
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
@@ -157,6 +166,7 @@ from .spirv_interface_locations import (
     plan_entry_input_locations,
     plan_struct_member_locations,
 )
+from .spirv_invariant_outputs import decorate_invariant_builtin_output
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_location_conflicts import InterfaceLocationConflictError
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -14346,6 +14356,8 @@ class VulkanSPIRVCodeGen(
             "tessellation_evaluation",
             "vertex",
             "writeonly",
+            # Interpolation, invariance and precision qualifiers decorate the value; they never name it.
+            *INTERFACE_QUALIFIER_ATTRIBUTES,
         }
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
@@ -14619,6 +14631,9 @@ class VulkanSPIRVCodeGen(
             if cache_key in self.global_variables:
                 variable = self.global_variables[cache_key]
                 self.mark_fragment_depth_replacing_if_needed(builtin_name, "Output")
+                decorate_invariant_builtin_output(
+                    self, variable, function_node, "Output"
+                )
                 self.mark_function_interface_variable(variable)
                 return variable
 
@@ -14626,6 +14641,7 @@ class VulkanSPIRVCodeGen(
                 name, builtin_type, builtin_name, "Output"
             )
             self.global_variables[cache_key] = variable
+            decorate_invariant_builtin_output(self, variable, function_node, "Output")
             self.mark_function_interface_variable(variable)
             return variable
 
@@ -15030,7 +15046,11 @@ class VulkanSPIRVCodeGen(
         )
         builtin = self.entry_point_builtin_variable(semantic, storage_class)
         if builtin is not None:
+            decorate_invariant_builtin_output(self, builtin, node, storage_class)
             return builtin
+        unmapped = unmapped_builtin_reason(semantic, storage_class, execution_model)
+        if unmapped is not None:
+            self.refuse_lowering(unmapped)
 
         interface_node = node
         if interface_node is None:
@@ -20835,6 +20855,7 @@ class VulkanSPIRVCodeGen(
                 self.decorate_global_interface_variable(node, var_id)
         elif storage_class == "Output":
             var_id = self.global_interface_builtin_variable(node, "Output", var_type)
+            decorate_invariant_builtin_output(self, var_id, node, storage_class)
             if var_id is None:
                 location = self.global_interface_location(node, "Output")
                 var_id = self.register_output(
@@ -30441,6 +30462,9 @@ class VulkanSPIRVCodeGen(
             )
             return None
 
+        elif is_comma_expression(expr):
+            return spirv_comma_expression(self, expr)
+
         else:
             self.refuse_lowering(f"Unknown expression type {type(expr).__name__}")
             return None
@@ -30512,7 +30536,7 @@ class VulkanSPIRVCodeGen(
             ),
             **SPIRV_SUBGROUP_BUILTINS,
         }
-        return builtins.get(name)
+        return builtins.get(name) or extension_any_stage_builtin_info(name)
 
     def spirv_builtin_alias(self, name: str) -> str:
         aliases = {
@@ -30542,6 +30566,7 @@ class VulkanSPIRVCodeGen(
                 if self.current_execution_model == "Fragment"
                 else "gl_PrimitiveShadingRateEXT"
             ),
+            **SPIRV_EXTENSION_BUILTIN_ALIASES,
         }
         return aliases.get(str(name).upper(), name)
 
@@ -30610,6 +30635,9 @@ class VulkanSPIRVCodeGen(
         shading_rate = shading_rate_builtin_info(name)
         if shading_rate is not None:
             return shading_rate
+        extension_builtin = extension_builtin_info(name)
+        if extension_builtin is not None:
+            return extension_builtin
         builtins = {
             "gl_VertexID": (
                 "uint",
@@ -31008,6 +31036,8 @@ class VulkanSPIRVCodeGen(
 
     def require_stage_builtin_capabilities(self, builtin_name: str):
         if require_shading_rate_capability(self, builtin_name):
+            return
+        if require_extension_builtin_capability(self, builtin_name):
             return
         if builtin_name in {"BaryCoordKHR", "BaryCoordNoPerspKHR"}:
             self.require_capability("FragmentBarycentricKHR")
@@ -31977,9 +32007,22 @@ class VulkanSPIRVCodeGen(
             entry_function = getattr(stage, "entry_point", None)
             if requests_early_fragment_tests(entry_function, stage):
                 self.emit(f"OpExecutionMode %{function_id.id} EarlyFragmentTests")
-            if function_id.id in self.fragment_depth_replacing_function_ids:
+            # A stage-level output variable is created before its entry function, so the interface, not the
+            # function being generated when the built-in was registered, says which outputs the entry writes.
+            interface_builtins = {
+                self.builtin_names_by_variable_id.get(variable.id)
+                for variable in interface_variables
+                if variable.type.storage_class == "Output"
+            }
+            if (
+                function_id.id in self.fragment_depth_replacing_function_ids
+                or "FragDepth" in interface_builtins
+            ):
                 self.emit(f"OpExecutionMode %{function_id.id} DepthReplacing")
-            if function_id.id in self.fragment_stencil_ref_replacing_function_ids:
+            if (
+                function_id.id in self.fragment_stencil_ref_replacing_function_ids
+                or "FragStencilRefEXT" in interface_builtins
+            ):
                 self.emit(f"OpExecutionMode %{function_id.id} StencilRefReplacingEXT")
         elif execution_model == "Geometry":
             self.emit_geometry_execution_modes(function_id, stage)
