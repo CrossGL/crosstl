@@ -57,8 +57,6 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
-- The CUDA, HIP and OpenCL C importers rename a struct named `let`, `match` or `var` (and the CUDA importer one named `kernel`) to `let_`, `match_`, `var_` or `kernel_` everywhere it is used, as the HLSL importer does, instead of writing CrossGL that does not parse (#3386).
-
 - HIP output lowers `ptr<T>` helper parameters imported from HIP or CUDA to native pointer types instead of emitting the CrossGL spelling unchanged.
 
 - CrossGL accepts an empty statement, a `;` on its own, which it used to refuse with `CrossGLFunctionBodyParseError`, so every target refused a function containing one. A switch whose last `case` or `default` label is followed by no statement now leaves the switch there with `break;`; Metal and GLSL ES output used to end the switch on the bare label, which the Metal compiler and GLSL ES 3.00 refuse.
@@ -104,6 +102,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - HLSL output of Metal sources gives `half` fragment returns `SV_Target`, declares `half` textures without a stray array size and drops `<TargetConditionals.h>`.
 - The runtime loader manifest's `targetProfiles` for HLSL artifacts, from `directx_target_profiles_for_source`, is `["directx-12"]` when the output has ray tracing stages (`raygeneration`, `intersection`, `anyhit`, `closesthit`, `miss`, `callable`), mesh or amplification stages, or wave and quad intrinsics such as `WaveActiveSum` and `QuadReadAcrossX`. It used to also list `directx-11`, which cannot run them and whose `dx11` HLSL profile refuses them.
 - GLSL, Slang, CUDA, HIP and OpenCL C input write a C-family octal literal such as `017` as the CrossGL octal `0o17`. They copied it unchanged and CrossGL read it as decimal, so `017 + 010` computed 27 instead of 23 in every target (#3282). A leading-zero integer with an 8 or a 9 raises `IntegerLiteralError`.
+- CUDA, HIP and OpenCL C input rename a struct named `let`, `match` or `var`, which CrossGL reads as keywords, and in CUDA input one named `kernel`, at its declaration and every use, including constructors such as `let{1.0f}`, as HLSL input does (#3386). Functions and variables with those names are renamed the same way, and a rename skips every name the source uses, so `let` becomes `let__` where the source has a `let_`. These importers used to keep the struct's name, or rename only its declaration, so the CrossGL they wrote did not parse (`SyntaxError: Expected binding name, got LBRACE`).
 - An early `return;` in a GLSL `main` that writes stage outputs returns those outputs on every target.
 - CUDA output writes CrossGL scalar casts such as `f64(x)` with C type names.
 - CUDA and HIP output write an HLSL `Interlocked*` call that returns the original value through its last argument, on a `groupshared` variable or a member of a structured-buffer element, as an assignment, as in `orig = atomicAdd(&counter, 1u);`, and `InterlockedCompareStore` as `atomicCAS`. The call used to be replaced with `/* unsupported ... */ 0u;`, so the operation never ran and the original value was never assigned, and `InterlockedCompareStore` was copied unchanged, which does not compile.
