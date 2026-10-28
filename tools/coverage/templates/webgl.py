@@ -13,7 +13,9 @@ from .abstractions import GLSL as _ABSTRACTIONS_GLSL
 from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
 from .blocks import WEBGL as _BLOCKS
+from .booleans import WEBGL as _BOOLEANS
 from .calls import WEBGL as _CALLS
+from .columns import WEBGL as _COLUMNS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
 from .edges import FAMILY as _EDGES
@@ -31,6 +33,8 @@ from .integers import WEBGL as _INTEGERS
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
+from .orientation import WEBGL as _ORIENTATION
+from .packing import WEBGL as _PACKING
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
@@ -97,6 +101,10 @@ WEBGL = {
     **_RECORDS,
     **_IDENTIFIERS,
     **_INTEGERS,
+    **_COLUMNS,
+    **_BOOLEANS,
+    **_PACKING,
+    **_ORIENTATION,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

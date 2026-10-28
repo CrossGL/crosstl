@@ -54,6 +54,7 @@ from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
 from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
+from .comma_expressions import is_comma_expression
 from .enum_utils import (
     generic_enum_specialization_name,
     generic_type_parts,
@@ -3157,6 +3158,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_expression(self, expr):
         if expr is None:
             return ""
+        if is_comma_expression(expr):
+            # Statement lowering hoists every comma it can reach (wgsl_value_side_effects).
+            raise ValueError(
+                "WGSL target cannot lower a comma expression in this position; WGSL has no "
+                "comma operator"
+            )
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
         if isinstance(expr, IdentifierNode):
@@ -3206,6 +3213,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
                 return f"{operand}{expr.operator}"
+            if expr.operator == "+":
+                # WGSL has no unary plus. On a number it is the identity, and the
+                # operand text already stands on its own as an expression.
+                if self.boolean_expression_width(expr.operand) is not None:
+                    raise ValueError(
+                        "WGSL has no unary plus, and unary plus on a boolean "
+                        "value has no numeric meaning to preserve"
+                    )
+                return operand
             if expr.operator == "!":
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):

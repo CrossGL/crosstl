@@ -16,6 +16,11 @@ from crosstl.translator.codegen.stage_distance_layout import distance_semantic_s
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
 from crosstl.translator.ray_query_vocabulary import canonical_ray_query_type
 
+from ..comma_expressions import (
+    comma_operands,
+    crossgl_comma_expression,
+    is_binary_comma,
+)
 from ..common_ast import (
     ArrayAccessNode,
     BreakNode,
@@ -2504,6 +2509,8 @@ class HLSLToCrossGLConverter(
         return None
 
     def expression_value_raw_type(self, expr):
+        if is_binary_comma(expr):
+            return self.expression_value_raw_type(comma_operands(expr)[-1])
         if isinstance(expr, BinaryOpNode):
             # Keep long left-associated sums iterative, as in their renderer.
             nodes = []
@@ -5212,6 +5219,11 @@ class HLSLToCrossGLConverter(
         elif isinstance(expr, VariableNode):
             return self.render_identifier(expr.name)
         elif isinstance(expr, BinaryOpNode):
+            comma = crossgl_comma_expression(
+                expr, lambda operand: self.generate_expression(operand, is_main)
+            )
+            if comma is not None:
+                return comma
             flat_expression = self.generate_flat_long_binary_expression(expr, is_main)
             if flat_expression is not None:
                 return flat_expression

@@ -56,6 +56,7 @@ from .array_utils import (
     evaluate_literal_int_expression,
     get_array_size_from_node,
 )
+from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -86,6 +87,9 @@ from .image_access_contracts import (
     explicit_image_format,
     image_format_channel_count,
     image_format_component_kind,
+)
+from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
+    MojoLoweringRefused,
 )
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter
@@ -8837,6 +8841,8 @@ class MojoCodeGen:
 
     def generate_expression(self, expr, target_type=None, target_context=None):
         """Render a CrossGL expression as Mojo expression syntax."""
+        if is_comma_expression(expr):
+            return refuse_comma_expression("Mojo", expr)
         if isinstance(expr, str):
             if expr in self.expression_identifier_replacements:
                 return self.expression_identifier_replacements[expr]
