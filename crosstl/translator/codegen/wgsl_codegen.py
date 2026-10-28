@@ -71,6 +71,11 @@ from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_array_constructors import wgsl_array_constructor
+from .wgsl_boolean_xor import (
+    wgsl_boolean_xor,
+    wgsl_boolean_xor_assignment,
+    wgsl_boolean_xor_assignment_statement,
+)
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
     entry_output_parameters,
@@ -2883,6 +2888,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
     def generate_assignment(self, node):
         self.validate_storage_assignment_target(node.target)
+        boolean_xor = wgsl_boolean_xor_assignment(self, node)
+        if boolean_xor is not None:
+            return boolean_xor
         target_type = self.expression_type(node.target)
         if node.operator[:-1] in SHIFT_OPERATORS:
             value = wgsl_shift_amount(self, node.value, target_type)
@@ -2904,6 +2912,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         swizzle_assignment = self.generate_swizzle_assignment_statement(node, indent)
         if swizzle_assignment is not None:
             return swizzle_assignment
+        boolean_xor = wgsl_boolean_xor_assignment_statement(self, node, indent)
+        if boolean_xor is not None:
+            return boolean_xor
         pad = "    " * indent
         return f"{pad}{self.generate_assignment(node)};"
 
@@ -3200,6 +3211,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                     self, expr.right, self.expression_type(expr.left)
                 )
                 return f"({left} {expr.operator} {amount})"
+            if expr.operator == "^":
+                boolean_xor = wgsl_boolean_xor(
+                    self, expr.left, expr.right, wgsl_bitwise_operands
+                )
+                if boolean_xor is not None:
+                    return boolean_xor
             if expr.operator in BITWISE_OPERATORS:
                 left, right = wgsl_bitwise_operands(self, expr.left, expr.right)
                 return f"({left} {expr.operator} {right})"
