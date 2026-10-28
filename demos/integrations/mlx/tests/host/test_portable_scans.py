@@ -483,6 +483,15 @@ def test_scan_verifier_cases_cover_storage_and_launch_boundaries():
     assert {case["layout"] for case in cases} == {"row", "column", "strided-column"}
     assert {case["axisSize"] for case in cases} == {1, 31, 32, 33, 65, 129, 257}
     assert {case["operation"] for case in cases} == {"sum", "min", "max"}
+    # A size-one axis scans as contiguous rows whatever its stride.
+    assert {
+        case["entry"].split("_", 1)[0]
+        for case in cases
+        if case["layout"] == "strided-column"
+    } == {"contig", "strided"}
+    assert all(
+        case["entry"].startswith("contig_") for case in cases if case["axisSize"] == 1
+    )
 
 
 def synthetic_event(case, target):
@@ -502,7 +511,7 @@ def synthetic_event(case, target):
         ),
         "axis_size": scan_dispatch.packet("uint64", target, [case["axisSize"]]),
     }
-    stride = 33 if case["layout"] == "strided-column" else 1
+    stride = 33 if case["entry"].startswith("strided_") else 1
     if stride > 1:
         inputs.update(
             stride=scan_dispatch.packet("uint64", target, [stride]),
@@ -659,7 +668,11 @@ def test_scan_audit_checks_every_case_and_requires_native_receipts(
 )
 @pytest.mark.parametrize("layout", ("column", "strided-column"))
 def test_scan_audit_rejects_corrupt_evidence(monkeypatch, fault, layout):
-    case = next(case for case in verify_scans.cases() if case["layout"] == layout)
+    case = next(
+        case
+        for case in verify_scans.cases()
+        if case["layout"] == layout and case["axisSize"] > 1
+    )
     event, saved = synthetic_event(case, "directx")
     monkeypatch.setattr(verify_scans, "audit_native_execution", lambda event: None)
     if fault == "entry":

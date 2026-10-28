@@ -1804,14 +1804,13 @@ def test_registration_retains_callback_and_uses_platform_library(
 def test_unary_dtype_rejection_uses_float64_storage(tmp_path, monkeypatch):
     installed = []
     arrays = []
-    message = (
-        "CrossTL unary dispatch requires matching bool, integer, float16, "
-        "bfloat16, float32 or complex64 arrays."
-    )
-    source = Path(verify.__file__).with_name("backend.cpp").read_text()
-    assert (
-        '"CrossTL unary dispatch requires matching bool, integer, float16, "' in source
-    )
+    message = verify.FLOAT64_REFUSAL
+
+    def negative(values, *, stream):
+        # MLX's array constructor refuses float64 on a GPU stream.
+        assert arrays == [([-3, 2], "float64")] and stream == "gpu"
+        raise ValueError(message)
+
     module = SimpleNamespace(
         gpu="gpu",
         float64="float64",
@@ -1819,41 +1818,41 @@ def test_unary_dtype_rejection_uses_float64_storage(tmp_path, monkeypatch):
         is_available=lambda device: bool(installed),
         default_device=lambda: "gpu",
         array=lambda values, *, dtype: arrays.append((values, dtype)) or values,
-        negative=lambda values, *, stream: values,
+        negative=negative,
+        eval=lambda value: pytest.fail("refused work evaluated"),
     )
-
-    def evaluate(value):
-        assert arrays == [([-3, 2], "float64")]
-        raise ValueError(message)
-
-    module.eval = evaluate
     monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=module))
     monkeypatch.setitem(sys.modules, "mlx.core", module)
     monkeypatch.setattr(
         verify,
         "HostRuntime",
-        lambda *args, **kwargs: SimpleNamespace(install=lambda: installed.append(True)),
+        lambda *args, **kwargs: SimpleNamespace(
+            install=lambda: installed.append(True), dispatch_count=0
+        ),
     )
     monkeypatch.setenv("DEVICE", "cpu")
     args = SimpleNamespace(
         worker="unary-dtype", output_dir=tmp_path / "proof", packages=tmp_path
     )
     verify.worker(args)
-    assert json.loads((args.output_dir / "result.json").read_text())["rejected"] is True
+    assert json.loads((args.output_dir / "result.json").read_text()) == {
+        "rejected": True,
+        "message": message,
+        "dispatchCount": 0,
+    }
 
 
-@pytest.mark.parametrize("mode", ("copy-dtype", "cast-dtype", "full-dtype"))
-@pytest.mark.parametrize("fault", (None, "message", "accepted"))
-def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fault):
+@pytest.mark.parametrize(
+    "mode", ("copy-dtype", "binary-dtype", "cast-dtype", "full-dtype")
+)
+@pytest.mark.parametrize("fault", (None, "message", "accepted", "dispatched"))
+def test_dtype_rejection_is_the_float64_gpu_refusal(tmp_path, monkeypatch, mode, fault):
     import numpy as np
 
     installed, arrays = [], []
-    message = (
-        "CrossTL casts require bool, integer, float16, bfloat16, float32 or complex64 arrays."
-        if mode == "cast-dtype"
-        else "CrossTL copying layouts require matching bool, integer, float16, bfloat16, float32 or complex64 arrays."
-    )
-    assert message in Path(verify.__file__).with_name("backend.cpp").read_text()
+    message = verify.FLOAT64_REFUSAL
+    assert verify.NEGATIVE_CHECKS[mode] == message
+    assert mode in verify.UNDISPATCHED_CHECKS
 
     def array(values, dtype=None):
         result = np.array(values, dtype=dtype)
@@ -1875,6 +1874,7 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
         is_available=lambda device: bool(installed),
         default_device=lambda: "gpu",
         array=array,
+        add=np.add,
         transpose=np.transpose,
         reshape=lambda values, shape, *, stream: values.reshape(shape),
         full=np.full,
@@ -1885,7 +1885,10 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
     monkeypatch.setattr(
         verify,
         "HostRuntime",
-        lambda *args, **kwargs: SimpleNamespace(install=lambda: installed.append(True)),
+        lambda *args, **kwargs: SimpleNamespace(
+            install=lambda: installed.append(True),
+            dispatch_count=1 if fault == "dispatched" else 0,
+        ),
     )
     monkeypatch.setenv("DEVICE", "cpu")
     args = SimpleNamespace(
@@ -1898,9 +1901,16 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
     elif fault == "accepted":
         with pytest.raises(RuntimeError, match="unexpectedly executed"):
             verify.worker(args)
+    elif fault == "dispatched":
+        with pytest.raises(RuntimeError, match="dispatched native work"):
+            verify.worker(args)
     else:
         verify.worker(args)
-        assert json.loads(result.read_text()) == {"rejected": True, "message": message}
+        assert json.loads(result.read_text()) == {
+            "rejected": True,
+            "message": message,
+            "dispatchCount": 0,
+        }
     if fault:
         assert not result.exists()
 
@@ -1953,6 +1963,8 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
         "skipped",
         "negative",
         "negative-message",
+        "negative-dispatch",
+        "unlisted-entry",
         "threads",
         "duplicate",
         "launch-version",
@@ -2008,6 +2020,9 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
     )
     calls = []
     identities = []
+    lazy_entry = "sv_Multiplyfloat32"
+    assert lazy_entry in verify.LAZY_ELEMENTWISE_ENTRIES
+    assert lazy_entry not in verify.ENTRIES
 
     def prepared(root):
         identities.append(root)
@@ -2141,6 +2156,14 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 trace[0]["dispatchVersion"] = 2.0
             if fault == "launch-size-boolean":
                 trace[0]["workgroupSize"] = [True, 1, 1]
+            # Upstream tests may translate unary and binary vectors on use;
+            # any other entry outside the base family is refused.
+            trace.append(
+                {
+                    **trace[-1],
+                    "entry": "sortfloat32" if fault == "unlisted-entry" else lazy_entry,
+                }
+            )
             (output / "dispatch.jsonl").write_text("\n".join(map(json.dumps, trace)))
         verify.save(
             output / "result.json",
@@ -2153,6 +2176,11 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                         "unexpected"
                         if fault == "negative-message"
                         else verify.NEGATIVE_CHECKS[mode]
+                    ),
+                    **(
+                        {"dispatchCount": int(fault == "negative-dispatch")}
+                        if mode in verify.UNDISPATCHED_CHECKS
+                        else {}
                     ),
                 }
             ),
@@ -2231,9 +2259,11 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 assert command_result["returncode"] == (124 if mode == "native" else 0)
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 19 and evidence["dispatchCount"] == 532 + len(
+        assert len(calls) == 19 and evidence["dispatchCount"] == 533 + len(
             boolean_workloads.dispatches()
         )
+        assert evidence["lazyEntries"] == [lazy_entry]
+        assert lazy_entry in evidence["entries"]
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -2645,12 +2675,44 @@ def test_boolean_host_rejects_invalid_storage(
     assert len(calls) == (0 if fault.startswith("input") else 1)
 
 
+def test_column_contiguous_comparisons_run_without_copies(monkeypatch):
+    # Two transposed operands are both column contiguous, so MLX runs them as
+    # one vector-vector dispatch; a broadcast or reversed pair is copied first.
+    checked = set()
+    for definition in list(boolean_workloads.definitions()):
+        entry, _, source, _, layout = definition
+        if entry not in packages.COMPARISON_ENTRIES or layout not in {
+            "matrix",
+            "transpose",
+            "broadcast",
+            "reverse",
+        }:
+            continue
+        monkeypatch.setattr(
+            boolean_workloads, "definitions", lambda item=definition: iter([item])
+        )
+        size = boolean_workloads.operand(source, layout).size
+        copy = packages.BOOLEAN_COPY_ENTRY if source == "bool_" else packages.COPY_ENTRY
+        copies = 0 if layout in {"matrix", "transpose"} else 2
+        assert boolean_workloads.dispatches() == [(copy, size)] * copies + [
+            (entry, size)
+        ]
+        checked.add((source, layout))
+    assert {layout for _, layout in checked} == {
+        "matrix",
+        "transpose",
+        "broadcast",
+        "reverse",
+    }
+    assert {source for source, _ in checked} >= {"float32", "bool_"}
+
+
 @pytest.mark.parametrize(
     "fault", [None, "missing", "dtype", "shape", "input", "output", "byte-type"]
 )
 def test_boolean_workload_records_are_exact(fault):
     records = boolean_workloads.expected_records()
-    assert len(records) > 250 and len(boolean_workloads.dispatches()) > 400
+    assert len(records) > 250 and len(boolean_workloads.dispatches()) == 362
     if fault == "missing":
         records.pop()
     elif fault == "dtype":

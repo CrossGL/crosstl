@@ -22,6 +22,9 @@ from demos.integrations.mlx.portable_host import (
     unary_workloads,
     view_workloads,
 )
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    ENTRIES as LAZY_ELEMENTWISE_ENTRIES,
+)
 from demos.integrations.mlx.portable_host.packages import ENTRIES
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.reduction_packages import (
@@ -103,34 +106,44 @@ UPSTREAM_TESTS = (
 )
 DTYPES = ("float32", "int32", "uint32", "int64", "uint64")
 COUNTS = (0, 1, 7, 257)
+# The host serves every MLX dtype but float64, and MLX's array constructor
+# refuses float64 on a GPU stream before any primitive reaches the host, so
+# each dtype check proves that refusal happens with no native dispatch.
+FLOAT64_REFUSAL = "float64 is not supported on the GPU"
 NEGATIVE_CHECKS = {
-    "unsupported": "no GPU implementation",
-    "over-limit": "65535",
+    "unsupported": "Hadamard has no GPU implementation",
+    "over-limit": "Arange currently supports at most 65535 elements",
     "missing": "artifact",
-    "unary-dtype": (
-        "unary dispatch requires matching bool, integer, float16, bfloat16, float32 or "
-        "complex64 arrays"
-    ),
+    "unary-dtype": FLOAT64_REFUSAL,
     "unary-allocation": "exceeds its allocation",
     "unary-strided-allocation": "exceeds its allocation",
     "unary-large-allocation": "exceeds its allocation",
-    "copy-dtype": (
-        "matching bool, integer, float16, bfloat16, float32 or complex64 arrays"
-    ),
+    "copy-dtype": FLOAT64_REFUSAL,
     "copy-large-allocation": "exceeds its allocation",
     "copy-allocation": "exceeds its allocation",
-    "binary-dtype": "supported dtype",
+    "binary-dtype": FLOAT64_REFUSAL,
     "binary-large-allocation": "exceeds its allocation",
-    "cast-dtype": (
-        "casts require bool, integer, float16, bfloat16, float32 or complex64"
-    ),
+    "cast-dtype": FLOAT64_REFUSAL,
     "cast-large-allocation": "exceeds its allocation",
     "cast-allocation": "exceeds its allocation",
-    "full-dtype": (
-        "matching bool, integer, float16, bfloat16, float32 or complex64 arrays"
-    ),
+    "full-dtype": FLOAT64_REFUSAL,
     "full-allocation": "exceeds its allocation",
 }
+UNDISPATCHED_CHECKS = frozenset(
+    {
+        "unsupported",
+        "over-limit",
+        "unary-dtype",
+        "copy-dtype",
+        "binary-dtype",
+        "cast-dtype",
+        "full-dtype",
+        "reduce-large-allocation",
+        "reduce-row-limit",
+        "reduce-row-launch",
+        "reduce-allocation",
+    }
+)
 REDUCTION_NEGATIVE_CHECKS = {
     "reduce-dtype": "matching float32/int32/uint32",
     "reduce-large-allocation": "storage does not match",
@@ -159,10 +172,14 @@ def worker(args):
         raise RuntimeError("A different GPU backend is already available")
     runtime = None
     if args.worker != "cpu":
+        # Upstream tests reach scalar-vector binaries and other entries outside
+        # the base family; the native run translates them from the pinned MLX
+        # sources on first use. Refusal workers keep the base family only.
         runtime = HostRuntime(
             args.packages,
             output / "dispatch.jsonl",
             reductions=getattr(args, "reductions", None),
+            mlx_root=args.mlx_root if args.worker == "native" else None,
         )
         runtime.install()
         assert mx.default_device() == mx.gpu and mx.is_available(mx.gpu)
@@ -173,9 +190,13 @@ def worker(args):
     if args.worker in checks:
         try:
             if args.worker == "unsupported":
-                value = mx.sort(mx.array([-3.0, 2.0]), stream=mx.gpu)
+                value = mx.hadamard_transform(
+                    mx.array([1.0, 2.0, 3.0, 4.0]), stream=mx.gpu
+                )
             elif args.worker == "over-limit":
-                value = mx.arange(65536, stream=mx.gpu)
+                # Integer aranges split into exact launches; a floating-point
+                # arange stays one launch of at most 65535 groups.
+                value = mx.arange(65536, dtype=mx.float32, stream=mx.gpu)
             elif args.worker == "unary-dtype":
                 value = mx.negative(mx.array([-3, 2], dtype=mx.float64), stream=mx.gpu)
             elif args.worker == "unary-allocation":
@@ -192,7 +213,8 @@ def worker(args):
                     stream=mx.gpu,
                 )
             elif args.worker == "copy-dtype":
-                source = mx.array(np.arange(12, dtype=np.float64).reshape(3, 4))
+                # MLX converts NumPy float64 to float32 unless asked otherwise.
+                source = mx.array(np.arange(12).reshape(3, 4), dtype=mx.float64)
                 value = mx.reshape(mx.transpose(source), (12,), stream=mx.gpu)
             elif args.worker == "copy-large-allocation":
                 source = mx.as_strided(
@@ -260,15 +282,10 @@ def worker(args):
             expected = checks[args.worker]
             if expected not in message:
                 raise
-            guarded_rejection = args.worker in {
-                "reduce-large-allocation",
-                "reduce-row-limit",
-                "reduce-row-launch",
-                "reduce-allocation",
-            }
+            guarded_rejection = args.worker in UNDISPATCHED_CHECKS
             if guarded_rejection and runtime.dispatch_count:
                 raise RuntimeError(
-                    "Invalid reduction dispatched native work"
+                    f"Refused {args.worker} work dispatched native work"
                 ) from error
             save(
                 output / "result.json",
@@ -490,12 +507,7 @@ def verify(args):
             or not isinstance(results[mode].get("message"), str)
             or expected not in results[mode]["message"]
             or (
-                mode in {
-                    "reduce-large-allocation",
-                    "reduce-row-limit",
-                    "reduce-row-launch",
-                    "reduce-allocation",
-                }
+                mode in UNDISPATCHED_CHECKS
                 and (
                     type(results[mode].get("dispatchCount")) is not int
                     or results[mode]["dispatchCount"] != 0
@@ -510,7 +522,13 @@ def verify(args):
     expected_entries = set(ENTRIES) | (
         set(REDUCTION_ENTRIES) if reductions is not None else set()
     )
-    if {record["entry"] for record in trace} != expected_entries:
+    traced = {record["entry"] for record in trace}
+    # Every installed entry runs; any other entry is a unary or binary vector
+    # that the native run translated on first use.
+    lazy_entries = sorted(traced - expected_entries)
+    if not expected_entries <= traced or any(
+        entry not in LAZY_ELEMENTWISE_ENTRIES for entry in lazy_entries
+    ):
         raise RuntimeError("Native trace does not cover every translated entry")
     expected_dispatches = (
         [(f"arange{dtype}", count) for dtype in DTYPES for count in COUNTS if count]
@@ -611,7 +629,8 @@ def verify(args):
         "original": results["cpu"],
         "translated": results["native"],
         "dispatchCount": len(trace),
-        "entries": sorted({record["entry"] for record in trace}),
+        "entries": sorted(traced),
+        "lazyEntries": lazy_entries,
         "negativeChecks": {mode: results[mode] for mode in checks},
         "fullUpstreamSuite": False,
         "fullTranslatedBackend": False,

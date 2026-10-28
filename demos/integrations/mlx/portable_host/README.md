@@ -2840,15 +2840,26 @@ comparison inputs on DirectX and OpenGL before dispatch until source parity is
 established. This check does not reject Boolean casts or ordinary comparison
 inputs, and does not claim to fix the underlying translator contract.
 
-Native traces must start with the exact 919 nonempty workload dispatches, cover
-all 93 entries, and retain artifact identities and runtime/device details.
-Separate negative processes reject an unsupported primitive, oversized arange,
-a missing artifact, unary inputs with unsupported dtype, contiguous and
+Native traces must start with the exact 894 nonempty workload dispatches, cover
+all 97 entries, and retain artifact identities and runtime/device details. Two
+transposed comparison operands are both column contiguous, so like MLX the host
+compares them in one vector-vector dispatch without copies. Any
+other traced entry must be a unary or binary vector that the native run
+translated from the pinned sources on first use, as the upstream tests do for
+scalar-vector binaries; the evidence lists these as `lazyEntries`.
+Separate negative processes reject an unsupported primitive (Hadamard), an
+oversized floating-point arange, a missing artifact, unary inputs with
+unsupported dtype, contiguous and
 strided unary inputs that exceed their allocations (including a large view), and
 copies with unsupported dtype, excessive size or an invalid source allocation.
 Binary inputs with unsupported dtype or insufficient backing storage are also rejected, as
 are casts with unsupported types or invalid source spans, including a view
 larger than one dispatch whose backing allocation is too short.
+The host serves every MLX dtype except float64, and MLX's array constructor
+refuses float64 on a GPU stream before a primitive reaches the host. The unary,
+copy, binary, cast and full dtype processes therefore require that refusal, and
+like the unsupported-primitive and arange processes they fail if any native
+dispatch ran.
 Full also rejects complex64 storage, excessive output size and a source
 view extending before its allocation.
 The native worker has a hard 900-second process-tree deadline; the CPU reference
