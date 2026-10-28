@@ -14,15 +14,24 @@ other bytes than the host and every other target.
 :func:`mark_default_buffer_layouts` adds ``@buffer_layout(std430)`` to each unmarked buffer, global, stage or
 parameter, whose element type MSL lays out differently. The Metal generator then declares the element with packed
 vectors and explicit padding at its std430 offsets, as it does for HLSL structured buffers, or raises a typed
-diagnostic for an element it cannot reproduce. A buffer whose element type has no computable layout is left to the
-generator unchanged, and so is one that holds a ``bool``: each target stores booleans in its own physical size, which
-the project package reports to the host (``crosstl.project``), rather than in std430's 32 bits.
+diagnostic for an element it cannot reproduce.
+
+An HLSL structured buffer aligns a vector to its scalar (D3D11.3 functional specification, section 5.3.7), so
+``struct { float a; vec3 b; }`` puts ``b`` at byte 4 where std430 puts it at byte 16, and ``vec3 v[]`` has a
+12-byte stride where std430 has 16. For the HLSL targets the marker adds the same attribute where the HLSL layout
+differs, and :func:`.structured_layouts.legalize_structured_layouts` stores the buffer as 32-bit words at the std430
+offsets.
+
+A buffer whose element type has no computable layout is left to the generator unchanged, and so is one that holds a
+``bool``: each target stores booleans in its own physical size, which the project package reports to the host
+(``crosstl.project``), rather than in std430's 32 bits.
 """
 
 from __future__ import annotations
 
 from .. import ast as A
 from .structured_layouts import (
+    HLSL_TARGETS,
     StructuredLayoutUnsupportedError,
     holds_boolean,
     layouts_agree,
@@ -31,7 +40,10 @@ from .structured_layouts import (
 __all__ = ["TARGETS", "mark_default_buffer_layouts"]
 
 # Targets whose own buffer rules differ from std430, with the rules ``structured_layouts`` names them by.
-_TARGET_RULES = {"metal": "metal"}
+_TARGET_RULES = {
+    "metal": "metal",
+    **{target: "hlsl" for target in sorted(HLSL_TARGETS)},
+}
 TARGETS = frozenset(_TARGET_RULES)
 _WRAPPERS = frozenset({"StructuredBuffer", "RWStructuredBuffer"})
 _ATTRIBUTE = "buffer_layout"

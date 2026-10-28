@@ -1,4 +1,4 @@
-"""Language-level features: control flow, operators, types, compute, resources and shader stages.
+"""Language-level features: control flow, operators, types, compute and graphics built-ins, resources and stages.
 
 The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches, what
 its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core grammar items it needs (an
@@ -24,7 +24,15 @@ from .model import Feature, Type
 from .templates import ABSENT, Template
 from .validators import GLSL_STAGES
 
-CATEGORIES = ("control-flow", "operator", "type", "compute", "resource", "stage")
+CATEGORIES = (
+    "control-flow",
+    "operator",
+    "type",
+    "compute",
+    "graphics",
+    "resource",
+    "stage",
+)
 # The capabilities that make an execution model a shader stage; Kernel and the NV-only mesh models are left out.
 _STAGE_CAPABILITIES = frozenset(
     {"Shader", "Geometry", "Tessellation", "MeshShadingEXT", "RayTracingKHR"}
@@ -272,6 +280,36 @@ def _curated() -> list[Construct]:
             "OpNot",
             "OpLogicalNot",
         ),
+        c(
+            "operator",
+            "vector-shift",
+            "OpShiftLeftLogical",
+            "OpShiftRightArithmetic",
+            "OpShiftRightLogical",
+        ),
+        c(
+            "operator",
+            "vector-bitwise",
+            "OpBitwiseAnd",
+            "OpBitwiseOr",
+            "OpBitwiseXor",
+            "OpNot",
+        ),
+        c(
+            "operator",
+            "integer-vector-comparison",
+            "OpSLessThan",
+            "OpUGreaterThan",
+            "OpIEqual",
+            "OpAny",
+        ),
+        c(
+            "operator",
+            "bool-vector-logic",
+            "OpLogicalNot",
+            "OpLogicalEqual",
+            "OpLogicalNotEqual",
+        ),
         c("type", "array", "OpTypeArray"),
         c("type", "struct", "OpTypeStruct"),
         c("type", "array-of-structs", "OpTypeArray", "OpTypeStruct"),
@@ -497,6 +535,9 @@ def _curated() -> list[Construct]:
             "OpTypeArray",
             "OpControlBarrier",
         ),
+        c("graphics", "fragment-coordinate", "BuiltIn.FragCoord", stage="fragment"),
+        c("graphics", "front-facing", "BuiltIn.FrontFacing", stage="fragment"),
+        c("graphics", "fragment-depth", "BuiltIn.FragDepth", stage="fragment"),
         c(
             "resource",
             "uniform-struct",
@@ -540,6 +581,9 @@ def _curated() -> list[Construct]:
         c("type", "reserved-member-name", "OpMemberName"),
         c("type", "reserved-type-name", "OpName", "OpTypeStruct"),
         c("type", "reserved-global-name", "OpName", "StorageClass.Private"),
+        c("type", "vector-truncation", "OpCompositeExtract", "OpConvertSToF"),
+        c("type", "matrix-resize", "OpTypeMatrix", "OpCompositeConstruct"),
+        c("type", "bool-vector-conversion", "OpINotEqual", "OpSelect"),
         c(
             "resource",
             "uniform-matrix2",
@@ -604,6 +648,26 @@ def _curated() -> list[Construct]:
             "resource",
             "uniform-row-major-array",
             "StorageClass.Uniform",
+            "Decoration.RowMajor",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "buffer-row-major-matrix",
+            "StorageClass.StorageBuffer",
+            "Decoration.RowMajor",
+        ),
+        c(
+            "resource",
+            "buffer-row-major-non-square",
+            "StorageClass.StorageBuffer",
+            "Decoration.RowMajor",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "buffer-row-major-array",
+            "StorageClass.StorageBuffer",
             "Decoration.RowMajor",
             "Decoration.ArrayStride",
         ),
