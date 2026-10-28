@@ -1870,10 +1870,7 @@ def test_hlsl_fx_macro_texture_resource_survives_metal_translation(tmp_path):
         not in crossgl
     )
     assert "texture2d<float> Texture [[texture(0)]]" in metal
-    assert (
-        "Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord)"
-        in metal
-    )
+    assert "Texture.sample(TextureSampler, input.texCoord)" in metal
     assert "[[gl_FragData]]" not in metal
     _compile_with_metal_if_available(metal, tmp_path)
 

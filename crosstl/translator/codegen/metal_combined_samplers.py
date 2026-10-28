@@ -29,6 +29,7 @@ from ..ast import (
     AttributeNode,
     FunctionCallNode,
     IdentifierNode,
+    MemberAccessNode,
     ParameterNode,
     PrimitiveType,
     ShaderNode,
@@ -100,7 +101,13 @@ def _functions(program):
 
 
 _SAMPLER_TYPES = frozenset(
-    {"sampler", "samplerShadow", "SamplerState", "SamplerComparisonState", "comparison_sampler"}
+    {
+        "sampler",
+        "samplerShadow",
+        "SamplerState",
+        "SamplerComparisonState",
+        "comparison_sampler",
+    }
 )
 
 
@@ -116,12 +123,43 @@ def _sampler_names(program, function=None):
     return names
 
 
+def _sampler_members(program):
+    """Structure member names that hold a sampler or an array of samplers."""
+    return {
+        member.name
+        for struct in getattr(program, "structs", None) or []
+        for member in getattr(struct, "members", None) or []
+        if _type_name(
+            getattr(member, "member_type", None) or getattr(member, "vtype", None)
+        )
+        in _SAMPLER_TYPES
+    }
+
+
+def _is_sampler(argument, samplers, members):
+    if isinstance(argument, ArrayAccessNode):
+        return _is_sampler(argument.array_expr, samplers, members)
+    if isinstance(argument, MemberAccessNode):
+        return argument.member in members
+    if isinstance(argument, FunctionCallNode):
+        return _callee(argument) == "sampler"
+    return _argument_name(argument) in samplers
+
+
 def _sampled_in(program, roots, candidates, helpers):
     """The candidates a call samples through their own sampler state, or passes to a helper that does."""
     sampled = set()
     seen = set()
+    members = _sampler_members(program)
+    globals_ = {
+        v.name: _type_name(getattr(v, "var_type", None))
+        for v in getattr(program, "global_variables", None) or []
+    }
     for root in roots:
         samplers = _sampler_names(program, root)
+        types = dict(globals_)
+        for parameter in getattr(root, "parameters", None) or []:
+            types[parameter.name] = _type_name(getattr(parameter, "param_type", None))
         for node in _walk(getattr(root, "body", None), seen):
             if not isinstance(node, FunctionCallNode):
                 continue
@@ -131,9 +169,18 @@ def _sampled_in(program, roots, candidates, helpers):
                 # Only the parameters the helper samples with their own sampler state need one.
                 indices = helpers[(callee, len(arguments))]
                 names = [_argument_name(arguments[i]) for i in indices]
-            elif callee.startswith("texture") and arguments and callee not in _TEXEL_CALLS:
-                explicit = len(arguments) >= 3 and _argument_name(arguments[1]) in samplers
-                names = [] if explicit else [_argument_name(arguments[0])]
+            elif (
+                callee.startswith("texture")
+                and arguments
+                and callee not in _TEXEL_CALLS
+            ):
+                explicit = len(arguments) >= 3 and _is_sampler(
+                    arguments[1], samplers, members
+                )
+                name = _argument_name(arguments[0])
+                # MSL takes no offsets on cube textures; the generator refuses such a call.
+                refused = "Offset" in callee and "Cube" in types.get(name, "")
+                names = [] if explicit or refused else [name]
             else:
                 names = []
             sampled.update(name for name in names if name in candidates)
@@ -152,7 +199,10 @@ def _declared_names(program):
 def _binding_key(attributes):
     return tuple(
         sorted(
-            (str(a.name).lower(), tuple(str(getattr(x, "value", x)) for x in a.arguments or []))
+            (
+                str(a.name).lower(),
+                tuple(str(getattr(x, "value", x)) for x in a.arguments or []),
+            )
             for a in attributes
         )
     )
@@ -200,9 +250,7 @@ def bind_combined_samplers(ast):
     helpers = _helper_sampler_parameters(ast)
     sampled = _sampled_in(ast, _functions(ast), set(textures), helpers)
     declared = _declared_names(ast)
-    needed = sorted(
-        name for name in sampled if f"{name}Sampler" not in declared
-    )
+    needed = sorted(name for name in sampled if f"{name}Sampler" not in declared)
     if not needed and not helpers:
         return ast
     ast = deepcopy(ast)
@@ -210,7 +258,8 @@ def bind_combined_samplers(ast):
     taken = {
         _binding_key(_binding_attributes(v))
         for v in globals_
-        if _type_name(getattr(v, "var_type", None)) in _SAMPLER_TYPES and _binding_attributes(v)
+        if _type_name(getattr(v, "var_type", None)) in _SAMPLER_TYPES
+        and _binding_attributes(v)
     }
     by_name = {getattr(v, "name", None): v for v in globals_}
     # After every other declaration, so that the samplers the program declares keep the slots they had.
@@ -255,7 +304,11 @@ def _helper_sampler_parameters(program):
 def _sampler_argument(argument):
     if isinstance(argument, ArrayAccessNode):
         inner = _sampler_argument(argument.array_expr)
-        return None if inner is None else ArrayAccessNode(inner, deepcopy(argument.index_expr))
+        return (
+            None
+            if inner is None
+            else ArrayAccessNode(inner, deepcopy(argument.index_expr))
+        )
     if isinstance(argument, IdentifierNode):
         return IdentifierNode(f"{argument.name}Sampler")
     return None
@@ -291,6 +344,10 @@ def _thread_helper_samplers(program):
             texture = parameters[index]
             sampler_type = PrimitiveType("sampler")
             if isinstance(texture.param_type, ArrayType):
-                sampler_type = ArrayType(sampler_type, deepcopy(texture.param_type.size))
-            parameters.insert(index + 1, ParameterNode(f"{texture.name}Sampler", sampler_type))
+                sampler_type = ArrayType(
+                    sampler_type, deepcopy(texture.param_type.size)
+                )
+            parameters.insert(
+                index + 1, ParameterNode(f"{texture.name}Sampler", sampler_type)
+            )
         function.parameters = parameters

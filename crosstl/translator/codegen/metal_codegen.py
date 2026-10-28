@@ -382,6 +382,7 @@ from .metal_bit_scans import emit_metal_bit_scan_helpers, metal_bit_scan_call
 from .metal_buffer_arrays import expand_entry_buffer_array
 from .metal_buffer_component_stores import metal_buffer_component_store
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
+from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
@@ -400,7 +401,6 @@ from .metal_keyword_identifiers import (
     rename_metal_keyword_members,
     rename_metal_keyword_parameters,
 )
-from .metal_combined_samplers import bind_combined_samplers
 from .metal_library_functions import rename_msl_library_functions
 from .metal_library_structs import is_metal_library_struct
 from .metal_matrix_builtins import MetalMatrixBuiltins
@@ -22034,7 +22034,14 @@ class MetalCodeGen(
             or is_texture_gather_compare_operation(func_name)
             or is_projected_texture_compare_operation(func_name)
         ):
-            return not self.is_multisample_texture_resource(texture_type)
+            if self.is_multisample_texture_resource(texture_type):
+                return False
+            if is_texture_compare_offset_operation(func_name) or str(
+                func_name
+            ).startswith("textureGatherCompareOffset"):
+                # Offsets the texture cannot take are refused, and need no sampler.
+                return self.texture_sample_supports_offset(texture_type)
+            return True
 
         if is_texture_query_lod_operation(func_name):
             return not (
