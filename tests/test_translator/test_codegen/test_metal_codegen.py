@@ -1104,6 +1104,51 @@ def test_metal_reserved_shader_scope_constant_is_renamed(name):
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_reserved_shader_scope_constant_is_renamed_at_every_use():
+    shader = """
+    shader ReservedShaderConstantUses {
+        const int thread = 2;
+        const int device = thread * 2;
+        const float device_ = 1.0;
+        struct Span { float v[thread]; };
+        float scale(float x) { return x * float(device); }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                Span s;
+                float tmp[device];
+                s.v[thread - 1] = device_;
+                tmp[0] = scale(s.v[1]);
+                switch (int(i)) {
+                    case thread:
+                        tmp[1] = 2.0;
+                        break;
+                    default:
+                        tmp[1] = 0.0;
+                        break;
+                }
+                outp[i] = tmp[0] + tmp[1];
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    # `device_` is taken, so `device` becomes `device__`.
+    assert "constant int thread_ = 2;" in generated_code
+    assert "constant int device__ = thread_ * 2;" in generated_code
+    assert "constant float device_ = 1.0;" in generated_code
+    assert "float v[thread_];" in generated_code
+    assert "return x * float(device__);" in generated_code
+    assert "float tmp[device__];" in generated_code
+    assert "s.v[thread_ - 1] = device_;" in generated_code
+    assert "case thread_:" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_binary_expression_precedence_preserves_grouping_in_metal():
     shader = """
     shader MetalExpressionGrouping {
