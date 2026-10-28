@@ -69,6 +69,11 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .wgsl_cube_texture_offsets import (
+    OFFSET_TEXTURE_LOOKUPS,
+    WGSLCubeTextureOffsetUnsupportedError,
+    is_cube_array_texture_type,
+)
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
     entry_output_parameters,
@@ -4203,6 +4208,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         args = list(node.arguments)
         if normalized_name in FILTERED_TEXTURE_LOOKUPS and args:
             self.refuse_integer_texture_sample(args[0], function_name)
+        if normalized_name in OFFSET_TEXTURE_LOOKUPS and args:
+            self.refuse_cube_array_texture_offset(args[0], function_name)
         if normalized_name == "texture":
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturelod":
@@ -4242,6 +4249,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         type_name = self.resource_type_name(self.expression_type(texture_expr))
         if is_integer_sampler_type_name(type_name):
             raise WGSLIntegerTextureSampleUnsupportedError(
+                function_name, self.generate_expression(texture_expr)
+            )
+
+    def refuse_cube_array_texture_offset(self, texture_expr, function_name):
+        texture_type = self.sampled_texture_type(self.expression_type(texture_expr))
+        if is_cube_array_texture_type(texture_type):
+            raise WGSLCubeTextureOffsetUnsupportedError(
                 function_name, self.generate_expression(texture_expr)
             )
 

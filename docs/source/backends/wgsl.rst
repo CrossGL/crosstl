@@ -53,6 +53,10 @@ The initial WGSL target surface covers common portable shader output:
   offset forms on ``isampler*`` and ``usampler*`` textures, which WGSL cannot
   sample; ``texelFetch`` and ``textureSize`` on them become ``textureLoad`` and
   ``textureDimensions``
+* typed diagnostics (``project.translate.wgsl-cube-texture-offset-unsupported``)
+  for ``textureOffset``, ``textureLodOffset``, ``textureGradOffset``,
+  ``textureCompareOffset`` and ``textureCompareLodOffset`` on cube array
+  textures, for which WGSL has no offset lookup
 
 Implementation Notes
 --------------------
