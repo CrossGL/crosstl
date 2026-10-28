@@ -47,7 +47,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
-from .c_family_operands import postfix_operand
+from .c_family_operands import postfix_operand, prefix_unary_operand
 from .c_float_literals import c_float_literal_text
 from .c_pointer_math import generate_pointer_math_call
 from .c_reference_parameters import (
@@ -4123,16 +4123,16 @@ class HipCodeGen(
             lowered = self.lower_vector_unary_operation(node.operand, operand, node.op)
             if lowered is not None:
                 return lowered
-            return f"!{operand}"
+            return f"!{prefix_unary_operand('!', operand)}"
         elif node.op in ["++", "--"]:
             if getattr(node, "is_postfix", getattr(node, "postfix", False)):
                 return f"{postfix_operand(operand)}{node.op}"
             else:
-                return f"{node.op}{operand}"
+                return f"{node.op}{prefix_unary_operand(node.op, operand)}"
         lowered = self.lower_vector_unary_operation(node.operand, operand, node.op)
         if lowered is not None:
             return lowered
-        return f"{node.op}{operand}"
+        return f"{node.op}{prefix_unary_operand(node.op, operand)}"
 
     def visit_ConstructorNode(self, node) -> str:
         enum_constructor = generate_enum_constructor_expression(self, node)
