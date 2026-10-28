@@ -56,7 +56,10 @@ ROUTES = {
     "depthwise-2d-3x5-copied": "depthwise_conv_2D_gpu",
     "depthwise-2d-pointwise": "depthwise_conv_2D_gpu",
     "depthwise-2d-from-1d": "depthwise_conv_2D_gpu",
-    "refused-general-2d": "implicit_gemm_conv_2D_general_gpu",
+    "general-2d-strided-unaligned": "implicit_gemm_conv_2D_general_gpu",
+    "general-2d-transpose": "implicit_gemm_conv_2D_general_gpu",
+    "general-2d-dilated-copied": "implicit_gemm_conv_2D_general_gpu",
+    "refused-stride-two-transpose-3d": "stride_two_conv_transpose_3D_gpu",
     "pad-in-channels-2d": "pad_in_channels_conv_2D_gpu",
     "pad-in-channels-2d-copied": "pad_in_channels_conv_2D_gpu",
     "refused-pad-and-slice-3d": "pad_and_slice_conv_3D_gpu",
@@ -97,6 +100,8 @@ def launches(record):
         return [padded_launch(record)]
     if record["route"] == "depthwise_conv_2D_gpu":
         return [depthwise_2d_launch(record)]
+    if record["route"] == layout.general.ROUTE:
+        return [general_launch(record)]
     points = math.prod(p["wS"])
     total = p["N"] * math.prod(p["oS"])
     rows = verify._unfold_rows(
@@ -134,6 +139,36 @@ def implicit_launch(record):
         "workgroupSize": list(model.workgroup_size),
     }
     parameters = {"params": p, "gemm_params": gemm}
+    return entry, counts, parameters, counts["C"], execution
+
+
+def general_launch(record):
+    """The steel_conv_general launch conv.inc makes for ``record``."""
+    (entry,) = record["convEntries"]
+    p = copy.deepcopy(record["params"])
+    general = layout.general
+    gemm = general.gemm_params(p, layout.signature(entry)["model"])
+    jump = general.jump_params(p)
+    counts = {
+        "A": math.prod(record["inShape"]),
+        "B": math.prod(record["wtShape"]),
+        "C": math.prod(record["outShape"]),
+    }
+    execution = {
+        "workgroupCount": [
+            gemm["tiles_n"],
+            gemm["tiles_m"],
+            jump["f_out_jump_h"] * jump["f_out_jump_w"],
+        ],
+        "workgroupSize": [32, 2, 2],
+    }
+    parameters = {
+        "params": p,
+        "gemm_params": gemm,
+        "jump_params": jump,
+        "base_h": general.base_info(p, 0),
+        "base_w": general.base_info(p, 1),
+    }
     return entry, counts, parameters, counts["C"], execution
 
 
@@ -878,7 +913,7 @@ def test_packages_follow_the_conv_gate(tmp_path):
     root = Path("/pinned")
     entries = {entry for record in RECORDS for entry in record["convEntries"]}
     for entry in sorted(entries):
-        if layout.signature(entry)["kind"] in {"implicit", "dw2"}:
+        if layout.signature(entry)["kind"] in {"implicit", "dw2", "general"}:
             continue
         for target in ("metal", "directx", "opengl"):
             config = conv_packages.ConvPackageCache(root, tmp_path, target)

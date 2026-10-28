@@ -2,9 +2,10 @@
 // convolution as conv.cpp does. It runs the explicit GEMM routes, which unfold
 // the input with naive_unfold_nd (groups == 1) or naive_unfold_transpose_nd
 // and multiply the unfolded rows with the steel GEMM, the separable
-// depthwise_conv_1d kernel, the small-kernel depthwise_conv_2d kernel and the
+// depthwise_conv_1d kernel, the small-kernel depthwise_conv_2d kernel, the
 // implicit GEMM routes, which run steel_conv's implicit_gemm_conv_2d and
-// implicit_gemm_conv_3d. Every other
+// implicit_gemm_conv_3d, and the general implicit GEMM route, which runs
+// steel_conv_general's implicit_gemm_conv_2d_general. Every other
 // route conv.cpp takes is refused by name before any launch. Each launch binds
 // the buffers and values conv.cpp binds; conv_layout checks the unfold,
 // depthwise and implicit GEMM launches against the same routing and
@@ -21,8 +22,11 @@
 // by and at most 65535 rows, the Z workgroups of one launch; conv.cpp's
 // MLX_CONV_UNFOLD_TILE_ROWS still caps it further. depthwise_conv_2d and the
 // implicit GEMM kernels run with conv.cpp's threadgroups and parameters; the
-// host names each depthwise_conv_2d pipeline by conv.cpp's hash name, whose
-// translated entry has those function constants frozen.
+// host names each depthwise_conv_2d and implicit_gemm_conv_2d_general
+// pipeline by conv.cpp's hash name, whose translated entry has those function
+// constants frozen.
+
+#include <numeric>
 
 #include "mlx/backend/metal/kernels/steel/conv/params.h"
 
@@ -457,6 +461,104 @@ void conv_pad_in_channels(
       in, wt, out, MLXConvParams<2>::with_padded_channels(conv_params, 0, extra_c));
 }
 
+// conv.cpp implicit_gemm_conv_2D_general_gpu: one steel_conv_general launch
+// whose grid z takes one output row and column residue. base_h and base_w
+// hold each residue's first filter tap and tap count, and the align_C
+// function constant is frozen into the entry conv.cpp's hash name selects.
+void conv_implicit_gemm_general(
+    const array& in,
+    const array& wt,
+    array& out,
+    const MLXConvParams<2>& conv_params) {
+  const int implicit_M = conv_int(
+      static_cast<int64_t>(conv_params.N) * conv_params.oS[0] * conv_params.oS[1]);
+  const int implicit_N = conv_params.O;
+  const int implicit_K =
+      conv_int(static_cast<int64_t>(conv_params.wS[0]) * conv_params.wS[1] * conv_params.C);
+  const int wm = 2, wn = 2;
+
+  const int f_wgt_jump_h =
+      std::lcm(conv_params.idil[0], conv_params.kdil[0]) / conv_params.kdil[0];
+  const int f_wgt_jump_w =
+      std::lcm(conv_params.idil[1], conv_params.kdil[1]) / conv_params.kdil[1];
+  const int f_out_jump_h =
+      std::lcm(conv_params.idil[0], conv_params.str[0]) / conv_params.str[0];
+  const int f_out_jump_w =
+      std::lcm(conv_params.idil[1], conv_params.str[1]) / conv_params.str[1];
+  const int adj_out_h = (conv_params.oS[0] + f_out_jump_h - 1) / f_out_jump_h;
+  const int adj_out_w = (conv_params.oS[1] + f_out_jump_w - 1) / f_out_jump_w;
+  const int adj_out_hw = conv_int(static_cast<int64_t>(adj_out_h) * adj_out_w);
+  const int adj_implicit_m = conv_int(static_cast<int64_t>(conv_params.N) * adj_out_hw);
+  steel::Conv2DGeneralJumpParams jump_params{
+      f_wgt_jump_h,
+      f_wgt_jump_w,
+      f_out_jump_h,
+      f_out_jump_w,
+      adj_out_h,
+      adj_out_w,
+      adj_out_hw,
+      adj_implicit_m};
+
+  // conv.cpp's base_h and base_w loops: each residue's first tap on an
+  // input pixel and the taps it steps through.
+  auto bases = [&](int axis, int residues, int step) {
+    std::vector<steel::Conv2DGeneralBaseInfo> table(residues);
+    const int jump = conv_params.flip ? -conv_params.kdil[axis] : conv_params.kdil[axis];
+    const int init =
+        conv_params.flip ? (conv_params.wS[axis] - 1) * conv_params.kdil[axis] : 0;
+    for (int i = 0; i < residues; ++i) {
+      int loop = i * conv_params.str[axis] - conv_params.pad[axis] + init;
+      int base = 0;
+      while (base < conv_params.wS[axis] && loop % conv_params.idil[axis] != 0) {
+        base++;
+        loop += jump;
+      }
+      table[i] = {base, ((conv_params.wS[axis] - base) + step - 1) / step};
+    }
+    return table;
+  };
+  const auto base_h = bases(0, f_out_jump_h, f_wgt_jump_h);
+  const auto base_w = bases(1, f_out_jump_w, f_wgt_jump_w);
+
+  const int bm = adj_implicit_m >= 8192 && conv_params.C >= 64 ? 64 : 32;
+  const int bn = (bm == 64 && implicit_N >= 64) ? 64 : 32;
+  const int bk = 16;
+  const int tn = (implicit_N + bn - 1) / bn;
+  const int tm = (adj_implicit_m + bm - 1) / bm;
+  const int gemm_k_iters = (conv_params.C + bk - 1) / bk;
+  const bool align_C = conv_params.C % bk == 0;
+  auto gemm_params = conv_implicit_params(
+      conv_params, implicit_M, implicit_N, implicit_K, gemm_k_iters, tn, tm, bk);
+
+  const char* storage = matmul_storage(out.dtype());
+  const std::string entry = std::string("implicit_gemm_conv_2d_general_") + storage +
+      "_bm" + std::to_string(bm) + "_bn" + std::to_string(bn) + "_bk" +
+      std::to_string(bk) + "_wm" + std::to_string(wm) + "_wn" + std::to_string(wn) +
+      "_alC_" + std::to_string(align_C);
+  require_entry(entry);
+
+  MLXConvParams<2> params = conv_params;
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  auto words = [](const auto& value) { return sizeof(value) / sizeof(int32_t); };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"A", storage, data(in), matmul_span(in), 0},
+      {"B", storage, data(wt), matmul_span(wt), 0},
+      {"C", storage, out.data<void>(), out.size(), 1},
+      {"params", "uint8", &params, sizeof(params), 0},
+      {"gemm_params", "int32", &gemm_params, words(gemm_params), 0},
+      {"jump_params", "int32", &jump_params, words(jump_params), 0},
+      {"base_h", "int32", const_cast<steel::Conv2DGeneralBaseInfo*>(base_h.data()),
+       base_h.size() * words(base_h[0]), 0},
+      {"base_w", "int32", const_cast<steel::Conv2DGeneralBaseInfo*>(base_w.data()),
+       base_w.size() * words(base_w[0]), 0},
+  };
+  const CrosstlMlxLaunch launch{
+      {conv_groups(tn), conv_groups(tm),
+       conv_groups(static_cast<int64_t>(f_out_jump_h) * f_out_jump_w)},
+      {32, uint32_t(wn), uint32_t(wm)}};
+  conv_launch(entry, buffers, out.size(), launch);
+}
+
 void conv_dispatch_2d(
     const array& in,
     const array& wt,
@@ -504,7 +606,7 @@ void conv_dispatch_2d(
     return conv_implicit_gemm(in, wt, out, conv_params);
   }
   if ((conv_params.C % 16 == 0 && conv_params.O % 16 == 0) || out_large) {
-    conv_unported("implicit_gemm_conv_2D_general_gpu");
+    return conv_implicit_gemm_general(in, wt, out, conv_params);
   }
   conv_explicit_gemm(in, wt, out, conv_params);
 }

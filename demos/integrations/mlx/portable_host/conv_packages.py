@@ -7,9 +7,11 @@ launches. ``depthwise_conv_2d`` comes from the same source at conv.cpp's
 threadgroups, one entry per conv.cpp pipeline with its function constants
 frozen. ``implicit_gemm_conv_2d`` and ``implicit_gemm_conv_3d`` come from
 steel_conv.metal and steel_conv_3d.metal with the options of
-``test_current_steel_conv``. Run as a module, it translates entries into a
-host package directory's cache ahead of execution, several processes at a
-time.
+``test_current_steel_conv``, and ``implicit_gemm_conv_2d_general`` from
+steel_conv_general.metal with those of ``test_current_steel_conv_general``,
+one entry per ``align_C`` value with the constant frozen. Run as a module, it
+translates entries into a host package directory's cache ahead of execution,
+several processes at a time.
 """
 
 import hashlib
@@ -24,6 +26,7 @@ from demos.integrations.mlx.portable_host.matmul_packages import (
     cli,
     run_builds,
 )
+from demos.integrations.mlx.tests.kernels import steel_conv_general_model as general
 from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
 
 # The directory under a host package root that HostRuntime caches entries in.
@@ -56,11 +59,35 @@ def implicit_project_config(root, output_dir, target, entry):
     )
 
 
+def general_project_config(root, output_dir, target, entry):
+    """One steel_conv_general entry with the current-tree gate's options."""
+    info = layout.signature(entry)
+    model = info["model"]
+    return ProjectConfig(
+        root=root,
+        source_roots=("mlx/backend/metal/kernels",),
+        include_patterns=(model.source,),
+        include_dirs=(".",),
+        targets=(target,),
+        output_dir=output_dir,
+        entry_points={model.source: (model.name,)},
+        specialization_constants=dict(info["constants"]),
+        freeze_specialization_constants=True,
+        entry_workgroup_size_rules={model.source: {model.name: model.workgroup_size}},
+        index_range_assertions=(
+            general.index_assertions(model) if target == "opengl" else ()
+        ),
+        source_options={"metal": steel.metal_source_options()},
+    )
+
+
 def project_config(root, output_dir, target, entry):
     """One conv.metal entry with the current-tree conv gate's options."""
     info = layout.signature(entry)
     if info["kind"] == "implicit":
         return implicit_project_config(root, output_dir, target, entry)
+    if info["kind"] == "general":
+        return general_project_config(root, output_dir, target, entry)
     target_options = {}
     if info["kind"] in {"dw1", "dw2"} and target in {"opengl", "directx"}:
         target_options[target] = {"binary32_additive_profile": ADDITIVE_PROFILE}

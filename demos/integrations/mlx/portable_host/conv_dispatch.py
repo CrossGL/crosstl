@@ -17,6 +17,7 @@ from crosstl.project import (
     pack_storage_records,
     pack_uniform_block,
 )
+from demos.integrations.mlx.portable_host import conv_general_layout as general
 from demos.integrations.mlx.portable_host import conv_layout as layout
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.matmul_dispatch import (
@@ -68,12 +69,14 @@ def _storage(entry, supplied, counts, parameters, metadata):
     return storage
 
 
-# Parameters bound as one C struct, with their sizes in bytes by rank.
+# Parameters bound as C structs, with their sizes in bytes by rank. The
+# general implicit GEMM's residue tables are arrays of one struct.
 RECORDS = {
     "params": layout.PARAMS_SIZES,
     "gemm_params": {
         rank: 4 * len(fields) for rank, fields in layout.GEMM_FIELDS.items()
     },
+    **{name: {2: size} for name, size in general.RECORD_BYTES.items()},
 }
 
 
@@ -82,8 +85,12 @@ UNIFORM_LAYOUTS = {"opengl": "std140", "directx": "hlsl-constant-buffer"}
 
 
 def _record(binding, name, record, spatial, target):
-    """One C struct parameter as its reflected storage record, block or words."""
+    """One C struct parameter as its reflected storage record, block or words.
+
+    ``record`` is one field map, or a list of them for a table.
+    """
     scalar = binding["scalarLayout"]
+    records = record if isinstance(record, list) else [record]
     if target in UNIFORM_LAYOUTS and (
         scalar.get("storageLayout") == UNIFORM_LAYOUTS[target]
     ):
@@ -99,17 +106,17 @@ def _record(binding, name, record, spatial, target):
     if scalar.get("elementStrideBytes") != RECORDS[name][spatial]:
         raise ValueError(f"{LABEL} reflected parameter record differs")
     if scalar.get("elementType") == "record":
-        words = pack_storage_records(scalar, [dict(record)])
+        words = pack_storage_records(scalar, [dict(item) for item in records])
         return {"dtype": "uint32", "shape": [len(words)], "values": words}
     # A record of int fields alone is reflected as its int words.
     members = [member.get("name") for member in scalar.get("structMembers", ())]
     if (
-        name != "gemm_params"
+        name not in {"gemm_params", *general.RECORDS}
         or scalar.get("elementType") != "int32"
-        or members != list(record)
+        or any(members != list(item) for item in records)
     ):
         raise ValueError(f"{LABEL} reflected parameter record differs")
-    words = [record[member] for member in members]
+    words = [item[member] for item in records for member in members]
     return {"dtype": "int32", "shape": [len(words)], "values": words}
 
 

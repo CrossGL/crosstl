@@ -10,8 +10,10 @@ convolutions (and the 1-D ones conv.cpp sends there) run one
 convolutions run one ``implicit_gemm_conv_2d`` or ``implicit_gemm_conv_3d``
 launch, padded-channel convolutions zero-pad the input and weight channels
 through ``Pad`` and run one ``implicit_gemm_conv_2d`` launch on the padded
-parameters, and an empty output launches nothing. Three cases reach routes the
-host does not port yet, which it refuses by name before any launch.
+parameters, input-dilated and unaligned-channel 2-D convolutions run one
+``implicit_gemm_conv_2d_general`` launch with ``align_C`` frozen, and an empty
+output launches nothing. Three cases reach routes the host does not port yet,
+which it refuses by name before any launch.
 
 Inputs are nonzero quarters and weights nonzero halves, so every product and
 sum is exact in float32 and rounds once to the output type. Every output bit
@@ -341,13 +343,48 @@ CASES = (
         "moved",
         None,
     ),
-    # Routes the host does not port yet.
+    # Unaligned channels and a large output: align_C false, one residue.
     (
-        "refused-general-2d",
+        "general-2d-strided-unaligned",
         "float32",
         (1, 40, 40, 8),
         (8, 3, 3, 8),
         dict(stride=2),
+        "dense",
+        None,
+    ),
+    # conv_transpose2d's input dilation and flip: four output residues.
+    (
+        "general-2d-transpose",
+        "float16",
+        (2, 6, 7, 16),
+        (16, 3, 3, 16),
+        dict(padding=((2, 2), (2, 2)), input_dilation=2, flip=True),
+        "dense",
+        None,
+    ),
+    # Mixed strides and dilations: six residues, some stepping three taps.
+    (
+        "general-2d-dilated-copied",
+        "bfloat16",
+        (1, 5, 6, 32),
+        (32, 2, 3, 32),
+        dict(
+            stride=(1, 2),
+            padding=((1, 1), (1, 1)),
+            kernel_dilation=(2, 1),
+            input_dilation=(2, 3),
+        ),
+        "moved",
+        None,
+    ),
+    # Routes the host does not port yet.
+    (
+        "refused-stride-two-transpose-3d",
+        "float32",
+        (1, 2, 2, 2, 4),
+        (4, 2, 2, 2, 4),
+        dict(padding=((1, 1, 1), (1, 1, 1)), input_dilation=2, flip=True),
         "dense",
         None,
     ),
@@ -373,7 +410,6 @@ CASES = (
     ("empty-batch", "float32", (0, 9, 5), (7, 3, 5), {}, "dense", None),
 )
 UNPORTED = {
-    "implicit_gemm_conv_2D_general_gpu",
     "winograd_conv_2D_gpu",
     "pad_and_slice_conv_3D_gpu",
     "stride_two_conv_transpose_3D_gpu",
@@ -497,6 +533,9 @@ def case_record(case):
             "launches": [entry],
             "copies": record["copies"] + 4,
         }
+    if route == layout.general.ROUTE:
+        entry = layout.general.entry(params, dtype)
+        return {**record, "convEntries": [entry], "launches": [entry]}
     if route in IMPLICIT_ROUTES:
         # conv_1D_gpu dispatches its implicit GEMM with 2-D parameters.
         entry = layout.implicit_entry(

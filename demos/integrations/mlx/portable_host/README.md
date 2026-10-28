@@ -913,7 +913,12 @@ parameters, including the 2-D implicit GEMM that conv_1D_gpu reaches.
 multiple of 16 through the host's `Pad` and runs that implicit GEMM on
 `MLXConvParams::with_padded_channels`; the plan accepts those padded
 parameters only when the dense parameters of a narrower channel count route
-there. The general implicit GEMM, winograd and 3-D special routes are refused
+there. `implicit_gemm_conv_2D_general_gpu`, which ungrouped input-dilated
+convolutions (the strided transposed ones) and large ones with unaligned
+channels take, runs one steel_conv_general `implicit_gemm_conv_2d_general`
+launch whose grid `z` enumerates the output row and column residues that share
+filter taps, with conv.cpp's `Conv2DGeneralJumpParams` and per-residue
+`base_h` and `base_w` tables. The winograd and 3-D special routes are refused
 by name before any launch, and an empty output launches nothing.
 
 Two launch choices differ from conv.cpp without changing a value. The unfold
@@ -937,6 +942,14 @@ new width axis of a 1-D input stride one. Only coordinate zero of such an axis
 is read, so the port binds the dense strides of the same buffer, and every
 route's checks see conv.cpp's contiguous layout.
 
+`implicit_gemm_conv_2d_general` reads `align_C` (id 200) from a function
+constant. The host names that pipeline by conv.cpp's hash name as well
+(`implicit_gemm_conv_2d_general_float32_bm32_bn32_bk16_wm2_wn2_alC_0`) and
+translates it with the constant frozen, with the options of
+`test_current_steel_conv_general`; `conv_general_layout.py` recomputes its
+parameters and residue tables. Its weight loader skips the rows from `O` on
+and ends each row at `C`, so no read leaves the bound weights.
+
 `depthwise_conv_2d` reads its kernel extent, strides, tile and flip from
 Metal function constants. The host names each pipeline by conv.cpp's hash
 name (`depthwise_conv_2d_float32_ker_h_3_ker_w_3_str_h_1_str_w_1_tgp_h_4_tgp_w_8_do_flip_n`)
@@ -956,14 +969,15 @@ and row pitch exactly as conv.cpp passes them. Entries translate into the
 
 The `MLX quantized host` jobs translate the verification entries and the GEMM
 entries they reach, then run `verify_conv.py` through `mx.conv_general`. Its
-32 cases cover every element type, every unfold rank, both explicit routes
+35 cases cover every element type, every unfold rank, both explicit routes
 with input and kernel dilation, flips, uneven padding, row tiles with a
 partial last tile, a split-K product, copied inputs, the separable kernel,
 the 1-D, 2-D and 3-D implicit GEMM routes with the general, small-filter,
 large-filter and one- and three-channel loaders, 64 x 64 tiles, partial 2-D
 grouped and 3-D tiles that read past the weights, depthwise 2-D kernels from
-1 x 1 to 7 x 7 with strides, flips, partial tiles and the 1-D view, three
-refused routes and an empty output. Every output must match the exact float64 reference bit for
+1 x 1 to 7 x 7 with strides, flips, partial tiles and the 1-D view, the
+general implicit GEMM with both `align_C` values, input dilation, residues
+without taps and a copied input, three refused routes and an empty output. Every output must match the exact float64 reference bit for
 bit, and float32 outputs must also equal MLX's CPU
 backend.
 

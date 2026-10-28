@@ -8,7 +8,8 @@ and multiply the unfolded rows with the steel GEMM, whose launches
 ``depthwise_conv_1d``; small-kernel depthwise 2-D convolutions run
 ``depthwise_conv_2d`` with conv.cpp's function constants; and the implicit
 GEMM routes run steel_conv's ``implicit_gemm_conv_2d`` and
-``implicit_gemm_conv_3d``. ``route`` mirrors
+``implicit_gemm_conv_3d``; ``conv_general_layout`` holds the general implicit
+GEMM route's ``implicit_gemm_conv_2d_general``. ``route`` mirrors
 conv.cpp's routing, and ``plan`` checks every launch against it and proves
 each read and write in bounds before a translated kernel runs.
 
@@ -33,6 +34,7 @@ import math
 import re
 import struct
 
+from demos.integrations.mlx.portable_host import conv_general_layout as general
 from demos.integrations.mlx.portable_host import gemv_layout
 from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
 from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
@@ -81,19 +83,29 @@ PARAMETERS = {
     "dw2": ("in", "wt", "out", "params"),
     # steel_conv's A, B, C, params and gemm_params.
     "implicit": ("A", "B", "C", "params", "gemm_params"),
+    # steel_conv_general's, with its jump record and residue tables.
+    "general": general.PARAMETERS,
 }
-OUTPUTS = {"unfold": "out", "dw1": "out", "dw2": "out", "implicit": "C"}
+OUTPUTS = {
+    "unfold": "out",
+    "dw1": "out",
+    "dw2": "out",
+    "implicit": "C",
+    "general": general.OUTPUT,
+}
 ARRAYS = {
     "unfold": ("in", "out"),
     "dw1": ("in", "w", "out"),
     "dw2": ("in", "wt", "out"),
     "implicit": ("A", "B", "C"),
+    "general": general.ARRAYS,
 }
 SCALAR_TYPES = {
     "row_offset": "int32",
     "strides": "int32",
     "kernel_size": "int32",
     "gemm_params": "int32",
+    **{name: "int32" for name in general.RECORDS},
 }
 # ImplicitGemmConv{2,3}DParams' int fields, in declaration order.
 GEMM_FIELDS = {
@@ -164,6 +176,7 @@ PORTED_ROUTES = (
     "implicit_gemm_conv_2D_gpu",
     "implicit_gemm_conv_3D_gpu",
     "pad_in_channels_conv_2D_gpu",
+    general.ROUTE,
 )
 # Routes that launch another route's kernel: the padded-channel route runs
 # the implicit GEMM on its padded parameters.
@@ -187,6 +200,8 @@ def signature(entry):
         match = DW2_PATTERN.fullmatch(entry)
         if match:
             return _dw2_signature(entry, match)
+        if general.is_entry(entry):
+            return general.signature(entry)
         model = steel.BY_NAME.get(entry)
         if model is not None:
             return {
@@ -251,19 +266,19 @@ def dw2_constants(p):
 def source_entry(entry):
     """The conv.metal or steel_conv entry point ``entry`` translates."""
     info = signature(entry)
-    return info["source"] if info["kind"] == "dw2" else entry
+    return info["source"] if info["kind"] in {"dw2", "general"} else entry
 
 
 def source(entry):
     """The pinned source that instantiates ``entry``."""
     info = signature(entry)
-    return info["model"].source if info["kind"] == "implicit" else SOURCE
+    return info["model"].source if info["kind"] in {"implicit", "general"} else SOURCE
 
 
 def workgroup_size(entry):
     """The workgroup size the host launches ``entry`` with."""
     info = signature(entry)
-    if info["kind"] == "implicit":
+    if info["kind"] in {"implicit", "general"}:
         return info["model"].workgroup_size
     return DW2_WORKGROUP if info["kind"] == "dw2" else WORKGROUP
 
@@ -529,6 +544,7 @@ def read_storage(entry, buffers):
             "row_offset": 1,
             "strides": 3,
             "kernel_size": 1,
+            **{record: general.limit(record) for record in general.RECORDS},
         }.get(name, MAX_ELEMENTS)
         count = buffer.count
         if (
@@ -550,7 +566,9 @@ def read_storage(entry, buffers):
             )
         else:
             values = list((ctypes.c_int32 * count).from_address(buffer.data))
-            if name == "gemm_params":
+            if name in general.RECORDS:
+                parameters[name] = general.decode(name, values)
+            elif name == "gemm_params":
                 if count != limit:
                     raise ValueError("Convolution GEMM parameters differ in size")
                 parameters[name] = dict(zip(GEMM_FIELDS[info["spatial"]], values))
@@ -927,6 +945,8 @@ def plan(entry, counts, parameters, threads, execution):
         return _plan_unfold(info, counts, parameters, threads, execution)
     if info["kind"] == "implicit":
         return _plan_implicit(entry, info, counts, parameters, threads, execution)
+    if info["kind"] == "general":
+        return general.plan(entry, info, counts, parameters, threads, execution)
     if info["kind"] == "dw2":
         return _plan_dw2(entry, info, counts, parameters, threads, execution)
     return _plan_dw1(counts, parameters, threads, execution)
