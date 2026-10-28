@@ -4229,6 +4229,10 @@ class HLSLCodeGen(
             self.collect_hlsl_struct_buffer_resource_types(global_vars)
         )
         self.global_variable_types = self.collect_global_variable_types(global_vars)
+        for constant in getattr(ast, "constants", []) or []:
+            constant_type = self.type_name_string(getattr(constant, "const_type", None))
+            if getattr(constant, "name", None) and constant_type:
+                self.global_variable_types.setdefault(constant.name, constant_type)
         self.global_variable_types.update(self.directx_specialization_constant_types)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
@@ -12556,8 +12560,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return
 
-        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
-            mapped_type
+        if (
+            self.is_scalar_value_type(mapped_type)
+            or self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
         ):
             return
 
@@ -12596,8 +12602,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def directx_compile_time_constructor_type(self, type_name):
         mapped_type = self.map_type(type_name)
-        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
-            mapped_type
+        if (
+            self.is_scalar_value_type(mapped_type)
+            or self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
         ):
             return mapped_type
         if self.hlsl_struct_constructor_fields(mapped_type) is not None:
@@ -12997,6 +13005,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if isinstance(expression, ArrayLiteralNode):
             return self.hlsl_contextual_aggregate_initializer(expression, mapped_type)
+        if self.hlsl_matrix_shape(mapped_type) is not None:
+            # Matrix constructors take CrossGL's column-major operand order; the
+            # expression generator owns that reordering.
+            return self.generate_constant_expression(expression, expected_type)
         if isinstance(expression, CastNode):
             target_type = self.map_type(expression.target_type)
             operand = self.hlsl_compile_time_initializer_expression(
