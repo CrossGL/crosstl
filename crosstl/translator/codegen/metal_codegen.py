@@ -6883,6 +6883,22 @@ class MetalCodeGen(
             metal_semantic = self.canonical_metal_semantic(semantic)
             if metal_semantic in builtin_attributes:
                 stage_parameters[metal_semantic] = getattr(parameter, "name", None)
+        if stage_name == "fragment":
+            # A [[stage_in]] structure member carrying a built-in, such as HLSL's SV_Position member, already
+            # delivers it; a second [[position]] parameter would not compile.
+            for parameter in parameters or []:
+                param_type = getattr(parameter, "param_type", None)
+                struct = self.structs_by_name.get(
+                    str(getattr(param_type, "name", param_type))
+                )
+                for member in getattr(struct, "members", None) or []:
+                    attribute = self.canonical_metal_semantic(
+                        self.semantic_from_node(member)
+                    )
+                    if attribute in builtin_attributes:
+                        stage_parameters.setdefault(
+                            attribute, f"{parameter.name}.{member.name}"
+                        )
         return stage_parameters
 
     def required_metal_vertex_builtin_parameters(
@@ -7716,7 +7732,12 @@ class MetalCodeGen(
                 "function return semantic"
             )
         actual_type = self.map_type(raw_return_type)
-        if actual_type != expected_type:
+        # A fragment function may return any scalar or vector colour value, as HLSL's float main() : SV_Target
+        # does (MSL 3.2 section 5.2.3.4).
+        color_value = bool(metal_semantic and metal_semantic.startswith("color(")) and (
+            METAL_COLOR_ATTACHMENT_TYPE.fullmatch(str(actual_type)) is not None
+        )
+        if actual_type != expected_type and not color_value:
             function_name = getattr(func, "name", "<anonymous>")
             raise ValueError(
                 f"Metal {stage_name} return semantic '{semantic}' maps to "
