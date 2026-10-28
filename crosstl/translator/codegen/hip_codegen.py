@@ -4336,6 +4336,10 @@ class HipCodeGen(
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
+        if func_name in self.structs_by_name:
+            # The structure has no constructor; aggregate initialization sets its members in order.
+            return f"{self.map_type(func_name)}{{{', '.join(args)}}}"
+
         mapped_name = self.function_map.get(func_name, func_name)
 
         reduction_call = generate_vector_reduction_call(

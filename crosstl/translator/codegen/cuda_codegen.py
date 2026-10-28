@@ -3605,6 +3605,10 @@ class CudaCodeGen(
 
         if func_name in self.struct_member_types:
             args = self.struct_constructor_arguments(func_name, raw_args, args)
+            if func_name in self.structs_by_name:
+                # The structure has no constructor; aggregate initialization sets its members in order.
+                mapped_type = self.convert_crossgl_type_to_cuda(func_name)
+                return f"{mapped_type}{{{', '.join(args)}}}"
 
         scalar_math_call = self.generate_scalar_math_call(
             math_func_name, raw_args, args

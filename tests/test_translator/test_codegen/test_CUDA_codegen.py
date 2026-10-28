@@ -15019,11 +15019,11 @@ class TestCudaCodeGen:
             "(dynImages_metadata[layer][slot]);" in cuda_code
         )
         assert (
-            "return SampleResult(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
+            "return SampleResult{tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
             "surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
-            "cgl_imageSize_image2D(dynImages_metadata[layer][slot]));" in cuda_code
+            "cgl_imageSize_image2D(dynImages_metadata[layer][slot])};" in cuda_code
         )
         assert (
             "SampleResult assigned = buildAssigned(dynTex, dynTex_metadata, "
@@ -17935,8 +17935,8 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo msTex_metadata;" in cuda_code
         assert "CglResourceQueryInfo img_metadata;" in cuda_code
         assert (
-            "return ResourceBundle(colorMap, colorMap_metadata, samplesMap, "
-            "samplesMap_metadata, imageMap, imageMap_metadata);" in cuda_code
+            "return ResourceBundle{colorMap, colorMap_metadata, samplesMap, "
+            "samplesMap_metadata, imageMap, imageMap_metadata};" in cuda_code
         )
         assert (
             "int2 directCallMember = cgl_textureSize_sampler2D"
@@ -18149,8 +18149,8 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert (
-            "ResourceBundle bundle = ResourceBundle("
-            "colorMap, colorMap_metadata, imageMap, imageMap_metadata);" in cuda_code
+            "ResourceBundle bundle = ResourceBundle{"
+            "colorMap, colorMap_metadata, imageMap, imageMap_metadata};" in cuda_code
         )
         assert (
             "int2 texDims = cgl_textureSize_sampler2D"
