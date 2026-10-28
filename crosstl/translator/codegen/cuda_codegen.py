@@ -49,11 +49,16 @@ from .c_reference_parameters import (
     reference_declarator,
 )
 from .c_vector_reductions import generate_vector_reduction_call
+from .c_wide_integer_vectors import (
+    wide_integer_vector_constructor,
+    wide_integer_vector_type,
+)
 from .comma_expressions import (
     CommaExpressionVisitorMixin,
     comma_result_operand,
     is_comma_expression,
 )
+from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_refusals import CudaLoweringRefused
 from .float_remainder_assignment import float_remainder_assignment
 from .for_initializers import join_for_initializer
@@ -68,6 +73,11 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+)
+from .gpu_device_globals import (
+    at_file_scope,
+    constant_in_device_memory,
+    file_scope_placement,
 )
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
@@ -396,6 +406,8 @@ class CudaCodeGen(
         """Render complete CUDA source for a CrossGL AST."""
         # A CUDA texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         ast_node = canonicalize_separate_textures(ast_node)
+        # A user function named like a device library function would redefine it or make its calls ambiguous.
+        ast_node = rename_cuda_library_functions(ast_node)
         # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
         lower_relational_builtins(ast_node)
         # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
@@ -1732,7 +1744,10 @@ class CudaCodeGen(
         declaration = self.format_typed_declarator(declaration_type, node.name)
         if value is not None:
             declaration += f" = {self.visit(value)}"
-        self.emit(f"const {declaration};")
+        declaration = f"const {declaration}"
+        if at_file_scope(self):
+            declaration = constant_in_device_memory(declaration)
+        self.emit(f"{declaration};")
 
     def format_variable_declaration(self, node):
         var_type = None
@@ -2841,9 +2856,10 @@ class CudaCodeGen(
         metadata_comment = self.cuda_resource_metadata_comment(node, var_type)
         if metadata_comment:
             self.emit(metadata_comment)
+        place = file_scope_placement(self, node, metadata_comment)
         declaration = self.format_variable_declaration(node)
         if declaration != node.name:
-            self.emit(f"{declaration};")
+            self.emit(f"{place(declaration)};")
             initial_value = getattr(
                 node,
                 "initial_value",
@@ -2863,17 +2879,17 @@ class CudaCodeGen(
                     effective_var_type,
                 )
             if metadata_declaration:
-                self.emit(f"{metadata_declaration};")
+                self.emit(f"{place(metadata_declaration)};")
             length_declaration = self.structured_buffer_length_declaration(
                 node.name, var_type
             )
             if length_declaration:
-                self.emit(f"{length_declaration};")
+                self.emit(f"{place(length_declaration)};")
             counter_declaration = self.structured_buffer_counter_declaration(
                 node.name, var_type
             )
             if counter_declaration:
-                self.emit(f"{counter_declaration};")
+                self.emit(f"{place(counter_declaration)};")
             return None
 
         return node.name
@@ -7049,6 +7065,10 @@ class CudaCodeGen(
             cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
             return f"{cuda_element_type}*"
 
+        wide_vector_type = wide_integer_vector_type(crossgl_type)
+        if wide_vector_type is not None:
+            return wide_vector_type
+
         return self.cuda_mapped_type_result(
             type_mapping.get(crossgl_type, crossgl_type)
         )
@@ -10126,6 +10146,9 @@ class CudaCodeGen(
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
+        wide_vector_constructor = wide_integer_vector_constructor(func_name)
+        if wide_vector_constructor is not None:
+            return wide_vector_constructor
         function_mapping = {
             # Math functions
             "sqrt": "sqrtf",
@@ -13376,6 +13399,8 @@ class CudaCodeGen(
                 elif element_type == "uint":
                     return f"uvec{size}"
                 elif element_type in {"i8", "u8", "i16", "u16"}:
+                    return f"vec{size}<{element_type}>"
+                elif wide_integer_vector_type(f"vec{size}<{element_type}>"):
                     return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"

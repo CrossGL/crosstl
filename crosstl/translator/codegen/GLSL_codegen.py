@@ -258,6 +258,11 @@ from .glsl_interface_block_io import (
     block_member_location_type,
     stage_block_member_layout,
 )
+from .glsl_invariant_builtins import (
+    has_invariant_attribute,
+    invariant_builtin_redeclaration,
+    invariant_builtin_redeclarations,
+)
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_mesh_locations import mesh_fragment_input_layouts, mesh_output_layouts
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
@@ -9802,6 +9807,7 @@ class GLSLCodeGen(
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
         code += stage_io_code
+        code += invariant_builtin_redeclarations(self, target_stage)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -22424,6 +22430,7 @@ class GLSLCodeGen(
             or mapped_type == "sampler"
             or self.is_opaque_resource_type(mapped_type)
             or self.is_structured_buffer_type(vtype)
+            or self.is_constant_buffer_type(vtype)
             or self.is_glsl_buffer_block_variable(node, vtype)
         )
 
@@ -32709,6 +32716,15 @@ class GLSLCodeGen(
                     self.current_identifier_aliases[source_name] = builtin_name
                 else:
                     self.current_identifier_aliases.pop(source_name, None)
+            if has_invariant_attribute(node):
+                return invariant_builtin_redeclaration(
+                    self,
+                    builtin_name,
+                    getattr(
+                        self, "current_global_stage_io_stage", self.current_target_stage
+                    ),
+                    source_name or builtin_name,
+                )
             return ""
 
         vtype, _, array_suffix, _ = self.resource_declaration_shape(node)

@@ -66,7 +66,7 @@ __all__ = [
 HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
 TARGETS = frozenset({"opengl", "glsl", "vulkan", "spirv"}) | HLSL_TARGETS
 # ``@buffer_layout`` values this pass reproduces, and the rules they name.
-_SOURCE_RULES = {"hlsl_structured": "hlsl", "metal": "metal"}
+_SOURCE_RULES = {"hlsl_structured": "hlsl", "metal": "metal", "std430": "std430"}
 _RULE_NAMES = {
     "hlsl": "HLSL structured buffers",
     "std430": "std430",
@@ -288,9 +288,9 @@ class _Shapes:
         )
 
     def matrix(self, type_node, bits, rows, columns):
-        # An MSL matrix is an array of column vectors, the columns CrossGL indexes, so its words can be addressed;
-        # the orientation of an HLSL structured-buffer matrix depends on its packing and is not split.
-        if self.source == "metal" and bits == 32:
+        # MSL and std430 matrices are arrays of column vectors, the columns CrossGL indexes, so their words can be
+        # addressed; the orientation of an HLSL structured-buffer matrix depends on its packing and is not split.
+        if self.source in ("metal", "std430") and bits == 32:
             return _Shape(
                 "matrix", kind="f", lanes=rows, count=columns, source=self.source
             )
@@ -458,6 +458,15 @@ class _Buffer:
     inline: bool = False  # a parameter, which generated helper functions cannot name
     queue: str = ""  # AppendStructuredBuffer or ConsumeStructuredBuffer: elements are word structs
     array: bool = False  # an array of buffers, whose elements are selected before they are indexed
+    stage: object = field(
+        default=None, compare=False
+    )  # the declaring stage, which receives the helpers
+
+    @property
+    def prefix(self):
+        """The helper-name prefix: a stage's own buffer names its stage, so stages never share a helper."""
+        stage = getattr(self.stage, "stage", None)
+        return f"__cgl_{getattr(stage, 'value', stage)}_" if stage else "__cgl_"
 
 
 @dataclass
@@ -506,6 +515,7 @@ class _Rewriter:
         # Function name -> the plan of each parameter of each overload (a :class:`_Buffer` where lowered).
         self.parameter_plans = parameter_plans or {}
         self.helpers = {}
+        self.owners = {}  # helper name -> the stage that declares its buffer, or None
         self.functions = {
             function.name: function
             for function in iter_functions(program)
@@ -722,7 +732,9 @@ class _Rewriter:
             suffix = f"{place.shape.kind}_{'_'.join(map(str, place.swizzle))}"
         else:
             suffix = place.shape.key()
-        return f"__cgl_{place.buffer.name}_{verb}_{suffix}"
+        name = f"{place.buffer.prefix}{place.buffer.name}_{verb}_{suffix}"
+        self.owners[name] = place.buffer.stage
+        return name
 
     def load_helper(self, place):
         name = self.helper_name("load", place)
@@ -1020,7 +1032,8 @@ class _Rewriter:
                     A.AssignmentNode(arguments[2], stride),
                 ]
             )
-        name = f"__cgl_{buffer.name}_dimensions"
+        name = f"{buffer.prefix}{buffer.name}_dimensions"
+        self.owners[name] = buffer.stage
         if name not in self.helpers:
             text, leading = _helper_buffer(buffer)
             per_element = "" if buffer.queue else f" / {buffer.shape.words}u"
@@ -1162,7 +1175,7 @@ def _buffer_type(declaration):
     source = _SOURCE_RULES.get(_declared_layout(declaration))
     if source is None:
         return None
-    if slot == "param_type" and isinstance(var_type, A.PointerType):
+    if isinstance(var_type, A.PointerType):
         return slot, var_type, var_type.pointee_type, source
     if (
         slot == "param_type"
@@ -1300,19 +1313,31 @@ def _passed_names(node, functions, names):
 
 
 def _lowered_buffers(program, shapes, target):
-    """The lowered global buffers, each function's buffer parameters and parameter names, and the global buffers
-    whose element calls are spelled as indexing.
+    """The lowered buffers and the buffers whose element calls are spelled as indexing, each keyed by ``None`` for
+    the program's and by ``id(stage)`` for a stage's own, and each function's buffer parameters, parameter names and
+    stage key.
 
     A parameter maps to its :class:`_Buffer`, or to ``False`` when the generator keeps its layout itself.
     """
-    buffers, canonical = {}, set()
+    buffers, canonical = {}, {}
     functions = list(iter_functions(program))
     names = {getattr(function, "name", None) for function in functions}
     passed = set()
     for function in functions:
         if getattr(function, "body", None) is not None:
             _passed_names(function.body, names, passed)
-    for declaration in getattr(program, "global_variables", None) or []:
+    declarations = [(None, item) for item in program.global_variables or []]
+    stage_of, stages_by_key = {}, {}
+    stages = getattr(program, "stages", None) or {}
+    for stage in stages.values() if isinstance(stages, dict) else stages:
+        stages_by_key[id(stage)] = stage
+        declarations.extend(
+            (id(stage), item) for item in getattr(stage, "local_variables", None) or []
+        )
+        stage_functions = list(getattr(stage, "local_functions", None) or [])
+        stage_functions.append(getattr(stage, "entry_point", None))
+        stage_of.update((id(item), id(stage)) for item in stage_functions if item)
+    for key, declaration in declarations:
         plan = _plan_buffer(
             declaration,
             shapes,
@@ -1321,11 +1346,12 @@ def _lowered_buffers(program, shapes, target):
             passed=getattr(declaration, "name", None) in passed,
         )
         if plan is not None:
-            canonical.add(declaration.name)
+            canonical.setdefault(key, set()).add(declaration.name)
         if plan:
-            buffers[declaration.name] = plan
+            plan.stage = stages_by_key.get(key)
+            buffers.setdefault(key, {})[declaration.name] = plan
     scopes = {}
-    for function in iter_functions(program):
+    for function in functions:
         parameters, names = {}, set()
         for parameter in getattr(function, "parameters", None) or []:
             name = getattr(parameter, "name", None)
@@ -1335,7 +1361,7 @@ def _lowered_buffers(program, shapes, target):
             plan = _plan_buffer(parameter, shapes, target, inline=True)
             if plan is not None:
                 parameters[name] = plan
-        scopes[id(function)] = (parameters, names)
+        scopes[id(function)] = (parameters, names, stage_of.get(id(function)))
     return buffers, scopes, canonical
 
 
@@ -1401,8 +1427,8 @@ def _parse_helpers(texts):
 
 def _add_words_structs(program, buffers, scopes, target):
     """Declare the word struct of every lowered append or consume buffer and buffer parameter."""
-    plans = list(buffers.values())
-    for parameters, _names in scopes.values():
+    plans = [plan for group in buffers.values() for plan in group.values()]
+    for parameters, _names, _stage in scopes.values():
         plans.extend(plan for plan in parameters.values() if plan)
     counts = sorted({plan.shape.words for plan in plans if plan.queue})
     if not counts:
@@ -1424,13 +1450,16 @@ def legalize_structured_layouts(program, target) -> int:
     target = str(target or "")
     if target not in TARGETS or not isinstance(program, A.ShaderNode):
         return 0
-    shapes = {source: _Shapes(program, source) for source in ("hlsl", "metal")}
+    shapes = {
+        source: _Shapes(program, source)
+        for source in sorted(set(_SOURCE_RULES.values()))
+    }
     buffers, scopes, canonical = _lowered_buffers(program, shapes, target)
-    if not canonical and not any(parameters for parameters, _names in scopes.values()):
+    if not canonical and not any(entry[0] for entry in scopes.values()):
         return 0
     parameter_plans = {}
     for function in iter_functions(program):
-        parameters, _names = scopes.get(id(function), ({}, set()))
+        parameters = scopes.get(id(function), ({},))[0]
         parameter_plans.setdefault(getattr(function, "name", None), []).append(
             [
                 parameters.get(getattr(parameter, "name", None))
@@ -1439,27 +1468,34 @@ def legalize_structured_layouts(program, target) -> int:
         )
     _add_words_structs(program, buffers, scopes, target)
     rewriter = _Rewriter(program, {}, target, parameter_plans)
-    count = len(buffers)
+    count = sum(len(group) for group in buffers.values())
     for function in list(iter_functions(program)):
-        parameters, names = scopes.get(id(function), ({}, set()))
-        scope = {name: buffer for name, buffer in buffers.items() if name not in names}
+        parameters, names, stage = scopes.get(id(function), ({}, set(), None))
+        visible = {**buffers.get(None, {}), **buffers.get(stage, {})}
+        scope = {name: buffer for name, buffer in visible.items() if name not in names}
         scope.update((name, buffer) for name, buffer in parameters.items() if buffer)
         count += sum(1 for buffer in parameters.values() if buffer)
-        kept = {name for name in canonical if name not in names} | set(parameters)
+        declared = canonical.get(None, set()) | canonical.get(stage, set())
+        kept = {name for name in declared if name not in names} | set(parameters)
         if getattr(function, "body", None) is None:
             continue
         _canonicalize_buffer_calls(function.body, kept)
         if scope:
             rewriter.buffers = scope
             rewriter.statement(function.body)
-    if rewriter.helpers:
-        functions = getattr(program, "functions", None)
+    groups = {}
+    for name in sorted(rewriter.helpers):
+        stage = rewriter.owners.get(name)
+        groups.setdefault(id(stage), (stage, []))[1].append(rewriter.helpers[name])
+    for stage, texts in groups.values():
+        owner = program if stage is None else stage
+        functions = getattr(
+            owner, "functions" if stage is None else "local_functions", None
+        )
         if not isinstance(functions, list):
             raise StructuredLayoutUnsupportedError(
                 "the program has no function list to receive the structured-buffer helpers",
                 target=target,
             )
-        functions[0:0] = _parse_helpers(
-            [rewriter.helpers[name] for name in sorted(rewriter.helpers)]
-        )
+        functions[0:0] = _parse_helpers(texts)
     return count

@@ -49,6 +49,7 @@ from .templates.columns import CROSSGL as COLUMNS_CROSSGL
 from .templates.edges import FAMILY as EDGES
 from .templates.elements import CROSSGL as ELEMENTS_CROSSGL
 from .templates.forms import FAMILY as FORMS
+from .templates.fragments import CROSSGL as FRAGMENTS
 from .templates.helpers import CROSSGL as HELPERS_CROSSGL
 from .templates.identifiers import CROSSGL as IDENTIFIERS_CROSSGL
 from .templates.idioms import (
@@ -62,6 +63,7 @@ from .templates.idioms import SHADOW_HELPERS
 from .templates.initializers import CROSSGL as INITIALIZERS_CROSSGL
 from .templates.initializers import FAMILY as INITIALIZERS
 from .templates.integers import CROSSGL as INTEGERS_CROSSGL
+from .templates.interfaces import CROSSGL as INTERFACES
 from .templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
@@ -77,8 +79,12 @@ from .templates.portability import (
     intrinsic_names,
 )
 from .templates.records import CROSSGL as RECORDS_CROSSGL
+from .templates.relations import CROSSGL as RELATIONS
+from .templates.rows import CROSSGL as ROWS_CROSSGL
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
+from .templates.vectors import GLSL as VECTORS
+from .templates.vertices import CROSSGL as VERTICES
 from .templates.workgroups import CROSSGL as WORKGROUPS_CROSSGL
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -617,6 +623,12 @@ CONSTRUCTS: dict[str, Template] = {
     **BOOLEANS_CROSSGL,
     **PACKING_CROSSGL,
     **ORIENTATION_CROSSGL,
+    **ROWS_CROSSGL,
+    **VECTORS,
+    **RELATIONS,
+    **FRAGMENTS,
+    **INTERFACES,
+    **VERTICES,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

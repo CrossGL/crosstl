@@ -249,7 +249,7 @@ class TestCudaCodeGen:
 
         assert "const float PI = 3.14159f;" in cuda_code
         assert "const int WARP_SIZE = 32;" in cuda_code
-        assert "const float3 UP_VECTOR = make_float3(0.0f, 1.0f, 0.0f);" in cuda_code
+        assert "__device__ const float3 UP_VECTOR = {0.0f, 1.0f, 0.0f};" in cuda_code
         assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in cuda_code
 
     def test_compute_shader_to_kernel(self):
@@ -977,9 +977,9 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "__device__ float mix(float3 x, float3 y, float t)" in cuda_code
-        assert "__device__ float fma(float3 x, float3 y, float3 z)" in cuda_code
+        assert "__device__ float fma_fn(float3 x, float3 y, float3 z)" in cuda_code
         assert "float wrappedMix = cgl_fract_float(mix(a, b, 0.25f));" in cuda_code
-        assert "float wrappedFma = cgl_fract_float(fma(a, b, c));" in cuda_code
+        assert "float wrappedFma = cgl_fract_float(fma_fn(a, b, c));" in cuda_code
         assert "float wrappedMix = cgl_float3_fract(mix(a, b, 0.25));" not in cuda_code
         assert "float wrappedMix = cgl_float3_fract(mix(a, b, 0.25f));" not in cuda_code
         assert "float wrappedFma = cgl_float3_fract(fma(a, b, c));" not in cuda_code
@@ -1015,9 +1015,10 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "__device__ float fma(float x, float y, float z)" in cuda_code
+        # fma is a CUDA math function, so the user function is renamed (issue #3326).
+        assert "__device__ float fma_fn(float x, float y, float z)" in cuda_code
         assert "__device__ float mad(float x, float y, float z)" in cuda_code
-        assert "float fused = fma(1.0f, 2.0f, 3.0f);" in cuda_code
+        assert "float fused = fma_fn(1.0f, 2.0f, 3.0f);" in cuda_code
         assert "float multiplyAdd = mad(1.0f, 2.0f, 3.0f);" in cuda_code
         assert "float fused = fmaf(1.0, 2.0, 3.0);" not in cuda_code
         assert "float fused = fmaf(1.0f, 2.0f, 3.0f);" not in cuda_code
@@ -4421,9 +4422,10 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "__device__ float inverseSqrt(float x)" in cuda_code
-        assert "__device__ float rsqrt(float x)" in cuda_code
+        # rsqrt is a CUDA math function, so the user function is renamed (issue #3326).
+        assert "__device__ float rsqrt_fn(float x)" in cuda_code
         assert "float value = inverseSqrt(4.0f);" in cuda_code
-        assert "float hlslValue = rsqrt(4.0f);" in cuda_code
+        assert "float hlslValue = rsqrt_fn(4.0f);" in cuda_code
         assert "float value = rsqrtf(4.0);" not in cuda_code
         assert "float value = rsqrtf(4.0f);" not in cuda_code
         assert "float hlslValue = rsqrtf(4.0);" not in cuda_code
@@ -5142,8 +5144,9 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float a = norm(2, 1.5f);" in cuda_code
-        assert "float b = rnorm(1.0f, 2.0f, 3.0f);" in cuda_code
+        # norm and rnorm are CUDA math functions, so the user functions are renamed (issue #3326).
+        assert "float a = norm_fn(2, 1.5f);" in cuda_code
+        assert "float b = rnorm_fn(1.0f, 2.0f, 3.0f);" in cuda_code
         assert "normf" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
@@ -5271,8 +5274,9 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "__device__ float atan(float y, float x)" in cuda_code
-        assert "float angle = atan(1.0f, 2.0f);" in cuda_code
+        # atan is a CUDA math function, so the user function is renamed (issue #3326).
+        assert "__device__ float atan_fn(float y, float x)" in cuda_code
+        assert "float angle = atan_fn(1.0f, 2.0f);" in cuda_code
         assert "atan2f(1.0, 2.0)" not in cuda_code
         assert "atan2f(1.0f, 2.0f)" not in cuda_code
 
@@ -10116,35 +10120,35 @@ class TestCudaCodeGen:
             if line.strip().endswith(";")
         }
 
-        assert "cudaTextureObject_t linearState;" in declarations
-        assert "cudaTextureObject_t ramp;" in declarations
-        assert "cudaTextureObject_t colorMap;" in declarations
-        assert "cudaTextureObject_t volumeMap;" in declarations
-        assert "cudaTextureObject_t environmentMap;" in declarations
-        assert "cudaTextureObject_t layers;" in declarations
-        assert "cudaTextureObject_t shadowMap;" in declarations
-        assert "cudaTextureObject_t cascades;" in declarations
-        assert "cudaTextureObject_t cubeShadow;" in declarations
-        assert "cudaTextureObject_t probes;" in declarations
-        assert "cudaTextureObject_t shadowProbes;" in declarations
-        assert "cudaTextureObject_t msTex;" in declarations
-        assert "cudaTextureObject_t msArray;" in declarations
-        assert "cudaSurfaceObject_t signedImage;" in declarations
-        assert "cudaSurfaceObject_t signedVolume;" in declarations
-        assert "cudaSurfaceObject_t signedLayers;" in declarations
-        assert "cudaSurfaceObject_t signedMs;" in declarations
-        assert "cudaSurfaceObject_t signedMsLayers;" in declarations
-        assert "cudaSurfaceObject_t unsignedImage;" in declarations
-        assert "cudaSurfaceObject_t unsignedVolume;" in declarations
-        assert "cudaSurfaceObject_t unsignedLayers;" in declarations
-        assert "cudaSurfaceObject_t unsignedMs;" in declarations
-        assert "cudaSurfaceObject_t unsignedMsLayers;" in declarations
-        assert "cudaSurfaceObject_t outputImage;" in declarations
-        assert "cudaSurfaceObject_t volumeImage;" in declarations
-        assert "cudaSurfaceObject_t cubeImage;" in declarations
-        assert "cudaSurfaceObject_t layerImage;" in declarations
-        assert "cudaSurfaceObject_t outputMs;" in declarations
-        assert "cudaSurfaceObject_t layerMs;" in declarations
+        assert "__device__ cudaTextureObject_t linearState;" in declarations
+        assert "__device__ cudaTextureObject_t ramp;" in declarations
+        assert "__device__ cudaTextureObject_t colorMap;" in declarations
+        assert "__device__ cudaTextureObject_t volumeMap;" in declarations
+        assert "__device__ cudaTextureObject_t environmentMap;" in declarations
+        assert "__device__ cudaTextureObject_t layers;" in declarations
+        assert "__device__ cudaTextureObject_t shadowMap;" in declarations
+        assert "__device__ cudaTextureObject_t cascades;" in declarations
+        assert "__device__ cudaTextureObject_t cubeShadow;" in declarations
+        assert "__device__ cudaTextureObject_t probes;" in declarations
+        assert "__device__ cudaTextureObject_t shadowProbes;" in declarations
+        assert "__device__ cudaTextureObject_t msTex;" in declarations
+        assert "__device__ cudaTextureObject_t msArray;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedVolume;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedMsLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedVolume;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedMsLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t outputImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t volumeImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t cubeImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t layerImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t outputMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t layerMs;" in declarations
 
         raw_resource_types = [
             "sampler",
