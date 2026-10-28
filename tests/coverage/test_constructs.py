@@ -436,6 +436,45 @@ def test_reserved_name_probes_use_their_own_language_s_words_at_every_declaratio
     assert "pub struct var {" in rust and "var { a: x * 2.0, b: 3 }" in rust
 
 
+def test_uniform_matrix_probes_read_every_column_from_its_own_16_byte_row():
+    crossgl = probes.build(_feature("glsl", "uniform-matrix3"), "crossgl").source
+    assert "cbuffer Params @binding(3) {\n        mat3 m;\n        vec4 v;" in crossgl
+    # Metal, WGSL and Rust give a 2x2 matrix an 8-byte column stride, so they build it from 16-byte vectors.
+    for language, member, build in (
+        (
+            "metal",
+            "float4 c[2];",
+            "float2x2 m = float2x2(params.c[0].xy, params.c[1].xy);",
+        ),
+        (
+            "wgsl",
+            "c: array<vec4<f32>, 2>,",
+            "let m = mat2x2<f32>(params.c[0].xy, params.c[1].xy);",
+        ),
+        (
+            "rust",
+            "c: [Vec4; 2],",
+            "let m = Mat2::from_cols(Vec2::new(params.c[0].x, params.c[0].y)",
+        ),
+    ):
+        source = probes.build(_feature(language, "uniform-matrix2"), language).source
+        assert member in source and build in source, language
+    rust = probes.build(_feature("rust", "uniform-matrix3"), "rust").source
+    assert "c: [Vec4; 3],\n    v: Vec4," in rust and "m.z_axis.y * params.v.w" in rust
+    # HLSL names CrossGL's mat2x3 float3x2 and swaps the indices.
+    hlsl = probes.build(_feature("hlsl", "uniform-non-square-matrix"), "hlsl").source
+    assert "float3x2 m;" in hlsl and "mul(v.xyz, m)" in hlsl and "m[2][1] * v.w" in hlsl
+    wgsl = probes.build(_feature("wgsl", "uniform-non-square-matrix"), "wgsl").source
+    assert "m: mat2x3<f32>," in wgsl and "params.m[1][2] * params.v.w" in wgsl
+    for language in ("cuda", "hip", "opencl", "mojo"):
+        assert not [
+            f
+            for f in constructs.features(language, GRAMMAR)
+            if f.name.startswith("uniform-matrix")
+            or f.name == "uniform-non-square-matrix"
+        ], language
+
+
 def test_uniform_integer_probes_keep_each_member_s_signedness_in_every_language():
     crossgl = probes.build(_feature("glsl", "uniform-integer"), "crossgl").source
     assert "cbuffer Params @binding(3) {\n        int n0;" in crossgl

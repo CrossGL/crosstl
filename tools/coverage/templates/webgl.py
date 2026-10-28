@@ -14,6 +14,7 @@ from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
 from .blocks import WEBGL as _BLOCKS
 from .calls import WEBGL as _CALLS
+from .columns import WEBGL as _COLUMNS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
 from .edges import FAMILY as _EDGES
@@ -97,6 +98,7 @@ WEBGL = {
     **_RECORDS,
     **_IDENTIFIERS,
     **_INTEGERS,
+    **_COLUMNS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
