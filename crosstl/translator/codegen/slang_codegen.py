@@ -5753,9 +5753,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         result = f"{declaration} {{\n"
         for member in node.members:
             if hasattr(member, "member_type"):
-                member_type = self.convert_type(
-                    self.convert_type_node_to_string(member.member_type)
-                )
+                member_type_name = self.convert_type_node_to_string(member.member_type)
+                # A block's members are module-scope names; their types pick mul() for matrix products.
+                self.variable_types[member.name] = member_type_name
+                member_type = self.convert_type(member_type_name)
             else:
                 member_type = self.convert_type(getattr(member, "vtype", "float"))
             result += f"    {self.format_declaration(member_type, member.name)};\n"
