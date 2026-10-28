@@ -131,6 +131,24 @@ def test_a_metal_translation_must_keep_the_air_attribute_of_each_anchor(monkeypa
     )
 
 
+def test_a_metal_coverage_mask_input_has_its_own_air_attribute(monkeypatch):
+    # AIR names the coverage mask a fragment function reads apart from the one it writes.
+    mask = {
+        name: Feature(
+            "glsl", "graphics", name, None, group="BuiltIn.SampleMask", stage="fragment"
+        )
+        for name in ("sample-mask-input", "sample-mask")
+    }
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    read = '!9 = !{i32 1, !"air.sample_mask_in"}\n'
+    written = '!9 = !{!"air.sample_mask"}\n'
+    assert decorations.lost(mask["sample-mask-input"], "metal", read) == ""
+    assert decorations.lost(mask["sample-mask"], "metal", written) == ""
+    assert decorations.lost(mask["sample-mask-input"], "metal", written) == (
+        "the translation loses BuiltIn.SampleMask"
+    )
+
+
 def test_a_webgl_translation_is_lowered_as_glsl_es_3_10(monkeypatch):
     calls = []
 
