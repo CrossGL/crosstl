@@ -28,6 +28,7 @@ from . import (
     idioms,
     initializers,
     integers,
+    interfaces,
     layouts,
     lexical,
     lvalues,
@@ -43,6 +44,7 @@ from . import (
     statements,
     values,
     vectors,
+    vertices,
     workgroups,
 )
 from .base import ABSENT, C_FAMILY, Template, scalar
@@ -116,6 +118,8 @@ GLSL = {
     **vectors.GLSL,
     **relations.GLSL,
     **fragments.GLSL,
+    **interfaces.GLSL,
+    **vertices.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -253,6 +257,8 @@ HLSL = {
     **vectors.HLSL,
     **relations.HLSL,
     **fragments.HLSL,
+    **interfaces.HLSL,
+    **vertices.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -435,6 +441,8 @@ METAL = {
     **vectors.METAL,
     **relations.METAL,
     **fragments.METAL,
+    **interfaces.METAL,
+    **vertices.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -655,6 +663,8 @@ WGSL = {
     **vectors.WGSL,
     **relations.WGSL,
     **fragments.WGSL,
+    **interfaces.WGSL,
+    **vertices.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
@@ -745,6 +755,8 @@ SLANG = {
     **abstractions.SLANG,
     **{name: _slang(template) for name, template in vectors.SLANG.items()},
     **fragments.SLANG,
+    **interfaces.SLANG,
+    **vertices.SLANG,
     "vertex": _slang(HLSL["vertex"], "vertex"),
     "fragment": _slang(HLSL["fragment"], "fragment"),
     # The stage attribute goes on the entry point, after the output struct.

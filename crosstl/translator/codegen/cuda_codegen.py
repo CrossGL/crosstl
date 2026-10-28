@@ -58,6 +58,7 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
+from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_refusals import CudaLoweringRefused
 from .float_remainder_assignment import float_remainder_assignment
 from .for_initializers import join_for_initializer
@@ -405,6 +406,8 @@ class CudaCodeGen(
         """Render complete CUDA source for a CrossGL AST."""
         # A CUDA texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         ast_node = canonicalize_separate_textures(ast_node)
+        # A user function named like a device library function would redefine it or make its calls ambiguous.
+        ast_node = rename_cuda_library_functions(ast_node)
         # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
         lower_relational_builtins(ast_node)
         # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.

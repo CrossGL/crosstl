@@ -3798,8 +3798,10 @@ def test_wgsl_call_statement_keeps_user_functions_and_atomics(tmp_path):
 
     generated = WGSLCodeGen().generate(parse_shader(shader))
 
-    assert "    sign(i);" in generated
-    assert "_ = sign(i);" not in generated
+    # The shader's sign is renamed so that it does not shadow the WGSL built-in.
+    assert "fn sign_(i: u32)" in generated
+    assert "    sign_(i);" in generated
+    assert "_ = sign_(i);" not in generated
     assert "_ = max(fin[i], 1.0);" in generated
     assert "_ = vec2<f32>(fin[i]);" in generated
     assert "_ = clamp(fin[i], 0.0, 1.0);" in generated

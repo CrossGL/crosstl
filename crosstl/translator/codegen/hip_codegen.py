@@ -66,6 +66,7 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
+from .cuda_library_functions import rename_cuda_library_functions
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -847,6 +848,8 @@ class HipCodeGen(
         """Render complete HIP source for a CrossGL AST."""
         # A HIP texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         node = canonicalize_separate_textures(node)
+        # A user function named like a device library function would redefine it or make its calls ambiguous.
+        node = rename_cuda_library_functions(node)
         # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
         lower_relational_builtins(node)
         # HIP has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.

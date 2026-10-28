@@ -25,6 +25,7 @@ from . import (
     idioms,
     initializers,
     integers,
+    interfaces,
     layouts,
     lexical,
     lvalues,
@@ -40,6 +41,7 @@ from . import (
     statements,
     values,
     vectors,
+    vertices,
     workgroups,
 )
 from .base import ABSENT, C_FAMILY, Template, scalar
@@ -116,6 +118,8 @@ CUDA = {
     **vectors.CUDA,
     **relations.CUDA,
     **fragments.KERNELS,
+    **interfaces.KERNELS,
+    **vertices.KERNELS,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -249,6 +253,8 @@ OPENCL = {
     **vectors.OPENCL,
     **relations.OPENCL,
     **fragments.KERNELS,
+    **interfaces.KERNELS,
+    **vertices.KERNELS,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -401,6 +407,8 @@ MOJO = {
     **vectors.MOJO,
     **relations.MOJO,
     **fragments.KERNELS,
+    **interfaces.KERNELS,
+    **vertices.KERNELS,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -620,6 +628,8 @@ RUST = {
     **vectors.RUST,
     **relations.RUST,
     **fragments.RUST,
+    **interfaces.RUST,
+    **vertices.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),

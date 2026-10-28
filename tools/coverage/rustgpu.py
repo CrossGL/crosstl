@@ -63,6 +63,7 @@ CAPABILITIES = (
     "AtomicFloat32MinMaxEXT",
     "ShaderClockKHR",
     "VulkanMemoryModelDeviceScope",
+    "ClipDistance",
     "Geometry",
     "GeometryStreams",
     "Tessellation",
