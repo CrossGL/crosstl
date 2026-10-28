@@ -3,6 +3,7 @@
 import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
+from ..assignment_operands import grouped_operand
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -4719,12 +4720,12 @@ class CudaToCrossGLConverter:
         axis = global_invocation_axis(node)
         if axis is not None:
             return f"gl_GlobalInvocationID.{axis}"
-        left = self.visit(node.left)
-        right = self.visit(node.right)
+        left = grouped_operand(self, node.left)
+        right = grouped_operand(self, node.right)
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
-        operand = self.visit(node.operand)
+        operand = grouped_operand(self, node.operand)
         if node.op.startswith("post"):
             return f"({operand}{node.op[4:]})"
         else:
@@ -6481,9 +6482,9 @@ class CudaToCrossGLConverter:
         self.emit("continue;")
 
     def visit_TernaryOpNode(self, node):
-        condition = self.visit(node.condition)
-        true_expr = self.visit(node.true_expr)
-        false_expr = self.visit(node.false_expr)
+        condition = grouped_operand(self, node.condition)
+        true_expr = grouped_operand(self, node.true_expr)
+        false_expr = grouped_operand(self, node.false_expr)
         return f"({condition} ? {true_expr} : {false_expr})"
 
     def visit_CastNode(self, node):

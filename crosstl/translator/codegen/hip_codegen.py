@@ -55,6 +55,7 @@ from .c_reference_parameters import (
     overlapping_output_arguments,
     reference_declarator,
 )
+from .c_vector_reductions import generate_vector_reduction_call
 from .comma_expressions import (
     CommaExpressionVisitorMixin,
     comma_result_operand,
@@ -86,6 +87,7 @@ from .enum_utils import (
     generic_enum_specialized_type_name,
     infer_enum_constructor_type,
 )
+from .float_remainder_assignment import float_remainder_assignment
 from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
@@ -3879,6 +3881,17 @@ class HipCodeGen(
             )
         if diagnostic is not None:
             return diagnostic
+        # C++ has no floating %=; x = x % y lowers the remainder through fmodf.
+        remainder = float_remainder_assignment(
+            node.left,
+            node.right,
+            operator,
+            type_of=self.expression_result_type,
+            is_floating=self.is_floating_value_type,
+            backend="hip",
+        )
+        if remainder is not None:
+            return self.format_assignment_expression(remainder)
         swizzle_assignment = self.format_swizzle_assignment_expression(
             node.left,
             node.right,
@@ -4341,7 +4354,17 @@ class HipCodeGen(
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
+        if func_name in self.structs_by_name:
+            # The structure has no constructor; aggregate initialization sets its members in order.
+            return f"{self.map_type(func_name)}{{{', '.join(args)}}}"
+
         mapped_name = self.function_map.get(func_name, func_name)
+
+        reduction_call = generate_vector_reduction_call(
+            self, "HIP", func_name, raw_args, args
+        )
+        if reduction_call is not None:
+            return reduction_call
 
         if func_name == "abs":
             if len(args) == 1:
@@ -5293,7 +5316,11 @@ class HipCodeGen(
         return components
 
     def generate_mod_call(self, raw_args, args):
-        """Lower CrossGL/GLSL mod with GLSL floor semantics."""
+        """Lower CrossGL/GLSL mod with GLSL floor semantics.
+
+        The ``%`` operator is the truncated remainder (``fmodf``) instead; see
+        VectorArithmeticMixin.lower_scalar_modulo_operation.
+        """
         if len(raw_args) != 2 or len(args) != 2:
             return None
 
@@ -5302,43 +5329,16 @@ class HipCodeGen(
             args[0],
             raw_args[1],
             args[1],
-            "%",
+            "mod",
         )
         if vector_call is not None:
             return vector_call
 
-        return self.lower_scalar_modulo_operation(
-            raw_args[0],
-            args[0],
-            raw_args[1],
-            args[1],
-        )
-
-    def lower_scalar_modulo_operation(
-        self,
-        left_node,
-        left_expr,
-        right_node,
-        right_expr,
-    ):
-        """Lower floating-point scalar modulo with GLSL floor semantics."""
-        scalar_type = self.hip_mod_scalar_type(left_node, right_node)
+        scalar_type = self.hip_mod_scalar_type(raw_args[0], raw_args[1])
         if scalar_type is None:
             return None
-
         helper_name = self.require_hip_scalar_mod_helper(scalar_type)
-        return f"{helper_name}({left_expr}, {right_expr})"
-
-    def format_vector_binary_component(self, component_type, operator, left, right):
-        if operator == "%" and component_type in {"float", "double"}:
-            helper_name = self.require_hip_scalar_mod_helper(component_type)
-            return f"{helper_name}({left}, {right})"
-        return super().format_vector_binary_component(
-            component_type,
-            operator,
-            left,
-            right,
-        )
+        return f"{helper_name}({args[0]}, {args[1]})"
 
     def hip_mod_scalar_type(self, left_node, right_node):
         component_types = []

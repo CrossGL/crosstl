@@ -39136,6 +39136,11 @@ complex64_t crossgl_complex64_mod_assign(
                 node,
             )
             return f"{left} = {right}"
+        float_remainder = self.glsl_float_remainder_assignment_value(
+            left_node, right_node, op, expected_type
+        )
+        if float_remainder is not None:
+            return f"{left} = {float_remainder}"
         boolean_assignment = self.glsl_boolean_compound_assignment_value(
             left_node,
             right_node,

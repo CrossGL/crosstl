@@ -22,6 +22,7 @@ from crosstl.backend.HIP.HipAst import (
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
+from ..assignment_operands import grouped_operand
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
@@ -1377,7 +1378,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if len(operands) < 4:
             return None
 
-        rendered = [self.visit(operand) for operand in operands]
+        rendered = [grouped_operand(self, operand) for operand in operands]
         return f"({f' {op} '.join(rendered)})"
 
     def collect_opencl_binary_chain_operands(self, node, op):
