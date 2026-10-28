@@ -564,6 +564,17 @@ def _curated() -> list[Construct]:
             "Decoration.Location",
             stage="fragment",
         ),
+        c("graphics", "vertex-index", "BuiltIn.VertexIndex", stage="vertex"),
+        c("graphics", "instance-index", "BuiltIn.InstanceIndex", stage="vertex"),
+        c("graphics", "point-size", "BuiltIn.PointSize", stage="vertex"),
+        c(
+            "graphics",
+            "clip-distance",
+            "BuiltIn.ClipDistance",
+            "Capability.ClipDistance",
+            stage="vertex",
+        ),
+        c("graphics", "invariant-position", "Decoration.Invariant", stage="vertex"),
         c(
             "resource",
             "uniform-struct",

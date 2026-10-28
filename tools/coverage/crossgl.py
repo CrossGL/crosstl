@@ -84,6 +84,7 @@ from .templates.rows import CROSSGL as ROWS_CROSSGL
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 from .templates.vectors import GLSL as VECTORS
+from .templates.vertices import CROSSGL as VERTICES
 from .templates.workgroups import CROSSGL as WORKGROUPS_CROSSGL
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -627,6 +628,7 @@ CONSTRUCTS: dict[str, Template] = {
     **RELATIONS,
     **FRAGMENTS,
     **INTERFACES,
+    **VERTICES,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

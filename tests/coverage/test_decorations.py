@@ -81,3 +81,21 @@ def test_a_translation_that_cannot_be_lowered_is_left_to_its_validator(
     monkeypatch.setattr(validators, "can_lower", lambda language: can_lower)
     monkeypatch.setattr(validators, "lower", lambda *args, **kwargs: lowered)
     assert decorations.lost(DEPTH, "metal", "fragment float probe() {}") == ""
+
+
+def test_opengl_glsl_is_lowered_with_the_vulkan_names_of_the_vertex_and_instance_index():
+    source = "gl_Position = vec4(float(gl_VertexID + gl_InstanceID), 0.0, 0.0, 1.0);"
+    assert validators.vulkan_glsl(source) == (
+        "gl_Position = vec4(float(gl_VertexIndex + gl_InstanceIndex), 0.0, 0.0, 1.0);"
+    )
+    assert validators.vulkan_glsl("int gl_VertexIDs;") == "int gl_VertexIDs;"
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_an_opengl_vertex_index_read():
+    source = (
+        "#version 460\nlayout(location = 0) in vec4 position;\nvoid main() {\n"
+        "    gl_Position = position + vec4(float(gl_VertexID), 0.0, 0.0, 0.0);\n}\n"
+    )
+    assembly, log = validators.lower("glsl", source, stage="vertex", raw_ids=False)
+    assert "BuiltIn VertexIndex" in assembly, log

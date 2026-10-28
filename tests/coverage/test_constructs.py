@@ -14,7 +14,7 @@ from tools.coverage import (
     validators,
 )
 from tools.coverage.model import Feature, Result
-from tools.coverage.templates import fragments, interfaces, relations
+from tools.coverage.templates import fragments, interfaces, relations, vertices
 from tools.coverage.templates.base import ABSENT, OPERATORS
 
 _MODELS = [
@@ -714,6 +714,47 @@ def test_interface_probes_qualify_the_fragment_input_or_add_a_second_target():
     for language, names in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & set(interfaces.NAMES) == set(interfaces.NAMES) - names, language
+
+
+def test_vertex_probes_use_each_languages_built_ins():
+    feature = _feature("glsl", "clip-distance")
+    assert (feature.category, feature.stage) == ("graphics", "vertex")
+    assert feature.group == "BuiltIn.ClipDistance Capability.ClipDistance"
+    for language, name, line in (
+        ("glsl", "vertex-index", "vec4(float(gl_VertexID), 0.0, 0.0, 0.0)"),
+        ("webgl", "instance-index", "vec4(float(gl_InstanceID), 0.0, 0.0, 0.0)"),
+        ("glsl", "point-size", "gl_PointSize = 2.0;"),
+        ("glsl", "clip-distance", "gl_ClipDistance[0] = position.x;"),
+        ("webgl", "invariant-position", "invariant gl_Position;\n"),
+        ("hlsl", "vertex-index", "uint vid : SV_VertexID"),
+        ("hlsl", "clip-distance", "float clip : SV_ClipDistance0;"),
+        ("slang", "point-size", "float size : SV_PointSize;"),
+        ("metal", "instance-index", "uint iid [[instance_id]]"),
+        ("metal", "clip-distance", "float clip [[clip_distance]] [1];"),
+        ("metal", "invariant-position", "float4 position [[position, invariant]];"),
+        ("wgsl", "vertex-index", "@builtin(vertex_index) vid: u32"),
+        ("wgsl", "clip-distance", "@builtin(clip_distances) clip: array<f32, 1>"),
+        ("wgsl", "invariant-position", "@builtin(position) @invariant vec4<f32>"),
+        ("rust", "point-size", "#[spirv(point_size)] size: &mut f32"),
+        ("rust", "invariant-position", "#[spirv(position, invariant)]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "vertex-index"), "crossgl").source
+    assert "        int vid @ gl_VertexID;\n" in crossgl and "    vertex {\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "invariant-position"), "crossgl").source
+    assert "vec4 position @ gl_Position @ invariant;" in crossgl
+    # Direct3D and WGSL have no point size, HLSL no invariance qualifier and GLSL ES 3.00 no clip distances.
+    absent = {
+        "hlsl": {"point-size", "invariant-position"},
+        "slang": {"invariant-position"},
+        "wgsl": {"point-size"},
+        "webgl": {"clip-distance"},
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), set(vertices.NAMES)),
+    }
+    for language, names in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & set(vertices.NAMES) == set(vertices.NAMES) - names, language
 
 
 def test_relation_probes_compare_integer_and_boolean_vectors_per_language():
