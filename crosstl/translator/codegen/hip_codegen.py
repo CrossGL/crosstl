@@ -106,6 +106,7 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .hip_refusals import HipLoweringRefused
+from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -277,8 +278,15 @@ class UnsupportedHIPAstNodeError(ValueError):
         )
 
 
-class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
+class HipCodeGen(
+    LoweringRefusalMixin,
+    VectorArithmeticMixin,
+    ResourceQueryMixin,
+    ResourceDiagnosticMixin,
+):
     """Emit HIP source from the shared CrossGL translator AST."""
+
+    LOWERING_REFUSAL_TYPE = HipLoweringRefused
 
     resource_diagnostic_backend = "HIP"
     struct_constructor_uses_braces = True
@@ -808,8 +816,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             ),
         }
 
-    def generate(self, node: ASTNode) -> str:
-        """Generate complete HIP source for a CrossGL AST."""
+    def generate(self, node):
+        """Generate complete HIP source for a CrossGL AST, or raise :class:`HipLoweringRefused`.
+
+        A construct with no faithful HIP lowering is refused; no program is returned while a refusal is
+        pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
+        """
+        return self.refusals.run(self.render_program, node)
+
+    def render_program(self, node: ASTNode) -> str:
+        """Render complete HIP source for a CrossGL AST."""
         # A HIP texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         node = canonicalize_separate_textures(node)
         # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
