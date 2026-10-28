@@ -661,6 +661,76 @@ guards and inputs must be unchanged, and Metal also runs the unchanged
 upstream kernels. This is a 162/17,832 increment; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
 
+``quantized_qmv_unaligned.current-tree.translation.json`` pins a further 162
+entries of ``quantized.metal``: ``affine_qmv`` with and without batching and
+``affine_gather_qmv``, which ``quantized.cpp`` picks over the ``_fast``
+kernels when ``N`` is not a multiple of 8 or ``K`` of
+``qmv_fast_k_alignment(bits)``. ``qmv_impl``'s guarded rows, its
+simdgroup-uniform return before ``simd_sum`` and its moved-back last tile run
+on 32-lane software subgroups on OpenGL and DirectX, and DirectX bounds the
+private pointer that ``qdot_safe`` advances by seeding helper parameters
+with the intervals of their call arguments. Each target executes 486
+dispatches on ``(32, 2, 1)`` threadgroups and ``(M, ceil(N / 8), B)`` grids
+that reach every path, including a ``K`` below one block and the safe tail
+of each lane. A lane-level model must reach direct dequantized dot products
+and store each moved row twice with the same value; every word is compared
+exactly, guards and inputs must be unchanged, and Metal also runs the
+unchanged upstream kernels. This is a 162/17,832 increment; it does not run
+the upstream MLX test suite or redirect the MLX host runtime.
+
+``quantized_qmv_wide.current-tree.translation.json`` pins a further 432
+entries of ``quantized.metal``: ``affine_qmv_wide`` with and without batching
+for the same types, group sizes and bit widths and tiles of 2 to 5 input
+vectors, eight lanes per output row. Its ``simd_shuffle_down`` ladder lowers
+to 32-lane software subgroups on OpenGL and DirectX, and OpenGL is given the
+batched index-range preconditions of ``qmv_fast``. A by-value template
+parameter deduced from a local array, such as ``dequantize``'s output
+pointer, now decays to a thread pointer for DirectX as it does for OpenGL, so
+its pointer steps move the view's base. Each target executes 1,080 dispatches
+on ``quantized.cpp``'s ``(32, 2, 1)`` threadgroups and
+``(ceil(M / vecs_per_tg), ceil(N / 8), B)`` grids, with ``M`` values
+``qmv_wide`` gives each tile: a single tile with two groups for some lanes,
+partial row groups and vector tiles, and stacked, broadcast two-dimensional
+and strided shared-weight batches. The inputs keep every float32
+intermediate exact, so only the final ``static_cast<T>`` rounds. A lane-level
+model of ``dequantize``'s sub-chunks, the shuffle ladder and the partial-tile
+guards must reach direct dequantized dot products; every word is compared
+exactly, guards and inputs must be unchanged, and Metal also runs the
+unchanged upstream kernels. This is a 432/17,832 increment; it does not run
+the upstream MLX test suite or redirect the MLX host runtime.
+
+``quantized_qvm.current-tree.translation.json`` pins a further 162 entries of
+``quantized.metal``: ``affine_qvm`` with and without batching and
+``affine_gather_qvm``, which ``quantized.cpp`` picks for weights that are not
+transposed. ``qvm_impl`` gives each lane one input row per block of 32 and
+reads that row's 32 codes through a private byte view of its ``vec_w``
+record; ``simd_sum`` runs on 32-lane software subgroups on OpenGL and
+DirectX. DirectX emits a private pointer helper only for the backings its
+calls reach, so the byte view of ``qouter`` is not shadowed by an identical
+default overload. Each target executes 432 dispatches on ``(32, 2, 1)`` threadgroups
+and ``(M, ceil(N / 64), B)`` grids that reach a ``K`` below one block, whole
+blocks, a last pass on some lanes and the early return of a simdgroup past
+``N``. A lane-level model must reach direct dequantized dot products and
+store each column once; every word is compared exactly, guards and inputs
+must be unchanged, and Metal also runs the unchanged upstream kernels. This
+is a 162/17,832 increment; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+``quantized_qvm_split_k.current-tree.translation.json`` pins a further 108
+entries of ``quantized.metal``: ``affine_qvm_split_k`` with ``split_k`` 8 and
+32, which ``quantized.cpp``'s ``qvm`` picks for weights that are not
+transposed when ``K`` is 1,024 or more. Each ``tid.z`` runs ``qvm_impl`` on
+one part of ``ceil(K / split_k)`` rows, the last of the final block size,
+with the whole ``K`` as the activation stride, and writes its partial
+products to an intermediate. Each target executes 540 dispatches on
+``(32, 2, 1)`` threadgroups and ``(M, ceil(N / 64), B * split_k)`` grids
+that bind the host's own views and reach parts of whole blocks, of blocks
+and a last pass, of a last pass alone and a final part of another size. The
+qvm gate's lane-level model replays each part; every word is compared
+exactly, guards and inputs must be unchanged, and Metal also runs the
+unchanged upstream kernels. This is a 108/17,832 increment; it does not run
+the upstream MLX test suite or redirect the MLX host runtime.
+
 DirectX now gives ``p + n``, ``n + p`` and ``p - n`` the element type of the
 pointer or buffer view ``p`` rather than of the integer offset, so values read
 through an offset pointer such as ``(v_ + dv_idx)[i]`` keep their float,
