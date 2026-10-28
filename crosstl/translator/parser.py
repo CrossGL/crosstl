@@ -563,7 +563,9 @@ class Parser:
             elif self.current_token[0] == "SHADER":
                 shader_node = self.parse_shader_declaration()
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffers.append(self.parse_attributed_cbuffer())
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(), cbuffers, structs, global_variables
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
@@ -571,7 +573,9 @@ class Parser:
             elif self.current_token[0] == "ENUM":
                 enums.append(self.parse_enum())
             elif self.is_cbuffer_declaration():
-                cbuffers.append(self.parse_cbuffer_as_struct())
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(), cbuffers, structs, global_variables
+                )
             elif (
                 self.current_token[0] == "CONST" and not self.is_function_declaration()
             ):
@@ -587,9 +591,19 @@ class Parser:
                     structs.append(struct_node)
                     global_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         global_variables, self.parse_variable_declaration(attributes)
@@ -662,7 +676,9 @@ class Parser:
                 stage_node = self.parse_shader_stage_block()
                 stages.append(stage_node.stage, stage_node)
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffers.append(self.parse_attributed_cbuffer())
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(), cbuffers, structs, global_variables
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
@@ -692,7 +708,9 @@ class Parser:
                     stages,
                 )
             elif self.is_cbuffer_declaration():
-                cbuffers.append(self.parse_cbuffer_as_struct())
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(), cbuffers, structs, global_variables
+                )
             elif (
                 self.current_token[0] == "CONST" and not self.is_function_declaration()
             ):
@@ -708,9 +726,19 @@ class Parser:
                     structs.append(struct_node)
                     global_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         global_variables, self.parse_variable_declaration(attributes)
@@ -813,9 +841,19 @@ class Parser:
                     local_structs.append(struct_node)
                     local_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    local_cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        local_cbuffers,
+                        local_structs,
+                        local_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    local_cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        local_cbuffers,
+                        local_structs,
+                        local_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         local_variables, self.parse_variable_declaration(attributes)
@@ -823,9 +861,12 @@ class Parser:
                 else:
                     self.skip_unknown_token()
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffer = self.parse_attributed_cbuffer()
-                if cbuffer:
-                    local_cbuffers.append(cbuffer)
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(),
+                    local_cbuffers,
+                    local_structs,
+                    local_variables,
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 struct_node = self.parse_attributed_struct()
                 if struct_node:
@@ -835,9 +876,12 @@ class Parser:
                 if struct_node:
                     local_structs.append(struct_node)
             elif self.is_cbuffer_declaration():
-                cbuffer = self.parse_cbuffer_as_struct()
-                if cbuffer:
-                    local_cbuffers.append(cbuffer)
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(),
+                    local_cbuffers,
+                    local_structs,
+                    local_variables,
+                )
             elif self.is_function_declaration():
                 func = self.parse_function()
                 parsed_functions.append(func)
@@ -5979,12 +6023,58 @@ class Parser:
 
         self.eat("RBRACE")
 
+        if self.current_token_is_declaration_binding_identifier():
+            return self.parse_constant_block_instance(name, members, attributes)
+
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
         node = StructNode(name=name, members=members, attributes=attributes)
         node.is_cbuffer = True
         return node
+
+    def parse_constant_block_instance(self, block_name, members, attributes):
+        """Desugar ``cbuffer Block { ... } instance[N];`` into ``struct Block`` and ``ConstantBuffer<Block>``.
+
+        An instance name scopes the block's members, which are then read as ``instance.member`` (GLSL's named
+        uniform blocks and arrays of them). The block becomes a plain struct and the instance a uniform
+        ``ConstantBuffer`` of it that carries the block's attributes, the spelling every generator lowers.
+        """
+        instance_name = self.parse_binding_identifier()
+        sizes = []
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            sizes.append(size)
+        attributes.extend(self.parse_post_declaration_attributes())
+        self.eat("SEMICOLON")
+
+        struct_node = StructNode(name=block_name, members=members)
+        variable_node = VariableNode(
+            name=instance_name,
+            var_type=self.wrap_array_dimensions(
+                NamedType("ConstantBuffer", [NamedType(block_name)]), sizes
+            ),
+            qualifiers=["uniform"],
+            attributes=attributes,
+        )
+        return [struct_node, variable_node]
+
+    def append_constant_block(self, parsed, cbuffers, structs, variables):
+        """Route a parsed constant block, or the struct and variable of an instance-named one."""
+        if isinstance(parsed, list):
+            struct_node, variable_node = parsed
+            structs.append(struct_node)
+            variables.append(variable_node)
+        elif parsed:
+            cbuffers.append(parsed)
 
     # Helper methods
     def is_cbuffer_declaration(self):
