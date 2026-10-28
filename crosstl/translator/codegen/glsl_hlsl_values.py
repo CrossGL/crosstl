@@ -12,6 +12,7 @@ import re
 
 from ..ast import FunctionCallNode
 from .array_utils import split_array_type_suffix
+from .float_remainder_assignment import float_remainder_assignment
 
 
 class GLSLHlslValueMixin:
@@ -77,6 +78,32 @@ class GLSLHlslValueMixin:
         if self.current_glsl_precise_function:
             self.glsl_precise_float_remainder_types.add(value_type)
         return f"crossgl_remainder({operands[0]}, {operands[1]})"
+
+    def glsl_float_remainder_assignment_value(self, target, value, op, expected_type):
+        """The remainder a floating ``%=`` assigns, as ``crossgl_remainder(target, value)``.
+
+        GLSL has no floating ``%=``; float_remainder_assignment.py refuses a target that cannot be read twice.
+        """
+
+        def is_floating(vtype):
+            info = self.glsl_value_type_info(vtype)
+            return info is not None and info["family"] in {"float", "double"}
+
+        rewritten = float_remainder_assignment(
+            target,
+            value,
+            op,
+            type_of=lambda node: (
+                expected_type
+                if node is target
+                else self.glsl_source_expression_type(node)
+            ),
+            is_floating=is_floating,
+            backend=self.GLSL_TARGET_DISPLAY_NAME.lower(),
+        )
+        if rewritten is None:
+            return None
+        return self.generate_expression_with_expected(rewritten.value, expected_type)
 
     def generate_glsl_float_remainder_helpers(self):
         helpers = ""

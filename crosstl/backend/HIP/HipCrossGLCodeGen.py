@@ -4,6 +4,7 @@ import hashlib
 import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
+from ..assignment_operands import grouped_operand
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..keyword_renames import source_identifier_names, unused_identifier_name
@@ -6371,8 +6372,8 @@ class HipToCrossGLConverter:
         axis = global_invocation_axis(node)
         if axis is not None:
             return f"gl_GlobalInvocationID.{axis}"
-        left = self.visit(node.left)
-        right = self.visit(node.right)
+        left = grouped_operand(self, node.left)
+        right = grouped_operand(self, node.right)
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
@@ -6383,7 +6384,7 @@ class HipToCrossGLConverter:
         if node.op == "&" or mutates_operand:
             operand = self.visit_lvalue_expression(node.operand)
         else:
-            operand = self.visit(node.operand)
+            operand = grouped_operand(self, node.operand)
         if mutates_operand:
             self.clear_lvalue_metadata_source(node.operand)
         if isinstance(node.op, str) and node.op.endswith("_POST"):
@@ -9814,9 +9815,9 @@ class HipToCrossGLConverter:
 
     def visit_TernaryOpNode(self, node):
         self.validate_record_scalar_context(node.condition, "ternary condition")
-        condition = self.visit(node.condition)
-        true_expr = self.visit(node.true_expr)
-        false_expr = self.visit(node.false_expr)
+        condition = grouped_operand(self, node.condition)
+        true_expr = grouped_operand(self, node.true_expr)
+        false_expr = grouped_operand(self, node.false_expr)
         return f"({condition} ? {true_expr} : {false_expr})"
 
     def visit_CastNode(self, node):
