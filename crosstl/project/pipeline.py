@@ -23411,6 +23411,16 @@ def _project_template_materialization_for_artifact(
         known_materializations=late_known_materializations,
     )
     specializations.extend(late_helper_specializations)
+    if late_helper_specializations:
+        # A late helper body can still spell struct template-ids
+        # (``device S<uchar>*``, ``Op op;``). Bind them to concrete structs and
+        # lower the members those structs bring, such as a functor call.
+        materialized = _lower_metal_struct_members_with_generated_aliases(
+            preprocessor,
+            materialized,
+            work_budget=explicit_work_budget,
+            prematerialize=True,
+        )
     removable_template_names = {
         *deferred_constexpr_template_names,
         *late_materialized_template_names,

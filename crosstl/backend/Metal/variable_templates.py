@@ -56,6 +56,27 @@ _SPELLING = {
     "unsigned short": "ushort",
     "unsigned long": "ulong",
 }
+_ONE_TOKEN_TYPE = re.compile(r"[A-Za-z_]\w*")
+
+
+class MetalValueVariableTemplateError(ValueError):
+    """A value variable template whose declared type has no functional-cast spelling."""
+
+
+def _cast_spelling(value_type: str) -> str:
+    """Return the one-token spelling that a functional cast to ``value_type`` needs.
+
+    Every multi-word type the declaration pattern admits has a one-token Metal alias; any other
+    declared type is a single identifier and is already a valid cast spelling.
+    """
+    alias = _SPELLING.get(value_type)
+    if alias is not None:
+        return alias
+    if _ONE_TOKEN_TYPE.fullmatch(value_type) is None:
+        raise MetalValueVariableTemplateError(
+            f"value variable template type '{value_type}' has no one-token cast spelling"
+        )
+    return value_type
 
 
 @dataclass(frozen=True)
@@ -130,7 +151,7 @@ def _render_value(
     expression = preprocessor._replace_identifiers(
         definition.expression, dict(zip(definition.parameters, arguments))
     )
-    value_type = _SPELLING.get(definition.value_type, definition.value_type)
+    value_type = _cast_spelling(definition.value_type)
     integral = (
         definition.value_type in _LITERAL_SUFFIX
         or definition.value_type in _INTEGRAL_TYPES

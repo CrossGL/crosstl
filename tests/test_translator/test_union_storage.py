@@ -26,6 +26,11 @@ union WideLanes { uint2 words; uchar bytes[8]; };
 template <typename T> constexpr constant uint lanes_per_word = sizeof(uint) / sizeof(T);
 template <typename T> union Packed { T val[lanes_per_word<T>]; uint bits; };
 struct Holder { Bits values[2]; };
+struct WordBox { uint bits; uint other; };
+void bump_word(thread uint* word) { word[0] += 0x01010101u; }
+template <typename T> constexpr constant bool is_word_type = is_same_v<T, uint>;
+template <typename T, enable_if_t<is_word_type<T>, bool> = true> void bump_value(thread T* value) { value[0] += T(1); }
+template <typename T, enable_if_t<!is_word_type<T>, bool> = true> void bump_value(thread T* value) { value[0].bits += 2u; }
 Bits make_bits(uint word) { Bits value; value.words = uint2(word, 0x88776655u); return value; }
 Bits copy_bits(Bits value) { value.bytes[1] = uchar4(9u, 10u, 11u, 12u); return value; }
 uint next_index(thread uint& count) { uint old = count; count += 1u; return old; }
@@ -161,6 +166,16 @@ CASES = {
         ["value.bits", "uint(value.val[0])"],
         [0x00070001, 1],
     ),
+    "member_pointer_views": (
+        "Lanes lanes; lanes.word = 0x04030201u; bump_word(&lanes.word); WordBox box; box.bits = 5u; box.other = 9u; bump_word(&(box.bits));",
+        ["lanes.word", "uint(lanes.bytes[3])", "box.bits", "box.other"],
+        [0x05040302, 5, 0x01010106, 9],
+    ),
+    "deduced_member_pointer_views": (
+        "Lanes lanes; lanes.word = 0x04030201u; bump_value(&(lanes.word)); WordBox box; box.bits = 5u; box.other = 9u; bump_value(&box.bits); bump_value(&box);",
+        ["lanes.word", "box.bits", "box.other"],
+        [0x04030202, 8, 9],
+    ),
     "read_selector": (
         "Holder holder; holder.values[0] = make_bits(0x04030201u); uint count = 0u; uint selected = holder.values[next_index(count)].bytes[1][2];",
         ["selected", "count"],
@@ -269,12 +284,18 @@ def test_union_storage_rejects_unrepresented_layouts(tmp_path, declaration, reas
             "Lanes lanes; lanes.word = 0u; lanes.bytes[1]++;",
             "interpreted-address-or-update-unsupported",
         ),
+        ("scale(&value.value);", "interpreted-member-address-unsupported"),
+        (
+            "bump_word(&value.word); scale(&value.value);",
+            "interpreted-member-address-unsupported",
+        ),
     ],
 )
 def test_union_storage_unsupported_mutations_report_diagnostics(tmp_path, body, reason):
     source = tmp_path / "union.metal"
     source.write_text(
         HEADER + "void mutate(thread float& arg) { arg = 2.0f; }\n"
+        "void scale(thread float* arg) { arg[0] *= 2.0f; }\n"
         "kernel void run(device uint* results [[buffer(0)]]) { Word value; value.word = 0u; "
         + body
         + " }"

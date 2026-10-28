@@ -514,6 +514,7 @@ from .pointer_reinterpret import (
     same_scalar_lane_view,
     scalar_storage_layout,
 )
+from .private_member_views import hlsl_aliased_scalar_view, hlsl_member_view_root
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases, references_provably_disjoint
 from .relational_builtins import lower_relational_builtins
@@ -20278,6 +20279,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "offset": "0",
                         "root_kind": "scalar",
                     }
+            if isinstance(operand, MemberAccessNode):
+                excluded = (
+                    set(local_extents)
+                    | set(scalar_parameters)
+                    | set(self.current_hlsl_private_pointer_base_names)
+                )
+                if hlsl_member_view_root(self, operand, excluded) is None:
+                    return None
+                return {
+                    "backing": self.generate_expression(operand),
+                    "offset": "0",
+                    "root_kind": "scalar",
+                    "member_view": True,
+                }
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.hlsl_private_pointer_view_binding(operand.array)
@@ -43483,6 +43498,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             scalar_parameters[call["callee"]].add(parameter_name)
                             changed = True
         self.function_private_pointer_scalar_parameters = scalar_parameters
+        aliased = hlsl_aliased_scalar_view(view_calls, scalar_parameters)
+        if aliased is not None:
+            call, first, second, root = aliased
+            raise DirectXPrivatePointerParameterError(
+                f"DirectX private pointer call to '{call['callee']}' binds "
+                f"parameters '{first}' and '{second}' to the same backing object "
+                f"'{root}'; HLSL inout copy-out cannot preserve aliased views",
+                function_name=call["callee"],
+                parameter_name=second,
+                reason="aliased-view-backing",
+                source_location=getattr(call.get("node"), "source_location", None),
+            )
 
         for calls in view_calls.values():
             for call in calls:
@@ -44272,6 +44299,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "offset": (0, 0),
                         "side_effecting": False,
                     }
+            if isinstance(operand, MemberAccessNode):
+                root = hlsl_member_view_root(
+                    self, operand, set(parameter_names) | set(local_extents)
+                )
+                if root is None:
+                    return None
+                return {
+                    "root_kind": "scalar",
+                    "root": root,
+                    "extent": 1,
+                    "offset": (0, 0),
+                    "side_effecting": False,
+                    "member_view": True,
+                }
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.hlsl_private_pointer_static_binding(

@@ -49,6 +49,10 @@ from .integral_constant_arithmetic import (
     fold_integral_constant_parameter_arithmetic,
 )
 from .local_decltypes import complete_declared_type, substitute_local_decltypes_in
+from .member_address_types import (
+    addressed_member_pointer_type,
+    merge_receiver_variable_types,
+)
 from .member_lowering_layers import lower_members_with_late_specializations
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .static_member_constants import (
@@ -22182,6 +22186,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 declared = local_variable_types.get(operand)
                 if isinstance(declared, _MetalAddressableValueType):
                     return declared.pointer_type
+            member_pointer = addressed_member_pointer_type(
+                self, operand, local_variable_types, struct_field_types
+            )
+            if member_pointer is not None:
+                return member_pointer
             return self._infer_addressed_buffer_element_pointer_type(
                 expr,
                 buffer_element_types,
@@ -26636,10 +26645,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             code,
             scan_skip_spans,
         )
-        for name, entries in receiver_variable_types.items():
-            existing = local_variable_types.setdefault(name, [])
-            existing.extend(entry for entry in entries if entry not in existing)
-            existing.sort(key=lambda item: item[0])
+        merge_receiver_variable_types(
+            code, local_variable_types, receiver_variable_types
+        )
         self._collect_function_parameter_types(
             code,
             scan_skip_spans,
