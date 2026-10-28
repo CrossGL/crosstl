@@ -4334,9 +4334,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 local_alias_declarations.append(
                     f"let mut {param_name}: {mapped_param_type} = *{reference_name};"
                 )
-                self.current_rust_output_parameters.append(
-                    (reference_name, param_name)
-                )
+                self.current_rust_output_parameters.append((reference_name, param_name))
                 emitted_param_names.add(reference_name)
                 continue
             if source_param_name in self.current_mutated_names or (
