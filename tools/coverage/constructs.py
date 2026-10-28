@@ -538,6 +538,32 @@ def _curated() -> list[Construct]:
         c("graphics", "fragment-coordinate", "BuiltIn.FragCoord", stage="fragment"),
         c("graphics", "front-facing", "BuiltIn.FrontFacing", stage="fragment"),
         c("graphics", "fragment-depth", "BuiltIn.FragDepth", stage="fragment"),
+        c("graphics", "flat-interpolation", "Decoration.Flat", stage="fragment"),
+        c(
+            "graphics",
+            "noperspective-interpolation",
+            "Decoration.NoPerspective",
+            stage="fragment",
+        ),
+        c(
+            "graphics",
+            "centroid-interpolation",
+            "Decoration.Centroid",
+            stage="fragment",
+        ),
+        c(
+            "graphics",
+            "sample-interpolation",
+            "Decoration.Sample",
+            "Capability.SampleRateShading",
+            stage="fragment",
+        ),
+        c(
+            "graphics",
+            "multiple-render-targets",
+            "Decoration.Location",
+            stage="fragment",
+        ),
         c(
             "resource",
             "uniform-struct",
