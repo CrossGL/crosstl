@@ -35,6 +35,7 @@ from crosstl.translator.codegen.hip_codegen import (
 from crosstl.translator.codegen.hip_refusals import HipLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.lowering_refusal_helpers import hip_partial_output
 
 
 def compile_hip_if_hipcc_available(hip_code, tmp_path):
@@ -2137,7 +2138,7 @@ class TestHipCodeGen:
             assert f" = {bare};" not in hip_code
         assert "return distance(a, b);" not in hip_code
 
-    def test_half_vector_modulo_uses_float_mod_helper(self):
+    def test_half_vector_remainder_takes_the_float_fmodf(self):
         source_code = """
         shader Mod {
             f16vec3 f(f16vec3 v, f16vec3 w) {
@@ -2155,18 +2156,16 @@ class TestHipCodeGen:
         ast = Parser(Lexer(source_code).tokens).parse()
         hip_code = HipCodeGen().generate(ast)
 
-        assert "__device__ inline float cgl_mod_float(float lhs, float rhs)" in hip_code
+        # `%` is the truncated remainder of the float components (fmodf);
+        # GLSL mod() floors the quotient.
         assert (
-            "__float2half(cgl_mod_float(__half2float(lhs.x), __half2float(rhs.x)))"
-            in hip_code
+            "__float2half(fmodf(__half2float(lhs.x), __half2float(rhs.x)))" in hip_code
         )
-        assert (
-            "__float2half(cgl_mod_float(__half2float(lhs.z), __half2float(rhs)))"
-            in hip_code
-        )
-        assert "fmodf(__half2float" not in hip_code
+        assert "__float2half(fmodf(__half2float(lhs.z), __half2float(rhs)))" in hip_code
+        assert "floorf(__half2float(lhs.x) / __half2float(rhs.x))" in hip_code
         assert "return cgl_cgl_half3_mod(v, w);" in hip_code
         assert "return cgl_cgl_half3_mod_scalar(v, h);" in hip_code
+        assert "return cgl_cgl_half3_glsl_mod(v, w);" in hip_code
         assert "(lhs.x % rhs.x)" not in hip_code
         assert "(lhs.x % rhs)" not in hip_code
 
@@ -3208,35 +3207,25 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(ast)
 
         assert "int scalar = (5 % 2);" in hip_code
-        assert "__device__ inline float cgl_mod_float(float lhs, float rhs)" in hip_code
-        assert "return lhs - rhs * floorf(lhs / rhs);" in hip_code
+        # `%` and `%=` are the truncated remainder (fmodf); mod() floors.
         assert (
-            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            "return make_float3(fmodf(lhs.x, rhs.x), "
+            "fmodf(lhs.y, rhs.y), fmodf(lhs.z, rhs.z));" in hip_code
+        )
+        assert (
+            "return make_double2(fmod(lhs.x, rhs.x), fmod(lhs.y, rhs.y));" in hip_code
+        )
+        assert (
+            "__device__ inline float3 cgl_float3_glsl_mod(float3 lhs, float3 rhs)"
             in hip_code
         )
-        assert "return lhs - rhs * floor(lhs / rhs);" in hip_code
-        assert (
-            "__device__ inline float3 cgl_float3_mod(float3 lhs, float3 rhs)"
-            in hip_code
-        )
-        assert (
-            "return make_float3(cgl_mod_float(lhs.x, rhs.x), "
-            "cgl_mod_float(lhs.y, rhs.y), cgl_mod_float(lhs.z, rhs.z));" in hip_code
-        )
-        assert (
-            "__device__ inline double2 cgl_double2_mod(double2 lhs, double2 rhs)"
-            in hip_code
-        )
-        assert (
-            "return make_double2(cgl_mod_double(lhs.x, rhs.x), "
-            "cgl_mod_double(lhs.y, rhs.y));" in hip_code
-        )
+        assert "(lhs.x - rhs.x * floorf(lhs.x / rhs.x))" in hip_code
         assert "__device__ inline int3 cgl_int3_mod(int3 lhs, int3 rhs)" in hip_code
         assert "__device__ inline uint4 cgl_uint4_mod(uint4 lhs, uint4 rhs)" in hip_code
         assert "float3 vf = cgl_float3_mod(a, b);" in hip_code
         assert "float3 vs = cgl_float3_mod_scalar(a, 2.0f);" in hip_code
         assert "float3 sv = cgl_scalar_mod_float3(10.0f, b);" in hip_code
-        assert "float3 builtin = cgl_float3_mod(a, b);" in hip_code
+        assert "float3 builtin = cgl_float3_glsl_mod(a, b);" in hip_code
         assert "a = cgl_float3_mod(a, b);" in hip_code
         assert "double2 dm = cgl_double2_mod(da, db);" in hip_code
         assert "da = cgl_double2_mod(da, db);" in hip_code
@@ -3247,16 +3236,8 @@ class TestHipCodeGen:
         assert "ua = cgl_uint4_mod(ua, ub);" in hip_code
         assert "float3 vf = (a % b);" not in hip_code
         assert "float3 builtin = fmodf(a, b);" not in hip_code
-        assert "a %= b;" not in hip_code
-        assert "da %= db;" not in hip_code
-        assert "int3 im = (ia % ib);" not in hip_code
-        assert "ia %= ib;" not in hip_code
-        assert "uint4 um = (ua % ub);" not in hip_code
-        assert "ua %= ub;" not in hip_code
-        assert "fmodf(" not in hip_code
-        assert "fmod(" not in hip_code
 
-    def test_scalar_float_modulo_uses_hip_floor_semantics(self):
+    def test_scalar_float_remainder_is_truncated_fmodf(self):
         source_code = """
         shader TestShader {
             compute {
@@ -3289,28 +3270,20 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "__device__ inline float cgl_mod_float(float lhs, float rhs)" in hip_code
-        assert "return lhs - rhs * floorf(lhs / rhs);" in hip_code
-        assert (
-            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
-            in hip_code
-        )
-        assert "return lhs - rhs * floor(lhs / rhs);" in hip_code
-        assert "float fm = cgl_mod_float(fa, fb);" in hip_code
-        assert "float flit = cgl_mod_float(5.5f, 2.0f);" in hip_code
-        assert "fa = cgl_mod_float(fa, fb);" in hip_code
-        assert "double dm = cgl_mod_double(da, db);" in hip_code
-        assert "da = cgl_mod_double(da, db);" in hip_code
+        # `%` and `%=` on floats are the truncated remainder, as in HLSL, MSL and C.
+        assert "float fm = fmodf(fa, fb);" in hip_code
+        assert "float flit = fmodf(5.5f, 2.0f);" in hip_code
+        assert "fa = fmodf(fa, fb);" in hip_code
+        assert "double dm = fmod(da, db);" in hip_code
+        assert "da = fmod(da, db);" in hip_code
         assert "int im = (ia % ib);" in hip_code
         assert "ia %= ib;" in hip_code
         assert "unsigned int um = (ua % ub);" in hip_code
         assert "ua %= ub;" in hip_code
-        assert "float fm = (fa % fb);" not in hip_code
-        assert "double dm = (da % db);" not in hip_code
         assert "fa %= fb;" not in hip_code
         assert "da %= db;" not in hip_code
-        assert "fmodf(" not in hip_code
-        assert "fmod(" not in hip_code
+        assert "floorf(" not in hip_code
+        assert "cgl_mod_float" not in hip_code
 
     def test_user_defined_mod_function_is_not_lowered_to_hip_builtin(self):
         source_code = """
@@ -5261,7 +5234,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         # HIP C++ language extensions specify TYPE atomicAdd(TYPE* address, TYPE val);
         # CrossGL parser source emits PointerAccessNode for `->`, so pointer-held
@@ -5877,7 +5850,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "float paramValue = /* unsupported HIP shadow resource call: "
@@ -6039,7 +6012,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "float4 gathered = tex2Dgather<float4>(colorMap, uv.x, uv.y);" in hip_code
@@ -6181,7 +6154,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         sampled_diagnostics = [
             "textureOffset",
@@ -6534,7 +6507,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "float4 line = tex1D<float4>(lineTex, u);" in hip_code
         assert (
@@ -6697,7 +6670,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "float4 fetchedLine = tex1Dfetch<float4>(lineTex, x);" in hip_code
         assert (
@@ -6810,7 +6783,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert (
             "float4 regular = cgl_surf2Dread<float4>"
@@ -6916,7 +6889,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "hipSurfaceObject_t lineImage;" in hip_code
         assert "hipSurfaceObject_t lineLayers;" in hip_code
@@ -7063,7 +7036,7 @@ class TestHipCodeGen:
             ],
         )
 
-        hip_code = HipCodeGen().generate(cube_array_ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, cube_array_ast)
 
         assert "hipSurfaceObject_t cubeLayers;" in hip_code
         assert "hipSurfaceObject_t cubeCounters;" in hip_code
@@ -7148,7 +7121,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert "hipTextureObject_t textureGrid[2][3];" in hip_code
         assert "hipTextureObject_t layerGrid[2][2];" in hip_code
@@ -8793,11 +8766,11 @@ class TestHipCodeGen:
             "(dynImages_metadata[layer][slot]);" in hip_code
         )
         assert (
-            "return SampleResult(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
+            "return SampleResult{tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
             "cgl_surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
-            "cgl_imageSize_image2D(dynImages_metadata[layer][slot]));" in hip_code
+            "cgl_imageSize_image2D(dynImages_metadata[layer][slot])};" in hip_code
         )
         assert (
             "SampleResult assigned = buildAssigned(dynTex, dynTex_metadata, "
@@ -9943,7 +9916,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "const int* input;" in hip_code
         assert "int* values;" in hip_code
@@ -10215,7 +10188,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert (
             "return /* unsupported HIP GLSL buffer block atomicAdd: resource "
@@ -10277,7 +10250,9 @@ class TestHipCodeGen:
         }
         """
 
-        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        hip_code, _ = hip_partial_output(
+            HipCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert "RuntimeLeaf* leaves;" in hip_code
         assert (
@@ -10540,7 +10515,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "const unsigned int* readonlyCounts;" in hip_code
         assert "unsigned int* counters;" in hip_code
@@ -10654,7 +10629,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         for name, intrinsic in (
             ("oldAdd", "atomicAdd_system"),
@@ -10719,7 +10694,7 @@ class TestHipCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "unsigned int a = atomicAdd(&outp[i], 1u);" in hip_code
         assert "unsigned int b = atomicAdd_system(&outp[i], 1u);" in hip_code
@@ -10770,7 +10745,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "float* values;" in hip_code
         assert "float oldAdd = atomicAdd(&values[index], value);" in hip_code
@@ -10814,7 +10789,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "unsigned int* counters;" in hip_code
         assert "int* signedCounters;" in hip_code
@@ -10890,7 +10865,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "const unsigned char* readBytes;" in hip_code
         assert "unsigned char* writeBytes;" in hip_code
@@ -11128,7 +11103,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "int added = /* unsupported HIP image atomic resource call: "
@@ -11216,7 +11191,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert (
             "unsigned int validCounter = "
@@ -11288,7 +11263,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "hipSurfaceObject_t signedCube;" in hip_code
         assert "hipSurfaceObject_t counterCube;" in hip_code
@@ -11646,7 +11621,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "float2 paramLod = /* unsupported HIP resource query: "
@@ -11702,7 +11677,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "int2 validTextureSize = cgl_textureSize_sampler2D"
@@ -11956,7 +11931,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert "hipTextureObject_t msTex;" in hip_code
         assert "hipTextureObject_t msLayers;" in hip_code
@@ -13306,7 +13281,9 @@ class TestHipCodeGen:
         }
         """
 
-        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        hip_code, _ = hip_partial_output(
+            HipCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert (
             "unsigned int badLane = /* unsupported HIP wave intrinsic: "
@@ -14347,7 +14324,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "const int* readOnlyValues;" in hip_code
         assert "int* writeOnlyValues;" in hip_code
@@ -14411,7 +14388,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "int* writeOnlyValues;" in hip_code
         assert "unsigned char* writeOnlyBytes;" in hip_code

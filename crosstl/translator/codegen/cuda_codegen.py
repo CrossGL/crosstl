@@ -47,8 +47,10 @@ from .c_reference_parameters import (
     overlapping_output_arguments,
     reference_declarator,
 )
+from .c_vector_reductions import generate_vector_reduction_call
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_refusals import CudaLoweringRefused
+from .float_remainder_assignment import float_remainder_assignment
 from .for_initializers import join_for_initializer
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
@@ -62,6 +64,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
 )
+from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -69,10 +72,12 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .relational_builtins import lower_relational_builtins
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 from .sampler_pairs import canonicalize_separate_textures
+from .stage_local_structs import module_structs
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
@@ -214,8 +219,15 @@ def _refuse_buffer_counter(reason):
     raise ValueError(f"CUDA buffer counter: {reason}")
 
 
-class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
+class CudaCodeGen(
+    LoweringRefusalMixin,
+    VectorArithmeticMixin,
+    ResourceQueryMixin,
+    ResourceDiagnosticMixin,
+):
     """Emit CUDA source from the shared CrossGL translator AST."""
+
+    LOWERING_REFUSAL_TYPE = CudaLoweringRefused
 
     resource_diagnostic_backend = "CUDA"
     query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
@@ -367,11 +379,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }
 
     def generate(self, ast_node):
-        """Generate complete CUDA source for a CrossGL AST."""
+        """Generate complete CUDA source for a CrossGL AST, or raise :class:`CudaLoweringRefused`.
+
+        A construct with no faithful CUDA lowering is refused; no program is returned while a refusal is
+        pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
+        """
+        return self.refusals.run(self.render_program, ast_node)
+
+    def render_program(self, ast_node):
+        """Render complete CUDA source for a CrossGL AST."""
         # A CUDA texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         ast_node = canonicalize_separate_textures(ast_node)
         # A user function named like a device library function would redefine it or make its calls ambiguous.
         ast_node = rename_cuda_library_functions(ast_node)
+        # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
+        lower_relational_builtins(ast_node)
         # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
         ast_node = materialize_structured_buffer_counters(
             ast_node, _refuse_buffer_counter
@@ -1118,8 +1140,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if self.has_mesh_task_stage(node):
             self.emit_generated_code(self.generate_cuda_mesh_task_helpers())
 
-        structs = getattr(node, "structs", [])
-        for struct in structs:
+        for struct in module_structs(node, "CUDA"):
             self.visit(struct)
             self.emit("")
 
@@ -3021,6 +3042,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         if diagnostic is not None:
             return diagnostic
+        # C++ has no floating %=; x = x % y lowers the remainder through fmodf.
+        remainder = float_remainder_assignment(
+            node.target,
+            node.value,
+            operator,
+            type_of=self.expression_result_type,
+            is_floating=self.is_floating_value_type,
+            backend="cuda",
+        )
+        if remainder is not None:
+            return self.format_assignment_expression(remainder)
         swizzle_assignment = self.format_swizzle_assignment_expression(
             node.target,
             node.value,
@@ -3483,6 +3515,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 f"arguments; got {len(raw_args)}"
             )
 
+        reduction_call = generate_vector_reduction_call(
+            self, "CUDA", func_name, raw_args, args
+        )
+        if reduction_call is not None:
+            return reduction_call
+
         if func_name == "abs" and len(args) == 1:
             abs_call = self.generate_abs_call(raw_args, args)
             if abs_call is not None:
@@ -3582,6 +3620,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name in self.struct_member_types:
             args = self.struct_constructor_arguments(func_name, raw_args, args)
+            if func_name in self.structs_by_name:
+                # The structure has no constructor; aggregate initialization sets its members in order.
+                mapped_type = self.convert_crossgl_type_to_cuda(func_name)
+                return f"{mapped_type}{{{', '.join(args)}}}"
 
         scalar_math_call = self.generate_scalar_math_call(
             math_func_name, raw_args, args
@@ -5515,7 +5557,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return raw
 
     def generate_mod_call(self, raw_args, args):
-        """Lower CrossGL/GLSL mod with GLSL floor semantics."""
+        """Lower CrossGL/GLSL mod with GLSL floor semantics.
+
+        The ``%`` operator is the truncated remainder (``fmodf``) instead; see
+        VectorArithmeticMixin.lower_scalar_modulo_operation.
+        """
         if len(raw_args) != 2 or len(args) != 2:
             return None
 
@@ -5524,40 +5570,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             args[0],
             raw_args[1],
             args[1],
-            "%",
+            "mod",
         )
         if vector_call is not None:
             return vector_call
 
-        return self.lower_scalar_modulo_operation(
-            raw_args[0],
-            args[0],
-            raw_args[1],
-            args[1],
-        )
-
-    def lower_scalar_modulo_operation(
-        self,
-        left_node,
-        left_expr,
-        right_node,
-        right_expr,
-    ):
-        """Lower floating-point scalar modulo with GLSL floor semantics."""
-        scalar_type = self.cuda_mod_scalar_type(left_node, right_node)
+        scalar_type = self.cuda_mod_scalar_type(raw_args[0], raw_args[1])
         if scalar_type is None:
             return None
-
         helper_name = self.require_cuda_scalar_mod_helper(scalar_type)
-        return f"{helper_name}({left_expr}, {right_expr})"
-
-    def format_vector_binary_component(self, component_type, operator, left, right):
-        if operator == "%" and component_type in {"float", "double"}:
-            helper_name = self.require_cuda_scalar_mod_helper(component_type)
-            return f"{helper_name}({left}, {right})"
-        return super().format_vector_binary_component(
-            component_type, operator, left, right
-        )
+        return f"{helper_name}({args[0]}, {args[1]})"
 
     def cuda_mod_scalar_type(self, left_node, right_node):
         component_types = []
