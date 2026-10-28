@@ -8969,7 +8969,7 @@ def test_reference_array_conversion():
     try:
         result = parse_and_generate(code)
         assert (
-            "void sample_arrays(Filter filter, float weights[4], vec3 output[2])"
+            "void sample_arrays(Filter filter, float weights[4], inout vec3 output[2])"
             in result
         )
         assert "first = weights[0];" in result
@@ -8990,7 +8990,7 @@ def test_lifetime_reference_type_conversion():
     try:
         result = parse_and_generate(code)
         assert "vec3 borrow(vec3 value)" in result
-        assert "vec3 borrow_mut(vec3 value)" in result
+        assert "vec3 borrow_mut(inout vec3 value)" in result
         assert "return value;" in result
         assert "'a" not in result
         assert "&" not in result
@@ -11311,7 +11311,7 @@ def test_rust_gpu_mouse_shader_impl_trait_parameter_codegen():
 
     result = parse_and_generate(code)
 
-    assert "void Painter_fill(Painter self, Shape shape, vec4 color)" in result
+    assert "void Painter_fill(inout Painter self, Shape shape, vec4 color)" in result
     assert "impl Shape shape" not in result
     crosstl.translator.parse(result)
 
