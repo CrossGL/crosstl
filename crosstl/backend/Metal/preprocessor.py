@@ -16903,7 +16903,18 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             concrete_value_type = self._canonical_template_binding_pointee_type(
                 concrete_value_type
             )
-            if resolved_declared_type != concrete_value_type:
+            # A materialized specialization such as `S_float16_t` expands to the
+            # argument spelling it was named from, so canonicalize both sides'
+            # aliases again after the expansion.
+            resolved_declared_type = canonicalize_declared_aliases(
+                resolved_declared_type
+            )
+            concrete_value_type = canonicalize_argument_aliases(concrete_value_type)
+            if (
+                resolved_declared_type is None
+                or concrete_value_type is None
+                or resolved_declared_type != concrete_value_type
+            ):
                 return None
         return bindings
 
