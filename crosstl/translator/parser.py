@@ -6023,7 +6023,13 @@ class Parser:
 
         self.eat("RBRACE")
 
-        if self.current_token_is_declaration_binding_identifier():
+        if self.current_token_is_declaration_binding_identifier() and self.peek()[0] in (
+            "SEMICOLON",
+            "LBRACKET",
+            "AT",
+            "ATTRIBUTE",
+        ):
+            # Without ';' or '[' next, the name is the type of the next declaration.
             return self.parse_constant_block_instance(name, members, attributes)
 
         if self.current_token[0] == "SEMICOLON":

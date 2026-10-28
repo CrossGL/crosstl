@@ -88,6 +88,18 @@ def test_a_block_without_an_instance_name_stays_a_constant_block():
     assert not program.global_variables
 
 
+def test_a_declaration_after_a_block_without_a_semicolon_is_not_its_instance():
+    program = _parse("""shader S {
+        cbuffer Params { vec4 v; }
+        Texture2D colorMap;
+        fragment { vec4 main() @ gl_FragColor { return v; } }
+    }""")
+    (block,) = program.cbuffers
+    assert block.is_cbuffer and [member.name for member in block.members] == ["v"]
+    (texture,) = program.global_variables
+    assert texture.name == "colorMap" and texture.var_type.name == "Texture2D"
+
+
 @pytest.mark.parametrize(
     "backend, declarations",
     [
