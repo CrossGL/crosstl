@@ -1546,7 +1546,7 @@ class MetalCodeGen(
             "gl_FragColor6": "[[color(6)]]",
             "gl_FragColor7": "[[color(7)]]",
             "gl_FragDepth": "depth(any)",
-            "gl_FragStencilRefEXT": "stencil_ref",
+            "gl_FragStencilRefEXT": "stencil",
             "SV_TARGET": "color(0)",
             "SV_TARGET0": "color(0)",
             "SV_TARGET1": "color(1)",
@@ -7589,9 +7589,9 @@ class MetalCodeGen(
             "depth(any)": "float",
             "sample_id": "uint",
             "sample_mask": "uint",
+            # A fragment function's stencil reference output (MSL 3.2 section 5.2.3.4).
+            "stencil": "uint",
         }
-        if metal_semantic == "stencil_ref":
-            return "invalid"
         if metal_semantic is None:
             return None
         if metal_semantic.startswith("color("):
@@ -7735,7 +7735,7 @@ class MetalCodeGen(
         } or bool(metal_semantic and metal_semantic.startswith("color("))
         is_fragment_output = is_fragment_output or metal_semantic in {
             "sample_mask",
-            "stencil_ref",
+            "stencil",
         }
         is_vertex_output = semantic_text == "gl_Position"
 
@@ -7778,9 +7778,8 @@ class MetalCodeGen(
             "gl_Position": "float4",
             "gl_FragDepth": "float",
             "gl_SampleMask": "uint",
+            "gl_FragStencilRefEXT": "uint",
         }
-        if semantic == "gl_FragStencilRefEXT" or metal_semantic == "stencil_ref":
-            return "invalid"
         if semantic in output_types:
             return output_types[semantic]
         if metal_semantic and metal_semantic.startswith("color("):
@@ -19273,7 +19272,7 @@ class MetalCodeGen(
             "render_target_array_index",
             "sample_id",
             "sample_mask",
-            "stencil_ref",
+            "stencil",
             "thread_index_in_threadgroup",
             "thread_position_in_grid",
             "thread_position_in_threadgroup",
