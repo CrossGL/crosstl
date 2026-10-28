@@ -12262,7 +12262,27 @@ class RustCodeGen(LoweringRefusalMixin):
     def rust_callable_name(self, name):
         if isinstance(name, str) and name.isidentifier():
             return self.rust_identifier(name)
-        return name
+        return self.rust_turbofish_callable_name(name)
+
+    def rust_turbofish_callable_name(self, name):
+        """Restore the turbofish on a callee that carries explicit type arguments.
+
+        CrossGL has no ``::``, so the Rust importer writes ``f::<T>(x)`` into
+        CrossGL as ``f<T>(x)``.  Emitted back verbatim, rustc reads the ``<`` as
+        a comparison and the generated crate does not parse, so the ``::`` goes
+        back in front of the type arguments here.  A path that already carries
+        one, and anything whose head is not a ``::``-separated path of plain
+        identifiers, is left exactly as it was.
+        """
+        if not isinstance(name, str):
+            return name
+        head, separator, type_arguments = name.partition("<")
+        if not separator:
+            return name
+        segments = head.split("::")
+        if not all(segment.isidentifier() for segment in segments):
+            return name
+        return f"{head}::<{type_arguments}"
 
     def rust_reserved_identifiers(self):
         return {
