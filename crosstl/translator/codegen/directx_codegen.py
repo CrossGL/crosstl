@@ -15793,6 +15793,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "maybe_unused",
             "source_resource",
             "precise",
+            # GLSL's invariance qualifier decorates an output (GLSL 4.60 section 4.8.1); it never names one.
+            "invariant",
             # GLSL precision qualifiers set a minimum precision (GLSL ES 3.00 section 4.5.2); HLSL's 32-bit types
             # meet it, so they carry no semantic and must not become one.
             "highp",
