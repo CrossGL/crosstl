@@ -457,7 +457,10 @@ class _Declarations:
                 functions.append(node)
             if isinstance(node, StructNode) and isinstance(name, str):
                 struct_names.add(name)
-            if isinstance(node, _VALUE_DECLARATION_TYPES) and isinstance(name, str):
+            if _is_type_alias(node) and isinstance(name, str):
+                # A type alias names a type: its uses are ``NamedType`` nodes.
+                self.types.add(name)
+            elif isinstance(node, _VALUE_DECLARATION_TYPES) and isinstance(name, str):
                 self.values.add(name)
                 if name in HLSL_SCOPED_KEYWORD_NAMES:
                     scoped.append(node)
@@ -513,6 +516,10 @@ def hlsl_keyword_declarations(ast):
     return declarations.keyword_values(), declarations.keyword_types()
 
 
+def _is_type_alias(node):
+    return isinstance(node, VariableNode) and getattr(node, "is_type_alias", False)
+
+
 def _program_names(ast):
     names = set()
     for node in _iter_nodes(ast, include_opaque=True):
@@ -563,7 +570,10 @@ class _Renamer:
 
     def rename(self, node):
         name = getattr(node, "name", None)
-        if isinstance(node, _VALUE_DECLARATION_TYPES):
+        if _is_type_alias(node):
+            if name in self.types:
+                node.name = self.types[name]
+        elif isinstance(node, _VALUE_DECLARATION_TYPES):
             if name in self.values:
                 node.name = self.values[name]
         elif isinstance(node, _TYPE_DECLARATION_TYPES):

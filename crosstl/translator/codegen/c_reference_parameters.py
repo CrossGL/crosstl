@@ -29,6 +29,7 @@ from ..ast import (
 __all__ = [
     "OUTPUT_QUALIFIERS",
     "is_output_parameter",
+    "multi_component_swizzle_arguments",
     "overlapping_output_arguments",
     "reference_declarator",
 ]
@@ -105,3 +106,32 @@ def overlapping_output_arguments(parameters, arguments):
         for root, uses in roots.items()
         if any(output for output, _ in uses) and sum(reach for _, reach in uses) > 1
     )
+
+
+def multi_component_swizzle_arguments(parameters, arguments, swizzle_components):
+    """``(position, swizzle)`` for each argument that passes a swizzle of several components to an ``out``/``inout``.
+
+    CUDA and HIP build a swizzle such as ``v.xy`` as a new vector, which an lvalue reference cannot bind to, so the
+    emitters refuse such a call. A swizzle anywhere on the argument's path counts, as in ``v.zw.x``.
+    ``swizzle_components`` returns the components of a member access that is a vector swizzle, or ``None``.
+    ``position`` counts from 1.
+    """
+    found = []
+    for position, (parameter, argument) in enumerate(
+        zip(parameters, arguments), start=1
+    ):
+        if not is_output_parameter(parameter):
+            continue
+        current = argument
+        while isinstance(current, (ArrayAccessNode, MemberAccessNode)):
+            if isinstance(current, MemberAccessNode):
+                components = swizzle_components(current)
+                if components is not None and len(components) > 1:
+                    found.append((position, current.member))
+                    break
+                current = current.object
+            else:
+                current = getattr(
+                    current, "array", getattr(current, "array_expr", None)
+                )
+    return found

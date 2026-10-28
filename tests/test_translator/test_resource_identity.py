@@ -278,7 +278,7 @@ def test_formatter_preserves_resource_metadata_comments(monkeypatch):
         "BasedOnStyle": "Microsoft",
         "SortIncludes": False,
         "CommentPragmas": (
-            "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-dispatch-region:|crosstl-combined-samplers:|crosstl-fixed-samplers:)"
+            "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-immutable-storage:|crosstl-dispatch-region:|crosstl-combined-samplers:|crosstl-fixed-samplers:)"
         ),
     }
 
