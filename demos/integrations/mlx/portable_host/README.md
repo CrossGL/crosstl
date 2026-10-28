@@ -59,10 +59,13 @@ half packages provide float16 copies and float16/float32 casts as described belo
 broadcast values in these types, including int64 and uint64 with the optional
 packages. Other storage widths are not yet
 supported by this copy path.
-Binary addition, subtraction, multiplication, minimum and maximum support
-float32, int32 and uint32; division supports float32. Broadcasts and non-row-contiguous binary
+Binary addition, subtraction, multiplication, minimum, maximum and MLX's floored
+remainder support float32, int32 and uint32; division and LogAddExp support float32.
+Integer remainders reject zero divisors and signed `INT_MIN % -1` before dispatch,
+because all three targets leave them undefined. Broadcasts and non-row-contiguous binary
 inputs are materialized by translated copies before the unchanged vector-vector
-binary entry executes. Casts between float32, int32 and uint32 use six unchanged
+binary entry executes. `DivMod` (see below) instead dispatches the strided
+`binary_two` kernels directly, for every real integer and floating type. Casts between float32, int32 and uint32 use six unchanged
 `v_copy` entries, including automatic promotion before mixed-type arithmetic.
 Six additional casts convert between bool and those three numeric types.
 Strided cast inputs are materialized through translated copies. Optional integer64
@@ -215,17 +218,52 @@ python -m demos.integrations.mlx.portable_host.verify_binary_batches \
   --mlx-root mlx-upstream --packages host-packages --output-dir binary-batches
 ```
 
-Its 48 API cases cover every base arithmetic, comparison and logical binary entry
+Its 52 API cases cover every base arithmetic, comparison and logical binary entry
 except NaN-equality, whose large-array API additionally needs the optional reduction packages.
 They include 65,535, 65,536 and 131,075 elements, distinct input offsets, a large
-transpose, a reversed input and row/column broadcasts. The 98 binary batches and
-four materializing copies require exact CPU/reference/native bytes, unchanged
+transpose, a reversed input and row/column broadcasts. Remainder divisors are
+nonzero signed powers of two (uint32: 1 through 997), so every floored result is
+exact on each target. The 106 binary batches and four materializing copies require
+exact CPU/reference/native bytes (LogAddExp: within 1e-6 + 2e-6 |reference|, the
+base workload's float32 bound, because exp and log1p are not correctly rounded, and
+each native batch must carry the retained readback's exact bits), unchanged
 source storage, physical Boolean widths, uploaded inputs, destination guards,
 launch geometry and retained compiled artifacts. Float operands are finite and
 exactly representable; the existing nonfinite and small-array tests remain in
 place. Half and 64-bit batch execution are not covered by these cases.
 
 These checks establish the batched operations, not full upstream-suite parity.
+
+## DivMod
+
+`DivMod` is MLX's two-output floored quotient and remainder. Its host port
+follows `binary_op_gpu` in `mlx/backend/metal/binary.cpp` for row-contiguous
+outputs: scalar and dense operands use the unchanged `ss_`, `sv_`, `vs_` and
+`vv_` `binary_two.metal` entries, and every other layout collapses its
+contiguous axes and uses `g1_`, `g2_`, `g3_` or `gn2_` with the operands'
+strides, so broadcasts need no copy kernel. Inputs with negative strides are
+first copied densely. The single-element `N = 1` entries are used throughout,
+so no work-per-thread variant is needed. All 88 kernel and dtype pairs (float16,
+bfloat16, float32 and the 8-, 16-, 32- and 64-bit integers) are translated from
+the pinned source on first use and cached under an identity that covers the
+translator, the packaging recipe and the source hash. The floating entries pin
+the same binary32 division, comparison, remainder and additive profiles, and
+the binary16 remainder profile, as the `binary_two` kernel parity tests.
+OpenGL packages assert their element indices in `[0, 2**31 - 1]`; the host
+bounds outputs and operand spans at 2**20 elements and every grid axis at
+65,535.
+
+Integer operands are refused before dispatch when a divisor is zero or a signed
+`MIN / -1` would overflow, because no target defines those results. The
+callback checks every buffer against its kernel's contract (types, extents,
+spans, directions, overlap and launch geometry), uploads narrow integers as
+32-bit words where a target lacks 8- or 16-bit storage, and decodes each
+readback exactly, with a guard after each output. `divmod_evidence` recomputes
+both outputs of a dispatch from its retained operands: integers exactly, and
+floating values with correctly rounded division, MLX's floored `fmod` and
+Metal's binary32-quotient binary16 remainder. The evidence check accepts only
+zero and normal finite values, so a dispatch that reaches subnormals,
+infinities or NaNs fails it rather than passing on an unmodelled flush.
 
 ## Batched Unary Operations
 
@@ -347,6 +385,205 @@ upstream quantization suite. Noncontiguous inputs still use the existing transla
 copy path, with its size and dtype restrictions; in particular, strided bfloat16
 copies are not implemented. Other upstream-test prerequisites such as large random
 arrays and quantized matrix multiplication remain separate work.
+
+## Affine Quantized Matrix-Vector Products
+
+`QuantizedMatmul::eval_gpu` routes affine products with few input vectors to the
+translated kernels of the unchanged `quantized.metal`, as quantized.cpp selects
+them. Transposed weights with fewer vectors than `get_qmv_batch_limit` go to the
+`dispatch_qmv` kernels: `affine_qmv_quad` when `K` is 64 or 128 and the width is
+a power of two, `affine_qmv_fast` when `N` and `K` are aligned, otherwise
+`affine_qmv`. Untransposed weights with fewer than four vectors and `K` below
+1024 go to `affine_qvm`. Each kernel has its `batch_0` and `batch_1` variants.
+The host reports no Apple GPU generation, so it uses the lowest generation's
+batch limits and never selects `affine_qmv_wide`. Untransposed vector products
+with `K` of 1024 or more go to `affine_qvm_split_k` in 8 partitions (32 above
+`K` of 8192), whose partial products a translated column sum adds:
+`col_reduce_small` below 32 partitions, `col_reduce_looped` otherwise.
+
+Products with at least the vector limit's rows go to `qmm_layout.py`'s
+matrix-matrix kernels. Single matrices with transposed weights take
+`qmm_splitk`: `affine_qmm_t_splitk` writes partial products over whole
+`BK`-wide, whole-group partitions of `K`, chosen to target about 512
+threadgroups, and the same column sums add them; when `K` admits no split they
+take `affine_qmm_t`, as batched transposed products do. Untransposed products
+take `affine_qmm_n`. The host has no NAX unit, so it never selects `qmm_nax`.
+Split-K products of float16 and bfloat16 write partial products in the element
+type, and MLX sums them in it: the host routes them to the unchanged
+`col_reduce_small_1_reduce_sum{float16,bfloat16}` entries below 32 partitions,
+`col_reduce_looped_1_32_32_reduce_sum...` from 32, and above 256 partitions of
+fewer than 32,768 outputs to `col_reduce_2pass_1_32_32_reduce_sum...` followed
+by the looped pass over its 32 partials, as reduce.cpp does. Each of them
+rounds every addition. Column packages hold these 16-bit entries only when
+asked for them by name (`reduction_packages.PARTITION_SUM_ENTRIES`). Partition
+sums bind up to 2^28 - 1 partial products, the bound of the products themselves.
+
+`matmul_layout.py` rejects a launch unless its entry, grid and workgroup are the
+ones MLX's routing would choose for the bound shapes, strides and buffer extents.
+Every batch offset must name an element of its buffer and every buffer holds at
+most 2^28 - 1 elements, which the OpenGL translation asserts for its 32-bit batch
+offsets. `qmv_quad` reads one scale and bias per row of its last tile, past `N`;
+the host pads those buffers with poison elements and the output with guards, and
+copies the output back only after validating them. `batch_0` kernels reflect the
+batch parameters MLX does not bind; the host supplies inert unbatched values.
+
+The three-platform `MLX quantized host` jobs translate every routed entry ahead
+of execution with `python -m demos.integrations.mlx.portable_host.matmul_packages
+--verification --jobs 3`, then run `verify_quantized_matmul.py` through
+`mx.quantized_matmul`. Its twenty-three cases cover every route and batch variant,
+all three element types and every width. The transposed cases include a partial
+`qmv_quad` tile, broadcast weights, a strided activation batch and two batch
+axes; the untransposed ones a `K` tail, a `K` shorter than one 32-row block, a
+half-empty last tile, broadcast and shared weights and two batch axes. Inputs
+lie on dyadic grids that keep every float32 partial sum exact, so each output
+must match an exact float64 reference bit for bit, and float32 results must also
+match MLX's CPU backend. Four more `qvm_split_k` cases sum float16 and bfloat16
+partitions in the small and the looped pass. The same jobs translate the matrix-matrix entries with
+`qmm_packages --verification` and run `verify_quantized_qmm.py`: twenty-two cases
+over `affine_qmm_t`, `affine_qmm_t_splitk` with small, looped and two-pass
+partition sums,
+and `affine_qmm_n`, in all three element types, with stacked, broadcast and
+shared weights, folded rows, partial row and column tiles and `K` tails. Split-K
+cases cover float16 and bfloat16 partition sums, sixteen partitions that each
+threadgroup row adds two of, and 65,536 and 131,072 partial products (`test_qmm`'s
+float16 shape), and the looped and two-pass sums of 64 to 512 partitions in
+every element type. A 16-bit product rounds each partition and each addition.
+Below 32 partitions its reference repeats those roundings in the small column
+sum's order, and they change hundreds of outputs against a single rounding of
+the exact product. The looped and two-pass sums add through simd reductions,
+whose order Metal leaves unspecified, so their 16-bit cases use unit scales and
+at most one nonzero activation per partition: every partial product and every
+sum of them is an integer the element type holds, and each output must equal
+the exact product bit for bit in any order. The unchanged upstream `test_qmv` and `test_qvm` also
+need the floating-point `Matmul` route below for their reference products;
+`test_qmv`'s unbatched references are matrix-matrix products, which take the
+steel GEMM or split-K route.
+
+`verify_upstream_qvm.py`, `verify_upstream_qmv.py`,
+`verify_upstream_qvm_splitk.py` (`test_qvm_splitk` and
+`test_qvm_splitk_multi_row`), `verify_upstream_qmm_shapes.py`
+(`test_qmm_shapes`, `test_small_matrix`, `test_non_multiples` and
+`test_throw`, whose one unchecked product takes `affine_qmv_fast`) and
+`verify_upstream_qmm.py` (`test_qmm`) run those
+tests unchanged, first on MLX's CPU and then through the translated host, with
+the shared steps in `upstream_runner.py`. Each runner translates every quantized and
+floating-point product entry the test reaches before the native worker starts,
+and packages the whole-array maximum of its error bound on demand. The native
+trace must hold exactly the affine, `gemv` and steel dispatches that
+quantized.cpp and matmul.cpp would make for every subtest: `test_qmv` reaches
+60 `affine_qmv_quad`, `affine_qmv_fast` and `affine_qmv` entries, both `gemv`
+tiles, two fused GEMM entries and the split-K product with its accumulation;
+the quantized-shape tests reach `affine_qmv`, `affine_qvm`, `affine_qmm_n` and
+`affine_qmm_t_splitk` with its small partition sum. `test_qmm` computes in
+float16 on the GPU device, so its native run is float16 throughout while the
+CPU run is float32: 288 products over three group sizes and three widths reach
+`affine_qmv`, `affine_qmv_fast`, `affine_qmv_quad`, `affine_qmm_n`,
+`affine_qmm_t` and `affine_qmm_t_splitk` with the float16 small partition sum,
+against float16 steel GEMM and split-K references. Its runner also translates
+the `half` and `half-arithmetic` families for the casts and the error bound's
+difference, absolute value and comparison, and packages the float16 maximum in
+its own reduction directory. `test_qmm_large_dims` (outputs over 2^15 rows or
+columns) is not run yet. The `MLX upstream` jobs run each test on Metal,
+Direct3D 12 (WARP) and OpenGL (Mesa) in the heavy tier.
+
+The block-scaled runners follow the same steps. `verify_upstream_fp_qmv.py`
+and `verify_upstream_fp_qvm.py` run `test_fp_qmv` and `test_fp_qvm` in
+float32. `verify_upstream_fp_qmv_large_output.py` runs
+`test_fp_qmv_large_output` in float16, bfloat16 and float32, as the GPU device
+does. Each type reaches `nvfp4_qmv_fast` of that type, alone and batched, for
+4,096 outputs, against a `gemv` reference in the same type. Its `allclose` is a
+translated chain of 16-bit and float32 element-wise operations ending in an
+`and` reduction.
+
+`verify_upstream_qmv_small_non_multiples.py` runs
+`test_qmv_small_non_multiples`, which mixes both families. One to four rows of
+32 values multiply 3, 5, 7 or 10 output rows quantized as 4-bit and 6-bit
+affine groups and as nvfp4. No width is a multiple of 8, so every affine product
+reaches `affine_qmv`, one nvfp4 row `nvfp4_qmv` and two or four rows
+`nvfp4_qmv_wide`. The references take `gemv` for one row and
+`steel_gemm_fused` otherwise.
+
+`verify_upstream_qmm_vjp.py` runs `test_qmm_vjp` and `test_qmm_jvp`. Each
+differentiates an 8-bit, group-64 product of a `(2, 64, K)` input with respect
+to that input, for transposed and untransposed weights, and compares the
+derivative with the same product written out through `allclose`. The
+derivatives are quantized products of the cotangent or tangent with the
+weights: 128 folded rows that reach `affine_qmm_n` or `affine_qmm_t_splitk`
+with its small float32 partition sum. Neither test evaluates the primal
+output, so the trace must hold exactly two launches of each product.
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_upstream_qmv \
+  --mlx-root mlx-upstream --packages host-packages --output-dir upstream-qmv
+```
+
+## Floating-Point Matrix-Vector Products
+
+`Matmul::eval_gpu` routes float32, float16 and bfloat16 products with one
+output row or column to the translated `gemv` and `gemv_t` kernels of the
+unchanged `gemv.metal`, as matmul.cpp selects them: `check_transpose` on both
+operands, `collapse_batches`, the fold of a contiguous batch into `M`, then
+`gemv_axbpy`'s kernel and tile shape. The host reports no Apple GPU generation,
+so it never selects `gemv_wide`, and `Matmul` never computes `axpby`. The host
+copies the operands MLX would copy and, in addition, views with negative
+strides. Empty inputs produce zeros through the translated copy. Single dot
+products, which MLX sends to `dot_product` and an all-reduce, fail with an
+explicit error. Matrix-matrix products take the steel GEMM route below.
+
+`gemv_layout.py` rejects a launch unless its entry, grid and workgroup are the
+ones MLX's routing would choose for the bound sizes, leading dimension and batch
+strides, and every batch's matrix and vector lie inside their buffers of at most
+2^28 - 1 elements, which bounds the offsets the OpenGL translation asserts. The
+kernels reflect the `axpby` bindings `gemv_axbpy` leaves unbound; the host binds
+inert values for them. The `MLX quantized host` jobs translate every routed
+entry with `python -m demos.integrations.mlx.portable_host.gemv_packages
+--verification --jobs 3`, then run `verify_matmul.py` through `mx.matmul`. Its
+cases reach ten of the twelve instantiated tiles in all three element types,
+both batch variants, transposed and strided operands, broadcast and
+`as_strided` batches, and the batch fold. Each output must match an exact
+float64 reference bit for bit, float32 outputs must also match MLX's CPU
+backend, and a single dot product must fail with the host's error without
+dispatching.
+
+## Floating-Point Matrix-Matrix Products
+
+Products with more than one output row and column follow matmul.cpp's
+`steel_matmul` after the same operand preparation. The host reports no Apple
+GPU architecture and no NAX unit, so `steel_matmul_axpby` compares the product
+against the split-K case with its 1,024-tile threshold and otherwise selects
+`steel_gemm_fused` with `GEMM_TPARAM_MACRO`'s medium-device tile, 64x64x16
+with 2x2 simdgroups. The host names each entry by matmul.cpp's hash name, so
+the translation freezes the kernel's `has_batch` and `align_M`/`N`/`K`
+function constants; `Matmul` never reads `C`, so `use_out_source` and
+`do_axpby` stay false. Split-K products take the route in the next section.
+
+`gemm_layout.py` rejects a launch unless its entry, constants, `GEMMParams`,
+grid and workgroup are what matmul.cpp would bind for the sizes and strides,
+and every batch's `A` and `B` tiles lie inside their buffers. `gemm_packages`
+translates entries with the options and range assertions of the current-tree
+GEMM gate (`test_current_gemm_family.py`), and the host packs `GEMMParams`
+into the reflected record layout. The `MLX quantized host` jobs translate the
+routed entries with `python -m demos.integrations.mlx.portable_host.gemm_packages
+--verification --jobs 3` before `verify_matmul.py`, whose GEMM cases cover
+every transposition and element type, partial and whole tiles, several tiles
+per axis, batches with and without `has_batch`, a batch folded into `M` and a
+copied operand, with the same exact references.
+
+A single product whose `M x N` output has at most 1,024 tiles of 16, with
+`K / 16 >= 8` and `K >= max(M, N)`, follows `steel_gemm_splitk_axpby`: the
+host allocates the float32 `C_split` temporary of matmul.cpp's partition
+count, runs the `gemm_splitk` entry for its tile (16 or 32 per axis) and
+alignment, then `gemm_splitk_accum` over the partitions. matmul.cpp launches
+the accumulation with `dispatch_threads` over exactly `N x M` threads; the
+kernel reads only `thread_position_in_grid` and has no bounds check, so the
+host covers the same threads with one-thread workgroups. `gemm_splitk_layout.py`
+checks `GEMMSpiltKParams`, the grid and each buffer extent against
+matmul.cpp's plan, and `gemm_splitk_packages` translates both kernels with the
+options and range assertions of `test_current_gemm_splitk.py`. The split-K
+cases of `verify_matmul.py` cover every transposition, element type and tile,
+aligned and unaligned `M x N` and `K`, 4 to 32 partitions, partitions without
+a whole `K` tile, a batch folded into `M` and a copied operand; the trace must
+show each accumulation reading exactly the partitions its product wrote.
 
 ## Block Quantization
 
@@ -807,7 +1044,7 @@ no-GPU backend build definition and adds four explicitly named backend files:
   upload; the logical origin is rebased for negative strides. Shape and stride
   metadata are independently validated at the callback boundary. Contiguous
   destination strides and three-dimensional dispatch follow the source kernel.
-  Six binary primitive hooks select 16 unchanged `vv_` specializations. They
+  Eight binary primitive hooks select 20 unchanged `vv_` specializations. They
   validate input shapes and types, allocate dense output and stage strided inputs
   through translated copies. Neither layout conversion nor arithmetic falls
   back to CPU computation. Binary buffer donation is not implemented.
@@ -906,8 +1143,9 @@ rows followed by a 32-thread final reduction; larger inputs use 4,096 partial
 rows followed by a 1,024-thread final reduction. The threshold uses MLX's logical
 item size, including one byte for Boolean values, independently of widened target
 storage. Whole-array inputs must fit their backing allocation and the signed
-32-bit buffer-index range; native device buffer limits also apply. Row and column
-reductions retain their 65,535-element bound. Intermediate values are staged synchronously, not
+32-bit buffer-index range; native device buffer limits also apply. Row
+reductions retain their 65,535-element bound; column reductions are bounded as
+described under Column Reductions. Intermediate values are staged synchronously, not
 kept in persistent GPU allocations. Unsupported column plans still produce
 explicit errors. No reduction arithmetic is
 performed on the CPU by the adapter.
@@ -1141,13 +1379,18 @@ The column family connects upstream looped and two-pass column plans to generate
 kernels. The default build includes all 84 entries: fourteen operation/type
 combinations, three template ranks, and two dispatch modes, each at 256 threads.
 Selection follows upstream's reduction count and contiguous output span. Small
-columns and the separate long-column algorithm still report explicit errors.
+columns take `col_reduce_small`; the separate long-column algorithm still reports
+an explicit error.
 
 The adapter preserves reduction strides, broadcast strides, allocation offsets
 and output geometry. Ranks, metadata array lengths, source spans and logical
 sizes are checked before dispatch. Two-pass plans write 32 intermediate rows;
 the second native dispatch consumes those actual results without host reduction
-arithmetic. The existing 65,535-element logical and physical bounds still apply.
+arithmetic. Inputs, outputs and source spans hold at most 2^28 - 1 elements, far
+below the `INT32_MAX` at which MLX selects 64-bit index kernels; every shape axis
+and stride stays below 65,536 and every launch axis at most 65,535 workgroups.
+Row plans, unlike column plans, retain the 65,535-element bound. The workloads
+include small, looped and two-pass plans over 76,800 to 131,072 elements.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family column --jobs 2 --output-dir column-packages
@@ -1295,32 +1538,44 @@ copy grids or a passing complete upstream suite. The existing half-host jobs
 run the native checks without additional runners; shared Python contract tests
 run on Linux only. The job deadline accounts for the bounded commands and setup.
 
-### Bfloat Reductions
+### 16-bit Float Extrema
 
-The reduction builder's `bfloat` family packages unchanged `reduce.metal`
-minimum and maximum entries. Host routing preserves two-byte logical allocation
-sizes, upstream launch selection and intermediate bfloat storage in two-pass
-whole-array reductions. Small rows use the existing exact-grid package cache,
-including partial workgroups and cooperative reductions. Larger row and column
-plans remain explicit unsupported operations; they are not promoted to float32.
+The reduction builder's `bfloat` and `half` families package the unchanged
+`reduce.metal` minimum and maximum entries for bfloat16 and float16. An
+extremum selects an input element, so these results need no rounding. Host
+routing preserves two-byte logical allocation sizes, upstream launch selection
+and intermediate 16-bit storage in two-pass whole-array reductions. Small rows
+use the existing exact-grid package cache, including partial workgroups and
+cooperative reductions. Larger row and column plans, and 16-bit sums and
+products, remain explicit unsupported operations; they are not promoted to
+float32.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages \
-  --mlx-root mlx-upstream --target metal --family bfloat \
-  --width 32 --width 128 --width 256 --output-dir bfloat-reductions
-python -m demos.integrations.mlx.portable_host.verify_bfloat_reductions \
-  --mlx-root mlx-upstream --packages host-packages --bfloat bfloat-packages \
-  --reductions bfloat-reductions --output-dir bfloat-reductions-evidence
+  --mlx-root mlx-upstream --target metal --family half \
+  --width 32 --width 128 --width 256 --output-dir half-reductions
+python -m demos.integrations.mlx.portable_host.verify_extrema_reductions \
+  --mlx-root mlx-upstream --packages host-packages --dtype float16 \
+  --elementwise half-packages --reductions half-reductions \
+  --output-dir half-reductions-evidence
 ```
 
-The required native proof checks 36 public-API workloads against separate CPU
-execution and independent storage-word references. It covers negative maxima,
+`--family bfloat` with `--dtype bfloat16 --elementwise bfloat-packages` runs the
+bfloat proof. Each proof checks the public-API workloads against separate CPU
+execution and independent storage-word references: 36 for bfloat16 and 38 for
+float16, which adds signed binary16 subnormals. They cover negative maxima,
 positive and negative infinity, NaNs, signed zero, 65,536-element inputs, both
 reduction passes, scalar/cooperative rows and a 1,031-row partial workgroup.
 Every partial result, output guard, source artifact and native module is checked.
-Local Metal and OpenGL runs each pass all 36 workloads with 40 native dispatches;
-all six HLSL variants compile with DXC. Windows native execution is a separate
-required CI result, not inferred from those compiler checks.
+Bfloat subnormal inputs stay refused off Metal under
+[#2000](https://github.com/CrossGL/crosstl/issues/2000); the half arithmetic
+proof already establishes binary16 subnormal comparisons on every target.
+Local Metal and OpenGL runs each pass all 36 bfloat workloads with 40 native
+dispatches; a local Metal run passes all 38 float16 workloads with 42. All six
+HLSL and GLSL variants of each family compile with DXC and glslang, as do the
+float16 small-row packages the proof launches. Windows and Linux native
+execution are separate required CI results, not inferred from those compiler
+checks.
 The default reduction package inventory is unchanged. Existing platform jobs
 run this optional family without adding runners.
 
@@ -1422,6 +1677,43 @@ work includes further dtype support, arg-reductions, sorting, and larger random
 and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
+
+The same job then runs 22 more unchanged `test_ops` tests on the families it
+has already translated:
+
+```bash
+python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
+  --mlx-root mlx-upstream --packages host-packages --random random-packages \
+  --bitwise bitwise-packages --selection selection-packages \
+  --absolute absolute-packages --reductions init-packages \
+  --reductions random-reductions --output-dir upstream-op-evidence
+```
+
+They are `test_trunc`, `test_erfinv`, `test_logical_and`, `test_logical_or`,
+`test_full_ones_zeros`, `test_atleast_1d`/`2d`/`3d`, `test_tile`,
+`test_repeat`, `test_roll`, `test_roll_errors`, `test_tri`, `test_tril`,
+`test_triu`, `test_as_strided`, `test_view`, `test_depends`, `test_eye`,
+`test_diag`, `test_diagonal` and `test_divmod`. Each runs once on the MLX CPU and once
+through the translated host, in separate processes, and every native run must
+dispatch. Every dispatch must belong to exactly one of the base, random,
+bitwise, selection, absolute-value or reduction indexes and pass that
+family's artifact and native-identity checks, or be a gather, scatter or
+DivMod kernel specialized from the pinned sources, whose result is recomputed
+from its retained inputs and whose native modules are checked. A test that
+reaches scans or the 64-bit and 16-bit package families therefore fails
+instead of running an unchecked package. A separate process
+checks that a missing comparison package is refused before dispatch. On Metal
+the native run dispatches 1,818 translated kernels, 12 of them indexing
+kernels and 37 DivMod kernels (25 kernel and dtype pairs, translated on first
+use; the cold native run takes about four minutes).
+
+`View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element
+size, narrow a contiguous last axis or start from a row-contiguous array share
+the buffer. The remaining views copy densely before the reinterpretation. When
+narrow elements pack into whole 32-bit words (or whole output elements) along
+a contiguous last axis, the copy moves those words, so the bytes match
+upstream's element copy without loading 8- or 16-bit values. Boolean views of
+integer data therefore round-trip even when their bytes are not 0 or 1.
 
 ### Kernel Evidence
 

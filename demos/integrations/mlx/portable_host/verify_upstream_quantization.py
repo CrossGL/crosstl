@@ -11,12 +11,14 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
+from demos.integrations.mlx.portable_host.trace_records import read_trace_summary
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 
 UPSTREAM_TESTS = ("test_quantized.TestQuantized.test_quantize_dequantize",)
 # Worker deadlines in seconds. The native run makes about 430 dispatches; CI
 # measured 5.6 s per DirectX dispatch and 4.4 s per OpenGL dispatch.
 TIMEOUTS = {"random": 600, "cpu": 180, "native": 5400}
+WORKER_MODES = ("cpu", "native")
 
 
 def write_json(path, value):
@@ -25,12 +27,12 @@ def write_json(path, value):
     )
 
 
-def validate_result(record, mode):
+def validate_result(record, mode, tests=UPSTREAM_TESTS):
     if (
         record.get("mode") != mode
-        or record.get("tests") != list(UPSTREAM_TESTS)
+        or record.get("tests") != list(tests)
         or type(record.get("testsRun")) is not int
-        or record["testsRun"] != 1
+        or record["testsRun"] != len(tests)
         or record.get("success") is not True
         or any(record.get(key) != [] for key in ("skipped", "errors", "failures"))
         or type(record.get("nativeDispatches")) is not int
@@ -40,7 +42,9 @@ def validate_result(record, mode):
             else record["nativeDispatches"] != 0
         )
     ):
-        raise RuntimeError("The unchanged upstream quantization test did not pass")
+        raise RuntimeError(
+            f"The unchanged upstream test {', '.join(tests)} did not pass"
+        )
 
 
 def validate_trace(trace, target, count):
@@ -75,7 +79,11 @@ def validate_trace(trace, target, count):
         )
 
 
-def worker(args):
+def worker(args, tests=UPSTREAM_TESTS, *, trace_values=True):
+    """Run ``tests`` unchanged on MLX's CPU or through the translated host.
+
+    ``trace_values=False`` records long value arrays only by length and digest.
+    """
     import mlx.core as mx
 
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -89,6 +97,10 @@ def worker(args):
             mlx_root=args.mlx_root,
             reductions=args.reductions,
             random=args.random,
+            half=getattr(args, "half", None),
+            half_arithmetic=getattr(args, "half_arithmetic", None),
+            bfloat=getattr(args, "bfloat", None),
+            trace_values=trace_values,
         )
         host.install()
     else:
@@ -97,14 +109,13 @@ def worker(args):
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     try:
         suite = unittest.TestSuite(
-            unittest.defaultTestLoader.loadTestsFromName(name)
-            for name in UPSTREAM_TESTS
+            unittest.defaultTestLoader.loadTestsFromName(name) for name in tests
         )
         with (args.output_dir / "upstream.log").open("w", encoding="utf-8") as stream:
             result = unittest.TextTestRunner(stream=stream, verbosity=2).run(suite)
         record = {
             "mode": args.worker,
-            "tests": list(UPSTREAM_TESTS),
+            "tests": list(tests),
             "testsRun": result.testsRun,
             "success": result.wasSuccessful(),
             "skipped": result.skipped,
@@ -113,12 +124,52 @@ def worker(args):
             "nativeDispatches": host.dispatch_count if host else 0,
         }
         write_json(args.output_dir / "results.json", record)
-        validate_result(record, args.worker)
+        validate_result(record, args.worker, tests)
     finally:
         if host:
             close = getattr(host.executor.runtime_adapter.runtime, "close", None)
             if close:
                 close()
+
+
+def execute(output, commands, tests, label):
+    """Run ``(mode, timeout, arguments)`` Python commands under a deadline.
+
+    Each command's streams and return code are kept in ``output``. The ``cpu``
+    and ``native`` workers must record a passing run of ``tests``; a failed
+    preparation command stops the sequence. Returns the failed modes and the
+    workers' results.
+    """
+    bounded = Path(__file__).resolve().parents[4] / "tools/run_bounded_command.py"
+    failures, results = [], {}
+    for mode, timeout, arguments in commands:
+        command = [
+            sys.executable,
+            str(bounded),
+            "--timeout-seconds",
+            str(timeout),
+            "--label",
+            f"{label} {mode}",
+            "--",
+            sys.executable,
+            *arguments,
+        ]
+        with (output / f"{mode}.stdout").open("w") as stdout, (
+            output / f"{mode}.stderr"
+        ).open("w") as stderr:
+            process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
+        write_json(
+            output / f"{mode}.command.json",
+            {"command": command, "returncode": process.returncode},
+        )
+        if process.returncode:
+            failures.append(mode)
+            if mode not in WORKER_MODES:
+                break
+        elif mode in WORKER_MODES:
+            results[mode] = json.loads((output / mode / "results.json").read_text())
+            validate_result(results[mode], mode, tests)
+    return failures, results
 
 
 def run(root, packages, reductions, output):
@@ -133,7 +184,6 @@ def run(root, packages, reductions, output):
         output / "inputs.json",
         {"adaptation": preparation, "sources": sources, "target": target},
     )
-    bounded = Path(__file__).resolve().parents[4] / "tools/run_bounded_command.py"
     random = output / "random-packages"
     commands = [
         (
@@ -174,34 +224,9 @@ def run(root, packages, reductions, output):
                 ],
             )
         )
-    failures, results = [], {}
-    for mode, timeout, arguments in commands:
-        command = [
-            sys.executable,
-            str(bounded),
-            "--timeout-seconds",
-            str(timeout),
-            "--label",
-            f"MLX upstream quantization {mode}",
-            "--",
-            sys.executable,
-            *arguments,
-        ]
-        with (output / f"{mode}.stdout").open("w") as stdout, (
-            output / f"{mode}.stderr"
-        ).open("w") as stderr:
-            process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
-        write_json(
-            output / f"{mode}.command.json",
-            {"command": command, "returncode": process.returncode},
-        )
-        if process.returncode:
-            failures.append(mode)
-            if mode == "random":
-                break
-        elif mode != "random":
-            results[mode] = json.loads((output / mode / "results.json").read_text())
-            validate_result(results[mode], mode)
+    failures, results = execute(
+        output, commands, UPSTREAM_TESTS, "MLX upstream quantization"
+    )
     after = verify_prepared(root)
     write_json(output / "adaptation-after.json", after)
     if preparation != after or sources != upstream_test_sources(root, UPSTREAM_TESTS):
@@ -212,10 +237,7 @@ def run(root, packages, reductions, output):
         raise RuntimeError(
             f"Upstream quantization workers failed: {', '.join(failures)}; inspect {output}"
         )
-    trace = [
-        json.loads(line)
-        for line in (output / "native/trace.jsonl").read_text().splitlines()
-    ]
+    trace = read_trace_summary(output / "native/trace.jsonl")
     validate_trace(trace, target, results["native"]["nativeDispatches"])
     evidence = {
         "commit": COMMIT,
