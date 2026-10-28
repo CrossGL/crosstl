@@ -404,7 +404,14 @@ def _metal_homogeneous_scalar_array_struct_contract(struct_node):
     if member_type is None or member_type.__class__.__name__ != "ArrayType":
         return None
     element_type = getattr(member_type, "element_type", None)
-    if element_type is None or element_type.__class__.__name__ != "PrimitiveType":
+    # Narrow scalars such as ``uint8`` parse as plain named types.
+    if element_type is None or not (
+        element_type.__class__.__name__ == "PrimitiveType"
+        or (
+            element_type.__class__.__name__ == "NamedType"
+            and not getattr(element_type, "generic_args", None)
+        )
+    ):
         return None
     element_type_name = getattr(element_type, "name", None)
     element_layout = scalar_storage_layout(element_type_name)

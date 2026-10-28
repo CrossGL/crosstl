@@ -1478,6 +1478,7 @@ jobs:
           demos/integrations/mlx/tests/host/test_portable_scans.py
           demos/integrations/mlx/tests/host/test_random_packages.py
           demos/integrations/mlx/tests/host/test_reduction_cache.py
+          demos/integrations/mlx/tests/host/test_portable_upstream_ops.py
       - name: Validate platform host ABI
         id: platform-host-abi
         if: runner.os != 'Linux'
@@ -1514,6 +1515,7 @@ jobs:
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_LANE_READ: "1"
           CROSTL_REQUIRE_SOFTWARE_SUBGROUP_SHUFFLE_FILL: "1"
           CROSTL_REQUIRE_SUBGROUP_CONDITIONAL_CALLS: "1"
+          CROSTL_REQUIRE_SOFTWARE_QUAD_REDUCTIONS: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
           PYOPENGL_PLATFORM: egl
@@ -1525,6 +1527,7 @@ jobs:
               --basetemp=.mlx-portable-host/subgroup-products/pytest \
               --junitxml=.mlx-portable-host/subgroup-products/results.xml \
               tests/test_translator/test_software_subgroup_product.py \
+              tests/test_translator/test_software_quad_reductions.py \
               tests/test_translator/test_software_subgroup_scan.py \
               tests/test_translator/test_software_subgroup_lane_read.py \
               tests/test_translator/test_software_subgroup_shuffle_fill.py \
@@ -1535,6 +1538,8 @@ jobs:
       - name: Validate subgroup-guarded returns
         env:
           CROSTL_REQUIRE_SUBGROUP_GUARDED_RETURNS: "1"
+          CROSTL_REQUIRE_SUBGROUP_UNIFORM_EXITS: "1"
+          CROSTL_REQUIRE_SUBGROUP_DIVERGENT_BARRIER_RUNTIME: "1"
           CROSTL_REQUIRE_FLOAT_SELF_COMPARISONS: "1"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -1550,6 +1555,8 @@ jobs:
               tests/test_translator/test_directx_self_comparisons.py \
               tests/test_translator/test_opengl_vector_comparisons.py \
               tests/test_translator/test_opengl_subgroup_exit_uniformity.py \
+              tests/test_translator/test_subgroup_uniform_exits.py \
+              tests/test_translator/test_subgroup_divergent_barriers.py \
               2>&1 | tee .mlx-portable-host/subgroup-returns.log
       - name: Validate collective helper arguments
         id: collective-helpers
@@ -1563,16 +1570,41 @@ jobs:
           CROSTL_REQUIRE_METAL_NESTED_MEMBERS: "1"
           CROSTL_REQUIRE_REFERENCE_CAPTURE: "1"
           CROSTL_REQUIRE_SELF_TAIL_CALLS: ${{ runner.os == 'macOS' && '1' || '0' }}
+          CROSTL_REQUIRE_TRAILING_RETURNS: "1"
+          CROSTL_REQUIRE_METAL_LOCAL_DECLTYPES: "1"
+          CROSTL_REQUIRE_CONSTEXPR_BRANCH_ASSERTIONS: "1"
+          CROSTL_REQUIRE_METAL_MEMBER_CALL_ARGUMENTS: "1"
+          CROSTL_REQUIRE_METAL_MEMBER_ALIAS_DEDUCTION: "1"
+          CROSTL_REQUIRE_METAL_INTEGRAL_CONSTANT_ARITHMETIC: "1"
+          CROSTL_REQUIRE_METAL_MEMBER_OVERLOAD_NAMES: "1"
+          CROSTL_REQUIRE_PRIVATE_POINTER_ARRAY_PARAMETER_VIEWS: "1"
+          CROSTL_REQUIRE_METAL_LOCAL_CONDITIONAL_ALIASES: "1"
+          CROSTL_REQUIRE_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES: "1"
+          CROSTL_REQUIRE_SUBGROUP_LOOP_ELEMENT_ADDRESSES: "1"
+          CROSTL_REQUIRE_METAL_LATE_MEMBER_SPECIALIZATIONS: "1"
+          CROSTL_REQUIRE_RESOURCE_HELPER_CONSTRUCTOR_INTERVALS: "1"
+          CROSTL_REQUIRE_INTEGRAL_CONSTANT_STRIDES: "1"
+          CROSTL_REQUIRE_BITWISE_RETURN_BOUNDS: "1"
+          CROSTL_REQUIRE_WORKGROUP_VIEW_IDENTITY_BRANCHES: "1"
+          CROSTL_REQUIRE_SUBGROUP_BRANCH_REASSIGNMENTS: "1"
+          CROSTL_REQUIRE_IMMUTABLE_STORAGE: "1"
+          CROSTL_REQUIRE_WORKGROUP_IDENTITY_REINTERPRET: "1"
+          CROSTL_REQUIRE_RESOURCE_STORAGE_VIEWS: "1"
+          CROSTL_REQUIRE_BINARY16_ALIAS_AGGREGATES: "1"
+          CROSTL_REQUIRE_FORWARDED_LOOP_BOUNDS: "1"
           CROSTL_REQUIRE_REFERENCE_ALIASES: "1"
           CROSTL_REQUIRE_PARAMETER_USAGE: "1"
           CROSTL_REQUIRE_RESOURCE_OVERLOADS: "1"
           CROSTL_REQUIRE_STORAGE_VECTOR_VIEWS: "1"
           CROSTL_REQUIRE_WORKGROUP_RECORD_TRANSFERS: "1"
           CROSTL_REQUIRE_WORKGROUP_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_NARROW_WORKGROUP_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_VECTOR_COMPONENT_NARROWING: "1"
           CROSTL_REQUIRE_AGGREGATE_RECORD_TRANSFERS: "1"
           CROSTL_REQUIRE_RESOURCE_ALLOCATION_ORIGINS: "1"
           CROSTL_REQUIRE_STATIC_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_PRIVATE_VECTOR_VIEWS: "1"
+          CROSTL_REQUIRE_BYTE_RECORD_VIEWS: "1"
           CROSTL_REQUIRE_PROJECT_MATRIX_FRAGMENTS: "1"
           CROSTL_REQUIRE_COOPERATIVE_MATRIX_RUNTIME: "1"
           CROSTL_REQUIRE_DIRECTX_COOPERATIVE_MATRIX: ${{ runner.os == 'Windows' && '1' || '0' }}
@@ -1619,12 +1651,36 @@ jobs:
               tests/test_translator/test_metal_nested_member_context.py \
               tests/test_translator/test_reference_capture.py \
               tests/test_translator/test_self_tail_calls.py \
+              tests/test_translator/test_trailing_divergent_returns.py \
+              tests/test_translator/test_metal_local_decltypes.py \
+              tests/test_translator/test_metal_constexpr_branch_assertions.py \
+              tests/test_translator/test_metal_member_call_arguments.py \
+              tests/test_translator/test_metal_member_alias_deduction.py \
+              tests/test_translator/test_metal_integral_constant_arithmetic.py \
+              tests/test_translator/test_metal_member_overload_names.py \
+              tests/test_translator/test_private_pointer_array_parameter_views.py \
+              tests/test_translator/test_metal_local_conditional_aliases.py \
+              tests/test_translator/test_software_subgroup_relative_shuffles.py \
+              tests/test_translator/test_subgroup_loop_element_addresses.py \
+              tests/test_translator/test_metal_late_member_specializations.py \
+              tests/test_translator/test_resource_helper_constructor_intervals.py \
+              tests/test_translator/test_integral_constant_strides.py \
+              tests/test_translator/test_bitwise_return_bounds.py \
+              tests/test_translator/test_workgroup_view_identity_branches.py \
+              tests/test_translator/test_subgroup_branch_reassignments.py \
+              tests/test_translator/test_immutable_storage.py \
+              tests/test_translator/test_workgroup_identity_reinterpret.py \
+              tests/test_translator/test_resource_storage_views.py \
+              tests/test_translator/test_binary16_alias_aggregates.py \
+              tests/test_translator/test_forwarded_resource_loop_bounds.py \
               tests/test_translator/test_reference_aliases.py \
               tests/test_translator/test_parameter_usage.py \
               tests/test_translator/test_resource_overloads.py \
               tests/test_translator/test_storage_vector_views.py \
               tests/test_translator/test_workgroup_record_transfers.py \
               tests/test_translator/test_workgroup_resource_aggregates.py \
+              tests/test_translator/test_narrow_workgroup_resource_aggregates.py \
+              tests/test_translator/test_directx_vector_component_narrowing.py \
               tests/test_translator/test_aggregate_record_transfers.py \
               tests/test_translator/test_resource_allocation_origins.py \
               2>&1 | tee .mlx-portable-host/subgroup-arguments.log
@@ -1637,6 +1693,7 @@ jobs:
               tests/test_translator/test_directx_matrix_rounding.py \
               tests/test_translator/test_static_resource_aggregates.py \
               tests/test_translator/test_private_vector_views.py \
+              tests/test_translator/test_byte_record_views.py \
               tests/test_translator/test_project_matrix_fragments.py \
               tests/test_translator/test_directx_cooperative_matrix.py \
               tests/test_translator/test_opengl_cooperative_matrix.py \
@@ -1653,6 +1710,7 @@ jobs:
               tests/test_translator/test_helper_local_returns.py \
               tests/test_translator/test_helper_array_returns.py \
               tests/test_translator/test_loop_guard_bounds.py \
+              tests/test_translator/test_metadata_call_bounds.py \
               tests/test_translator/test_pointer_index_bounds.py \
               tests/test_translator/test_frozen_specializations.py \
               tests/test_translator/test_storage_record_runtime.py \
@@ -2440,7 +2498,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX host package translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target ${{ matrix.target }} --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
+              --target ${{ matrix.target }} --jobs 4 --output-dir .mlx-portable-host/packages 2>&1 | tee .mlx-portable-host/translation.log
       - name: Execute upstream tests on the translated backend
         if: >-
           ${{ !cancelled() && steps.host-build.outcome == 'success' &&
@@ -2478,7 +2536,7 @@ jobs:
     name: MLX small-row reductions (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 340
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -2591,7 +2649,7 @@ jobs:
           PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 4000 --label "MLX small-row host verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 3500 --label "MLX small-row host verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_small_rows --mlx-root mlx-upstream \
               --packages .mlx-portable-small-rows/base/packages --jobs 2 --output-dir .mlx-portable-small-rows/evidence 2>&1 | tee .mlx-portable-small-rows/verification.log
       - name: Translate reduction initialization
@@ -2617,7 +2675,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX bitwise translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family bitwise --output-dir .mlx-portable-small-rows/bitwise-packages \
+              --target "${{ matrix.target }}" --family bitwise --jobs 4 --output-dir .mlx-portable-small-rows/bitwise-packages \
               2>&1 | tee .mlx-portable-small-rows/bitwise-translation.log
       - name: Execute bitwise host operations
         env:
@@ -2654,14 +2712,14 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX selection translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family selection --output-dir .mlx-portable-small-rows/selection-packages \
+              --target "${{ matrix.target }}" --family selection --jobs 4 --output-dir .mlx-portable-small-rows/selection-packages \
               2>&1 | tee .mlx-portable-small-rows/selection-translation.log
       - name: Translate absolute-value host packages
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX absolute-value translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family absolute --output-dir .mlx-portable-small-rows/absolute-packages \
+              --target "${{ matrix.target }}" --family absolute --jobs 4 --output-dir .mlx-portable-small-rows/absolute-packages \
               2>&1 | tee .mlx-portable-small-rows/absolute-translation.log
       - name: Execute selection host operations
         env:
@@ -2702,6 +2760,20 @@ jobs:
               --packages .mlx-portable-small-rows/base/packages --random .mlx-portable-small-rows/random-packages \
               --reductions .mlx-portable-small-rows/random-reductions --output-dir .mlx-portable-small-rows/random-evidence \
               2>&1 | tee .mlx-portable-small-rows/random-verification.log
+      - name: Execute unchanged upstream op tests on the small-row families
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1680 --label "MLX upstream op verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_upstream_ops --mlx-root mlx-upstream \
+              --packages .mlx-portable-small-rows/base/packages --random .mlx-portable-small-rows/random-packages \
+              --bitwise .mlx-portable-small-rows/bitwise-packages --selection .mlx-portable-small-rows/selection-packages \
+              --absolute .mlx-portable-small-rows/absolute-packages --reductions .mlx-portable-small-rows/init-packages \
+              --reductions .mlx-portable-small-rows/random-reductions --output-dir .mlx-portable-small-rows/upstream-op-evidence \
+              2>&1 | tee .mlx-portable-small-rows/upstream-op-verification.log
       - name: Retain small-row execution evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -2728,7 +2800,7 @@ jobs:
     name: MLX half host (${{ matrix.target }})
     needs: [ci-plan, portable-host]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 355
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -2763,7 +2835,7 @@ jobs:
             2>&1 | tee .mlx-portable-half/dependencies.log
       - name: Validate half host contracts
         if: runner.os == 'Linux'
-        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py demos/integrations/mlx/tests/host/test_portable_bfloat.py demos/integrations/mlx/tests/host/test_portable_bfloat_reductions.py demos/integrations/mlx/tests/host/test_upstream_blocks.py
+        run: python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_half.py demos/integrations/mlx/tests/host/test_portable_half_arithmetic.py demos/integrations/mlx/tests/host/test_portable_bfloat.py demos/integrations/mlx/tests/host/test_portable_extrema_reductions.py demos/integrations/mlx/tests/host/test_upstream_blocks.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -2869,9 +2941,9 @@ jobs:
       - name: Translate half host packages
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX half translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX half translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family half --output-dir .mlx-portable-half/half-packages \
+              --target "${{ matrix.target }}" --family half --jobs 4 --output-dir .mlx-portable-half/half-packages \
               2>&1 | tee .mlx-portable-half/translation.log
       - name: Execute half host operations
         env:
@@ -2880,7 +2952,7 @@ jobs:
           CROSTL_DIRECTX_FORCE_WARP: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX half verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX half verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_half --mlx-root mlx-upstream \
               --packages .mlx-portable-half/base/packages --half .mlx-portable-half/half-packages \
               --output-dir .mlx-portable-half/evidence 2>&1 | tee .mlx-portable-half/verification.log
@@ -2889,7 +2961,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX half arithmetic translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family half-arithmetic --output-dir .mlx-portable-half/arithmetic-packages \
+              --target "${{ matrix.target }}" --family half-arithmetic --jobs 4 --output-dir .mlx-portable-half/arithmetic-packages \
               2>&1 | tee .mlx-portable-half/arithmetic-translation.log
       - name: Translate random prerequisites for half arithmetic
         run: |
@@ -2905,7 +2977,7 @@ jobs:
           CROSTL_DIRECTX_FORCE_WARP: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 2100 --label "MLX half arithmetic verification" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX half arithmetic verification" -- \
             python -m demos.integrations.mlx.portable_host.verify_half_arithmetic --mlx-root mlx-upstream \
               --packages .mlx-portable-half/base/packages --half .mlx-portable-half/half-packages \
               --arithmetic .mlx-portable-half/arithmetic-packages --random .mlx-portable-half/random-packages \
@@ -2915,7 +2987,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX bfloat translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family bfloat --output-dir .mlx-portable-half/bfloat-packages \
+              --target "${{ matrix.target }}" --family bfloat --jobs 4 --output-dir .mlx-portable-half/bfloat-packages \
               2>&1 | tee .mlx-portable-half/bfloat-translation.log
       - name: Execute bfloat host operations
         env:
@@ -2944,10 +3016,31 @@ jobs:
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "Bfloat reduction verification" -- \
-            python -m demos.integrations.mlx.portable_host.verify_bfloat_reductions --mlx-root mlx-upstream \
-              --packages .mlx-portable-half/base/packages --bfloat .mlx-portable-half/bfloat-packages \
+            python -m demos.integrations.mlx.portable_host.verify_extrema_reductions --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --dtype bfloat16 --elementwise .mlx-portable-half/bfloat-packages \
               --reductions .mlx-portable-half/bfloat-reductions --output-dir .mlx-portable-half/bfloat-reductions-evidence \
               2>&1 | tee .mlx-portable-half/bfloat-reductions-verification.log
+      - name: Translate float16 reduction packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "Float16 reduction translation" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family half --width 32 --width 128 --width 256 \
+              --output-dir .mlx-portable-half/half-reductions \
+              2>&1 | tee .mlx-portable-half/half-reductions-translation.log
+      - name: Execute float16 reductions
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "Float16 reduction verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_extrema_reductions --mlx-root mlx-upstream \
+              --packages .mlx-portable-half/base/packages --dtype float16 --elementwise .mlx-portable-half/half-packages \
+              --reductions .mlx-portable-half/half-reductions --output-dir .mlx-portable-half/half-reductions-evidence \
+              2>&1 | tee .mlx-portable-half/half-reductions-verification.log
       - name: Translate upstream block assertion packages
         run: |
           set -euo pipefail
@@ -2978,6 +3071,397 @@ jobs:
         with:
           name: mlx-portable-half-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-half
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  quantized-host:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-quantized-host-${{ strategy.job-index }}
+      cancel-in-progress: false
+    if: needs.ci-plan.outputs.heavy == 'true'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      PYTHONUNBUFFERED: "1"
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
+      CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
+
+    name: MLX quantized host (${{ matrix.target }})
+    needs: [ci-plan, portable-host]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Initialize quantized evidence
+        run: mkdir -p .mlx-portable-quantized
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7" setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-quantized/dependencies.log
+      - name: Validate quantized host contracts
+        if: runner.os == 'Linux'
+        run: |
+          python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_quantized_matmul.py \
+            demos/integrations/mlx/tests/host/test_portable_fp_quantized_matmul.py \
+            demos/integrations/mlx/tests/host/test_portable_quantized_qmm.py \
+            demos/integrations/mlx/tests/host/test_portable_matmul.py demos/integrations/mlx/tests/host/test_portable_gemm.py
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          python tools/ensure_metal_toolchain.py
+          xcrun --sdk macosx metal --version | tee .mlx-portable-quantized/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-quantized/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run host packages
+        uses: actions/github-script@v9
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-quantized/base
+          merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-quantized/base
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-quantized/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX quantized host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-quantized/build.log
+      - name: Translate quantized matrix-vector packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX quantized matmul translation" -- \
+            python -m demos.integrations.mlx.portable_host.matmul_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/quantized-matmul-translation.log
+      - name: Translate quantized matrix-matrix packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX quantized qmm translation" -- \
+            python -m demos.integrations.mlx.portable_host.qmm_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/quantized-qmm-translation.log
+      - name: Translate split-K partition sums
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX small column packages" -- \
+            python -m demos.integrations.mlx.portable_host.column_small_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/small-column-translation.log
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX split-K column packages" -- \
+            python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --family column \
+              --entry col_reduce_looped_1_32_32_reduce_sumfloat32 \
+              --entry col_reduce_looped_1_32_32_reduce_sumfloat16 \
+              --entry col_reduce_looped_1_32_32_reduce_sumbfloat16 \
+              --entry col_reduce_2pass_1_32_32_reduce_sumfloat32 \
+              --entry col_reduce_2pass_1_32_32_reduce_sumfloat16 \
+              --entry col_reduce_2pass_1_32_32_reduce_sumbfloat16 \
+              --jobs 2 --output-dir .mlx-portable-quantized/column-reductions \
+              2>&1 | tee .mlx-portable-quantized/column-translation.log
+      - name: Execute affine quantized matrix-vector products through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX quantized matmul host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_quantized_matmul --mlx-root mlx-upstream \
+              --packages .mlx-portable-quantized/base/packages --reductions .mlx-portable-quantized/column-reductions \
+              --output-dir .mlx-portable-quantized/quantized-matmul \
+              2>&1 | tee .mlx-portable-quantized/quantized-matmul.log
+      - name: Execute affine quantized matrix-matrix products through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX quantized qmm host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_quantized_qmm --mlx-root mlx-upstream \
+              --packages .mlx-portable-quantized/base/packages --reductions .mlx-portable-quantized/column-reductions \
+              --output-dir .mlx-portable-quantized/quantized-qmm \
+              2>&1 | tee .mlx-portable-quantized/quantized-qmm.log
+      - name: Translate floating-point matrix-vector packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX matmul translation" -- \
+            python -m demos.integrations.mlx.portable_host.gemv_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/matmul-translation.log
+      - name: Translate steel GEMM packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX steel GEMM translation" -- \
+            python -m demos.integrations.mlx.portable_host.gemm_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/gemm-translation.log
+      - name: Translate split-K GEMM packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX split-K GEMM translation" -- \
+            python -m demos.integrations.mlx.portable_host.gemm_splitk_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/gemm-splitk-translation.log
+      - name: Execute floating-point matrix products through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX matmul host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_matmul --mlx-root mlx-upstream \
+              --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/matmul \
+              2>&1 | tee .mlx-portable-quantized/matmul.log
+      - name: Retain quantized execution evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mlx-portable-quantized-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-quantized
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  quantized-upstream-host:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-quantized-upstream-host-${{ strategy.job-index }}
+      cancel-in-progress: false
+    if: needs.ci-plan.outputs.heavy == 'true'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      PYTHONUNBUFFERED: "1"
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
+      CMAKE_ARGS: "-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON"
+
+    name: MLX upstream ${{ matrix.test }} (${{ matrix.target }})
+    needs: [ci-plan, portable-host]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 270
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each unchanged upstream test runs on its own leg of every platform.
+        test: [qvm, qmv, qvm_splitk, qmm_shapes, qmm, fp_qmv, fp_qmv_large_output, fp_qvm, qmv_small_non_multiples, qmm_vjp]
+        include:
+          - os: ubuntu-24.04
+            target: opengl
+          - os: windows-2025
+            target: directx
+          - os: macos-26
+            target: metal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Initialize quantized evidence
+        run: mkdir -p .mlx-portable-quantized
+      - name: Install Linux build and graphics dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev liblapack-dev liblapacke-dev libegl1 libgl1-mesa-dri libglx-mesa0 libopengl0 glslang-tools
+      - name: Install CrossTL and MLX build dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[directx-runtime]" pytest pytest-xdist "PyYAML>=6,<7" setuptools wheel cmake ninja nanobind numpy packaging \
+            2>&1 | tee .mlx-portable-quantized/dependencies.log
+      - name: Validate quantized host contracts
+        if: runner.os == 'Linux'
+        run: |
+          python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_upstream_runner.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qvm.py demos/integrations/mlx/tests/host/test_portable_upstream_qmv.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qvm_splitk.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmm_shapes.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmm.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_fp_qmv.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_fp_qmv_large_output.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_fp_qvm.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmv_small_non_multiples.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmm_vjp.py
+      - name: Install OpenGL runtime dependencies
+        if: runner.os == 'Linux'
+        run: python -m pip install moderngl PyOpenGL
+      - name: Verify macOS Metal toolchain
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          python tools/ensure_metal_toolchain.py
+          xcrun --sdk macosx metal --version | tee .mlx-portable-quantized/metal-version.txt
+          xcrun --sdk macosx swiftc --version | tee .mlx-portable-quantized/swift-version.txt
+      - name: Install pinned DirectX tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $root = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4") {
+            throw "DXC archive checksum mismatch."
+          }
+          Expand-Archive $archive -DestinationPath $root
+          $bin = Join-Path $root "bin/x64"
+          if (-not (Test-Path "$bin/dxc.exe")) { throw "DXC executable missing." }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $warpArchive = Join-Path $env:RUNNER_TEMP "warp.zip"
+          $warpRoot = Join-Path $env:RUNNER_TEMP "warp"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg" -OutFile $warpArchive
+          if ((Get-FileHash $warpArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681") {
+            throw "WARP archive checksum mismatch."
+          }
+          Expand-Archive $warpArchive -DestinationPath $warpRoot
+          Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
+      - name: Select same-run host packages
+        uses: actions/github-script@v9
+        id: host-artifact
+        env:
+          MLX_TARGET: ${{ matrix.target }}
+        with:
+          script: |
+            const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+            });
+            const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
+              && /^\d+$/.test(item.name.slice(prefix.length)));
+            candidates.sort((a, b) => Number(b.name.slice(prefix.length)) - Number(a.name.slice(prefix.length)));
+            if (!candidates.length) throw new Error("The required host proof artifact is missing.");
+            core.setOutput("id", candidates[0].id);
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          path: .mlx-portable-quantized/base
+          merge-multiple: true
+          skip-decompress: true
+      - name: Unpack same-run host package
+        run: python -m demos.integrations.mlx.portable_host.unpack_artifact .mlx-portable-quantized/base
+      - name: Prepare pinned MLX
+        run: |
+          set -euo pipefail
+          git init mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-quantized/adaptation.json
+      - name: Build adapted upstream MLX
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX quantized host build" -- \
+            python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-quantized/build.log
+      - name: Run the unchanged upstream test through translated kernels
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 12300 --label "MLX upstream test_${{ matrix.test }}" -- \
+            python -m demos.integrations.mlx.portable_host.verify_upstream_${{ matrix.test }} --mlx-root mlx-upstream \
+              --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/upstream-${{ matrix.test }} \
+              2>&1 | tee .mlx-portable-quantized/upstream-${{ matrix.test }}.log
+      - name: Retain quantized execution evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mlx-portable-upstream-quantized-${{ matrix.test }}-${{ matrix.target }}-${{ github.run_attempt }}
+          path: .mlx-portable-quantized
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -3109,14 +3593,14 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 7200 --label "MLX integer64 translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family integer64 --output-dir .mlx-portable-integer64/integer64-packages \
+              --target "${{ matrix.target }}" --family integer64 --jobs 4 --output-dir .mlx-portable-integer64/integer64-packages \
               2>&1 | tee .mlx-portable-integer64/integer64-translation.log
       - name: Translate integer64 test companions
         run: |
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX integer absolute translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family absolute --output-dir .mlx-portable-integer64/absolute-packages \
+              --target "${{ matrix.target }}" --family absolute --jobs 4 --output-dir .mlx-portable-integer64/absolute-packages \
               2>&1 | tee .mlx-portable-integer64/absolute-translation.log
           python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX integer64 Boolean reduction translation" -- \
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
@@ -3297,7 +3781,7 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX slice update translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
-              --target "${{ matrix.target }}" --family slice-update --output-dir .mlx-portable-slice-update/slice-update-packages \
+              --target "${{ matrix.target }}" --family slice-update --jobs 4 --output-dir .mlx-portable-slice-update/slice-update-packages \
               2>&1 | tee .mlx-portable-slice-update/slice-update-translation.log
       - name: Execute slice update reductions
         env:
@@ -4705,13 +5189,15 @@ jobs:
           retention-days: 14
 
       - name: Prove current MLX GEMM native execution
-        if: runner.os == 'macOS' || runner.os == 'Windows'
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_GEMM: "1"
-          CROSTL_MLX_CURRENT_TARGET: ${{ runner.os == 'Windows' && 'directx' || 'metal' }}
+          CROSTL_MLX_CURRENT_TARGET: ${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl' || 'metal' }}
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
         run: |
           set -euo pipefail
           mkdir -p mlx-gemm-results
@@ -4723,11 +5209,40 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_gemm.py
 
       - name: Upload current MLX GEMM native evidence
-        if: always() && (runner.os == 'macOS' || runner.os == 'Windows')
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: mlx-gemm-${{ runner.os }}
           path: mlx-gemm-results
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Prove current MLX attention native execution
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_ATTENTION: "1"
+          CROSTL_MLX_CURRENT_TARGET: ${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl' || 'metal' }}
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p mlx-attention-results
+          python tools/run_bounded_command.py \
+            --label "current MLX attention native execution" --timeout-seconds 1800 -- \
+            python -m pytest -q -n auto --dist loadgroup --durations=20 \
+              --basetemp=mlx-attention-results/pytest \
+              --junitxml=mlx-attention-results/results.xml \
+              demos/integrations/mlx/tests/kernels/test_current_attention.py
+
+      - name: Upload current MLX attention native evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mlx-attention-${{ runner.os }}
+          path: mlx-attention-results
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -6766,13 +7281,52 @@ jobs:
     timeout-minutes: 210
     strategy:
       fail-fast: false
-      # 135 legs, a third of them on macOS: leave runners for other pull requests.
-      max-parallel: 24
+      # GitHub expands at most 256 legs from one matrix, so the current-tree
+      # families are split over three jobs that share one list of steps.
+      # 126 legs here, a third of them on macOS; the three jobs
+      # together run at most 28 legs at once. The group axis comes first, so
+      # GitHub starts each group's three platform legs together instead of
+      # every Linux leg before any macOS leg; at eight legs at a time the
+      # platforms ran one after another for about six hours.
+      max-parallel: 12
       matrix:
+        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11]
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        group: [elementwise, attention, sequence, backward, ordering, convolution, scan, gemv, gemv-masked, gemv-t-masked, copy-0, copy-1, copy-2, copy-3, copy-4, copy-5, binary-0, binary-1, binary-2, binary-3, binary-4, binary-5, binary-6, binary-7, binary-8, binary-9, binary-10, binary-11, unary-0, unary-1, reduce-0, reduce-1, reduce-2, reduce-3, reduce-4, reduce-5, reduce-6, reduce-7, reduce-8, reduce-9, reduce-10, reduce-11, quantized, quantized-qmv-0, quantized-qmv-1]
+        include:
+          - {group: copy-0, family: copy, shard: 0}
+          - {group: copy-1, family: copy, shard: 1}
+          - {group: copy-2, family: copy, shard: 2}
+          - {group: copy-3, family: copy, shard: 3}
+          - {group: copy-4, family: copy, shard: 4}
+          - {group: copy-5, family: copy, shard: 5}
+          - {group: binary-0, family: binary, shard: 0}
+          - {group: binary-1, family: binary, shard: 1}
+          - {group: binary-2, family: binary, shard: 2}
+          - {group: binary-3, family: binary, shard: 3}
+          - {group: binary-4, family: binary, shard: 4}
+          - {group: binary-5, family: binary, shard: 5}
+          - {group: binary-6, family: binary, shard: 6}
+          - {group: binary-7, family: binary, shard: 7}
+          - {group: binary-8, family: binary, shard: 8}
+          - {group: binary-9, family: binary, shard: 9}
+          - {group: binary-10, family: binary, shard: 10}
+          - {group: binary-11, family: binary, shard: 11}
+          - {group: unary-0, family: unary, shard: 0}
+          - {group: unary-1, family: unary, shard: 1}
+          - {group: reduce-0, family: reduce, shard: 0}
+          - {group: reduce-1, family: reduce, shard: 1}
+          - {group: reduce-2, family: reduce, shard: 2}
+          - {group: reduce-3, family: reduce, shard: 3}
+          - {group: reduce-4, family: reduce, shard: 4}
+          - {group: reduce-5, family: reduce, shard: 5}
+          - {group: reduce-6, family: reduce, shard: 6}
+          - {group: reduce-7, family: reduce, shard: 7}
+          - {group: reduce-8, family: reduce, shard: 8}
+          - {group: reduce-9, family: reduce, shard: 9}
+          - {group: reduce-10, family: reduce, shard: 10}
+          - {group: reduce-11, family: reduce, shard: 11}
 
-    steps:
+    steps: &mlx-current-parity-steps
       - name: Checkout CrossTL
         uses: actions/checkout@v7
         with:
@@ -7330,13 +7884,13 @@ jobs:
               -k test_current_mlx_gemv_t_masked_native_parity \
               demos/integrations/mlx/tests/kernels/test_current_gemv_masked.py
 
-      - name: Prove current MLX copy family native parity (shard 0 of 6)
-        if: matrix.group == 'copy-0'
+      - name: Prove current MLX copy family native parity
+        if: matrix.family == 'copy'
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "0"
+          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
@@ -7353,170 +7907,20 @@ jobs:
           esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
-            --label "current MLX copy family native parity (shard 0 of 6)" \
+            --label "current MLX copy family native parity (shard ${{ matrix.shard }} of 6)" \
             --timeout-seconds 7200 -- \
             python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/copy-0 \
-              --junitxml=mlx-current-results/copy-0.xml \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_copy_family.py
 
-      - name: Prove current MLX copy family native parity (shard 1 of 6)
-        if: matrix.group == 'copy-1'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "1"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX copy family native parity (shard 1 of 6)" \
-            --timeout-seconds 7200 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/copy-1 \
-              --junitxml=mlx-current-results/copy-1.xml \
-              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
-
-      - name: Prove current MLX copy family native parity (shard 2 of 6)
-        if: matrix.group == 'copy-2'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "2"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX copy family native parity (shard 2 of 6)" \
-            --timeout-seconds 7200 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/copy-2 \
-              --junitxml=mlx-current-results/copy-2.xml \
-              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
-
-      - name: Prove current MLX copy family native parity (shard 3 of 6)
-        if: matrix.group == 'copy-3'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "3"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX copy family native parity (shard 3 of 6)" \
-            --timeout-seconds 7200 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/copy-3 \
-              --junitxml=mlx-current-results/copy-3.xml \
-              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
-
-      - name: Prove current MLX copy family native parity (shard 4 of 6)
-        if: matrix.group == 'copy-4'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "4"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX copy family native parity (shard 4 of 6)" \
-            --timeout-seconds 7200 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/copy-4 \
-              --junitxml=mlx-current-results/copy-4.xml \
-              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
-
-      - name: Prove current MLX copy family native parity (shard 5 of 6)
-        if: matrix.group == 'copy-5'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_COPY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_INDEX: "5"
-          CROSTL_MLX_CURRENT_COPY_FAMILY_SHARD_COUNT: "6"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX copy family native parity (shard 5 of 6)" \
-            --timeout-seconds 7200 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/copy-5 \
-              --junitxml=mlx-current-results/copy-5.xml \
-              demos/integrations/mlx/tests/kernels/test_current_copy_family.py
-
-      - name: Prove current MLX binary family native parity (shard 0 of 12)
-        if: matrix.group == 'binary-0'
+      - name: Prove current MLX binary family native parity
+        if: matrix.family == 'binary'
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "0"
+          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
@@ -7533,350 +7937,20 @@ jobs:
           esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 0 of 12)" \
+            --label "current MLX binary family native parity (shard ${{ matrix.shard }} of 12)" \
             --timeout-seconds 9000 -- \
             python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-0 \
-              --junitxml=mlx-current-results/binary-0.xml \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_binary_family.py
 
-      - name: Prove current MLX binary family native parity (shard 1 of 12)
-        if: matrix.group == 'binary-1'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 1 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-1 \
-              --junitxml=mlx-current-results/binary-1.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 2 of 12)
-        if: matrix.group == 'binary-2'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "2"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 2 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-2 \
-              --junitxml=mlx-current-results/binary-2.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 3 of 12)
-        if: matrix.group == 'binary-3'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "3"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 3 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-3 \
-              --junitxml=mlx-current-results/binary-3.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 4 of 12)
-        if: matrix.group == 'binary-4'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "4"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 4 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-4 \
-              --junitxml=mlx-current-results/binary-4.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 5 of 12)
-        if: matrix.group == 'binary-5'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "5"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 5 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-5 \
-              --junitxml=mlx-current-results/binary-5.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 6 of 12)
-        if: matrix.group == 'binary-6'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "6"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 6 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-6 \
-              --junitxml=mlx-current-results/binary-6.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 7 of 12)
-        if: matrix.group == 'binary-7'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "7"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 7 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-7 \
-              --junitxml=mlx-current-results/binary-7.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 8 of 12)
-        if: matrix.group == 'binary-8'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "8"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 8 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-8 \
-              --junitxml=mlx-current-results/binary-8.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 9 of 12)
-        if: matrix.group == 'binary-9'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "9"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 9 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-9 \
-              --junitxml=mlx-current-results/binary-9.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 10 of 12)
-        if: matrix.group == 'binary-10'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "10"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 10 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-10 \
-              --junitxml=mlx-current-results/binary-10.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX binary family native parity (shard 11 of 12)
-        if: matrix.group == 'binary-11'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_BINARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_INDEX: "11"
-          CROSTL_MLX_CURRENT_BINARY_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX binary family native parity (shard 11 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/binary-11 \
-              --junitxml=mlx-current-results/binary-11.xml \
-              demos/integrations/mlx/tests/kernels/test_current_binary_family.py
-
-      - name: Prove current MLX unary family native parity (shard 0 of 2)
-        if: matrix.group == 'unary-0'
+      - name: Prove current MLX unary family native parity
+        if: matrix.family == 'unary'
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_UNARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_INDEX: "0"
+          CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_COUNT: "2"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
@@ -7893,50 +7967,20 @@ jobs:
           esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
-            --label "current MLX unary family native parity (shard 0 of 2)" \
+            --label "current MLX unary family native parity (shard ${{ matrix.shard }} of 2)" \
             --timeout-seconds 9000 -- \
             python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/unary-0 \
-              --junitxml=mlx-current-results/unary-0.xml \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_unary_family.py
 
-      - name: Prove current MLX unary family native parity (shard 1 of 2)
-        if: matrix.group == 'unary-1'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_UNARY_FAMILY: "1"
-          CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_INDEX: "1"
-          CROSTL_MLX_CURRENT_UNARY_FAMILY_SHARD_COUNT: "2"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX unary family native parity (shard 1 of 2)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/unary-1 \
-              --junitxml=mlx-current-results/unary-1.xml \
-              demos/integrations/mlx/tests/kernels/test_current_unary_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 0 of 12)
-        if: matrix.group == 'reduce-0'
+      - name: Prove current MLX reduce family native parity
+        if: matrix.family == 'reduce'
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "0"
+          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
@@ -7953,341 +7997,11 @@ jobs:
           esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 0 of 12)" \
+            --label "current MLX reduce family native parity (shard ${{ matrix.shard }} of 12)" \
             --timeout-seconds 9000 -- \
             python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-0 \
-              --junitxml=mlx-current-results/reduce-0.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 1 of 12)
-        if: matrix.group == 'reduce-1'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 1 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-1 \
-              --junitxml=mlx-current-results/reduce-1.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 2 of 12)
-        if: matrix.group == 'reduce-2'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "2"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 2 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-2 \
-              --junitxml=mlx-current-results/reduce-2.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 3 of 12)
-        if: matrix.group == 'reduce-3'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "3"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 3 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-3 \
-              --junitxml=mlx-current-results/reduce-3.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 4 of 12)
-        if: matrix.group == 'reduce-4'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "4"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 4 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-4 \
-              --junitxml=mlx-current-results/reduce-4.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 5 of 12)
-        if: matrix.group == 'reduce-5'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "5"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 5 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-5 \
-              --junitxml=mlx-current-results/reduce-5.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 6 of 12)
-        if: matrix.group == 'reduce-6'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "6"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 6 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-6 \
-              --junitxml=mlx-current-results/reduce-6.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 7 of 12)
-        if: matrix.group == 'reduce-7'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "7"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 7 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-7 \
-              --junitxml=mlx-current-results/reduce-7.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 8 of 12)
-        if: matrix.group == 'reduce-8'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "8"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 8 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-8 \
-              --junitxml=mlx-current-results/reduce-8.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 9 of 12)
-        if: matrix.group == 'reduce-9'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "9"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 9 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-9 \
-              --junitxml=mlx-current-results/reduce-9.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 10 of 12)
-        if: matrix.group == 'reduce-10'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "10"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 10 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-10 \
-              --junitxml=mlx-current-results/reduce-10.xml \
-              demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
-
-      - name: Prove current MLX reduce family native parity (shard 11 of 12)
-        if: matrix.group == 'reduce-11'
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_REDUCE_FAMILY: "1"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_INDEX: "11"
-          CROSTL_MLX_CURRENT_REDUCE_FAMILY_SHARD_COUNT: "12"
-          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-          PYTHONUNBUFFERED: "1"
-        run: |
-          set -euo pipefail
-          case "$RUNNER_OS" in
-            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
-            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
-            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
-            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
-          esac
-          mkdir -p mlx-current-results
-          python tools/run_bounded_command.py \
-            --label "current MLX reduce family native parity (shard 11 of 12)" \
-            --timeout-seconds 9000 -- \
-            python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/reduce-11 \
-              --junitxml=mlx-current-results/reduce-11.xml \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_reduce_family.py
 
       # quantized.metal's 54 affine_quantize and 54 affine_dequantize entries.
@@ -8321,13 +8035,13 @@ jobs:
 
       # quantized.metal's 54 affine_qmv_fast entries with batching, 54 without
       # and 54 affine_gather_qmv_fast entries, in two shards.
-      - name: Prove current MLX quantized matrix-vector native parity (shard 0 of 2)
-        if: matrix.group == 'quantized-qmv-0'
+      - name: Prove current MLX quantized matrix-vector native parity
+        if: matrix.family == 'quantized-qmv'
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
           CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV: "1"
-          CROSTL_MLX_CURRENT_QUANTIZED_QMV_SHARD_INDEX: "0"
+          CROSTL_MLX_CURRENT_QUANTIZED_QMV_SHARD_INDEX: ${{ matrix.shard }}
           CROSTL_MLX_CURRENT_QUANTIZED_QMV_SHARD_COUNT: "2"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
@@ -8344,21 +8058,23 @@ jobs:
           esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
-            --label "current MLX quantized matrix-vector native parity (shard 0 of 2)" \
+            --label "current MLX quantized matrix-vector native parity (shard ${{ matrix.shard }} of 2)" \
             --timeout-seconds 5400 -- \
             python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/quantized-qmv-0 \
-              --junitxml=mlx-current-results/quantized-qmv-0.xml \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_quantized_qmv.py
 
-      - name: Prove current MLX quantized matrix-vector native parity (shard 1 of 2)
-        if: matrix.group == 'quantized-qmv-1'
+      # quantized.metal's 54 affine_qmv entries with batching, 54 without and
+      # 54 affine_gather_qmv entries, in four shards.
+      - name: Prove current MLX unaligned quantized matrix-vector native parity
+        if: matrix.family == 'quantized-qmv-unaligned'
         shell: bash
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV: "1"
-          CROSTL_MLX_CURRENT_QUANTIZED_QMV_SHARD_INDEX: "1"
-          CROSTL_MLX_CURRENT_QUANTIZED_QMV_SHARD_COUNT: "2"
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV_UNALIGNED: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QMV_UNALIGNED_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QMV_UNALIGNED_SHARD_COUNT: "4"
           PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -8374,12 +8090,494 @@ jobs:
           esac
           mkdir -p mlx-current-results
           python tools/run_bounded_command.py \
-            --label "current MLX quantized matrix-vector native parity (shard 1 of 2)" \
+            --label "current MLX unaligned quantized matrix-vector native parity (shard ${{ matrix.shard }} of 4)" \
             --timeout-seconds 5400 -- \
             python -m pytest -q -n auto \
-              --basetemp=mlx-current-results/quantized-qmv-1 \
-              --junitxml=mlx-current-results/quantized-qmv-1.xml \
-              demos/integrations/mlx/tests/kernels/test_current_quantized_qmv.py
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qmv_unaligned.py
+
+      # quantized.metal's 216 affine_qmv_wide entries with batching and 216
+      # without, in nine shards.
+      - name: Prove current MLX quantized wide matrix-vector native parity
+        if: matrix.family == 'quantized-qmv-wide'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV_WIDE: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QMV_WIDE_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QMV_WIDE_SHARD_COUNT: "9"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized wide matrix-vector native parity (shard ${{ matrix.shard }} of 9)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qmv_wide.py
+
+      # quantized.metal's 54 affine_qvm entries with batching, 54 without and
+      # 54 affine_gather_qvm entries, in four shards.
+      - name: Prove current MLX quantized vector-matrix native parity
+        if: matrix.family == 'quantized-qvm'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QVM: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QVM_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QVM_SHARD_COUNT: "4"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized vector-matrix native parity (shard ${{ matrix.shard }} of 4)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qvm.py
+
+      # quantized.metal's 108 affine_qvm_split_k entries, split_k 8 and 32, in
+      # four shards.
+      - name: Prove current MLX quantized split-K vector-matrix native parity
+        if: matrix.family == 'quantized-qvm-split-k'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QVM_SPLIT_K_SHARD_COUNT: "4"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized split-K vector-matrix native parity (shard ${{ matrix.shard }} of 4)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qvm_split_k.py
+
+      # quantized.metal's 216 affine_qmm_t entries, aligned and unaligned N,
+      # with and without batching, in seven shards.
+      - name: Prove current MLX quantized transposed matrix-matrix native parity
+        if: matrix.family == 'quantized-qmm-t'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMM_T: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QMM_T_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QMM_T_SHARD_COUNT: "7"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized transposed matrix-matrix native parity (shard ${{ matrix.shard }} of 7)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qmm_t.py
+
+      # quantized.metal's 108 affine_qmm_n entries, with and without batching,
+      # in five shards.
+      - name: Prove current MLX quantized matrix-matrix native parity
+        if: matrix.family == 'quantized-qmm-n'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMM_N: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QMM_N_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QMM_N_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized matrix-matrix native parity (shard ${{ matrix.shard }} of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qmm_n.py
+
+      # quantized.metal's 108 affine_qmm_t_splitk entries, aligned and
+      # unaligned N, in five shards.
+      - name: Prove current MLX quantized split-K matrix-matrix native parity
+        if: matrix.family == 'quantized-qmm-t-splitk'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMM_T_SPLITK: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QMM_T_SPLITK_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QMM_T_SPLITK_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized split-K matrix-matrix native parity (shard ${{ matrix.shard }} of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qmm_t_splitk.py
+
+      # quantized.metal's 162 affine_gather_qmm_t and affine_gather_qmm_n
+      # entries, in seven shards.
+      - name: Prove current MLX quantized gather matrix-matrix native parity
+        if: matrix.family == 'quantized-gather-qmm'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_GATHER_QMM: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_GATHER_QMM_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_GATHER_QMM_SHARD_COUNT: "7"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized gather matrix-matrix native parity (shard ${{ matrix.shard }} of 7)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_gather_qmm.py
+
+      # quantized.metal's 216 affine_qmv_quad entries, D 64 and 128, with and
+      # without batching, in three shards; the 90 the host can dispatch run.
+      - name: Prove current MLX quantized quad matrix-vector native parity
+        if: matrix.family == 'quantized-qmv-quad'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_QUANTIZED_QMV_QUAD: "1"
+          CROSTL_MLX_CURRENT_QUANTIZED_QMV_QUAD_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_QUANTIZED_QMV_QUAD_SHARD_COUNT: "3"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX quantized quad matrix-vector native parity (shard ${{ matrix.shard }} of 3)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_quantized_qmv_quad.py
+
+      # steel_gemm_fused.metal's 72 float32, float16 and bfloat16 entries, three
+      # constant configurations each, in five shards.
+      - name: Prove current MLX GEMM family native parity
+        if: matrix.family == 'gemm-family'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_FAMILY: "1"
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_GEMM_FAMILY_SHARD_COUNT: "5"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX GEMM family native parity (shard ${{ matrix.shard }} of 5)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_family.py
+
+      # steel_gemm_splitk.metal's 192 float32, float16 and bfloat16 entries in
+      # seven shards; shard 0 also runs the six accumulation kernels.
+      - name: Prove current MLX GEMM split-K native parity
+        if: matrix.family == 'gemm-splitk'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_SPLITK: "1"
+          CROSTL_MLX_CURRENT_GEMM_SPLITK_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_GEMM_SPLITK_SHARD_COUNT: "7"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX GEMM split-K native parity (shard ${{ matrix.shard }} of 7)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_splitk.py
+
+      # steel_gemm_gather.metal's 60 gather_mm entries, each with three
+      # frozen function-constant variants, in seven shards.
+      - name: Prove current MLX gathered GEMM native parity
+        if: matrix.family == 'gemm-gather'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_GATHER: "1"
+          CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_COUNT: "7"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX gathered GEMM native parity (shard ${{ matrix.shard }} of 7)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_gather.py
+
+      # steel_gemm_masked.metal's 768 block_masked_gemm entries, each with
+      # unbatched, one-dimensional and broadcast two-dimensional batches, in
+      # thirteen shards.
+      - name: Prove current MLX block-masked GEMM native parity
+        if: matrix.family == 'gemm-masked'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_MASKED: "1"
+          CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_GEMM_MASKED_SHARD_COUNT: "13"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX block-masked GEMM native parity (shard ${{ matrix.shard }} of 13)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_masked.py
+
+      # steel_gemm_segmented.metal's 60 segmented_mm entries, each with four
+      # frozen segments-layout and alignment configurations, in seven shards.
+      - name: Prove current MLX segmented GEMM native parity
+        if: matrix.family == 'gemm-segmented'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_GEMM_SEGMENTED: "1"
+          CROSTL_MLX_CURRENT_GEMM_SEGMENTED_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_GEMM_SEGMENTED_SHARD_COUNT: "7"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX segmented GEMM native parity (shard ${{ matrix.shard }} of 7)" \
+            --timeout-seconds 7200 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_gemm_segmented.py
+
+      # The 144 implicit-GEMM convolution entries of steel_conv.metal and
+      # steel_conv_3d.metal, each with three convolutions, in six shards.
+      - name: Prove current MLX steel_conv native parity
+        if: matrix.family == 'steel-conv'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV: "1"
+          CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_STEEL_CONV_SHARD_COUNT: "6"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX steel_conv native parity (shard ${{ matrix.shard }} of 6)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_steel_conv.py
+
+      # The 18 general implicit-GEMM convolution entries of
+      # steel_conv_general.metal, each with align_C true and false and
+      # three convolutions per specialization, in three shards.
+      - name: Prove current MLX steel_conv_general native parity
+        if: matrix.family == 'steel-conv-general'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_STEEL_CONV_GENERAL: "1"
+          CROSTL_MLX_CURRENT_STEEL_CONV_GENERAL_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_STEEL_CONV_GENERAL_SHARD_COUNT: "3"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX steel_conv_general native parity (shard ${{ matrix.shard }} of 3)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_steel_conv_general.py
 
       - name: Upload current MLX native parity evidence
         if: always()
@@ -8389,6 +8587,162 @@ jobs:
           path: mlx-current-results
           if-no-files-found: warn
           retention-days: 14
+
+  mlx-current-quantized-parity:
+    needs: ci-plan
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-quantized-parity-${{ strategy.job-index }}
+      cancel-in-progress: false
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+
+    name: MLX current-tree quantized native parity (${{ matrix.os }}, ${{ matrix.group }})
+    if: needs.ci-plan.outputs.heavy == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      # GitHub expands at most 256 legs from one matrix, so the current-tree
+      # families are split over three jobs that share one list of steps.
+      # 153 legs here, a third of them on macOS; the three jobs
+      # together run at most 28 legs at once, each group's platform legs
+      # together.
+      max-parallel: 8
+      matrix:
+        group: [quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-unaligned-0, quantized-qmv-unaligned-1, quantized-qmv-unaligned-2, quantized-qmv-unaligned-3, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, quantized-qvm-0, quantized-qvm-1, quantized-qvm-2, quantized-qvm-3, quantized-qvm-split-k-0, quantized-qvm-split-k-1, quantized-qvm-split-k-2, quantized-qvm-split-k-3, quantized-qmm-t-0, quantized-qmm-t-1, quantized-qmm-t-2, quantized-qmm-t-3, quantized-qmm-t-4, quantized-qmm-t-5, quantized-qmm-t-6, quantized-qmm-n-0, quantized-qmm-n-1, quantized-qmm-n-2, quantized-qmm-n-3, quantized-qmm-n-4, quantized-qmm-t-splitk-0, quantized-qmm-t-splitk-1, quantized-qmm-t-splitk-2, quantized-qmm-t-splitk-3, quantized-qmm-t-splitk-4, quantized-gather-qmm-0, quantized-gather-qmm-1, quantized-gather-qmm-2, quantized-gather-qmm-3, quantized-gather-qmm-4, quantized-gather-qmm-5, quantized-gather-qmm-6, quantized-qmv-quad-0, quantized-qmv-quad-1, quantized-qmv-quad-2]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        include:
+          - {group: quantized-qmv-0, family: quantized-qmv, shard: 0}
+          - {group: quantized-qmv-1, family: quantized-qmv, shard: 1}
+          - {group: quantized-qmv-unaligned-0, family: quantized-qmv-unaligned, shard: 0}
+          - {group: quantized-qmv-unaligned-1, family: quantized-qmv-unaligned, shard: 1}
+          - {group: quantized-qmv-unaligned-2, family: quantized-qmv-unaligned, shard: 2}
+          - {group: quantized-qmv-unaligned-3, family: quantized-qmv-unaligned, shard: 3}
+          - {group: quantized-qmv-wide-0, family: quantized-qmv-wide, shard: 0}
+          - {group: quantized-qmv-wide-1, family: quantized-qmv-wide, shard: 1}
+          - {group: quantized-qmv-wide-2, family: quantized-qmv-wide, shard: 2}
+          - {group: quantized-qmv-wide-3, family: quantized-qmv-wide, shard: 3}
+          - {group: quantized-qmv-wide-4, family: quantized-qmv-wide, shard: 4}
+          - {group: quantized-qmv-wide-5, family: quantized-qmv-wide, shard: 5}
+          - {group: quantized-qmv-wide-6, family: quantized-qmv-wide, shard: 6}
+          - {group: quantized-qmv-wide-7, family: quantized-qmv-wide, shard: 7}
+          - {group: quantized-qmv-wide-8, family: quantized-qmv-wide, shard: 8}
+          - {group: quantized-qvm-0, family: quantized-qvm, shard: 0}
+          - {group: quantized-qvm-1, family: quantized-qvm, shard: 1}
+          - {group: quantized-qvm-2, family: quantized-qvm, shard: 2}
+          - {group: quantized-qvm-3, family: quantized-qvm, shard: 3}
+          - {group: quantized-qvm-split-k-0, family: quantized-qvm-split-k, shard: 0}
+          - {group: quantized-qvm-split-k-1, family: quantized-qvm-split-k, shard: 1}
+          - {group: quantized-qvm-split-k-2, family: quantized-qvm-split-k, shard: 2}
+          - {group: quantized-qvm-split-k-3, family: quantized-qvm-split-k, shard: 3}
+          - {group: quantized-qmm-t-0, family: quantized-qmm-t, shard: 0}
+          - {group: quantized-qmm-t-1, family: quantized-qmm-t, shard: 1}
+          - {group: quantized-qmm-t-2, family: quantized-qmm-t, shard: 2}
+          - {group: quantized-qmm-t-3, family: quantized-qmm-t, shard: 3}
+          - {group: quantized-qmm-t-4, family: quantized-qmm-t, shard: 4}
+          - {group: quantized-qmm-t-5, family: quantized-qmm-t, shard: 5}
+          - {group: quantized-qmm-t-6, family: quantized-qmm-t, shard: 6}
+          - {group: quantized-qmm-n-0, family: quantized-qmm-n, shard: 0}
+          - {group: quantized-qmm-n-1, family: quantized-qmm-n, shard: 1}
+          - {group: quantized-qmm-n-2, family: quantized-qmm-n, shard: 2}
+          - {group: quantized-qmm-n-3, family: quantized-qmm-n, shard: 3}
+          - {group: quantized-qmm-n-4, family: quantized-qmm-n, shard: 4}
+          - {group: quantized-qmm-t-splitk-0, family: quantized-qmm-t-splitk, shard: 0}
+          - {group: quantized-qmm-t-splitk-1, family: quantized-qmm-t-splitk, shard: 1}
+          - {group: quantized-qmm-t-splitk-2, family: quantized-qmm-t-splitk, shard: 2}
+          - {group: quantized-qmm-t-splitk-3, family: quantized-qmm-t-splitk, shard: 3}
+          - {group: quantized-qmm-t-splitk-4, family: quantized-qmm-t-splitk, shard: 4}
+          - {group: quantized-gather-qmm-0, family: quantized-gather-qmm, shard: 0}
+          - {group: quantized-gather-qmm-1, family: quantized-gather-qmm, shard: 1}
+          - {group: quantized-gather-qmm-2, family: quantized-gather-qmm, shard: 2}
+          - {group: quantized-gather-qmm-3, family: quantized-gather-qmm, shard: 3}
+          - {group: quantized-gather-qmm-4, family: quantized-gather-qmm, shard: 4}
+          - {group: quantized-gather-qmm-5, family: quantized-gather-qmm, shard: 5}
+          - {group: quantized-gather-qmm-6, family: quantized-gather-qmm, shard: 6}
+          - {group: quantized-qmv-quad-0, family: quantized-qmv-quad, shard: 0}
+          - {group: quantized-qmv-quad-1, family: quantized-qmv-quad, shard: 1}
+          - {group: quantized-qmv-quad-2, family: quantized-qmv-quad, shard: 2}
+
+    # The steps of mlx-current-native-parity. Each runs only in its own groups.
+    steps: *mlx-current-parity-steps
+
+  mlx-current-gemm-parity:
+    needs: ci-plan
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-gemm-parity-${{ strategy.job-index }}
+      cancel-in-progress: false
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+
+    name: MLX current-tree GEMM and convolution native parity (${{ matrix.os }}, ${{ matrix.group }})
+    if: needs.ci-plan.outputs.heavy == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 210
+    strategy:
+      fail-fast: false
+      # GitHub expands at most 256 legs from one matrix, so the current-tree
+      # families are split over three jobs that share one list of steps.
+      # 144 legs here, a third of them on macOS; the three jobs
+      # together run at most 28 legs at once, each group's platform legs
+      # together.
+      max-parallel: 8
+      matrix:
+        group: [gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12, gemm-segmented-0, gemm-segmented-1, gemm-segmented-2, gemm-segmented-3, gemm-segmented-4, gemm-segmented-5, gemm-segmented-6]
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        include:
+          - {group: gemm-family-0, family: gemm-family, shard: 0}
+          - {group: gemm-family-1, family: gemm-family, shard: 1}
+          - {group: gemm-family-2, family: gemm-family, shard: 2}
+          - {group: gemm-family-3, family: gemm-family, shard: 3}
+          - {group: gemm-family-4, family: gemm-family, shard: 4}
+          - {group: gemm-splitk-0, family: gemm-splitk, shard: 0}
+          - {group: gemm-splitk-1, family: gemm-splitk, shard: 1}
+          - {group: gemm-splitk-2, family: gemm-splitk, shard: 2}
+          - {group: gemm-splitk-3, family: gemm-splitk, shard: 3}
+          - {group: gemm-splitk-4, family: gemm-splitk, shard: 4}
+          - {group: gemm-splitk-5, family: gemm-splitk, shard: 5}
+          - {group: gemm-splitk-6, family: gemm-splitk, shard: 6}
+          - {group: gemm-gather-0, family: gemm-gather, shard: 0}
+          - {group: gemm-gather-1, family: gemm-gather, shard: 1}
+          - {group: gemm-gather-2, family: gemm-gather, shard: 2}
+          - {group: gemm-gather-3, family: gemm-gather, shard: 3}
+          - {group: gemm-gather-4, family: gemm-gather, shard: 4}
+          - {group: gemm-gather-5, family: gemm-gather, shard: 5}
+          - {group: gemm-gather-6, family: gemm-gather, shard: 6}
+          - {group: steel-conv-0, family: steel-conv, shard: 0}
+          - {group: steel-conv-1, family: steel-conv, shard: 1}
+          - {group: steel-conv-2, family: steel-conv, shard: 2}
+          - {group: steel-conv-3, family: steel-conv, shard: 3}
+          - {group: steel-conv-4, family: steel-conv, shard: 4}
+          - {group: steel-conv-5, family: steel-conv, shard: 5}
+          - {group: steel-conv-general-0, family: steel-conv-general, shard: 0}
+          - {group: steel-conv-general-1, family: steel-conv-general, shard: 1}
+          - {group: steel-conv-general-2, family: steel-conv-general, shard: 2}
+          - {group: gemm-masked-0, family: gemm-masked, shard: 0}
+          - {group: gemm-masked-1, family: gemm-masked, shard: 1}
+          - {group: gemm-masked-2, family: gemm-masked, shard: 2}
+          - {group: gemm-masked-3, family: gemm-masked, shard: 3}
+          - {group: gemm-masked-4, family: gemm-masked, shard: 4}
+          - {group: gemm-masked-5, family: gemm-masked, shard: 5}
+          - {group: gemm-masked-6, family: gemm-masked, shard: 6}
+          - {group: gemm-masked-7, family: gemm-masked, shard: 7}
+          - {group: gemm-masked-8, family: gemm-masked, shard: 8}
+          - {group: gemm-masked-9, family: gemm-masked, shard: 9}
+          - {group: gemm-masked-10, family: gemm-masked, shard: 10}
+          - {group: gemm-masked-11, family: gemm-masked, shard: 11}
+          - {group: gemm-masked-12, family: gemm-masked, shard: 12}
+          - {group: gemm-segmented-0, family: gemm-segmented, shard: 0}
+          - {group: gemm-segmented-1, family: gemm-segmented, shard: 1}
+          - {group: gemm-segmented-2, family: gemm-segmented, shard: 2}
+          - {group: gemm-segmented-3, family: gemm-segmented, shard: 3}
+          - {group: gemm-segmented-4, family: gemm-segmented, shard: 4}
+          - {group: gemm-segmented-5, family: gemm-segmented, shard: 5}
+          - {group: gemm-segmented-6, family: gemm-segmented, shard: 6}
+
+    # The steps of mlx-current-native-parity. Each runs only in its own groups.
+    steps: *mlx-current-parity-steps
 
   mlx-unary-metal-sources:
     needs: ci-plan
@@ -9890,6 +10244,8 @@ jobs:
       - portable-host
       - small-row-reductions
       - half-host
+      - quantized-host
+      - quantized-upstream-host
       - integer64-host
       - slice-update-host
       - scatter-host
@@ -9897,6 +10253,8 @@ jobs:
       - reductions
       - mlx-metal-porting
       - mlx-current-native-parity
+      - mlx-current-quantized-parity
+      - mlx-current-gemm-parity
       - mlx-unary-metal-sources
       - mlx-unary-metal-roundtrip
       - mlx-unary-complete-opengl-translation
