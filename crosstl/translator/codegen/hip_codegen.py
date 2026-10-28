@@ -56,6 +56,11 @@ from .c_reference_parameters import (
     reference_declarator,
 )
 from .c_vector_reductions import generate_vector_reduction_call
+from .comma_expressions import (
+    CommaExpressionVisitorMixin,
+    comma_result_operand,
+    is_comma_expression,
+)
 from .cuda_library_functions import rename_cuda_library_functions
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -284,6 +289,7 @@ class UnsupportedHIPAstNodeError(ValueError):
 
 class HipCodeGen(
     LoweringRefusalMixin,
+    CommaExpressionVisitorMixin,
     VectorArithmeticMixin,
     ResourceQueryMixin,
     ResourceDiagnosticMixin,
@@ -10278,6 +10284,8 @@ class HipCodeGen(
 
     def expression_result_type(self, node):
         """Infer expression result types with HIP buffer operations."""
+        if is_comma_expression(node):
+            return self.expression_result_type(comma_result_operand(node))
         if isinstance(node, (IdentifierNode, VariableNode)):
             name = getattr(node, "name", None)
             if not self.source_identifier_shadows_builtin(name):

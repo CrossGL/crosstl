@@ -5414,9 +5414,9 @@ def test_tuple_pattern_if_let_expression_initializer_conversion():
         assert "LetPatternConditionNode" not in result
         assert "auto _rust_match_tuple_0;" in result
         assert "if (is_Some(def_location))" in result
-        assert "_rust_match_tuple_0 = (def_location.0, def_location.1);" in result
+        assert "_rust_match_tuple_0 = (def_location.0, def_location.1,);" in result
         assert (
-            "_rust_match_tuple_0 = (unknown_file_metadata(cx), UNKNOWN_LINE_NUMBER);"
+            "_rust_match_tuple_0 = (unknown_file_metadata(cx), UNKNOWN_LINE_NUMBER,);"
             in result
         )
         assert "file_metadata = _rust_tuple_0(_rust_match_tuple_0);" in result
@@ -8699,9 +8699,9 @@ def test_tuple_field_access_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "let pair = (a, b);" in result
+        assert "let pair = (a, b,);" in result
         assert "let first = pair.0;" in result
-        assert "let second = (a, b).1;" in result
+        assert "let second = (a, b,).1;" in result
         assert "return (first + second);" in result
     except Exception as e:
         pytest.fail(f"Tuple field access conversion failed: {e}")
@@ -11498,7 +11498,7 @@ def test_tuple_typed_global_array_codegen_reparse_from_rust_gpu_libm_table():
 
     assert (
         "const Tuple<str, LibmIntrinsic> LIBM_TABLE[] = "
-        '{("acos", LibmIntrinsic::GLOp(GLOp::Acos))};'
+        '{("acos", LibmIntrinsic::GLOp(GLOp::Acos),)};'
     ) in result
     crosstl.translator.parse(result)
 

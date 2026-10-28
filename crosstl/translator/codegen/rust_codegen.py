@@ -54,6 +54,7 @@ from ..ast import (
 from ..matrix_shape import matrix_type_spelling
 from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .assignment_values import is_reevaluable_place
+from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_refusals import RustLoweringRefused
@@ -8871,6 +8872,8 @@ class RustCodeGen(LoweringRefusalMixin):
         """Render a CrossGL expression as Rust expression syntax."""
         if expr is None:
             return ""
+        elif is_comma_expression(expr):
+            return refuse_comma_expression("Rust", expr)
         elif isinstance(expr, str):
             return expr
         elif isinstance(expr, (int, float, bool)):

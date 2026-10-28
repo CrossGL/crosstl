@@ -54,6 +54,7 @@ from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
 from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
+from .comma_expressions import is_comma_expression
 from .enum_utils import (
     generic_enum_specialization_name,
     generic_type_parts,
@@ -3158,6 +3159,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_expression(self, expr):
         if expr is None:
             return ""
+        if is_comma_expression(expr):
+            # Statement lowering hoists every comma it can reach (wgsl_value_side_effects).
+            raise ValueError(
+                "WGSL target cannot lower a comma expression in this position; WGSL has no "
+                "comma operator"
+            )
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
         if isinstance(expr, IdentifierNode):
