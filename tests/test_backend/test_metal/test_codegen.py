@@ -13160,9 +13160,14 @@ def test_codegen_does_not_capture_qualified_static_call_as_struct_alias():
     }
     """
 
-    crossgl = convert_without_preprocessing(source)
+    from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+        MetalStructMethodCallResolutionError,
+    )
 
-    assert "load(value);" in crossgl
+    # The statement is a call of a static member that `Fragment` does not declare, not an alias
+    # declaration; dropping the owner would emit a call to an undeclared `load`.
+    with pytest.raises(MetalStructMethodCallResolutionError, match=r"Fragment::load\("):
+        convert_without_preprocessing(source)
 
 
 def test_codegen_resource_vector_components_preserve_buffer_indexing(tmp_path):
