@@ -59,11 +59,15 @@ ROUTES = {
     "general-2d-strided-unaligned": "implicit_gemm_conv_2D_general_gpu",
     "general-2d-transpose": "implicit_gemm_conv_2D_general_gpu",
     "general-2d-dilated-copied": "implicit_gemm_conv_2D_general_gpu",
-    "refused-stride-two-transpose-3d": "stride_two_conv_transpose_3D_gpu",
+    "stride-two-transpose-3d": "stride_two_conv_transpose_3D_gpu",
+    "stride-two-transpose-3d-half": "stride_two_conv_transpose_3D_gpu",
     "pad-in-channels-2d": "pad_in_channels_conv_2D_gpu",
     "pad-in-channels-2d-copied": "pad_in_channels_conv_2D_gpu",
-    "refused-pad-and-slice-3d": "pad_and_slice_conv_3D_gpu",
-    "refused-small-kd-3d": "small_kd_conv_3D_gpu",
+    "pad-and-slice-3d": "pad_and_slice_conv_3D_gpu",
+    "pad-and-slice-3d-outputs": "pad_and_slice_conv_3D_gpu",
+    "small-kd-3d": "small_kd_conv_3D_gpu",
+    "small-kd-3d-flipped": "small_kd_conv_3D_gpu",
+    "refused-winograd-2d": "winograd_conv_2D_gpu",
     "empty-batch": "none",
 }
 
@@ -98,6 +102,10 @@ def launches(record):
         return [implicit_launch(record)]
     if record["route"] == "pad_in_channels_conv_2D_gpu":
         return [padded_launch(record)]
+    if record["route"] == "pad_and_slice_conv_3D_gpu":
+        return [sliced_launch(record)]
+    if record["route"] == "small_kd_conv_3D_gpu":
+        return small_kd_launches(record)
     if record["route"] == "depthwise_conv_2D_gpu":
         return [depthwise_2d_launch(record)]
     if record["route"] == layout.general.ROUTE:
@@ -194,7 +202,89 @@ def padded_launch(record):
     return entry, counts, parameters, counts["C"], execution
 
 
-def test_padded_channels_reach_the_implicit_gemm_as_conv_cpp_pads_them():
+def sliced_launch(record):
+    """The implicit GEMM pad_and_slice_conv_3D_gpu launches into its intermediate."""
+    (entry,) = record["convEntries"]
+    p = record["params"]
+    extra_c, extra_o = layout.padded_channels(p)
+    padded = layout.with_padded_channels(p, extra_c, extra_o)
+    model = steel.BY_NAME[entry]
+    gemm = layout.implicit_gemm_params(padded, model)
+    counts = {
+        "A": math.prod([*record["inShape"][:-1], padded["C"]]),
+        "B": math.prod([padded["O"], *record["wtShape"][1:-1], padded["C"]]),
+        "C": math.prod([*record["outShape"][:-1], padded["O"]]),
+    }
+    execution = {
+        "workgroupCount": [gemm["tiles_n"], gemm["tiles_m"], 1],
+        "workgroupSize": list(model.workgroup_size),
+    }
+    parameters = {"params": padded, "gemm_params": gemm}
+    return entry, counts, parameters, counts["C"], execution
+
+
+def small_kd_launches(record):
+    """The 2-D convolution small_kd_conv_3D_gpu launches for each depth tap."""
+    p = record["frameParams"]
+    frame = {
+        "convEntries": record["convEntries"],
+        "params": p,
+        "inShape": [p["N"], *p["iS"], p["C"]],
+        "wtShape": [p["O"], *p["wS"], p["C"]],
+        "outShape": [p["N"], *p["oS"], p["O"]],
+    }
+    launch = (
+        general_launch
+        if record["launchRoute"] == layout.general.ROUTE
+        else implicit_launch
+    )
+    return [launch(frame) for _ in range(record["params"]["wS"][0])]
+
+
+def test_3d_padded_channels_reach_the_implicit_gemm_as_conv_cpp_pads_them():
+    record = BY_NAME["pad-and-slice-3d-outputs"]
+    p = record["params"]
+    assert layout.padded_channels(p) == (0, 12)
+    padded = layout.with_padded_channels(p, 0, 12)
+    # params.h scales the output strides by the padded output channels too.
+    assert padded["O"] == 32 and padded["out_strides"] == layout.contiguous(
+        [2, 3, 4, 4, 32]
+    )
+    assert padded["in_strides"] == p["in_strides"]
+    assert padded["wt_strides"] == layout.contiguous([32, 2, 2, 2, 16])
+    assert layout.pad_and_slice_source(padded)
+    # Input and output channels both grow for four-channel convolutions.
+    four = BY_NAME["pad-and-slice-3d"]["params"]
+    assert layout.padded_channels(four) == (12, 12)
+    assert layout.pad_and_slice_source(layout.with_padded_channels(four, 12, 12))
+    entry, counts, parameters, threads, execution = sliced_launch(record)
+    metadata = layout.plan(entry, counts, parameters, threads, execution)
+    assert metadata["route"] == "implicit_gemm_conv_3D_gpu"
+    # Parameters conv.cpp would not have padded keep the routing check.
+    for change in (
+        {"groups": 2},
+        {"idil": [2, 1, 1]},
+        {"O": 48},
+    ):
+        assert not layout.pad_and_slice_source({**copy.deepcopy(padded), **change})
+
+
+def test_small_depth_and_stride_two_records_follow_conv_cpp():
+    record = BY_NAME["small-kd-3d-flipped"]
+    frames = record["frameParams"]
+    # Every output frame is one 2-D batch item over the input's frame shape.
+    assert frames["N"] == record["outShape"][1] and frames["iS"] == [4, 3]
+    assert frames["pad"] == [1, 0] and frames["flip"] is True
+    entry = record["convEntries"][0]
+    assert record["launches"] == [entry, entry, "vv_Addfloat32", entry, "vv_Addfloat32"]
+    # One dense copy of each depth tap's weight plane.
+    assert record["copies"] == 3
+    two = BY_NAME["stride-two-transpose-3d"]
+    (product,) = two["productEntries"]
+    assert two["launches"] == [product] * 8 and two["copies"] == 8
+    assert product.startswith("steel_gemm_fused_nt_float32")
+    assert BY_NAME["pad-and-slice-3d"]["copies"] == 4
+    assert BY_NAME["pad-and-slice-3d-outputs"]["copies"] == 2
     record = BY_NAME["pad-in-channels-2d-copied"]
     p = record["params"]
     padded = layout.with_padded_channels(p, 11)
@@ -407,8 +497,8 @@ def test_plan_accepts_each_launch(record):
     ]
     for entry, counts, parameters, threads, execution in planned:
         metadata = layout.plan(entry, counts, parameters, threads, execution)
-        assert metadata["route"] == layout.LAUNCH_ROUTES.get(
-            record["route"], record["route"]
+        assert metadata["route"] == record.get(
+            "launchRoute", layout.LAUNCH_ROUTES.get(record["route"], record["route"])
         )
 
 
@@ -1076,14 +1166,22 @@ def test_implicit_plan_requires_the_entry_conv_cpp_names():
         with pytest.raises(ValueError, match="entry differs|channels"):
             layout.plan(other, counts, parameters, threads, execution)
     # conv.cpp sends a 3-D convolution of one batch with a short depth kernel
-    # to small_kd_conv_3D_gpu.
+    # to small_kd_conv_3D_gpu. Eight output channels are no padding of
+    # pad_and_slice_conv_3D_gpu's, whose padded channels are multiples of 16.
     entry, counts, parameters, threads, execution = _implicit("implicit-3d")
     params = copy.deepcopy(parameters["params"])
-    params["N"] = 1
+    params["N"], params["O"] = 1, 8
     params["in_strides"] = layout.contiguous([1, *params["iS"], params["C"]])
-    params["out_strides"] = layout.contiguous([1, *params["oS"], params["O"]])
+    params["wt_strides"] = layout.contiguous([8, *params["wS"], params["C"]])
+    params["out_strides"] = layout.contiguous([1, *params["oS"], 8])
     with pytest.raises(ValueError, match="routing"):
         layout.plan(entry, counts, {**parameters, "params": params}, threads, execution)
+    # Sixteen output channels of one batch are also what pad_and_slice
+    # launches for narrower channels, so they pass the routing check.
+    params["O"] = 16
+    params["wt_strides"] = layout.contiguous([16, *params["wS"], params["C"]])
+    params["out_strides"] = layout.contiguous([1, *params["oS"], 16])
+    assert layout.pad_and_slice_source(params)
 
 
 def test_implicit_plan_bounds_the_weight_tiles():
@@ -1311,6 +1409,9 @@ def _direct(np, x, w, record):
         "depthwise-1d",
         "depthwise-2d-strided-flip",
         "depthwise-2d-from-1d",
+        "stride-two-transpose-3d-half",
+        "pad-and-slice-3d",
+        "small-kd-3d",
     ),
 )
 def test_reference_follows_the_convolution_definition(name):
@@ -1366,9 +1467,30 @@ def test_backend_ports_convolution_eval_gpu():
     assert two.count("return conv_implicit_gemm(in, wt, out, conv_params);") == 2
     three = port[port.index("void conv_dispatch_3d(") :]
     three = three[: three.index("\n}\n")]
-    assert three.index('conv_unported("small_kd_conv_3D_gpu")') < three.index(
-        "return conv_implicit_gemm(in, wt, out, p);"
+    # dispatch_conv_3D_gpu's order: the padded channels before the output is
+    # allocated, then the stride-two transpose, the small depth kernels and
+    # the implicit GEMM.
+    order = [
+        "return conv_pad_and_slice_3d(in_pre, wt_pre, out, p);",
+        "out.set_data(allocator::malloc(out.nbytes()));",
+        "return conv_stride_two_transpose_3d(in, wt, out, p);",
+        "return conv_small_kd_3d(in, wt, out, p);",
+        "return conv_implicit_gemm(in, wt, out, p);",
+    ]
+    assert [three.index(text) for text in order] == sorted(
+        three.index(text) for text in order
     )
+    assert "conv_unported(" not in three
+    for text in (
+        "MLXConvParams<3>::with_padded_channels(conv_params, extra_o, extra_c));",
+        "Pad(s, {0, -1}, {0, 0}, {pad_first, pad_last}).eval_gpu({x, zero}, padded);",
+        "intermediate, intermediate.strides(), {0}, intermediate.data_size());",
+        "const int kd_wt = p.flip ? KD - 1 - kd : kd;",
+        'dispatch_binary({acc, conv_out}, sum, "Add");',
+        "in_matrix, wt_phase, phase_out, M, O, C, 1, C, kernel_volume * C, false, true,",
+        "out_phase_strides, pd * out.strides(1) + ph * out.strides(2) + pw * out.strides(3),",
+    ):
+        assert text in port, text
     for text in (
         "{conv_groups(tn), conv_groups(tm), conv_groups(groups)},",
         "{32, uint32_t(wn), uint32_t(wm)}};",

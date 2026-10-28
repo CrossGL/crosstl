@@ -4,9 +4,11 @@
 // and multiply the unfolded rows with the steel GEMM, the separable
 // depthwise_conv_1d kernel, the small-kernel depthwise_conv_2d kernel, the
 // implicit GEMM routes, which run steel_conv's implicit_gemm_conv_2d and
-// implicit_gemm_conv_3d, and the general implicit GEMM route, which runs
-// steel_conv_general's implicit_gemm_conv_2d_general. Every other
-// route conv.cpp takes is refused by name before any launch. Each launch binds
+// implicit_gemm_conv_3d, the general implicit GEMM route, which runs
+// steel_conv_general's implicit_gemm_conv_2d_general, and the 3-D routes that
+// compose those launches: padded channels, per-depth-tap 2-D convolutions and
+// the eight-phase stride-two transpose. Winograd, the one other route conv.cpp
+// takes, is refused by name before any launch. Each launch binds
 // the buffers and values conv.cpp binds; conv_layout checks the unfold,
 // depthwise and implicit GEMM launches against the same routing and
 // gemm_layout the products. crosstl_backend.cpp includes this file after the
@@ -611,6 +613,177 @@ void conv_dispatch_2d(
   conv_explicit_gemm(in, wt, out, conv_params);
 }
 
+void conv_2d(
+    const array& in_pre,
+    const array& wt_pre,
+    array& out,
+    const std::vector<int>& padding,
+    const std::vector<int>& wt_strides,
+    const std::vector<int>& wt_dilation,
+    const std::vector<int>& in_dilation,
+    int groups,
+    bool flip);
+
+// conv.cpp pad_and_slice_conv_3D_gpu: zero-pad the input channels and the
+// weight's output and input channels to multiples of 16 through Pad, run the
+// implicit GEMM into an intermediate with the padded output channels, and
+// present its first O channels as the output, which shares that buffer.
+void conv_pad_and_slice_3d(
+    const array& in_pre,
+    const array& wt_pre,
+    array& out,
+    const MLXConvParams<3>& conv_params) {
+  const int extra_c = ((conv_params.C + 15) / 16) * 16 - conv_params.C;
+  const int extra_o = ((conv_params.O + 15) / 16) * 16 - conv_params.O;
+  const Stream s = out.primitive().stream();
+  auto pad_array = [&](const array& x, int pad_first, int pad_last) {
+    if (pad_first == 0 && pad_last == 0) {
+      return conv_row_contiguous(x);
+    }
+    auto shape = x.shape();
+    shape.front() += pad_first;
+    shape.back() += pad_last;
+    array padded(shape, x.dtype(), nullptr, {});
+    array zero(0, x.dtype());
+    Pad(s, {0, -1}, {0, 0}, {pad_first, pad_last}).eval_gpu({x, zero}, padded);
+    return padded;
+  };
+  auto shape = out.shape();
+  shape.back() += extra_o;
+  array intermediate(shape, out.dtype(), nullptr, {});
+  intermediate.set_data(allocator::malloc(intermediate.nbytes()));
+  const array in = pad_array(in_pre, 0, extra_c);
+  const array wt = pad_array(wt_pre, extra_o, extra_c);
+  conv_implicit_gemm(
+      in, wt, intermediate,
+      MLXConvParams<3>::with_padded_channels(conv_params, extra_o, extra_c));
+  out.copy_shared_buffer(
+      intermediate, intermediate.strides(), {0}, intermediate.data_size());
+}
+
+// conv.cpp small_kd_conv_3D_gpu: one 2-D convolution per depth tap over
+// views of every output frame's input slab and the tap's weight plane (the
+// depth axis mirrored for a flipped convolution), summed into the first
+// tap's result. conv.cpp adds in place; the host's binary port writes each
+// sum to its own array, which holds the same values.
+void conv_small_kd_3d(
+    const array& in,
+    const array& wt,
+    array& out,
+    const MLXConvParams<3>& p) {
+  const int H = p.iS[1];
+  const int W = p.iS[2];
+  const int C = p.C;
+  const int O = p.O;
+  const int KD = p.wS[0];
+  const int KH = p.wS[1];
+  const int KW = p.wS[2];
+  const int OD = p.oS[0];
+  const int OH = p.oS[1];
+  const int OW = p.oS[2];
+  array acc({OD, OH, OW, O}, out.dtype(), nullptr, {});
+  for (int kd = 0; kd < KD; ++kd) {
+    array in_2d({OD, H, W, C}, in.dtype(), nullptr, {});
+    in_2d.copy_shared_buffer(
+        in,
+        {static_cast<int64_t>(H) * W * C, static_cast<int64_t>(W) * C,
+         static_cast<int64_t>(C), 1},
+        {true, true, false},
+        static_cast<size_t>(OD) * H * W * C,
+        static_cast<int64_t>(kd) * H * W * C);
+    const int kd_wt = p.flip ? KD - 1 - kd : kd;
+    array wt_2d({O, KH, KW, C}, wt.dtype(), nullptr, {});
+    wt_2d.copy_shared_buffer(
+        wt,
+        {static_cast<int64_t>(KD) * KH * KW * C, static_cast<int64_t>(KW) * C,
+         static_cast<int64_t>(C), 1},
+        {false, false, false},
+        static_cast<size_t>(O - 1) * KD * KH * KW * C + static_cast<size_t>(KH) * KW * C,
+        static_cast<int64_t>(kd_wt) * KH * KW * C);
+    array conv_out({OD, OH, OW, O}, out.dtype(), nullptr, {});
+    conv_2d(
+        in_2d, wt_2d, conv_out, {p.pad[1], p.pad[2]}, {p.str[1], p.str[2]},
+        {p.kdil[1], p.kdil[2]}, {p.idil[1], p.idil[2]}, 1, p.flip);
+    if (kd == 0) {
+      acc = conv_out;
+    } else {
+      array sum(acc.shape(), acc.dtype(), nullptr, {});
+      dispatch_binary({acc, conv_out}, sum, "Add");
+      acc = sum;
+    }
+  }
+  // The output is [1, OD, OH, OW, O].
+  out.copy_shared_buffer(
+      acc,
+      {static_cast<int64_t>(OD) * OH * OW * O, static_cast<int64_t>(OH) * OW * O,
+       static_cast<int64_t>(OW) * O, static_cast<int64_t>(O), 1},
+      {true, true, false},
+      static_cast<size_t>(OD) * OH * OW * O,
+      0);
+}
+
+// conv.cpp is_stride_two_conv_transpose_3D.
+bool conv_is_stride_two_transpose_3d(const MLXConvParams<3>& p) {
+  return p.groups == 1 && p.flip && p.str[0] == 1 && p.str[1] == 1 && p.str[2] == 1 &&
+      p.idil[0] == 2 && p.idil[1] == 2 && p.idil[2] == 2 && p.kdil[0] == 1 &&
+      p.kdil[1] == 1 && p.kdil[2] == 1 && p.wS[0] == 2 && p.wS[1] == 2 && p.wS[2] == 2 &&
+      p.pad[0] == 1 && p.pad[1] == 1 && p.pad[2] == 1 &&
+      static_cast<int64_t>(p.oS[0]) == 2LL * p.iS[0] &&
+      static_cast<int64_t>(p.oS[1]) == 2LL * p.iS[1] &&
+      static_cast<int64_t>(p.oS[2]) == 2LL * p.iS[2];
+}
+
+// conv.cpp stride_two_conv_transpose_3D_gpu: each of the eight kernel phases
+// multiplies the whole input, as an [M, C] matrix, with that phase's [C, O]
+// weight slice through the steel GEMM, and the GeneralGeneral copy writes the
+// product to the phase's interleaved output coordinates. Every phase keeps
+// the coordinates the others wrote.
+void conv_stride_two_transpose_3d(
+    const array& in,
+    const array& wt,
+    array& out,
+    const MLXConvParams<3>& p) {
+  constexpr int kernel_volume = 8;
+  const int C = p.C;
+  const int O = p.O;
+  for (int phase = 0; phase < kernel_volume; ++phase) {
+    const int pd = (phase >> 2) & 1;
+    const int ph = (phase >> 1) & 1;
+    const int pw = phase & 1;
+    const int D = p.iS[0];
+    const int H = p.iS[1];
+    const int W = p.iS[2];
+    const int M = conv_int(static_cast<int64_t>(p.N) * D * H * W);
+    array wt_phase({C, O}, wt.dtype(), nullptr, {});
+    auto wt_flags = wt.flags();
+    wt_flags.contiguous = false;
+    wt_flags.row_contiguous = false;
+    wt_flags.col_contiguous = true;
+    wt_phase.copy_shared_buffer(
+        wt, {1, wt.strides(0)}, wt_flags, wt.data_size(),
+        static_cast<int64_t>(pd * 4 + ph * 2 + pw) * C);
+    array in_matrix({M, C}, in.dtype(), nullptr, {});
+    in_matrix.copy_shared_buffer(in, {C, 1}, in.flags(), in.data_size());
+    array phase_out({M, O}, out.dtype(), nullptr, {});
+    phase_out.set_data(allocator::malloc(phase_out.nbytes()));
+    // steel_matmul collapses two-dimensional operands to one batch.
+    dispatch_steel_gemm(
+        in_matrix, wt_phase, phase_out, M, O, C, 1, C, kernel_volume * C, false, true,
+        Shape{1}, Strides{0}, Strides{0});
+    const Shape phase_shape{p.N, D, H, W, O};
+    const Strides phase_strides = make_contiguous_strides(phase_shape);
+    std::vector<int64_t> out_phase_strides(out.strides().begin(), out.strides().end());
+    out_phase_strides[1] *= 2;
+    out_phase_strides[2] *= 2;
+    out_phase_strides[3] *= 2;
+    dispatch_strided_copy(
+        phase_out, out, phase_shape,
+        std::vector<int64_t>(phase_strides.begin(), phase_strides.end()), 0,
+        out_phase_strides, pd * out.strides(1) + ph * out.strides(2) + pw * out.strides(3),
+        true);
+  }
+}
+
 // conv.cpp dispatch_conv_3D_gpu.
 void conv_dispatch_3d(
     const array& in_pre,
@@ -623,24 +796,18 @@ void conv_dispatch_3d(
   const bool mod16_channels =
       C_per_group % 16 == 0 && (O_per_group <= 16 || O_per_group % 16 == 0);
   if (is_idil_one && !mod16_channels && p.groups == 1) {
-    conv_unported("pad_and_slice_conv_3D_gpu");
+    return conv_pad_and_slice_3d(in_pre, wt_pre, out, p);
   }
   out.set_data(allocator::malloc(out.nbytes()));
   auto in = conv_row_contiguous(in_pre);
   auto wt = conv_row_contiguous(wt_pre);
-  if (p.groups == 1 && p.flip && p.str[0] == 1 && p.str[1] == 1 && p.str[2] == 1 &&
-      p.idil[0] == 2 && p.idil[1] == 2 && p.idil[2] == 2 && p.kdil[0] == 1 &&
-      p.kdil[1] == 1 && p.kdil[2] == 1 && p.wS[0] == 2 && p.wS[1] == 2 && p.wS[2] == 2 &&
-      p.pad[0] == 1 && p.pad[1] == 1 && p.pad[2] == 1 &&
-      static_cast<int64_t>(p.oS[0]) == 2LL * p.iS[0] &&
-      static_cast<int64_t>(p.oS[1]) == 2LL * p.iS[1] &&
-      static_cast<int64_t>(p.oS[2]) == 2LL * p.iS[2]) {
-    conv_unported("stride_two_conv_transpose_3D_gpu");
+  if (conv_is_stride_two_transpose_3d(p)) {
+    return conv_stride_two_transpose_3d(in, wt, out, p);
   }
   constexpr int kSmallKdLimit3D = 7;
   if (is_idil_one && mod16_channels && p.groups == 1 && p.N == 1 &&
       p.wS[0] <= kSmallKdLimit3D && p.str[0] == 1 && p.kdil[0] == 1 && p.pad[0] == 0) {
-    conv_unported("small_kd_conv_3D_gpu");
+    return conv_small_kd_3d(in, wt, out, p);
   }
   if (is_idil_one && mod16_channels) {
     return conv_implicit_gemm(in, wt, out, p);

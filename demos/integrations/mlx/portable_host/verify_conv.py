@@ -11,9 +11,13 @@ convolutions run one ``implicit_gemm_conv_2d`` or ``implicit_gemm_conv_3d``
 launch, padded-channel convolutions zero-pad the input and weight channels
 through ``Pad`` and run one ``implicit_gemm_conv_2d`` launch on the padded
 parameters, input-dilated and unaligned-channel 2-D convolutions run one
-``implicit_gemm_conv_2d_general`` launch with ``align_C`` frozen, and an empty
-output launches nothing. Three cases reach routes the host does not port yet,
-which it refuses by name before any launch.
+``implicit_gemm_conv_2d_general`` launch with ``align_C`` frozen, 3-D
+convolutions of unaligned channels pad them and run one
+``implicit_gemm_conv_3d`` launch into a wider intermediate, small-depth 3-D
+convolutions run one 2-D convolution per depth tap and add them, stride-two
+transposed 3-D convolutions run one steel GEMM and one strided copy per kernel
+phase, and an empty output launches nothing. One case reaches winograd, which
+the host does not port and refuses by name before any launch.
 
 Inputs are nonzero quarters and weights nonzero halves, so every product and
 sum is exact in float32 and rounds once to the output type. Every output bit
@@ -378,18 +382,30 @@ CASES = (
         "moved",
         None,
     ),
-    # Routes the host does not port yet.
+    # stride_two_conv_transpose_3D_gpu: a stride-two transposed convolution
+    # with a two-wide kernel, one steel GEMM and one strided copy per phase.
     (
-        "refused-stride-two-transpose-3d",
+        "stride-two-transpose-3d",
         "float32",
+        (2, 2, 3, 2, 8),
+        (12, 2, 2, 2, 8),
+        dict(padding=((1, 1, 1), (1, 1, 1)), input_dilation=2, flip=True),
+        "dense",
+        None,
+    ),
+    (
+        "stride-two-transpose-3d-half",
+        "float16",
         (1, 2, 2, 2, 4),
         (4, 2, 2, 2, 4),
         dict(padding=((1, 1, 1), (1, 1, 1)), input_dilation=2, flip=True),
         "dense",
         None,
     ),
+    # pad_and_slice_conv_3D_gpu: unaligned input and output channels, then
+    # aligned input channels with unaligned outputs, whose input is not padded.
     (
-        "refused-pad-and-slice-3d",
+        "pad-and-slice-3d",
         "float32",
         (1, 3, 4, 4, 4),
         (4, 2, 2, 2, 4),
@@ -398,7 +414,18 @@ CASES = (
         None,
     ),
     (
-        "refused-small-kd-3d",
+        "pad-and-slice-3d-outputs",
+        "float16",
+        (2, 3, 4, 4, 16),
+        (20, 2, 2, 2, 16),
+        dict(padding=((1, 0, 1), (0, 1, 0))),
+        "dense",
+        None,
+    ),
+    # small_kd_conv_3D_gpu: one 2-D convolution per depth tap, summed; the
+    # flipped case mirrors the depth taps and pads the frames.
+    (
+        "small-kd-3d",
         "bfloat16",
         (1, 4, 4, 4, 16),
         (16, 2, 2, 2, 16),
@@ -406,15 +433,30 @@ CASES = (
         "dense",
         None,
     ),
+    (
+        "small-kd-3d-flipped",
+        "float32",
+        (1, 5, 4, 3, 32),
+        (32, 3, 2, 2, 32),
+        dict(padding=((0, 1, 0), (0, 1, 1)), flip=True),
+        "dense",
+        None,
+    ),
+    # A route the host does not port: winograd, which conv.cpp sends 3x3
+    # convolutions of large aligned channels once the working set allows.
+    (
+        "refused-winograd-2d",
+        "float32",
+        (1, 64, 64, 32),
+        (224, 3, 3, 32),
+        {},
+        "dense",
+        None,
+    ),
     # No output element.
     ("empty-batch", "float32", (0, 9, 5), (7, 3, 5), {}, "dense", None),
 )
-UNPORTED = {
-    "winograd_conv_2D_gpu",
-    "pad_and_slice_conv_3D_gpu",
-    "stride_two_conv_transpose_3D_gpu",
-    "small_kd_conv_3D_gpu",
-}
+UNPORTED = {"winograd_conv_2D_gpu"}
 IMPLICIT_ROUTES = {"implicit_gemm_conv_2D_gpu", "implicit_gemm_conv_3D_gpu"}
 
 
@@ -488,6 +530,54 @@ def _products(dtype, groups, m, n, k):
     return [gemm_layout.select(dtype, False, True, m, n, k, 1)]
 
 
+def _small_kd_record(record, params, dtype):
+    """small_kd_conv_3D_gpu: one 2-D convolution per depth tap, summed.
+
+    Each tap convolves every output frame's input slab, a dense view, with a
+    strided view of the tap's weight plane, which conv_2D_gpu copies dense,
+    and every tap after the first adds into the running sum.
+    """
+    od, h, w = params["oS"][0], *params["iS"][1:]
+    frames = [od, h, w, params["C"]]
+    taps = [params["O"], *params["wS"][1:], params["C"]]
+    planar = {
+        "N": od,
+        "C": params["C"],
+        "O": params["O"],
+        "iS": [h, w],
+        "wS": params["wS"][1:],
+        "oS": params["oS"][1:],
+        "str": params["str"][1:],
+        "pad": params["pad"][1:],
+        "kdil": params["kdil"][1:],
+        "idil": params["idil"][1:],
+        "in_strides": layout.contiguous(frames),
+        "wt_strides": layout.contiguous(taps),
+        "out_strides": layout.contiguous([od, *params["oS"][1:], params["O"]]),
+        "groups": 1,
+        "flip": params["flip"],
+    }
+    route = layout.route(planar)
+    if route == layout.general.ROUTE:
+        entry = layout.general.entry(planar, dtype)
+    elif route == "implicit_gemm_conv_2D_gpu":
+        entry = layout.implicit_entry(planar, dtype)
+    else:
+        raise ValueError(f"Small-depth case routes its frames to {route}")
+    depth = params["wS"][0]
+    launches = [entry]
+    for _ in range(1, depth):
+        launches += [entry, f"vv_Add{dtype}"]
+    return {
+        **record,
+        "convEntries": [entry],
+        "launches": launches,
+        "launchRoute": route,
+        "frameParams": planar,
+        "copies": record["copies"] + depth,
+    }
+
+
 def case_record(case):
     name, dtype, in_shape, wt_shape, _, view, tile = case
     o = options(case)
@@ -536,6 +626,31 @@ def case_record(case):
     if route == layout.general.ROUTE:
         entry = layout.general.entry(params, dtype)
         return {**record, "convEntries": [entry], "launches": [entry]}
+    if route == "pad_and_slice_conv_3D_gpu":
+        # Pad fills and copies each padded operand: the weight always, the
+        # input when its channels grow.
+        extra_c, extra_o = layout.padded_channels(params)
+        padded = layout.with_padded_channels(params, extra_c, extra_o)
+        entry = layout.implicit_entry(padded, dtype)
+        return {
+            **record,
+            "convEntries": [entry],
+            "launches": [entry],
+            "copies": record["copies"] + 2 + 2 * bool(extra_c),
+        }
+    if route == "small_kd_conv_3D_gpu":
+        return _small_kd_record(record, params, dtype)
+    if route == "stride_two_conv_transpose_3D_gpu":
+        # Eight phases of one [N*D*H*W, C] by [C, O] product and one strided
+        # copy into the phase's output coordinates.
+        m = params["N"] * math.prod(params["iS"])
+        entries = _products(dtype, 1, m, params["O"], params["C"])
+        return {
+            **record,
+            "productEntries": entries,
+            "launches": entries * 8,
+            "copies": record["copies"] + 8,
+        }
     if route in IMPLICIT_ROUTES:
         # conv_1D_gpu dispatches its implicit GEMM with 2-D parameters.
         entry = layout.implicit_entry(
@@ -738,7 +853,7 @@ def _covered(records):
     depthwise = [info for info in infos if info["kind"] == "dw2"]
     return (
         set(layout.PORTED_ROUTES) <= routes
-        and len(routes & UNPORTED) >= 3
+        and UNPORTED <= routes
         and {info["dtype"] for info in depthwise} == set(layout.DTYPES)
         and {info["constants"]["do_flip"] for info in depthwise} == {False, True}
         and any(
@@ -779,7 +894,10 @@ def validate_trace(trace, records, target):
             raise RuntimeError(f"Convolution copies differ: {record['name']}")
         for event in launches:
             metadata = event.get("convMetadata")
-            route = layout.LAUNCH_ROUTES.get(record["route"], record["route"])
+            route = record.get(
+                "launchRoute",
+                layout.LAUNCH_ROUTES.get(record["route"], record["route"]),
+            )
             if metadata is not None and metadata["route"] != route:
                 raise RuntimeError(f"Convolution launch differs: {record['name']}")
             grouped = event.get("gemmMetadata", {}).get("groups")

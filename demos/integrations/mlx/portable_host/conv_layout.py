@@ -9,7 +9,9 @@ and multiply the unfolded rows with the steel GEMM, whose launches
 ``depthwise_conv_2d`` with conv.cpp's function constants; and the implicit
 GEMM routes run steel_conv's ``implicit_gemm_conv_2d`` and
 ``implicit_gemm_conv_3d``; ``conv_general_layout`` holds the general implicit
-GEMM route's ``implicit_gemm_conv_2d_general``. ``route`` mirrors
+GEMM route's ``implicit_gemm_conv_2d_general``. The 3-D padded-channel,
+small-depth and stride-two transpose routes compose those launches with
+padding, binary additions, steel GEMMs and strided copies. ``route`` mirrors
 conv.cpp's routing, and ``plan`` checks every launch against it and proves
 each read and write in bounds before a translated kernel runs.
 
@@ -177,10 +179,16 @@ PORTED_ROUTES = (
     "implicit_gemm_conv_3D_gpu",
     "pad_in_channels_conv_2D_gpu",
     general.ROUTE,
+    "pad_and_slice_conv_3D_gpu",
+    "small_kd_conv_3D_gpu",
+    "stride_two_conv_transpose_3D_gpu",
 )
-# Routes that launch another route's kernel: the padded-channel route runs
-# the implicit GEMM on its padded parameters.
-LAUNCH_ROUTES = {"pad_in_channels_conv_2D_gpu": "implicit_gemm_conv_2D_gpu"}
+# Routes that launch another route's kernel: the padded-channel routes run
+# the implicit GEMM on their padded parameters.
+LAUNCH_ROUTES = {
+    "pad_in_channels_conv_2D_gpu": "implicit_gemm_conv_2D_gpu",
+    "pad_and_slice_conv_3D_gpu": "implicit_gemm_conv_3D_gpu",
+}
 
 
 def signature(entry):
@@ -480,19 +488,50 @@ def _route_3d(p):
     )
 
 
-def with_padded_channels(p, pad_in):
-    """MLXConvParams<N>::with_padded_channels(p, 0, pad_in) of steel conv's params.h."""
+def with_padded_channels(p, pad_in, pad_out=0):
+    """MLXConvParams<N>::with_padded_channels(p, pad_out, pad_in) of steel conv's params.h."""
     q = dict(p)
     for name, channels, extra in (
         ("in_strides", p["C"], pad_in),
         ("wt_strides", p["C"], pad_in),
-        ("out_strides", p["O"], 0),
+        ("out_strides", p["O"], pad_out),
     ):
         # C++ divides the non-negative int64 strides toward zero.
         q[name] = [value // channels * (channels + extra) for value in p[name][:-1]]
         q[name].append(1)
     q["C"] = p["C"] + pad_in
+    q["O"] = p["O"] + pad_out
     return q
+
+
+def padded_channels(p):
+    """The input and output channels conv.cpp's padded routes add to ``p``."""
+    return -(-p["C"] // 16) * 16 - p["C"], -(-p["O"] // 16) * 16 - p["O"]
+
+
+def pad_and_slice_source(p):
+    """Whether ``p`` is pad_and_slice_conv_3D_gpu's padded implicit GEMM.
+
+    conv.cpp pads the input channels and the weight's output and input
+    channels of 3-D convolutions whose channels are not multiples of 16, and
+    launches the implicit GEMM into an intermediate with the padded output
+    channels without routing it again. ``p`` qualifies when the dense
+    parameters of some narrower channel counts route there and pad into it.
+    """
+    if len(p["iS"]) != 3 or p["groups"] != 1 or p["C"] % 16 or p["O"] % 16:
+        return False
+    for channels in range(max(1, p["C"] - 15), p["C"] + 1):
+        for outputs in range(max(1, p["O"] - 15), p["O"] + 1):
+            q = dict(p, C=channels, O=outputs)
+            q["in_strides"] = contiguous([p["N"], *p["iS"], channels])
+            q["wt_strides"] = contiguous([outputs, *p["wS"], channels])
+            q["out_strides"] = contiguous([p["N"], *p["oS"], outputs])
+            if _route_3d(q) != "pad_and_slice_conv_3D_gpu":
+                continue
+            extra_c, extra_o = padded_channels(q)
+            if with_padded_channels(q, extra_c, extra_o) == p:
+                return True
+    return False
 
 
 def pad_in_channels_source(p):
@@ -815,8 +854,9 @@ def _plan_implicit(entry, info, counts, parameters, threads, execution):
     in_shape, wt_shape, out_shape = _check_implicit_params(info, p)
     expected = f"implicit_gemm_conv_{model.rank}D_gpu"
     routed = _route_2d(p) if model.rank == 2 else _route_3d(p)
-    # pad_in_channels_conv_2D_gpu launches this kernel on padded channels.
-    if routed != expected and not (model.rank == 2 and pad_in_channels_source(p)):
+    # The padded-channel routes launch this kernel on padded channels.
+    padded = pad_in_channels_source(p) if model.rank == 2 else pad_and_slice_source(p)
+    if routed != expected and not padded:
         raise ValueError("Convolution implicit GEMM differs from conv.cpp's routing")
     if implicit_entry(p, info["dtype"]) != entry:
         raise ValueError("Convolution implicit GEMM entry differs from conv.cpp's")
