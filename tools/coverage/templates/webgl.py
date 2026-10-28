@@ -23,6 +23,7 @@ from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
+from .fragments import WEBGL as _FRAGMENTS
 from .helpers import WEBGL as _HELPERS
 from .identifiers import WEBGL as _IDENTIFIERS
 from .idioms import FAMILY as _IDIOMS
@@ -39,8 +40,11 @@ from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
 from .records import WEBGL as _RECORDS
+from .relations import GLSL as _RELATIONS
+from .rows import WEBGL as _ROWS
 from .scopes import WEBGL as _SCOPES
 from .values import FAMILY as _VALUES
+from .vectors import GLSL as _VECTORS
 from .workgroups import WEBGL as _WORKGROUPS
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
@@ -105,6 +109,10 @@ WEBGL = {
     **_BOOLEANS,
     **_PACKING,
     **_ORIENTATION,
+    **_ROWS,
+    **_VECTORS,
+    **_RELATIONS,
+    **_FRAGMENTS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

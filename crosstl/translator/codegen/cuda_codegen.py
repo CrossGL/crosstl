@@ -41,6 +41,7 @@ from .array_utils import (
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
 from .c_float_literals import c_float_literal_text
+from .c_pointer_math import generate_pointer_math_call
 from .c_reference_parameters import (
     is_output_parameter,
     multi_component_swizzle_arguments,
@@ -3588,6 +3589,12 @@ class CudaCodeGen(
             smoothstep_call = self.generate_smoothstep_call(raw_args, args)
             if smoothstep_call is not None:
                 return smoothstep_call
+
+        pointer_math_call = generate_pointer_math_call(
+            self, CudaLoweringRefused, func_name, raw_args, args
+        )
+        if pointer_math_call is not None:
+            return pointer_math_call
 
         if func_name in {"dot", "cross", "distance", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
