@@ -14,6 +14,7 @@ from tools.coverage import (
     validators,
 )
 from tools.coverage.model import Feature, Result
+from tools.coverage.templates import fragments, relations
 from tools.coverage.templates.base import ABSENT, OPERATORS
 
 _MODELS = [
@@ -553,6 +554,151 @@ def test_row_major_probes_store_each_matrix_row_on_its_own_16_byte_row():
             for f in constructs.features(language, GRAMMAR)
             if f.name.startswith("uniform-row-major")
         ], language
+
+
+def test_buffer_row_major_probes_store_struct_matrices_by_rows():
+    crossgl = probes.build(
+        _feature("glsl", "buffer-row-major-non-square"), "crossgl"
+    ).source
+    assert "struct Rows {\n        @ row_major mat2x3 m;\n        vec2 w;" in crossgl
+    assert "buffer Rows* outp;" in crossgl
+    # GLSL has no layout qualifier on a structure member, so the buffer's array is row-major.
+    glsl = probes.build(_feature("glsl", "buffer-row-major-array"), "glsl").source
+    assert "{ layout(row_major) Rows outp[]; }" in glsl and "mat2 m[2];" in glsl
+    hlsl = probes.build(_feature("hlsl", "buffer-row-major-matrix"), "hlsl").source
+    assert "row_major float2x2 m;" in hlsl and "RWStructuredBuffer<Rows>" in hlsl
+    assert "outp[i].m[1][0] += 0.25;" in hlsl
+    # Metal, WGSL and Rust store the rows of the matrix's transpose.
+    for language, member, store in (
+        ("metal", "float2 r[3];", "outp[i].r[2][1] += 0.25;"),
+        ("wgsl", "r: array<vec2<f32>, 3>,", "let t = transpose(mat2x3<f32>("),
+    ):
+        source = probes.build(
+            _feature(language, "buffer-row-major-non-square"), language
+        ).source
+        assert member in source and store in source, language
+    rust = probes.build(_feature("rust", "buffer-row-major-array"), "rust").source
+    assert "r: [[Vec2; 2]; 2]," in rust and "outp[i].r[k][0].y += 0.25;" in rust
+    names = {f.name for f in constructs.features("rust", GRAMMAR)}
+    assert "buffer-row-major-matrix" in names
+    assert "buffer-row-major-non-square" not in names
+    for language in ("webgl", "cuda", "hip", "opencl", "mojo"):
+        assert not [
+            f
+            for f in constructs.features(language, GRAMMAR)
+            if f.name.startswith("buffer-row-major")
+        ], language
+
+
+def test_vector_probes_shift_by_scalars_and_resize_with_constructors():
+    crossgl = probes.build(_feature("glsl", "vector-shift"), "crossgl").source
+    assert "ivec2 r = a >> 1;" in crossgl and "uvec2 w = u << 3u;" in crossgl
+    # WGSL shifts by an unsigned vector of the operand's width and has no scalar operand on a bitwise operator.
+    wgsl = probes.build(_feature("wgsl", "vector-shift"), "wgsl").source
+    assert "let r = a >> vec2<u32>(1u);" in wgsl
+    wgsl = probes.build(_feature("wgsl", "vector-bitwise"), "wgsl").source
+    assert "(a ^ vec2<i32>(9))" in wgsl and "~a & vec2<i32>(15)" in wgsl
+    crossgl = probes.build(_feature("glsl", "matrix-resize"), "crossgl").source
+    assert "mat2 a = mat2(m);" in crossgl and "mat2x3 n = mat2x3(m);" in crossgl
+    # HLSL casts and indexes by rows; Slang casts only matrices; Metal takes swizzles and columns.
+    hlsl = probes.build(_feature("hlsl", "matrix-resize"), "hlsl").source
+    assert "float2x2 a = (float2x2)m;" in hlsl and "n[2][1] * 8192.0" in hlsl
+    for language, line in (
+        ("hlsl", "float2 a = (float2)v;"),
+        ("slang", "float2 a = v.xy;"),
+        ("metal", "int2 j = k.xy;"),
+        ("rust", "let b = v.truncate();"),
+    ):
+        source = probes.build(_feature(language, "vector-truncation"), language).source
+        assert line in source, language
+    metal = probes.build(_feature("metal", "matrix-resize"), "metal").source
+    assert "float2x2 a = float2x2(m[0].xy, m[1].xy);" in metal
+    rust = probes.build(_feature("rust", "matrix-resize"), "rust").source
+    assert "Mat3::from_mat2(a * 2.0)" in rust and "n[1].z * 8192.0" in rust
+    for language, absent in (
+        ("cuda", {"vector-shift", "vector-truncation", "matrix-resize"}),
+        ("opencl", {"matrix-resize"}),
+        ("mojo", {"vector-truncation", "matrix-resize"}),
+    ):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & absent, language
+
+
+def test_fragment_probes_use_each_languages_built_ins():
+    # The built-ins are graphics features of the fragment stage, which the kernel languages do not have.
+    feature = _feature("glsl", "front-facing")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    for language, name, line in (
+        (
+            "glsl",
+            "fragment-coordinate",
+            "vec4(gl_FragCoord.xy * 0.5 + uv, gl_FragCoord.z, 1.0)",
+        ),
+        ("webgl", "fragment-depth", "gl_FragDepth = uv.x * 0.5 + 0.25;"),
+        (
+            "hlsl",
+            "front-facing",
+            "float4 main(float2 uv : TEXCOORD0, bool front : SV_IsFrontFace)",
+        ),
+        (
+            "slang",
+            "fragment-depth",
+            '[shader("fragment")]\nFragmentOutput main(float2 uv : TEXCOORD0)',
+        ),
+        ("metal", "fragment-depth", "float depth [[depth(any)]];"),
+        ("wgsl", "fragment-coordinate", "@builtin(position) position: vec4<f32>"),
+        ("rust", "fragment-depth", "#[spirv(fragment(depth_replacing))]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, language
+    assert probes.build(_feature("glsl", "fragment-depth"), "glsl").suffix == ".frag"
+    hlsl = probes.build(_feature("hlsl", "fragment-depth"), "hlsl").source
+    assert hlsl.startswith("struct FragmentOutput {") and "[shader(" not in hlsl
+    crossgl = probes.build(_feature("glsl", "fragment-depth"), "crossgl").source
+    assert "        float depth @ gl_FragDepth;\n" in crossgl
+    assert "output.depth = input.uv.x * 0.5 + 0.25;" in crossgl
+    crossgl = probes.build(_feature("glsl", "front-facing"), "crossgl").source
+    assert "bool front @ gl_FrontFacing;" in crossgl and "input.front ? " in crossgl
+    for language in ("cuda", "hip", "opencl", "mojo"):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & set(fragments.NAMES), language
+
+
+def test_relation_probes_compare_integer_and_boolean_vectors_per_language():
+    # CrossGL and the C family compare with operators; GLSL spells each comparison and negation as a function.
+    crossgl = probes.build(
+        _feature("glsl", "integer-vector-comparison"), "crossgl"
+    ).source
+    assert "bvec2 gt = u > uvec2(5u, 7u);" in crossgl and "if (all(ne)) {" in crossgl
+    glsl = probes.build(_feature("glsl", "integer-vector-comparison"), "glsl").source
+    assert "bvec2 gt = greaterThan(u, uvec2(5u, 7u));" in glsl
+    glsl = probes.build(_feature("glsl", "bool-vector-logic"), "glsl").source
+    assert "bvec2 n = not(b);" in glsl and "if (any(not(c))) {" in glsl
+    crossgl = probes.build(_feature("glsl", "bool-vector-logic"), "crossgl").source
+    assert "bvec2 e = b == c;" in crossgl and "if (any(!c)) {" in crossgl
+    for language, line in (
+        ("hlsl", "bool2 b = (bool2)k;"),
+        ("metal", "bool2 b = bool2(k);"),
+        ("wgsl", "let u = vec2<u32>(vec2<bool>(fin[i] > 1.0, true));"),
+        ("rust", "let g = Vec2::select(b, Vec2::ONE, Vec2::ZERO);"),
+        ("mojo", "var j = c.cast[DType.int32]()"),
+    ):
+        source = probes.build(
+            _feature(language, "bool-vector-conversion"), language
+        ).source
+        assert line in source, language
+    opencl = probes.build(
+        _feature("opencl", "integer-vector-comparison"), "opencl"
+    ).source
+    assert "int2 gt = u > (uint2)(5u, 7u);" in opencl and "r += 128.0f;" in opencl
+    rust = probes.build(_feature("rust", "bool-vector-logic"), "rust").source
+    assert "let e = !(b ^ c);" in rust and "if (!c).any() {" in rust
+    for language, absent in (
+        ("cuda", set(relations.NAMES)),
+        ("opencl", {"bool-vector-logic", "bool-vector-conversion"}),
+    ):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & absent, language
 
 
 def test_packing_probes_name_the_layout_rule_and_declare_its_offsets():
