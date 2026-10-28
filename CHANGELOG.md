@@ -57,6 +57,8 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- WGSL output maps `gl_PrimitiveID` / `SV_PrimitiveID` / `primitive_id` fragment inputs to `@builtin(primitive_index)` as `u32` (and enables `primitive_index`). It used to refuse them with `wgsl-stage-io-unsupported` even though WGSL has the built-in (#3505).
+
 - HIP output lowers `ptr<T>` helper parameters imported from HIP or CUDA to native pointer types instead of emitting the CrossGL spelling unchanged.
 
 - CrossGL accepts an empty statement, a `;` on its own, which it used to refuse with `CrossGLFunctionBodyParseError`, so every target refused a function containing one. A switch whose last `case` or `default` label is followed by no statement now leaves the switch there with `break;`; Metal and GLSL ES output used to end the switch on the bare label, which the Metal compiler and GLSL ES 3.00 refuse.

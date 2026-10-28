@@ -272,16 +272,39 @@ shader S {
 
 
 def test_unmapped_system_semantic_parameter_is_refused():
-    with pytest.raises(WGSLStageIOUnsupportedError, match="SV_PrimitiveID"):
+    with pytest.raises(WGSLStageIOUnsupportedError, match="SV_ClipDistance0"):
         generate_wgsl("""
 shader S {
     fragment {
-        vec4 main(vec4 color, uint primitive @ SV_PrimitiveID) @ gl_FragColor {
+        vec4 main(vec4 color, float clip @ SV_ClipDistance0) @ gl_FragColor {
             return color;
         }
     }
 }
 """)
+
+
+def test_primitive_index_builtin_is_u32():
+    code = generate_wgsl("""
+shader Probe {
+    struct FragmentInput {
+        vec2 uv;
+        int pid @ gl_PrimitiveID;
+    }
+    struct FragmentOutput {
+        vec4 color;
+    }
+    fragment {
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            output.color = vec4(input.uv, float(input.pid), 1.0);
+            return output;
+        }
+    }
+}
+""")
+    assert "@builtin(primitive_index) pid: u32" in code
+    assert "f32(input.pid)" in code
 
 
 def test_unmapped_system_semantic_member_is_refused():

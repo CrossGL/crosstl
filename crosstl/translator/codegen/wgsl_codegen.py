@@ -193,6 +193,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         "gl_instanceid": "instance_index",
         "gl_instanceindex": "instance_index",
         "sv_instanceid": "instance_index",
+        "primitive_index": "primitive_index",
+        "primitive_id": "primitive_index",
+        "primitiveid": "primitive_index",
+        "gl_primitiveid": "primitive_index",
+        "sv_primitiveid": "primitive_index",
         "global_invocation_id": "global_invocation_id",
         "gl_globalinvocationid": "global_invocation_id",
         "sv_dispatchthreadid": "global_invocation_id",
@@ -1782,9 +1787,10 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 f"{prefix}{parameter_name}: "
                 f"{self.buffer_pointer_parameter_type(node.param_type)}"
             )
-        parameter = (
-            f"{prefix}{parameter_name}: {self.type_name_string(node.param_type)}"
-        )
+        param_type_name = self.type_name_string(node.param_type)
+        if "@builtin(primitive_index)" in attributes:
+            param_type_name = "u32"
+        parameter = f"{prefix}{parameter_name}: {param_type_name}"
         resource_parameters = self.resource_member_parameter_declarations(
             node.name, node.param_type
         )
@@ -2049,6 +2055,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 member_type_name = self.uniform_buffer_member_type_name(member_type)
             else:
                 member_type_name = self.type_name_string(member_type)
+            # WGSL's primitive_index built-in is u32 (and CrossGL/GLSL expose it as int).
+            if "@builtin(primitive_index)" in attributes:
+                member_type_name = "u32"
             attributes = with_flat_integer_interpolation(attributes, member_type_name)
             prefix = f"{attributes} " if attributes else ""
             lines.append(f"    {prefix}{member_name}: {member_type_name},")
