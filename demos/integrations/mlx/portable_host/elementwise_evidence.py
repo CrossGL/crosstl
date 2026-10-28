@@ -21,9 +21,13 @@ from demos.integrations.mlx.portable_host.element_storage import (
     guard_words,
     packet,
 )
-from demos.integrations.mlx.portable_host.elementwise_dispatch import operands
+from demos.integrations.mlx.portable_host.elementwise_dispatch import (
+    broadcast,
+    extents,
+    operands,
+)
 from demos.integrations.mlx.portable_host.elementwise_packages import (
-    BINARY,
+    BINARY_KERNELS,
     TERNARY,
 )
 from demos.integrations.mlx.portable_host.elementwise_packages import (
@@ -108,7 +112,11 @@ def _bounds(dtype):
 
 
 def expected_words(kernel, operation, source, destination, values):
-    """Every output word of an integer or Boolean unary, binary or ternary vector."""
+    """Every output word of an integer or Boolean unary, binary or ternary vector.
+
+    ``values`` holds one word per invocation for every operand; ``broadcast``
+    repeats the scalar operand of an ``sv_`` or ``vs_`` launch.
+    """
     require(source not in INEXACT, "Elementwise recompute requires integer operands")
     for name, words in values.items():
         # Only a selection's condition differs from the operand type.
@@ -120,7 +128,7 @@ def expected_words(kernel, operation, source, destination, values):
     if kernel == UNARY_KERNEL:
         function = UNARY[operation]
         return [stored(function(word), destination) for word in values["in"]]
-    if kernel == BINARY:
+    if kernel in BINARY_KERNELS:
         function = BINARY_OPERATIONS[operation]
         return [
             stored(function(x, y, source), destination)
@@ -165,10 +173,11 @@ def audit_event(event, cache=None, *, native=True):
     threads = event["threads"]
     if recomputable(entry):
         names, _ = operands(kernel)
+        counts = extents(kernel, threads)
         values, outputs = event["operandValues"], event["outputValues"]
         require(
             set(values) == set(names)
-            and all(len(values[name]) == threads for name in names)
+            and all(len(values[name]) == counts[name] for name in names)
             and len(outputs) == threads
             and event["initialValues"] == guard_words(destination, threads),
             "Elementwise readback extent differs",
@@ -184,7 +193,9 @@ def audit_event(event, cache=None, *, native=True):
             ),
         ):
             require(value in uploads, "Elementwise upload differs from its values")
-        expected = expected_words(kernel, operation, source, destination, values)
+        expected = expected_words(
+            kernel, operation, source, destination, broadcast(kernel, values, threads)
+        )
         for index, (actual, wanted) in enumerate(zip(outputs, expected)):
             require(
                 actual == wanted,

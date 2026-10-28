@@ -32,7 +32,9 @@ def pinned_vectors():
     for source in ("unary", "binary"):
         path = CONTRACTS / f"{source}.current-tree.translation.json"
         entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
-        names |= {entry for entry in entries if re.match(r"vv?_[A-Z]", entry)}
+        names |= {
+            entry for entry in entries if re.match(r"(?:v|vv|sv|vs)_[A-Z]", entry)
+        }
     return names
 
 
@@ -49,8 +51,12 @@ def test_entries_are_every_pinned_vector_instantiation():
     assert len(selections) == 13
     lazy_selections = selections - set(packages.SELECTION_ENTRIES)
     assert set(elementwise_packages.ENTRIES) == pinned | lazy_selections
-    assert len(portable) == 415 and len(pinned) - len(portable) == 6
-    assert len(lazy_selections) == 9 and len(elementwise_packages.ENTRIES) == 430
+    assert len(portable) == 891 and len(pinned) - len(portable) == 6
+    assert len(lazy_selections) == 9 and len(elementwise_packages.ENTRIES) == 906
+    # binary_sv and binary_vs instantiate exactly the vv_ operations and types.
+    binary = {name[3:] for name in pinned if name.startswith("vv_")}
+    for kernel in ("sv_", "vs_"):
+        assert {name[3:] for name in pinned if name.startswith(kernel)} == binary
     # fast::ConvertFP8 converts each real float to and from E4M3 bytes.
     assert {
         name: elementwise_packages.signature(name) for name in pinned - portable
@@ -58,7 +64,7 @@ def test_entries_are_every_pinned_vector_instantiation():
         f"v_{operation}{source}{destination}": ("v_", operation, source, destination)
         for operation, source, destination in elementwise_packages.FP8_CONVERSIONS
     }
-    assert sum("complex64" in name for name in portable) == 40
+    assert sum("complex64" in name for name in portable) == 72
     assert elementwise_packages.signature("v_Selectfloat16") == (
         "ternary_v",
         "Select",
@@ -75,6 +81,14 @@ def test_entries_are_every_pinned_vector_instantiation():
     assert signature("vv_Lessbfloat16") == ("vv_", "Less", "bfloat16", "bool_")
     assert signature("v_Absint8int8") == ("v_", "Abs", "int8", "int8")
     assert signature("vv_Addbool_") == ("vv_", "Add", "bool_", "bool_")
+    assert signature("sv_Lessint8") == ("sv_", "Less", "int8", "bool_")
+    assert signature("vs_Powerfloat16") == ("vs_", "Power", "float16", "float16")
+    assert elementwise_packages.BINARY_RECIPE.signature("vs_Addint8")[0] == "vs_"
+    assert elementwise_packages.operand_types("sv_Equalcomplex64") == {
+        "a": "complex64",
+        "b": "complex64",
+        "c": "bool_",
+    }
     assert signature("v_Realcomplex64float32") == ("v_", "Real", "complex64", "float32")
     assert signature("vv_NaNEqualcomplex64") == (
         "vv_",
@@ -90,6 +104,9 @@ def test_entries_are_every_pinned_vector_instantiation():
         "vv_ArcTan2complex64",
         "v_Selectfloat32",
         "v_Selectbool_",
+        "sv_ArcTan2int32",
+        "vs_LogicalOrint8",
+        "ss_Addint8",
         None,
     ):
         with pytest.raises(ValueError, match="Unknown elementwise entry"):
@@ -98,6 +115,8 @@ def test_entries_are_every_pinned_vector_instantiation():
         elementwise_packages.UNARY_RECIPE.signature("vv_Addint8")
     with pytest.raises(ValueError, match="Unknown elementwise entry"):
         elementwise_packages.BINARY_RECIPE.signature("v_Absint8int8")
+    with pytest.raises(ValueError, match="Unknown elementwise entry"):
+        elementwise_packages.UNARY_RECIPE.signature("sv_Addint8")
     with pytest.raises(ValueError, match="Unknown elementwise entry"):
         elementwise_packages.UNARY_RECIPE.signature("v_Selectint8")
     assert elementwise_packages.TERNARY_RECIPE.source == packages.SELECTION_SOURCE
@@ -152,15 +171,17 @@ def native_buffers(entry, operands, *, donate=False):
     kernel, _, source, destination = elementwise_packages.signature(entry)
     names, output = elementwise_dispatch.operands(kernel)
     types = {**elementwise_packages.operand_types(entry), "size": "uint32"}
-    threads = len(operands[names[0]])
+    threads = max(len(operands[name]) for name in names)
     memory = {
-        name: (element_storage.CTYPES[types[name]] * threads)(*operands[name])
+        name: (element_storage.CTYPES[types[name]] * len(operands[name]))(
+            *operands[name]
+        )
         for name in names
     }
+    # MLX donates a vector operand, never the scalar of an sv_ or vs_ launch.
+    donor = next(name for name in names if len(operands[name]) == threads)
     memory[output] = (
-        memory[names[0]]
-        if donate
-        else (element_storage.CTYPES[destination] * threads)()
+        memory[donor] if donate else (element_storage.CTYPES[destination] * threads)()
     )
     memory["size"] = (ctypes.c_uint32 * 1)(threads)
     array = (runtime.Buffer * len(memory))(
@@ -248,7 +269,11 @@ def run(
             destination, target, request["inputs"][output + "Binding"]["values"]
         )
         result = (compute or elementwise_evidence.expected_words)(
-            kernel, operation, source, destination, values
+            kernel,
+            operation,
+            source,
+            destination,
+            elementwise_dispatch.broadcast(kernel, values, threads),
         )
         result += initial[threads:]
         if fault == "guard":
@@ -310,6 +335,58 @@ def test_narrow_vectors_dispatch_through_reflected_carriers(
             {"a": [1], "b": [2]},
             fault="guard",
         )
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_scalar_operand_vectors_read_one_element(monkeypatch, tmp_path, target):
+    words, event, host = run(
+        monkeypatch, tmp_path, target, "sv_Subtractint8", {"a": [5], "b": [1, 2, -128]}
+    )
+    assert host.dispatch_count == 1 and event["operandValues"]["a"] == [5]
+    assert words == np.subtract(np.int8(5), np.int8([1, 2, -128])).tolist()
+    assert elementwise_evidence.audit_event(event, native=False) == 3
+    words, event, _ = run(
+        monkeypatch,
+        tmp_path,
+        target,
+        "vs_LeftShiftuint16",
+        {"a": [1, 3, 65535], "b": [4]},
+        donate=True,
+    )
+    assert words == [16, 48, 65520]
+    assert elementwise_evidence.audit_event(event, native=False) == 3
+    # The audit rejects an event whose scalar operand was given per invocation.
+    widened = json.loads(json.dumps(event))
+    widened["operandValues"]["b"] = [4, 4, 4]
+    with pytest.raises(ValueError, match="readback extent"):
+        elementwise_evidence.audit_event(widened, native=False)
+    with pytest.raises(ValueError, match="nonzero divisors"):
+        run(monkeypatch, tmp_path, target, "vs_Divideint32", {"a": [1, 2], "b": [0]})
+    with pytest.raises(ValueError, match="signed overflow"):
+        run(
+            monkeypatch,
+            tmp_path,
+            target,
+            "sv_Remainderint8",
+            {"a": [-128], "b": [3, -1]},
+        )
+
+
+def test_scalar_operand_layout_rejections():
+    array, memory, _ = native_buffers("sv_Addint8", {"a": [1], "b": [3, 4]})
+    supplied = {name: array[i] for i, name in enumerate(memory)}
+    execution = {"workgroupCount": [2, 1, 1], "workgroupSize": [1, 1, 1]}
+    validate = elementwise_dispatch.validate
+    assert validate("sv_Addint8", supplied, 2, execution)["operation"] == "Add"
+    # The scalar of a vs_ launch is b, and a vv_ launch reads both vectors.
+    for entry in ("vs_Addint8", "vv_Addint8"):
+        with pytest.raises(ValueError, match="type, extent"):
+            validate(entry, supplied, 2, execution)
+    assert elementwise_dispatch.extents("vs_", 7) == {"a": 7, "b": 1, "c": 7}
+    assert elementwise_dispatch.broadcast("sv_", {"a": [2], "b": [1, 0]}, 2) == {
+        "a": [2, 2],
+        "b": [1, 0],
+    }
 
 
 def complex_words(values, dtype=np.complex64):
@@ -778,7 +855,8 @@ def test_warm_translates_every_entry_in_parallel_batches(monkeypatch, tmp_path, 
             str(summary),
         ]
     )
-    assert sorted(requested) == sorted(elementwise_packages.ENTRIES)
+    assert sorted(requested) == sorted(elementwise_warm.WARMED)
+    assert not any(entry.startswith(("sv_", "vs_")) for entry in requested)
     record = json.loads(summary.read_text())
     assert record["entries"] == 430 and record["target"] == "opengl"
     assert record["artifacts"]["vv_Addint8"] == "vv_Addint8"[::-1]

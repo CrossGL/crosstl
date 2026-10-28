@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "mlx/allocator.h"
+#include "mlx/backend/common/binary.h"
 #include "mlx/backend/common/matmul.h"
 #include "mlx/backend/common/reduce.h"
 #include "mlx/backend/common/slicing.h"
@@ -1158,18 +1159,41 @@ void dispatch_binary(
   if (std::string(operation) == "NaNEqual" && !floating) {
     operation = "Equal";
   }
-  out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  // binary.cpp's binary_op_gpu: the operand layout selects the kernel and
+  // set_binary_op_output_data donates an input or allocates the output in
+  // that layout. sv_ and vs_ read one scalar element; vv_ also serves
+  // ScalarScalar, as one invocation of a[0] and b[0] like ss_. A General
+  // pair is copied into dense row-major vectors first.
+  const auto bopt = mlx::core::get_binary_op_type(inputs[0], inputs[1]);
+  const bool general = bopt == mlx::core::BinaryOpType::General;
+  if (general) {
+    out.set_data(mlx::core::allocator::malloc(out.nbytes()));
+  } else {
+    mlx::core::set_binary_op_output_data(inputs[0], inputs[1], out, bopt);
+  }
   if (out.size() == 0) {
     return;
   }
-  auto a = dense_input(inputs[0]);
-  auto b = dense_input(inputs[1]);
+  auto a = general ? dense_input(inputs[0]) : inputs[0];
+  auto b = general ? dense_input(inputs[1]) : inputs[1];
+  const uint64_t count = general ? out.size() : out.data_size();
+  auto require_extent = [](const mlx::core::array& value, uint64_t extent) {
+    if (value.offset() < 0 || uint64_t(value.offset()) > value.buffer_size() ||
+        extent > (value.buffer_size() - uint64_t(value.offset())) / value.itemsize()) {
+      throw std::invalid_argument("CrossTL binary operand exceeds its allocation.");
+    }
+  };
+  const bool sv = bopt == mlx::core::BinaryOpType::ScalarVector;
+  const bool vs = bopt == mlx::core::BinaryOpType::VectorScalar;
+  require_extent(a, sv ? 1 : count);
+  require_extent(b, vs ? 1 : count);
+  require_extent(out, count);
   if ((std::string(operation) == "Remainder" || std::string(operation) == "Divide") &&
       !floating) {
     // Integer / or % by zero, and INT_MIN by -1, are undefined in Metal, HLSL and GLSL.
-    for (size_t i = 0; i < b.size(); ++i) {
-      const int64_t divisor = remainder_operand(b, i);
-      const int64_t dividend = remainder_operand(a, i);
+    for (uint64_t i = 0; i < count; ++i) {
+      const int64_t divisor = remainder_operand(b, vs ? 0 : i);
+      const int64_t dividend = remainder_operand(a, sv ? 0 : i);
       if (divisor == 0 || (mlx::core::issubdtype(b.dtype(), mlx::core::signedinteger) &&
                            divisor == -1 && dividend == remainder_minimum(b.dtype()))) {
         throw std::invalid_argument(
@@ -1182,7 +1206,7 @@ void dispatch_binary(
     // Shifts promote narrow operands to 32 bits, so counts must stay below
     // the promoted width.
     const bool wide = b.itemsize() == 8;
-    for (size_t i = 0; i < b.size(); ++i) {
+    for (uint64_t i = 0; i < (vs ? 1 : count); ++i) {
       const bool valid = b.dtype() == mlx::core::uint64
           ? b.data<uint64_t>()[i] < 64
           : [&] {
@@ -1195,15 +1219,15 @@ void dispatch_binary(
       }
     }
   }
-  std::string entry = std::string("vv_") + operation + dtype;
+  std::string entry = std::string(sv ? "sv_" : vs ? "vs_" : "vv_") + operation + dtype;
   require_entry(entry);
-  // vv_ specializes one independent element per invocation, including comparisons.
-  for (uint64_t first = 0; first < out.size();) {
-    uint32_t size = static_cast<uint32_t>(
-        std::min<uint64_t>(out.size() - first, 65535));
+  // Each launch specializes one independent element per invocation; a
+  // scalar operand is the same single element in every launch.
+  for (uint64_t first = 0; first < count;) {
+    uint32_t size = static_cast<uint32_t>(std::min<uint64_t>(count - first, 65535));
     CrosstlMlxBuffer buffers[] = {
-        {"a", dtype, a.data<uint8_t>() + first * a.itemsize(), size, 0},
-        {"b", dtype, b.data<uint8_t>() + first * b.itemsize(), size, 0},
+        {"a", dtype, a.data<uint8_t>() + (sv ? 0 : first * a.itemsize()), sv ? 1u : size, 0},
+        {"b", dtype, b.data<uint8_t>() + (vs ? 0 : first * b.itemsize()), vs ? 1u : size, 0},
         {"c", comparison ? "bool_" : dtype, out.data<uint8_t>() + first * out.itemsize(), size, 1},
         {"size", "uint32", &size, 1, 0},
     };

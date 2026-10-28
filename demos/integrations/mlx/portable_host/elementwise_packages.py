@@ -1,8 +1,9 @@
 """Translate unchanged ``unary.metal``, ``binary.metal`` and ``ternary.metal`` vectors on use.
 
 MLX instantiates ``v_<op><in><out>`` (``unary_v``), ``vv_<op><type>``
-(``binary_vv``) and ``v_Select<type>`` (``ternary_v``) for every real dtype an
-operation supports. The prebuilt families cover the float32, 32-bit integer,
+(``binary_vv``), ``sv_<op><type>`` and ``vs_<op><type>`` (``binary_sv`` and
+``binary_vs``, whose first or second operand is one scalar) and
+``v_Select<type>`` (``ternary_v``) for every real dtype an operation supports. The prebuilt families cover the float32, 32-bit integer,
 64-bit integer and Boolean sets the host was first proven on; every other real
 instantiation, such as the 16-bit floats' transcendentals, the narrow
 integers' arithmetic or a float16 selection, is translated once from the
@@ -35,6 +36,9 @@ from demos.integrations.mlx.portable_host.packages import (
 CACHE = "elementwise"
 # Ternary vectors share the unary prefix, so their kind names the template.
 UNARY, BINARY, TERNARY = "v_", "vv_", "ternary_v"
+# binary.cpp's ScalarVector and VectorScalar kernels: one operand is a[0] or b[0].
+SCALAR_VECTOR, VECTOR_SCALAR = "sv_", "vs_"
+BINARY_KERNELS = (BINARY, SCALAR_VECTOR, VECTOR_SCALAR)
 FLOATS = ("float16", "float32", "bfloat16")
 INTEGERS = tuple(dtype for dtype in DTYPES if dtype.startswith(("int", "uint")))
 # instantiate_unary_types / instantiate_unary_float / instantiate_unary_int
@@ -163,12 +167,13 @@ ENTRIES = {
         for operation, source, destination in FP8_CONVERSIONS
     },
     **{
-        f"{BINARY}{operation}{dtype}": (
-            BINARY,
+        f"{kernel}{operation}{dtype}": (
+            kernel,
             operation,
             dtype,
             "bool_" if operation in BOOLEAN_RESULTS else dtype,
         )
+        for kernel in BINARY_KERNELS
         for operation, dtypes in BINARY_TYPES.items()
         for dtype in dtypes
     },
@@ -200,7 +205,7 @@ def operand_types(entry):
     kernel, _, source, destination = signature(entry)
     if kernel == UNARY:
         return {"in": source, "out": destination}
-    if kernel == BINARY:
+    if kernel in BINARY_KERNELS:
         return {"a": source, "b": source, "c": destination}
     return {"a": "bool_", "b": source, "c": source, "d": destination}
 
@@ -249,17 +254,21 @@ def options(target, entry):
     )
 
 
-def _kernel_signature(kernel):
+def _kernel_signature(*kernels):
     def checked(entry):
         result = signature(entry)
-        if result[0] != kernel:
+        if result[0] not in kernels:
             raise ValueError("Unknown elementwise entry")
         return result
 
     return checked
 
 
-SOURCES = {UNARY: UNARY_SOURCE, BINARY: BINARY_SOURCE, TERNARY: SELECTION_SOURCE}
+SOURCES = {
+    UNARY: UNARY_SOURCE,
+    **dict.fromkeys(BINARY_KERNELS, BINARY_SOURCE),
+    TERNARY: SELECTION_SOURCE,
+}
 
 
 def _source(entry):
@@ -270,7 +279,7 @@ UNARY_RECIPE = KernelRecipe(
     "Unary", UNARY_SOURCE, _kernel_signature(UNARY), options, __file__
 )
 BINARY_RECIPE = KernelRecipe(
-    "Binary", BINARY_SOURCE, _kernel_signature(BINARY), options, __file__
+    "Binary", BINARY_SOURCE, _kernel_signature(*BINARY_KERNELS), options, __file__
 )
 TERNARY_RECIPE = KernelRecipe(
     "Ternary", SELECTION_SOURCE, _kernel_signature(TERNARY), options, __file__

@@ -3,9 +3,14 @@
 The host translates a ``v_``, ``vv_`` or ``v_Select`` entry the first time a
 test reaches it, one entry at a time. Translating the complete table ahead of
 the run in parallel worker processes bounds the native run's time and shows
-that all 424 entries translate and package on the runner's platform. The
+that all 430 entries translate and package on the runner's platform. The
 packages land in the same content-addressed cache the host and the audits
 use, so they are never trusted on name alone.
+
+The ``sv_`` and ``vs_`` scalar-operand vectors instantiate the same operations
+and types from the same ``binary.h`` templates. A test group reaches only a
+few of their 476 entries, so they stay on demand rather than doubling the
+translation every upstream job runs before its tests.
 """
 
 import argparse
@@ -16,9 +21,18 @@ from pathlib import Path
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     CACHE,
     ENTRIES,
+    SCALAR_VECTOR,
+    VECTOR_SCALAR,
     ElementwisePackageCache,
 )
 from demos.integrations.mlx.portable_host.lazy_kernel_cache import TARGETS
+
+# Every entry except the on-demand scalar-operand vectors.
+WARMED = frozenset(
+    entry
+    for entry, (kernel, *_) in ENTRIES.items()
+    if kernel not in {SCALAR_VECTOR, VECTOR_SCALAR}
+)
 
 
 def _translate(job):
@@ -35,7 +49,7 @@ def warm(root, packages, target, jobs):
         raise ValueError("Unsupported lazy vector target")
     if type(jobs) is not int or not 1 <= jobs <= 16:
         raise ValueError("Lazy vector translation needs 1 to 16 jobs")
-    entries = sorted(ENTRIES)
+    entries = sorted(WARMED)
     directory = Path(packages).resolve() / CACHE
     batches = [
         (Path(root).resolve(), directory, target, entries[index::jobs])

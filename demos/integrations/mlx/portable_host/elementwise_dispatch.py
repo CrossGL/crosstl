@@ -1,7 +1,9 @@
 """Dispatch contiguous unary, binary and ternary vectors through lazy kernels.
 
-The native host passes ``v_<op>``, ``vv_<op>`` and ``v_Select`` launches of at
-most 65535 one-thread groups for every dtype MLX instantiates on the GPU. Each buffer is checked
+The native host passes ``v_<op>``, ``vv_<op>``, ``sv_<op>``, ``vs_<op>`` and
+``v_Select`` launches of at most 65535 one-thread groups for every dtype MLX
+instantiates on the GPU; ``sv_`` and ``vs_`` read their first or second operand
+from one scalar element. Each buffer is checked
 against its kernel's source contract before upload: one element per invocation
 in every vector, the reflected storage of every binding, and an output that
 either has its own allocation or is exactly a donated input. The output
@@ -25,16 +27,26 @@ from demos.integrations.mlx.portable_host.element_storage import (
     unpack,
 )
 from demos.integrations.mlx.portable_host.elementwise_packages import (
-    BINARY,
+    BINARY_KERNELS,
     ENTRIES,
+    SCALAR_VECTOR,
     UNARY,
+    VECTOR_SCALAR,
     operand_types,
     signature,
 )
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
-__all__ = ("ENTRIES", "bind", "dispatch", "operands", "validate")
+__all__ = (
+    "ENTRIES",
+    "bind",
+    "broadcast",
+    "dispatch",
+    "extents",
+    "operands",
+    "validate",
+)
 # backend.cpp splits unary and binary vectors into launches of 65535 groups.
 MAX_VECTOR = 65535
 
@@ -43,7 +55,30 @@ def operands(kernel):
     """The source parameters that read elements, then the one that writes."""
     if kernel == UNARY:
         return ("in",), "out"
-    return (("a", "b"), "c") if kernel == BINARY else (("a", "b", "c"), "d")
+    return (("a", "b"), "c") if kernel in BINARY_KERNELS else (("a", "b", "c"), "d")
+
+
+# The operand binary_sv and binary_vs read as a[0] or b[0].
+SCALARS = {SCALAR_VECTOR: "a", VECTOR_SCALAR: "b"}
+
+
+def extents(kernel, threads):
+    """The element count of every operand and the output of one launch."""
+    names, output = operands(kernel)
+    scalar = SCALARS.get(kernel)
+    return {
+        **{name: 1 if name == scalar else threads for name in names},
+        output: threads,
+    }
+
+
+def broadcast(kernel, values, threads):
+    """The operand words each invocation reads, a scalar repeated ``threads`` times."""
+    scalar = SCALARS.get(kernel)
+    return {
+        name: words * threads if name == scalar else words
+        for name, words in values.items()
+    }
 
 
 def _span(buffer, dtype):
@@ -86,6 +121,7 @@ def validate(entry, buffers, threads, execution):
     types = operand_types(entry)
     if type(threads) is not int or not 0 < threads <= MAX_VECTOR:
         raise ValueError("Elementwise size exceeds the host contract")
+    counts = {**extents(kernel, threads), "size": 1}
     if set(buffers) != {*inputs, output, "size"}:
         raise ValueError("Elementwise buffers do not match their kernel")
     expected = {
@@ -100,7 +136,7 @@ def validate(entry, buffers, threads, execution):
             buffer.dtype != dtype.encode("ascii")
             or not buffer.data
             or buffer.data % size
-            or buffer.count != (1 if name == "size" else threads)
+            or buffer.count != counts[name]
             or buffer.output != direction
         ):
             raise ValueError(
@@ -193,7 +229,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     target = host.target
     types = operand_types(entry)
     values = {name: buffer_words(supplied[name], types[name]) for name in names}
-    require_defined(metadata["operation"], source, values)
+    require_defined(metadata["operation"], source, broadcast(kernel, values, threads))
     # A fresh output is filled with guards, so the readback is never stale.
     initial = guard_words(destination, threads)
     tail = guard_words(destination)
