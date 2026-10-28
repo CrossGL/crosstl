@@ -4,6 +4,10 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Fixed
+
+- WGSL output keeps `@ flat`, `@ noperspective`, `@ centroid` and `@ sample` on floating-point fragment inputs as `@interpolate(...)`, instead of dropping them and leaving WGSL's default perspective-centre interpolation (Fixes #3483, #3519, #3520, #3521, #3522).
+
 ### Breaking Changes
 
 - CrossGL refuses non-square `floatNxM` and `doubleNxM` matrix spellings, such as `float2x3`, with `AmbiguousMatrixSpellingError` (`project.translate.ambiguous-matrix-spelling`): MSL reads `float2x3` as 2 columns of 3 rows and HLSL as 2 rows of 3 columns, and the Metal, GLSL, HLSL and SPIR-V generators each took a different one. Write `matCxR` or `dmatCxR`. The SPIR-V importer now writes non-square matrices as `matCxR`. Square `float3x3(...)` and `float3x3(s)` now fill columns and build a diagonal matrix in HLSL output, as `mat3` does; HLSL output filled rows and repeated `s`.

@@ -7160,14 +7160,39 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
     def wgsl_attributes(self, attributes, direction="generic"):
         rendered = []
+        # Collect GLSL-style interpolation qualifiers (@ flat, @ noperspective,
+        # @ centroid, @ sample). Explicit @interpolate(...) is handled above and
+        # wins when already present.
+        interpolate_mode = None  # flat | linear | perspective
+        interpolate_sampling = None  # centroid | sample | either
+        has_explicit_interpolate = False
         for attr in attributes or []:
             semantic = str(getattr(attr, "name", attr))
             explicit_attribute = self.explicit_wgsl_attribute(attr, semantic)
             if explicit_attribute:
+                if explicit_attribute.startswith("@interpolate("):
+                    has_explicit_interpolate = True
                 rendered.append(explicit_attribute)
                 continue
 
             key = self.semantic_key(semantic)
+            if key in {"flat", "nointerpolation"}:
+                interpolate_mode = "flat"
+                continue
+            if key in {"noperspective", "linearnoperspective"}:
+                interpolate_mode = "linear"
+                continue
+            if key in {"smooth", "linear"}:
+                # perspective is WGSL's default; keep it only when sampling needs it
+                interpolate_mode = interpolate_mode or "perspective"
+                continue
+            if key == "centroid":
+                interpolate_sampling = "centroid"
+                continue
+            if key == "sample":
+                interpolate_sampling = "sample"
+                continue
+
             builtin = self.BUILTIN_SEMANTICS.get(key)
             if builtin:
                 rendered.append(f"@builtin({builtin})")
@@ -7176,6 +7201,20 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             location = self.attribute_location(attr, semantic, direction)
             if location is not None:
                 rendered.append(f"@location({location})")
+
+        if not has_explicit_interpolate and (
+            interpolate_mode is not None or interpolate_sampling is not None
+        ):
+            mode = interpolate_mode or "perspective"
+            if mode == "flat":
+                if interpolate_sampling in (None, "either"):
+                    rendered.append("@interpolate(flat)")
+                else:
+                    rendered.append(f"@interpolate(flat, {interpolate_sampling})")
+            elif interpolate_sampling is not None:
+                rendered.append(f"@interpolate({mode}, {interpolate_sampling})")
+            elif mode != "perspective":
+                rendered.append(f"@interpolate({mode})")
 
         return " ".join(rendered)
 
