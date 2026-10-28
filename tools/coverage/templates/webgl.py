@@ -23,6 +23,7 @@ from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
+from .fragments import WEBGL as _FRAGMENTS
 from .helpers import WEBGL as _HELPERS
 from .identifiers import WEBGL as _IDENTIFIERS
 from .idioms import FAMILY as _IDIOMS
@@ -111,6 +112,7 @@ WEBGL = {
     **_ROWS,
     **_VECTORS,
     **_RELATIONS,
+    **_FRAGMENTS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

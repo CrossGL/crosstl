@@ -14,7 +14,7 @@ from tools.coverage import (
     validators,
 )
 from tools.coverage.model import Feature, Result
-from tools.coverage.templates import relations
+from tools.coverage.templates import fragments, relations
 from tools.coverage.templates.base import ABSENT, OPERATORS
 
 _MODELS = [
@@ -622,6 +622,46 @@ def test_vector_probes_shift_by_scalars_and_resize_with_constructors():
     ):
         names = {f.name for f in constructs.features(language, GRAMMAR)}
         assert not names & absent, language
+
+
+def test_fragment_probes_use_each_languages_built_ins():
+    # The built-ins are graphics features of the fragment stage, which the kernel languages do not have.
+    feature = _feature("glsl", "front-facing")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    for language, name, line in (
+        (
+            "glsl",
+            "fragment-coordinate",
+            "vec4(gl_FragCoord.xy * 0.5 + uv, gl_FragCoord.z, 1.0)",
+        ),
+        ("webgl", "fragment-depth", "gl_FragDepth = uv.x * 0.5 + 0.25;"),
+        (
+            "hlsl",
+            "front-facing",
+            "float4 main(float2 uv : TEXCOORD0, bool front : SV_IsFrontFace)",
+        ),
+        (
+            "slang",
+            "fragment-depth",
+            '[shader("fragment")]\nFragmentOutput main(float2 uv : TEXCOORD0)',
+        ),
+        ("metal", "fragment-depth", "float depth [[depth(any)]];"),
+        ("wgsl", "fragment-coordinate", "@builtin(position) position: vec4<f32>"),
+        ("rust", "fragment-depth", "#[spirv(fragment(depth_replacing))]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, language
+    assert probes.build(_feature("glsl", "fragment-depth"), "glsl").suffix == ".frag"
+    hlsl = probes.build(_feature("hlsl", "fragment-depth"), "hlsl").source
+    assert hlsl.startswith("struct FragmentOutput {") and "[shader(" not in hlsl
+    crossgl = probes.build(_feature("glsl", "fragment-depth"), "crossgl").source
+    assert "        float depth @ gl_FragDepth;\n" in crossgl
+    assert "output.depth = input.uv.x * 0.5 + 0.25;" in crossgl
+    crossgl = probes.build(_feature("glsl", "front-facing"), "crossgl").source
+    assert "bool front @ gl_FrontFacing;" in crossgl and "input.front ? " in crossgl
+    for language in ("cuda", "hip", "opencl", "mojo"):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & set(fragments.NAMES), language
 
 
 def test_relation_probes_compare_integer_and_boolean_vectors_per_language():

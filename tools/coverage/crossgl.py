@@ -49,6 +49,7 @@ from .templates.columns import CROSSGL as COLUMNS_CROSSGL
 from .templates.edges import FAMILY as EDGES
 from .templates.elements import CROSSGL as ELEMENTS_CROSSGL
 from .templates.forms import FAMILY as FORMS
+from .templates.fragments import CROSSGL as FRAGMENTS
 from .templates.helpers import CROSSGL as HELPERS_CROSSGL
 from .templates.identifiers import CROSSGL as IDENTIFIERS_CROSSGL
 from .templates.idioms import (
@@ -623,6 +624,7 @@ CONSTRUCTS: dict[str, Template] = {
     **ROWS_CROSSGL,
     **VECTORS,
     **RELATIONS,
+    **FRAGMENTS,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

@@ -1,4 +1,4 @@
-"""Language-level features: control flow, operators, types, compute, resources and shader stages.
+"""Language-level features: control flow, operators, types, compute and graphics built-ins, resources and stages.
 
 The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches, what
 its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core grammar items it needs (an
@@ -24,7 +24,15 @@ from .model import Feature, Type
 from .templates import ABSENT, Template
 from .validators import GLSL_STAGES
 
-CATEGORIES = ("control-flow", "operator", "type", "compute", "resource", "stage")
+CATEGORIES = (
+    "control-flow",
+    "operator",
+    "type",
+    "compute",
+    "graphics",
+    "resource",
+    "stage",
+)
 # The capabilities that make an execution model a shader stage; Kernel and the NV-only mesh models are left out.
 _STAGE_CAPABILITIES = frozenset(
     {"Shader", "Geometry", "Tessellation", "MeshShadingEXT", "RayTracingKHR"}
@@ -527,6 +535,9 @@ def _curated() -> list[Construct]:
             "OpTypeArray",
             "OpControlBarrier",
         ),
+        c("graphics", "fragment-coordinate", "BuiltIn.FragCoord", stage="fragment"),
+        c("graphics", "front-facing", "BuiltIn.FrontFacing", stage="fragment"),
+        c("graphics", "fragment-depth", "BuiltIn.FragDepth", stage="fragment"),
         c(
             "resource",
             "uniform-struct",

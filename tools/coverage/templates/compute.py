@@ -18,6 +18,7 @@ from . import (
     elements,
     evaluation,
     forms,
+    fragments,
     functions,
     helpers,
     identifiers,
@@ -114,6 +115,7 @@ CUDA = {
     **rows.CUDA,
     **vectors.CUDA,
     **relations.CUDA,
+    **fragments.KERNELS,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -246,6 +248,7 @@ OPENCL = {
     **rows.OPENCL,
     **vectors.OPENCL,
     **relations.OPENCL,
+    **fragments.KERNELS,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -397,6 +400,7 @@ MOJO = {
     **rows.MOJO,
     **vectors.MOJO,
     **relations.MOJO,
+    **fragments.KERNELS,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -615,6 +619,7 @@ RUST = {
     **rows.RUST,
     **vectors.RUST,
     **relations.RUST,
+    **fragments.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),
