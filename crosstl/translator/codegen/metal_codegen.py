@@ -22029,6 +22029,13 @@ class MetalCodeGen(
         if is_texture_sample_operation(func_name):
             return not self.is_multisample_texture_resource(texture_type)
 
+        if (
+            is_texture_compare_operation(func_name)
+            or is_texture_gather_compare_operation(func_name)
+            or is_projected_texture_compare_operation(func_name)
+        ):
+            return not self.is_multisample_texture_resource(texture_type)
+
         if is_texture_query_lod_operation(func_name):
             return not (
                 self.is_multisample_texture_resource(texture_type)

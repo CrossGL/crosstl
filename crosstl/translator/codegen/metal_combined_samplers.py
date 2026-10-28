@@ -116,8 +116,8 @@ def _sampler_names(program, function=None):
     return names
 
 
-def _sampled_in(program, roots, candidates):
-    """The candidates a call samples through their own sampler state, or passes to a function."""
+def _sampled_in(program, roots, candidates, helpers):
+    """The candidates a call samples through their own sampler state, or passes to a helper that does."""
     sampled = set()
     seen = set()
     for root in roots:
@@ -127,18 +127,16 @@ def _sampled_in(program, roots, candidates):
                 continue
             arguments = list(getattr(node, "arguments", None) or [])
             callee = _callee(node)
-            explicit = (
-                callee.startswith("texture")
-                and len(arguments) >= 3
-                and _argument_name(arguments[1]) in samplers
-            )
-            if callee in _TEXEL_CALLS or explicit:
-                # A texel read uses no sampler; a sample through a named sampler uses that one.
-                arguments = arguments[1:]
-            for argument in arguments:
-                name = _argument_name(argument)
-                if name in candidates:
-                    sampled.add(name)
+            if (callee, len(arguments)) in helpers:
+                # Only the parameters the helper samples with their own sampler state need one.
+                indices = helpers[(callee, len(arguments))]
+                names = [_argument_name(arguments[i]) for i in indices]
+            elif callee.startswith("texture") and arguments and callee not in _TEXEL_CALLS:
+                explicit = len(arguments) >= 3 and _argument_name(arguments[1]) in samplers
+                names = [] if explicit else [_argument_name(arguments[0])]
+            else:
+                names = []
+            sampled.update(name for name in names if name in candidates)
     return sampled
 
 
@@ -199,8 +197,8 @@ def bind_combined_samplers(ast):
     }
     if not textures:
         return ast
-    sampled = _sampled_in(ast, _functions(ast), set(textures))
     helpers = _helper_sampler_parameters(ast)
+    sampled = _sampled_in(ast, _functions(ast), set(textures), helpers)
     declared = _declared_names(ast)
     needed = sorted(
         name for name in sampled if f"{name}Sampler" not in declared
@@ -214,9 +212,10 @@ def bind_combined_samplers(ast):
         for v in globals_
         if _type_name(getattr(v, "var_type", None)) in _SAMPLER_TYPES and _binding_attributes(v)
     }
+    by_name = {getattr(v, "name", None): v for v in globals_}
+    # After every other declaration, so that the samplers the program declares keep the slots they had.
     for name in needed:
-        index = next(i for i, v in enumerate(globals_) if getattr(v, "name", None) == name)
-        globals_.insert(index + 1, _sampler_for(globals_[index], f"{name}Sampler", taken))
+        globals_.append(_sampler_for(by_name[name], f"{name}Sampler", taken))
     ast.global_variables = globals_
     if helpers:
         _thread_helper_samplers(ast)
@@ -224,24 +223,32 @@ def bind_combined_samplers(ast):
 
 
 def _helper_sampler_parameters(program):
-    """``{(name, parameter count): [index, ...]}``: the combined sampler parameters each helper samples."""
+    """``{(name, parameter count): [index, ...]}``: the combined sampler parameters each helper samples.
+
+    A helper that passes a parameter on to a helper sampling it samples it too, so the map grows to a fixed point.
+    """
+    entries = {id(getattr(stage, "entry_point", None)) for stage in _stages(program)}
+    helpers = [f for f in _functions(program) if id(f) not in entries]
     result = {}
-    for function in _functions(program):
-        if any(function is getattr(stage, "entry_point", None) for stage in _stages(program)):
-            continue
-        parameters = list(getattr(function, "parameters", None) or [])
-        candidates = {
-            p.name: i
-            for i, p in enumerate(parameters)
-            if _type_name(getattr(p, "param_type", None)) in COMBINED_SAMPLER_TYPES
-        }
-        local = {p.name for p in parameters}
-        sampled = _sampled_in(program, [function], set(candidates))
-        indices = sorted(
-            candidates[name] for name in sampled if f"{name}Sampler" not in local
-        )
-        if indices:
-            result[(function.name, len(parameters))] = indices
+    changed = True
+    while changed:
+        changed = False
+        for function in helpers:
+            parameters = list(getattr(function, "parameters", None) or [])
+            candidates = {
+                p.name: i
+                for i, p in enumerate(parameters)
+                if _type_name(getattr(p, "param_type", None)) in COMBINED_SAMPLER_TYPES
+            }
+            local = {p.name for p in parameters}
+            sampled = _sampled_in(program, [function], set(candidates), result)
+            indices = sorted(
+                candidates[name] for name in sampled if f"{name}Sampler" not in local
+            )
+            key = (function.name, len(parameters))
+            if indices and indices != result.get(key):
+                result[key] = indices
+                changed = True
     return result
 
 
