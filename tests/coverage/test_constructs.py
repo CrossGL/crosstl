@@ -555,6 +555,40 @@ def test_row_major_probes_store_each_matrix_row_on_its_own_16_byte_row():
         ], language
 
 
+def test_buffer_row_major_probes_store_struct_matrices_by_rows():
+    crossgl = probes.build(
+        _feature("glsl", "buffer-row-major-non-square"), "crossgl"
+    ).source
+    assert "struct Rows {\n        @ row_major mat2x3 m;\n        vec2 w;" in crossgl
+    assert "buffer Rows* outp;" in crossgl
+    # GLSL has no layout qualifier on a structure member, so the buffer's array is row-major.
+    glsl = probes.build(_feature("glsl", "buffer-row-major-array"), "glsl").source
+    assert "{ layout(row_major) Rows outp[]; }" in glsl and "mat2 m[2];" in glsl
+    hlsl = probes.build(_feature("hlsl", "buffer-row-major-matrix"), "hlsl").source
+    assert "row_major float2x2 m;" in hlsl and "RWStructuredBuffer<Rows>" in hlsl
+    assert "outp[i].m[1][0] += 0.25;" in hlsl
+    # Metal, WGSL and Rust store the rows of the matrix's transpose.
+    for language, member, store in (
+        ("metal", "float2 r[3];", "outp[i].r[2][1] += 0.25;"),
+        ("wgsl", "r: array<vec2<f32>, 3>,", "let t = transpose(mat2x3<f32>("),
+    ):
+        source = probes.build(
+            _feature(language, "buffer-row-major-non-square"), language
+        ).source
+        assert member in source and store in source, language
+    rust = probes.build(_feature("rust", "buffer-row-major-array"), "rust").source
+    assert "r: [[Vec2; 2]; 2]," in rust and "outp[i].r[k][0].y += 0.25;" in rust
+    names = {f.name for f in constructs.features("rust", GRAMMAR)}
+    assert "buffer-row-major-matrix" in names
+    assert "buffer-row-major-non-square" not in names
+    for language in ("webgl", "cuda", "hip", "opencl", "mojo"):
+        assert not [
+            f
+            for f in constructs.features(language, GRAMMAR)
+            if f.name.startswith("buffer-row-major")
+        ], language
+
+
 def test_packing_probes_name_the_layout_rule_and_declare_its_offsets():
     for name, rule in (
         ("uniform-std140-vector", "std140"),

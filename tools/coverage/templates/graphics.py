@@ -35,6 +35,7 @@ from . import (
     packing,
     portability,
     records,
+    rows,
     scopes,
     shapes,
     statements,
@@ -108,6 +109,7 @@ GLSL = {
     **booleans.GLSL,
     **packing.GLSL,
     **orientation.GLSL,
+    **rows.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -241,6 +243,7 @@ HLSL = {
     **booleans.FAMILY,
     **packing.FAMILY,
     **orientation.FAMILY,
+    **rows.FAMILY,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -419,6 +422,7 @@ METAL = {
     **booleans.METAL,
     **packing.METAL,
     **orientation.METAL,
+    **rows.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -635,6 +639,7 @@ WGSL = {
     **booleans.WGSL,
     **packing.WGSL,
     **orientation.WGSL,
+    **rows.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

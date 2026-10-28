@@ -607,6 +607,26 @@ def _curated() -> list[Construct]:
             "Decoration.RowMajor",
             "Decoration.ArrayStride",
         ),
+        c(
+            "resource",
+            "buffer-row-major-matrix",
+            "StorageClass.StorageBuffer",
+            "Decoration.RowMajor",
+        ),
+        c(
+            "resource",
+            "buffer-row-major-non-square",
+            "StorageClass.StorageBuffer",
+            "Decoration.RowMajor",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "buffer-row-major-array",
+            "StorageClass.StorageBuffer",
+            "Decoration.RowMajor",
+            "Decoration.ArrayStride",
+        ),
     ]
 
 

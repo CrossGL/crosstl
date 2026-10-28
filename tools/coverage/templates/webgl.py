@@ -39,6 +39,7 @@ from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
 from .records import WEBGL as _RECORDS
+from .rows import WEBGL as _ROWS
 from .scopes import WEBGL as _SCOPES
 from .values import FAMILY as _VALUES
 from .workgroups import WEBGL as _WORKGROUPS
@@ -105,6 +106,7 @@ WEBGL = {
     **_BOOLEANS,
     **_PACKING,
     **_ORIENTATION,
+    **_ROWS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
