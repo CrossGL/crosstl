@@ -302,13 +302,15 @@ def test_current_bfloat_sigmoid_non_nan_domain(tmp_path):
             assert data["project"]["sourceOptions"] == options
             identity = ARTIFACTS[target]
             generated = (root / artifact["path"]).read_bytes()
-            check_generated_artifact(artifact, sha256=identity["sha256"])
-            assert hashlib.sha256(generated).hexdigest() == identity["sha256"]
-            assert (
-                len(generated)
-                == artifact["generatedSizeBytes"]
-                == identity["sizeBytes"]
+            check_generated_artifact(
+                artifact, sha256=identity["sha256"], size_bytes=identity["sizeBytes"]
             )
+            # The bytes are the reported artifact; the pins above check them.
+            assert (
+                hashlib.sha256(generated).hexdigest()
+                == artifact["generatedHash"]["value"]
+            )
+            assert len(generated) == artifact["generatedSizeBytes"]
             manifest = build_runtime_artifact_manifest(work / "report.json")
             assert manifest["success"], manifest
             (work / "artifacts.json").write_text(json.dumps(manifest), encoding="utf-8")
