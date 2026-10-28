@@ -34,7 +34,7 @@ VIEW_PRIMITIVES = (
     "Unflatten",
 )
 MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
-COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate")
+COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate", "View")
 CAST_PRIMITIVES = ("AsType",)
 
 
@@ -51,6 +51,8 @@ def adapted_sources(original, primitives, events):
         "RandomBits",
         "Scan",
         "Quantize",
+        "QuantizedMatmul",
+        "Matmul",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",
@@ -60,6 +62,7 @@ def adapted_sources(original, primitives, events):
         "GatherAxis",
         "ScatterAxis",
         "Scatter",
+        "DivMod",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
         *COPY_PRIMITIVES,
@@ -73,7 +76,7 @@ def adapted_sources(original, primitives, events):
             continue
         macro = (
             "NO_GPU_MULTI"
-            if primitive in MULTI_OUTPUT_VIEWS or primitive == "Quantize"
+            if primitive in MULTI_OUTPUT_VIEWS or primitive in {"DivMod", "Quantize"}
             else "NO_GPU"
         )
         primitives = replace_once(

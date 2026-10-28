@@ -275,6 +275,56 @@ def test_type_only_keywords_rename_types_and_keep_value_names(tmp_path):
     _compile(tmp_path, hlsl, "cs_6_0", "CSMain")
 
 
+CGL_TYPE_ALIASES = """shader AliasProgram {
+    typedef float float16_t;
+    typedef uint vector;
+
+    float16_t twice(float16_t value) {
+        return value * 2.0;
+    }
+
+    compute {
+        buffer float values[];
+
+        @workgroup_size(4, 1, 1)
+        void main() {
+            uint index = gl_GlobalInvocationID.x;
+            vector offset = index;
+            float16_t local[2];
+            local[0] = values[offset];
+            local[1] = twice(local[0]);
+            values[index] = local[1];
+        }
+    }
+}
+"""
+
+
+def test_type_aliases_are_renamed_with_every_use(tmp_path):
+    # HLSL reads float16_t as binary16 and vector as float4, so an alias named
+    # either must be renamed together with the types that name it.
+    ast = parse(CGL_TYPE_ALIASES)
+    renamed = legalize_hlsl_keyword_names(ast)
+    aliases = [node for node in renamed.global_variables if node.is_type_alias]
+    assert sorted(alias.name for alias in aliases) == ["float16_t_", "vector_"]
+    entry = next(iter(renamed.stages.values())).entry_point
+    offset, local = entry.body.statements[1:3]
+    assert (offset.var_type.name, local.var_type.element_type.name) == (
+        "vector_",
+        "float16_t_",
+    )
+    function = renamed.functions[0]
+    assert function.return_type.name == "float16_t_"
+    assert function.parameters[0].param_type.name == "float16_t_"
+
+    hlsl = _translate(tmp_path, CGL_TYPE_ALIASES, ".cgl")
+    assert "float16_t" not in hlsl and not re.search(r"\bvector\b", hlsl)
+    assert re.search(r"\buint offset = index;", hlsl)
+    assert re.search(r"\bfloat local\[2\];", hlsl)
+    assert re.search(r"\bfloat twice\(float value\)", hlsl)
+    _compile(tmp_path, hlsl, "cs_6_0", "CSMain")
+
+
 def test_renaming_copies_the_ast_and_keeps_other_programs_untouched():
     ast = parse(CGL_PROGRAM)
     renamed = legalize_hlsl_keyword_names(ast)

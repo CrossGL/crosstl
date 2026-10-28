@@ -183,7 +183,7 @@ def _package(
         format_output=False,
     )
     report.write_json(root / "report.json")
-    assert report.to_json()["summary"]["failedCount"] == 0, report.to_json()
+    assert report.to_json()["summary"]["failedCount"] == 0, json.dumps(report.to_json())
     manifest = build_runtime_artifact_manifest(root / "report.json")
     assert manifest["success"], manifest
     (root / "artifacts.json").write_text(json.dumps(manifest))
