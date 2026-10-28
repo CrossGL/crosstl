@@ -176,11 +176,17 @@ def test_buffer_passed_to_a_helper_keeps_the_same_words(tmp_path):
         p[i].b += vec3(p[i].a);
     }""",
     )
-    compact = _compact(_translate(source, "directx", tmp_path))
+    code = _translate(source, "directx", tmp_path)
+    compact = _compact(code)
     assert "RWStructuredBuffer<uint>items" in compact
     assert "RWStructuredBuffer<Item>" not in compact
-    # The parameter reads the argument's words at the same std430 offsets.
-    assert "asfloat(p[(uint(i)*8u)])" in compact
+    # HLSL has no pointers: the parameter is the word buffer plus a word offset, and it reads the argument's
+    # words at the same std430 offsets.
+    assert "uint*" not in compact
+    assert "voidtouch(RWStructuredBuffer<uint>p,int64_tp_offset,uinti)" in compact
+    assert "asfloat(p[uint((p_offset+(uint(i)*8u)))])" in compact
+    assert "touch(items,int64_t(0),i);" in compact
+    _dxc(code, tmp_path)
 
 
 def test_stage_buffer_with_a_declared_layout_is_lowered_on_std430_targets(tmp_path):
