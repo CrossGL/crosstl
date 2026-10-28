@@ -284,6 +284,10 @@ from .hlsl_ray_queries import (
 )
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_render_targets import is_render_target_value_type
+from .hlsl_storage_array_views import (
+    storage_array_pointer_type,
+    view_storage_array_parameters,
+)
 from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
@@ -2552,6 +2556,7 @@ class HLSLCodeGen(
         self.function_hlsl_resource_pointer_array_parameter_indices = {}
         self.function_hlsl_resource_pointer_array_mutated_parameters = {}
         self.hlsl_resource_pointer_analysis_call_source_types = {}
+        self.hlsl_view_storage_array_parameters = {}
         self.hlsl_omitted_resource_pointer_parameter_keys = set()
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
@@ -3949,6 +3954,7 @@ class HLSLCodeGen(
         self.function_hlsl_resource_pointer_array_parameter_indices = {}
         self.function_hlsl_resource_pointer_array_mutated_parameters = {}
         self.hlsl_resource_pointer_analysis_call_source_types = {}
+        self.hlsl_view_storage_array_parameters = {}
         self.hlsl_omitted_resource_pointer_parameter_keys = set()
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
@@ -5436,6 +5442,17 @@ class HLSLCodeGen(
 
             prototype = deepcopy(function)
             prototype.body = None
+            # The copy's parameters are new objects; carry the view analysis.
+            for original, copied in zip(
+                getattr(function, "parameters", None) or [],
+                getattr(prototype, "parameters", None) or [],
+            ):
+                view = self.hlsl_view_storage_array_parameters.get(id(original))
+                if view is not None and view[0] is original:
+                    self.hlsl_view_storage_array_parameters[id(copied)] = (
+                        copied,
+                        view[1],
+                    )
             declaration = self.generate_function(prototype)
             if declaration in seen_declarations:
                 continue
@@ -20647,7 +20664,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parameter_type = getattr(
             parameter, "param_type", getattr(parameter, "vtype", None)
         )
-        return parameter_type if isinstance(parameter_type, PointerType) else None
+        if isinstance(parameter_type, PointerType):
+            return parameter_type
+        # A storage array parameter that receives a view into a buffer is a
+        # storage pointer; see hlsl_storage_array_views.
+        view = self.hlsl_view_storage_array_parameters.get(id(parameter))
+        return view[1] if view is not None and view[0] is parameter else None
 
     def hlsl_resource_pointer_parameter_address_space(self, parameter):
         pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
@@ -20708,6 +20730,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return "read_write"
 
     def hlsl_resource_pointer_offset_parameter_direction(self, parameter):
+        if id(parameter) in self.hlsl_view_storage_array_parameters:
+            # An array parameter decays to a pointer passed by value; its
+            # ``inout`` qualifier covers the elements, not the view.
+            return None
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(parameter, "qualifiers", []) or []
@@ -21093,6 +21119,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def collect_hlsl_resource_pointer_parameters(self, functions):
         functions = list(functions or [])
+        self.hlsl_view_storage_array_parameters = {
+            key: (parameter, storage_array_pointer_type(parameter))
+            for key, parameter in view_storage_array_parameters(
+                functions, self.function_call_name
+            ).items()
+        }
         parameters_by_function = {}
         indices_by_function = {}
         array_parameters_by_function = {}
