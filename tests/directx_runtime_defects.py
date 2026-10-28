@@ -30,6 +30,7 @@ WARP_LIBRARY_NAME = "d3d10warp.dll"
 _MATRIX = "tests/test_translator/test_directx_cooperative_matrix.py"
 _NARROW = "tests/test_translator/test_directx_narrow_buffer_extents.py"
 _SHUFFLES = "tests/test_translator/test_integer_subgroup_shuffles.py"
+_BINARY16_ALIASES = "tests/test_translator/test_binary16_alias_aggregates.py"
 _FLOATING_BINARY = (
     "demos/integrations/mlx/tests/kernels/test_current_floating_binary.py"
 )
@@ -84,6 +85,7 @@ DEFECTS = (
                 f"{_SHUFFLES}::test_integer_shuffles_execute[shape1-{kind}]"
                 for kind in ("short", "ushort")
             ),
+            f"{_BINARY16_ALIASES}::test_binary16_alias_aggregates_execute",
         ),
     ),
     RuntimeDefect(

@@ -226,6 +226,10 @@ class OpenCLParser(HipParser):
         "SEMICOLON",
     }
 
+    def __init__(self, tokens):
+        super().__init__(tokens)
+        self.opencl_type_alias_targets = {}
+
     def parse(self):
         previous_recursion_limit = sys.getrecursionlimit()
         if len(self.tokens) > previous_recursion_limit:
@@ -824,6 +828,7 @@ class OpenCLParser(HipParser):
         alias_type += self.parse_array_suffix()
         self.skip_declarator_attribute_suffixes()
         self.type_aliases.add(name)
+        self.opencl_type_alias_targets[name] = alias_type
         return TypeAliasNode(alias_type, name)
 
     def parse_typedef_alias(self):
@@ -1318,6 +1323,10 @@ class OpenCLParser(HipParser):
             return False
         if self.is_opencl_vector_type_name(parts[0]):
             return True
+        if self.is_opencl_vector_type_name(
+            self.resolve_opencl_alias_to_vector_type(parts[0])
+        ):
+            return True
         return self.is_probable_identifier_type_name(
             parts[0]
         ) and self.has_top_level_comma_in_group_at_pos(type_end + 1)
@@ -1340,7 +1349,19 @@ class OpenCLParser(HipParser):
         ]
         if len(parts) == 1 and self.is_opencl_vector_type_name(parts[0]):
             return parts[0]
+        if len(parts) == 1:
+            resolved = self.resolve_opencl_alias_to_vector_type(parts[0])
+            if self.is_opencl_vector_type_name(resolved):
+                return resolved
         return type_name
+
+    def resolve_opencl_alias_to_vector_type(self, type_name):
+        seen = set()
+        current = str(type_name).strip()
+        while current in self.opencl_type_alias_targets and current not in seen:
+            seen.add(current)
+            current = self.opencl_type_alias_targets[current].strip()
+        return current
 
     def has_top_level_comma_in_group_at_pos(self, index):
         if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
