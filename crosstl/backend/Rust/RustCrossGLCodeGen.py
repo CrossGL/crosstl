@@ -2,6 +2,7 @@
 
 import re
 
+from ..comma_expressions import crossgl_tuple_literal
 from .RustAst import *
 from .RustLexer import *
 from .RustParser import *
@@ -9563,11 +9564,10 @@ class RustToCrossGLConverter:
             # Dereferences are typically not needed in CrossGL
             return self.generate_expression(expr.expression)
         elif isinstance(expr, TupleNode):
-            # Tuples might not be directly supported, convert to struct or multiple variables
-            elements = ", ".join(
+            # ``(a, b,)``: without the trailing comma CrossGL reads the comma operator.
+            return crossgl_tuple_literal(
                 self.generate_expression(elem) for elem in expr.elements
             )
-            return f"({elements})"
         elif isinstance(expr, ArrayNode):
             if expr.size is not None and len(expr.elements) == 1:
                 repeated = self.expand_repeated_array_literal(

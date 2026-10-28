@@ -165,6 +165,12 @@ from .builtin_result_types import (
 )
 from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
+from .comma_expressions import (
+    c_family_comma_expression,
+    comma_result_operand,
+    is_comma_expression,
+    split_comma_initializer,
+)
 from .constant_guards import (
     constant_bool_locals,
     constant_branch_guards,
@@ -15063,6 +15069,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
+            comma_initializer = split_comma_initializer(stmt)
+            if comma_initializer is not None:
+                effects, declaration = comma_initializer
+                return "".join(
+                    self.generate_statement(statement, indent)
+                    for statement in (*effects, declaration)
+                )
             source_vtype = self.hlsl_source_variable_declared_type(stmt)
             vtype = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = self.type_name_string(vtype)
@@ -18654,6 +18667,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if is_comma_expression(expr):
+            return self.expression_result_type(comma_result_operand(expr))
         if isinstance(expr, PointerReinterpretNode):
             target_type = getattr(expr.target_type, "pointee_type", None)
             return self.map_type(self.type_name_string(target_type))
@@ -27537,6 +27552,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """Render an expression whose value is unused, such as a for update."""
         if isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
+        if is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr,
+                self.generate_expression,
+                self.generate_discarded_expression,
+                discarded=True,
+            )
         return self.generate_expression(expr)
 
     def hlsl_helper_invocation_expression(self, expr):
@@ -27613,6 +27635,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return str(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.hlsl_array_literal_expression(expr)
+        elif is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr, self.generate_expression, self.generate_discarded_expression
+            )
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value

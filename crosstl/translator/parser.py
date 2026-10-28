@@ -18,6 +18,7 @@ from .ast import (
     BlockNode,
     BreakNode,
     CaseNode,
+    CommaExpressionNode,
     ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
@@ -4450,10 +4451,21 @@ class Parser:
             self.restore_value_type_scope()
 
     def parse_expression_sequence(self):
-        expressions = [self.parse_expression()]
+        """A for-loop update: ``a, b`` and the comma operator ``(a, b)`` both give the list ``[a, b]``.
+
+        The update's value is discarded, so its operands are the same updates run left to right.
+        """
+        expressions = []
+        pending = [self.parse_expression()]
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
-            expressions.append(self.parse_expression())
+            pending.append(self.parse_expression())
+        while pending:
+            expr = pending.pop(0)
+            if isinstance(expr, CommaExpressionNode):
+                pending[:0] = list(expr.expressions)
+            else:
+                expressions.append(expr)
         return expressions[0] if len(expressions) == 1 else expressions
 
     def parse_for_in_statement_after_for(self):
@@ -5762,14 +5774,19 @@ class Parser:
                 return ArrayLiteralNode([])
             expr = self.parse_expression()
             if self.current_token[0] == "COMMA":
+                # ``(a, b)`` is the comma operator; a trailing comma, ``(a, b,)``, keeps the tuple form.
                 elements = [expr]
+                trailing_comma = False
                 while self.current_token[0] == "COMMA":
                     self.eat("COMMA")
                     if self.current_token[0] == "RPAREN":
+                        trailing_comma = True
                         break
                     elements.append(self.parse_expression())
                 self.eat("RPAREN")
-                return ArrayLiteralNode(elements)
+                if trailing_comma:
+                    return ArrayLiteralNode(elements)
+                return CommaExpressionNode(elements)
             self.eat("RPAREN")
             return expr
 
