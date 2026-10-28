@@ -21,10 +21,10 @@ def _parse(source):
     return Parser(Lexer(source).get_tokens()).parse()
 
 
-def _translate(tmp_path, source, backend, format_output=False):
+def _translate(tmp_path, source, backend):
     path = tmp_path / "shader.cgl"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend, format_output=format_output)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _flat(code):
@@ -173,16 +173,18 @@ def test_metal_pads_a_std140_constant_buffer_to_its_std140_offsets(tmp_path):
 
 @pytest.mark.parametrize("backend", ["opengl", "vulkan"])
 def test_std140_targets_place_an_hlsl_packed_constant_buffer(tmp_path, backend):
-    # Formatted SPIR-V names its types.
-    code = _translate(
-        tmp_path, LAYOUT.replace("LAYOUT", "hlsl_cbuffer"), backend, format_output=True
-    )
+    code = _translate(tmp_path, LAYOUT.replace("LAYOUT", "hlsl_cbuffer"), backend)
     if backend == "opengl":
         assert "uniform params_block" in code
         assert "uintBitsToFloat(crossgl_cbuffer_registers[0].yzw)" in code
     else:
-        assert re.search(r"OpMemberDecorate %Params_placed\w* 1 Offset 4\b", code)
-        assert re.search(r"OpMemberDecorate %Params_placed\w* 2 Offset 16\b", code)
+        # Resolve the placed struct's id through OpName so the check does not
+        # depend on SPIRV-Tools being installed to name the types.
+        placed = re.search(r'OpName (%\w+) "Params_placed\w*"', code)
+        assert placed, code
+        type_id = re.escape(placed.group(1))
+        assert re.search(rf"OpMemberDecorate {type_id} 1 Offset 4\b", code)
+        assert re.search(rf"OpMemberDecorate {type_id} 2 Offset 16\b", code)
 
 
 @pytest.mark.parametrize(
