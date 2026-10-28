@@ -124,6 +124,32 @@ def test_struct_ternary_inside_an_expression_is_refused():
         compute(PAIRS + "data[2] = (data[1] > 7.0 ? p : q).a;")
 
 
+def test_struct_constructor_ternary_inside_an_expression_is_refused():
+    with pytest.raises(ValueError, match="of type Pair here"):
+        compute("data[2] = (data[1] > 7.0 ? Pair(1.0, 2.0) : Pair(3.0, 4.0)).a;")
+
+
+def test_struct_constructor_ternary_as_a_module_constant_is_refused():
+    source = """
+        shader Probe {
+            struct Pair {
+                float a;
+                float b;
+            };
+            const Pair G = true ? Pair(1.0, 2.0) : Pair(3.0, 4.0);
+            compute {
+                buffer float data[];
+                [numthreads(1, 1, 1)]
+                void main() {
+                    data[0] = G.a;
+                }
+            }
+        }
+        """
+    with pytest.raises(ValueError, match="of type Pair here"):
+        WGSLCodeGen().generate(Parser(Lexer(source).get_tokens()).parse())
+
+
 def test_struct_initializer_that_reads_the_name_it_declares_is_refused():
     # The initializer reads the outer r; after the lowering it would read the new one.
     with pytest.raises(ValueError, match="reads a variable named r"):

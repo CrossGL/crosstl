@@ -6467,6 +6467,11 @@ class WGSLCodeGen(
                 return option_call_type
             if self.is_type_constructor_name(function_name):
                 return self.type_name_string(function_name)
+            if function_name in self._structs_by_name and not (
+                self.is_user_function_name(function_name)
+            ):
+                # A structure constructor such as Pair(a, b) has the structure's type.
+                return NamedType(function_name)
             if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
                 return "uint"
             packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(
