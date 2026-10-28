@@ -31981,9 +31981,22 @@ class VulkanSPIRVCodeGen(
             entry_function = getattr(stage, "entry_point", None)
             if requests_early_fragment_tests(entry_function, stage):
                 self.emit(f"OpExecutionMode %{function_id.id} EarlyFragmentTests")
-            if function_id.id in self.fragment_depth_replacing_function_ids:
+            # A stage-level output variable is created before its entry function, so the interface, not the
+            # function being generated when the built-in was registered, says which outputs the entry writes.
+            interface_builtins = {
+                self.builtin_names_by_variable_id.get(variable.id)
+                for variable in interface_variables
+                if variable.type.storage_class == "Output"
+            }
+            if (
+                function_id.id in self.fragment_depth_replacing_function_ids
+                or "FragDepth" in interface_builtins
+            ):
                 self.emit(f"OpExecutionMode %{function_id.id} DepthReplacing")
-            if function_id.id in self.fragment_stencil_ref_replacing_function_ids:
+            if (
+                function_id.id in self.fragment_stencil_ref_replacing_function_ids
+                or "FragStencilRefEXT" in interface_builtins
+            ):
                 self.emit(f"OpExecutionMode %{function_id.id} StencilRefReplacingEXT")
         elif execution_model == "Geometry":
             self.emit_geometry_execution_modes(function_id, stage)
