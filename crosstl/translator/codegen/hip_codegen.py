@@ -105,6 +105,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
@@ -4322,6 +4323,10 @@ class HipCodeGen(
             args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
 
+        library_call = generate_hip_library_call(self, func_name, raw_args, args)
+        if library_call is not None:
+            return library_call
+
         if func_name in self.synchronization_builtins and raw_args:
             raise ValueError(
                 f"HIP synchronization builtin '{func_name}' requires 0 "
@@ -4688,6 +4693,9 @@ class HipCodeGen(
         if operation == "countLeadingZeros":
             return f"{clz_intrinsic}({value})"
         if operation == "findLSB":
+            if bit_width == 64:
+                scalar_type = self.map_type(source_type) if source_type else None
+                return f"(__ffsll({ffs64_argument(value, scalar_type)}) - 1)"
             return f"({ffs_intrinsic}({value}) - 1)"
         if operation == "findMSB":
             clz_value = (
@@ -8058,6 +8066,9 @@ class HipCodeGen(
                 f"{intrinsic}_system",
                 (f"{intrinsic}_system", arg_count, kinds, kinds_label),
             )
+        # HIP's atomicAddNoRet adds to a float and returns nothing; it has no
+        # system-scoped form.
+        operations["atomicAddNoRet"] = ("atomicAddNoRet", 2, {"float"}, "float")
         return operations
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):
