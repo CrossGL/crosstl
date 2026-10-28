@@ -122,3 +122,13 @@ def test_scalar_and_vector_ternaries_keep_select(tmp_path):
 def test_struct_ternary_inside_an_expression_is_refused():
     with pytest.raises(ValueError, match="WGSL select takes scalars and vectors"):
         compute(PAIRS + "data[2] = (data[1] > 7.0 ? p : q).a;")
+
+
+def test_struct_initializer_that_reads_the_name_it_declares_is_refused():
+    # The initializer reads the outer r; after the lowering it would read the new one.
+    with pytest.raises(ValueError, match="reads a variable named r"):
+        compute(
+            PAIRS
+            + "Pair r = p;\n{\n    Pair r = data[1] > 7.0 ? q : r;\n"
+            + "    data[2] = r.a;\n}\ndata[3] = r.a;"
+        )

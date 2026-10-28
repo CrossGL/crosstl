@@ -12,6 +12,10 @@ branch::
 The condition is evaluated once and only the chosen branch is evaluated, as in the C-family source. A conditional in
 a branch is lowered again as that branch's assignment. Anywhere else, such as ``(c ? p : q).a``, the conditional is
 refused with ``ValueError`` rather than written as a ``select`` that naga rejects.
+
+An initializer is part of the declaration it initializes, so in ``Pair r = c ? q : r;`` inside a block the ``r``
+being read is the outer one, as in GLSL and WGSL. Moving the declaration above the ``if``/``else`` would make it
+read the new, zero-initialized variable instead, so an initializer that reads the name it declares is refused too.
 """
 
 from __future__ import annotations
@@ -65,6 +69,15 @@ class WGSLCompositeConditionalMixin:
             var_type = self.local_variable_declaration_type(stmt)
             if self.is_select_operand_type(var_type):
                 return None
+            if any(
+                isinstance(node, IdentifierNode) and node.name == stmt.name
+                for node in value.walk()
+            ):
+                raise ValueError(
+                    f"WGSL target cannot lower the conditional that initializes {stmt.name}: "
+                    f"it reads a variable named {stmt.name}, which would name the new variable "
+                    "once its declaration moves above the if/else; rename one of them"
+                )
             declaration = copy.copy(stmt)
             declaration.var_type = var_type
             declaration.vtype = var_type
