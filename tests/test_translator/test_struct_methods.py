@@ -95,7 +95,10 @@ def test_the_parser_keeps_member_functions_on_the_structure():
 
 def test_hlsl_receives_free_functions_that_take_the_receiver(tmp_path):
     code = _flat(_translate(tmp_path, SPAN, "directx"))
-    assert "float Span_width(Span receiver) { return (receiver.hi - receiver.lo); }" in code
+    assert (
+        "float Span_width(Span receiver) { return (receiver.hi - receiver.lo); }"
+        in code
+    )
     assert "return (receiver.lo + (t * Span_width(receiver)));" in code
     # Only the methods that write their receiver take it inout, including through a writing method.
     assert "void Span_widen(inout Span receiver, float d) { receiver.hi += d; }" in code
@@ -104,7 +107,10 @@ def test_hlsl_receives_free_functions_that_take_the_receiver(tmp_path):
         in code
     )
     # A parameter named like a member hides the member.
-    assert "float Span_clampTo(Span receiver, float lo) { return min(lo, receiver.hi); }" in code
+    assert (
+        "float Span_clampTo(Span receiver, float lo) { return min(lo, receiver.hi); }"
+        in code
+    )
     assert "Span Span_make(float a, float b)" in code
     assert "Span s = Span_make(float(iin[i]), ((float(iin[i]) * 2.0) + 1.0));" in code
     assert "float w = Span_width(s);" in code
@@ -161,7 +167,9 @@ def test_metal_output_computes_the_member_function_results(tmp_path):
     iin = device.newBufferWithBytes_length_options_(
         inputs, len(inputs), Metal.MTLResourceStorageModeShared
     )
-    results = device.newBufferWithLength_options_(32, Metal.MTLResourceStorageModeShared)
+    results = device.newBufferWithLength_options_(
+        32, Metal.MTLResourceStorageModeShared
+    )
     command = device.newCommandQueue().commandBuffer()
     encoder = command.computeCommandEncoder()
     encoder.setComputePipelineState_(pipeline)

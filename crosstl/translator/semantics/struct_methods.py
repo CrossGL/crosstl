@@ -112,7 +112,9 @@ def _owners(program):
     for stage in program_stages(program):
         if getattr(stage, "local_functions", None) is None:
             stage.local_functions = []
-        scopes.append((getattr(stage, "local_structs", None) or [], stage.local_functions))
+        scopes.append(
+            (getattr(stage, "local_structs", None) or [], stage.local_functions)
+        )
     owners = {}
     for structs, functions in scopes:
         for struct in structs:
@@ -319,7 +321,9 @@ class _Lowering:
             method.owner, function, method.static, method.free_name, method.receiver
         )
         body = _MethodBody(owner, rewritten)
-        body.run(lambda node, parent, slot: self._rewrite_in_method(body, node, parent, slot))
+        body.run(
+            lambda node, parent, slot: self._rewrite_in_method(body, node, parent, slot)
+        )
         if not method.static:
             receiver = A.ParameterNode(
                 method.receiver,
