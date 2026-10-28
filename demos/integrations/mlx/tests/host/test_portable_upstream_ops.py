@@ -1,3 +1,4 @@
+import argparse
 import hashlib
 import json
 import re
@@ -10,6 +11,8 @@ import yaml
 from demos.integrations.mlx.portable_host import (
     trace_records,
     upstream_module_groups,
+    upstream_subtest_shards,
+    upstream_test_seeds,
     verify,
     verify_random,
     verify_scatter,
@@ -19,6 +22,22 @@ from demos.integrations.mlx.portable_host import (
 )
 
 ops = verify_upstream_ops
+
+
+def shard_record(name, *, native):
+    _, shard, count = upstream_subtest_shards.parse(name)
+    if shard is None:
+        return {}
+    total = 240 if native else 0
+    selected = upstream_subtest_shards.expected_selection(shard, count, total)
+    return {
+        "subtests": {
+            "shard": shard,
+            "count": count,
+            "total": total,
+            "selected": selected,
+        }
+    }
 
 
 def records(*, native):
@@ -33,6 +52,7 @@ def records(*, native):
                 "dispatchCount": (
                     3 if native and name not in ops.NO_DISPATCH_TESTS else 0
                 ),
+                **shard_record(name, native=native),
             }
             for name in ops.UPSTREAM_TESTS
         ]
@@ -70,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 512
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 537
     assert all(
         name.startswith(
             (
@@ -105,6 +125,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_memory.TestMemory.test_",
                 "test_constants.TestConstants.test_",
                 "test_upsample.TestUpsample.test_",
+                "test_fast_sdpa.TestFastSDPA.test_",
             )
         )
         for name in ops.UPSTREAM_TESTS
@@ -121,6 +142,11 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + upstream_module_groups.TRAINING_TESTS
         + upstream_module_groups.ROPE_TESTS
         + upstream_module_groups.FFT_TESTS
+        + upstream_module_groups.SDPA_TESTS
+        + upstream_module_groups.ATTENTION_TESTS
+        + upstream_module_groups.ATTENTION_2_TESTS
+        + upstream_module_groups.ATTENTION_3_TESTS
+        + upstream_module_groups.ATTENTION_SWEEP_TESTS
     )
     assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
@@ -148,7 +174,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 507 and not set(opengl) & set(excluded)
+    assert len(opengl) == 532 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -180,6 +206,13 @@ def test_upstream_op_groups_partition_the_inventory():
         "training",
         "rope",
         "fft",
+        "sdpa",
+        "attention",
+        "attention-2",
+        "attention-3",
+        "attention-sweep-1",
+        "attention-sweep-2",
+        "attention-sweep-3",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -247,9 +280,9 @@ def test_upstream_op_groups_partition_the_inventory():
     # The GPU methods of whole modules run by module family, each family in
     # a group of its own.
     for group, modules, count in (
-        ("nn", ("test_nn.",), 39),
+        ("nn", ("test_nn.",), 41),
         ("transforms", ("test_vmap.", "test_eval."), 35),
-        ("serialization", ("test_export_import.", "test_load."), 30),
+        ("serialization", ("test_export_import.", "test_load."), 31),
         (
             "training",
             (
@@ -264,6 +297,13 @@ def test_upstream_op_groups_partition_the_inventory():
         ),
         ("rope", ("test_fast.", "test_upsample."), 9),
         ("fft", ("test_fft.",), 11),
+        ("sdpa", ("test_fast_sdpa.",), 6),
+        ("attention", ("test_fast_sdpa.",), 4),
+        ("attention-2", ("test_fast_sdpa.",), 6),
+        ("attention-3", ("test_fast_sdpa.",), 2),
+        ("attention-sweep-1", ("test_fast_sdpa.",), 1),
+        ("attention-sweep-2", ("test_fast_sdpa.",), 1),
+        ("attention-sweep-3", ("test_fast_sdpa.",), 1),
     ):
         tests = upstream_module_groups.GROUPS[group]
         assert ops.GROUPS[group] == tests and len(tests) == count
@@ -352,9 +392,142 @@ def test_upstream_op_workers_receive_their_group(tmp_path, monkeypatch):
     (command,) = commands
     assert command[command.index("--group") + 1] == "normalization"
     assert command[command.index("--worker") + 1] == "native"
+    assert "--seed" not in command
     args.group = None
+    args.seed = (1 << 64) - 1
     ops.run_worker(args, tmp_path, "cpu")
     assert "--group" not in commands[-1]
+    assert commands[-1][commands[-1].index("--seed") + 1] == str((1 << 64) - 1)
+
+
+def test_upstream_tests_replay_from_the_recorded_run_seed():
+    seeds = upstream_test_seeds
+    names = ops.upstream_tests("metal", "attention-2")
+    derived = [seeds.test_seed(7, name) for name in names]
+    # Each test's seed depends on the run seed and its own name only, so a
+    # test replays alone, and the CPU and native workers draw the same inputs.
+    assert derived == [seeds.test_seed(7, name) for name in reversed(names)][::-1]
+    assert len(set(derived)) == len(names)
+    assert all(0 <= value < 1 << 64 for value in derived)
+    assert seeds.test_seed(8, names[0]) != derived[0]
+    assert seeds.parse_seed(str((1 << 64) - 1)) == (1 << 64) - 1
+    for text in ("-1", str(1 << 64)):
+        with pytest.raises(argparse.ArgumentTypeError):
+            seeds.parse_seed(text)
+
+
+SHARDED_MODULE = """
+import unittest
+from itertools import product
+
+VISITED = []
+
+
+class Sweep(unittest.TestCase):
+    def test_cases(self):
+        for left, right in product(range(4), "ab"):
+            with self.subTest(left=left, right=right):
+                VISITED.append((left, right))
+                self.assertLess(left, 4)
+
+    @unittest.skip("needs a GPU")
+    def test_skipped(self):
+        for case in product(range(3)):
+            VISITED.append(case)
+"""
+
+
+def test_upstream_test_shards_run_each_subtest_once_in_order(tmp_path, monkeypatch):
+    shards = upstream_subtest_shards
+    names = shards.shard_names("sharded_sweep.Sweep.test_cases", 3)
+    assert names == tuple(f"sharded_sweep.Sweep.test_cases[{k}/3]" for k in (1, 2, 3))
+    assert shards.parse(names[1]) == ("sharded_sweep.Sweep.test_cases", 2, 3)
+    assert shards.parse("a.B.test_c") == ("a.B.test_c", None, None)
+    for name in ("a.B.test_c[0/3]", "a.B.test_c[4/3]", "a.B.test_c[1/1]", "a.B.c[1/x]"):
+        with pytest.raises(ValueError, match="Malformed"):
+            shards.parse(name)
+    with pytest.raises(ValueError, match="two shards"):
+        shards.shard_names("a.B.test_c", 1)
+    (tmp_path / "sharded_sweep.py").write_text(SHARDED_MODULE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from itertools import product
+
+    import sharded_sweep
+
+    original = sharded_sweep.product
+    ran = []
+    for name in names:
+        sharded_sweep.VISITED.clear()
+        result, tally = ops.run_upstream_test(name)
+        assert result.wasSuccessful() and result.testsRun == 1
+        assert sharded_sweep.product is original
+        ran.extend(sharded_sweep.VISITED)
+        _, shard, _ = shards.parse(name)
+        assert tally == {
+            "shard": shard,
+            "count": 3,
+            "total": 8,
+            "selected": len(range(shard - 1, 8, 3)),
+        }
+        shards.validate(name, tally, ran=True)
+    # The shards interleave, so together they run every case exactly once.
+    assert sorted(ran) == sorted(product(range(4), "ab"))
+    assert len(ran) == len(set(ran)) == 8
+    # A method skipped as a whole draws no case.
+    sharded_sweep.VISITED.clear()
+    result, tally = ops.run_upstream_test("sharded_sweep.Sweep.test_skipped[1/2]")
+    assert len(result.skipped) == 1 and not sharded_sweep.VISITED
+    shards.validate("sharded_sweep.Sweep.test_skipped[1/2]", tally, ran=False)
+    with pytest.raises(ValueError, match="wrong subtests"):
+        shards.validate("sharded_sweep.Sweep.test_skipped[1/2]", tally, ran=True)
+    # An unsharded test runs whole and records no tally.
+    sharded_sweep.VISITED.clear()
+    result, tally = ops.run_upstream_test("sharded_sweep.Sweep.test_cases")
+    assert tally is None and len(sharded_sweep.VISITED) == 8
+    shards.validate("sharded_sweep.Sweep.test_cases", None, ran=True)
+    with pytest.raises(ValueError, match="unsharded"):
+        shards.validate("sharded_sweep.Sweep.test_cases", {"total": 8}, ran=True)
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing", "shard", "count", "total", "selected", "keys", "type"]
+)
+def test_upstream_test_shard_records_must_cover_their_share(fault):
+    name = upstream_module_groups.ATTENTION_SWEEP_TESTS[1]
+    record = records(native=True)
+    item = next(item for item in record["tests"] if item["test"] == name)
+    assert item["subtests"] == {"shard": 2, "count": 3, "total": 240, "selected": 80}
+    ops.validate_upstream(record, native=True)
+    if fault == "missing":
+        del item["subtests"]
+    elif fault == "keys":
+        item["subtests"]["extra"] = 1
+    elif fault == "type":
+        item["subtests"]["total"] = 240.0
+    elif fault == "total":
+        # A shard that drew no case did not run its share.
+        item["subtests"].update(total=0, selected=0)
+    else:
+        item["subtests"][fault] += 1
+    with pytest.raises(ValueError, match="shard"):
+        ops.validate_upstream(record, native=True)
+
+
+def test_upstream_sweep_shards_cover_test_sdpa_in_their_own_groups():
+    sweep = upstream_module_groups.ATTENTION_SWEEP_TESTS
+    assert len(sweep) == upstream_module_groups.SWEEP_SHARDS == 3
+    assert {upstream_subtest_shards.parse(name)[0] for name in sweep} == {
+        "test_fast_sdpa.TestFastSDPA.test_sdpa"
+    }
+    assert [upstream_subtest_shards.parse(name)[1:] for name in sweep] == [
+        (1, 3),
+        (2, 3),
+        (3, 3),
+    ]
+    assert "test_fast_sdpa.TestFastSDPA.test_sdpa" not in ops.UPSTREAM_TESTS
+    assert set(sweep) <= ops.GPU_ONLY_TESTS
+    for index, name in enumerate(sweep, start=1):
+        assert ops.GROUPS[f"attention-sweep-{index}"] == (name,)
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -371,7 +544,10 @@ def test_upstream_op_results_cannot_skip_or_replace_tests(native, fault):
     elif fault == "failure":
         tests[3]["failures"] = 1
     elif fault == "skip":
-        tests[-1]["skips"] = 1
+        # The last test that both workers must run.
+        next(
+            item for item in reversed(tests) if item["test"] not in ops.GPU_ONLY_TESTS
+        )["skips"] = 1
     elif fault == "dispatch":
         # Native tests must reach a translated kernel; CPU tests must not.
         tests[2]["dispatchCount"] = 0 if native else 1

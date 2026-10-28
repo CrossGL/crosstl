@@ -7,14 +7,17 @@ order unittest loads them. Methods that dispatch nothing, and methods that
 need a kernel family the host does not port yet, are not listed.
 """
 
+from demos.integrations.mlx.portable_host import upstream_subtest_shards
+
 
 def _tests(module, case, names):
     return tuple(f"{module}.{case}.test_{name}" for name in names)
 
 
 # test_nn: module state, weight files and every layer whose forward and
-# backward passes reach the GPU, among them the normalization layers, the
-# recurrent GRU, pooling, the quantized embedding and both upsampling modes.
+# backward passes reach the GPU, among them the convolutions, the
+# normalization layers, the recurrent GRU, pooling, the quantized embedding
+# and both upsampling modes.
 NN_TESTS = _tests(
     "test_nn",
     "TestBase",
@@ -34,6 +37,8 @@ NN_TESTS = _tests(
         "batch_norm_stats",
         "causal_mask",
         "celu",
+        "conv1d",
+        "conv2d",
         "elu",
         "gelu",
         "glu",
@@ -125,6 +130,7 @@ SERIALIZATION_TESTS = _tests(
     (
         "basic_export_import",
         "export_control_flow",
+        "export_conv",
         "export_import_metadata",
         "export_import_multi_with_constants",
         "export_import_scatter_sum",
@@ -267,6 +273,68 @@ FFT_TESTS = _tests(
     ),
 )
 
+# test_fast_sdpa: queries of at most eight positions, which
+# scaled_dot_product_attention.cpp runs through the vector kernels in one pass
+# or, for long grouped queries, in two (sdpa.inc), and the inf-score test,
+# whose four-wide heads take MLX's composed fallback. The other tests reach
+# the steel full-attention kernels (ATTENTION_TESTS) or run only where
+# mx.metal.is_available(). test_sdpa_vector_gqa_long draws about 10^8 normal
+# samples through the translated random-bits kernel, whose evidence records
+# every byte, and does not finish within the native worker's bound.
+SDPA_TESTS = _tests(
+    "test_fast_sdpa",
+    "TestFastSDPA",
+    (
+        "sdpa_vector_kv_transposed_head_seq",
+        "sdpa_vector",
+        "sdpa_inf_score",
+        "sdpa_few_query",
+        "sdpa_vector_batched",
+        "sdpa_blocks_env_override",
+    ),
+)
+
+# test_fast_sdpa: queries of more than eight positions, which
+# scaled_dot_product_attention.cpp runs through the steel full-attention
+# kernel (sdpa.inc), and the gradients, which run its fused VJP kernels after
+# a forward that saves the logsumexp. The host has no NAX, so the padded head
+# dims and the NAX kernels never apply. Each head-dim test runs 48 subtests
+# of about 70 dispatches, so the tests are split in groups that each fit the
+# native worker's bound: the head dims 72 and 80, the head dim 96 with the
+# small and gradient tests, and the tests that draw tens of millions of normal
+# samples. test_sdpa alone runs a subtest for each of its 240 dtype, layout,
+# mask and shape cases, longer than the bound, so each of three sweep groups
+# runs every third case (upstream_subtest_shards).
+ATTENTION_TESTS = _tests(
+    "test_fast_sdpa",
+    "TestFastSDPA",
+    (
+        "sdpa_head_dim_72",
+        "sdpa_head_dim_80",
+        "sdpa_head_dim_72_80_sinks",
+        "sdpa_fully_masked",
+    ),
+)
+ATTENTION_2_TESTS = _tests(
+    "test_fast_sdpa",
+    "TestFastSDPA",
+    (
+        "sdpa_head_dim_96",
+        "sdpa_broadcast_mask",
+        "sdpa_noncontiguous_inputs",
+        "sdpa_promote_mask",
+        "sdpa_nan_bug",
+        "sdpa_grad",
+    ),
+)
+ATTENTION_3_TESTS = _tests(
+    "test_fast_sdpa", "TestFastSDPA", ("sdpa_attention_sinks", "sdpa_sliced")
+)
+SWEEP_SHARDS = 3
+ATTENTION_SWEEP_TESTS = upstream_subtest_shards.shard_names(
+    "test_fast_sdpa.TestFastSDPA.test_sdpa", SWEEP_SHARDS
+)
+
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.
 GROUPS = {
     "nn": NN_TESTS,
@@ -275,4 +343,12 @@ GROUPS = {
     "training": TRAINING_TESTS,
     "rope": ROPE_TESTS,
     "fft": FFT_TESTS,
+    "sdpa": SDPA_TESTS,
+    "attention": ATTENTION_TESTS,
+    "attention-2": ATTENTION_2_TESTS,
+    "attention-3": ATTENTION_3_TESTS,
+    **{
+        f"attention-sweep-{index}": (name,)
+        for index, name in enumerate(ATTENTION_SWEEP_TESTS, start=1)
+    },
 }

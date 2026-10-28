@@ -2792,7 +2792,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Sixty-three jobs, twenty-one of them on macOS: run them in seven waves.
+      # Eighty-four jobs, twenty-eight of them on macOS: run them in nine waves.
       max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
@@ -2819,6 +2819,13 @@ jobs:
             training,
             rope,
             fft,
+            sdpa,
+            attention,
+            attention-2,
+            attention-3,
+            attention-sweep-1,
+            attention-sweep-2,
+            attention-sweep-3,
           ]
         target: [opengl, directx, metal]
         include:

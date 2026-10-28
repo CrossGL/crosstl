@@ -84,6 +84,8 @@ from demos.integrations.mlx.portable_host import (
     sort_dispatch,
     sort_evidence,
     sort_layout,
+    upstream_subtest_shards,
+    upstream_test_seeds,
     wide_column_dispatch,
     wide_column_evidence,
     wide_reduction_evidence,
@@ -158,6 +160,9 @@ from demos.integrations.mlx.portable_host.sort_packages import (
 )
 from demos.integrations.mlx.portable_host.sort_packages import SortPackageCache
 from demos.integrations.mlx.portable_host.trace_records import TraceStream
+from demos.integrations.mlx.portable_host.upstream_module_groups import (
+    ATTENTION_SWEEP_TESTS,
+)
 from demos.integrations.mlx.portable_host.upstream_module_groups import (
     GROUPS as MODULE_GROUPS,
 )
@@ -611,6 +616,9 @@ UPSTREAM_TESTS = (
         # This reaches the kernels MLX generates for the fused tapes of
         # mx.unique's compiled helpers, with sorts and scans.
         "test_ops.TestOps.test_unique",
+        # This reaches the translated masked_scatter kernels through boolean
+        # masks of whole arrays and of leading dimensions.
+        "test_ops.TestOps.test_masked_scatter",
     ) + (
         # These reach lazily translated contiguous and strided, forward and
         # reverse, inclusive and exclusive scans of float32, int32, int64 and
@@ -749,6 +757,20 @@ GPU_ONLY_TESTS = frozenset(
         ),
         # Evaluates GPU and CPU streams that wait on each other.
         "test_eval.TestEval.test_multistream_deadlock",
+        # Overrides the two-pass vector kernels' block count (sdpa.inc).
+        "test_fast_sdpa.TestFastSDPA.test_sdpa_blocks_env_override",
+        # Full attention with head dims 72, 80 and 96, and the shards of
+        # test_sdpa, which is too slow on the CPU.
+        *(
+            "test_fast_sdpa.TestFastSDPA." + name
+            for name in (
+                "test_sdpa_head_dim_72",
+                "test_sdpa_head_dim_80",
+                "test_sdpa_head_dim_72_80_sinks",
+                "test_sdpa_head_dim_96",
+            )
+        ),
+        *ATTENTION_SWEEP_TESTS,
     )
 )
 # CI runs each group in its own job. The normalization gradients move tens of
@@ -949,9 +971,15 @@ def worker(args):
     records = []
     for name in tests:
         start = host.dispatch_count if host else 0
-        result = unittest.TextTestRunner(verbosity=2).run(
-            unittest.defaultTestLoader.loadTestsFromName(name)
+        seed = (
+            None
+            if args.seed is None
+            else upstream_test_seeds.test_seed(args.seed, name)
         )
+        if seed is not None:
+            mx.random.seed(seed)
+            np.random.seed(seed % (1 << 32))
+        result, subtests = run_upstream_test(name)
         records.append(
             {
                 "test": name,
@@ -960,6 +988,8 @@ def worker(args):
                 "errors": len(result.errors),
                 "skips": len(result.skipped),
                 "dispatchCount": host.dispatch_count - start if host else 0,
+                "seed": seed,
+                **({} if subtests is None else {"subtests": subtests}),
             }
         )
         write_json(output / "upstream.json", {"tests": records})
@@ -970,6 +1000,18 @@ def worker(args):
     validate_upstream({"tests": records}, native=host is not None, inventory=tests)
     if audit is not None and audit.error is not None:
         raise RuntimeError(f"The native trace audit failed: {audit.error}")
+
+
+def run_upstream_test(name):
+    """Run upstream test ``name``, or its shard, and the shard's subtest tally."""
+    test, shard, count = upstream_subtest_shards.parse(name)
+    suite = unittest.defaultTestLoader.loadTestsFromName(test)
+    if shard is None:
+        return unittest.TextTestRunner(verbosity=2).run(suite), None
+    module = sys.modules[test.split(".", 1)[0]]
+    with upstream_subtest_shards.selecting(module, shard, count) as tally:
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+    return result, dict(tally)
 
 
 def validate_upstream(record, *, native, inventory=UPSTREAM_TESTS):
@@ -987,6 +1029,9 @@ def validate_upstream(record, *, native, inventory=UPSTREAM_TESTS):
             or (count <= 0 if dispatches else count != 0)
         ):
             raise ValueError(f"Unchanged upstream test failed: {item.get('test')}")
+        upstream_subtest_shards.validate(
+            item["test"], item.get("subtests"), ran=not skips
+        )
 
 
 def load_indexes(args):
@@ -1333,6 +1378,8 @@ def run_worker(args, output, mode):
         command.extend(("--reductions", str(path.resolve())))
     if args.group is not None:
         command.extend(("--group", args.group))
+    if args.seed is not None:
+        command.extend(("--seed", str(args.seed)))
     command.extend(("--output-dir", str(output / mode)))
     with (output / f"{mode}.stdout").open("w") as stdout:
         with (output / f"{mode}.stderr").open("w") as stderr:
@@ -1345,6 +1392,8 @@ def run_worker(args, output, mode):
 def verify(args):
     output = args.output_dir.resolve()
     output.mkdir(parents=True)
+    if args.seed is None:
+        args.seed = int.from_bytes(os.urandom(8), "little")
     before = verify_prepared(args.mlx_root)
     target = package_target(args.packages)
     tests = upstream_tests(target, args.group)
@@ -1359,6 +1408,7 @@ def verify(args):
         "adaptation": before,
         "upstreamTestSources": sources,
         "group": args.group,
+        "seed": args.seed,
         "upstreamTests": list(tests),
         "excludedUpstreamTests": dict(TARGET_EXCLUSIONS.get(target, {})),
         "workers": {},
@@ -1370,7 +1420,10 @@ def verify(args):
             evidence["workers"][mode] = run_worker(args, output, mode)
             write_json(output / "evidence.json", evidence)
         if any(value["returncode"] for value in evidence["workers"].values()):
-            raise RuntimeError("An upstream op worker failed; inspect retained logs")
+            raise RuntimeError(
+                f"An upstream op worker failed with seed {args.seed}; "
+                "inspect retained logs"
+            )
         upstream = {}
         for mode in ("cpu", "native"):
             upstream[mode] = json.loads((output / mode / "upstream.json").read_text())
@@ -1439,6 +1492,12 @@ def parse(argv=None):
     parser.add_argument("--reductions", type=Path, action="append", required=True)
     parser.add_argument("--worker", choices=("cpu", "native", *NEGATIVE_CHECKS))
     parser.add_argument("--group", choices=tuple(GROUPS))
+    parser.add_argument(
+        "--seed",
+        type=upstream_test_seeds.parse_seed,
+        help="the run seed test_seed derives each test's MLX seed from; "
+        "a random one is recorded when omitted",
+    )
     return parser.parse_args(argv)
 
 
