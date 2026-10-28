@@ -69,6 +69,11 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
 )
+from .gpu_device_globals import (
+    at_file_scope,
+    constant_in_device_memory,
+    file_scope_placement,
+)
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -1732,7 +1737,10 @@ class CudaCodeGen(
         declaration = self.format_typed_declarator(declaration_type, node.name)
         if value is not None:
             declaration += f" = {self.visit(value)}"
-        self.emit(f"const {declaration};")
+        declaration = f"const {declaration}"
+        if at_file_scope(self):
+            declaration = constant_in_device_memory(declaration)
+        self.emit(f"{declaration};")
 
     def format_variable_declaration(self, node):
         var_type = None
@@ -2841,9 +2849,10 @@ class CudaCodeGen(
         metadata_comment = self.cuda_resource_metadata_comment(node, var_type)
         if metadata_comment:
             self.emit(metadata_comment)
+        place = file_scope_placement(self, node, metadata_comment)
         declaration = self.format_variable_declaration(node)
         if declaration != node.name:
-            self.emit(f"{declaration};")
+            self.emit(f"{place(declaration)};")
             initial_value = getattr(
                 node,
                 "initial_value",
@@ -2863,17 +2872,17 @@ class CudaCodeGen(
                     effective_var_type,
                 )
             if metadata_declaration:
-                self.emit(f"{metadata_declaration};")
+                self.emit(f"{place(metadata_declaration)};")
             length_declaration = self.structured_buffer_length_declaration(
                 node.name, var_type
             )
             if length_declaration:
-                self.emit(f"{length_declaration};")
+                self.emit(f"{place(length_declaration)};")
             counter_declaration = self.structured_buffer_counter_declaration(
                 node.name, var_type
             )
             if counter_declaration:
-                self.emit(f"{counter_declaration};")
+                self.emit(f"{place(counter_declaration)};")
             return None
 
         return node.name
