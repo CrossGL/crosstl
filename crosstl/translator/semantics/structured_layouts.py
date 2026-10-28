@@ -58,6 +58,8 @@ __all__ = [
     "TARGETS",
     "StructuredLayoutUnsupportedError",
     "element_stride",
+    "holds_boolean",
+    "layouts_agree",
     "legalize_structured_layouts",
 ]
 
@@ -375,6 +377,45 @@ def element_stride(program, type_node, rules, context, cache=None) -> int:
         cache[source] = _Shapes(program, source)
     size, alignment, _leaves = _layout(cache[source].of(type_node, context), rules)
     return _round(size, alignment)
+
+
+def _cached_shape(program, type_node, source, rules, context, cache):
+    cache = {} if cache is None else cache
+    shapes = "metal" if "metal" in (source, rules) else "hlsl"
+    if shapes not in cache:
+        cache[shapes] = _Shapes(program, shapes)
+    return cache[shapes].of(type_node, context)
+
+
+def holds_boolean(program, type_node, context, cache=None) -> bool:
+    """Whether ``type_node`` holds a ``bool``, whose storage size every rule set chooses for itself."""
+
+    def holds(shape):
+        if shape.form == "opaque":
+            return shape.opaque[0] == "b"
+        if shape.form == "array":
+            return holds(shape.element)
+        return shape.kind == "b" or any(
+            holds(member) for _n, member, _o in shape.members
+        )
+
+    return holds(_cached_shape(program, type_node, "metal", "metal", context, cache))
+
+
+def layouts_agree(program, type_node, source, rules, context, cache=None) -> bool:
+    """Whether a runtime array of ``type_node`` has the same stride and scalar offsets under ``rules`` as under
+    the rules of ``source`` (``hlsl``, ``std430`` or ``metal``).
+
+    ``cache`` is as for :func:`element_stride`. Raises :class:`StructuredLayoutUnsupportedError` for a type without
+    a layout.
+    """
+    shape = _cached_shape(program, type_node, source, rules, context, cache)
+    size, alignment, leaves = _layout(shape, source)
+    other_size, other_alignment, other_leaves = _layout(shape, rules)
+    return (
+        _round(size, alignment) == _round(other_size, other_alignment)
+        and leaves == other_leaves
+    )
 
 
 def _packed_shape(shape, context):

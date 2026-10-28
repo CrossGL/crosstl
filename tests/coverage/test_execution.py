@@ -292,12 +292,10 @@ def test_a_probe_that_declares_a_constants_block_gets_one(monkeypatch, tmp_path)
         "00001-native": None,
         "00001-translated": None,
     }
-    assert np.frombuffer(execution.CONSTANTS, np.float32).tolist() == [
-        2.5,
-        -1.75,
-        3.25,
-        0.5,
-    ]
+    # Four std140 rows whose words all differ, so a translation that reads another offset reads another value.
+    words = np.frombuffer(execution.CONSTANTS, np.float32).tolist()
+    assert words[:4] == [2.5, -1.75, 3.25, 0.5]
+    assert len(words) == 16 and len(set(words)) == 16
     path = tmp_path / "scaled.metal"
     path.write_text(SCALED)
     assert execution.declares_constants("metal", path)

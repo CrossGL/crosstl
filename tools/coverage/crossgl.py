@@ -28,6 +28,9 @@ from .model import (
 from .objects import HIT_OBJECT, OBJECTS, VERTEX
 from .spellings import ELEMENT, SUBSCRIPT
 from .templates import C_FAMILY, Template
+from .templates.abstractions import ENUM
+from .templates.abstractions import FAMILY as ABSTRACTIONS
+from .templates.abstractions import GENERIC, SPAN, TWICE, WEIGH, scoped_enum
 from .templates.aggregates import ABSORB
 from .templates.aggregates import FAMILY as AGGREGATES
 from .templates.base import (
@@ -40,8 +43,14 @@ from .templates.base import (
     POSE,
     SPREAD,
 )
+from .templates.blocks import CROSSGL as BLOCKS_CROSSGL
+from .templates.booleans import CROSSGL as BOOLEANS_CROSSGL
+from .templates.columns import CROSSGL as COLUMNS_CROSSGL
 from .templates.edges import FAMILY as EDGES
+from .templates.elements import CROSSGL as ELEMENTS_CROSSGL
 from .templates.forms import FAMILY as FORMS
+from .templates.helpers import CROSSGL as HELPERS_CROSSGL
+from .templates.identifiers import CROSSGL as IDENTIFIERS_CROSSGL
 from .templates.idioms import (
     ALIAS_HELPER,
     ALIASES,
@@ -50,11 +59,27 @@ from .templates.idioms import (
 )
 from .templates.idioms import FAMILY as IDIOMS
 from .templates.idioms import SHADOW_HELPERS
+from .templates.initializers import CROSSGL as INITIALIZERS_CROSSGL
+from .templates.initializers import FAMILY as INITIALIZERS
+from .templates.integers import CROSSGL as INTEGERS_CROSSGL
+from .templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
 from .templates.lexical import FILL, SPREAD4, reserved
+from .templates.orientation import CROSSGL as ORIENTATION_CROSSGL
+from .templates.packing import CROSSGL as PACKING_CROSSGL
+from .templates.portability import FAMILY as PORTABILITY
+from .templates.portability import (
+    GLSL_ARRAY,
+    GLSL_SPREAD,
+    SHADER_NAMES,
+    constants,
+    intrinsic_names,
+)
+from .templates.records import CROSSGL as RECORDS_CROSSGL
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
+from .templates.workgroups import CROSSGL as WORKGROUPS_CROSSGL
 
 # The stage block of each ray-tracing stage a probe runs in.
 _RAYTRACING_BLOCKS = {
@@ -565,6 +590,33 @@ CONSTRUCTS: dict[str, Template] = {
     "type-alias": Template(
         IDIOMS["type-alias"].body, ALIAS_HELPER, prelude=f"{PAIR}\n{ALIASES}"
     ),
+    **ABSTRACTIONS,
+    "enum-constant": Template(scoped_enum("::"), prelude=ENUM),
+    "struct-method": Template(ABSTRACTIONS["struct-method"].body, prelude=SPAN),
+    "generic-function": Template(GENERIC, prelude=f"generic<T> {TWICE}"),
+    "const-parameter": Template(
+        ABSTRACTIONS["const-parameter"].body, WEIGH, prelude=PAIR
+    ),
+    **PORTABILITY,
+    "constant-expression": Template(
+        PORTABILITY["constant-expression"].body, prelude=constants("const")
+    ),
+    "intrinsic-name": intrinsic_names(SHADER_NAMES),
+    "array-return": Template(GLSL_ARRAY, GLSL_SPREAD),
+    **INITIALIZERS,
+    **INITIALIZERS_CROSSGL,
+    **HELPERS_CROSSGL,
+    **LAYOUTS_CROSSGL,
+    **ELEMENTS_CROSSGL,
+    **BLOCKS_CROSSGL,
+    **WORKGROUPS_CROSSGL,
+    **RECORDS_CROSSGL,
+    **IDENTIFIERS_CROSSGL,
+    **INTEGERS_CROSSGL,
+    **COLUMNS_CROSSGL,
+    **BOOLEANS_CROSSGL,
+    **PACKING_CROSSGL,
+    **ORIENTATION_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
