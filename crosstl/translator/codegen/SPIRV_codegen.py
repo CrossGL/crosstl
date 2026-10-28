@@ -142,6 +142,13 @@ from .spirv_exponent_builtins import (
     spirv_ldexp_call,
     spirv_output_operand_call,
 )
+from .spirv_extension_builtins import BUILTIN_ALIASES as SPIRV_EXTENSION_BUILTIN_ALIASES
+from .spirv_extension_builtins import (
+    extension_any_stage_builtin_info,
+    extension_builtin_info,
+    require_extension_builtin_capability,
+    unmapped_builtin_reason,
+)
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
@@ -192,13 +199,6 @@ from .spirv_ray_builtins import (
     ray_builtin_info,
     ray_constant_value,
     transposed_ray_builtin,
-)
-from .spirv_extension_builtins import (
-    BUILTIN_ALIASES as SPIRV_EXTENSION_BUILTIN_ALIASES,
-    extension_any_stage_builtin_info,
-    extension_builtin_info,
-    require_extension_builtin_capability,
-    unmapped_builtin_reason,
 )
 from .spirv_refusals import SpirvRefusals
 from .spirv_separate_textures import separate_texture_type_info

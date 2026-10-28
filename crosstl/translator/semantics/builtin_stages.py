@@ -290,4 +290,3 @@ def _where(name, rule):
         if stages:
             parts.append(f"{label} of {', '.join(stages)}")
     return f"GLSL declares {name} as " + " and ".join(parts)
-
