@@ -400,6 +400,7 @@ from .metal_keyword_identifiers import (
     rename_metal_keyword_members,
     rename_metal_keyword_parameters,
 )
+from .metal_combined_samplers import bind_combined_samplers
 from .metal_library_functions import rename_msl_library_functions
 from .metal_library_structs import is_metal_library_struct
 from .metal_matrix_builtins import MetalMatrixBuiltins
@@ -2043,6 +2044,7 @@ class MetalCodeGen(
         )
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
+        ast = bind_combined_samplers(ast)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
@@ -22007,9 +22009,14 @@ class MetalCodeGen(
             dependencies.add(buffer_name)
 
     def texture_sampling_uses_implicit_sampler(self, func_name):
-        return is_texture_sampling_operation(
-            func_name
-        ) or is_texture_query_lod_operation(func_name)
+        # A depth comparison of a combined sampler samples through its sampler too.
+        return (
+            is_texture_sampling_operation(func_name)
+            or is_texture_query_lod_operation(func_name)
+            or is_texture_compare_operation(func_name)
+            or is_texture_gather_compare_operation(func_name)
+            or is_projected_texture_compare_operation(func_name)
+        )
 
     def texture_call_needs_implicit_sampler_dependency(self, func_name, args):
         if not self.texture_sampling_uses_implicit_sampler(func_name):
