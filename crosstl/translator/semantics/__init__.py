@@ -136,6 +136,7 @@ from .storage_blocks import (
     normalize_spirv_storage_blocks,
 )
 from .struct_constructor_conversions import convert_struct_constructor_arguments
+from .struct_methods import StructMethodUnsupportedError, lower_struct_methods
 from .struct_scalar_splats import expand_struct_scalar_splats
 from .structured_layouts import (
     StructuredLayoutUnsupportedError,
@@ -210,6 +211,7 @@ __all__ = [
     "SpirvArrayLengthUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
+    "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
@@ -250,6 +252,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
     Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
+    Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
@@ -344,6 +347,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     hoist_local_structs(program, report.target)
+    lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
     refuse_undeclared_types(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)

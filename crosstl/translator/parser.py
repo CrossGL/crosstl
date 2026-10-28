@@ -1439,10 +1439,19 @@ class Parser:
 
         self.eat("LBRACE")
         members = []
+        methods = []
 
         previous_scope = self.enter_generic_parameter_scope(generic_params)
         try:
             while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                if self.is_function_declaration():
+                    # A member function reads its receiver's members by name.
+                    static_member = self.current_token[0] == "STATIC"
+                    method = self.parse_function()
+                    if static_member and "static" not in method.qualifiers:
+                        method.qualifiers.append("static")
+                    methods.append(method)
+                    continue
                 member = self.parse_struct_member()
                 self.append_parsed_nodes(members, member)
         finally:
@@ -1461,6 +1470,7 @@ class Parser:
             members=members,
             generic_params=generic_params,
             attributes=attributes,
+            methods=methods,
         )
 
     def parse_struct_member(self):
@@ -1592,6 +1602,12 @@ class Parser:
                 self.eat("SEMICOLON")
                 return members[0] if len(members) == 1 else members
 
+            if self.current_token[0] == "LPAREN":
+                # Skipping to the next ';' would drop a member function silently.
+                raise SyntaxError(
+                    f"Struct member '{name}' is declared like a function that CrossGL "
+                    "cannot read as a member function"
+                )
             # Skip malformed member suffix while preserving earlier declarators.
             while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
                 self.skip_unknown_token()
