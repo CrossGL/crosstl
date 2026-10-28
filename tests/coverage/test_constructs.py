@@ -14,7 +14,13 @@ from tools.coverage import (
     validators,
 )
 from tools.coverage.model import Feature, Result
-from tools.coverage.templates import fragments, interfaces, relations, vertices
+from tools.coverage.templates import (
+    fragments,
+    interfaces,
+    rasterization,
+    relations,
+    vertices,
+)
 from tools.coverage.templates.base import ABSENT, OPERATORS
 
 _MODELS = [
@@ -755,6 +761,42 @@ def test_vertex_probes_use_each_languages_built_ins():
     for language, names in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & set(vertices.NAMES) == set(vertices.NAMES) - names, language
+
+
+def test_rasterization_probes_read_the_primitive_and_sample_or_write_coverage():
+    feature = _feature("glsl", "sample-index")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    assert feature.group == "BuiltIn.SampleId Capability.SampleRateShading"
+    for language, name, line in (
+        ("glsl", "primitive-id", "float(gl_PrimitiveID)"),
+        ("glsl", "sample-mask-input", "gl_SampleMaskIn[0] & 1"),
+        ("glsl", "sample-mask", "gl_SampleMask[0] = 1;"),
+        ("hlsl", "sample-index", "uint sid : SV_SampleIndex"),
+        ("hlsl", "sample-mask", "uint mask : SV_Coverage;"),
+        ("slang", "primitive-id", "uint pid : SV_PrimitiveID"),
+        ("metal", "sample-mask-input", "uint mask [[sample_mask]]"),
+        ("metal", "sample-mask", "uint mask [[sample_mask]];"),
+        ("wgsl", "primitive-id", "enable primitive_index;"),
+        ("wgsl", "sample-index", "@builtin(sample_index) sid: u32"),
+        ("rust", "sample-mask-input", "#[spirv(sample_mask, flat)] mask: [u32; 1]"),
+        ("rust", "primitive-id", "#[spirv(primitive_id, flat)] pid: u32"),
+        ("rust", "sample-mask", "#[spirv(sample_mask)] mask: &mut [u32; 1]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "sample-mask-input"), "crossgl").source
+    assert "        uint mask @ gl_SampleMaskIn;\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "sample-mask"), "crossgl").source
+    assert "output.mask = 1u;" in crossgl and "uint mask @ gl_SampleMask;" in crossgl
+    # GLSL ES 3.00 has none of the four built-ins, and the kernel languages have no fragment stage.
+    absent = dict.fromkeys(
+        ("webgl", "cuda", "hip", "opencl", "mojo"), set(rasterization.NAMES)
+    )
+    for language, names in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert (
+            listed & set(rasterization.NAMES) == set(rasterization.NAMES) - names
+        ), language
 
 
 def test_relation_probes_compare_integer_and_boolean_vectors_per_language():

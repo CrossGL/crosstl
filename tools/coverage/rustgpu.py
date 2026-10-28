@@ -64,6 +64,7 @@ CAPABILITIES = (
     "ShaderClockKHR",
     "VulkanMemoryModelDeviceScope",
     "ClipDistance",
+    "SampleRateShading",
     "Geometry",
     "GeometryStreams",
     "Tessellation",
