@@ -26,6 +26,7 @@ from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import cuda_partial_output
 
 EXTERNAL_SAMPLES = [
     {
@@ -271,7 +272,12 @@ shader MatrixConstructorComputeShader {
 
 
 def assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
-    cuda_code = crossgl_to_cuda(source)
+    return assert_cuda_reverse_codegen_prunes_generated_matrix_helpers(
+        crossgl_to_cuda(source)
+    )
+
+
+def assert_cuda_reverse_codegen_prunes_generated_matrix_helpers(cuda_code):
     assert "struct float2x2" in cuda_code
 
     crossgl = cuda_to_crossgl(cuda_code)
@@ -291,12 +297,17 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
 
 
-def test_compiler_manual_sampler_fixture_reverse_codegen_prunes_cuda_helpers():
+def test_compiler_manual_sampler_fixture_refuses_cuda_depth_compare_and_prunes_helpers():
     # Reduced from CrossGL-Compiler/tests/fixtures/
-    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl.
-    crossgl = assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(
-        COMPILER_MANUAL_SAMPLER_FIXTURE
-    )
+    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl. A CUDA texture object has no
+    # depth comparison, so the program is refused; its partial output still round-trips.
+    program = CrossGLParser(
+        CrossGLLexer(COMPILER_MANUAL_SAMPLER_FIXTURE).tokens
+    ).parse()
+    cuda_code, refusal = cuda_partial_output(CudaCodeGen().generate, program)
+    assert "CUDA shadow resource call: textureCompare on sampler2DShadow" in refusal
+
+    crossgl = assert_cuda_reverse_codegen_prunes_generated_matrix_helpers(cuda_code)
 
     assert len(crossgl) < 2_000
     assert "textureCompareLodManual(" in crossgl

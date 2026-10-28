@@ -160,6 +160,7 @@ from .extended_arithmetic_builtins import (
     emit_metal_extended_arithmetic_helpers,
     metal_extended_arithmetic_call,
 )
+from .float_remainder_assignment import float_remainder_assignment
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
@@ -11106,6 +11107,22 @@ class MetalCodeGen(
         zero = "0.0" if component_type in {"float", "half", "double"} else "0"
         return f"any(({rendered}) < {mapped_type}({zero}))"
 
+    def metal_is_floating_value_type(self, vtype):
+        """Whether ``vtype`` is a floating-point scalar or vector."""
+        if vtype is None:
+            return False
+        mapped = self.map_type(vtype)
+        if not isinstance(mapped, str) or not (
+            self.is_scalar_value_type(mapped) or self.is_vector_value_type(mapped)
+        ):
+            return False
+        return self.vector_component_type(mapped) in {
+            "float",
+            "half",
+            "double",
+            "bfloat",
+        }
+
     def generate_assignment(self, node):
         if hasattr(node, "target") and hasattr(node, "value"):
             target = node.target
@@ -11126,6 +11143,17 @@ class MetalCodeGen(
         )
         if matrix_product is not None:
             return self.generate_assignment(matrix_product)
+        # MSL has no floating %=; x = x % y lowers the remainder through fmod.
+        remainder = float_remainder_assignment(
+            target,
+            value,
+            op,
+            type_of=self.expression_result_type,
+            is_floating=self.metal_is_floating_value_type,
+            backend="metal",
+        )
+        if remainder is not None:
+            return self.generate_assignment(remainder)
         rhs = self.generate_expression_with_expected(
             value, self.metal_assignment_value_type(target, value, op)
         )
