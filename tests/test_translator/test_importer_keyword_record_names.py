@@ -6,8 +6,8 @@ HIP and OpenCL C importers kept the name, so the CrossGL they wrote did not pars
 (``SyntaxError: Expected binding name, got LBRACE``). The CUDA importer renamed the declaration
 of a ``kernel`` or ``var`` struct but not the places that use it as a type.
 
-A rename skips every name the source already uses, so ``let`` becomes ``let__`` where ``let_``
-is taken.
+Constructors and calls name the renamed declaration, and a rename skips every name the source
+already uses, so ``let`` becomes ``let__`` where ``let_`` is taken.
 """
 
 import pytest
@@ -91,6 +91,32 @@ def test_keyword_struct_translates_to_metal(tmp_path, file_name, template, name)
     assert f"struct {name}_" in code
 
 
+CONSTRUCTORS = """\
+struct {name} {{
+    float a;
+}};
+
+__device__ {name} make(float x) {{
+    return {name}{{x}};
+}}
+
+__global__ void probe(float* outp) {{
+    {name} t = make(2.0f);
+    {name} u = {name}();
+    outp[threadIdx.x] = t.a + u.a;
+}}
+"""
+
+FUNCTION = """\
+__device__ float {name}(float x) {{
+    return x * 2.0f;
+}}
+
+__global__ void probe(float* outp) {{
+    outp[threadIdx.x] = {name}(1.0f);
+}}
+"""
+
 SHADOW = """\
 __global__ void probe(float* outp) {{
     float {name}_ = 1.0f;
@@ -115,6 +141,26 @@ def _cuda_and_hip(template):
             if name != "kernel"
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("file_name", "template", "name"), _cuda_and_hip(CONSTRUCTORS)
+)
+def test_constructors_name_the_renamed_struct(tmp_path, file_name, template, name):
+    code = _translate(tmp_path, file_name, template.format(name=name))
+
+    assert f"return {name}_(x);" in code
+    assert f"var u: {name}_ = {name}_();" in code
+    Parser(Lexer(code).tokens).parse()
+
+
+@pytest.mark.parametrize(("file_name", "template", "name"), _cuda_and_hip(FUNCTION))
+def test_calls_name_the_renamed_function(tmp_path, file_name, template, name):
+    code = _translate(tmp_path, file_name, template.format(name=name))
+
+    assert f"f32 {name}_(f32 x) {{" in code
+    assert f"= {name}_(1.0f);" in code
+    Parser(Lexer(code).tokens).parse()
 
 
 @pytest.mark.parametrize(("file_name", "template", "name"), _cuda_and_hip(SHADOW))

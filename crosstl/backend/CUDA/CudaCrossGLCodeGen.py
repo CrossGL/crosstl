@@ -4782,12 +4782,16 @@ class CudaToCrossGLConverter:
                 return integer_intrinsic
 
         if self.is_user_defined_function(raw_name):
+            # A call names the function as its declaration does, ``let_`` for ``let``.
             func_name = (
                 self.convert_cuda_function_name_to_crossgl(raw_name)
-                if isinstance(raw_name, str) and raw_name.startswith("::")
+                if raw_name.startswith("::") or self.is_simple_identifier(raw_name)
                 else raw_name
             )
             return f"{func_name}({args_str})"
+        if self.is_simple_identifier(raw_name) and raw_name in self.cuda_record_names:
+            # ``let{1.0f}`` and ``let()`` construct the record under its declared name.
+            return f"{self.convert_cuda_type_to_crossgl(raw_name)}({args_str})"
 
         load_cache_intrinsic = self.format_cuda_load_cache_intrinsic_call(
             raw_name, node.args, args
