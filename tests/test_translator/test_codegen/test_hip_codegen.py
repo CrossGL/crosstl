@@ -1702,8 +1702,9 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "__device__ float rsqrt(float x)" in hip_code
-        assert "float inv = rsqrt(4.0f);" in hip_code
+        # rsqrt is a HIP math function, so the user function is renamed (issue #3326).
+        assert "__device__ float rsqrt_fn(float x)" in hip_code
+        assert "float inv = rsqrt_fn(4.0f);" in hip_code
         assert "rsqrtf(4.0)" not in hip_code
         assert "rsqrtf(4.0f)" not in hip_code
 
@@ -3768,8 +3769,9 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "__device__ float atan(float y, float x)" in hip_code
-        assert "float angle = atan(1.0f, 2.0f);" in hip_code
+        # atan is a HIP math function, so the user function is renamed (issue #3326).
+        assert "__device__ float atan_fn(float y, float x)" in hip_code
+        assert "float angle = atan_fn(1.0f, 2.0f);" in hip_code
         assert "atan2f(1.0, 2.0)" not in hip_code
         assert "atan2f(1.0f, 2.0f)" not in hip_code
 

@@ -19,7 +19,12 @@ from __future__ import annotations
 from .. import ast as A
 from .hub_types import call_name
 
-__all__ = ["rename_colliding_functions", "rename_functions", "user_function_names"]
+__all__ = [
+    "names_called_with_other_arity",
+    "rename_colliding_functions",
+    "rename_functions",
+    "user_function_names",
+]
 
 
 def _stages(program):
@@ -145,6 +150,39 @@ def _call_arity(node):
     return len(arguments)
 
 
+def _function_arities(functions, names):
+    arities = {}
+    for function, entry in functions:
+        if not entry and function.name in names:
+            parameters = getattr(
+                function, "parameters", getattr(function, "params", [])
+            )
+            arities.setdefault(function.name, set()).add(len(parameters or []))
+    return arities
+
+
+def names_called_with_other_arity(program) -> set:
+    """User function names that some call uses with an argument count none of their overloads takes.
+
+    Such a call can only reach a built-in function of the same name, as ``clamp(x, 0.0, 1.0)`` beside a user
+    ``clamp(float)`` does, so a generator that resolves calls by name alone must rename the user function first.
+    """
+    names = user_function_names(program)
+    if not names:
+        return set()
+    functions = list(_functions(program))
+    arities = _function_arities(functions, names)
+    found = set()
+    seen = set()
+    for function, _ in functions:
+        for node in _walk(function, seen):
+            if isinstance(node, A.FunctionCallNode):
+                name = call_name(node)
+                if name in arities and _call_arity(node) not in arities[name]:
+                    found.add(name)
+    return found
+
+
 def rename_functions(program, names, *, by_arity=False) -> dict:
     """Rename the user functions in ``names``, each overload and every call to it, in place; returns old -> new.
 
@@ -158,13 +196,9 @@ def rename_functions(program, names, *, by_arity=False) -> dict:
     functions = list(_functions(program))
     taken = _declared_names(program)
     renamed = {name: _fresh(name, taken) for name in names}
-    arities = {}
+    arities = _function_arities(functions, renamed)
     for function, entry in functions:
         if not entry and function.name in renamed:
-            parameters = getattr(
-                function, "parameters", getattr(function, "params", [])
-            )
-            arities.setdefault(function.name, set()).add(len(parameters or []))
             function.name = renamed[function.name]
     seen = set()
     for function, _ in functions:

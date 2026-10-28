@@ -148,5 +148,7 @@ def test_user_function_named_norm_is_called_as_written(tmp_path):
 """)
     code = crosstl.translate(str(path), backend="hip", format_output=False)
 
-    assert "norm(2, 1.5f)" in code
+    # The user function is renamed away from the device library's norm and called directly.
+    assert "float norm_fn(int n, float x)" in code
+    assert "norm_fn(2, 1.5f)" in kernel_body(code)
     assert "normf(" not in kernel_body(code)
