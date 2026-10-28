@@ -26,6 +26,28 @@ layout(std430, binding = 0) buffer Data { float x; float y; };
 void main() { y = x * 2.0; }
 """
 
+SHADOWED_INSTANCE_LOCAL = """#version 460
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Data { float values[]; };
+void main() {
+    float data = values[0];
+    values[0] = data * 2.0;
+}
+"""
+
+SHADOWED_INSTANCE_PARAM_AND_NESTED_BLOCK = """#version 460
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Data { float values[]; };
+void helper(float data) {
+    if (data > 0.0) {
+        for (int data_2 = 0; data_2 < 4; ++data_2) {
+            values[data_2] = data;
+        }
+    }
+}
+void main() { helper(values[0]); }
+"""
+
 SHADER_RECORD_MISS = """#version 460
 #extension GL_EXT_ray_tracing : enable
 layout(location = 0) rayPayloadInEXT vec3 hitValue;
@@ -54,6 +76,36 @@ def test_anonymous_buffer_members_stay_in_the_buffer(tmp_path):
     assert "Private" not in spirv
     hlsl = crosstl.translate(source, backend="directx", format_output=False)
     assert re.search(r"\bRW\w*Buffer\b", hlsl)
+
+
+def test_anonymous_buffer_instance_avoids_function_locals(tmp_path):
+    source = _write(tmp_path, "shadowed.comp", SHADOWED_INSTANCE_LOCAL)
+    crossgl = crosstl.translate(source, backend="cgl", format_output=False)
+    glsl = crosstl.translate(source, backend="opengl", format_output=False)
+    for output in (crossgl, glsl):
+        instance = re.search(r"buffer\s+Data\s*\{[^}]*\}\s*(\w+);", output)
+        assert instance is not None
+        assert instance.group(1) != "data"
+        assert re.search(rf"\b{instance.group(1)}\.values\b", output)
+        assert not re.search(r"\bdata\.values\b", output)
+
+
+def test_anonymous_buffer_instance_avoids_params_and_nested_blocks(tmp_path):
+    source = _write(
+        tmp_path, "shadowed_params.comp", SHADOWED_INSTANCE_PARAM_AND_NESTED_BLOCK
+    )
+    glsl = crosstl.translate(source, backend="opengl", format_output=False)
+    instance = re.search(r"buffer\s+Data\s*\{[^}]*\}\s*(\w+);", glsl)
+    assert instance is not None
+    # "data" is taken by the parameter and "data_2" by the loop counter inside the if body.
+    assert instance.group(1) == "data_3"
+    assert not re.search(r"\bdata_2\.values\b", glsl)
+
+
+def test_anonymous_buffer_instance_keeps_base_name_without_a_clash(tmp_path):
+    source = _write(tmp_path, "unshadowed.comp", ANONYMOUS_BUFFER)
+    glsl = crosstl.translate(source, backend="opengl", format_output=False)
+    assert re.search(r"buffer\s+Data\s*\{[^}]*\}\s*data;", glsl)
 
 
 def test_anonymous_buffer_glsl_output_compiles(tmp_path):
