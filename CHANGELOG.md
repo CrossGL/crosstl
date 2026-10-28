@@ -57,8 +57,6 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
-- WGSL output writes a conditional on a structure, array or matrix that initializes or is assigned to a variable, such as `Pair r = c ? p : q;`, as `var r: Pair;` and an `if`/`else` that assigns the chosen branch. It used to write `select(q, p, c)`, which naga rejects because `select` takes scalars and vectors only. Such a conditional anywhere else, such as `(c ? p : q).a`, is refused with a `ValueError` that names its type.
-
 - HIP output lowers `ptr<T>` helper parameters imported from HIP or CUDA to native pointer types instead of emitting the CrossGL spelling unchanged.
 
 - CrossGL accepts an empty statement, a `;` on its own, which it used to refuse with `CrossGLFunctionBodyParseError`, so every target refused a function containing one. A switch whose last `case` or `default` label is followed by no statement now leaves the switch there with `break;`; Metal and GLSL ES output used to end the switch on the bare label, which the Metal compiler and GLSL ES 3.00 refuse.
@@ -119,6 +117,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - An assignment used as a value keeps its own parentheses: `int f = (e = 4) + 1;` used to become `e = 4 + 1` on several targets, which assigns 5.
 - CUDA, HIP and Metal output keep the parentheses around the operand of a postfix `++` or `--` unless it is a name, member access, index or call, so `(*p)++` stays `(*p)++`. It used to be written `*p++`, which increments the pointer and discards the value because postfix `++` binds tighter than unary `*`, and does not compile for an array, as in `(*v)++` on a `float v[2]`.
 - SPIR-V output short-circuits `&&`, `||` and `?:`. The right operand and both arms used to run unconditionally.
+- WGSL output writes a conditional on a structure, array or matrix that is the whole initializer of a local variable or the whole value of an assignment, such as `Pair r = c ? p : q;`, as `var r: Pair;` and an `if`/`else` that assigns the chosen branch, so only that branch is evaluated. It used to write `select(q, p, c)`, which naga rejected because `select` takes scalars and vectors only. Such a conditional anywhere else, such as `(c ? p : q).a`, a return value or a module-scope constant, and an initializer that reads an outer variable of the name it declares, are refused with a `ValueError`.
 - GLSL output declares `long`, `ulong`, `size_t` and `ptrdiff_t` as 64-bit integers instead of 32-bit ones, which changed arithmetic and block layouts; GLSL ES and WebGL refuse them. SPIR-V output converts `size_t(x)` and `ptrdiff_t(x)` and widens `uint` without sign extension.
 - 8- and 16-bit integer vector arithmetic wraps at its own width on GLSL and Metal, and Metal widens native `ushort2` and similar fields and buffer elements when it reads them.
 - Storage buffer arrays translate to GLSL, SPIR-V, HLSL, WGSL, Slang and Metal. Sized arrays on HLSL used to be `static` arrays whose stores never reached memory, and unsized arrays of structures were refused on HLSL and WGSL.
