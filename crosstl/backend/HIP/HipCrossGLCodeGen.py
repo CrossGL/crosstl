@@ -7769,7 +7769,10 @@ class HipToCrossGLConverter:
         user_defined_call_name = self.format_user_defined_function_call_name(func_name)
         if user_defined_call_name is not None:
             return f"{user_defined_call_name}({args_str})"
-        if self.is_simple_identifier(func_name) and func_name in self.record_definitions:
+        if (
+            self.is_simple_identifier(func_name)
+            and func_name in self.record_definitions
+        ):
             # ``let{1.0f}`` and ``let()`` construct the record under its declared name.
             return f"{self.convert_hip_type_to_crossgl(func_name)}({args_str})"
 

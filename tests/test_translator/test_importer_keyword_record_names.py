@@ -143,9 +143,7 @@ def _cuda_and_hip(template):
     ]
 
 
-@pytest.mark.parametrize(
-    ("file_name", "template", "name"), _cuda_and_hip(CONSTRUCTORS)
-)
+@pytest.mark.parametrize(("file_name", "template", "name"), _cuda_and_hip(CONSTRUCTORS))
 def test_constructors_name_the_renamed_struct(tmp_path, file_name, template, name):
     code = _translate(tmp_path, file_name, template.format(name=name))
 
