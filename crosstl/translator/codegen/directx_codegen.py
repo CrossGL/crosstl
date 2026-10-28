@@ -273,6 +273,13 @@ from .hlsl_bfloat16_vectors import (
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
+from .hlsl_extension_builtins import (
+    HLSL_GLSL_SYSTEM_VALUES,
+    HLSL_NOPERSPECTIVE_BARYCENTRICS,
+    hlsl_builtin_input_parameter,
+    hlsl_stage_builtin_read,
+    refuse_unmapped_hlsl_builtin,
+)
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
@@ -3050,6 +3057,7 @@ class HLSLCodeGen(
             "hit_attribute": "hit_attribute",
             "callable_data": "callable_data",
             "shader_record": "shader_record",
+            **HLSL_GLSL_SYSTEM_VALUES,
         }
 
     def normalize_directx_target_profile(self, target_profile):
@@ -14121,6 +14129,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             semantic = self.semantic_from_node(p)
             if semantic is None:
                 semantic = default_vertex_parameter_semantics.get(id(p))
+            builtin_input = hlsl_builtin_input_parameter(
+                self,
+                p,
+                param_type,
+                semantic,
+                effective_shader_type,
+                emitted_param_names,
+            )
+            if builtin_input is not None:
+                declaration, prologue = builtin_input
+                if declaration is not None:
+                    params.append(declaration)
+                parameter_prologue_statements.append(prologue)
+                continue
             dispatch_thread_id_bridge = None
             if effective_shader_type == "compute":
                 dispatch_thread_id_bridge = (
@@ -27632,6 +27654,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         helper_lane = self.hlsl_helper_invocation_expression(expr)
         if helper_lane is not None:
             return helper_lane
+        builtin_read = hlsl_stage_builtin_read(self, expr)
+        if builtin_read is not None:
+            return builtin_read
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):
@@ -34964,7 +34989,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 mode = self.HLSL_INTERPOLATION_MODE_MODIFIERS.get(name)
             if sampling is None:
                 sampling = self.HLSL_INTERPOLATION_SAMPLING_MODIFIERS.get(name)
-        if mode is None and self.semantic_from_node(node) == "gl_BaryCoordNoPerspEXT":
+        if (
+            mode is None
+            and self.semantic_from_node(node) in HLSL_NOPERSPECTIVE_BARYCENTRICS
+        ):
             mode = "noperspective"
 
         modifiers = []
@@ -36349,6 +36377,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "SV_INSTANCEID",
             "SV_SAMPLEINDEX",
             "SV_GSINSTANCEID",
+            "SV_SHADINGRATE",
         }
     )
 
@@ -56357,6 +56386,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to an HLSL semantic suffix."""
         if semantic:
-            return f": {self.hlsl_semantic_name(semantic)}"
+            mapped = refuse_unmapped_hlsl_builtin(
+                self, semantic, self.hlsl_semantic_name(semantic)
+            )
+            return f": {mapped}"
         else:
             return ""  # Handle None by returning an empty string
