@@ -26564,6 +26564,9 @@ class GLSLCodeGen(
                 qualifiers.add(str(name).lower())
         if qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"}:
             return None
+        # CrossGL spells a storage-buffer pointer `buffer T* p`.
+        if isinstance(raw_type, PointerType) and "buffer" in qualifiers:
+            return raw_type.pointee_type
         if not qualifiers & {"constant", "device", "storage"}:
             return None
         if isinstance(raw_type, PointerType):

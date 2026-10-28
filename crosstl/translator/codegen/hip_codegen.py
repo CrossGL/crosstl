@@ -105,7 +105,9 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
+from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -113,10 +115,12 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .relational_builtins import lower_relational_builtins
 from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 from .sampler_pairs import canonicalize_separate_textures
+from .stage_local_structs import module_structs
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
@@ -275,8 +279,15 @@ class UnsupportedHIPAstNodeError(ValueError):
         )
 
 
-class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
+class HipCodeGen(
+    LoweringRefusalMixin,
+    VectorArithmeticMixin,
+    ResourceQueryMixin,
+    ResourceDiagnosticMixin,
+):
     """Emit HIP source from the shared CrossGL translator AST."""
+
+    LOWERING_REFUSAL_TYPE = HipLoweringRefused
 
     resource_diagnostic_backend = "HIP"
     struct_constructor_uses_braces = True
@@ -806,10 +817,20 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             ),
         }
 
-    def generate(self, node: ASTNode) -> str:
-        """Generate complete HIP source for a CrossGL AST."""
+    def generate(self, node):
+        """Generate complete HIP source for a CrossGL AST, or raise :class:`HipLoweringRefused`.
+
+        A construct with no faithful HIP lowering is refused; no program is returned while a refusal is
+        pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
+        """
+        return self.refusals.run(self.render_program, node)
+
+    def render_program(self, node: ASTNode) -> str:
+        """Render complete HIP source for a CrossGL AST."""
         # A HIP texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         node = canonicalize_separate_textures(node)
+        # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
+        lower_relational_builtins(node)
         # HIP has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
         node = materialize_structured_buffer_counters(node, _refuse_buffer_counter)
         self.code_lines = []
@@ -1696,7 +1717,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def visit_ShaderNode(self, node: ShaderNode) -> str:
         """Render a full shader/program AST as a HIP translation unit."""
-        structs = getattr(node, "structs", [])
+        structs = module_structs(node, "HIP")
         self.add_generated_code(
             generate_enum_constants(
                 self,
@@ -4302,6 +4323,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
 
+        library_call = generate_hip_library_call(self, func_name, raw_args, args)
+        if library_call is not None:
+            return library_call
+
         if func_name in self.synchronization_builtins and raw_args:
             raise ValueError(
                 f"HIP synchronization builtin '{func_name}' requires 0 "
@@ -4668,6 +4693,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if operation == "countLeadingZeros":
             return f"{clz_intrinsic}({value})"
         if operation == "findLSB":
+            if bit_width == 64:
+                scalar_type = self.map_type(source_type) if source_type else None
+                return f"(__ffsll({ffs64_argument(value, scalar_type)}) - 1)"
             return f"({ffs_intrinsic}({value}) - 1)"
         if operation == "findMSB":
             clz_value = (
@@ -8038,6 +8066,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 f"{intrinsic}_system",
                 (f"{intrinsic}_system", arg_count, kinds, kinds_label),
             )
+        # HIP's atomicAddNoRet adds to a float and returns nothing; it has no
+        # system-scoped form.
+        operations["atomicAddNoRet"] = ("atomicAddNoRet", 2, {"float"}, "float")
         return operations
 
     def generate_structured_buffer_atomic_call(self, func_name, raw_args, args):

@@ -35,6 +35,7 @@ from crosstl.translator.codegen.hip_codegen import (
 from crosstl.translator.codegen.hip_refusals import HipLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.lowering_refusal_helpers import hip_partial_output
 
 
 def compile_hip_if_hipcc_available(hip_code, tmp_path):
@@ -5259,7 +5260,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         # HIP C++ language extensions specify TYPE atomicAdd(TYPE* address, TYPE val);
         # CrossGL parser source emits PointerAccessNode for `->`, so pointer-held
@@ -5875,7 +5876,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "float paramValue = /* unsupported HIP shadow resource call: "
@@ -6037,7 +6038,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "float4 gathered = tex2Dgather<float4>(colorMap, uv.x, uv.y);" in hip_code
@@ -6179,7 +6180,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         sampled_diagnostics = [
             "textureOffset",
@@ -6532,7 +6533,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "float4 line = tex1D<float4>(lineTex, u);" in hip_code
         assert (
@@ -6695,7 +6696,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "float4 fetchedLine = tex1Dfetch<float4>(lineTex, x);" in hip_code
         assert (
@@ -6808,7 +6809,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert (
             "float4 regular = cgl_surf2Dread<float4>"
@@ -6914,7 +6915,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "hipSurfaceObject_t lineImage;" in hip_code
         assert "hipSurfaceObject_t lineLayers;" in hip_code
@@ -7061,7 +7062,7 @@ class TestHipCodeGen:
             ],
         )
 
-        hip_code = HipCodeGen().generate(cube_array_ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, cube_array_ast)
 
         assert "hipSurfaceObject_t cubeLayers;" in hip_code
         assert "hipSurfaceObject_t cubeCounters;" in hip_code
@@ -7146,7 +7147,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert "hipTextureObject_t textureGrid[2][3];" in hip_code
         assert "hipTextureObject_t layerGrid[2][2];" in hip_code
@@ -9941,7 +9942,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "const int* input;" in hip_code
         assert "int* values;" in hip_code
@@ -10213,7 +10214,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert (
             "return /* unsupported HIP GLSL buffer block atomicAdd: resource "
@@ -10275,7 +10276,9 @@ class TestHipCodeGen:
         }
         """
 
-        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        hip_code, _ = hip_partial_output(
+            HipCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert "RuntimeLeaf* leaves;" in hip_code
         assert (
@@ -10538,7 +10541,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "const unsigned int* readonlyCounts;" in hip_code
         assert "unsigned int* counters;" in hip_code
@@ -10652,7 +10655,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         for name, intrinsic in (
             ("oldAdd", "atomicAdd_system"),
@@ -10717,7 +10720,7 @@ class TestHipCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "unsigned int a = atomicAdd(&outp[i], 1u);" in hip_code
         assert "unsigned int b = atomicAdd_system(&outp[i], 1u);" in hip_code
@@ -10768,7 +10771,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "float* values;" in hip_code
         assert "float oldAdd = atomicAdd(&values[index], value);" in hip_code
@@ -10812,7 +10815,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "unsigned int* counters;" in hip_code
         assert "int* signedCounters;" in hip_code
@@ -10888,7 +10891,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "const unsigned char* readBytes;" in hip_code
         assert "unsigned char* writeBytes;" in hip_code
@@ -11126,7 +11129,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "int added = /* unsupported HIP image atomic resource call: "
@@ -11214,7 +11217,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert (
             "unsigned int validCounter = "
@@ -11286,7 +11289,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "hipSurfaceObject_t signedCube;" in hip_code
         assert "hipSurfaceObject_t counterCube;" in hip_code
@@ -11644,7 +11647,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "float2 paramLod = /* unsupported HIP resource query: "
@@ -11700,7 +11703,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert (
             "int2 validTextureSize = cgl_textureSize_sampler2D"
@@ -11954,7 +11957,7 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        hip_code = codegen.generate(ast)
+        hip_code, _ = hip_partial_output(codegen.generate, ast)
 
         assert "hipTextureObject_t msTex;" in hip_code
         assert "hipTextureObject_t msLayers;" in hip_code
@@ -13304,7 +13307,9 @@ class TestHipCodeGen:
         }
         """
 
-        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        hip_code, _ = hip_partial_output(
+            HipCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert (
             "unsigned int badLane = /* unsupported HIP wave intrinsic: "
@@ -14345,7 +14350,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "const int* readOnlyValues;" in hip_code
         assert "int* writeOnlyValues;" in hip_code
@@ -14409,7 +14414,7 @@ class TestHipCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        hip_code = HipCodeGen().generate(ast)
+        hip_code, _ = hip_partial_output(HipCodeGen().generate, ast)
 
         assert "int* writeOnlyValues;" in hip_code
         assert "unsigned char* writeOnlyBytes;" in hip_code

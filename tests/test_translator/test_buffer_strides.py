@@ -19,6 +19,7 @@ import crosstl
 from crosstl.translator.semantics.structured_layouts import (
     StructuredLayoutUnsupportedError,
 )
+from tests.lowering_refusal_helpers import cuda_partial_output
 
 REQUIRE_ENV = "CROSSTL_REQUIRE_BUFFER_STRIDE_EXECUTION"
 
@@ -257,7 +258,14 @@ void main()
 @pytest.mark.parametrize("backend", ["opengl", "cuda"])
 def test_texture_and_buffer_overloads_of_a_helper(tmp_path, backend):
     # Only the buffer overload is reached by a buffer, so it takes that buffer's 4-byte stride.
-    code = translate(tmp_path, backend, OVERLOADED_HLSL)
+    if backend == "cuda":
+        # A CUDA surface carries no extent, so the texture overload's query is refused.
+        code, message = cuda_partial_output(
+            translate, tmp_path, backend, OVERLOADED_HLSL
+        )
+        assert "imageSize metadata unavailable on image2D" in message
+    else:
+        code = translate(tmp_path, backend, OVERLOADED_HLSL)
     assert stride_assignments(code) == [("stride", "4")]
 
 
