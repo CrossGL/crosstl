@@ -998,7 +998,7 @@ def test_codegen_mixed_ssbo_metal_fixed_vector_array_compound_store_uses_temp():
     assert "unsupported Metal GLSL buffer block compound store" not in metal
 
 
-def test_codegen_mixed_ssbo_metal_fixed_vector_float_mod_compound_is_diagnostic():
+def test_codegen_mixed_ssbo_metal_fixed_vector_float_mod_compound_uses_fmod():
     code = """
     #version 450 core
     layout(std430, binding = 67) buffer MetalFixedVectorOpsBlock {
@@ -1017,11 +1017,10 @@ def test_codegen_mixed_ssbo_metal_fixed_vector_float_mod_compound_is_diagnostic(
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    with pytest.raises(
-        BufferBlockUnsupportedError,
-        match=r"GLSL buffer block compound store: operator %= is not supported for float",
-    ):
-        MetalCodeGen().generate(parse_crossgl(crossgl))
+    # CrossGL %= on floats is the truncated remainder, which MSL spells fmod.
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "fmod(float2(" in metal
+    assert "%=" not in metal
 
 
 def test_codegen_mixed_ssbo_metal_readonly_fixed_vector_write_is_diagnostic():
@@ -1050,7 +1049,7 @@ def test_codegen_mixed_ssbo_metal_readonly_fixed_vector_write_is_diagnostic():
         MetalCodeGen().generate(parse_crossgl(crossgl))
 
 
-def test_codegen_mixed_ssbo_metal_float_compound_unsupported_op_stays_diagnostic():
+def test_codegen_mixed_ssbo_metal_float_mod_compound_uses_fmod():
     code = """
     #version 450 core
     layout(std430, binding = 62) buffer MetalFloatOpsBlock {
@@ -1068,11 +1067,10 @@ def test_codegen_mixed_ssbo_metal_float_compound_unsupported_op_stays_diagnostic
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    with pytest.raises(
-        BufferBlockUnsupportedError,
-        match=r"GLSL buffer block compound store: operator %= is not supported for float",
-    ):
-        MetalCodeGen().generate(parse_crossgl(crossgl))
+    # CrossGL %= on floats is the truncated remainder, which MSL spells fmod.
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "= fmod((*reinterpret_cast<const device float*>(metalFloatOpsBlock" in metal
+    assert "%=" not in metal
 
 
 def test_codegen_mixed_ssbo_metal_integer_mod_compound_store_is_supported():
