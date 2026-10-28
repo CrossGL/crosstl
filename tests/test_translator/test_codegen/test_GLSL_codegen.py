@@ -7365,7 +7365,7 @@ def test_glsl_compiler_set_zero_buffer_pointer_resource_lowers_to_ssbo():
     assert "PointerType" not in generated
 
 
-def test_glsl_buffer_pointer_helper_parameters_lower_to_array_parameters():
+def test_glsl_buffer_pointer_helper_parameters_specialize_per_buffer():
     code = """
     shader BufferPointerHelperParameter {
         float readValue(buffer float* values, int index) {
@@ -7389,8 +7389,15 @@ def test_glsl_buffer_pointer_helper_parameters_lower_to_array_parameters():
         "layout(std430, binding = 0) buffer valuesBuffer { float values[]; };"
         in generated
     )
-    assert "float readValue(float values[], int index)" in generated
-    assert "float value = readValue(values, 0);" in generated
+    # GLSL 4.60 section 6.1: an array parameter must be explicitly sized, so the
+    # helper is specialized for the buffer it reads and takes an element offset.
+    assert "float readValue(float values[]" not in generated
+    assert (
+        "float readValue_glsl_values_values_float(int index, int values_offset) {"
+        in generated
+    )
+    assert "return values[(values_offset + index)];" in generated
+    assert "float value = readValue_glsl_values_values_float(0, int(0));" in generated
     assert "PointerType" not in generated
 
 
