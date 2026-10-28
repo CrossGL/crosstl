@@ -367,6 +367,98 @@ def test_a_kernel_probe_declares_only_the_input_buffers_it_reads():
     )
 
 
+def test_a_kernel_template_can_give_the_output_element_type():
+    # The output buffer holds float unless the template names another element type, in the language's spelling.
+    vectors = probes.build(_feature("glsl", "vector-buffer"), "glsl").source
+    assert "buffer B1 { vec4 outp[]; };" in vectors
+    pairs = probes.build(_feature("wgsl", "struct-buffer"), "wgsl").source
+    assert "array<Pair>" in pairs and "array<f32>" in pairs
+    crossgl_probe = probes.build(_feature("glsl", "vector-buffer"), "crossgl").source
+    assert "vec4* outp" in crossgl_probe
+
+
+def test_a_uniform_float_array_reads_one_word_per_row_in_every_language():
+    # std140 and a cbuffer give each float its own 16-byte row; languages that pack a float array declare vectors.
+    padded = probes.build(_feature("glsl", "uniform-array"), "glsl").source
+    assert "float w[4];" in padded and "+ w[k])" in padded
+    for language, declaration in (
+        ("metal", "float4 w[4];"),
+        ("wgsl", "w: array<vec4<f32>, 4>,"),
+        ("cuda", "float4 w[4];"),
+        ("rust", "w: [Vec4; 4],"),
+    ):
+        source = probes.build(_feature(language, "uniform-array"), language).source
+        assert declaration in source and "w[k].x" in source
+
+
+def test_a_uniform_struct_is_declared_before_its_block_and_copied_into_a_mutable_local():
+    glsl = probes.build(_feature("glsl", "uniform-struct"), "glsl").source
+    assert glsl.index("struct Light {") < glsl.index("uniform Params {")
+    assert "    Light light;\n    vec4 tint;" in glsl
+    for language, copy in (
+        ("wgsl", "var l = params.light;"),
+        ("rust", "let mut l = params.light;"),
+        ("mojo", "var l = params.light\n"),
+        ("hlsl", "Light l = light;"),
+    ):
+        source = probes.build(
+            _feature(language, "uniform-struct-copy"), language
+        ).source
+        assert copy in source
+    # Mojo reads a vector's lanes by index.
+    mojo = probes.build(_feature("mojo", "uniform-struct-array"), "mojo").source
+    assert "params.lights[k].color[0]" in mojo and "var lights: Array[Light, 2]" in mojo
+
+
+def test_reserved_name_probes_use_their_own_language_s_words_at_every_declaration_and_use():
+    crossgl = probes.build(_feature("glsl", "reserved-type-name"), "crossgl").source
+    assert crossgl.index("struct type {") < crossgl.index("compute {")
+    assert "type make(float x)" in crossgl and "float weigh(type t)" in crossgl
+    for language, declaration, use in (
+        ("metal", "constant float var = 2.0;", "fin[i] * var + input[k]"),
+        ("hlsl", "static const float loop = 2.0;", "fin[i] * loop + type[k]"),
+        ("cuda", "__constant__ float var = 2.0f;", "mod[2 - k] * 1024.0f"),
+        ("wgsl", "const half: f32 = 2.0;", "fin[i] * half + output[k]"),
+        ("mojo", "comptime output: Array[Float32, 3]", "materialize[output]()"),
+    ):
+        source = probes.build(
+            _feature(language, "reserved-global-name"), language
+        ).source
+        assert declaration in source and use in source
+    opencl = probes.build(_feature("opencl", "reserved-type-name"), "opencl").source
+    assert "} let;" in opencl and "let make(float x)" in opencl
+    cuda = probes.build(_feature("cuda", "reserved-member-name"), "cuda").source
+    assert (
+        "__device__ float total(Rec r)" in cuda
+        and "r.fn = (float)(iin[i] & 7);" in cuda
+    )
+    rust = probes.build(_feature("rust", "reserved-type-name"), "rust").source
+    assert "pub struct var {" in rust and "var { a: x * 2.0, b: 3 }" in rust
+
+
+def test_uniform_integer_probes_keep_each_member_s_signedness_in_every_language():
+    crossgl = probes.build(_feature("glsl", "uniform-integer"), "crossgl").source
+    assert "cbuffer Params @binding(3) {\n        int n0;" in crossgl
+    for language, member, use in (
+        ("wgsl", "u1: u32,", "f32(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("cuda", "unsigned int u1;", "(float)(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("opencl", "uint u1;", "(float)(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("rust", "u1: u32,", "(params.u2 % 1000 + (params.u3 >> 24)) as f32"),
+        ("mojo", "var u1: UInt32", "Float32(params.u2 % 1000 + (params.u3 >> 24))"),
+    ):
+        source = probes.build(_feature(language, "uniform-unsigned"), language).source
+        assert member in source and use in source, language
+    mojo = probes.build(_feature("mojo", "uniform-integer"), "mojo").source
+    assert "params.n3 // 1000000" in mojo
+    for language, local in (
+        ("wgsl", "let v = params.iv;"),
+        ("mojo", "var v = params.iv"),
+    ):
+        vector = probes.build(_feature(language, "uniform-integer-vector"), language)
+        assert local in vector.source and "$" not in vector.source, language
+    assert "(v[0] >> 20) + (v[1] >> 20) + (v[3] >> 24)" in vector.source
+
+
 # Each HLSL matrix probe with its matrices written as CrossGL lists them, by columns, and transposed into HLSL's rows.
 # The indexing probe keeps CrossGL's columns as HLSL rows instead, and indexes them as CrossGL does.
 _HLSL_BY_COLUMNS = {
@@ -434,9 +526,15 @@ def test_the_hlsl_matrix_probes_compute_what_the_crossgl_probes_compute(name):
 
 # glslang folds the swizzle probe's v.wzyx.x to one OpCompositeExtract.
 _UNANCHORED_TYPES = {"swizzle"}
-# GLSL has no float remainder with the dividend's sign, so its probe computes one through trunc, and no typedef;
-# DXC lowers the HLSL probes of both.
-_HLSL_ANCHORED = {"float-remainder", "type-alias"}
+# GLSL has no float remainder with the dividend's sign, so its probe computes one through trunc, and no typedef,
+# enumeration, member function or boolean bitwise operator; DXC lowers the HLSL probes of all five.
+_HLSL_ANCHORED = {
+    "float-remainder",
+    "type-alias",
+    "enum-constant",
+    "struct-method",
+    "bool-bitwise",
+}
 
 
 def _missing_anchors(language: str, names: set[str] | None = None) -> list[str]:
