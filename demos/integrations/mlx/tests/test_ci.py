@@ -7,7 +7,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import textwrap
 import zipfile
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -27,6 +26,30 @@ from tests.test_translator.test_atomic_store_runtime import REQUIRE_ENV as STORE
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_DIR = ROOT / ".github/workflows"
+
+
+FRONTIER_ACCOUNTING = ROOT / "demos" / "integrations" / "mlx" / "frontier_accounting.py"
+
+
+def _frontier_accounting_script(workflow):
+    """The frontier accounting script, after checking that the porting job runs it."""
+    step = workflow_text.workflow_step_section(
+        _workflow_job_section(workflow, "mlx-metal-porting"),
+        "Verify MLX frontier accounting",
+    )
+    assert "run: python -m demos.integrations.mlx.frontier_accounting" in step
+    return FRONTIER_ACCOUNTING.read_text(encoding="utf-8")
+
+
+def test_mlx_workflow_stays_below_the_size_github_accepts():
+    """GitHub rejects an oversized workflow file without running any of its jobs.
+
+    The run fails as a "workflow file issue" with no jobs, so ``MLX validation result``
+    never reports. A 505,212-byte file ran and a 532,712-byte one was rejected; long
+    checks belong in modules the steps run, not in inline scripts.
+    """
+    size = (WORKFLOW_DIR / "demo-project-testing.yml").stat().st_size
+    assert size < 500_000, size
 
 
 def test_host_package_downloads_unpack_outside_the_artifact_stream():
@@ -1415,6 +1438,7 @@ def test_mlx_float_atomic_reference_uses_fixed_metal_toolchain():
 def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     workflows = _workflow_texts()
     mlx_porting = workflows.get("demo-project-testing.yml", "")
+    frontier = _frontier_accounting_script(mlx_porting)
     harness = (ROOT / "demos" / "integrations" / "mlx" / "run_porting.py").read_text(
         encoding="utf-8"
     )
@@ -1853,114 +1877,106 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting, "tests/test_translator/test_project_translation.py"
     )
     assert "Verify MLX frontier accounting" in mlx_porting
-    assert "expected the exact 11-source non-fence MLX frontier" in mlx_porting
-    assert 'scope["nonFenceFrontierSources"]' in mlx_porting
-    assert "cleanFrontierSources" not in mlx_porting
-    assert "MLX summary identity or status is incorrect" in mlx_porting
-    assert "MLX summary check names must be unique" in mlx_porting
-    assert "MLX checkout proof does not match the pinned revision" in mlx_porting
-    assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
-    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT" in mlx_porting
-    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
-    assert "MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE" in mlx_porting
-    assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in mlx_porting
-    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in mlx_porting
-    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE" in mlx_porting
-    assert "MLX_LAYER_NORM_DISPATCH_VARIANTS" in mlx_porting
-    assert "MLX_LOGSUMEXP_DISPATCH_VARIANTS" in mlx_porting
-    assert "MLX_RMS_NORM_DISPATCH_VARIANTS" in mlx_porting
-    assert 'checks["directx-frontier"]' in mlx_porting
-    assert 'checks["vulkan-frontier"]' in mlx_porting
-    assert 'directx["directxToolchainArtifactCount"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedArtifactCount"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedEntryPointCounts"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedEntryPointCount"]' in mlx_porting
-    assert 'directx["toolchainRuns"] != directx_entry_point_count' in mlx_porting
-    assert "DirectX frontier accounting is incomplete" in mlx_porting
-    assert 'directx["bfloat16LoweringEvidence"]' in mlx_porting
-    assert "DirectX bfloat16 lowering evidence is incomplete" in mlx_porting
-    assert "DirectX workgroup blocker evidence changed" in mlx_porting
-    assert "expected 76 fail-closed DirectX compute entries" in mlx_porting
-    assert "LayerNorm dispatch frontier evidence is incomplete" in mlx_porting
-    assert "LogSumExp dispatch frontier evidence is incomplete" in mlx_porting
-    assert "RMSNorm dispatch frontier evidence is incomplete" in mlx_porting
-    assert "matched-materialized-host-names" in mlx_porting
-    assert "DirectX frontier toolchain must validate every configured" in mlx_porting
-    assert "source artifact and compute entry" in mlx_porting
-    assert "Vulkan frontier accounting is incomplete" in mlx_porting
-    assert "Vulkan frontier toolchain validation is incomplete" in mlx_porting
-    assert 'checks["gemv-directx-compiler-frontier"]' in mlx_porting
-    assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in mlx_porting
-    assert "GEMV_WORKGROUP_SIZE_RULE" in mlx_porting
-    assert "GEMV_REPORT_WORKGROUP_SIZE_RULE" in mlx_porting
-    assert "GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES" in mlx_porting
-    assert 'gemv_directx["entryProfile"] != "cs_6_2"' in mlx_porting
-    assert 'gemv_directx["compilerArguments"]' in mlx_porting
-    assert 'gemv_directx["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'run["profile"] != "cs_6_2"' in mlx_porting
-    assert 'run["compilerArguments"] != ["-enable-16bit-types"]' in mlx_porting
-    assert 'run["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'gemv_directx["artifactPackaging"]' in mlx_porting
-    assert 'gemv_directx["hostNamedMaterializationCount"] != 224' in mlx_porting
-    assert 'gemv_directx["reportExecutionEntryCount"] != 224' in mlx_porting
-    assert 'gemv_directx["executionIdentityJoinCount"] != 224' in mlx_porting
-    assert 'gemv_directx["generatedTargetEntryIdentityCount"] != 224' in mlx_porting
-    assert 'gemv_directx["generatedNumthreadsContractCount"] != 224' in mlx_porting
-    assert 'gemv_directx["bareValueDiscardCount"] != 0' in mlx_porting
-    assert 'gemv_directx["entryProfileDiagnosticCount"] != 0' in mlx_porting
-    assert 'gemv_directx["entryProfileUnusedValueWarningCount"] != 0' in mlx_porting
-    assert 'library_run["unusedValueWarningCount"] != 0' in mlx_porting
-    assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in mlx_porting
-    assert 'library_run["profile"] != "lib_6_6"' in mlx_porting
-    assert 'library_run["compilerArguments"]' in mlx_porting
-    assert 'library_run["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'gemv_directx["libraryExportCount"] != 224' in mlx_porting
-    assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in mlx_porting
-    assert "DirectX GEMV resolved workgroup-size evidence is incomplete" in (
-        mlx_porting
-    )
-    assert "library-profile-numthreads-ignored" in mlx_porting
-    assert "DirectX GEMV compiler warning classification changed" in mlx_porting
-    assert "DirectX GEMV compiler warning evidence changed" in mlx_porting
-    assert "DirectX GEMV execution non-claims changed" in mlx_porting
-    assert "GEMV_OPENGL_WORKGROUP_SIZE_ISSUE" not in mlx_porting
-    assert 'gemv_directx["numthreadsContractEstablished"] is not True' in mlx_porting
-    assert 'gemv_directx["exactWorkgroupSizeEstablished"] is not True' in mlx_porting
-    assert 'checks["gemv-opengl-toolchain"]' in mlx_porting
-    assert 'scope["openglGemvToolchainRequired"]' in mlx_porting
-    assert 'gemv_opengl["workgroupSizeRuleConfigured"] is not True' in mlx_porting
-    assert 'gemv_opengl["runnableArtifactClaimed"] is not False' in mlx_porting
-    assert 'gemv_opengl["toolchainValidatedArtifactCount"]' in mlx_porting
-    assert 'gemv_opengl["compilerValidatedArtifactClaimed"] is not True' in (
-        mlx_porting
-    )
-    assert "OpenGL GEMV toolchain evidence is incomplete" in mlx_porting
-    assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
-    assert "reference accessor proof accounting is incomplete" in mlx_porting
-    assert "reference accessor {target} storage evidence is incomplete" in mlx_porting
-    assert (
-        "reference accessor {target} const-read evidence is incomplete" in mlx_porting
-    )
-    assert "reference accessor {target} native validation must be" in mlx_porting
-    assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTIONS" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM" in mlx_porting
-    assert "MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
-    assert "expected 8 OpenGL attempted frontier sources" in mlx_porting
-    assert "expected 3 OpenGL toolchain frontier sources" in mlx_porting
-    assert "OpenGL target-split frontier accounting is incomplete" in mlx_porting
-    assert "OpenGL workgroup blocker evidence changed" in mlx_porting
-    assert "OpenGL frontier toolchain must validate every emitted source" in (
-        mlx_porting
-    )
-    assert 'opengl["indexRangeAssertionEvidence"]' in mlx_porting
-    assert "OpenGL index-range portability evidence is incomplete" in mlx_porting
-    assert 'opengl["runtimeIntegrationIncluded"] is not False' in mlx_porting
-    assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
+    assert "expected the exact 11-source non-fence MLX frontier" in frontier
+    assert 'scope["nonFenceFrontierSources"]' in frontier
+    assert "cleanFrontierSources" not in (mlx_porting + frontier)
+    assert "MLX summary identity or status is incorrect" in frontier
+    assert "MLX summary check names must be unique" in frontier
+    assert "MLX checkout proof does not match the pinned revision" in frontier
+    assert "fence contract accounting must be 3 failed, 0 emitted" in frontier
+    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in frontier
+    assert "MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT" in frontier
+    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in frontier
+    assert "MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE" in frontier
+    assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in frontier
+    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in frontier
+    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in frontier
+    assert "MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE" in frontier
+    assert "MLX_LAYER_NORM_DISPATCH_VARIANTS" in frontier
+    assert "MLX_LOGSUMEXP_DISPATCH_VARIANTS" in frontier
+    assert "MLX_RMS_NORM_DISPATCH_VARIANTS" in frontier
+    assert 'checks["directx-frontier"]' in frontier
+    assert 'checks["vulkan-frontier"]' in frontier
+    assert 'directx["directxToolchainArtifactCount"]' in frontier
+    assert 'directx["directxToolchainValidatedArtifactCount"]' in frontier
+    assert 'directx["directxToolchainValidatedEntryPointCounts"]' in frontier
+    assert 'directx["directxToolchainValidatedEntryPointCount"]' in frontier
+    assert 'directx["toolchainRuns"] != directx_entry_point_count' in frontier
+    assert "DirectX frontier accounting is incomplete" in frontier
+    assert 'directx["bfloat16LoweringEvidence"]' in frontier
+    assert "DirectX bfloat16 lowering evidence is incomplete" in frontier
+    assert "DirectX workgroup blocker evidence changed" in frontier
+    assert "expected 76 fail-closed DirectX compute entries" in frontier
+    assert "LayerNorm dispatch frontier evidence is incomplete" in frontier
+    assert "LogSumExp dispatch frontier evidence is incomplete" in frontier
+    assert "RMSNorm dispatch frontier evidence is incomplete" in frontier
+    assert "matched-materialized-host-names" in frontier
+    assert "DirectX frontier toolchain must validate every configured" in frontier
+    assert "source artifact and compute entry" in frontier
+    assert "Vulkan frontier accounting is incomplete" in frontier
+    assert "Vulkan frontier toolchain validation is incomplete" in frontier
+    assert 'checks["gemv-directx-compiler-frontier"]' in frontier
+    assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in frontier
+    assert "GEMV_WORKGROUP_SIZE_RULE" in frontier
+    assert "GEMV_REPORT_WORKGROUP_SIZE_RULE" in frontier
+    assert "GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES" in frontier
+    assert 'gemv_directx["entryProfile"] != "cs_6_2"' in frontier
+    assert 'gemv_directx["compilerArguments"]' in frontier
+    assert 'gemv_directx["minimumShaderModel"] != "6.2"' in frontier
+    assert 'run["profile"] != "cs_6_2"' in frontier
+    assert 'run["compilerArguments"] != ["-enable-16bit-types"]' in frontier
+    assert 'run["minimumShaderModel"] != "6.2"' in frontier
+    assert 'gemv_directx["artifactPackaging"]' in frontier
+    assert 'gemv_directx["hostNamedMaterializationCount"] != 224' in frontier
+    assert 'gemv_directx["reportExecutionEntryCount"] != 224' in frontier
+    assert 'gemv_directx["executionIdentityJoinCount"] != 224' in frontier
+    assert 'gemv_directx["generatedTargetEntryIdentityCount"] != 224' in frontier
+    assert 'gemv_directx["generatedNumthreadsContractCount"] != 224' in frontier
+    assert 'gemv_directx["bareValueDiscardCount"] != 0' in frontier
+    assert 'gemv_directx["entryProfileDiagnosticCount"] != 0' in frontier
+    assert 'gemv_directx["entryProfileUnusedValueWarningCount"] != 0' in frontier
+    assert 'library_run["unusedValueWarningCount"] != 0' in frontier
+    assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in frontier
+    assert 'library_run["profile"] != "lib_6_6"' in frontier
+    assert 'library_run["compilerArguments"]' in frontier
+    assert 'library_run["minimumShaderModel"] != "6.2"' in frontier
+    assert 'gemv_directx["libraryExportCount"] != 224' in frontier
+    assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in frontier
+    assert "DirectX GEMV resolved workgroup-size evidence is incomplete" in (frontier)
+    assert "library-profile-numthreads-ignored" in frontier
+    assert "DirectX GEMV compiler warning classification changed" in frontier
+    assert "DirectX GEMV compiler warning evidence changed" in frontier
+    assert "DirectX GEMV execution non-claims changed" in frontier
+    assert "GEMV_OPENGL_WORKGROUP_SIZE_ISSUE" not in (mlx_porting + frontier)
+    assert 'gemv_directx["numthreadsContractEstablished"] is not True' in frontier
+    assert 'gemv_directx["exactWorkgroupSizeEstablished"] is not True' in frontier
+    assert 'checks["gemv-opengl-toolchain"]' in frontier
+    assert 'scope["openglGemvToolchainRequired"]' in frontier
+    assert 'gemv_opengl["workgroupSizeRuleConfigured"] is not True' in frontier
+    assert 'gemv_opengl["runnableArtifactClaimed"] is not False' in frontier
+    assert 'gemv_opengl["toolchainValidatedArtifactCount"]' in frontier
+    assert 'gemv_opengl["compilerValidatedArtifactClaimed"] is not True' in (frontier)
+    assert "OpenGL GEMV toolchain evidence is incomplete" in frontier
+    assert 'checks["reference-accessor-lvalue-identity"]' in frontier
+    assert "reference accessor proof accounting is incomplete" in frontier
+    assert "reference accessor {target} storage evidence is incomplete" in frontier
+    assert "reference accessor {target} const-read evidence is incomplete" in frontier
+    assert "reference accessor {target} native validation must be" in frontier
+    assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in frontier
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTIONS" in frontier
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS" in frontier
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM" in frontier
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM" in frontier
+    assert "MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in frontier
+    assert "expected 8 OpenGL attempted frontier sources" in frontier
+    assert "expected 3 OpenGL toolchain frontier sources" in frontier
+    assert "OpenGL target-split frontier accounting is incomplete" in frontier
+    assert "OpenGL workgroup blocker evidence changed" in frontier
+    assert "OpenGL frontier toolchain must validate every emitted source" in (frontier)
+    assert 'opengl["indexRangeAssertionEvidence"]' in frontier
+    assert "OpenGL index-range portability evidence is incomplete" in frontier
+    assert 'opengl["runtimeIntegrationIncluded"] is not False' in frontier
+    assert "mlx/backend/metal/kernels/binary_two.metal" in frontier
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "vulkan==1.3.275.1" in mlx_porting
     assert "vulkaninfo --summary" in mlx_porting
@@ -2105,12 +2121,7 @@ def test_mlx_platform_runtime_workflow_preserves_pinned_checkout():
 
 
 def test_mlx_frontier_accounting_workflow_imports_available_harness_symbols():
-    workflow = _workflow_texts()["demo-project-testing.yml"]
-    step_start = workflow.index("- name: Verify MLX frontier accounting")
-    command_marker = "          python - <<'PY'\n"
-    script_start = workflow.index(command_marker, step_start) + len(command_marker)
-    script_end = workflow.index("\n          PY", script_start)
-    script = textwrap.dedent(workflow[script_start:script_end])
+    script = _frontier_accounting_script(_workflow_texts()["demo-project-testing.yml"])
     tree = ast.parse(script)
     harness_import = next(
         node
@@ -2133,13 +2144,7 @@ def test_mlx_frontier_accounting_counts_refused_vulkan_sources_separately():
     """Refused Vulkan frontier sources are verified by run_porting, not counted as translated."""
     from demos.integrations.mlx import run_porting
 
-    workflow = _workflow_texts()["demo-project-testing.yml"]
-    step_start = workflow.index("- name: Verify MLX frontier accounting")
-    command_marker = "          python - <<'PY'\n"
-    script_start = workflow.index(command_marker, step_start) + len(command_marker)
-    script = textwrap.dedent(
-        workflow[script_start : workflow.index("\n          PY", script_start)]
-    )
+    script = _frontier_accounting_script(_workflow_texts()["demo-project-testing.yml"])
     assert run_porting.MLX_VULKAN_FRONTIER_REFUSALS
     assert set(run_porting.MLX_VULKAN_FRONTIER_SOURCES) == set(
         run_porting.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
