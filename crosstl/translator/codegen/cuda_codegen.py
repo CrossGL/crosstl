@@ -47,6 +47,7 @@ from .c_reference_parameters import (
     overlapping_output_arguments,
     reference_declarator,
 )
+from .c_vector_reductions import generate_vector_reduction_call
 from .cuda_refusals import CudaLoweringRefused
 from .for_initializers import join_for_initializer
 from .generic_function_utils import (
@@ -3498,6 +3499,12 @@ class CudaCodeGen(
                 f"CUDA synchronization builtin '{func_name}' requires 0 "
                 f"arguments; got {len(raw_args)}"
             )
+
+        reduction_call = generate_vector_reduction_call(
+            self, "CUDA", func_name, raw_args, args
+        )
+        if reduction_call is not None:
+            return reduction_call
 
         if func_name == "abs" and len(args) == 1:
             abs_call = self.generate_abs_call(raw_args, args)
