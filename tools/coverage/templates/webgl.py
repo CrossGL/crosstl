@@ -40,6 +40,7 @@ from .packing import WEBGL as _PACKING
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
+from .rasterization import WEBGL as _RASTERIZATION
 from .records import WEBGL as _RECORDS
 from .relations import GLSL as _RELATIONS
 from .rows import WEBGL as _ROWS
@@ -117,6 +118,7 @@ WEBGL = {
     **_FRAGMENTS,
     **_INTERFACES,
     **_VERTICES,
+    **_RASTERIZATION,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
