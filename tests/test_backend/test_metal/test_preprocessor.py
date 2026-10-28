@@ -4979,6 +4979,58 @@ def test_preprocessor_matches_partial_specialization_through_materialized_alias(
     assert "StorageTraits_ComplexHalf" not in output
 
 
+def test_preprocessor_matches_partial_specialization_spelled_with_an_alias():
+    code = """
+    template <typename T>
+    struct Complex {
+        T real;
+        T imag;
+    };
+
+    using ComplexFloat = Complex<float>;
+
+    template <typename T, int N>
+    struct Block {
+        T values[N];
+    };
+
+    template <int N>
+    struct Block<ComplexFloat, N> {
+        float real[N];
+        float imag[N];
+    };
+
+    template <typename N>
+    struct Shadow {
+        int value;
+    };
+
+    template <typename ComplexFloat>
+    struct Shadow<Block<ComplexFloat, 1>> {
+        ComplexFloat value;
+    };
+
+    Block<Complex<float>, 2> split;
+    Block<ComplexFloat, 4> aliased;
+    Block<float, 2> plain;
+    Shadow<Block<half, 1>> shadowed;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    # The pattern names Complex<float> through its alias, so both spellings
+    # select the partial specialization rather than the primary's body.
+    assert "Block<Complex<float>, 2> split;" in output
+    assert "Block<ComplexFloat, 4> aliased;" in output
+    assert "ComplexFloat values" not in output
+    assert "Complex_float values" not in output
+    assert "Block_float_2 plain;" in output
+    assert "struct Block_float_2" in output
+    # A template parameter shadows the alias inside its own specialization.
+    assert "Shadow<Block<half, 1>> shadowed;" in output
+    assert "struct Shadow_Block_half_1" not in output
+
+
 def test_preprocessor_resolves_struct_alias_in_nested_method_parameter_template():
     code = """
     template <typename T>
@@ -10493,8 +10545,14 @@ def test_preprocessor_expands_nested_const_for_loop_in_template_member_ordered()
 
     assert calls == [name for name, _, _ in expected]
     assert definitions == expected
-    assert "integral_constant_int_1{} * Int<(4)>{}" in output
-    assert "integral_constant_int_1{} * Int<(1)>{}" in output
+    # `idx_row * Int<RowStride>{}` multiplies two integral constants, so the
+    # operator template's result `integral_constant<int, idx_row * 4>` is the
+    # argument ([over.match.oper]); each call passes that folded constant.
+    arguments = re.findall(
+        r"Fragment__load__\w+\(src,\s*(\w+)\{\},\s*(\w+)\{\}\);", output
+    )
+    assert arguments == [(row, col) for _name, row, col in expected]
+    assert "Int<(4)>{}" not in output and "Int<(1)>{}" not in output
     assert "src[0 + 0]" in output
     assert "src[0 + 1]" in output
     assert "src[4 + 0]" in output
