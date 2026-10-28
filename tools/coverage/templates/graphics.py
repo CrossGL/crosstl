@@ -35,6 +35,7 @@ from . import (
     packing,
     portability,
     records,
+    relations,
     rows,
     scopes,
     shapes,
@@ -112,6 +113,7 @@ GLSL = {
     **orientation.GLSL,
     **rows.GLSL,
     **vectors.GLSL,
+    **relations.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -247,6 +249,7 @@ HLSL = {
     **orientation.FAMILY,
     **rows.FAMILY,
     **vectors.HLSL,
+    **relations.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -427,6 +430,7 @@ METAL = {
     **orientation.METAL,
     **rows.METAL,
     **vectors.METAL,
+    **relations.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -645,6 +649,7 @@ WGSL = {
     **orientation.WGSL,
     **rows.WGSL,
     **vectors.WGSL,
+    **relations.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

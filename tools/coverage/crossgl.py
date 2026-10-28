@@ -77,6 +77,7 @@ from .templates.portability import (
     intrinsic_names,
 )
 from .templates.records import CROSSGL as RECORDS_CROSSGL
+from .templates.relations import CROSSGL as RELATIONS
 from .templates.rows import CROSSGL as ROWS_CROSSGL
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
@@ -621,6 +622,7 @@ CONSTRUCTS: dict[str, Template] = {
     **ORIENTATION_CROSSGL,
     **ROWS_CROSSGL,
     **VECTORS,
+    **RELATIONS,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

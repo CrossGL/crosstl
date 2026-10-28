@@ -14,6 +14,7 @@ from tools.coverage import (
     validators,
 )
 from tools.coverage.model import Feature, Result
+from tools.coverage.templates import relations
 from tools.coverage.templates.base import ABSENT, OPERATORS
 
 _MODELS = [
@@ -618,6 +619,43 @@ def test_vector_probes_shift_by_scalars_and_resize_with_constructors():
         ("cuda", {"vector-shift", "vector-truncation", "matrix-resize"}),
         ("opencl", {"matrix-resize"}),
         ("mojo", {"vector-truncation", "matrix-resize"}),
+    ):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & absent, language
+
+
+def test_relation_probes_compare_integer_and_boolean_vectors_per_language():
+    # CrossGL and the C family compare with operators; GLSL spells each comparison and negation as a function.
+    crossgl = probes.build(
+        _feature("glsl", "integer-vector-comparison"), "crossgl"
+    ).source
+    assert "bvec2 gt = u > uvec2(5u, 7u);" in crossgl and "if (all(ne)) {" in crossgl
+    glsl = probes.build(_feature("glsl", "integer-vector-comparison"), "glsl").source
+    assert "bvec2 gt = greaterThan(u, uvec2(5u, 7u));" in glsl
+    glsl = probes.build(_feature("glsl", "bool-vector-logic"), "glsl").source
+    assert "bvec2 n = not(b);" in glsl and "if (any(not(c))) {" in glsl
+    crossgl = probes.build(_feature("glsl", "bool-vector-logic"), "crossgl").source
+    assert "bvec2 e = b == c;" in crossgl and "if (any(!c)) {" in crossgl
+    for language, line in (
+        ("hlsl", "bool2 b = (bool2)k;"),
+        ("metal", "bool2 b = bool2(k);"),
+        ("wgsl", "let u = vec2<u32>(vec2<bool>(fin[i] > 1.0, true));"),
+        ("rust", "let g = Vec2::select(b, Vec2::ONE, Vec2::ZERO);"),
+        ("mojo", "var j = c.cast[DType.int32]()"),
+    ):
+        source = probes.build(
+            _feature(language, "bool-vector-conversion"), language
+        ).source
+        assert line in source, language
+    opencl = probes.build(
+        _feature("opencl", "integer-vector-comparison"), "opencl"
+    ).source
+    assert "int2 gt = u > (uint2)(5u, 7u);" in opencl and "r += 128.0f;" in opencl
+    rust = probes.build(_feature("rust", "bool-vector-logic"), "rust").source
+    assert "let e = !(b ^ c);" in rust and "if (!c).any() {" in rust
+    for language, absent in (
+        ("cuda", set(relations.NAMES)),
+        ("opencl", {"bool-vector-logic", "bool-vector-conversion"}),
     ):
         names = {f.name for f in constructs.features(language, GRAMMAR)}
         assert not names & absent, language
