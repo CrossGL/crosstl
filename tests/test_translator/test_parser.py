@@ -722,9 +722,10 @@ def test_callable_type_values_accept_named_parameters():
 
 
 def test_parenthesized_tuple_and_square_list_literals_parse_as_array_literals():
+    # A tuple literal keeps a trailing comma: ``(32, 4)`` is the comma operator.
     code = """
     shader LiteralShapeShader {
-        let SF_ATOM_M = (32, 4);
+        let SF_ATOM_M = (32, 4,);
         List[Path] CUDA_CUDNN_LIBRARY_PATHS = ["libcudnn.so", "libcudnn.so.9"];
     }
     """

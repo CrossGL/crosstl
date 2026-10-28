@@ -14,6 +14,10 @@ faithful. Conditional evaluation is not: a side effect in the right operand of
 ``ValueError`` rather than running unconditionally. So does a side effect whose
 l-value calls a function, because the lowering evaluates that l-value twice.
 
+WGSL has no comma operator either. A comma expression ``(a, b)`` is lowered the same way: ``a`` becomes a
+statement in the prelude and ``b`` takes the comma's place. A discarded operand with no side effect and no call
+is dropped. One with a side effect or a call in a conditional position raises ``ValueError``.
+
 A ``while`` condition is lowered to ``loop { ...; if (!c) { break; } body }``
 and a ``for`` condition to an empty condition with the same guard at the top of
 the body, so the side effects still run once per test.
@@ -31,6 +35,7 @@ from ..ast import (
     BlockNode,
     BreakNode,
     CastNode,
+    CommaExpressionNode,
     ConstructorNode,
     ExpressionStatementNode,
     ForNode,
@@ -78,7 +83,7 @@ def is_value_side_effect(node):
 
 
 def contains_value_side_effect(value):
-    """True when ``value`` or a descendant increments, decrements or assigns.
+    """True when ``value`` or a descendant increments, decrements, assigns or is a comma expression.
 
     Nodes keep legacy alias fields, so the walk visits each node once.
     """
@@ -89,7 +94,7 @@ def contains_value_side_effect(value):
         if id(node) in visited:
             continue
         visited.add(id(node))
-        if is_value_side_effect(node):
+        if is_value_side_effect(node) or isinstance(node, CommaExpressionNode):
             return True
         if not isinstance(node, LambdaNode):
             stack.extend(node.child_nodes())
@@ -291,6 +296,8 @@ class WGSLValueSideEffectsMixin:
             return self.hoist_increment(expr, prelude)
         if isinstance(expr, AssignmentNode):
             return self.hoist_assignment(expr, prelude)
+        if isinstance(expr, CommaExpressionNode):
+            return self.hoist_comma_expression(expr, prelude, conditional)
         hoist = self.hoist_value_side_effects
         if isinstance(expr, BinaryOpNode):
             left = hoist(expr.left, prelude, conditional)
@@ -335,6 +342,26 @@ class WGSLValueSideEffectsMixin:
                 expr, expression=hoist(expr.expression, prelude, conditional)
             )
         self.reject_unordered_side_effect(expr)
+
+    def hoist_comma_expression(self, expr, prelude, conditional):
+        """Run the discarded operands of ``(a, b)`` as statements and return the hoisted ``b``."""
+        *discarded, result = expr.expressions
+        for operand in discarded:
+            effectful = contains_value_side_effect(operand) or any(
+                isinstance(node, FunctionCallNode) for node in operand.walk()
+            )
+            if not effectful:
+                continue
+            if conditional:
+                raise ValueError(
+                    "WGSL target cannot lower a comma expression whose discarded operand has a side "
+                    "effect or a call, in the right operand of && or ||, or in a ternary branch; WGSL "
+                    "has no comma operator and hoisting the operand would run it unconditionally"
+                )
+            statement = self.lower_statement_expression(operand, prelude)
+            if statement is not None:
+                prelude.append(ExpressionStatementNode(statement))
+        return self.hoist_value_side_effects(result, prelude, conditional)
 
     def reject_unordered_side_effect(self, expr):
         raise ValueError(

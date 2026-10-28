@@ -1111,7 +1111,13 @@ def test_cuda_samples_batch_cublas_unsigned_inline_union_and_comma_codegen_repar
     assert "u32 floatAsUInt(f32 x)" in crossgl
     assert "struct anonymous_xx_layout" in crossgl
     assert "var xx: anonymous_xx_layout;" in crossgl
-    assert "CUDA comma expression" in crossgl
+    # The comma operator survives as CrossGL's ``(a, b, c)``, not as a comment and a neutral value.
+    assert "CUDA comma expression" not in crossgl
+    assert (
+        "return (cuda_jsr = (cuda_jsr ^ (cuda_jsr << 17)), "
+        "cuda_jsr = (cuda_jsr ^ (cuda_jsr >> 13)), "
+        "cuda_jsr = (cuda_jsr ^ (cuda_jsr << 5)));"
+    ) in crossgl
     assert_crossgl_reparse(crossgl)
 
 
