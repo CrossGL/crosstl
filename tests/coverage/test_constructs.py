@@ -509,6 +509,52 @@ def test_uniform_bool_probes_store_each_boolean_in_a_32_bit_word():
         assert "uniform-bool" in names and "uniform-bool-vector" not in names, language
 
 
+def test_row_major_probes_store_each_matrix_row_on_its_own_16_byte_row():
+    crossgl = probes.build(
+        _feature("glsl", "uniform-row-major-non-square"), "crossgl"
+    ).source
+    assert (
+        "cbuffer Params @binding(3) {\n        @ row_major mat2x3 m;\n        vec4 v;"
+        in crossgl
+    )
+    glsl = probes.build(_feature("glsl", "uniform-row-major-array"), "glsl").source
+    assert "layout(row_major) mat2 m[2];" in glsl and "m[0][1][0] * 8.0" in glsl
+    # HLSL indexes by rows, so CrossGL's element in column 1 and row 2 is m[2][1].
+    hlsl = probes.build(_feature("hlsl", "uniform-row-major-non-square"), "hlsl").source
+    assert "row_major float3x2 m;\n    float4 v;" in hlsl and "m[2][1] * v.w" in hlsl
+    # Metal, WGSL and Rust have no row-major matrices, so they transpose the matrix whose columns are the rows.
+    for language, member, build in (
+        (
+            "metal",
+            "float4 r[3];\n    float4 v;",
+            "float3x3 m = transpose(float3x3(params.r[0].xyz,",
+        ),
+        (
+            "wgsl",
+            "r: array<vec4<f32>, 3>,\n    v: vec4<f32>,",
+            "let m = transpose(mat3x3<f32>(params.r[0].xyz,",
+        ),
+        (
+            "rust",
+            "r: [Vec4; 3],\n    v: Vec4,",
+            ".transpose();\n    let t = m * params.v",
+        ),
+    ):
+        source = probes.build(
+            _feature(language, "uniform-row-major-matrix"), language
+        ).source
+        assert member in source and build in source, language
+    names = {f.name for f in constructs.features("rust", GRAMMAR)}
+    assert "uniform-row-major-array" in names
+    assert "uniform-row-major-non-square" not in names
+    for language in ("cuda", "hip", "opencl", "mojo"):
+        assert not [
+            f
+            for f in constructs.features(language, GRAMMAR)
+            if f.name.startswith("uniform-row-major")
+        ], language
+
+
 def test_packing_probes_name_the_layout_rule_and_declare_its_offsets():
     for name, rule in (
         ("uniform-std140-vector", "std140"),
