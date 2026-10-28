@@ -1,4 +1,4 @@
-"""Language-level features: control flow, operators, types, compute, resources and shader stages.
+"""Language-level features: control flow, operators, types, compute and graphics built-ins, resources and stages.
 
 The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches, what
 its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core grammar items it needs (an
@@ -24,7 +24,15 @@ from .model import Feature, Type
 from .templates import ABSENT, Template
 from .validators import GLSL_STAGES
 
-CATEGORIES = ("control-flow", "operator", "type", "compute", "resource", "stage")
+CATEGORIES = (
+    "control-flow",
+    "operator",
+    "type",
+    "compute",
+    "graphics",
+    "resource",
+    "stage",
+)
 # The capabilities that make an execution model a shader stage; Kernel and the NV-only mesh models are left out.
 _STAGE_CAPABILITIES = frozenset(
     {"Shader", "Geometry", "Tessellation", "MeshShadingEXT", "RayTracingKHR"}
@@ -125,6 +133,19 @@ def _curated() -> list[Construct]:
         c("control-flow", "default-only-switch", "OpSwitch"),
         c("control-flow", "integer-condition", "OpINotEqual", "OpBranchConditional"),
         c("control-flow", "global-shadowing", "OpFunctionParameter", "OpVariable"),
+        c("control-flow", "default-argument", "OpFunctionCall", "OpFunctionParameter"),
+        c("control-flow", "generic-function", "OpFunctionCall", "OpIAdd", "OpFAdd"),
+        c("control-flow", "const-parameter", "OpFunctionParameter", "OpFunctionCall"),
+        c("control-flow", "condition-assignment", "OpLoopMerge", "OpIAdd", "OpISub"),
+        c("control-flow", "intrinsic-name", "OpFunctionCall"),
+        c("control-flow", "control-attribute", "OpLoopMerge", "OpSelectionMerge"),
+        c(
+            "control-flow",
+            "struct-array-parameter",
+            "OpFunctionParameter",
+            "OpTypeArray",
+        ),
+        c("control-flow", "unsigned-countdown", "OpLoopMerge", "OpULessThan", "OpISub"),
         c(
             "control-flow",
             "sibling-redeclaration",
@@ -250,6 +271,45 @@ def _curated() -> list[Construct]:
         c("operator", "increment-in-index", "OpIAdd", "OpAccessChain"),
         c("operator", "comma-operator", "OpIAdd", "OpIMul"),
         c("operator", "aggregate-equality", "OpFOrdEqual", "OpAll", "OpLogicalAnd"),
+        c("operator", "bool-bitwise", "OpBitwiseAnd", "OpBitwiseOr", "OpBitwiseXor"),
+        c(
+            "operator",
+            "nested-unary",
+            "OpFNegate",
+            "OpSNegate",
+            "OpNot",
+            "OpLogicalNot",
+        ),
+        c(
+            "operator",
+            "vector-shift",
+            "OpShiftLeftLogical",
+            "OpShiftRightArithmetic",
+            "OpShiftRightLogical",
+        ),
+        c(
+            "operator",
+            "vector-bitwise",
+            "OpBitwiseAnd",
+            "OpBitwiseOr",
+            "OpBitwiseXor",
+            "OpNot",
+        ),
+        c(
+            "operator",
+            "integer-vector-comparison",
+            "OpSLessThan",
+            "OpUGreaterThan",
+            "OpIEqual",
+            "OpAny",
+        ),
+        c(
+            "operator",
+            "bool-vector-logic",
+            "OpLogicalNot",
+            "OpLogicalEqual",
+            "OpLogicalNotEqual",
+        ),
         c("type", "array", "OpTypeArray"),
         c("type", "struct", "OpTypeStruct"),
         c("type", "array-of-structs", "OpTypeArray", "OpTypeStruct"),
@@ -305,6 +365,20 @@ def _curated() -> list[Construct]:
         c("type", "constant-array-size", "OpTypeArray", "OpConstant"),
         c("type", "local-struct", "OpTypeStruct"),
         c("type", "type-alias", "OpTypeFloat", "OpTypeVector", "OpTypeStruct"),
+        c("type", "enum-constant", "OpSwitch", "OpIEqual"),
+        c("type", "struct-method", "OpFSub", "OpFAdd"),
+        c("type", "constant-expression", "OpConstant", "OpConstantComposite"),
+        c("type", "array-return", "OpTypeArray", "OpFunctionCall", "OpReturnValue"),
+        c("type", "constant-struct", "OpConstantComposite", "OpTypeStruct"),
+        c("type", "constant-vector-array", "OpConstantComposite", "OpTypeArray"),
+        c("type", "constant-matrix", "OpConstantComposite", "OpTypeMatrix"),
+        c(
+            "type",
+            "zero-initializer",
+            "OpConstantComposite",
+            "OpTypeStruct",
+            "OpTypeArray",
+        ),
         c("type", "call-result-access", "OpFunctionCall", "OpCompositeExtract"),
         c("type", "reserved-identifier", "OpName"),
         c("type", "runtime-array-length", "OpTypeRuntimeArray", "OpArrayLength"),
@@ -313,6 +387,20 @@ def _curated() -> list[Construct]:
         c("compute", "workgroup-id", "BuiltIn.WorkgroupId"),
         c("compute", "local-invocation-index", "BuiltIn.LocalInvocationIndex"),
         c("compute", "num-workgroups", "BuiltIn.NumWorkgroups"),
+        c(
+            "compute",
+            "invocation-id-in-helper",
+            "OpFunctionCall",
+            "BuiltIn.GlobalInvocationId",
+        ),
+        c(
+            "compute",
+            "shared-memory-in-helper",
+            "OpFunctionCall",
+            "StorageClass.Workgroup",
+            "OpControlBarrier",
+        ),
+        c("compute", "barrier-in-loop", "OpLoopMerge", "OpControlBarrier"),
         c("resource", "uniform-buffer", "StorageClass.Uniform"),
         c(
             "resource",
@@ -327,6 +415,262 @@ def _curated() -> list[Construct]:
             "OpImageSampleExplicitLod",
         ),
         c("resource", "storage-image", "OpTypeImage", "OpImageWrite"),
+        c(
+            "resource",
+            "buffer-in-helper",
+            "OpFunctionCall",
+            "StorageClass.StorageBuffer",
+        ),
+        c(
+            "resource",
+            "buffer-element-argument",
+            "OpFunctionCall",
+            "OpAccessChain",
+            "StorageClass.StorageBuffer",
+        ),
+        c("resource", "uniform-in-helper", "OpFunctionCall", "StorageClass.Uniform"),
+        c(
+            "resource",
+            "vector-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeVector",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "struct-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeStruct",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "struct-buffer-copy",
+            "StorageClass.StorageBuffer",
+            "OpTypeStruct",
+            "OpCompositeExtract",
+        ),
+        c("resource", "uniform-members", "StorageClass.Uniform", "Decoration.Offset"),
+        c("resource", "uniform-vector", "StorageClass.Uniform", "OpTypeVector"),
+        c(
+            "resource",
+            "uniform-vector-packing",
+            "StorageClass.Uniform",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "matrix-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeMatrix",
+            "Decoration.MatrixStride",
+        ),
+        c(
+            "resource",
+            "struct-buffer-packing",
+            "StorageClass.StorageBuffer",
+            "OpTypeStruct",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "struct-array-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeArray",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "nested-struct-buffer",
+            "StorageClass.StorageBuffer",
+            "OpTypeStruct",
+            "Decoration.Offset",
+        ),
+        c("resource", "integer-buffer", "StorageClass.StorageBuffer", "OpIMul"),
+        c(
+            "resource",
+            "unsigned-buffer",
+            "StorageClass.StorageBuffer",
+            "OpShiftRightLogical",
+        ),
+        c(
+            "resource",
+            "uniform-array",
+            "StorageClass.Uniform",
+            "OpTypeArray",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "uniform-vector-array",
+            "StorageClass.Uniform",
+            "OpTypeArray",
+            "OpTypeVector",
+        ),
+        c(
+            "resource",
+            "uniform-matrix",
+            "StorageClass.Uniform",
+            "OpTypeMatrix",
+            "Decoration.ColMajor",
+        ),
+        c(
+            "compute",
+            "shared-vector-array",
+            "StorageClass.Workgroup",
+            "OpTypeVector",
+            "OpControlBarrier",
+        ),
+        c(
+            "compute",
+            "shared-struct-array",
+            "StorageClass.Workgroup",
+            "OpTypeStruct",
+            "OpControlBarrier",
+        ),
+        c(
+            "compute",
+            "shared-2d-array",
+            "StorageClass.Workgroup",
+            "OpTypeArray",
+            "OpControlBarrier",
+        ),
+        c("graphics", "fragment-coordinate", "BuiltIn.FragCoord", stage="fragment"),
+        c("graphics", "front-facing", "BuiltIn.FrontFacing", stage="fragment"),
+        c("graphics", "fragment-depth", "BuiltIn.FragDepth", stage="fragment"),
+        c(
+            "resource",
+            "uniform-struct",
+            "StorageClass.Uniform",
+            "OpTypeStruct",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-struct-array",
+            "StorageClass.Uniform",
+            "OpTypeStruct",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "uniform-struct-copy",
+            "StorageClass.Uniform",
+            "OpTypeStruct",
+            "OpCompositeExtract",
+        ),
+        c(
+            "resource",
+            "uniform-integer",
+            "StorageClass.Uniform",
+            "OpShiftRightArithmetic",
+        ),
+        c(
+            "resource",
+            "uniform-unsigned",
+            "StorageClass.Uniform",
+            "OpShiftRightLogical",
+        ),
+        c(
+            "resource",
+            "uniform-integer-vector",
+            "StorageClass.Uniform",
+            "OpTypeVector",
+            "OpShiftRightArithmetic",
+        ),
+        c("type", "reserved-member-name", "OpMemberName"),
+        c("type", "reserved-type-name", "OpName", "OpTypeStruct"),
+        c("type", "reserved-global-name", "OpName", "StorageClass.Private"),
+        c("type", "vector-truncation", "OpCompositeExtract", "OpConvertSToF"),
+        c("type", "matrix-resize", "OpTypeMatrix", "OpCompositeConstruct"),
+        c("type", "bool-vector-conversion", "OpINotEqual", "OpSelect"),
+        c(
+            "resource",
+            "uniform-matrix2",
+            "StorageClass.Uniform",
+            "OpTypeMatrix",
+            "Decoration.MatrixStride",
+        ),
+        c(
+            "resource",
+            "uniform-matrix3",
+            "StorageClass.Uniform",
+            "OpTypeMatrix",
+            "Decoration.MatrixStride",
+        ),
+        c(
+            "resource",
+            "uniform-non-square-matrix",
+            "StorageClass.Uniform",
+            "OpTypeMatrix",
+            "Decoration.ColMajor",
+        ),
+        c("resource", "uniform-bool", "StorageClass.Uniform", "OpINotEqual"),
+        c(
+            "resource",
+            "uniform-bool-vector",
+            "StorageClass.Uniform",
+            "OpINotEqual",
+            "OpTypeBool",
+        ),
+        c(
+            "resource",
+            "uniform-std140-vector",
+            "StorageClass.Uniform",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-cbuffer-vector",
+            "StorageClass.Uniform",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-std140-array",
+            "StorageClass.Uniform",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "uniform-row-major-matrix",
+            "StorageClass.Uniform",
+            "Decoration.RowMajor",
+        ),
+        c(
+            "resource",
+            "uniform-row-major-non-square",
+            "StorageClass.Uniform",
+            "Decoration.RowMajor",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-row-major-array",
+            "StorageClass.Uniform",
+            "Decoration.RowMajor",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "buffer-row-major-matrix",
+            "StorageClass.StorageBuffer",
+            "Decoration.RowMajor",
+        ),
+        c(
+            "resource",
+            "buffer-row-major-non-square",
+            "StorageClass.StorageBuffer",
+            "Decoration.RowMajor",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "buffer-row-major-array",
+            "StorageClass.StorageBuffer",
+            "Decoration.RowMajor",
+            "Decoration.ArrayStride",
+        ),
     ]
 
 
@@ -412,12 +756,15 @@ def _spellings(dialect) -> dict[str, str]:
     try:
         spelled["mat2"] = dialect.type(Type("float", (2, 2)))
         spelled["mat2x3"] = dialect.type(Type("float", (2, 3)))
+        spelled["mat3"] = dialect.type(Type("float", (3, 3)))
+        spelled["mat4"] = dialect.type(Type("float", (4, 4)))
     except ProbeError:
         pass  # the language lacks these matrices, and its templates do not use them
     try:
         spelled["bvec2"] = dialect.type(Type("bool", (2,)))
+        spelled["bvec4"] = dialect.type(Type("bool", (4,)))
     except ProbeError:
-        pass  # the language has no bool vectors, and its templates do not use $bvec2
+        pass  # the language has no bool vectors, and its templates use neither $bvec2 nor $bvec4
     return spelled
 
 
@@ -452,6 +799,8 @@ def build(feature: Feature, dialect):
         for scalar, name in _BUFFERS
         if name == "outp" or name in read
     ]
+    if template.output:
+        buffers[-1] = (_Text(template.output).substitute(spelled), "outp")
     source = dialect.kernel(
         buffers,
         _lines(template.body, spelled),

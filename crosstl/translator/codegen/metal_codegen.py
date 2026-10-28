@@ -122,6 +122,11 @@ from .builtin_result_types import (
 )
 from .c_family_operands import postfix_operand
 from .call_graph import validate_recursion_free
+from .comma_expressions import (
+    c_family_comma_expression,
+    comma_result_operand,
+    is_comma_expression,
+)
 from .constant_ordering import partition_constants_by_struct_dependency
 from .crossgl_vector_names import (
     crossgl_named_vector_spelling,
@@ -160,6 +165,7 @@ from .extended_arithmetic_builtins import (
     emit_metal_extended_arithmetic_helpers,
     metal_extended_arithmetic_call,
 )
+from .float_remainder_assignment import float_remainder_assignment
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
 from .generic_function_utils import (
@@ -10314,6 +10320,8 @@ class MetalCodeGen(
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if is_comma_expression(expr):
+            return self.expression_result_type(comma_result_operand(expr))
         if isinstance(expr, IdentifierNode):
             builtin_type = self.metal_graphics_builtin_result_type(expr.name)
             if builtin_type is not None:
@@ -11049,6 +11057,13 @@ class MetalCodeGen(
         """Render an unused result without changing nested value expressions."""
         if isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return self.generate_assignment(expr)
+        if is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr,
+                self.generate_expression,
+                self.generate_discarded_expression,
+                discarded=True,
+            )
         rendered = self.generate_expression(expr)
         narrow_update = (
             isinstance(expr, UnaryOpNode)
@@ -11106,6 +11121,22 @@ class MetalCodeGen(
         zero = "0.0" if component_type in {"float", "half", "double"} else "0"
         return f"any(({rendered}) < {mapped_type}({zero}))"
 
+    def metal_is_floating_value_type(self, vtype):
+        """Whether ``vtype`` is a floating-point scalar or vector."""
+        if vtype is None:
+            return False
+        mapped = self.map_type(vtype)
+        if not isinstance(mapped, str) or not (
+            self.is_scalar_value_type(mapped) or self.is_vector_value_type(mapped)
+        ):
+            return False
+        return self.vector_component_type(mapped) in {
+            "float",
+            "half",
+            "double",
+            "bfloat",
+        }
+
     def generate_assignment(self, node):
         if hasattr(node, "target") and hasattr(node, "value"):
             target = node.target
@@ -11126,6 +11157,17 @@ class MetalCodeGen(
         )
         if matrix_product is not None:
             return self.generate_assignment(matrix_product)
+        # MSL has no floating %=; x = x % y lowers the remainder through fmod.
+        remainder = float_remainder_assignment(
+            target,
+            value,
+            op,
+            type_of=self.expression_result_type,
+            is_floating=self.metal_is_floating_value_type,
+            backend="metal",
+        )
+        if remainder is not None:
+            return self.generate_assignment(remainder)
         rhs = self.generate_expression_with_expected(
             value, self.metal_assignment_value_type(target, value, op)
         )
@@ -11976,6 +12018,10 @@ class MetalCodeGen(
             )
         elif isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return assignment_value_expression(self.generate_assignment(expr))
+        elif is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr, self.generate_expression, self.generate_discarded_expression
+            )
         elif isinstance(expr, ArrayLiteralNode):
             elements = ", ".join(
                 self.generate_expression_with_expected(element, None)

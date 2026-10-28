@@ -21,6 +21,7 @@ from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .binding_constants import BindingIndexUnresolvedError, fold_binding_constants
+from .boolean_reductions import lower_boolean_reductions
 from .buffer_strides import materialize_buffer_strides
 from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
@@ -38,6 +39,7 @@ from .constant_reference_layouts import (
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
 from .declaration_scopes import separate_initializer_scopes
 from .declared_types import UndeclaredTypeError, refuse_undeclared_types
+from .default_buffer_layouts import mark_default_buffer_layouts
 from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
@@ -119,6 +121,10 @@ from .shader_records import (
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
+from .stage_constant_blocks import (
+    StageConstantBlockConflictError,
+    hoist_stage_constant_blocks,
+)
 from .stage_interface_structs import (
     StageInterfaceUnsupportedError,
     gather_stage_interface_variables,
@@ -130,6 +136,7 @@ from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
     normalize_spirv_storage_blocks,
 )
+from .struct_constructor_conversions import convert_struct_constructor_arguments
 from .struct_scalar_splats import expand_struct_scalar_splats
 from .structured_layouts import (
     StructuredLayoutUnsupportedError,
@@ -202,6 +209,7 @@ __all__ = [
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
     "SpirvArrayLengthUnsupportedError",
+    "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
@@ -258,7 +266,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
     structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
-    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V,
+    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For GLSL, WGSL and MSL, ``any``
+    and ``all`` of a numeric vector reduce its conversion to a boolean vector, and of a scalar become the scalar
+    converted to ``bool`` (:mod:`.boolean_reductions`). For OpenGL, SPIR-V,
     Metal, CUDA and HIP, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
@@ -271,6 +281,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
     structures (:mod:`.stage_interface_structs`). A structure an
     HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
+    A structure constructor argument whose type converts implicitly to its member's type is converted explicitly
+    (:mod:`.struct_constructor_conversions`).
     For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
     inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
     becomes the stream form (:mod:`.hlsl_geometry_streams`), and for HLSL and MSL a GLSL-style mesh or task stage's
@@ -335,6 +347,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     hoist_local_structs(program, report.target)
+    hoist_stage_constant_blocks(program, report.target)
     refuse_undeclared_types(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
@@ -359,6 +372,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     expand_scalar_swizzles(program)
     lower_aggregate_equality(program, report.target)
     lower_vector_logic(program, report.target)
+    lower_boolean_reductions(program, report.target)
     lower_subpass_inputs(program, report.target)
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
@@ -373,6 +387,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
+    convert_struct_constructor_arguments(program)
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
     raise_glsl_geometry_streams(program, report.target)
@@ -383,6 +398,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     declare_interface_block_instances(program, report.target)
     normalize_spirv_storage_blocks(program, report.source, report.target)
     legalize_unsized_arrays(program, report.target)
+    mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
     hoist_constant_reference_layouts(program, report.target)

@@ -165,6 +165,12 @@ from .builtin_result_types import (
 )
 from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
+from .comma_expressions import (
+    c_family_comma_expression,
+    comma_result_operand,
+    is_comma_expression,
+    split_comma_initializer,
+)
 from .constant_guards import (
     constant_bool_locals,
     constant_branch_guards,
@@ -285,6 +291,10 @@ from .hlsl_ray_queries import (
 from .hlsl_refusals import DirectXLoweringRefused
 from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
+from .hlsl_storage_array_views import (
+    storage_array_pointer_type,
+    view_storage_array_parameters,
+)
 from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_struct_varyings import assign_struct_varying_semantic
 from .hlsl_texel_buffers import (
@@ -2554,6 +2564,7 @@ class HLSLCodeGen(
         self.function_hlsl_resource_pointer_array_parameter_indices = {}
         self.function_hlsl_resource_pointer_array_mutated_parameters = {}
         self.hlsl_resource_pointer_analysis_call_source_types = {}
+        self.hlsl_view_storage_array_parameters = {}
         self.hlsl_omitted_resource_pointer_parameter_keys = set()
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
@@ -3951,6 +3962,7 @@ class HLSLCodeGen(
         self.function_hlsl_resource_pointer_array_parameter_indices = {}
         self.function_hlsl_resource_pointer_array_mutated_parameters = {}
         self.hlsl_resource_pointer_analysis_call_source_types = {}
+        self.hlsl_view_storage_array_parameters = {}
         self.hlsl_omitted_resource_pointer_parameter_keys = set()
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
@@ -4225,6 +4237,10 @@ class HLSLCodeGen(
             self.collect_hlsl_struct_buffer_resource_types(global_vars)
         )
         self.global_variable_types = self.collect_global_variable_types(global_vars)
+        for constant in getattr(ast, "constants", []) or []:
+            constant_type = self.type_name_string(getattr(constant, "const_type", None))
+            if getattr(constant, "name", None) and constant_type:
+                self.global_variable_types.setdefault(constant.name, constant_type)
         self.global_variable_types.update(self.directx_specialization_constant_types)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
@@ -5438,6 +5454,17 @@ class HLSLCodeGen(
 
             prototype = deepcopy(function)
             prototype.body = None
+            # The copy's parameters are new objects; carry the view analysis.
+            for original, copied in zip(
+                getattr(function, "parameters", None) or [],
+                getattr(prototype, "parameters", None) or [],
+            ):
+                view = self.hlsl_view_storage_array_parameters.get(id(original))
+                if view is not None and view[0] is original:
+                    self.hlsl_view_storage_array_parameters[id(copied)] = (
+                        copied,
+                        view[1],
+                    )
             declaration = self.generate_function(prototype)
             if declaration in seen_declarations:
                 continue
@@ -12541,8 +12568,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return
 
-        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
-            mapped_type
+        if (
+            self.is_scalar_value_type(mapped_type)
+            or self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
         ):
             return
 
@@ -12581,8 +12610,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def directx_compile_time_constructor_type(self, type_name):
         mapped_type = self.map_type(type_name)
-        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
-            mapped_type
+        if (
+            self.is_scalar_value_type(mapped_type)
+            or self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
         ):
             return mapped_type
         if self.hlsl_struct_constructor_fields(mapped_type) is not None:
@@ -12982,6 +13013,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if isinstance(expression, ArrayLiteralNode):
             return self.hlsl_contextual_aggregate_initializer(expression, mapped_type)
+        if self.hlsl_matrix_shape(mapped_type) is not None:
+            # Matrix constructors take CrossGL's column-major operand order; the
+            # expression generator owns that reordering.
+            return self.generate_constant_expression(expression, expected_type)
         if isinstance(expression, CastNode):
             target_type = self.map_type(expression.target_type)
             operand = self.hlsl_compile_time_initializer_expression(
@@ -15062,6 +15097,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
+            comma_initializer = split_comma_initializer(stmt)
+            if comma_initializer is not None:
+                effects, declaration = comma_initializer
+                return "".join(
+                    self.generate_statement(statement, indent)
+                    for statement in (*effects, declaration)
+                )
             source_vtype = self.hlsl_source_variable_declared_type(stmt)
             vtype = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = self.type_name_string(vtype)
@@ -18653,6 +18695,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if is_comma_expression(expr):
+            return self.expression_result_type(comma_result_operand(expr))
         if isinstance(expr, PointerReinterpretNode):
             target_type = getattr(expr.target_type, "pointee_type", None)
             return self.map_type(self.type_name_string(target_type))
@@ -20675,7 +20719,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parameter_type = getattr(
             parameter, "param_type", getattr(parameter, "vtype", None)
         )
-        return parameter_type if isinstance(parameter_type, PointerType) else None
+        if isinstance(parameter_type, PointerType):
+            return parameter_type
+        # A storage array parameter that receives a view into a buffer is a
+        # storage pointer; see hlsl_storage_array_views.
+        view = self.hlsl_view_storage_array_parameters.get(id(parameter))
+        return view[1] if view is not None and view[0] is parameter else None
 
     def hlsl_resource_pointer_parameter_address_space(self, parameter):
         pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
@@ -20741,6 +20790,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return "read_write"
 
     def hlsl_resource_pointer_offset_parameter_direction(self, parameter):
+        if id(parameter) in self.hlsl_view_storage_array_parameters:
+            # An array parameter decays to a pointer passed by value; its
+            # ``inout`` qualifier covers the elements, not the view.
+            return None
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(parameter, "qualifiers", []) or []
@@ -21126,6 +21179,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def collect_hlsl_resource_pointer_parameters(self, functions):
         functions = list(functions or [])
+        self.hlsl_view_storage_array_parameters = {
+            key: (parameter, storage_array_pointer_type(parameter))
+            for key, parameter in view_storage_array_parameters(
+                functions, self.function_call_name
+            ).items()
+        }
         parameters_by_function = {}
         indices_by_function = {}
         array_parameters_by_function = {}
@@ -27526,6 +27585,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """Render an expression whose value is unused, such as a for update."""
         if isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
+        if is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr,
+                self.generate_expression,
+                self.generate_discarded_expression,
+                discarded=True,
+            )
         return self.generate_expression(expr)
 
     def hlsl_helper_invocation_expression(self, expr):
@@ -27602,6 +27668,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return str(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.hlsl_array_literal_expression(expr)
+        elif is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr, self.generate_expression, self.generate_discarded_expression
+            )
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value

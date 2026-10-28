@@ -54,6 +54,7 @@ from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
 from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
+from .comma_expressions import is_comma_expression
 from .enum_utils import (
     generic_enum_specialization_name,
     generic_type_parts,
@@ -69,6 +70,12 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .wgsl_array_constructors import wgsl_array_constructor
+from .wgsl_boolean_xor import (
+    wgsl_boolean_xor,
+    wgsl_boolean_xor_assignment,
+    wgsl_boolean_xor_assignment_statement,
+)
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
     entry_output_parameters,
@@ -2881,6 +2888,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
     def generate_assignment(self, node):
         self.validate_storage_assignment_target(node.target)
+        boolean_xor = wgsl_boolean_xor_assignment(self, node)
+        if boolean_xor is not None:
+            return boolean_xor
         target_type = self.expression_type(node.target)
         if node.operator[:-1] in SHIFT_OPERATORS:
             value = wgsl_shift_amount(self, node.value, target_type)
@@ -2902,6 +2912,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         swizzle_assignment = self.generate_swizzle_assignment_statement(node, indent)
         if swizzle_assignment is not None:
             return swizzle_assignment
+        boolean_xor = wgsl_boolean_xor_assignment_statement(self, node, indent)
+        if boolean_xor is not None:
+            return boolean_xor
         pad = "    " * indent
         return f"{pad}{self.generate_assignment(node)};"
 
@@ -3156,6 +3169,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_expression(self, expr):
         if expr is None:
             return ""
+        if is_comma_expression(expr):
+            # Statement lowering hoists every comma it can reach (wgsl_value_side_effects).
+            raise ValueError(
+                "WGSL target cannot lower a comma expression in this position; WGSL has no "
+                "comma operator"
+            )
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
         if isinstance(expr, IdentifierNode):
@@ -3192,6 +3211,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                     self, expr.right, self.expression_type(expr.left)
                 )
                 return f"({left} {expr.operator} {amount})"
+            if expr.operator == "^":
+                boolean_xor = wgsl_boolean_xor(
+                    self, expr.left, expr.right, wgsl_bitwise_operands
+                )
+                if boolean_xor is not None:
+                    return boolean_xor
             if expr.operator in BITWISE_OPERATORS:
                 left, right = wgsl_bitwise_operands(self, expr.left, expr.right)
                 return f"({left} {expr.operator} {right})"
@@ -3205,6 +3230,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
                 return f"{operand}{expr.operator}"
+            if expr.operator == "+":
+                # WGSL has no unary plus. On a number it is the identity, and the
+                # operand text already stands on its own as an expression.
+                if self.boolean_expression_width(expr.operand) is not None:
+                    raise ValueError(
+                        "WGSL has no unary plus, and unary plus on a boolean "
+                        "value has no numeric meaning to preserve"
+                    )
+                return operand
             if expr.operator == "!":
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
@@ -3355,6 +3389,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_function_call(self, node, expected_type=None):
         node = self.specialize_generic_function_call(node)
         function_name = self.expression_name(node.function)
+        array_value = wgsl_array_constructor(self, node)
+        if array_value is not None:
+            return array_value
         normalized_name = self.semantic_key(function_name)
         option_call = self.generate_builtin_option_call(node, function_name)
         if option_call is not None:
