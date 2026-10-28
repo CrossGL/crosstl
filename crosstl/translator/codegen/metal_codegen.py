@@ -9868,16 +9868,52 @@ class MetalCodeGen(
         # Keep arithmetic carriers widened, but preserve the source conversion.
         return f"{carrier}({native}({rendered}))"
 
+    def metal_narrow_update_repeatable_lvalue(self, target):
+        """Return whether ``target`` can be read and written by repeating it.
+
+        The widened update renders the lvalue twice, so every subexpression
+        must name the same storage on both evaluations: variables, fields and
+        array elements whose indices are side-effect-free.
+        """
+        if isinstance(target, (IdentifierNode, VariableNode)):
+            return True
+        if isinstance(target, MemberAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(target.object_expr)
+        if isinstance(target, ArrayAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(
+                target.array_expr
+            ) and self.metal_narrow_update_repeatable_index(target.index_expr)
+        return False
+
+    def metal_narrow_update_repeatable_index(self, index):
+        if isinstance(index, LiteralNode):
+            return True
+        if isinstance(index, (IdentifierNode, VariableNode, MemberAccessNode)):
+            return self.metal_narrow_update_repeatable_lvalue(index)
+        if isinstance(index, ArrayAccessNode):
+            return self.metal_narrow_update_repeatable_lvalue(index)
+        if isinstance(index, BinaryOpNode):
+            return self.metal_narrow_update_repeatable_index(
+                index.left
+            ) and self.metal_narrow_update_repeatable_index(index.right)
+        if isinstance(index, UnaryOpNode):
+            return str(index.operator) not in {
+                "++",
+                "--",
+            } and self.metal_narrow_update_repeatable_index(index.operand)
+        if isinstance(index, CastNode):
+            return self.metal_narrow_update_repeatable_index(
+                getattr(index, "expression", None)
+            )
+        return False
+
     def metal_narrow_integer_update_expression(
         self, node, target, operator, value=None
     ):
         value_type = self.expression_result_type(target)
         if self.metal_narrow_integer_conversion_expression("value", value_type) is None:
             return None
-        owner = target
-        while isinstance(owner, MemberAccessNode):
-            owner = owner.object_expr
-        if not isinstance(owner, (IdentifierNode, VariableNode)):
+        if not self.metal_narrow_update_repeatable_lvalue(target):
             raise UnsupportedMetalFeatureError(
                 "byte-update",
                 "Narrow integer updates require a stable variable or field",
@@ -12380,6 +12416,11 @@ class MetalCodeGen(
                 func_name = specialized_func_name
             else:
                 reject_unresolved_generic_function_call(self, func_name, "Metal")
+            scalar_geometric_call = self.metal_scalar_geometric_call(
+                func_name, expr.args
+            )
+            if scalar_geometric_call is not None:
+                return scalar_geometric_call
             if func_name == "normalize" and func_name not in self.user_function_names:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
                 call_name = (
@@ -18488,6 +18529,7 @@ class MetalCodeGen(
             "const-qualified",
             "const-qualified local alias",
             "constant address space",
+            "constant address-space local alias",
         }:
             return False
         if not isinstance(target, IdentifierNode):
@@ -25009,6 +25051,26 @@ class MetalCodeGen(
 
     def is_scalar_integer_type(self, vtype):
         return is_integer_scalar_type_name(self.type_name_string(vtype), self.map_type)
+
+    def metal_scalar_geometric_call(self, func_name, args):
+        """Lower scalar ``length``, ``dot``, ``distance`` and ``normalize``, which Metal declares only for vectors."""
+        arity = {"length": 1, "normalize": 1, "dot": 2, "distance": 2}.get(func_name)
+        if arity != len(args) or func_name in self.user_function_names:
+            return None
+        if not all(
+            self.is_scalar_numeric_type(self.expression_result_type(arg))
+            for arg in args
+        ):
+            return None
+        operands = [self.generate_expression(arg) for arg in args]
+        if func_name == "dot":
+            return f"(({operands[0]}) * ({operands[1]}))"
+        call_name = "sign" if func_name == "normalize" else "abs"
+        if self.metal_function_name_is_shadowed(call_name):
+            call_name = f"metal::{call_name}"
+        if func_name == "distance":
+            return f"{call_name}(({operands[0]}) - ({operands[1]}))"
+        return f"{call_name}({operands[0]})"
 
     def texture_argument_diagnostic_type(self, arg):
         sampler_names = {

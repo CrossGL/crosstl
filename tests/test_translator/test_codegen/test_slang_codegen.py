@@ -25109,5 +25109,54 @@ def test_slang_refuses_matrix_builtins_without_a_known_shape(expression, reason)
     assert "matrixCompMult(" not in refused.code
 
 
+def test_bare_block_is_emitted_with_its_own_scope():
+    code = """
+    shader P {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                float x = fin[i];
+                float r = 0.0;
+                {
+                    float x = 2.0;
+                    r += x;
+                    {
+                        r += 1.0;
+                    }
+                }
+                if (r > 0.0) {
+                    {
+                        r += x;
+                    }
+                }
+                outp[i] = r * 100.0 + x;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    lines = [line.rstrip() for line in generated.splitlines()]
+    body = "\n".join(lines)
+
+    assert "BlockNode" not in generated
+    assert (
+        "    float r = 0.0;\n"
+        "    {\n"
+        "        float x = 2.0;\n"
+        "        r += x;\n"
+        "        {\n"
+        "            r += 1.0;\n"
+        "        }\n"
+        "    }\n"
+        "    if (r > 0.0)"
+    ) in body
+    assert "        {\n            r += x;\n        }\n" in body
+    assert "    outp[i] = r * 100.0 + x;" in body
+
+
 if __name__ == "__main__":
     pytest.main()

@@ -50,8 +50,16 @@ def test_host_package_downloads_unpack_outside_the_artifact_stream():
             )
             assert "if" not in unpack and "continue-on-error" not in unpack
             consumers[name] = with_["path"]
-    assert len(consumers) == 6
-    assert len(set(consumers.values())) == 6
+    assert consumers == {
+        "small-row-reductions": ".mlx-portable-small-rows/base",
+        "half-host": ".mlx-portable-half/base",
+        "quantized-host": ".mlx-portable-quantized/base",
+        "quantized-upstream-host": ".mlx-portable-quantized/base",
+        "integer64-host": ".mlx-portable-integer64/base",
+        "slice-update-host": ".mlx-portable-slice-update/base",
+        "scatter-host": ".mlx-portable-scatter/base",
+        "reductions": ".mlx-portable-reductions/base",
+    }
 
 
 @pytest.mark.parametrize("family", ["column", "row"])
@@ -155,6 +163,41 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
     )
 
 
+def test_current_attention_runs_in_the_native_jobs_and_retains_evidence():
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    job = yaml.safe_load(workflow)["jobs"]["mlx-metal-porting"]
+    names = [step.get("name") for step in job["steps"]]
+    step = job["steps"][names.index("Prove current MLX attention native execution")]
+    path = "demos/integrations/mlx/tests/kernels/test_current_attention.py"
+    assert workflow.count(path) == 1
+    assert path in step["run"]
+    assert "if" not in step and "continue-on-error" not in step
+    assert step["env"]["CROSTL_MLX_CURRENT_TARGET"] == (
+        "${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl'"
+        " || 'metal' }}"
+    )
+    assert step["env"]["CROSTL_REQUIRE_MLX_CURRENT_ATTENTION"] == "1"
+    assert step["env"]["CROSTL_MLX_CURRENT_ROOT"].endswith("/mlx-current-tree-upstream")
+    assert step["env"]["EGL_PLATFORM"] == "surfaceless"
+    assert step["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    assert step["env"]["PYOPENGL_PLATFORM"] == "egl"
+    # Entries translate in parallel groups; Windows runners take several
+    # minutes for each one.
+    assert "--timeout-seconds 1800" in step["run"]
+    assert "-n auto --dist loadgroup" in step["run"]
+    assert "--junitxml=mlx-attention-results/results.xml" in step["run"]
+    upload = job["steps"][names.index("Upload current MLX attention native evidence")]
+    assert names.index("Upload current MLX attention native evidence") == (
+        names.index("Prove current MLX attention native execution") + 1
+    )
+    assert upload["if"] == "always()"
+    assert upload["with"]["name"] == "mlx-attention-${{ runner.os }}"
+    assert upload["with"]["path"] == "mlx-attention-results"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["include-hidden-files"] is True
+    _assert_workflow_triggers(workflow, path)
+
+
 def test_full_gemm_uses_existing_native_jobs_and_retains_evidence():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     job = yaml.safe_load(workflow)["jobs"]["mlx-metal-porting"]
@@ -166,10 +209,14 @@ def test_full_gemm_uses_existing_native_jobs_and_retains_evidence():
     path = "demos/integrations/mlx/tests/kernels/test_current_gemm.py"
     assert workflow.count(path) == 1
     assert path in step["run"]
-    assert step["if"] == "runner.os == 'macOS' || runner.os == 'Windows'"
+    assert "if" not in step
     assert step["env"]["CROSTL_MLX_CURRENT_TARGET"] == (
-        "${{ runner.os == 'Windows' && 'directx' || 'metal' }}"
+        "${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl'"
+        " || 'metal' }}"
     )
+    assert step["env"]["EGL_PLATFORM"] == "surfaceless"
+    assert step["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"
+    assert step["env"]["PYOPENGL_PLATFORM"] == "egl"
     assert step["env"]["CROSTL_REQUIRE_MLX_CURRENT_GEMM"] == "1"
     assert step["env"]["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "2"
     assert step["env"]["CROSTL_MLX_CURRENT_ROOT"].endswith("/mlx-current-tree-upstream")
@@ -184,9 +231,7 @@ def test_full_gemm_uses_existing_native_jobs_and_retains_evidence():
         for s in job["steps"]
         if s.get("name") == "Upload current MLX GEMM native evidence"
     )
-    assert (
-        upload["if"] == "always() && (runner.os == 'macOS' || runner.os == 'Windows')"
-    )
+    assert upload["if"] == "always()"
     assert upload["with"]["name"] == "mlx-gemm-${{ runner.os }}"
     assert upload["with"]["path"] == "mlx-gemm-results"
     assert upload["with"]["if-no-files-found"] == "error"
@@ -465,7 +510,8 @@ def test_host_runtime_recheck_rejects_missing_or_changed_libraries(
         env=env,
         capture_output=True,
         text=True,
-        timeout=15,
+        # PowerShell cold starts on shared runners have exceeded 15 s.
+        timeout=120,
     )
     receipt = evidence / "host-runtime-identity.json"
     if failure:
@@ -898,7 +944,7 @@ def test_project_demo_has_no_parent_cancellation_or_serialization():
 def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = workflow_text.workflow_job_names(workflow)
-    assert len(jobs) == 42
+    assert len(jobs) == 46
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -917,18 +963,43 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
 def test_current_tree_native_parity_job_runs_each_family_group_once():
     from tests.ci_helpers import (
         CURRENT_PARITY_JOB,
+        CURRENT_PARITY_JOBS,
         CURRENT_PARITY_UPLOAD,
+        MAX_MATRIX_LEGS,
         bounded_step_deadline,
+        current_parity_matrix,
     )
 
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = yaml.safe_load(workflow)["jobs"]
     job = jobs[CURRENT_PARITY_JOB]
     porting = jobs["mlx-metal-porting"]
-    matrix = job["strategy"]["matrix"]
-    assert job["strategy"]["fail-fast"] is False
-    assert len(matrix["os"]) == len(RUNNER_OSES)
-    assert set(matrix["os"]) == RUNNER_OSES
+    titles = set()
+    for name in CURRENT_PARITY_JOBS:
+        part = jobs[name]
+        part_matrix = part["strategy"]["matrix"]
+        assert part["strategy"]["fail-fast"] is False
+        assert len(part_matrix["os"]) == len(RUNNER_OSES)
+        assert set(part_matrix["os"]) == RUNNER_OSES
+        assert len(part_matrix["os"]) * len(part_matrix["group"]) <= MAX_MATRIX_LEGS
+        # Every part runs the same steps on the same runners within one
+        # deadline; a step runs only in the groups of its own part.
+        for key in ("needs", "env", "if", "runs-on", "timeout-minutes", "steps"):
+            assert part[key] == job[key], (name, key)
+        for entry in part_matrix.get("include", []):
+            assert entry["group"] in part_matrix["group"], (name, entry)
+        assert part["name"].startswith("MLX current-tree ")
+        assert part["name"].endswith(" (${{ matrix.os }}, ${{ matrix.group }})")
+        titles.add(part["name"])
+    assert len(titles) == len(CURRENT_PARITY_JOBS)
+    for name in CURRENT_PARITY_JOBS[1:]:
+        section = _workflow_job_section(workflow, name)
+        assert "    steps: *mlx-current-parity-steps" in section, name
+    assert "    steps: &mlx-current-parity-steps" in _workflow_job_section(
+        workflow, CURRENT_PARITY_JOB
+    )
+    matrix = current_parity_matrix(workflow)
+    assert len(matrix["group"]) == len(set(matrix["group"]))
     assert matrix["group"] == [
         "elementwise",
         "attention",
@@ -975,6 +1046,102 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "quantized",
         "quantized-qmv-0",
         "quantized-qmv-1",
+        "quantized-qmv-unaligned-0",
+        "quantized-qmv-unaligned-1",
+        "quantized-qmv-unaligned-2",
+        "quantized-qmv-unaligned-3",
+        "quantized-qmv-wide-0",
+        "quantized-qmv-wide-1",
+        "quantized-qmv-wide-2",
+        "quantized-qmv-wide-3",
+        "quantized-qmv-wide-4",
+        "quantized-qmv-wide-5",
+        "quantized-qmv-wide-6",
+        "quantized-qmv-wide-7",
+        "quantized-qmv-wide-8",
+        "quantized-qvm-0",
+        "quantized-qvm-1",
+        "quantized-qvm-2",
+        "quantized-qvm-3",
+        "quantized-qvm-split-k-0",
+        "quantized-qvm-split-k-1",
+        "quantized-qvm-split-k-2",
+        "quantized-qvm-split-k-3",
+        "quantized-qmm-t-0",
+        "quantized-qmm-t-1",
+        "quantized-qmm-t-2",
+        "quantized-qmm-t-3",
+        "quantized-qmm-t-4",
+        "quantized-qmm-t-5",
+        "quantized-qmm-t-6",
+        "quantized-qmm-n-0",
+        "quantized-qmm-n-1",
+        "quantized-qmm-n-2",
+        "quantized-qmm-n-3",
+        "quantized-qmm-n-4",
+        "quantized-qmm-t-splitk-0",
+        "quantized-qmm-t-splitk-1",
+        "quantized-qmm-t-splitk-2",
+        "quantized-qmm-t-splitk-3",
+        "quantized-qmm-t-splitk-4",
+        "quantized-gather-qmm-0",
+        "quantized-gather-qmm-1",
+        "quantized-gather-qmm-2",
+        "quantized-gather-qmm-3",
+        "quantized-gather-qmm-4",
+        "quantized-gather-qmm-5",
+        "quantized-gather-qmm-6",
+        "quantized-qmv-quad-0",
+        "quantized-qmv-quad-1",
+        "quantized-qmv-quad-2",
+        "gemm-family-0",
+        "gemm-family-1",
+        "gemm-family-2",
+        "gemm-family-3",
+        "gemm-family-4",
+        "gemm-splitk-0",
+        "gemm-splitk-1",
+        "gemm-splitk-2",
+        "gemm-splitk-3",
+        "gemm-splitk-4",
+        "gemm-splitk-5",
+        "gemm-splitk-6",
+        "gemm-gather-0",
+        "gemm-gather-1",
+        "gemm-gather-2",
+        "gemm-gather-3",
+        "gemm-gather-4",
+        "gemm-gather-5",
+        "gemm-gather-6",
+        "steel-conv-0",
+        "steel-conv-1",
+        "steel-conv-2",
+        "steel-conv-3",
+        "steel-conv-4",
+        "steel-conv-5",
+        "steel-conv-general-0",
+        "steel-conv-general-1",
+        "steel-conv-general-2",
+        "gemm-masked-0",
+        "gemm-masked-1",
+        "gemm-masked-2",
+        "gemm-masked-3",
+        "gemm-masked-4",
+        "gemm-masked-5",
+        "gemm-masked-6",
+        "gemm-masked-7",
+        "gemm-masked-8",
+        "gemm-masked-9",
+        "gemm-masked-10",
+        "gemm-masked-11",
+        "gemm-masked-12",
+        "gemm-segmented-0",
+        "gemm-segmented-1",
+        "gemm-segmented-2",
+        "gemm-segmented-3",
+        "gemm-segmented-4",
+        "gemm-segmented-5",
+        "gemm-segmented-6",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
     assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
@@ -1015,13 +1182,37 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
     assert upload["with"]["path"] == "mlx-current-results"
     families = steps[len(setup) : -1]
     assert families
+    # A sharded family runs one step in each of its groups. The include list gives
+    # every such group its family and shard index, numbered 0 to n - 1.
+    shard_groups = {}
+    for entry in matrix["include"]:
+        assert set(entry) == {"group", "family", "shard"}, entry
+        assert entry["group"] in matrix["group"], entry
+        assert entry["group"] == f"{entry['family']}-{entry['shard']}", entry
+        shard_groups.setdefault(entry["family"], []).append(entry["shard"])
+    assert len(matrix["include"]) == len(
+        {entry["group"] for entry in matrix["include"]}
+    )
+    for family, shards in shard_groups.items():
+        assert shards == list(range(len(shards))), family
+        assert family not in matrix["group"], family
     by_group = {group: [] for group in matrix["group"]}
+    stepped_families = set()
     for step in families:
         assert step["name"].startswith("Prove current MLX ")
         assert step["name"] not in porting_steps
-        condition = re.fullmatch(r"matrix\.group == '([a-z][a-z0-9-]*)'", step["if"])
-        group = condition.group(1)
-        by_group[group].append(step)
+        condition = re.fullmatch(
+            r"matrix\.(group|family) == '([a-z][a-z0-9-]*)'", step["if"]
+        )
+        if condition.group(1) == "group":
+            by_group[condition.group(2)].append(step)
+        else:
+            family = condition.group(2)
+            assert family not in stepped_families, family
+            stepped_families.add(family)
+            for shard in shard_groups[family]:
+                by_group[f"{family}-{shard}"].append(step)
+            assert "${{ matrix.shard }}" in step["env"].values(), step["name"]
         assert "continue-on-error" not in step
         assert "python tools/run_bounded_command.py" in step["run"]
     timeout = job["timeout-minutes"] * 60
