@@ -469,6 +469,23 @@ def test_opencl_vector_constructor_cast_codegen_reparse():
     assert "var color: vec4<f32> = vec4<f32>(" in crossgl
 
 
+def test_opencl_typedef_vector_constructor_reads_as_vector_not_comma():
+    crossgl = generate_crossgl("""
+        typedef float2 duo;
+        __kernel void probe(__global float* outp) {
+            uint i = get_global_id(0);
+            float x = outp[i];
+            float2 a = (float2)(x, 2.0f);
+            duo b = (duo)(x, 3.0f);
+            outp[i] = a.y + b.y;
+        }
+        """)
+
+    assert "var a: vec2<f32> = vec2<f32>(x, 2.0f);" in crossgl
+    assert "var b: vec2<f32> = vec2<f32>(x, 3.0f);" in crossgl
+    assert "(x , 3.0f)" not in crossgl
+
+
 def test_opencl_signed_char_pointer_lowers_to_crossgl_i8_array():
     crossgl = generate_crossgl("""
         kernel void pocl_add_i8(global signed char *a,

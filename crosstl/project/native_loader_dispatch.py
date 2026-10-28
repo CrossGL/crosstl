@@ -20,6 +20,7 @@ from crosstl.project.native_loader_abi import (
     _validate_descriptor,
 )
 from crosstl.project.runtime_value_encoding import validate_value_encoding
+from crosstl.project.runtime_values import copy_values, flatten_values, scalars_fit
 from crosstl.project.runtime_verification import (
     RuntimeAdapterContract,
     RuntimeAllocationView,
@@ -283,6 +284,10 @@ def build_native_loader_dispatch_request(
         artifact_path, artifact_content, target, normalized["bindings"]
     )
 
+    from .immutable_storage import (
+        artifact_immutable_bindings,
+        check_immutable_inputs,
+    )
     from .metadata_preconditions import (
         artifact_metadata_bindings,
         check_metadata_inputs,
@@ -297,6 +302,14 @@ def build_native_loader_dispatch_request(
     except (ValueError, UnicodeError) as exc:
         raise NativeLoaderDispatchError(
             "metadata-precondition-invalid", str(exc), path="$.bindings"
+        ) from exc
+    try:
+        immutable_names = artifact_immutable_bindings(
+            artifact_path, target, normalized["bindings"]
+        )
+    except (ValueError, UnicodeError) as exc:
+        raise NativeLoaderDispatchError(
+            "immutable-storage-invalid", str(exc), path="$.bindings"
         ) from exc
     dispatch = _dispatch_geometry(
         dispatch_geometry,
@@ -397,6 +410,12 @@ def build_native_loader_dispatch_request(
     except ValueError as exc:
         raise NativeLoaderDispatchError(
             "metadata-precondition-invalid", str(exc), path="$.inputValues"
+        ) from exc
+    try:
+        check_immutable_inputs(immutable_names, inputs, outputs, resource_bindings)
+    except ValueError as exc:
+        raise NativeLoaderDispatchError(
+            "immutable-storage-invalid", str(exc), path="$.inputValues"
         ) from exc
     constants = _specialization_constants(
         normalized["specializationConstants"],
@@ -828,7 +847,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             path=f"{path}.kind",
             details={"name": runtime_value.name, "kind": runtime_value.kind},
         )
-    runtime_value = replace(runtime_value, values=copy.deepcopy(runtime_value.values))
+    runtime_value = replace(runtime_value, values=copy_values(runtime_value.values))
     metadata = runtime_value.metadata
     if not isinstance(metadata, Mapping):
         raise NativeLoaderDispatchError(
@@ -985,22 +1004,14 @@ def _buffer_dtype(value: Any, *, path: str) -> str:
     return dtype
 
 
-def _flatten_values(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, (str, bytes, bytearray)):
-        return [value]
-    if isinstance(value, Sequence):
-        result: list[Any] = []
-        for item in value:
-            result.extend(_flatten_values(item))
-        return result
-    return [value]
+_flatten_values = flatten_values
 
 
 def _validate_buffer_values(
     values: Sequence[Any], *, dtype: str, path: str, name: str, role: str
 ) -> None:
+    if scalars_fit(values, dtype):
+        return
     for index, value in enumerate(values):
         valid = False
         if dtype == "bool":

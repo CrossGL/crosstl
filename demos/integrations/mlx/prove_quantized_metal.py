@@ -297,8 +297,10 @@ def _run_matrix_controls(
     report["matrixEntryCount"] = len(entries)
     for family, entry in entries:
         name = entry["entryPoint"]
+        # The bundle record is the pinned identity, or in report mode the
+        # drifted one _bundle_records accepted.
         source = Path(artifacts[name]["path"])
-        _require(_sha256(source) == entry["sha256"], "Matrix source changed")
+        _require(_sha256(source) == artifacts[name]["sha256"], "Matrix source changed")
         directory = output / ("matrix-" + hashlib.sha256(name.encode()).hexdigest())
         generated = _compile_source(source, directory / "generated", mlx_root)
         layouts = ("flat", "broadcast") if family == "wide" else ("flat",)
@@ -518,8 +520,8 @@ def prove(mlx_root, bundle_root, contract_path, output, *, allow_drift=False):
             artifact = artifacts[name]
             source = Path(artifact["path"])
             _require(
-                _sha256(source) == entry["sha256"]
-                and source.stat().st_size == entry["sizeBytes"],
+                _sha256(source) == artifact["sha256"]
+                and source.stat().st_size == artifact["sizeBytes"],
                 "Generated source changed",
             )
             directory = output / hashlib.sha256(name.encode()).hexdigest()
