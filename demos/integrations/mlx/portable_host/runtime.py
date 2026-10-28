@@ -33,6 +33,7 @@ from demos.integrations.mlx.portable_host import (
     bfloat_storage,
     block_masked_mm_dispatch,
     block_masked_mm_layout,
+    column_long_layout,
     column_reduction_layout,
     column_small_layout,
     compiled_dispatch,
@@ -106,6 +107,12 @@ from demos.integrations.mlx.portable_host.block_masked_mm_packages import (
     MASKED_MV_CACHE,
     MaskedMmPackageCache,
     MaskedMvPackageCache,
+)
+from demos.integrations.mlx.portable_host.column_long_packages import (
+    CACHE_DIRECTORY as LONG_COLUMN_CACHE,
+)
+from demos.integrations.mlx.portable_host.column_long_packages import (
+    LongColumnPackageCache,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -506,6 +513,13 @@ class HostRuntime:
         self.small_columns = (
             SmallColumnPackageCache(
                 mlx_root, self.directory / SMALL_COLUMN_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.long_columns = (
+            LongColumnPackageCache(
+                mlx_root, self.directory / LONG_COLUMN_CACHE, self.target
             )
             if mlx_root is not None
             else None
@@ -1253,13 +1267,21 @@ class HostRuntime:
         initialization = entry in INIT_ENTRIES
         small_row = entry in SMALL_ROW_ENTRIES
         row_reduction = entry in ALL_ROW_ENTRIES or small_row
-        small_column = entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES
+        long_column = entry in column_long_layout.LONG_COLUMN_ENTRIES
+        # Small and long column passes translate each threadgroup size on use.
+        small_column = (
+            entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES or long_column
+        )
         column_reduction = (
             entry in COLUMN_ENTRIES or entry in HALF_COLUMN_ENTRIES or small_column
         )
         shaped_reduction = row_reduction or column_reduction
         layout_module = (
-            (column_small_layout if small_column else column_reduction_layout)
+            (
+                column_long_layout
+                if long_column
+                else column_small_layout if small_column else column_reduction_layout
+            )
             if column_reduction
             else row_reduction_layout
         )
@@ -1503,14 +1525,13 @@ class HostRuntime:
                 entry, supplied, threads, execution
             )
             if small_column:
-                if self.small_columns is None:
+                cache = self.long_columns if long_column else self.small_columns
+                if cache is None:
                     raise ValueError(
                         "Small column dispatch requires the pinned MLX source root"
                     )
-                descriptor, package_directory = self.small_columns.get(
-                    column_small_layout.variant(
-                        entry, tuple(execution["workgroupSize"])
-                    )
+                descriptor, package_directory = cache.get(
+                    layout_module.variant(entry, tuple(execution["workgroupSize"]))
                 )
             if checked_reduction is not None:
                 descriptor, package_directory = checked_reduction.get(

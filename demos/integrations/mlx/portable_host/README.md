@@ -1848,8 +1848,16 @@ The column family connects upstream looped and two-pass column plans to generate
 kernels. The default build includes all 84 entries: fourteen operation/type
 combinations, three template ranks, and two dispatch modes, each at 256 threads.
 Selection follows upstream's reduction count and contiguous output span. Small
-columns take `col_reduce_small`; the separate long-column algorithm still reports
-an explicit error.
+columns take `col_reduce_small`. Long columns, a reduction stride below 32 over
+1,024 or more reduced elements, take `col_reduce_longcolumn` as
+`strided_reduce_longcolumn` launches it: one thread per column and 32 rows per
+threadgroup, with 32 partial blocks (128 from 32,768 reduced elements) along the
+grid's third axis, followed by a looped pass over the partials. The kernel reads
+its threadgroup size, so `column_long_packages` translates each entry at each
+column count on first use (`column_long_layout` checks the plan, metadata and
+launch first); the column CI job translates the verification's 44 variants
+ahead of execution. The long-column entries cover the 32-bit, Boolean and
+16-bit float operations of the looped and two-pass family.
 
 The adapter preserves reduction strides, broadcast strides, allocation offsets
 and output geometry. Ranks, metadata array lengths, source spans and logical
@@ -1859,7 +1867,9 @@ arithmetic. Inputs, outputs and source spans hold at most 2^28 - 1 elements, far
 below the `INT32_MAX` at which MLX selects 64-bit index kernels; every shape axis
 and stride stays below 65,536 and every launch axis at most 65,535 workgroups.
 Row plans share this element bound. The workloads
-include small, looped and two-pass plans over 76,800 to 131,072 elements.
+include small, looped and two-pass plans over 76,800 to 131,072 elements, and
+long-column plans of every 32-bit and Boolean entry, whose partial blocks are
+checked against an independent model of the kernel's row assignment.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family column --jobs 2 --output-dir column-packages
@@ -1873,8 +1883,8 @@ views, NaNs, infinities and signed zero. Independent references check every
 intermediate and final native readback; retained traces include launch geometry,
 artifact hashes and output guards. These are bounded integration workloads, not
 evidence that the complete upstream reduction suite or MLX backend is supported.
-Separate native processes also verify that invalid allocation spans, small and
-long column plans, and oversized inputs fail before any shader dispatch.
+Separate native processes also verify that invalid allocation spans and
+oversized inputs fail before any shader dispatch.
 
 Small-column integration also requires a native-barrier convergence check,
 tracked in [#2021](https://github.com/CrossGL/crosstl/issues/2021). For example,

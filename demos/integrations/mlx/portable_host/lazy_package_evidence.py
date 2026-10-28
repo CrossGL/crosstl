@@ -1,6 +1,6 @@
 """Tie lazily translated scan, reduction and matrix dispatches to their caches.
 
-Scans, small row reductions, small column reductions, GEMV, dot-product,
+Scans, small row reductions, small and long column reductions, GEMV, dot-product,
 steel GEMM, split-K GEMM, GatherMM, SegmentedMM, BlockMaskedMM, convolution,
 Stockham FFT and affine and floating-point quantized matrix-vector and matrix-matrix
 kernels are translated from the pinned sources on first use, so no static index lists
@@ -18,6 +18,7 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
     block_masked_mm_layout,
+    column_long_layout,
     column_small_layout,
     conv_layout,
     dot_layout,
@@ -42,6 +43,12 @@ from demos.integrations.mlx.portable_host.block_masked_mm_packages import (
     MASKED_MV_CACHE,
     MaskedMmPackageCache,
     MaskedMvPackageCache,
+)
+from demos.integrations.mlx.portable_host.column_long_packages import (
+    CACHE_DIRECTORY as LONG_COLUMN_CACHE,
+)
+from demos.integrations.mlx.portable_host.column_long_packages import (
+    LongColumnPackageCache,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -162,7 +169,7 @@ QUANTIZED_FAMILIES = {
     "fp-quantized-mm": fp_qmm_layout.ENTRY_PREFIXES,
 }
 EXECUTED_FAMILIES = {**MATRIX_FAMILIES, **QUANTIZED_FAMILIES}
-FAMILIES = ("scan", "small-row", "small-column", *EXECUTED_FAMILIES)
+FAMILIES = ("scan", "small-row", "small-column", "long-column", *EXECUTED_FAMILIES)
 GEOMETRY = ("workgroupCount", "workgroupSize")
 
 
@@ -176,6 +183,8 @@ def family(entry):
         return "small-row"
     if entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES:
         return "small-column"
+    if entry in column_long_layout.LONG_COLUMN_ENTRIES:
+        return "long-column"
     for name, prefixes in EXECUTED_FAMILIES.items():
         if name == "gather-mm-offsets":
             if entry in prefixes:
@@ -216,6 +225,9 @@ class LazyPackages:
             ),
             "small-column": SmallColumnPackageCache(
                 mlx_root, packages / SMALL_COLUMN_CACHE, target
+            ),
+            "long-column": LongColumnPackageCache(
+                mlx_root, packages / LONG_COLUMN_CACHE, target
             ),
             "gemv": GemvPackageCache(mlx_root, packages / GEMV_CACHE, target),
             "dot": DotPackageCache(mlx_root, packages / DOT_CACHE, target),
@@ -264,8 +276,8 @@ class LazyPackages:
             )
         if name in EXECUTED_FAMILIES:
             return [cache.get(entry)]
-        key = column_small_layout.variant(entry, tuple(event["workgroupSize"]))
-        return [cache.get(key)]
+        layout = column_long_layout if name == "long-column" else column_small_layout
+        return [cache.get(layout.variant(entry, tuple(event["workgroupSize"])))]
 
 
 def require_unchanged(descriptor, directory):

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx.portable_host import (
+    column_long_layout,
     column_reduction_layout,
     column_small_layout,
     column_workloads,
@@ -73,7 +74,9 @@ def test_column_package_family_covers_both_modes_and_every_template():
     assert reduction_packages.FAMILY_WIDTHS["column"] == (256,)
     assert {case["entry"] for case in column_workloads.cases()} == set(
         reduction_packages.COLUMN_ENTRIES
-    ) | set(column_small_layout.SMALL_COLUMN_ENTRIES)
+    ) | set(column_small_layout.SMALL_COLUMN_ENTRIES) | set(
+        column_workloads.LONG_COLUMN_ENTRIES
+    )
 
 
 @pytest.mark.parametrize(
@@ -136,7 +139,7 @@ def test_column_rejection_messages_match_the_host_backend():
         assert f"CrossTL {message}" in source
 
 
-@pytest.mark.parametrize("mode", ["allocation", "long", "limit"])
+@pytest.mark.parametrize("mode", ["allocation", "limit"])
 @pytest.mark.parametrize("fault", [None, "message", "dispatch", "accepted"])
 def test_column_rejection_requires_the_expected_error_before_dispatch(mode, fault):
     import numpy as np
@@ -391,6 +394,14 @@ def column_evidence():
                 size = [lanes, rows, 1]
                 blocks = -(-stride // 4)
                 count = [-(-blocks // lanes), expected.size // stride, 1]
+            if stage == 0 and case["entry"] in column_long_layout.LONG_COLUMN_ENTRIES:
+                total = logical.size // expected.size
+                size = [*column_long_layout.geometry(stride, total), 1]
+                count = [
+                    expected.size // stride,
+                    1,
+                    column_long_layout.outer_blocks(total),
+                ]
             trace.append(
                 dict(
                     entry=(

@@ -4772,6 +4772,14 @@ jobs:
             python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream \
               --target ${{ matrix.target }} --family all --width 32 --jobs 2 \
               --output-dir .mlx-portable-reductions/companions 2>&1 | tee .mlx-portable-reductions/companion-translation.log
+      - name: Translate long-column variants
+        if: matrix.family == 'column'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX long column packages" -- \
+            python -m demos.integrations.mlx.portable_host.column_long_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-reductions/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-reductions/long-column-translation.log
       - name: Execute MLX reductions
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"

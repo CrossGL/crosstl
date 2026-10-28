@@ -739,7 +739,10 @@ uint64_t column_shape_size(const mlx::core::Shape& shape) {
   return size;
 }
 
-enum class ColumnPass { Small, Looped, TwoPass };
+enum class ColumnPass { Small, Looped, TwoPass, LongColumn };
+
+// reduce.cpp strided_reduce_longcolumn: the partial results per output.
+uint64_t long_column_blocks(uint64_t total) { return total >= 32768 ? 128 : 32; }
 
 void dispatch_column_pass(
     const mlx::core::array& in,
@@ -753,6 +756,7 @@ void dispatch_column_pass(
     const char* dtype,
     const char* output) {
   const bool two_pass = pass == ColumnPass::TwoPass;
+  const bool long_column = pass == ColumnPass::LongColumn;
   if (shape.size() > 64 || shape.size() != strides.size() ||
       reduce_shape.empty() || reduce_shape.size() > 64 ||
       reduce_shape.size() != reduce_strides.size()) {
@@ -763,11 +767,14 @@ void dispatch_column_pass(
   uint64_t reduction_size = reduce_shape.back();
   int64_t reduction_stride = reduce_strides.back();
   uint64_t non_columns = total / reduction_size;
+  // The two-pass and long-column passes write partial results per output.
+  const uint64_t partials = two_pass ? 32 : long_column ? long_column_blocks(total) : 1;
   if (reduction_stride < 1 || uint64_t(reduction_stride) > max_column_elements ||
       outer * reduction_stride * total != in.size() ||
-      outer * reduction_stride * (two_pass ? 32 : 1) != out.size() ||
+      outer * reduction_stride * partials != out.size() ||
       in.size() > max_column_elements || out.size() > max_column_elements ||
-      outer * (two_pass ? 32 : 1) > 65535) {
+      outer * (two_pass ? 32 : 1) > 65535 ||
+      (long_column && (reduction_stride >= 32 || total < 1024))) {
     throw std::invalid_argument("CrossTL column reduction storage does not match its pass.");
   }
   uint64_t span = reduction_stride;
@@ -789,11 +796,15 @@ void dispatch_column_pass(
   int32_t ndim = static_cast<int32_t>(shape.size());
   int32_t reduce_ndim = static_cast<int32_t>(reduce_shape.size());
   const int dimension = reduce_ndim == 1 ? 1 : reduce_ndim == 2 ? 2 : 5;
-  std::string entry = pass == ColumnPass::Small
-      ? "col_reduce_small_" + std::to_string(dimension) + "_reduce_" + operation + dtype
+  std::string entry = pass == ColumnPass::Small || long_column
+      ? std::string(long_column ? "col_reduce_longcolumn_" : "col_reduce_small_") +
+          std::to_string(dimension) + "_reduce_" + operation + dtype
       : std::string(two_pass ? "col_reduce_2pass_" : "col_reduce_looped_") +
           std::to_string(dimension) + "_32_32_reduce_" + operation + dtype;
   if (ndim == 0) { shape.push_back(0); strides.push_back(0); }
+  // The two-pass kernel counts its outputs per column; the long-column kernel
+  // offsets each block's partials by the whole output.
+  uint64_t out_size = long_column ? outer * reduction_stride : outer;
   out.set_data(mlx::core::allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
   CrosstlMlxBuffer buffers[] = {
       {"in", dtype, const_cast<void*>(in.data<void>()), span, 0},
@@ -807,7 +818,7 @@ void dispatch_column_pass(
       {"reduce_strides", "int64", reduce_strides.data(), reduce_strides.size(), 0},
       {"reduce_ndim", "int32", &reduce_ndim, 1, 0},
       {"non_col_reductions", "uint64", &non_columns, 1, 0},
-      {"out_size", "uint64", &outer, 1, 0},
+      {"out_size", "uint64", &out_size, 1, 0},
   };
   // reduce.cpp strided_reduce_small: lanes of four columns, at most eight rows
   // (the kernels allow 1024 threads); the looped passes use 32 x 32 tiles.
@@ -816,20 +827,28 @@ void dispatch_column_pass(
   // Each pass covers the reduction stride along the launch's first axis.
   const uint64_t column_groups = pass == ColumnPass::Small
       ? (blocks + lanes - 1) / lanes
-      : (uint64_t(reduction_stride) + 31) / 32;
+      : long_column ? outer : (uint64_t(reduction_stride) + 31) / 32;
   if (column_groups > 65535) {
     throw std::invalid_argument("CrossTL column reduction launch exceeds 65535 workgroups.");
   }
+  // strided_reduce_longcolumn: one thread per column and up to 32 rows per
+  // threadgroup, one threadgroup per output column span and partial block.
+  const uint64_t long_rows = std::min<uint64_t>(32, (total + partials - 1) / partials);
   const CrosstlMlxLaunch launch = pass == ColumnPass::Small
       ? CrosstlMlxLaunch{
             {uint32_t((blocks + lanes - 1) / lanes), uint32_t(outer), 1},
             {lanes, uint32_t(std::min<uint64_t>({8, 1024 / lanes, total})), 1}}
+      : long_column
+      ? CrosstlMlxLaunch{
+            {uint32_t(outer), 1, uint32_t(partials)},
+            {uint32_t(reduction_stride), uint32_t(long_rows), 1}}
       : CrosstlMlxLaunch{
             {uint32_t((reduction_stride + 31) / 32), uint32_t(outer * (two_pass ? 32 : 1)), 1},
             {256, 1, 1}};
   char error[2048] = {};
   int status = dispatch_callback.load()(
-      entry.c_str(), buffers, two_pass ? 12 : 11, in.size(), &launch, error, sizeof(error));
+      entry.c_str(), buffers, two_pass || long_column ? 12 : 11, in.size(), &launch, error,
+      sizeof(error));
   error[sizeof(error) - 1] = '\0';
   if (status != 0) {
     throw std::runtime_error(std::string("CrossTL native column reduction failed: ") + error);
@@ -852,9 +871,6 @@ void dispatch_column_reduce(
   }
   const uint64_t total = column_shape_size(plan.shape);
   const int64_t stride = plan.strides.back();
-  if (stride < 32 && total >= 1024) {
-    throw std::invalid_argument("CrossTL long-column reduction plans are not implemented.");
-  }
   auto [shape, strides] = shapes_without_reduction_axes(in, axes);
   // Follow upstream's shape product, including broadcast views with zero strides.
   uint64_t inner = 1;
@@ -875,6 +891,21 @@ void dispatch_column_reduce(
     dispatch_column_pass(
         in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Small, operation, dtype,
         output);
+    return;
+  }
+  if (stride < 32 && total >= 1024) {
+    // strided_reduce_longcolumn: partial results per block of rows, then a
+    // looped pass over the intermediate's first axis.
+    const uint64_t blocks = long_column_blocks(total);
+    Shape intermediate_shape{int(blocks)};
+    intermediate_shape.insert(intermediate_shape.end(), out.shape().begin(), out.shape().end());
+    array intermediate(std::move(intermediate_shape), out.dtype(), nullptr, {});
+    dispatch_column_pass(
+        in, intermediate, shape, strides, plan.shape, plan.strides, ColumnPass::LongColumn,
+        operation, dtype, output);
+    dispatch_column_pass(
+        intermediate, out, {}, {}, {int(blocks)}, {int64_t(out.size())}, ColumnPass::Looped,
+        operation, output, output);
     return;
   }
   const bool two_pass = total > 256 && out.size() / 32 < 1024;

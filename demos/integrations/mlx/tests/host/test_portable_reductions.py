@@ -632,18 +632,13 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
     config = yaml.safe_load(workflow)["jobs"]["reductions"]
     assert "if: matrix.family != 'row'" in translation and "if:" not in execution
     for case in config["strategy"]["matrix"]["include"]:
-        steps = [
-            step
-            for step in config["steps"]
-            if step.get("if")
-            not in (
-                (
-                    "matrix.family != 'row'"
-                    if case["family"] == "row"
-                    else "matrix.family == 'row'"
-                ),
-            )
-        ]
+        family = case["family"]
+        # A step conditioned on another family does not run in this leg.
+        skipped = {
+            f"matrix.family == '{other}'"
+            for other in {"all", "row", "column"} - {family}
+        } | ({"matrix.family != 'row'"} if family == "row" else set())
+        steps = [step for step in config["steps"] if step.get("if") not in skipped]
         deadline = sum(
             int(value)
             for step in steps
