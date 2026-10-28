@@ -968,7 +968,8 @@ def launches(case):
     steps = [[s // array.itemsize for s in array.strides] for array in physical]
     bases = [
         np.lib.stride_tricks.as_strided(
-            array, (1 + sum((n - 1) * s for n, s in zip(array.shape, step)),),
+            array,
+            (1 + sum((n - 1) * s for n, s in zip(array.shape, step)),),
             (array.itemsize,),
         )
         for array, step in zip(physical, steps)
@@ -981,7 +982,9 @@ def launches(case):
     keep = [i for i in range(source.ndim) if i != axis]
     for slab, rows in layout.launch_plan(list(indices.shape), axis):
         start = [part.start or 0 for part in slab]
-        lead = [len(range(*part.indices(indices.shape[i]))) for i, part in enumerate(slab)]
+        lead = [
+            len(range(*part.indices(indices.shape[i]))) for i, part in enumerate(slab)
+        ]
         tile = lead + [rows.stop - rows.start] + list(indices.shape[axis + 1 :])
         first = int(np.ravel_multi_index(start, indices.shape[:axis])) if slab else 0
         outputs = math.prod(lead) * source.shape[axis] * post
@@ -1119,10 +1122,13 @@ def test_axis_scatter_wide_validation_bounds_storage_and_launch_axes():
     assert outputs == 4 * 7 * 4096 > layout.MAX_ELEMENTS
     layout.validate(entry, supplied, outputs, execution)
     for fault in ("grid", "storage", "alignment"):
-        trial = {name: runtime.Buffer(*buffer) for name, buffer in (
-            (name, (b.name, b.dtype, b.data, b.count, b.output))
-            for name, b in supplied.items()
-        )}
+        trial = {
+            name: runtime.Buffer(*buffer)
+            for name, buffer in (
+                (name, (b.name, b.dtype, b.data, b.count, b.output))
+                for name, b in supplied.items()
+            )
+        }
         launch = json.loads(json.dumps(execution))
         if fault == "grid":
             launch["workgroupCount"][2] = 65536

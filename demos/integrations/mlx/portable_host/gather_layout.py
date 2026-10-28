@@ -24,9 +24,7 @@ TYPES = {
 # Value types first carried by their own runtime words; every other MLX
 # storage type travels through ``element_storage`` as exact logical words.
 WORD_TYPES = tuple(TYPES)
-TYPES.update(
-    {dtype: CTYPES[dtype] for dtype in STORAGE_DTYPES if dtype not in TYPES}
-)
+TYPES.update({dtype: CTYPES[dtype] for dtype in STORAGE_DTYPES if dtype not in TYPES})
 VALUE_PATTERN = "|".join(sorted(STORAGE_DTYPES, key=len, reverse=True))
 METADATA = {
     "src_shape": "int32",

@@ -96,7 +96,9 @@ def words(np, array):
     array = np.ascontiguousarray(array)
     return (
         array.view(
-            {1: np.uint8, 2: np.uint16, 4: np.uint32, 8: np.uint64}[array.dtype.itemsize]
+            {1: np.uint8, 2: np.uint16, 4: np.uint32, 8: np.uint64}[
+                array.dtype.itemsize
+            ]
         )
         .reshape(-1)
         .tolist()

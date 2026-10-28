@@ -338,8 +338,6 @@ def test_runtime_routes_small_columns_through_the_variant_cache():
     source = Path(runtime.__file__).read_text()
     # Small and long column passes share the per-threadgroup routing; each
     # family keys its own cache by its own layout's variant.
-    assert (
-        "cache = self.long_columns if long_column else self.small_columns" in source
-    )
+    assert "cache = self.long_columns if long_column else self.small_columns" in source
     assert "cache.get(\n" in source and "layout_module.variant(entry" in source
     assert "column_long_layout\n                if long_column" in source

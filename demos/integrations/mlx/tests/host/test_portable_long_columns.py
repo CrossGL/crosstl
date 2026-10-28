@@ -106,7 +106,11 @@ def test_long_variants_round_trip_and_bound_the_threadgroup():
     for workgroup in ((32, 32, 1), (0, 32, 1), (3, 33, 1), (3, 32, 2), (3.0, 32, 1)):
         with pytest.raises(ValueError, match="threadgroup"):
             column_long_layout.variant(entry, workgroup)
-    for key in (f"{entry}@3", f"{entry}@3x032", "col_reduce_small_1_reduce_sumfloat32@3x32"):
+    for key in (
+        f"{entry}@3",
+        f"{entry}@3x032",
+        "col_reduce_small_1_reduce_sumfloat32@3x32",
+    ):
         with pytest.raises(ValueError):
             column_long_layout.split_variant(key)
 

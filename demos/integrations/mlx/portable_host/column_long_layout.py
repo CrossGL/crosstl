@@ -100,10 +100,9 @@ def validate(entry, buffers, logical_size, execution):
     if stride > MAX_STRIDE or total < MIN_TOTAL:
         raise ValueError("Native column reduction does not match the upstream plan")
     blocks = outer_blocks(total)
-    if (
-        buffers["out"].count != outer * stride * blocks
-        or metadata["out_size"] != [outer * stride]
-    ):
+    if buffers["out"].count != outer * stride * blocks or metadata["out_size"] != [
+        outer * stride
+    ]:
         raise ValueError(
             "Native column reduction shape does not match its logical size"
         )

@@ -41,7 +41,8 @@ SMALL_SUM_ENTRY = "col_reduce_small_1_reduce_sumfloat32"
 LONG_COLUMN_ENTRIES = {
     entry: dtype
     for entry, dtype in column_long_layout.LONG_COLUMN_ENTRIES.items()
-    if entry.rsplit("_reduce_", 1)[1] in {name.removeprefix("all_reduce_") for name in ENTRIES}
+    if entry.rsplit("_reduce_", 1)[1]
+    in {name.removeprefix("all_reduce_") for name in ENTRIES}
 }
 # Strides below 32 over at least 1,024 reduced elements per output, for each
 # template's reduction rank.
@@ -121,7 +122,10 @@ def _long_cases():
         yield case
         if entry == LONG_SUM_ENTRY:
             for extra in LONG_SUM_SHAPES:
-                yield case | {"id": f"{entry}-{'x'.join(map(str, extra))}", "shape": extra}
+                yield case | {
+                    "id": f"{entry}-{'x'.join(map(str, extra))}",
+                    "shape": extra,
+                }
         if dimension == 1:
             if entry.endswith(WIDE_OPERATIONS):
                 yield case | {"id": f"{entry}-wide", "shape": LONG_WIDE_SHAPE}

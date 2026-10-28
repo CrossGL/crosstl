@@ -134,7 +134,9 @@ class Kernel:
         if self.fault == "dtype":
             readback["dtype"] = "int64"
         return SimpleNamespace(
-            status="ok", outputs={names["out_"]: readback}, details=self.details(request)
+            status="ok",
+            outputs={names["out_"]: readback},
+            details=self.details(request),
         )
 
     def details(self, request):
@@ -144,7 +146,10 @@ class Kernel:
             path = self.tmp_path / name
             path.write_bytes(b"retained-" + name.encode())
             modules.append(
-                {"file": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                {
+                    "file": str(path),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
             )
         buffers = {
             binding["name"]: {
@@ -158,8 +163,10 @@ class Kernel:
             for binding in request.descriptor["bindings"]
         }
         dispatch = {
-            "entryPoint": {"opengl": "main", "directx": "CSMain"}.get(
-                self.target, ENTRY_PREFIX[1]
+            "entryPoint": (
+                {"opengl": "main", "directx": "CSMain"}.get(
+                    self.target, ENTRY_PREFIX[1]
+                )
             ),
             "target": self.target,
             "buffers": buffers,
@@ -168,7 +175,10 @@ class Kernel:
         artifact = request.descriptor["artifact"]
         identity = {key: artifact[key] for key in ("hash", "sizeBytes")}
         action = {
-            "metal": ("compile-metal-for-native-runtime", "link-metal-for-native-runtime"),
+            "metal": (
+                "compile-metal-for-native-runtime",
+                "link-metal-for-native-runtime",
+            ),
             "directx": ("compile-hlsl-for-directx-runtime",),
             "opengl": ("validate-glsl-for-opengl-runtime",),
         }[self.target]
@@ -205,9 +215,7 @@ def run(tmp_path, dtype, target, fault=None):
         "bindings": [
             {
                 "name": f"binding{i}",
-                "scalarLayout": reflection(
-                    entry, name, buffer.dtype.decode(), target
-                ),
+                "scalarLayout": reflection(entry, name, buffer.dtype.decode(), target),
             }
             for i, (name, buffer) in enumerate(supplied.items())
         ],
@@ -221,7 +229,9 @@ def run(tmp_path, dtype, target, fault=None):
     )
     table = (runtime.Buffer * len(supplied))(*supplied.values())
     patch = pytest.MonkeyPatch()
-    patch.setattr(gather_dispatch, "build_native_loader_dispatch_request", kernel.request)
+    patch.setattr(
+        gather_dispatch, "build_native_loader_dispatch_request", kernel.request
+    )
     patch.setattr(gather_dispatch, "execute", kernel)
     try:
         gather_dispatch.dispatch(

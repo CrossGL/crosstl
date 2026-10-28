@@ -147,7 +147,10 @@ class FakeCache:
             element = name in sort_layout.ELEMENTS or name in sort_layout.ARRAYS
             member = "out_" if name == "out" else name if element else prefix + name
             bindings.append(
-                {"name": name + "Binding", "scalarLayout": {**scalar, "memberName": member}}
+                {
+                    "name": name + "Binding",
+                    "scalarLayout": {**scalar, "memberName": member},
+                }
             )
         return {"bindings": bindings, "artifact": {"id": key}}, Path("/packages")
 
@@ -199,9 +202,12 @@ def run(monkeypatch, tmp_path, target, entry, metadata, values, logical, fault=N
             initial = element_storage.unpack(
                 types[name], target, inputs[name + "Binding"]["values"]
             )
-            assert initial == element_storage.guard_words(
-                types[name], counts[name] + element_storage.GUARD_COUNT
-            ) or types[name] == "bool_"
+            assert (
+                initial == element_storage.guard_words(
+                    types[name], counts[name] + element_storage.GUARD_COUNT
+                )
+                or types[name] == "bool_"
+            )
             result = model[name] + initial[counts[name] :]
             if fault == "guard":
                 result[-1] ^= 1
@@ -317,7 +323,11 @@ def test_entry_selection_and_variants():
     assert sort_layout.width(partition, 17) == 18
     assert sort_layout.width(partition, 2048) == 1024
     assert sort_layout.split_variant(partition + "@18") == (partition, (18, 1, 1))
-    for key in (partition + "@2", partition + "@1025", "c_block_sort_bool__bool__bn32_tn4@32"):
+    for key in (
+        partition + "@2",
+        partition + "@1025",
+        "c_block_sort_bool__bool__bn32_tn4@32",
+    ):
         with pytest.raises(ValueError):
             sort_layout.split_variant(key)
     block = sort_layout.entry_name("block", "float32", 600)
@@ -463,12 +473,24 @@ def test_dispatch_refuses_guard_damage_and_audit_refuses_wrong_values(
     if fault == "guard":
         with pytest.raises(RuntimeError, match="guard"):
             run(
-                monkeypatch, tmp_path, "metal", entry, metadata, {"inp": words}, 20,
+                monkeypatch,
+                tmp_path,
+                "metal",
+                entry,
+                metadata,
+                {"inp": words},
+                20,
                 fault=fault,
             )
         return
     _, event = run(
-        monkeypatch, tmp_path, "metal", entry, metadata, {"inp": words}, 20,
+        monkeypatch,
+        tmp_path,
+        "metal",
+        entry,
+        metadata,
+        {"inp": words},
+        20,
         fault=fault,
     )
     with pytest.raises(ValueError, match="hash|stable"):
@@ -582,12 +604,20 @@ def test_runtime_and_host_adapter_route_sorts():
     )
     fake.softmaxes = None
     fake.sorts = object()
-    assert runtime.HostRuntime._entry_available(fake, b"sort_mbsort_int8_uint32_bn512_tn4") == 1
+    assert (
+        runtime.HostRuntime._entry_available(fake, b"sort_mbsort_int8_uint32_bn512_tn4")
+        == 1
+    )
     fake.sorts = None
-    assert runtime.HostRuntime._entry_available(fake, b"c_block_sort_int8_int8_bn32_tn4") == 0
+    assert (
+        runtime.HostRuntime._entry_available(fake, b"c_block_sort_int8_int8_bn32_tn4")
+        == 0
+    )
     source = Path(runtime.__file__).read_text(encoding="utf-8")
     assert "if entry in sort_layout.ENTRIES:" in source
-    adapter = Path(runtime.__file__).with_name("backend.cpp").read_text(encoding="utf-8")
+    adapter = (
+        Path(runtime.__file__).with_name("backend.cpp").read_text(encoding="utf-8")
+    )
     for primitive in ("ArgSort", "Sort", "ArgPartition", "Partition"):
         assert f"void {primitive}::eval_gpu(" in adapter
         assert f'"{primitive}",' in Path(prepare.__file__).read_text(encoding="utf-8")
