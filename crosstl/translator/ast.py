@@ -637,6 +637,7 @@ class StructNode(ASTNode):
         attributes: List["AttributeNode"] = None,
         inheritance: List[NamedType] = None,
         visibility: str = "public",
+        methods: List["FunctionNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -646,6 +647,8 @@ class StructNode(ASTNode):
         self.attributes = attributes or []
         self.inheritance = inheritance or []
         self.visibility = visibility
+        # Member functions; the struct_methods rule pass lowers them to free functions.
+        self.methods = methods or []
 
     def __repr__(self):
         return f"StructNode(name={self.name}, members={len(self.members)})"
