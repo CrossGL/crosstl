@@ -150,6 +150,7 @@ SERIALIZATION_TESTS = _tests(
     "test_load",
     "TestLoad",
     (
+        "load_donation",
         "load_f8_e4m3",
         "load_gguf_quantized",
         "non_contiguous",

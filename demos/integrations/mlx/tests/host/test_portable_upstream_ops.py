@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 537
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 541
     assert all(
         name.startswith(
             (
@@ -174,7 +174,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 532 and not set(opengl) & set(excluded)
+    assert len(opengl) == 536 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -272,7 +272,7 @@ def test_upstream_op_groups_partition_the_inventory():
     for group, tests, module, count in (
         ("array", ops.ARRAY_TESTS, "test_array.", 41),
         ("autograd", ops.AUTOGRAD_TESTS, "test_autograd.", 45),
-        ("compile", ops.COMPILE_TESTS, "test_compile.", 51),
+        ("compile", ops.COMPILE_TESTS, "test_compile.", 54),
     ):
         assert ops.GROUPS[group] == tests and len(tests) == count
         assert all(name.startswith(module) for name in tests)
@@ -282,7 +282,7 @@ def test_upstream_op_groups_partition_the_inventory():
     for group, modules, count in (
         ("nn", ("test_nn.",), 41),
         ("transforms", ("test_vmap.", "test_eval."), 35),
-        ("serialization", ("test_export_import.", "test_load."), 31),
+        ("serialization", ("test_export_import.", "test_load."), 32),
         (
             "training",
             (

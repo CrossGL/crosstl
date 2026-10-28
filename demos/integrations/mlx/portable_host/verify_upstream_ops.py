@@ -397,11 +397,13 @@ COMPILE_TESTS = (
         "test_compile.TestCompile.test_" + name
         for name in (
             "compile_abs_unsigned",
+            "compile_broadcast_only",
             "compile_capture",
             "compile_changing_outputs",
             "compile_changing_outputs_with_state",
             "compile_create_list",
             "compile_different_log_bases",
+            "compile_dynamic_dims",
             "compile_equal_nan",
             "compile_float_constant_precision",
             "compile_grad",
@@ -409,6 +411,7 @@ COMPILE_TESTS = (
             "compile_inputs_with_primitives",
             "compile_kwargs",
             "compile_large_graph_with_broadcasts",
+            "compile_many_inputs",
             "compile_many_outputs",
             "compile_multi_output",
             "compile_nonfinite_constants",
