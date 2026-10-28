@@ -69,6 +69,7 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .wgsl_array_constructors import wgsl_array_constructor
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
     entry_output_parameters,
@@ -3205,6 +3206,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
                 return f"{operand}{expr.operator}"
+            if expr.operator == "+":
+                # WGSL has no unary plus. On a number it is the identity, and the
+                # operand text already stands on its own as an expression.
+                if self.boolean_expression_width(expr.operand) is not None:
+                    raise ValueError(
+                        "WGSL has no unary plus, and unary plus on a boolean "
+                        "value has no numeric meaning to preserve"
+                    )
+                return operand
             if expr.operator == "!":
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
@@ -3355,6 +3365,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_function_call(self, node, expected_type=None):
         node = self.specialize_generic_function_call(node)
         function_name = self.expression_name(node.function)
+        array_value = wgsl_array_constructor(self, node)
+        if array_value is not None:
+            return array_value
         normalized_name = self.semantic_key(function_name)
         option_call = self.generate_builtin_option_call(node, function_name)
         if option_call is not None:

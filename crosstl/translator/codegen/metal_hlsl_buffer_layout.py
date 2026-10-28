@@ -601,8 +601,8 @@ class MetalHlslBufferLayouts:
         )
         return self.plan_members(name, layout_type, layout, root=True)
 
-    def plan_structured_element(self, raw_type):
-        """Storage of one structured-buffer element.
+    def plan_structured_element(self, raw_type, layout=HLSL_STRUCTURED_LAYOUT):
+        """Storage of one element of a buffer laid out by HLSL structured-buffer or std430 rules.
 
         Returns ``(storage_type, read_conversion, write_conversion)``.
         """
@@ -610,7 +610,7 @@ class MetalHlslBufferLayouts:
         if layout_type.kind == "array":
             raise HlslLayoutError("structured buffers of arrays are not supported")
         storage_type, _size, _alignment, read, write, _nested = self.value_storage(
-            layout_type, HLSL_STRUCTURED_LAYOUT
+            layout_type, layout
         )
         if layout_type.kind == "vector" and layout_type.components in (2, 4):
             # The element stride equals the vector size either way, and buffer
