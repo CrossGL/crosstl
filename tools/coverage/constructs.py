@@ -540,6 +540,73 @@ def _curated() -> list[Construct]:
         c("type", "reserved-member-name", "OpMemberName"),
         c("type", "reserved-type-name", "OpName", "OpTypeStruct"),
         c("type", "reserved-global-name", "OpName", "StorageClass.Private"),
+        c(
+            "resource",
+            "uniform-matrix2",
+            "StorageClass.Uniform",
+            "OpTypeMatrix",
+            "Decoration.MatrixStride",
+        ),
+        c(
+            "resource",
+            "uniform-matrix3",
+            "StorageClass.Uniform",
+            "OpTypeMatrix",
+            "Decoration.MatrixStride",
+        ),
+        c(
+            "resource",
+            "uniform-non-square-matrix",
+            "StorageClass.Uniform",
+            "OpTypeMatrix",
+            "Decoration.ColMajor",
+        ),
+        c("resource", "uniform-bool", "StorageClass.Uniform", "OpINotEqual"),
+        c(
+            "resource",
+            "uniform-bool-vector",
+            "StorageClass.Uniform",
+            "OpINotEqual",
+            "OpTypeBool",
+        ),
+        c(
+            "resource",
+            "uniform-std140-vector",
+            "StorageClass.Uniform",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-cbuffer-vector",
+            "StorageClass.Uniform",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-std140-array",
+            "StorageClass.Uniform",
+            "Decoration.ArrayStride",
+        ),
+        c(
+            "resource",
+            "uniform-row-major-matrix",
+            "StorageClass.Uniform",
+            "Decoration.RowMajor",
+        ),
+        c(
+            "resource",
+            "uniform-row-major-non-square",
+            "StorageClass.Uniform",
+            "Decoration.RowMajor",
+            "Decoration.Offset",
+        ),
+        c(
+            "resource",
+            "uniform-row-major-array",
+            "StorageClass.Uniform",
+            "Decoration.RowMajor",
+            "Decoration.ArrayStride",
+        ),
     ]
 
 
@@ -625,13 +692,15 @@ def _spellings(dialect) -> dict[str, str]:
     try:
         spelled["mat2"] = dialect.type(Type("float", (2, 2)))
         spelled["mat2x3"] = dialect.type(Type("float", (2, 3)))
+        spelled["mat3"] = dialect.type(Type("float", (3, 3)))
         spelled["mat4"] = dialect.type(Type("float", (4, 4)))
     except ProbeError:
         pass  # the language lacks these matrices, and its templates do not use them
     try:
         spelled["bvec2"] = dialect.type(Type("bool", (2,)))
+        spelled["bvec4"] = dialect.type(Type("bool", (4,)))
     except ProbeError:
-        pass  # the language has no bool vectors, and its templates do not use $bvec2
+        pass  # the language has no bool vectors, and its templates use neither $bvec2 nor $bvec4
     return spelled
 
 
