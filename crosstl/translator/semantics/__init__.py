@@ -146,6 +146,7 @@ from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
+from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
 from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
 from .vector_logic import lower_vector_logic
 from .vertex_input_positions import (
@@ -207,6 +208,7 @@ __all__ = [
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
+    "TypeAliasUnsupportedError",
     "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
     "apply_rule_carrying",
@@ -251,12 +253,14 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
     (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. ``sizeof``
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
-    layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). GLSL's
+    layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
+    type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
+    (:mod:`.type_aliases`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
     structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
-    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V
-    and Metal, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
+    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For OpenGL, SPIR-V,
+    Metal, CUDA and HIP, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
     value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
     HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
     attachment ``n`` (``@gl_FragData[n]``, :mod:`.fragment_colour_outputs`). A position built-in on a vertex input
@@ -349,6 +353,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     store_row_major_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
+    resolve_type_aliases(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
     lower_device_struct_references(program, report.target)
