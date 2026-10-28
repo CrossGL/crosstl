@@ -96,7 +96,12 @@ def gather_stage_interface_variables(program, target) -> int:
         ]
         if stage_name not in _STRUCT_NAMES or not variables:
             continue
-        _Gatherer(program, stage, stage_name, variables, names, target).run()
+        # The names the program declared, and the structures earlier stages added; the ``input`` and ``output``
+        # locals another stage's entry point now declares are not visible to this one.
+        stage_names = names | {
+            struct.name for struct in getattr(program, "structs", None) or []
+        }
+        _Gatherer(program, stage, stage_name, variables, stage_names, target).run()
         changed += 1
     return changed
 

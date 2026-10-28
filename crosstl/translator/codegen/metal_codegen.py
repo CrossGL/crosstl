@@ -403,6 +403,7 @@ from .metal_keyword_identifiers import (
 from .metal_library_functions import rename_msl_library_functions
 from .metal_library_structs import is_metal_library_struct
 from .metal_matrix_builtins import MetalMatrixBuiltins
+from .metal_namespace_names import rename_metal_namespace_names
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
@@ -1546,7 +1547,7 @@ class MetalCodeGen(
             "gl_FragColor6": "[[color(6)]]",
             "gl_FragColor7": "[[color(7)]]",
             "gl_FragDepth": "depth(any)",
-            "gl_FragStencilRefEXT": "stencil_ref",
+            "gl_FragStencilRefEXT": "stencil",
             "SV_TARGET": "color(0)",
             "SV_TARGET0": "color(0)",
             "SV_TARGET1": "color(1)",
@@ -2048,6 +2049,7 @@ class MetalCodeGen(
         ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
         ast = rename_msl_library_functions(ast)
+        ast = rename_metal_namespace_names(ast)
         ast = rename_metal_keyword_parameters(ast)
         ast = split_metal_stage_input_builtins(ast, self)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
@@ -6881,6 +6883,22 @@ class MetalCodeGen(
             metal_semantic = self.canonical_metal_semantic(semantic)
             if metal_semantic in builtin_attributes:
                 stage_parameters[metal_semantic] = getattr(parameter, "name", None)
+        if stage_name == "fragment":
+            # A [[stage_in]] structure member carrying a built-in, such as HLSL's SV_Position member, already
+            # delivers it; a second [[position]] parameter would not compile.
+            for parameter in parameters or []:
+                param_type = getattr(parameter, "param_type", None)
+                struct = self.structs_by_name.get(
+                    str(getattr(param_type, "name", param_type))
+                )
+                for member in getattr(struct, "members", None) or []:
+                    attribute = self.canonical_metal_semantic(
+                        self.semantic_from_node(member)
+                    )
+                    if attribute in builtin_attributes:
+                        stage_parameters.setdefault(
+                            attribute, f"{parameter.name}.{member.name}"
+                        )
         return stage_parameters
 
     def required_metal_vertex_builtin_parameters(
@@ -7589,9 +7607,9 @@ class MetalCodeGen(
             "depth(any)": "float",
             "sample_id": "uint",
             "sample_mask": "uint",
+            # A fragment function's stencil reference output (MSL 3.2 section 5.2.3.4).
+            "stencil": "uint",
         }
-        if metal_semantic == "stencil_ref":
-            return "invalid"
         if metal_semantic is None:
             return None
         if metal_semantic.startswith("color("):
@@ -7714,7 +7732,12 @@ class MetalCodeGen(
                 "function return semantic"
             )
         actual_type = self.map_type(raw_return_type)
-        if actual_type != expected_type:
+        # A fragment function may return any scalar or vector colour value, as HLSL's float main() : SV_Target
+        # does (MSL 3.2 section 5.2.3.4).
+        color_value = bool(metal_semantic and metal_semantic.startswith("color(")) and (
+            METAL_COLOR_ATTACHMENT_TYPE.fullmatch(str(actual_type)) is not None
+        )
+        if actual_type != expected_type and not color_value:
             function_name = getattr(func, "name", "<anonymous>")
             raise ValueError(
                 f"Metal {stage_name} return semantic '{semantic}' maps to "
@@ -7735,7 +7758,7 @@ class MetalCodeGen(
         } or bool(metal_semantic and metal_semantic.startswith("color("))
         is_fragment_output = is_fragment_output or metal_semantic in {
             "sample_mask",
-            "stencil_ref",
+            "stencil",
         }
         is_vertex_output = semantic_text == "gl_Position"
 
@@ -7778,9 +7801,8 @@ class MetalCodeGen(
             "gl_Position": "float4",
             "gl_FragDepth": "float",
             "gl_SampleMask": "uint",
+            "gl_FragStencilRefEXT": "uint",
         }
-        if semantic == "gl_FragStencilRefEXT" or metal_semantic == "stencil_ref":
-            return "invalid"
         if semantic in output_types:
             return output_types[semantic]
         if metal_semantic and metal_semantic.startswith("color("):
@@ -19273,7 +19295,7 @@ class MetalCodeGen(
             "render_target_array_index",
             "sample_id",
             "sample_mask",
-            "stencil_ref",
+            "stencil",
             "thread_index_in_threadgroup",
             "thread_position_in_grid",
             "thread_position_in_threadgroup",
