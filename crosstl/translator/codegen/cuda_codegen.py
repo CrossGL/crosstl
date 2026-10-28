@@ -41,6 +41,7 @@ from .array_utils import (
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand
 from .c_float_literals import c_float_literal_text
+from .c_pointer_math import generate_pointer_math_call
 from .c_reference_parameters import (
     is_output_parameter,
     multi_component_swizzle_arguments,
@@ -48,6 +49,10 @@ from .c_reference_parameters import (
     reference_declarator,
 )
 from .c_vector_reductions import generate_vector_reduction_call
+from .c_wide_integer_vectors import (
+    wide_integer_vector_constructor,
+    wide_integer_vector_type,
+)
 from .comma_expressions import (
     CommaExpressionVisitorMixin,
     comma_result_operand,
@@ -67,6 +72,11 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+)
+from .gpu_device_globals import (
+    at_file_scope,
+    constant_in_device_memory,
+    file_scope_placement,
 )
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
@@ -1731,7 +1741,10 @@ class CudaCodeGen(
         declaration = self.format_typed_declarator(declaration_type, node.name)
         if value is not None:
             declaration += f" = {self.visit(value)}"
-        self.emit(f"const {declaration};")
+        declaration = f"const {declaration}"
+        if at_file_scope(self):
+            declaration = constant_in_device_memory(declaration)
+        self.emit(f"{declaration};")
 
     def format_variable_declaration(self, node):
         var_type = None
@@ -2840,9 +2853,10 @@ class CudaCodeGen(
         metadata_comment = self.cuda_resource_metadata_comment(node, var_type)
         if metadata_comment:
             self.emit(metadata_comment)
+        place = file_scope_placement(self, node, metadata_comment)
         declaration = self.format_variable_declaration(node)
         if declaration != node.name:
-            self.emit(f"{declaration};")
+            self.emit(f"{place(declaration)};")
             initial_value = getattr(
                 node,
                 "initial_value",
@@ -2862,17 +2876,17 @@ class CudaCodeGen(
                     effective_var_type,
                 )
             if metadata_declaration:
-                self.emit(f"{metadata_declaration};")
+                self.emit(f"{place(metadata_declaration)};")
             length_declaration = self.structured_buffer_length_declaration(
                 node.name, var_type
             )
             if length_declaration:
-                self.emit(f"{length_declaration};")
+                self.emit(f"{place(length_declaration)};")
             counter_declaration = self.structured_buffer_counter_declaration(
                 node.name, var_type
             )
             if counter_declaration:
-                self.emit(f"{counter_declaration};")
+                self.emit(f"{place(counter_declaration)};")
             return None
 
         return node.name
@@ -3588,6 +3602,12 @@ class CudaCodeGen(
             smoothstep_call = self.generate_smoothstep_call(raw_args, args)
             if smoothstep_call is not None:
                 return smoothstep_call
+
+        pointer_math_call = generate_pointer_math_call(
+            self, CudaLoweringRefused, func_name, raw_args, args
+        )
+        if pointer_math_call is not None:
+            return pointer_math_call
 
         if func_name in {"dot", "cross", "distance", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
@@ -7042,6 +7062,10 @@ class CudaCodeGen(
             cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
             return f"{cuda_element_type}*"
 
+        wide_vector_type = wide_integer_vector_type(crossgl_type)
+        if wide_vector_type is not None:
+            return wide_vector_type
+
         return self.cuda_mapped_type_result(
             type_mapping.get(crossgl_type, crossgl_type)
         )
@@ -10119,6 +10143,9 @@ class CudaCodeGen(
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
+        wide_vector_constructor = wide_integer_vector_constructor(func_name)
+        if wide_vector_constructor is not None:
+            return wide_vector_constructor
         function_mapping = {
             # Math functions
             "sqrt": "sqrtf",
@@ -13369,6 +13396,8 @@ class CudaCodeGen(
                 elif element_type == "uint":
                     return f"uvec{size}"
                 elif element_type in {"i8", "u8", "i16", "u16"}:
+                    return f"vec{size}<{element_type}>"
+                elif wide_integer_vector_type(f"vec{size}<{element_type}>"):
                     return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
