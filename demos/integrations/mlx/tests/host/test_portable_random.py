@@ -437,6 +437,9 @@ def _workload_records(native):
                 {
                     "entry": "rbitsc",
                     "threads": reference.nbytes,
+                    **random_layout.RandomOutputLayout(
+                        keys, reference.nbytes // keys
+                    ).execution,
                     "randomMetadata": {
                         "keyCount": keys,
                         "wordCount": reference.size // keys,
@@ -464,6 +467,7 @@ def workload_records(native):
         "count",
         "boundary",
         "id",
+        "geometry",
     ],
 )
 def test_random_workload_requires_exact_inventory_and_results(native, fault):
@@ -484,12 +488,19 @@ def test_random_workload_requires_exact_inventory_and_results(native, fault):
         records[1]["dispatchStart"] += 1
     elif fault == "id":
         records[1]["id"] = "unknown"
+    elif fault == "geometry":
+        if not native:
+            return
+        # The widest split must run in exact groups, not one thread per group.
+        event = next(event for event in trace if event["workgroupSize"][1] == 4)
+        event["workgroupCount"] = [1, event["workgroupCount"][1] * 4, 1]
+        event["workgroupSize"] = [1, 1, 1]
     if fault:
         with pytest.raises(ValueError):
             random_workloads.validate(np, records, trace, native=native)
     else:
         random_workloads.validate(np, records, trace, native=native)
-        assert len(records) == 48
+        assert len(records) == 50
 
 
 @pytest.mark.parametrize("per_key", (65536, 262144, 524280))
@@ -505,13 +516,37 @@ def test_random_output_size_is_not_a_key_storage_limit(per_key, strides, entry):
 
 
 def test_random_rejects_launch_overflow_without_changing_counters():
-    supplied, memory, _ = buffers(524288, shape=(1, 2))
+    # 65537 word pairs is prime: no exact group height of at most 1024 fits.
+    supplied, memory, _ = buffers(524296, shape=(1, 2))
     with pytest.raises(ValueError, match="workgroup limits"):
         random_dispatch.validate(
             "rbitsc",
             supplied,
             len(memory["out"]),
-            {"workgroupCount": [1, 65536, 1], "workgroupSize": [1, 1, 1]},
+            {"workgroupCount": [1, 65537, 1], "workgroupSize": [1, 1, 1]},
+        )
+
+
+@pytest.mark.parametrize(
+    "per_key,count,height",
+    ((524288, 32768, 2), (524280, 65535, 1), (1572840, 65535, 3), (4194304, 32768, 16)),
+)
+def test_random_splits_wide_word_pair_axes_into_exact_groups(per_key, count, height):
+    supplied, memory, _ = buffers(per_key, shape=(1, 2))
+    execution = {"workgroupCount": [1, count, 1], "workgroupSize": [1, height, 1]}
+    layout, metadata = random_dispatch.validate(
+        "rbitsc", supplied, len(memory["out"]), execution
+    )
+    assert layout.execution == execution
+    assert count * height == (metadata["wordCount"] + 1) // 2
+    if height == 1:
+        return
+    with pytest.raises(ValueError, match="does not match"):
+        random_dispatch.validate(
+            "rbitsc",
+            supplied,
+            len(memory["out"]),
+            {"workgroupCount": [1, count * height, 1], "workgroupSize": [1, 1, 1]},
         )
 
 
@@ -536,14 +571,21 @@ def test_random_workloads_cover_large_outputs_and_key_layouts():
         for case in random_workloads.cases()
         if case["kind"] == "split" and case["count"] >= 8192
     ]
-    assert len(large) == 6
+    assert len(large) == 8
     assert {case["layout"] for case in large} == {
         "single",
         "contiguous",
         "strided",
         "broadcast",
     }
-    assert max(case["count"] for case in large) == 65535
+    # One single-key split per portable group height: 1, 2 and 4.
+    heights = {
+        random_layout.RandomOutputLayout(1, case["count"] * 8).workgroup_size[1]
+        for case in large
+        if case["layout"] == "single"
+    }
+    assert heights == {1, 2, 4}
+    assert max(case["count"] for case in large) == 131072
 
 
 def event(target, entry):

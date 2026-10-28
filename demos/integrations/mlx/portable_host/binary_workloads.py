@@ -12,6 +12,8 @@ OPERATIONS = {
     "Minimum": "minimum",
     "Maximum": "maximum",
     "Divide": "divide",
+    "Remainder": "remainder",
+    "LogAddExp": "logaddexp",
 }
 LAYOUTS = (
     "empty",
@@ -98,6 +100,19 @@ def record(entry, layout, a, b, result):
     }
 
 
+def floored_remainder(np, a, b):
+    """MLX's Remainder: the truncated remainder moved onto the divisor's sign.
+
+    Unlike ``numpy.remainder`` this keeps the dividend's signed zero, as the
+    kernel's ``fmod`` does when no correction applies.
+    """
+    remainder = np.fmod(a, b)
+    if a.dtype.kind == "u":
+        return remainder
+    shift = (remainder != 0) & ((remainder < 0) != (b < 0))
+    return np.where(shift, remainder + b, remainder).astype(a.dtype)
+
+
 def expected_records():
     import numpy as np
 
@@ -109,6 +124,8 @@ def expected_records():
                 # MLX selects the second operand on ties, including signed zero.
                 comparison = np.less if operation == "Minimum" else np.greater
                 result = np.where(np.isnan(a) | comparison(a, b), a, b)
+            elif operation == "Remainder":
+                result = floored_remainder(np, a, b)
             else:
                 result = getattr(np, OPERATIONS[operation])(a, b)
         records.append(record(entry, layout, a, b, result))
@@ -142,7 +159,14 @@ def run(mx, np):
     return records
 
 
-def validate(records):
+def validate(records, *, cpu=False):
+    """Check readbacks against the kernel-defined references.
+
+    ``cpu`` marks MLX's own CPU results. Its Remainder uses ``std::remainder``
+    for scalars and Accelerate's ``remainder`` for SIMD runs, which disagree
+    on the sign of an exact zero; translated kernels follow binary_ops.h's
+    ``fmod`` and must keep the dividend's sign.
+    """
     expected = expected_records()
     if not isinstance(records, list) or len(records) != len(expected):
         raise RuntimeError("Incomplete binary readbacks")
@@ -169,7 +193,10 @@ def validate(records):
                     reference == 0
                     and (
                         actual != 0
-                        or math.copysign(1, actual) != math.copysign(1, reference)
+                        or (
+                            math.copysign(1, actual) != math.copysign(1, reference)
+                            and not (cpu and want["entry"] == "vv_Remainderfloat32")
+                        )
                     )
                 )
                 or abs(actual - reference) > 1e-6 + 2e-6 * abs(reference)
