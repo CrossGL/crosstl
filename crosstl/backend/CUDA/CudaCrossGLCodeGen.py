@@ -4854,11 +4854,8 @@ class CudaToCrossGLConverter:
         )
 
     def format_cuda_comma_expression(self, args):
-        args_text = ", ".join(self.visit(arg) for arg in args)
-        return (
-            f"(/* CUDA comma expression {args_text} "
-            "not directly supported in CrossGL */ 0)"
-        )
+        # CrossGL has the C comma operator: ``(a, b)`` evaluates ``a``, then yields ``b``.
+        return f"({', '.join(self.visit(arg) for arg in args)})"
 
     def format_cuda_nanosleep_call(self, function_name, args):
         if not isinstance(function_name, str):

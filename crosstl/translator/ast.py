@@ -1344,6 +1344,17 @@ class ArrayLiteralNode(ExpressionNode):
         return f"ArrayLiteralNode(elements={len(self.elements)})"
 
 
+class CommaExpressionNode(ExpressionNode):
+    """Comma expression ``(a, b)``: evaluates its operands left to right, and its value is the last one's."""
+
+    def __init__(self, expressions: List[ExpressionNode], **kwargs):
+        super().__init__(**kwargs)
+        self.expressions = expressions
+
+    def __repr__(self):
+        return f"CommaExpressionNode(expressions={len(self.expressions)})"
+
+
 class SwizzleNode(ExpressionNode):
     """Vector swizzling (vec.xyz, vec.xxyy, etc.)."""
 

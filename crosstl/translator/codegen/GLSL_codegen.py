@@ -163,6 +163,11 @@ from .builtin_result_types import (
 from .builtin_variable_types import crossgl_builtin_variable_type
 from .call_effects import builtin_argument_write_indices
 from .clip_position_defaults import default_clip_position_member
+from .comma_expressions import (
+    c_family_comma_expression,
+    comma_result_operand,
+    is_comma_expression,
+)
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
 from .counter_loops import (
@@ -35768,6 +35773,13 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{helper}({left}, {right_operand})"
 
     def generate_discarded_expression(self, expr):
+        if is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr,
+                self.generate_expression,
+                self.generate_discarded_expression,
+                discarded=True,
+            )
         previous_discarded_expression = self.current_discarded_expression
         self.current_discarded_expression = expr
         try:
@@ -37373,6 +37385,8 @@ complex64_t crossgl_complex64_mod_assign(
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if is_comma_expression(expr):
+            return self.expression_result_type(comma_result_operand(expr))
         emulated_matrix_type = self.glsl_emulated_matrix_expression_type(expr)
         if emulated_matrix_type is not None:
             return emulated_matrix_type
@@ -40277,6 +40291,12 @@ complex64_t crossgl_complex64_mod_assign(
             return self.generate_glsl_identifier_expression(expr.name)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_glsl_aggregate_initializer(expr)
+        elif is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr,
+                lambda operand: self.generate_expression(operand, is_main),
+                self.generate_discarded_expression,
+            )
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
             if literal_type == "string":

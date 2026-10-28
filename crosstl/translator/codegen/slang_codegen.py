@@ -66,6 +66,11 @@ from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
+from .comma_expressions import (
+    c_family_comma_expression,
+    comma_result_operand,
+    is_comma_expression,
+)
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -9107,6 +9112,8 @@ class SlangCodeGen(LoweringRefusalMixin):
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if is_comma_expression(expr):
+            return self.expression_result_type(comma_result_operand(expr))
         if isinstance(expr, VariableNode):
             return self.local_variable_types.get(
                 getattr(expr, "name", None)
@@ -9602,6 +9609,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.generate_literal(node)
         elif isinstance(node, ExpressionStatementNode):
             return self.generate_expression(node.expression)
+        elif is_comma_expression(node):
+            return c_family_comma_expression(node, self.generate_expression)
         elif isinstance(node, AssignmentNode):
             return assignment_value_expression(self.generate_assignment(node))
         elif isinstance(node, ArrayAccessNode):

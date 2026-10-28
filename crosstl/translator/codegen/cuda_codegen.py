@@ -47,6 +47,11 @@ from .c_reference_parameters import (
     overlapping_output_arguments,
     reference_declarator,
 )
+from .comma_expressions import (
+    CommaExpressionVisitorMixin,
+    comma_result_operand,
+    is_comma_expression,
+)
 from .cuda_refusals import CudaLoweringRefused
 from .for_initializers import join_for_initializer
 from .generic_function_utils import (
@@ -218,6 +223,7 @@ def _refuse_buffer_counter(reason):
 
 class CudaCodeGen(
     LoweringRefusalMixin,
+    CommaExpressionVisitorMixin,
     VectorArithmeticMixin,
     ResourceQueryMixin,
     ResourceDiagnosticMixin,
@@ -7656,6 +7662,8 @@ class CudaCodeGen(
 
     def expression_result_type(self, node):
         """Infer expression result types with CUDA structured-buffer operations."""
+        if is_comma_expression(node):
+            return self.expression_result_type(comma_result_operand(node))
         if isinstance(node, (IdentifierNode, VariableNode)):
             name = getattr(node, "name", None)
             if not self.cuda_identifier_shadows_compute_builtin(name):

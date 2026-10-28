@@ -40,6 +40,7 @@ from ...translator.semantics.sampler_states import (
     canonical_sampler_argument,
 )
 from ...translator.standard_constants import standard_math_constant
+from ..comma_expressions import crossgl_comma_expression
 from ..import_refusals import ImportRefusalMixin, MetalImportRefused
 from ..switch_clauses import ordered_switch_clauses
 from .aggregate_scalar_conversions import (
@@ -12303,6 +12304,11 @@ class MetalToCrossGLConverter(
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr, is_main)
         elif isinstance(expr, BinaryOpNode):
+            comma = crossgl_comma_expression(
+                expr, lambda operand: self.generate_expression(operand, is_main)
+            )
+            if comma is not None:
+                return comma
             free_operator_call = self.generate_metal_free_operator_call(
                 expr.op,
                 (expr.left, expr.right),

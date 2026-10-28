@@ -76,6 +76,7 @@ from .array_utils import (
 from .ast_walk import walk_ast_values
 from .bitfield_builtins import BITFIELD_ARITIES, spirv_bitfield_call
 from .call_graph import validate_recursion_free
+from .comma_expressions import is_comma_expression, spirv_comma_expression
 from .enum_utils import (
     collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
@@ -30440,6 +30441,9 @@ class VulkanSPIRVCodeGen(
                 f"Could not find member {member_name} in {struct_type}"
             )
             return None
+
+        elif is_comma_expression(expr):
+            return spirv_comma_expression(self, expr)
 
         else:
             self.refuse_lowering(f"Unknown expression type {type(expr).__name__}")

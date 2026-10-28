@@ -122,6 +122,11 @@ from .builtin_result_types import (
 )
 from .c_family_operands import postfix_operand
 from .call_graph import validate_recursion_free
+from .comma_expressions import (
+    c_family_comma_expression,
+    comma_result_operand,
+    is_comma_expression,
+)
 from .constant_ordering import partition_constants_by_struct_dependency
 from .crossgl_vector_names import (
     crossgl_named_vector_spelling,
@@ -10314,6 +10319,8 @@ class MetalCodeGen(
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if is_comma_expression(expr):
+            return self.expression_result_type(comma_result_operand(expr))
         if isinstance(expr, IdentifierNode):
             builtin_type = self.metal_graphics_builtin_result_type(expr.name)
             if builtin_type is not None:
@@ -11049,6 +11056,13 @@ class MetalCodeGen(
         """Render an unused result without changing nested value expressions."""
         if isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return self.generate_assignment(expr)
+        if is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr,
+                self.generate_expression,
+                self.generate_discarded_expression,
+                discarded=True,
+            )
         rendered = self.generate_expression(expr)
         narrow_update = (
             isinstance(expr, UnaryOpNode)
@@ -11976,6 +11990,10 @@ class MetalCodeGen(
             )
         elif isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return assignment_value_expression(self.generate_assignment(expr))
+        elif is_comma_expression(expr):
+            return c_family_comma_expression(
+                expr, self.generate_expression, self.generate_discarded_expression
+            )
         elif isinstance(expr, ArrayLiteralNode):
             elements = ", ".join(
                 self.generate_expression_with_expected(element, None)
