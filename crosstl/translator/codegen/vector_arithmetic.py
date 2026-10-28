@@ -391,6 +391,21 @@ class VectorArithmeticMixin:
             "components": components,
         }
 
+    def math_vector_type_info(self, type_name):
+        """Return vector type info for scalar math built-ins, including native half2."""
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info
+        if self.native_vector_component_type(type_name) == "half":
+            return {
+                "type": "half2",
+                "constructor": "__floats2half2_rn",
+                "component_type": "half",
+                "components": ("x", "y"),
+                "narrow_lanes": False,
+            }
+        return None
+
     def is_repeat_safe_expression(self, expr):
         """Return whether an expression can be safely emitted more than once."""
         if isinstance(expr, (IdentifierNode, VariableNode, LiteralNode)):
@@ -2002,7 +2017,10 @@ class VectorArithmeticMixin:
         component_types = []
         for raw_arg in raw_args:
             arg_type = self.expression_result_type(raw_arg)
-            if self.vector_type_info(arg_type) is not None:
+            if (
+                self.vector_type_info(arg_type) is not None
+                or self.native_vector_component_type(arg_type) is not None
+            ):
                 return None
             component_type = self.scalar_component_type(arg_type)
             if component_type not in {"float", "double", None}:
@@ -2025,7 +2043,9 @@ class VectorArithmeticMixin:
         if signatures is None or len(raw_args) != len(args) or len(raw_args) != 1:
             return None
 
-        vector_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        vector_info = self.math_vector_type_info(
+            self.expression_result_type(raw_args[0])
+        )
         if vector_info is None:
             return None
 
@@ -2054,11 +2074,13 @@ class VectorArithmeticMixin:
         if helper_name in self.helper_functions:
             return helper_name
 
+        narrow_half = vector_info.get("narrow_lanes", True)
         components = [
             self.format_scalar_math_component(
                 func_name,
                 component_type,
                 f"value.{component}",
+                narrow_half=narrow_half,
             )
             for component in vector_info["components"]
         ]
@@ -2076,7 +2098,7 @@ class VectorArithmeticMixin:
         if len(raw_args) != 2 or len(args) != 2:
             return None
 
-        base_info = self.vector_type_info(self.expression_result_type(raw_args[0]))
+        base_info = self.math_vector_type_info(self.expression_result_type(raw_args[0]))
         if base_info is None or base_info["component_type"] not in {
             "float",
             "double",
@@ -2084,7 +2106,9 @@ class VectorArithmeticMixin:
         }:
             return None
 
-        exponent_info = self.vector_type_info(self.expression_result_type(raw_args[1]))
+        exponent_info = self.math_vector_type_info(
+            self.expression_result_type(raw_args[1])
+        )
         if exponent_info is not None:
             if exponent_info["component_type"] != base_info["component_type"] or len(
                 exponent_info["components"]
@@ -2114,6 +2138,7 @@ class VectorArithmeticMixin:
             if exponent_info is not None
             else self.vector_scalar_parameter_type(base_info)
         )
+        narrow_half = base_info.get("narrow_lanes", True)
         components = []
         for component in base_info["components"]:
             exponent_component = (
@@ -2121,7 +2146,10 @@ class VectorArithmeticMixin:
             )
             components.append(
                 self.format_scalar_math_component(
-                    "pow", component_type, f"base.{component}, {exponent_component}"
+                    "pow",
+                    component_type,
+                    f"base.{component}, {exponent_component}",
+                    narrow_half=narrow_half,
                 )
             )
         helper = (
@@ -2177,7 +2205,9 @@ class VectorArithmeticMixin:
         self.helper_functions[helper_name] = helper
         return helper_name
 
-    def format_scalar_math_component(self, func_name, component_type, value):
+    def format_scalar_math_component(
+        self, func_name, component_type, value, narrow_half=True
+    ):
         """Format one scalar component for a precision-aware math builtin."""
         if component_type == "half":
             # ``__half`` has no math overloads in every toolkit, so widen each
@@ -2186,6 +2216,8 @@ class VectorArithmeticMixin:
                 f"__half2float({operand.strip()})" for operand in value.split(",")
             )
             float_call = self.format_scalar_math_component(func_name, "float", operands)
+            if not narrow_half:
+                return float_call
             return f"__float2half({float_call})"
         signatures = self.scalar_float_math_functions()[func_name]
         if func_name == "inversesqrt" and component_type == "double":
