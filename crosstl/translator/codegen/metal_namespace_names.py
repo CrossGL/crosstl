@@ -226,7 +226,8 @@ def _fresh(name, taken):
 
 def _rename_values(program, renames):
     for value in _program_constants(program):
-        value.name = renames.get(value.name, value.name)
+        if value.name in renames:
+            value.name = renames[value.name]
     seen = set()
 
     def visit(node, hidden):
