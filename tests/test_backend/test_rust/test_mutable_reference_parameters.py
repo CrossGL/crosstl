@@ -77,15 +77,11 @@ def test_mutable_references_import_as_inout_parameters():
 
 
 def test_mutable_slices_are_not_inout_values():
-    crossgl = _compact(
-        _import(
-            """
+    crossgl = _compact(_import("""
             pub fn fill(values: &mut [f32], x: &mut f32) {
                 values[0] = *x;
             }
-            """
-        )
-    )
+            """))
     assert "inout float x" in crossgl
     assert "inout float values" not in crossgl
 
