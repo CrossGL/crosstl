@@ -2,7 +2,6 @@
 
 import ctypes
 import hashlib
-import json
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
@@ -12,6 +11,7 @@ from demos.integrations.mlx.portable_host import (
     scan_layout,
 )
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
 def guard(dtype):
@@ -170,7 +170,6 @@ def dispatch(host, entry, buffers, count, size, launch):
         "outputGuards": words[size:],
         "outputHash": hashlib.sha256(payload).hexdigest(),
     }
-    with host.trace.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event) + "\n")
+    write_trace(host, event)
     ctypes.memmove(supplied["out"].data, payload, len(payload))
     host.dispatch_count += 1

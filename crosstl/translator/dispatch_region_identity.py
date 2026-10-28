@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any, Mapping
+
+# Source path -> ((mtime_ns, size, inode), sha256 of its text).
+_SOURCE_DIGESTS: dict[str, tuple[tuple[int, int, int], str]] = {}
+_SOURCE_DIGESTS_LOCK = threading.Lock()
+# Coarser than the modification-time granularity of common file systems.
+_SETTLED_SOURCE_NS = 2_000_000_000
 
 _FIELDS = frozenset(
     (
@@ -29,20 +38,56 @@ def _digest(value: Any) -> str:
     ).hexdigest()
 
 
-def translation_implementation_hash() -> str:
-    """Identify installed translation code without checkout paths or Git state."""
-    root = Path(__file__).resolve().parents[1]
-    # Read each time: a long-lived process may translate after source updates.
+def _source_files(directory: str, prefix: str):
+    """Yield ``(relative path, entry)`` for every ``*.py`` file under ``directory``.
+
+    Like ``Path.rglob``, the walk does not descend into symbolic links to
+    directories.
+    """
+    with os.scandir(directory) as entries:
+        children = sorted(entries, key=lambda entry: entry.name)
+    for entry in children:
+        if entry.is_dir(follow_symlinks=False):
+            yield from _source_files(entry.path, prefix + entry.name + "/")
+        elif entry.name.endswith(".py") and entry.is_file():
+            yield prefix + entry.name, entry
+
+
+def _source_digest(entry: os.DirEntry) -> str:
+    status = entry.stat()
+    signature = (status.st_mtime_ns, status.st_size, status.st_ino)
+    with _SOURCE_DIGESTS_LOCK:
+        cached = _SOURCE_DIGESTS.get(entry.path)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+    with open(entry.path, encoding="utf-8") as source:
+        digest = hashlib.sha256(source.read().encode("utf-8")).hexdigest()
+    # A file written within its timestamp's granularity of this read could
+    # change again without a new signature, so its digest is not kept.
+    if time.time_ns() - status.st_mtime_ns > _SETTLED_SOURCE_NS:
+        with _SOURCE_DIGESTS_LOCK:
+            _SOURCE_DIGESTS[entry.path] = (signature, digest)
+    return digest
+
+
+def source_tree_hash(root: Path) -> str:
+    """Digest every ``*.py`` file's text under ``root`` by its relative path.
+
+    Checked on each call, because a long-lived process may translate after
+    source updates. A file is reread whenever its modification time, size or
+    inode differs from the read its digest came from.
+    """
     return _digest(
         {
-            path.relative_to(root).as_posix(): (
-                hashlib.sha256(
-                    path.read_text(encoding="utf-8").encode("utf-8")
-                ).hexdigest()
-            )
-            for path in sorted(root.rglob("*.py"))
+            relative: _source_digest(entry)
+            for relative, entry in _source_files(str(root), "")
         }
     )
+
+
+def translation_implementation_hash() -> str:
+    """Identify installed translation code without checkout paths or Git state."""
+    return source_tree_hash(Path(__file__).resolve().parents[1])
 
 
 def build_dispatch_region_program(

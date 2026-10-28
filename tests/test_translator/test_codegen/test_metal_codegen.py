@@ -34643,5 +34643,34 @@ def test_translate_hlsl_packed_byte_results_convert_to_declared_metal_vectors(
     assert "int4s=int4(ushort4(as_type<uchar4>(uint(iin[3]))));" in compact
 
 
+def test_scalar_geometric_builtins_lower_to_scalar_expressions(tmp_path):
+    source_path = tmp_path / "scalar_geometric.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<float> results : register(u0);
+        RWStructuredBuffer<int> counts : register(u1);
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 id : SV_DispatchThreadID)
+        {
+            float x = results[1];
+            float y = results[2];
+            int a = counts[1];
+            int b = counts[2];
+            float3 v = float3(x, y, x);
+            results[0] = length(x) + dot(x, y) + distance(x, y) + normalize(x);
+            counts[0] = dot(a, b);
+            results[3] = length(v) + dot(v, v) + distance(v, v) + normalize(v).x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    compact = re.sub(r"\s+", "", crosstl.translate(str(source_path), backend="metal"))
+
+    assert "results[0]=abs(x)+((x)*(y))+abs((x)-(y))+sign(x);" in compact
+    assert "counts[0]=((a)*(b));" in compact
+    assert "results[3]=length(v)+dot(v,v)+distance(v,v)+normalize(v).x;" in compact
+
+
 if __name__ == "__main__":
     pytest.main()
