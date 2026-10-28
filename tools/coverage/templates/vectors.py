@@ -8,9 +8,10 @@ operator, so its probes widen each scalar. No probe shifts a negative value left
 GLSL builds a shorter vector from a longer one with a constructor, ``vec2(v)``, and a smaller or larger matrix from
 another one, ``mat2(m)`` taking the upper-left corner and ``mat4(m)`` filling the rest from the identity. HLSL
 truncates with a cast, ``(float2)v`` and ``(float2x2)m``, and writes a larger matrix out by rows; Slang casts only
-matrices. Metal, WGSL and OpenCL C have neither, so their probes take swizzles and build matrices from columns, and glam truncates with
-``truncate`` and resizes with ``from_mat3`` and its relatives. CUDA and HIP vector types have no operators or
-conversions, CUDA, HIP, OpenCL C and Mojo have no matrices, and Mojo has no three-component vectors.
+matrices. Metal, WGSL and OpenCL C have neither, so their probes take swizzles and build matrices from columns,
+and glam truncates with ``truncate`` and resizes with ``from_mat3`` and its relatives. CUDA and HIP vector types
+have no operators or conversions, CUDA, HIP, OpenCL C and Mojo have no matrices, and Mojo has no three-component
+vectors.
 """
 
 from __future__ import annotations
@@ -167,7 +168,8 @@ OPENCL = {
     "vector-truncation": Template(
         c_text(
             "float4 v = (float4)(fin[i], 2.0, 3.0, 4.0);\nfloat2 a = v.xy;\nfloat3 b = v.xyz;\n"
-            "int3 k = (int3)(iin[i], 5, 6);\nint2 j = k.xy;\nfloat2 c = convert_float2(((int3)(iin[i] * 2, 7, 8)).xy);\n"
+            "int3 k = (int3)(iin[i], 5, 6);\nint2 j = k.xy;\n"
+            "float2 c = convert_float2(((int3)(iin[i] * 2, 7, 8)).xy);\n"
             f"outp[i] = {_TRUNCATION_SUM.format(f='float')};",
             "uint",
         )
@@ -208,7 +210,8 @@ RUST = {
     ),
     "vector-truncation": Template(
         "let v = Vec4::new(fin[i], 2.0, 3.0, 4.0);\nlet a = v.truncate().truncate();\nlet b = v.truncate();\n"
-        "let k = IVec3::new(iin[i], 5, 6);\nlet j = k.truncate();\nlet c = IVec3::new(iin[i] * 2, 7, 8).truncate().as_vec2();\n"
+        "let k = IVec3::new(iin[i], 5, 6);\nlet j = k.truncate();\n"
+        "let c = IVec3::new(iin[i] * 2, 7, 8).truncate().as_vec2();\n"
         "outp[i] = a.x + a.y * 4.0 + b.z * 16.0 + (j.x + j.y * 16) as f32 * 64.0 + (c.x + c.y * 32.0) * 8192.0;"
     ),
     # glam has no non-square matrices, so n is the pair of columns mat2x3(m) would hold.
