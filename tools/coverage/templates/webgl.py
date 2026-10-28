@@ -13,6 +13,7 @@ from .abstractions import GLSL as _ABSTRACTIONS_GLSL
 from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
 from .blocks import WEBGL as _BLOCKS
+from .booleans import WEBGL as _BOOLEANS
 from .calls import WEBGL as _CALLS
 from .columns import WEBGL as _COLUMNS
 from .composites import WEBGL as _COMPOSITES
@@ -99,6 +100,7 @@ WEBGL = {
     **_IDENTIFIERS,
     **_INTEGERS,
     **_COLUMNS,
+    **_BOOLEANS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

@@ -475,6 +475,40 @@ def test_uniform_matrix_probes_read_every_column_from_its_own_16_byte_row():
         ], language
 
 
+def test_uniform_bool_probes_store_each_boolean_in_a_32_bit_word():
+    crossgl = probes.build(_feature("glsl", "uniform-bool-vector"), "crossgl").source
+    assert (
+        "cbuffer Params @binding(3) {\n        bvec4 f;\n        bvec2 g;\n        bool h;"
+        in crossgl
+    )
+    hlsl = probes.build(_feature("hlsl", "uniform-bool-vector"), "hlsl").source
+    assert "bool4 f;\n    bool2 g;" in hlsl and "bool4 c = f;" in hlsl
+    # Metal's bool is one byte and the others cannot put a boolean in a host-written block, so they test a uint.
+    for language, member, test in (
+        ("metal", "uint b0;", "bool b0 = bool(params.b0);"),
+        ("wgsl", "b0: u32,", "let b0 = bool(params.b0);"),
+        ("cuda", "unsigned int b0;", "bool b0 = params.b0 != 0u;"),
+        ("opencl", "uint b0;", "bool b0 = params.b0 != 0u;"),
+        ("rust", "b0: u32,", "let b0 = params.b0 != 0;"),
+        ("mojo", "var b0: UInt32", "var b0 = params.b0 != 0"),
+    ):
+        source = probes.build(_feature(language, "uniform-bool"), language).source
+        assert member in source and test in source, language
+    for language, member, test in (
+        ("metal", "uint4 f;\n    uint2 g;", "bool4 f = bool4(params.f);"),
+        ("wgsl", "f: vec4<u32>,\n    g: vec2<u32>,", "var c = vec4<bool>(params.f);"),
+        ("rust", "f: UVec4,\n    g: UVec2,", "params.f.cmpne(UVec4::ZERO)"),
+        ("mojo", "var f: SIMD[DType.uint32, 4]", "params.f.cast[DType.bool]()"),
+    ):
+        source = probes.build(
+            _feature(language, "uniform-bool-vector"), language
+        ).source
+        assert member in source and test in source, language
+    for language in ("cuda", "hip", "opencl"):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert "uniform-bool" in names and "uniform-bool-vector" not in names, language
+
+
 def test_uniform_integer_probes_keep_each_member_s_signedness_in_every_language():
     crossgl = probes.build(_feature("glsl", "uniform-integer"), "crossgl").source
     assert "cbuffer Params @binding(3) {\n        int n0;" in crossgl

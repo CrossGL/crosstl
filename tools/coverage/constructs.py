@@ -561,6 +561,14 @@ def _curated() -> list[Construct]:
             "OpTypeMatrix",
             "Decoration.ColMajor",
         ),
+        c("resource", "uniform-bool", "StorageClass.Uniform", "OpINotEqual"),
+        c(
+            "resource",
+            "uniform-bool-vector",
+            "StorageClass.Uniform",
+            "OpINotEqual",
+            "OpTypeBool",
+        ),
     ]
 
 
@@ -652,8 +660,9 @@ def _spellings(dialect) -> dict[str, str]:
         pass  # the language lacks these matrices, and its templates do not use them
     try:
         spelled["bvec2"] = dialect.type(Type("bool", (2,)))
+        spelled["bvec4"] = dialect.type(Type("bool", (4,)))
     except ProbeError:
-        pass  # the language has no bool vectors, and its templates do not use $bvec2
+        pass  # the language has no bool vectors, and its templates use neither $bvec2 nor $bvec4
     return spelled
 
 

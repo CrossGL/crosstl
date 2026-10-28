@@ -44,6 +44,7 @@ from .templates.base import (
     SPREAD,
 )
 from .templates.blocks import CROSSGL as BLOCKS_CROSSGL
+from .templates.booleans import CROSSGL as BOOLEANS_CROSSGL
 from .templates.columns import CROSSGL as COLUMNS_CROSSGL
 from .templates.edges import FAMILY as EDGES
 from .templates.elements import CROSSGL as ELEMENTS_CROSSGL
@@ -611,6 +612,7 @@ CONSTRUCTS: dict[str, Template] = {
     **IDENTIFIERS_CROSSGL,
     **INTEGERS_CROSSGL,
     **COLUMNS_CROSSGL,
+    **BOOLEANS_CROSSGL,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
