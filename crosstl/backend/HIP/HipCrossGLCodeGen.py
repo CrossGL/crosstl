@@ -6,6 +6,7 @@ import re
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..keyword_renames import source_identifier_names, unused_identifier_name
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -532,6 +533,7 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.generated_matrix_helper_types = set()
         self.namespace_aliases = {}
+        self.source_identifier_names = frozenset()
         self.anonymous_enum_count = 0
         self.function_local_record_definitions = {}
         self.function_local_record_node_ids = set()
@@ -551,6 +553,7 @@ class HipToCrossGLConverter:
     def generate(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -1605,7 +1608,7 @@ class HipToCrossGLConverter:
 
     def sanitize_identifier_name(self, name):
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
-            return f"{name}_"
+            return unused_identifier_name(name, self.source_identifier_names)
         return name
 
     def sanitize_crossgl_type_identifier(self, name):

@@ -3,6 +3,7 @@
 import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
+from ..keyword_renames import source_identifier_names, unused_identifier_name
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -267,6 +268,7 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = {}
         self.cuda_record_names = set()
+        self.source_identifier_names = frozenset()
         self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
@@ -274,6 +276,7 @@ class CudaToCrossGLConverter:
     def generate(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -419,7 +422,7 @@ class CudaToCrossGLConverter:
 
     def sanitize_identifier_name(self, name):
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
-            return f"{name}_"
+            return unused_identifier_name(name, self.source_identifier_names)
         return name
 
     def format_crossgl_array_extent(self, size):
