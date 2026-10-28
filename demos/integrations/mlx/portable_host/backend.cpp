@@ -91,19 +91,36 @@ void dispatch_arange(
   } else {
     step = next - start;
   }
-  CrosstlMlxBuffer buffers[] = {
-      {"start", dtype, &start, 1, 0},
-      {"step", dtype, &step, 1, 0},
-      {"out", dtype, out.data<T>(), out.size(), 1},
-  };
-  char error[2048] = {};
-  const auto launch = elementwise_launch(out.size());
-  int status = dispatch_callback.load()(
-      entry, buffers, 3, out.size(), &launch, error, sizeof(error));
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(
-        std::string("CrossTL native dispatch failed: ") + error);
+  // arange.metal writes start + index * step. Integer arithmetic wraps to
+  // the element width, so a launch that starts at element ``first`` with
+  // start + first * step (wrapped) writes exactly the values the single
+  // upstream launch writes there. Floating-point products round, so a
+  // floating-point arange stays one launch.
+  const uint64_t count = out.size();
+  for (uint64_t first = 0; first < count; first += 65535) {
+    const uint64_t size = std::min<uint64_t>(65535, count - first);
+    T base = start;
+    if constexpr (std::is_integral_v<T>) {
+      using Unsigned = std::make_unsigned_t<T>;
+      // 64-bit unsigned arithmetic wraps; the cast keeps its low bits.
+      base = std::bit_cast<T>(static_cast<Unsigned>(
+          uint64_t(static_cast<Unsigned>(start)) +
+          first * uint64_t(static_cast<Unsigned>(step))));
+    }
+    CrosstlMlxBuffer buffers[] = {
+        {"start", dtype, &base, 1, 0},
+        {"step", dtype, &step, 1, 0},
+        {"out", dtype, out.data<T>() + first, size, 1},
+    };
+    char error[2048] = {};
+    const auto launch = elementwise_launch(size);
+    int status = dispatch_callback.load()(
+        entry, buffers, 3, size, &launch, error, sizeof(error));
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(
+          std::string("CrossTL native dispatch failed: ") + error);
+    }
   }
 }
 
@@ -754,7 +771,8 @@ void dispatch_column_pass(
     ColumnPass pass,
     const std::string& operation,
     const char* dtype,
-    const char* output) {
+    const char* output,
+    int64_t column_span = 0) {
   const bool two_pass = pass == ColumnPass::TwoPass;
   const bool long_column = pass == ColumnPass::LongColumn;
   if (shape.size() > 64 || shape.size() != strides.size() ||
@@ -765,7 +783,9 @@ void dispatch_column_pass(
   uint64_t total = column_shape_size(reduce_shape);
   uint64_t outer = column_shape_size(shape);
   uint64_t reduction_size = reduce_shape.back();
-  int64_t reduction_stride = reduce_strides.back();
+  // The columns each output row spans: the last reduced axis's stride, or
+  // a part of it when split_column_span added an outer axis.
+  int64_t reduction_stride = column_span ? column_span : reduce_strides.back();
   uint64_t non_columns = total / reduction_size;
   // The two-pass and long-column passes write partial results per output.
   const uint64_t partials = two_pass ? 32 : long_column ? long_column_blocks(total) : 1;
@@ -859,6 +879,31 @@ void dispatch_column_pass(
   }
 }
 
+// Every column pass but the long-column one launches a workgroup per block of
+// ``per_group`` columns along X, and a launch axis carries at most 65535
+// workgroups; upstream's single Metal launch may carry more. A span of k
+// equal parts, each a whole number b of blocks, runs as one more outer axis
+// of k parts with stride span / k: workgroup (x, y) of the single launch is
+// workgroup (x mod b, y * k + x / b), which reads and writes the same
+// elements in the same order.
+int64_t split_column_span(
+    mlx::core::Shape& shape, mlx::core::Strides& strides, int64_t span, uint64_t per_group) {
+  const uint64_t columns = uint64_t(span);
+  if ((columns + per_group - 1) / per_group <= 65535) {
+    return span;
+  }
+  for (uint64_t parts = 2; parts <= 65535; ++parts) {
+    const uint64_t part = columns / parts;
+    if (columns % parts == 0 && part % per_group == 0 && part / per_group <= 65535) {
+      shape.push_back(int(parts));
+      strides.push_back(int64_t(part));
+      return int64_t(part);
+    }
+  }
+  // No equal split exists; the pass refuses the launch.
+  return span;
+}
+
 void dispatch_column_reduce(
     const mlx::core::array& in,
     mlx::core::array& out,
@@ -892,9 +937,11 @@ void dispatch_column_reduce(
   }
   std::tie(shape, strides) = collapse_contiguous_dims(shape, strides);
   if (total < 32) {
+    // strided_reduce_small: 32 lanes of four columns once the span needs a split.
+    const int64_t span = split_column_span(shape, strides, stride, 128);
     dispatch_column_pass(
         in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Small, operation, dtype,
-        output);
+        output, span);
     return;
   }
   if (stride < 32 && total >= 1024) {
@@ -913,10 +960,12 @@ void dispatch_column_reduce(
     return;
   }
   const bool two_pass = total > 256 && out.size() / 32 < 1024;
+  // The looped and two-pass kernels cover 32 columns per workgroup.
+  const int64_t span = split_column_span(shape, strides, stride, 32);
   if (!two_pass) {
     dispatch_column_pass(
         in, out, shape, strides, plan.shape, plan.strides, ColumnPass::Looped, operation, dtype,
-        output);
+        output, span);
     return;
   }
   Shape intermediate_shape{32};
@@ -924,7 +973,7 @@ void dispatch_column_reduce(
   array intermediate(std::move(intermediate_shape), out.dtype(), nullptr, {});
   dispatch_column_pass(
       in, intermediate, shape, strides, plan.shape, plan.strides, ColumnPass::TwoPass, operation, dtype,
-      output);
+      output, span);
   // Consume the completed native partials, preserving the upstream second pass.
   dispatch_column_pass(
       intermediate, out, {}, {}, {32}, {int64_t(out.size())}, ColumnPass::Looped, operation, output,
@@ -2949,9 +2998,10 @@ void Arange::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (!dtype || out.dtype() == bool_ || out.dtype() == complex64) {
     throw std::invalid_argument("CrossTL Arange does not support this dtype.");
   }
-  if (out.size() > 65535) {
+  // dispatch_arange splits integer aranges into exact launches.
+  if (issubdtype(out.dtype(), floating) && out.size() > 65535) {
     throw std::invalid_argument(
-        "CrossTL Arange currently supports at most 65535 elements.");
+        "CrossTL floating-point Arange currently supports at most 65535 elements.");
   }
   out.set_data(allocator::malloc(out.nbytes()));
   if (out.size() == 0) {

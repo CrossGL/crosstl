@@ -280,3 +280,40 @@ def test_runtime_prefers_the_installed_family_over_lazy_aranges():
     assert not lazy(host, "arangebool_")
     host.aranges = None
     assert not lazy(host, "arangeint8")
+
+
+@pytest.mark.parametrize("dtype", (*NARROW, "int32", "uint32", "int64", "uint64"))
+def test_backend_splits_integer_aranges_into_exact_launches(dtype):
+    source = (ROOT / "demos/integrations/mlx/portable_host/backend.cpp").read_text()
+    start = source.index("void dispatch_arange(")
+    body = source[start : source.index("\n}\n", start)]
+    # Each launch covers at most 65,535 elements from element ``first`` and
+    # starts at start + first * step, wrapped to the element width.
+    for text in (
+        "for (uint64_t first = 0; first < count; first += 65535)",
+        "if constexpr (std::is_integral_v<T>)",
+        "first * uint64_t(static_cast<Unsigned>(step))",
+        '{"out", dtype, out.data<T>() + first, size, 1}',
+        "elementwise_launch(size)",
+    ):
+        assert text in body, text
+    start = source.index("void Arange::eval_gpu(")
+    body = source[start : source.index("\n}\n", start)]
+    assert "issubdtype(out.dtype(), floating) && out.size() > 65535" in body
+    # The wrapped base reproduces the single launch's wrapped products.
+    kind = np.dtype(dtype)
+    unsigned = np.dtype(kind.str.replace("i", "u"))
+    first_value, step = np.array([-7, 3], dtype=np.int64).astype(kind)
+    count, first = 3 * 65535 + 17, 65535 * 2
+    with np.errstate(over="ignore"):
+        whole = first_value + np.arange(count).astype(kind) * step
+        base = (
+            (
+                np.uint64(first_value.astype(unsigned))
+                + np.uint64(first) * np.uint64(step.astype(unsigned))
+            )
+            .astype(unsigned)
+            .view(kind)
+        )
+        part = base + np.arange(count - first).astype(kind) * step
+    assert np.array_equal(part, whole[first:])

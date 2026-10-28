@@ -591,6 +591,11 @@ UPSTREAM_TESTS = (
         "test_reduce.TestReduce.test_axis_permutation_sums",
         "test_reduce.TestReduce.test_expand_sums",
         "test_reduce.TestReduce.test_row_reduce_negative_stride",
+        # These reach integer aranges of more than 65,535 elements in exact
+        # parts, and column spans of more than 65,535 workgroups split over
+        # one more outer launch axis.
+        "test_reduce.TestReduce.test_col_reduce_negative_stride",
+        "test_reduce.TestReduce.test_many_reduction_axes",
         "test_reduce.TestReduce.test_dtypes",
         "test_reduce.TestReduce.test_sum_bool",
         "test_reduce.TestReduce.test_edge_case",

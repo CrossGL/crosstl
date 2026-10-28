@@ -187,10 +187,15 @@ def test_partition_sums_accept_their_16_bit_launches(dtype):
         column_small_layout.signature("col_reduce_small_1_reduce_andint8")
 
 
-def _view(shape, strides, rows, columns):
-    """A float32 launch over an explicit outer view of ``rows`` by ``columns``."""
+def _view(shape, strides, rows, columns, span=None):
+    """A float32 launch over an explicit outer view of ``rows`` by ``columns``.
+
+    The rows step by ``span``, the whole column span, when an outer axis
+    splits it into parts of ``columns``.
+    """
+    span = columns if span is None else span
     extent = columns + sum((size - 1) * step for size, step in zip(shape, strides))
-    extent += (rows - 1) * columns
+    extent += (rows - 1) * span
     data = {
         "in": ("float32", [1.0] * extent),
         "out": ("float32", [0.0] * (columns * math.prod(shape))),
@@ -200,7 +205,7 @@ def _view(shape, strides, rows, columns):
         "strides": ("int64", list(strides)),
         "ndim": ("int32", [len(shape)]),
         "reduce_shape": ("int32", [rows]),
-        "reduce_strides": ("int64", [columns]),
+        "reduce_strides": ("int64", [span]),
         "reduce_ndim": ("int32", [1]),
         "non_col_reductions": ("uint64", [1]),
     }
@@ -247,6 +252,35 @@ def test_validate_accepts_reduction_strides_past_one_axis_bound():
     assert metadata["reduce_strides"] == [65536]
 
 
+def test_validate_accepts_a_column_span_split_one_launch_cannot_cover(monkeypatch):
+    # backend.cpp split_column_span: with 6 workgroups per launch axis, a
+    # 256-column span runs as 2 parts of 128 columns on an innermost outer
+    # axis of stride 128, while the 3 rows still step by the whole span.
+    monkeypatch.setattr(column_reduction_layout, "MAX_GROUPS", 6)
+    buffers, count, _ = _view((3, 2), (768, 128), 3, 128, span=256)
+    assert count == 3 * 3 * 256 == buffers["in"].count
+    metadata = column_small_layout.validate(ENTRY, buffers, count, _launch(128, 3, 6))
+    assert metadata["reduce_strides"] == [256]
+    assert metadata["shape"] == [3, 2] and metadata["strides"] == [768, 128]
+
+
+@pytest.mark.parametrize("fault", ["unneeded", "parts", "part-stride", "remainder"])
+def test_validate_rejects_column_span_splits_that_change_the_view(monkeypatch, fault):
+    if fault != "unneeded":
+        monkeypatch.setattr(column_reduction_layout, "MAX_GROUPS", 6)
+    shape, strides, span = (3, 2), [768, 128], 256
+    if fault == "parts":
+        shape = (3, 3)
+    elif fault == "part-stride":
+        strides[-1] = 64
+    elif fault == "remainder":
+        strides[0], span = 960, 320
+    buffers, count, _ = _view(shape, strides, 3, 128, span=span)
+    launch = _launch(128, 3, math.prod(shape))
+    with pytest.raises(ValueError, match="span split"):
+        column_small_layout.validate(ENTRY, buffers, count, launch)
+
+
 def test_validate_bounds_the_column_axis_of_the_launch(monkeypatch):
     # 2,097,152 columns need 16,384 workgroups of 32 lanes of four columns;
     # with MAX_GROUPS lowered below that, the column axis bounds the launch.
@@ -290,6 +324,33 @@ def test_backend_bounds_column_passes_by_elements_and_workgroups():
     assert body.index("const bool column_plan =") < refusal
     assert refusal < body.index("in = dense_input(in);")
     assert "row and column reductions support" not in source
+
+
+def test_backend_splits_column_spans_one_launch_axis_cannot_cover():
+    source = Path(column_small_layout.__file__).with_name("backend.cpp").read_text()
+    start = source.index("int64_t split_column_span(")
+    body = source[start : source.index("\n}\n", start)]
+    # Only a span of more than 65,535 workgroups splits, into equal parts of
+    # whole workgroups on one more, innermost outer axis of stride ``part``.
+    for text in (
+        "if ((columns + per_group - 1) / per_group <= 65535) {",
+        "columns % parts == 0 && part % per_group == 0 && part / per_group <= 65535",
+        "shape.push_back(int(parts));",
+        "strides.push_back(int64_t(part));",
+    ):
+        assert text in body, text
+    start = source.index("void dispatch_column_reduce(")
+    body = source[start : source.index("\n}\n", start)]
+    # Four columns per lane and 32 lanes for strided_reduce_small, 32 columns
+    # per workgroup for the looped and two-pass kernels.
+    assert "split_column_span(shape, strides, stride, 128)" in body
+    assert "split_column_span(shape, strides, stride, 32)" in body
+    start = source.index("void dispatch_column_pass(")
+    body = source[start : source.index("\n}\n", start)]
+    assert (
+        "int64_t reduction_stride = column_span ? column_span : reduce_strides.back();"
+        in body
+    )
 
 
 def test_package_config_translates_one_entry_at_its_threadgroup(tmp_path):

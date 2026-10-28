@@ -113,13 +113,29 @@ def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
         not 1 <= size <= 65535
         or not 1 <= stride <= MAX_ELEMENTS
         or reductions[-1] != size
-        or steps[-1] != stride
         or metadata["non_col_reductions"] != [non_columns]
         or total * output_size != logical_size
     ):
         raise ValueError(
             "Native column reduction shape does not match its logical size"
         )
+    if steps[-1] != stride:
+        # backend.cpp split_column_span: a span of more column workgroups than
+        # one launch axis carries runs as k equal parts on one more, innermost
+        # outer axis of stride ``stride``, while the rows still step by the
+        # whole span. Only a span one launch cannot cover is split.
+        parts, remainder = divmod(steps[-1], stride)
+        if (
+            remainder
+            or parts < 2
+            or ndim < 1
+            or shape[-1] != parts
+            or strides[-1] != stride
+            or -(-steps[-1] // 32) <= MAX_GROUPS
+        ):
+            raise ValueError(
+                "Native column reduction span split does not match its rows"
+            )
     if outer > MAX_GROUPS:
         raise ValueError("Native column reduction launch exceeds 65535 workgroups")
     extent = stride + sum(

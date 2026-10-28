@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 547
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 549
     assert all(
         name.startswith(
             (
@@ -174,7 +174,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.upstream_tests("directx")
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 542 and not set(opengl) & set(excluded)
+    assert len(opengl) == 544 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -230,7 +230,7 @@ def test_upstream_op_groups_partition_the_inventory():
     assert len(combined) == len(set(combined))
     assert all(name.startswith("test_fast.") for name in ops.GROUPS["normalization"])
     assert len(ops.GROUPS["normalization"]) == 9
-    assert len(ops.GROUPS["reductions"]) == 9
+    assert len(ops.GROUPS["reductions"]) == 11
     assert not set(ops.GROUPS["reductions"]) & {
         name for tests in ops.GROUP_TESTS.values() for name in tests
     }
