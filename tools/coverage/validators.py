@@ -309,10 +309,9 @@ METAL_ENTRIES = {
 }
 
 
-def _metal(name: str, stage: str, scratch: str) -> Verdict:
-    """Compile a Metal probe to textual AIR and require an entry point of ``stage``: the compiler accepts a library
-    of plain functions, which no pipeline can run."""
-    compiled = _run(
+def _air(name: str, scratch: str) -> Verdict:
+    """Compile the Metal source ``name`` in ``scratch`` to textual AIR in ``probe.ll``."""
+    return _run(
         [
             *command("metal"),
             f"-std={METAL_STANDARD}",
@@ -324,6 +323,22 @@ def _metal(name: str, stage: str, scratch: str) -> Verdict:
         ],
         scratch,
     )
+
+
+def air(source: str) -> str:
+    """Metal ``source`` as textual AIR, or an empty string when the Metal compiler is not installed or rejects it."""
+    if not command("metal"):
+        return ""
+    with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
+        Path(scratch, "probe.metal").write_text(source)
+        compiled = _air("probe.metal", scratch)
+        return Path(scratch, "probe.ll").read_text() if compiled.accepted else ""
+
+
+def _metal(name: str, stage: str, scratch: str) -> Verdict:
+    """Compile a Metal probe to textual AIR and require an entry point of ``stage``: the compiler accepts a library
+    of plain functions, which no pipeline can run."""
+    compiled = _air(name, scratch)
     if not compiled.accepted:
         return compiled
     air = Path(scratch, "probe.ll").read_text()

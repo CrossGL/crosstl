@@ -17,7 +17,7 @@ translation must compute what the native probe computes: Metal, GLSL and
 SPIR-V directly, and HLSL, Slang and WGSL as the SPIR-V their reference
 compilers produce. A graphics probe's translation must keep the built-ins and
 decorations, such as ``flat``, that the feature needs in the SPIR-V its
-compiler produces.
+compiler produces, or in the AIR for Metal.
 `COVERAGE.md <https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md>`_
 lists the score and every gap for each language and direction, and each row
 with gaps has an open issue labelled ``coverage``.

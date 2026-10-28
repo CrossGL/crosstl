@@ -80,7 +80,7 @@ def test_a_translation_that_cannot_be_lowered_is_left_to_its_validator(
 ):
     monkeypatch.setattr(validators, "can_lower", lambda language: can_lower)
     monkeypatch.setattr(validators, "lower", lambda *args, **kwargs: lowered)
-    assert decorations.lost(DEPTH, "metal", "fragment float probe() {}") == ""
+    assert decorations.lost(DEPTH, "hlsl", "float PSMain() : SV_Depth;") == ""
 
 
 def test_opengl_glsl_is_lowered_with_the_vulkan_names_of_the_vertex_and_instance_index():
@@ -99,3 +99,72 @@ def test_glslang_lowers_an_opengl_vertex_index_read():
     )
     assembly, log = validators.lower("glsl", source, stage="vertex", raw_ids=False)
     assert "BuiltIn VertexIndex" in assembly, log
+
+
+INVARIANT = Feature(
+    "metal",
+    "graphics",
+    "invariant-position",
+    None,
+    group="Decoration.Invariant",
+    stage="vertex",
+)
+
+
+def test_a_metal_translation_must_keep_the_air_attribute_of_each_anchor(monkeypatch):
+    air = {"source": ""}
+    monkeypatch.setattr(validators, "air", lambda source: air["source"])
+    # Without the Metal compiler the translation is only validated.
+    assert decorations.lost(INVARIANT, "metal", "vertex") == ""
+    air["source"] = '!5 = !{i32 0, !"air.position", !"air.invariant"}\n'
+    assert decorations.lost(INVARIANT, "metal", "vertex") == ""
+    air["source"] = '!5 = !{i32 0, !"air.position"}\n'
+    assert decorations.lost(INVARIANT, "metal", "vertex") == (
+        "the translation loses Decoration.Invariant"
+    )
+    # A capability has no Metal attribute, so only the decoration is checked.
+    air["source"] = '!7 = !{i32 1, !"air.sample", !"air.perspective"}\n'
+    assert decorations.lost(SAMPLE, "metal", "fragment") == ""
+    air["source"] = '!7 = !{i32 1, !"air.sampler"}\n'
+    assert decorations.lost(SAMPLE, "metal", "fragment") == (
+        "the translation loses Decoration.Sample"
+    )
+
+
+def test_a_webgl_translation_is_lowered_as_glsl_es_3_10(monkeypatch):
+    calls = []
+
+    def lower(language, source, entry, stage, **options):
+        calls.append((language, source.splitlines()[0], stage))
+        return "OpMemberDecorate %gl_PerVertex 0 Invariant\n", ""
+
+    monkeypatch.setattr(validators, "can_lower", lambda language: language == "glsl")
+    monkeypatch.setattr(validators, "lower", lower)
+    webgl = "#version 300 es\ninvariant gl_Position;\nvoid main() {}\n"
+    assert decorations.lost(INVARIANT, "webgl", webgl) == ""
+    assert calls == [("glsl", "#version 310 es", "vertex")]
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_records_the_invariant_attribute_in_air():
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "struct Out { float4 position [[position, invariant]]; };\n"
+        "vertex Out probe() { Out out; out.position = float4(1.0); return out; }\n"
+    )
+    assert decorations.lost(INVARIANT, "metal", source) == ""
+    assert decorations.lost(INVARIANT, "metal", source.replace(", invariant", "")) == (
+        "the translation loses Decoration.Invariant"
+    )
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_a_glsl_es_3_00_vertex_shader():
+    source = (
+        "#version 300 es\ninvariant gl_Position;\nin vec4 position;\n"
+        "void main() {\n    gl_Position = position + vec4(float(gl_VertexID));\n}\n"
+    )
+    assert decorations.lost(INVARIANT, "webgl", source) == ""
+    assert decorations.lost(
+        INVARIANT, "webgl", source.replace("invariant gl_Position;\n", "")
+    ) == ("the translation loses Decoration.Invariant")
