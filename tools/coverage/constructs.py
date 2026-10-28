@@ -575,6 +575,16 @@ def _curated() -> list[Construct]:
             stage="vertex",
         ),
         c("graphics", "invariant-position", "Decoration.Invariant", stage="vertex"),
+        c("graphics", "primitive-id", "BuiltIn.PrimitiveId", stage="fragment"),
+        c(
+            "graphics",
+            "sample-index",
+            "BuiltIn.SampleId",
+            "Capability.SampleRateShading",
+            stage="fragment",
+        ),
+        c("graphics", "sample-mask-input", "BuiltIn.SampleMask", stage="fragment"),
+        c("graphics", "sample-mask", "BuiltIn.SampleMask", stage="fragment"),
         c(
             "resource",
             "uniform-struct",

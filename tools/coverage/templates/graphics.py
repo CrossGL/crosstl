@@ -36,6 +36,7 @@ from . import (
     orientation,
     packing,
     portability,
+    rasterization,
     records,
     relations,
     rows,
@@ -120,6 +121,7 @@ GLSL = {
     **fragments.GLSL,
     **interfaces.GLSL,
     **vertices.GLSL,
+    **rasterization.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -259,6 +261,7 @@ HLSL = {
     **fragments.HLSL,
     **interfaces.HLSL,
     **vertices.HLSL,
+    **rasterization.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -443,6 +446,7 @@ METAL = {
     **fragments.METAL,
     **interfaces.METAL,
     **vertices.METAL,
+    **rasterization.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -665,6 +669,7 @@ WGSL = {
     **fragments.WGSL,
     **interfaces.WGSL,
     **vertices.WGSL,
+    **rasterization.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
@@ -757,6 +762,7 @@ SLANG = {
     **fragments.SLANG,
     **interfaces.SLANG,
     **vertices.SLANG,
+    **rasterization.SLANG,
     "vertex": _slang(HLSL["vertex"], "vertex"),
     "fragment": _slang(HLSL["fragment"], "fragment"),
     # The stage attribute goes on the entry point, after the output struct.

@@ -33,6 +33,9 @@ AIR = {
     "BuiltIn.InstanceIndex": "air.instance_id",
     "BuiltIn.PointSize": "air.point_size",
     "BuiltIn.ClipDistance": "air.clip_distance",
+    "BuiltIn.PrimitiveId": "air.primitive_id",
+    "BuiltIn.SampleId": "air.sample_id",
+    "BuiltIn.SampleMask": "air.sample_mask",
     "Decoration.Flat": "air.flat",
     "Decoration.NoPerspective": "air.no_perspective",
     "Decoration.Centroid": "air.centroid",
@@ -40,6 +43,9 @@ AIR = {
     "Decoration.Invariant": "air.invariant",
     "Decoration.Location": "air.render_target",
 }
+# The attributes that AIR names apart when a fragment function reads them: a ``[[sample_mask]]`` input is
+# ``!"air.sample_mask_in"``. A feature whose name ends in ``-input`` reads its built-in.
+AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
 
 _ESSL_300 = re.compile(r"\A(\s*#version\s+)300(\s+es\b)")
 
@@ -52,8 +58,10 @@ def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
     for anchor in feature.group.split():
         kind, _, name = anchor.partition(".")
         if language == "metal":
-            if anchor in AIR:
-                wanted.append((anchor, rf'!"{re.escape(AIR[anchor])}"'))
+            air = AIR_INPUTS if feature.name.endswith("-input") else {}
+            attribute = air.get(anchor, AIR.get(anchor))
+            if attribute:
+                wanted.append((anchor, rf'!"{re.escape(attribute)}"'))
         elif kind in _PATTERNS:
             wanted.append((anchor, _PATTERNS[kind].format(name=re.escape(name))))
     return wanted

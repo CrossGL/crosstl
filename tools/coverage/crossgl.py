@@ -78,6 +78,7 @@ from .templates.portability import (
     constants,
     intrinsic_names,
 )
+from .templates.rasterization import CROSSGL as RASTERIZATION
 from .templates.records import CROSSGL as RECORDS_CROSSGL
 from .templates.relations import CROSSGL as RELATIONS
 from .templates.rows import CROSSGL as ROWS_CROSSGL
@@ -629,6 +630,7 @@ CONSTRUCTS: dict[str, Template] = {
     **FRAGMENTS,
     **INTERFACES,
     **VERTICES,
+    **RASTERIZATION,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
