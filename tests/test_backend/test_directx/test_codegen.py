@@ -1251,7 +1251,8 @@ def test_codegen_canonicalizes_fragment_barycentric_semantics():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "float3 bary : SV_Barycentrics" in regenerated_hlsl
-    assert "noperspective float3 affineBary : SV_Barycentrics" in regenerated_hlsl
+    # Index 1: DXC rejects two SV_Barycentrics inputs with the same semantic index.
+    assert "noperspective float3 affineBary : SV_Barycentrics1" in regenerated_hlsl
     assert "gl_BaryCoord" not in regenerated_hlsl
 
 

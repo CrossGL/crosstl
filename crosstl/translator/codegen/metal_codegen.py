@@ -1571,6 +1571,8 @@ class MetalCodeGen(
             "gl_FragCoord": "position",
             "gl_BaryCoordEXT": "barycentric_coord",
             "gl_BaryCoordNoPerspEXT": "barycentric_coord",
+            "gl_BaryCoordNV": "barycentric_coord",
+            "gl_BaryCoordNoPerspNV": "barycentric_coord",
             "gl_FrontFacing": "front_facing",
             "gl_PointCoord": "point_coord",
             "gl_SampleID": "sample_id",
@@ -3959,7 +3961,7 @@ class MetalCodeGen(
         semantic = self.semantic_from_node(node)
         if semantic is None:
             return None
-        if str(semantic).lower() == "gl_barycoordnoperspext":
+        if str(semantic).lower() in {"gl_barycoordnoperspext", "gl_barycoordnoperspnv"}:
             return "center_no_perspective"
         return None
 
@@ -17108,6 +17110,11 @@ class MetalCodeGen(
         }:
             return ""
         if semantic:
+            if shader_type == "fragment" and node is not None:
+                # A no-perspective barycentric input takes [[center_no_perspective]], as a member does.
+                implied = self.metal_semantic_implied_interpolation_attribute(node)
+                if implied is not None:
+                    return f"{self.map_semantic(semantic)} [[{implied}]]"
             return self.map_semantic(semantic)
         if shader_type in {
             "vertex",

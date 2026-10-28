@@ -66,6 +66,11 @@ from .fragment_colour_outputs import (
     FragmentColourOutputUnsupportedError,
     name_fragment_colour_outputs,
 )
+from .fragment_rate_barycentrics import (
+    MetalBarycentricsUnsupportedError,
+    lower_shading_rate_flags,
+    refuse_mixed_metal_barycentrics,
+)
 from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
@@ -203,6 +208,7 @@ __all__ = [
     "InterfaceBlockInstanceUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "LocalStructUnsupportedError",
+    "MetalBarycentricsUnsupportedError",
     "MetalRayDispatchUnsupportedError",
     "MetalRuntimeTypeUnsupportedError",
     "NarrowIntegerUnsupportedError",
@@ -341,7 +347,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Fragment built-in inputs read by name are passed to the HLSL and MSL entry point and its helpers
     (:mod:`.builtin_input_reads`). For them, the built-in outputs a vertex or fragment stage writes by name and its
     ``in``/``out`` variables become stage-level interface variables, and ``int`` ones carrying a ``uint`` system value
-    are retyped with conversions at each use (:mod:`.builtin_output_writes`).
+    are retyped with conversions at each use (:mod:`.builtin_output_writes`). The GLSL shading-rate flag constants
+    become their values for every target but GLSL, and a Metal fragment stage reading barycentrics with and without
+    perspective is refused (:mod:`.fragment_rate_barycentrics`).
     Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
@@ -395,6 +403,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
+    lower_shading_rate_flags(program, report.target)
+    refuse_mixed_metal_barycentrics(program, report.target)
     declare_builtin_outputs(program, report.target)
     pass_builtin_inputs(program, report.target)
     name_fragment_colour_outputs(program, report.target)
