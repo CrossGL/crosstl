@@ -230,6 +230,9 @@ def _build_runtime_package(
         )
     else:
         assert "float cast_to_float_float(float val)" in generated
+        # GLSL forbids writes to gl_GlobalInvocationID, so the kernel's
+        # ``index *= N`` works on a copy of the input.
+        assert "uint index_copy = index;" in generated
         assert (
             "dst[(index_copy + uint(i))] = "
             "cast_to_float_float(src[(index_copy + uint(i))]);" in generated

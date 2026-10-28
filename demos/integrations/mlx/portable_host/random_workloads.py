@@ -2,6 +2,7 @@
 
 import math
 
+from demos.integrations.mlx.portable_host.random_layout import RandomOutputLayout
 from demos.integrations.mlx.random_audit import threefry
 
 LAYOUTS = ("single", "contiguous", "transposed", "broadcast", "strided", "reversed")
@@ -26,10 +27,14 @@ def cases():
                 "count": count,
             }
 
+    # 65536 and 131072 word pairs exceed one portable workgroup-count axis, so
+    # their launches split the pair axis into exact groups of height 2 and 4.
     for layout, count in (
         ("single", 8192),
         ("single", 32768),
         ("single", 65535),
+        ("single", 65536),
+        ("single", 131072),
         ("contiguous", 32768),
         ("strided", 32768),
         ("broadcast", 32768),
@@ -151,9 +156,12 @@ def validate(np, records, trace, *, native):
                 key_count = 3 if case.get("layout") not in (None, "single") else 1
                 expected_bytes = reference.size * 4
                 metadata = event["randomMetadata"]
+                layout = RandomOutputLayout(key_count, expected_bytes // key_count)
                 if (
                     metadata["keyCount"] != key_count
                     or event["threads"] != expected_bytes
+                    or event.get("workgroupCount") != layout.workgroup_count
+                    or event.get("workgroupSize") != layout.workgroup_size
                 ):
                     raise ValueError("Random workload key or output allocation differs")
                 if case["kind"] == "split":
