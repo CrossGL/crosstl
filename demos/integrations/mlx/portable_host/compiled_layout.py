@@ -113,13 +113,15 @@ def parse(entry, source):
         parameters.append((match["name"], TYPES[match["type"]], 0, int(match["slot"])))
         index += 1
     strided = kind.startswith("strided")
-    names = {"in_strides"} if strided and parameters else set()
-    if names:
+    if strided and parameters:
+        # build_kernel binds in_strides only when some input is not a scalar;
+        # a kernel whose inputs are all scalars reads each as x[0].
         match = _SCALARS["in_strides"][0].fullmatch(lines[index])
-        if match is None:
+        if match is not None:
+            parameters.append(("in_strides", "int64", 0, int(match[1])))
+            index += 1
+        elif strided_inputs(source):
             raise ValueError("Compiled source does not bind its input strides")
-        parameters.append(("in_strides", "int64", 0, int(match[1])))
-        index += 1
     first_output = len(parameters)
     while index < len(lines) and (match := _OUTPUT.fullmatch(lines[index])):
         parameters.append((match["name"], TYPES[match["type"]], 1, int(match["slot"])))
@@ -247,10 +249,18 @@ def validate(entry, source, parameters, supplied, threads, execution):
     ):
         raise ValueError("Compiled launch differs from its one-thread groups")
     work = work_per_thread(source)
-    if (kind == "contiguous_n") != (work > 1) or (
-        kind.startswith("strided")
-        and work != (2 if kind == "strided_dynamic" or int(kind[-1]) > 3 else 1)
-    ):
+    # Only contiguous_n of the contiguous kernels covers several elements; the
+    # strided kernels of more than three dimensions, and the dynamic one, cover two.
+    expected_work = (
+        work > 1
+        if kind == "contiguous_n"
+        else (
+            work == 1
+            if kind == "contiguous"
+            else work == (2 if kind == "strided_dynamic" or int(kind[-1]) > 3 else 1)
+        )
+    )
+    if not expected_work:
         raise ValueError("Compiled work per thread differs from its variant")
     vectors = [name for name, _, direction in parameters if direction == 0]
     outputs = [name for name, _, direction in parameters if direction == 1]

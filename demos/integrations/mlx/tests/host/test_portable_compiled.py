@@ -89,6 +89,38 @@ def test_parse_reads_exactly_build_kernel_parameters():
     ] == ["contiguous", "contiguous_n", "strided_1", "strided_7", "strided_dynamic"]
 
 
+def test_parse_binds_input_strides_only_for_non_scalar_inputs():
+    # mx.compile of broadcast_to(a, (1,)) + itself: one scalar input, read as
+    # A[0], so build_kernel emits no in_strides parameter.
+    entry = "compiled_0123456789abcdef_strided_1"
+    source = layout.PREAMBLE + f"""[[host_name("{entry}")]]
+[[kernel]] void {entry}(
+    device const float* A [[buffer(0)]],
+    device float* B [[buffer(1)]],
+    constant const int* output_shape [[buffer(2)]],
+    uint3 pos [[thread_position_in_grid]],
+    uint3 grid [[threads_per_grid]]) {{
+  constexpr int N_ = 1;
+  uint index = pos.x + grid.x * (pos.y + uint(grid.y) * pos.z);
+  float tmp_A = A[0];
+  float tmp_B = Add()(tmp_A, tmp_A);
+  B[index] = tmp_B;
+}}
+"""
+    assert layout.parse(entry, source) == (
+        ("A", "float32", 0),
+        ("B", "float32", 1),
+        ("output_shape", "int32", 0),
+    )
+    assert layout.strided_inputs(source) == ()
+    # A strided read still needs its strides.
+    unbound = STRIDED_SOURCE.replace(
+        "    constant const int64_t* in_strides [[buffer(2)]],\n", ""
+    )
+    with pytest.raises(ValueError, match="input strides"):
+        layout.parse(STRIDED, unbound)
+
+
 @pytest.mark.parametrize(
     "entry",
     (
@@ -236,6 +268,24 @@ def test_validate_accepts_the_launches_eval_gpu_makes():
         "shape": [4, 3],
         "strides": {"A": [1, 4], "B": [0, 1]},
     }
+
+
+def test_work_per_thread_follows_each_variant():
+    # Compiled::eval_gpu covers two elements per thread in the strided kernels
+    # of more than three dimensions and one in those of at most three.
+    _, buffers = strided_buffers()
+    parameters = layout.parse(STRIDED, STRIDED_SOURCE)
+    arguments = (parameters, by_name(buffers), 12, execution((3, 4, 1)))
+    two = STRIDED_SOURCE.replace("constexpr int N_ = 1;", "constexpr int N_ = 2;")
+    with pytest.raises(ValueError, match="work per thread"):
+        layout.validate(STRIDED, two, *arguments)
+    wide = STRIDED.replace("strided_2", "strided_4")
+    four = two.replace(STRIDED, wide)
+    # The work check passes, and the two-dimensional buffers fail the rank check.
+    with pytest.raises(ValueError, match="rank differs"):
+        layout.validate(wide, four, *arguments)
+    with pytest.raises(ValueError, match="work per thread"):
+        layout.validate(wide, four.replace("N_ = 2;", "N_ = 1;"), *arguments)
 
 
 @pytest.mark.parametrize(
