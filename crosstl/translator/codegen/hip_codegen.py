@@ -3529,7 +3529,7 @@ class HipCodeGen(
             # initializer, but not a mutable host variable.
             declaration = f"const {declaration}"
 
-        qualifiers = self.variable_memory_qualifiers(node)
+        qualifiers = self.variable_memory_qualifiers(node, declaration)
         if qualifiers:
             declaration = f"{' '.join(qualifiers)} {declaration}"
 
@@ -3538,11 +3538,18 @@ class HipCodeGen(
 
         return declaration
 
-    def variable_memory_qualifiers(self, node: VariableNode):
+    def variable_memory_qualifiers(self, node: VariableNode, declaration=""):
         qualifiers = []
         for qualifier in getattr(node, "qualifiers", []) or []:
             qualifier_name = str(qualifier).lower()
-            if "workgroup" in qualifier_name or "shared" in qualifier_name:
+            if qualifier_name == "const":
+                # Resource pointers already carry const from
+                # apply_resource_memory_qualifiers_to_declaration.
+                if not declaration.startswith("const "):
+                    qualifiers.append("const")
+            elif qualifier_name == "static":
+                qualifiers.append("static")
+            elif "workgroup" in qualifier_name or "shared" in qualifier_name:
                 qualifiers.append("__shared__")
             elif "uniform" in qualifier_name:
                 qualifiers.append("__constant__")
@@ -3601,7 +3608,13 @@ class HipCodeGen(
         declaration = self.apply_resource_memory_qualifiers_to_declaration(
             declaration, node.name, node
         )
-        qualifiers = self.variable_memory_qualifiers(node)
+        # The match arms assign the variable after this declaration, so it
+        # cannot be const.
+        qualifiers = [
+            qualifier
+            for qualifier in self.variable_memory_qualifiers(node, declaration)
+            if qualifier != "const"
+        ]
         if qualifiers:
             declaration = f"{' '.join(qualifiers)} {declaration}"
 

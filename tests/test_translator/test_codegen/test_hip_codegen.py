@@ -14647,3 +14647,64 @@ def test_hip_half_vector_constructor_splats_a_half_cast():
 
     assert "return cgl_cgl_half3_splat(__float2half(x));" in hip_code
     assert "cgl_make_half3(__float2half(x))" not in hip_code
+
+
+def test_hip_keeps_static_and_const_on_hlsl_constants(tmp_path):
+    import crosstl
+
+    shader = tmp_path / "constants.hlsl"
+    shader.write_text("""
+RWStructuredBuffer<float> results : register(u0);
+static const int N = 3;
+[numthreads(1, 1, 1)]
+void main() {
+    const float scale = 2.0;
+    float a[N] = { 1.0, 2.0, 3.0 };
+    results[0] = a[N - 1] * scale;
+}
+""")
+    hip_code = crosstl.translate(str(shader), backend="hip")
+
+    assert "static const int N = 3;" in hip_code
+    assert "\nint N = 3;" not in hip_code
+    assert "const float scale = 2.0f;" in hip_code
+
+
+def test_hip_const_resource_pointer_is_not_qualified_twice():
+    source_code = """
+    shader ReadOnly {
+        compute {
+            const buffer float* values;
+            void main() {
+                float x = values[0];
+            }
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "const const" not in hip_code
+
+
+def test_hip_const_match_expression_local_stays_assignable():
+    source_code = """
+    shader ConstMatch {
+        compute {
+            buffer int* outv;
+            void main() {
+                int mode = outv[1];
+                const int value = match mode {
+                    0 => 10,
+                    _ => -1,
+                };
+                outv[0] = value;
+            }
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "const int value;" not in hip_code
+    assert "int value;" in hip_code
+    assert "value = 10;" in hip_code
+    assert "value = -1;" in hip_code
