@@ -367,3 +367,47 @@ def test_cli_allows_drift_only_when_asked(tmp_path, monkeypatch):
     proof.main(argv)
     proof.main([*argv, "--allow-drift"])
     assert seen == [False, True]
+
+
+def test_matrix_controls_check_sources_against_their_bundle_records(
+    tmp_path, monkeypatch
+):
+    # In report mode a drifted record keeps the contract's pin apart from its
+    # own bytes; the controls run the exported bytes the record names.
+    contract = {
+        "entries": [
+            {
+                "entryPoint": f"{family}_{dtype}",
+                "variant": variant,
+                "dataType": dtype,
+                "groupSize": group,
+                "bitWidth": bits,
+                "sha256": "0" * 64,
+            }
+            for family, (variant, group, bits) in proof.MATRIX_VARIANTS.items()
+            for dtype in proof.DATA_TYPES
+        ]
+    }
+    source = tmp_path / "kernel.metal"
+    source.write_text("kernel", encoding="utf-8")
+    artifacts = {
+        entry["entryPoint"]: {"path": str(source), "sha256": proof._sha256(source)}
+        for entry in contract["entries"]
+    }
+
+    class Compiled(Exception):
+        pass
+
+    def compile_source(*_args, **_kwargs):
+        raise Compiled
+
+    monkeypatch.setattr(proof, "_compile_source", compile_source)
+    with pytest.raises(Compiled):
+        proof._run_matrix_controls(
+            contract, artifacts, tmp_path, tmp_path / "out", None, None, {}
+        )
+    artifacts["wide_float"]["sha256"] = "1" * 64
+    with pytest.raises(ValueError, match="Matrix source changed"):
+        proof._run_matrix_controls(
+            contract, artifacts, tmp_path, tmp_path / "out", None, None, {}
+        )

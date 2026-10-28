@@ -442,6 +442,34 @@ def test_codegen_unary_rhs_after_newline_from_crt_royale_roundtrip():
     assert "-0.0597255978950933" in glsl
 
 
+def test_codegen_assignment_operand_keeps_grouping():
+    # An assignment used as an operand of a larger expression is itself an expression
+    # whose value is the assigned value; dropping its parentheses made the surrounding
+    # operator bind to the assignment's right-hand side instead.
+    code = textwrap.dedent("""
+        #version 450 core
+
+        void main() {
+            float b = 1.0;
+            float c = (b = b + 1.0) * 2.0;
+            float d = (b += 1.0) + 1.0;
+            b = 4.0;
+            gl_Position = vec4(b + c + d);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "(b = (b + 1.0)) * 2.0" in crossgl
+    assert "(b += 1.0) + 1.0" in crossgl
+    # A bare assignment statement stays an unparenthesized statement.
+    assert re.search(r"(?m)^\s+b = 4\.0;$", crossgl)
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "(b = (b + 1.0)) * 2.0" in glsl
+    assert "(b += 1.0) + 1.0" in glsl
+    assert re.search(r"(?m)^\s+b = 4\.0;$", glsl)
+
+
 def test_codegen_fragment_roundtrip():
     output = assert_roundtrip(FRAGMENT_GLSL, "fragment", ShaderStage.FRAGMENT)
     lowered = output.lower()

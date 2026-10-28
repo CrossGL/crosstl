@@ -51,6 +51,7 @@ from .c_family_operands import postfix_operand
 from .c_float_literals import c_float_literal_text
 from .c_reference_parameters import (
     is_output_parameter,
+    multi_component_swizzle_arguments,
     overlapping_output_arguments,
     reference_declarator,
 )
@@ -3935,7 +3936,9 @@ class HipCodeGen(
         if object_node is None or components is None or len(components) <= 1:
             return None
 
-        object_info = self.vector_type_info(self.expression_result_type(object_node))
+        object_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if object_info is None:
             return None
         result_type = self.vector_type_for_components(
@@ -4365,7 +4368,7 @@ class HipCodeGen(
                     if result_type is not None:
                         node.expression_type = result_type
                     return fma_call
-        elif func_name in {"dot", "cross", "length", "normalize"}:
+        elif func_name in {"dot", "cross", "distance", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,
@@ -5179,7 +5182,7 @@ class HipCodeGen(
         """Flatten vector arguments passed to HIP make_* constructors."""
         if len(args) == 1:
             arg_type = self.expression_result_type(raw_args[0])
-            if arg_type is not None and not self.vector_type_info(arg_type):
+            if arg_type is not None and not self.swizzle_result_vector_info(arg_type):
                 return args * len(vector_info["components"])
 
         generated_args = []
@@ -5197,7 +5200,9 @@ class HipCodeGen(
                     return generated_args[: len(vector_info["components"])]
                 continue
 
-            arg_info = self.vector_type_info(self.expression_result_type(raw_arg))
+            arg_info = self.swizzle_result_vector_info(
+                self.expression_result_type(raw_arg)
+            )
             if arg_info is None:
                 generated_args.append(arg_expr)
             else:
@@ -5242,7 +5247,9 @@ class HipCodeGen(
             return None
 
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
-        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        vector_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if vector_info is None:
             return None
 
@@ -5384,7 +5391,7 @@ class HipCodeGen(
 
     def require_vector_fract_helper(self, vector_info):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        if component_type not in {"float", "double", "half"}:
             return None
 
         vector_type = vector_info["type"]
@@ -5392,11 +5399,20 @@ class HipCodeGen(
         if helper_name in self.helper_functions:
             return helper_name
 
-        scalar_helper_name = self.require_scalar_fract_helper(component_type)
-        components = [
-            f"{scalar_helper_name}(value.{component})"
-            for component in vector_info["components"]
-        ]
+        # __half has no floor overload, so widen through the float helper.
+        scalar_helper_name = self.require_scalar_fract_helper(
+            "float" if component_type == "half" else component_type
+        )
+        if component_type == "half":
+            components = [
+                f"__float2half({scalar_helper_name}(__half2float(value.{component})))"
+                for component in vector_info["components"]
+            ]
+        else:
+            components = [
+                f"{scalar_helper_name}(value.{component})"
+                for component in vector_info["components"]
+            ]
         helper = (
             f"__device__ inline {vector_type} {helper_name}({vector_type} value)\n"
             "{\n"
@@ -5475,15 +5491,19 @@ class HipCodeGen(
             return self.format_step_component(scalar_type, args[0], args[1])
 
         result_info = value_info or edge_info
-        if result_info["component_type"] not in {"float", "double"}:
+        if result_info["component_type"] not in {"float", "double", "half"}:
             return None
         if not self.compatible_step_operand(edge_info, result_info):
             return None
         if not self.compatible_step_operand(value_info, result_info):
             return None
-        if edge_info is None and not self.compatible_step_scalar(edge_type):
+        if edge_info is None and not self.compatible_step_scalar(
+            edge_type, result_info["component_type"]
+        ):
             return None
-        if value_info is None and not self.compatible_step_scalar(value_type):
+        if value_info is None and not self.compatible_step_scalar(
+            value_type, result_info["component_type"]
+        ):
             return None
 
         helper_name = self.require_vector_step_helper(
@@ -5512,8 +5532,10 @@ class HipCodeGen(
             operand_info["components"]
         ) == len(result_info["components"])
 
-    def compatible_step_scalar(self, type_name):
+    def compatible_step_scalar(self, type_name, result_component_type=None):
         component_type = self.scalar_component_type(type_name)
+        if result_component_type == "half":
+            return component_type in {"half", None}
         return component_type in {"float", "double", None}
 
     def require_vector_step_helper(self, result_info, edge_is_vector, value_is_vector):
@@ -5532,9 +5554,20 @@ class HipCodeGen(
         for component in result_info["components"]:
             edge = f"edge.{component}" if edge_is_vector else "edge"
             value = f"value.{component}" if value_is_vector else "value"
-            components.append(
-                self.format_step_component(result_info["component_type"], edge, value)
-            )
+            if result_info["component_type"] == "half":
+                components.append(
+                    "__float2half("
+                    + self.format_step_component(
+                        "float", f"__half2float({edge})", f"__half2float({value})"
+                    )
+                    + ")"
+                )
+            else:
+                components.append(
+                    self.format_step_component(
+                        result_info["component_type"], edge, value
+                    )
+                )
 
         helper = (
             f"__device__ inline {result_info['type']} {helper_name}"
@@ -5620,7 +5653,7 @@ class HipCodeGen(
 
     def require_vector_mix_helper(self, vector_info, factor_is_vector):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        if component_type not in {"float", "double", "half"}:
             return None
 
         vector_type = vector_info["type"]
@@ -5637,13 +5670,24 @@ class HipCodeGen(
         components = []
         for component in vector_info["components"]:
             factor_component = f"a.{component}" if factor_is_vector else "a"
-            components.append(
-                self.format_mix_component(
-                    f"x.{component}",
-                    f"y.{component}",
-                    factor_component,
+            if component_type == "half":
+                components.append(
+                    "__float2half("
+                    + self.format_mix_component(
+                        f"__half2float(x.{component})",
+                        f"__half2float(y.{component})",
+                        f"__half2float({factor_component})",
+                    )
+                    + ")"
                 )
-            )
+            else:
+                components.append(
+                    self.format_mix_component(
+                        f"x.{component}",
+                        f"y.{component}",
+                        factor_component,
+                    )
+                )
 
         helper = (
             f"__device__ inline {vector_type} {helper_name}"
@@ -5675,7 +5719,7 @@ class HipCodeGen(
                 args[2],
             )
 
-        if vector_info["component_type"] not in {"float", "double"}:
+        if vector_info["component_type"] not in {"float", "double", "half"}:
             return None
         for info in vector_infos:
             if info is None:
@@ -5744,6 +5788,13 @@ class HipCodeGen(
         params = [
             f"{piece['param_type']} arg{index}" for index, piece in enumerate(pieces)
         ]
+
+        def widen(piece, expr):
+            # Half lanes widen to float; int scalars convert implicitly in fmaf.
+            if piece["kind"] == "vector" or piece["param_type"] == "half":
+                return f"__half2float({expr})"
+            return expr
+
         component_args = []
         for component in vector_info["components"]:
             multiply_left = self.vector_operation_piece_param_expr(
@@ -5753,14 +5804,26 @@ class HipCodeGen(
                 pieces[1], 1, component
             )
             addend = self.vector_operation_piece_param_expr(pieces[2], 2, component)
-            component_args.append(
-                self.format_fused_multiply_add_component(
-                    vector_info["component_type"],
-                    multiply_left,
-                    multiply_right,
-                    addend,
+            if vector_info["component_type"] == "half":
+                component_args.append(
+                    "__float2half("
+                    + self.format_fused_multiply_add_component(
+                        "float",
+                        widen(pieces[0], multiply_left),
+                        widen(pieces[1], multiply_right),
+                        widen(pieces[2], addend),
+                    )
+                    + ")"
                 )
-            )
+            else:
+                component_args.append(
+                    self.format_fused_multiply_add_component(
+                        vector_info["component_type"],
+                        multiply_left,
+                        multiply_right,
+                        addend,
+                    )
+                )
 
         helper = (
             f"__device__ inline {vector_info['type']} {helper_name}"
@@ -5813,7 +5876,7 @@ class HipCodeGen(
 
     def require_vector_atan2_helper(self, vector_info):
         component_type = vector_info["component_type"]
-        if component_type not in {"float", "double"}:
+        if component_type not in {"float", "double", "half"}:
             return None
 
         vector_type = vector_info["type"]
@@ -5821,11 +5884,17 @@ class HipCodeGen(
         if helper_name in self.helper_functions:
             return helper_name
 
-        scalar_func = "atan2" if component_type == "double" else "atan2f"
-        components = [
-            f"{scalar_func}(y.{component}, x.{component})"
-            for component in vector_info["components"]
-        ]
+        if component_type == "half":
+            components = [
+                f"__float2half(atan2f(__half2float(y.{component}), __half2float(x.{component})))"
+                for component in vector_info["components"]
+            ]
+        else:
+            scalar_func = "atan2" if component_type == "double" else "atan2f"
+            components = [
+                f"{scalar_func}(y.{component}, x.{component})"
+                for component in vector_info["components"]
+            ]
         helper = (
             f"__device__ inline {vector_type} {helper_name}"
             f"({vector_type} y, {vector_type} x)\n"
@@ -8731,6 +8800,22 @@ class HipCodeGen(
                     "reaches the caller; HIP references would not copy out separately"
                 ]
             )
+        swizzles = multi_component_swizzle_arguments(
+            params, raw_args, self.member_swizzle_components
+        )
+        if swizzles:
+            raise HipLoweringRefused(
+                [
+                    f"swizzle passed to an out/inout parameter: {func_name} receives "
+                    + ", ".join(
+                        f"'.{swizzle}' as argument {position}"
+                        for position, swizzle in swizzles
+                    )
+                    + "; HIP builds a swizzle of several components as a new vector, "
+                    "which a reference cannot bind to; copy it into a local, pass that "
+                    "and assign it back"
+                ]
+            )
         query_params = self.query_metadata_function_params.get(func_name, set())
         expanded_args = []
         for index, arg in enumerate(args):
@@ -9083,7 +9168,9 @@ class HipCodeGen(
 
     def generate_vector_swizzle(self, node, object_expr):
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
-        vector_info = self.vector_type_info(self.expression_result_type(object_node))
+        vector_info = self.swizzle_result_vector_info(
+            self.expression_result_type(object_node)
+        )
         if vector_info is None:
             return None
 
@@ -9414,6 +9501,9 @@ class HipCodeGen(
         byte_address_buffer_type = self.hip_byte_address_buffer_type(type_str)
         if byte_address_buffer_type is not None:
             return byte_address_buffer_type
+
+        if type_str.startswith("ptr<") and type_str.endswith(">"):
+            return f"{self.map_type(type_str[4:-1])}*"
 
         canonical_type = self.canonical_resource_type(type_str)
         mapped_type = self.type_map.get(canonical_type or type_str, type_str)
