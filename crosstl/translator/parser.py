@@ -6023,7 +6023,9 @@ class Parser:
 
         self.eat("RBRACE")
 
-        if self.current_token_is_declaration_binding_identifier() and self.peek()[0] in (
+        if self.current_token_is_declaration_binding_identifier() and self.peek()[
+            0
+        ] in (
             "SEMICOLON",
             "LBRACKET",
             "AT",
