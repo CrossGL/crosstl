@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 from crosstl.translator.resource_storage import encoded_storage_dtype
 
 from .runtime_value_encoding import validate_value_encoding
+from .runtime_values import exact_types_within, flatten_values, scalars_fit
 from .runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeDispatchRequest,
@@ -192,6 +193,8 @@ class _OpenGLSPIRVUnavailable(RuntimeError):
         self.details = dict(details)
 
 
+_BOOL_TYPES = frozenset({bool})
+_INT_TYPES = frozenset({int})
 _OPENGL_SPIRV_HEADER_BYTE_LENGTH = 5 * 4
 _OPENGL_SUBGROUP_SIZE_KHR = 0x9532
 _OPENGL_SUBGROUP_EXTENSION = "GL_KHR_shader_subgroup"
@@ -5027,17 +5030,7 @@ def _dtype_size(dtype: str) -> int:
     return struct.calcsize("<" + _dtype_format(dtype))
 
 
-def _flatten_values(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, (str, bytes, bytearray)):
-        return [value]
-    if isinstance(value, Sequence):
-        flattened: list[Any] = []
-        for item in value:
-            flattened.extend(_flatten_values(item))
-        return flattened
-    return [value]
+_flatten_values = flatten_values
 
 
 def _native_buffer_element_count(binding: NativeRuntimeBufferBinding) -> int:
@@ -5140,7 +5133,7 @@ def _pack_values(
             "<" + ("H" if dtype in {"float16", "bfloat16"} else "I") * expected_count,
             *values,
         )
-    if dtype == "bool" and any(type(item) is not bool for item in values):
+    if dtype == "bool" and not exact_types_within(values, _BOOL_TYPES):
         raise RuntimeExecutorUnavailable(
             f"{target} boolean buffer values must be true or false."
         )
@@ -5151,11 +5144,15 @@ def _pack_values(
             if dtype.startswith("int")
             else (0, (1 << width) - 1)
         )
-        if any(type(item) is not int or not low <= item <= high for item in values):
+        if not exact_types_within(values, _INT_TYPES) or (
+            values and not (low <= min(values) and max(values) <= high)
+        ):
             raise RuntimeExecutorUnavailable(
                 f"{target} narrow integer buffer values must be integers in [{low}, {high}]."
             )
     if dtype in {"float16", "float32"}:
+        if scalars_fit(values, dtype):
+            return struct.pack("<" + _dtype_format(dtype) * expected_count, *values)
         special_bits = (
             {
                 "nan": 0x7E00,
@@ -5211,7 +5208,7 @@ def _unpack_values(
             details={"target": target.lower(), "reasonKind": "value-encoding-invalid"},
         ) from exc
     size = _dtype_size(dtype)
-    if dtype == "bool" and any(byte not in (0, 1) for byte in payload):
+    if dtype == "bool" and bytes(payload).translate(None, b"\x00\x01"):
         raise RuntimeAdapterDispatchError(
             f"{target} boolean output contains a noncanonical storage byte.",
             details={
@@ -5233,18 +5230,12 @@ def _unpack_values(
     count = len(payload) // size
     if count == 0:
         return []
-    return list(
-        struct.unpack(
-            "<"
-            + (
-                ("H" if dtype in {"float16", "bfloat16"} else "I")
-                if encoding is not None
-                else _dtype_format(dtype)
-            )
-            * count,
-            payload,
-        )
+    code = (
+        ("H" if dtype in {"float16", "bfloat16"} else "I")
+        if encoding is not None
+        else _dtype_format(dtype)
     )
+    return list(struct.unpack(f"<{count}{code}", payload))
 
 
 def _buffer_readback(
