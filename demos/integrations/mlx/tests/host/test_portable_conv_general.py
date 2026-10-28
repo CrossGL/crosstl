@@ -85,7 +85,6 @@ def test_cases_reach_the_general_route_with_both_alignments():
     assert {info["constants"]["align_C"] for info in infos} == {False, True}
     assert {info["dtype"] for info in infos} == set(layout.DTYPES)
     assert general.ROUTE in layout.PORTED_ROUTES
-    assert general.ROUTE not in verify.UNPORTED
     # A residue whose rows never land on an input pixel keeps no tap.
     dilated = RECORDS["general-2d-dilated-copied"]["params"]
     assert general.base_info(dilated, 0)[0] == {"weight_base": 2, "weight_size": 0}

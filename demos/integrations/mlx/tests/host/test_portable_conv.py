@@ -1,4 +1,7 @@
-"""Convolution host routing, unfold, depthwise and implicit GEMM launch contracts."""
+"""Convolution host routing, unfold, depthwise and implicit GEMM launch contracts.
+
+``test_portable_conv_winograd`` holds the Winograd route's.
+"""
 
 import copy
 import ctypes
@@ -19,6 +22,9 @@ from demos.integrations.mlx.portable_host import (
     upstream_matrix_packages,
 )
 from demos.integrations.mlx.portable_host import verify_conv as verify
+from demos.integrations.mlx.tests.host.test_portable_conv_winograd import (
+    winograd_launches,
+)
 from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
 from demos.integrations.mlx.tests.kernels import test_current_conv as gate
 
@@ -67,7 +73,11 @@ ROUTES = {
     "pad-and-slice-3d-outputs": "pad_and_slice_conv_3D_gpu",
     "small-kd-3d": "small_kd_conv_3D_gpu",
     "small-kd-3d-flipped": "small_kd_conv_3D_gpu",
-    "refused-winograd-2d": "winograd_conv_2D_gpu",
+    "winograd-2d": "winograd_conv_2D_gpu",
+    "winograd-2d-tiled": "winograd_conv_2D_gpu",
+    "winograd-2d-moved": "winograd_conv_2D_gpu",
+    "winograd-2d-working-set": "winograd_conv_2D_gpu",
+    "winograd-2d-fallback": "implicit_gemm_conv_2D_gpu",
     "empty-batch": "none",
 }
 
@@ -97,6 +107,8 @@ def launches(record):
         return [(entry, counts, parameters, counts["out"], execution)]
     if not record["convEntries"]:
         return []
+    if record["route"] == layout.winograd.ROUTE:
+        return winograd_launches(record)
     (entry,) = record["convEntries"]
     if record["route"] in verify.IMPLICIT_ROUTES:
         return [implicit_launch(record)]
@@ -410,7 +422,7 @@ def test_implicit_selection_matches_the_steel_conv_model():
 @pytest.mark.parametrize("record", RECORDS, ids=lambda record: record["name"])
 def test_cases_route_as_conv_cpp(record):
     assert record["route"] == ROUTES[record["name"]]
-    if record["route"] in verify.UNPORTED | {"none"}:
+    if record["route"] == "none":
         assert record["launches"] == [] and record["convEntries"] == []
 
 
@@ -463,10 +475,8 @@ def test_routes_follow_conv_cpp_branches():
 
 def test_cases_cover_every_ported_route():
     placed = [
-        {**record, "outputHash": "x"}
-        for record in RECORDS
-        if record["route"] not in verify.UNPORTED | {"none"}
-    ] + [record for record in RECORDS if record["route"] in verify.UNPORTED | {"none"}]
+        {**record, "outputHash": "x"} for record in RECORDS if record["route"] != "none"
+    ] + [record for record in RECORDS if record["route"] == "none"]
     assert verify._covered(placed)
     assert not verify._covered(
         [record for record in placed if record["route"] != "depthwise_conv_1D_gpu"]
@@ -1003,7 +1013,9 @@ def test_packages_follow_the_conv_gate(tmp_path):
     root = Path("/pinned")
     entries = {entry for record in RECORDS for entry in record["convEntries"]}
     for entry in sorted(entries):
-        if layout.signature(entry)["kind"] in {"implicit", "dw2", "general"}:
+        info = layout.signature(entry)
+        # test_portable_conv_winograd checks the Winograd transforms' packages.
+        if info["kind"] in {"implicit", "dw2", "general"} or "stage" in info:
             continue
         for target in ("metal", "directx", "opengl"):
             config = conv_packages.ConvPackageCache(root, tmp_path, target)
@@ -1202,6 +1214,8 @@ def test_implicit_plan_bounds_the_weight_tiles():
         "implicit-1d-strided": 0,
         "implicit-1d-large-filter": 0,
         "implicit-2d-wide-tiles": 0,
+        # Four 64-row tiles over 224 filters of 3 x 3 x 32 taps.
+        "winograd-2d-fallback": (4 * 64 - 224) * 3 * 3 * 32,
         "implicit-3d": 0,
         "implicit-3d-partial": 16 * 2 * 3 * 3 * 32,
     }
@@ -1441,8 +1455,8 @@ def test_backend_ports_convolution_eval_gpu():
     assert [body.index(text) for text in order] == sorted(
         body.index(text) for text in order
     )
-    for route in verify.UNPORTED:
-        assert f'conv_unported("{route}");' in port, route
+    # Every route of conv.cpp's eval_gpu is ported.
+    assert "conv_unported(" not in port
     for name in (
         *layout.PARAMETERS["unfold"],
         *layout.PARAMETERS["dw1"],

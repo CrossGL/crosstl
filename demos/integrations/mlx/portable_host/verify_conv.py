@@ -16,13 +16,18 @@ convolutions of unaligned channels pad them and run one
 ``implicit_gemm_conv_3d`` launch into a wider intermediate, small-depth 3-D
 convolutions run one 2-D convolution per depth tap and add them, stride-two
 transposed 3-D convolutions run one steel GEMM and one strided copy per kernel
-phase, and an empty output launches nothing. One case reaches winograd, which
-the host does not port and refuses by name before any launch.
+phase, Winograd convolutions run the weight transform once and the input
+transform, 64 batched steel GEMMs and the output transform per batch tile,
+and an empty output launches nothing.
 
 Inputs are nonzero quarters and weights nonzero halves, so every product and
-sum is exact in float32 and rounds once to the output type. Every output bit
-is checked against a float64 reference of the convolution's definition, and
-float32 outputs against MLX's CPU values as well.
+sum of the other routes is exact in float32 and rounds once to the output
+type. Every output bit is checked against a float64 reference of the
+convolution's definition, and float32 outputs against MLX's CPU values as
+well. Winograd rounds by design, so its outputs must lie in the interval
+``conv_winograd_reference`` certifies from its stages, a few units in the
+last place wide, and a batch-tiled run must reproduce the untiled bits, as
+conv.cpp keeps every element's reduction order.
 """
 
 import argparse
@@ -33,12 +38,37 @@ import os
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import conv_layout as layout
+from demos.integrations.mlx.portable_host import conv_winograd_layout as winograd
+from demos.integrations.mlx.portable_host import (
+    conv_winograd_reference as winograd_reference,
+)
 from demos.integrations.mlx.portable_host import gemm_layout, gemm_splitk_layout
 from demos.integrations.mlx.portable_host.prepare import verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify_quantized_matmul import rounded
 
 TILE_ENV = "MLX_CONV_UNFOLD_TILE_ROWS"
+# The environment variables a case may set; run_case clears the others.
+CASE_ENV = (winograd.WORKING_SET_ENV, winograd.TILE_BATCH_ENV)
+
+
+def _working_set(in_shape, wt_shape, pad, rows, itemsize):
+    """A MLX_CONV_WINOGRAD_WORKING_SET that leaves room for ``rows`` and a half.
+
+    winograd_batch_step keeps three quarters of the working set, takes the
+    input, output and transformed weights from it and divides the rest by
+    each batch row's padded input and transformed tiles.
+    """
+    n, h, w, c = in_shape
+    o = wt_shape[0]
+    tiles = -(-h // 6) * -(-w // 6)
+    padded = (6 * -(-h // 6) + 2) * (6 * -(-w // 6) + 2)
+    per_row = itemsize * (padded * c + 64 * tiles * (c + o))
+    used = itemsize * (n * h * w * (c + o) + 64 * c * o)
+    assert all(side == 1 for side in pad)
+    return str((used + (2 * rows + 1) * per_row // 2) * 4 // 3)
+
+
 # (name, dtype, input shape, weight shape, options, view, tile rows). Options
 # are conv_general's stride, padding (low, high), kernel and input dilation,
 # groups and flip; "moved" inputs are channels-last views of channels-first
@@ -442,10 +472,11 @@ CASES = (
         "dense",
         None,
     ),
-    # A route the host does not port: winograd, which conv.cpp sends 3x3
-    # convolutions of large aligned channels once the working set allows.
+    # Winograd: stride-one 3x3 convolutions of 32-aligned channels over a
+    # large input. 62 x 62 outputs leave partial 6 x 6 tiles in both
+    # directions, and one batch tile holds the whole batch.
     (
-        "refused-winograd-2d",
+        "winograd-2d",
         "float32",
         (1, 64, 64, 32),
         (224, 3, 3, 32),
@@ -453,10 +484,63 @@ CASES = (
         "dense",
         None,
     ),
+    # A forced tile of two batch rows leaves a short last tile; the untiled
+    # run that follows must give the same bits.
+    (
+        "winograd-2d-tiled",
+        "float16",
+        (3, 40, 36, 64),
+        (192, 3, 3, 64),
+        dict(
+            padding=((1, 1), (1, 1)),
+            env={winograd.TILE_BATCH_ENV: "2"},
+            untiled=True,
+        ),
+        "dense",
+        None,
+    ),
+    # bfloat16 from a channels-first array, padded.
+    (
+        "winograd-2d-moved",
+        "bfloat16",
+        (2, 48, 48, 32),
+        (224, 3, 3, 32),
+        dict(padding=((1, 1), (1, 1))),
+        "moved",
+        None,
+    ),
+    # A working set with room for two batch rows makes winograd_batch_step
+    # tile the batch of five as 2, 2 and 1.
+    (
+        "winograd-2d-working-set",
+        "float32",
+        (5, 30, 30, 32),
+        (224, 3, 3, 32),
+        dict(
+            padding=((1, 1), (1, 1)),
+            env={
+                winograd.WORKING_SET_ENV: _working_set(
+                    (5, 30, 30, 32), (224, 3, 3, 32), (1, 1), 2, 4
+                )
+            },
+        ),
+        "dense",
+        None,
+    ),
+    # A working set too small for one batch row: conv.cpp falls back to the
+    # implicit GEMM.
+    (
+        "winograd-2d-fallback",
+        "float32",
+        (1, 64, 64, 32),
+        (224, 3, 3, 32),
+        dict(env={winograd.WORKING_SET_ENV: "1"}),
+        "dense",
+        None,
+    ),
     # No output element.
     ("empty-batch", "float32", (0, 9, 5), (7, 3, 5), {}, "dense", None),
 )
-UNPORTED = {"winograd_conv_2D_gpu"}
 IMPLICIT_ROUTES = {"implicit_gemm_conv_2D_gpu", "implicit_gemm_conv_3D_gpu"}
 
 
@@ -578,11 +662,49 @@ def _small_kd_record(record, params, dtype):
     }
 
 
+def _winograd_record(record, params, dtype):
+    """winograd_conv_2D_gpu: one weight transform, then per batch tile the
+    zero-padded input copy, the input transform, 64 batched steel GEMMs and
+    the output transform. The padded scratch is zero-filled once.
+
+    An ``untiled`` case runs again without its forced batch tile.
+    """
+    runs = [record["env"]]
+    if record["untiled"]:
+        runs.append(
+            {
+                key: value
+                for key, value in record["env"].items()
+                if key != winograd.TILE_BATCH_ENV
+            }
+        )
+    launches, products, rows, copies = [], [], [], 0
+    for environ in runs:
+        step = winograd.batch_step(params, dtype, environ)
+        tiles = winograd.batch_tiles(params, step)
+        launches += winograd.launches(params, dtype, step)
+        products += winograd.products(params, dtype, step)
+        rows.append(tiles)
+        # The input copy of a moved view, the zero fill and each tile's copy.
+        copies += int(record["view"] == "moved") + 1 + len(tiles)
+    return {
+        **record,
+        "convEntries": winograd.entries(dtype),
+        "productEntries": list(dict.fromkeys(products)),
+        "launches": launches,
+        "batchRows": rows,
+        "copies": copies,
+    }
+
+
 def case_record(case):
-    name, dtype, in_shape, wt_shape, _, view, tile = case
+    name, dtype, in_shape, wt_shape, opts, view, tile = case
     o = options(case)
     shape = out_shape(in_shape, wt_shape, o)
     params = conv_params(in_shape, wt_shape, shape, o)
+    env = dict(opts.get("env", {}))
+    if set(env) - set(CASE_ENV):
+        raise ValueError(f"Convolution case sets an unknown variable: {name}")
     record = {
         "name": name,
         "dtype": dtype,
@@ -592,6 +714,8 @@ def case_record(case):
         "options": o,
         "view": view,
         "tileRows": tile,
+        "env": env,
+        "untiled": bool(opts.get("untiled")),
         "params": params,
         "convEntries": [],
         "productEntries": [],
@@ -600,11 +724,12 @@ def case_record(case):
     }
     if math.prod(shape) == 0:
         return {**record, "route": "none"}
-    route = layout.route(params)
+    route = layout.route(params, dtype, env)
     record["route"] = route
-    if route in UNPORTED:
-        # The host refuses before its first launch, even an input copy.
-        return {**record, "copies": 0}
+    if record["untiled"] and route != winograd.ROUTE:
+        raise ValueError(f"Only Winograd cases rerun untiled: {name}")
+    if route == winograd.ROUTE:
+        return _winograd_record(record, params, dtype)
     if route == "depthwise_conv_1D_gpu":
         entry = layout.dw1_entry(dtype)
         return {**record, "convEntries": [entry], "launches": [entry]}
@@ -740,13 +865,18 @@ def case_data(np, record, seed):
     rng = np.random.default_rng(seed)
     x = _nonzero(rng, record["inShape"], 0.25)
     w = _nonzero(rng, record["wtShape"], 0.5)
-    expected = None
-    if record["route"] not in UNPORTED:
-        total = reference(np, x, w, record)
-        if total.size and np.abs(total).max() >= 2**19:
-            raise ValueError("Convolution case exceeds the exact float32 budget")
-        expected = rounded(total, record["dtype"])
-    return {"x": x, "w": w, "expected": expected}
+    if record["route"] == winograd.ROUTE:
+        o = record["options"]
+        if o["padLo"] != o["padHi"]:
+            raise ValueError("Winograd cases pad symmetrically")
+        value, uncertainty = winograd_reference.stages(
+            np, x, w, o["padLo"], record["dtype"]
+        )
+        return {"x": x, "w": w, "interval": (value, uncertainty)}
+    total = reference(np, x, w, record)
+    if total.size and np.abs(total).max() >= 2**19:
+        raise ValueError("Convolution case exceeds the exact float32 budget")
+    return {"x": x, "w": w, "expected": rounded(total, record["dtype"])}
 
 
 def _input(mx, np, values, view, dtype):
@@ -787,45 +917,53 @@ def run_case(mx, np, host, record, seed):
     mx.eval(stored, w)
     before = {"x": _bits(np, stored), "w": _bits(np, w)}
     keywords = _arguments(record)
-    previous = os.environ.pop(TILE_ENV, None)
+    names = (TILE_ENV, *CASE_ENV)
+    previous = {name: os.environ.pop(name, None) for name in names}
     if record["tileRows"]:
         os.environ[TILE_ENV] = str(record["tileRows"])
+    os.environ.update(record["env"])
     start = host.dispatch_count
     try:
-        if record["route"] in UNPORTED:
-            try:
-                mx.eval(mx.conv_general(x, w, **keywords))
-            except ValueError as error:
-                if f"conv.cpp's {record['route']} yet" not in str(error):
-                    raise
-            else:
-                raise AssertionError(
-                    f"Convolution ran an unported route: {record['name']}"
-                )
-            if host.dispatch_count != start:
-                raise AssertionError(
-                    f"Convolution launched before refusing: {record['name']}"
-                )
-            return {**record, "seed": seed, "dispatchStart": start, "dispatchCount": 0}
         y = mx.conv_general(x, w, **keywords)
         mx.eval(y)
+        untiled = None
+        if record["untiled"]:
+            os.environ.pop(winograd.TILE_BATCH_ENV)
+            untiled = mx.conv_general(x, w, **keywords)
+            mx.eval(untiled)
     finally:
-        os.environ.pop(TILE_ENV, None)
-        if previous is not None:
-            os.environ[TILE_ENV] = previous
+        for name in names:
+            os.environ.pop(name, None)
+            if previous[name] is not None:
+                os.environ[name] = previous[name]
     count = host.dispatch_count - start
-    expected = data["expected"]
     if list(y.shape) != record["outShape"] or y.dtype != dtype:
         raise AssertionError(f"Convolution output layout differs: {record['name']}")
-    actual = np.asarray(y.tolist(), dtype=np.float32).reshape(expected.shape)
-    if actual.view(np.uint32).tobytes() != expected.view(np.uint32).tobytes():
+    actual = np.asarray(y.tolist(), dtype=np.float32).reshape(record["outShape"])
+    if record["route"] == winograd.ROUTE:
+        if not winograd_reference.contains(np, actual, *data["interval"]):
+            raise AssertionError(
+                f"Convolution leaves its certified interval: {record['name']}"
+            )
+        if untiled is not None and (
+            np.asarray(untiled.tolist(), dtype=np.float32).tobytes() != actual.tobytes()
+        ):
+            raise AssertionError(
+                f"Convolution batch tiles change its bits: {record['name']}"
+            )
+    elif actual.view(np.uint32).tobytes() != data["expected"].view(np.uint32).tobytes():
         raise AssertionError(f"Convolution output differs: {record['name']}")
     if count != len(record["launches"]) + record["copies"]:
         raise AssertionError(f"Convolution dispatch count differs: {record['name']}")
     if before != {"x": _bits(np, stored), "w": _bits(np, w)}:
         raise AssertionError(f"Convolution input changed: {record['name']}")
     cpu = False
-    if record["dtype"] == "float32" and actual.size:
+    # Winograd rounds where the CPU's direct convolution does not.
+    if (
+        record["dtype"] == "float32"
+        and actual.size
+        and record["route"] != winograd.ROUTE
+    ):
         reference_value = mx.conv_general(x, w, **keywords, stream=mx.cpu)
         values = np.asarray(reference_value.tolist(), dtype=np.float32)
         if (
@@ -851,9 +989,11 @@ def _covered(records):
         layout.signature(entry) for record in records for entry in record["convEntries"]
     ]
     depthwise = [info for info in infos if info["kind"] == "dw2"]
+    winograd_records = [
+        record for record in records if record["route"] == winograd.ROUTE
+    ]
     return (
         set(layout.PORTED_ROUTES) <= routes
-        and UNPORTED <= routes
         and {info["dtype"] for info in depthwise} == set(layout.DTYPES)
         and {info["constants"]["do_flip"] for info in depthwise} == {False, True}
         and any(
@@ -873,7 +1013,20 @@ def _covered(records):
         and any(record["view"] == "moved" for record in records)
         and any(record["view"] == "expanded" for record in records)
         and all(
-            "outputHash" in record or record["route"] in UNPORTED | {"none"}
+            "outputHash" in record or record["route"] == "none" for record in records
+        )
+        # Winograd runs every dtype, a short last batch tile, a tiled run
+        # against its untiled bits, and a working set that falls back.
+        and {record["dtype"] for record in winograd_records} == set(layout.DTYPES)
+        and any(
+            len(set(rows)) > 1
+            for record in winograd_records
+            for rows in record["batchRows"]
+        )
+        and any(record["untiled"] for record in winograd_records)
+        and any(
+            winograd.WORKING_SET_ENV in record["env"]
+            and record["route"] != winograd.ROUTE
             for record in records
         )
     )
@@ -903,6 +1056,15 @@ def validate_trace(trace, records, target):
             grouped = event.get("gemmMetadata", {}).get("groups")
             if grouped is not None and grouped != record["options"]["groups"]:
                 raise RuntimeError(f"Convolution groups differ: {record['name']}")
+        if record["route"] == winograd.ROUTE:
+            # Each tile's transforms run its batch rows, in conv.cpp's order.
+            batches = [
+                event["convMetadata"]["batch"]
+                for event in launches
+                if event.get("convMetadata", {}).get("stage") == "input"
+            ]
+            if batches != [row for rows in record["batchRows"] for row in rows]:
+                raise RuntimeError(f"Convolution batch tiles differ: {record['name']}")
     if not _covered(records) or not any(
         event.get("convMetadata", {}).get("weightSlack", 0) > 0 for event in trace
     ):

@@ -9,7 +9,9 @@ frozen. ``implicit_gemm_conv_2d`` and ``implicit_gemm_conv_3d`` come from
 steel_conv.metal and steel_conv_3d.metal with the options of
 ``test_current_steel_conv``, and ``implicit_gemm_conv_2d_general`` from
 steel_conv_general.metal with those of ``test_current_steel_conv_general``,
-one entry per ``align_C`` value with the constant frozen. Run as a module, it
+one entry per ``align_C`` value with the constant frozen. The Winograd weight,
+input and output transforms come from conv.metal with the options of
+``test_current_winograd``. Run as a module, it
 translates entries into a host package directory's cache ahead of execution,
 several processes at a time.
 """
@@ -20,6 +22,7 @@ from pathlib import Path
 
 from crosstl.project import ProjectConfig
 from demos.integrations.mlx.portable_host import conv_layout as layout
+from demos.integrations.mlx.portable_host import conv_winograd_layout as winograd
 from demos.integrations.mlx.portable_host.matmul_packages import (
     TranslatedEntryCache,
     build_record,
@@ -81,9 +84,74 @@ def general_project_config(root, output_dir, target, entry):
     )
 
 
+def winograd_project_config(root, output_dir, target, entry):
+    """One Winograd transform with the current-tree Winograd gate's options.
+
+    OpenGL and DirectX lower the SIMD-group products in software with the
+    gate's rounding profile and check the precondition that bounds the
+    transform's channel loop.
+    """
+    stage = winograd.signature(entry)["stage"]
+    metal = {
+        "max_template_specializations": 256,
+        "max_template_materialization_work": 16384,
+        "preserve_resource_origins": True,
+        "cooperative_matrix_fragment_mapping": winograd.FRAGMENT_MAPPING,
+        "cooperative_matrix_fragment_mapping_provenance": (
+            winograd.FRAGMENT_MAPPING_PROVENANCE
+        ),
+    }
+    preconditions = []
+    if target in {"opengl", "directx"}:
+        options = {
+            "cooperative_matrix_software_lowering": True,
+            "software_subgroup_width": winograd.SIMD_SIZE,
+            "cooperative_matrix_mma_profile": winograd.MMA_PROFILE,
+        }
+        if target == "directx":
+            options["relative_wave_shuffle_out_of_range"] = "self"
+        metal["target_options"] = {target: options}
+        preconditions = [
+            dict(
+                source=winograd.SOURCE,
+                entryPoint=entry,
+                **winograd.METADATA_PRECONDITIONS[stage],
+            )
+        ]
+    return ProjectConfig(
+        root=root,
+        source_roots=("mlx/backend/metal/kernels",),
+        include_patterns=(winograd.SOURCE,),
+        include_dirs=(".",),
+        targets=(target,),
+        output_dir=output_dir,
+        entry_points={winograd.SOURCE: (entry,)},
+        entry_workgroup_size_rules={
+            winograd.SOURCE: {entry: winograd.WORKGROUPS[stage]}
+        },
+        metadata_preconditions=preconditions,
+        index_range_assertions=[
+            {
+                "source": winograd.SOURCE,
+                "expression": expression,
+                "minimum": 0,
+                "maximum": winograd.SIGNED_MAX,
+            }
+            for expression in (
+                winograd.OPENGL_INDEX_RANGE_ASSERTIONS[stage]
+                if target == "opengl"
+                else ()
+            )
+        ],
+        source_options={"metal": metal},
+    )
+
+
 def project_config(root, output_dir, target, entry):
     """One conv.metal entry with the current-tree conv gate's options."""
     info = layout.signature(entry)
+    if "stage" in info:
+        return winograd_project_config(root, output_dir, target, entry)
     if info["kind"] == "implicit":
         return implicit_project_config(root, output_dir, target, entry)
     if info["kind"] == "general":

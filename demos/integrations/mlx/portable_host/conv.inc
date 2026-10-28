@@ -5,10 +5,10 @@
 // depthwise_conv_1d kernel, the small-kernel depthwise_conv_2d kernel, the
 // implicit GEMM routes, which run steel_conv's implicit_gemm_conv_2d and
 // implicit_gemm_conv_3d, the general implicit GEMM route, which runs
-// steel_conv_general's implicit_gemm_conv_2d_general, and the 3-D routes that
+// steel_conv_general's implicit_gemm_conv_2d_general, the Winograd route,
+// whose three transforms frame batched steel GEMMs, and the 3-D routes that
 // compose those launches: padded channels, per-depth-tap 2-D convolutions and
-// the eight-phase stride-two transpose. Winograd, the one other route conv.cpp
-// takes, is refused by name before any launch. Each launch binds
+// the eight-phase stride-two transpose. Each launch binds
 // the buffers and values conv.cpp binds; conv_layout checks the unfold,
 // depthwise and implicit GEMM launches against the same routing and
 // gemm_layout the products. crosstl_backend.cpp includes this file after the
@@ -34,11 +34,6 @@
 
 namespace mlx::core {
 namespace {
-
-[[noreturn]] void conv_unported(const char* route) {
-  throw std::invalid_argument(
-      std::string("CrossTL convolution does not port conv.cpp's ") + route + " yet.");
-}
 
 // conv.cpp ensure_row_contiguous.
 array conv_row_contiguous(const array& x) {
@@ -435,9 +430,188 @@ void dispatch_depthwise_conv_2d(
   conv_launch(entry, buffers, out.size(), launch);
 }
 
-// conv.cpp dispatch_conv_2D_gpu. The host has no recommendedMaxWorkingSetSize
-// for winograd_batch_step, so it refuses every product conv.cpp would send to
-// winograd once the working set allowed.
+// conv.cpp winograd_padded_size: whole 6-row output tiles plus the 2-row halo.
+std::pair<int, int> conv_winograd_padded_size(const MLXConvParams<2>& p) {
+  const int64_t pad_h = int64_t(p.iS[0]) + 2 * int64_t(p.pad[0]);
+  const int64_t pad_w = int64_t(p.iS[1]) + 2 * int64_t(p.pad[1]);
+  return {
+      conv_int(6 * ((pad_h - 2 + 5) / 6) + 2), conv_int(6 * ((pad_w - 2 + 5) / 6) + 2)};
+}
+
+// conv.cpp winograd_batch_step. The host has no recommendedMaxWorkingSetSize:
+// unless MLX_CONV_WINOGRAD_WORKING_SET names one, it budgets with the bound of
+// every translated launch, at most max_matmul_elements elements per scratch
+// array and 65535 batch rows, the Z workgroups of one launch, as
+// conv_unfold_rows uses it in place of maxBufferLength. A named working set
+// takes conv.cpp's arithmetic, which that bound still caps. 0 falls back.
+int conv_winograd_batch_step(const array& in, const MLXConvParams<2>& p) {
+  const int total_n = p.N;
+  const size_t itemsize = in.itemsize();
+  auto [padded_h, padded_w] = conv_winograd_padded_size(p);
+  const int tiles_per_n = ((p.oS[0] + 5) / 6) * ((p.oS[1] + 5) / 6);
+  const uint64_t bound = max_matmul_elements;
+  int64_t max_n = 0;
+  if (uint64_t(64) * p.C * p.O <= bound) {
+    max_n = int64_t(std::min<uint64_t>(
+        {bound / (uint64_t(padded_h) * padded_w * p.C),
+         bound / (uint64_t(64) * tiles_per_n * p.C),
+         bound / (uint64_t(64) * tiles_per_n * p.O), 65535}));
+  }
+  if (int env_ws = env::get_var("MLX_CONV_WINOGRAD_WORKING_SET", 0); env_ws > 0) {
+    const size_t limit = size_t(env_ws) / 4 * 3;
+    const size_t filt_bytes = size_t(8 * 8) * p.C * p.O * itemsize;
+    const size_t io_bytes = itemsize *
+        (size_t(total_n) * p.iS[0] * p.iS[1] * p.C +
+         size_t(total_n) * p.oS[0] * p.oS[1] * p.O);
+    const size_t used = io_bytes + filt_bytes;
+    const size_t budget = limit > used ? limit - used : 0;
+    const size_t bytes_per_n = size_t(padded_h) * padded_w * p.C * itemsize +
+        size_t(8 * 8) * tiles_per_n * (p.C + p.O) * itemsize;
+    max_n = std::min<int64_t>(max_n, int64_t(budget / bytes_per_n));
+  }
+  const int safe_n = int(std::min<int64_t>(max_n, total_n));
+  if (int forced = env::get_var("MLX_CONV_WINOGRAD_TILE_BATCH", 0); forced > 0) {
+    return std::min(forced, safe_n);
+  }
+  // Below 32 GEMM rows per forced tile the implicit GEMM fallback is faster.
+  constexpr int min_rows_per_tile = 32;
+  if (safe_n < total_n && safe_n * tiles_per_n < min_rows_per_tile) {
+    return 0;
+  }
+  return safe_n;
+}
+
+// conv.cpp winograd_conv_2D_gpu: the weight transform into (8 x 8, C, O), a
+// zero-filled padded input scratch of n_step rows, and per batch tile the
+// input transform into (8 x 8, tiles, C), 64 steel GEMMs into
+// (8 x 8, tiles, O) and the output transform into the tile's output rows.
+// The transforms bind the scratch words each tile writes and reads.
+void conv_winograd(
+    const array& in,
+    const array& wt,
+    array& out,
+    const MLXConvParams<2>& conv_params,
+    int n_step) {
+  const int O_c = conv_params.O;
+  const int C_c = conv_params.C;
+  auto [padded_h, padded_w] = conv_winograd_padded_size(conv_params);
+  const int N_tiles_h = (conv_params.oS[0] + 5) / 6;
+  const int N_tiles_w = (conv_params.oS[1] + 5) / 6;
+  const int tiles_per_n = N_tiles_h * N_tiles_w;
+  const char* storage = matmul_storage(out.dtype());
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+
+  array filt_wg({8 * 8, C_c, O_c}, wt.dtype(), nullptr, {});
+  filt_wg.set_data(allocator::malloc(filt_wg.nbytes()));
+  {
+    const std::string entry =
+        std::string("winograd_conv_2d_weight_transform_") + storage + "_bc32";
+    require_entry(entry);
+    int C = C_c, O = O_c;
+    std::vector<CrosstlMlxBuffer> buffers = {
+        {"wt_in", storage, data(wt), matmul_span(wt), 0},
+        {"wt_out", storage, filt_wg.data<void>(), filt_wg.size(), 1},
+        {"C", "int32", &C, 1, 0},
+        {"O", "int32", &O, 1, 0},
+    };
+    const int bo = 4;
+    const CrosstlMlxLaunch launch{{conv_groups(O_c / bo), 1, 1}, {32, uint32_t(bo), 1}};
+    conv_launch(entry, buffers, filt_wg.size(), launch);
+  }
+
+  array inp_wg({8 * 8, n_step * tiles_per_n, C_c}, in.dtype(), nullptr, {});
+  inp_wg.set_data(allocator::malloc(inp_wg.nbytes()));
+  array out_wg({8 * 8, n_step * tiles_per_n, O_c}, in.dtype(), nullptr, {});
+  out_wg.set_data(allocator::malloc(out_wg.nbytes()));
+  array in_padded({n_step, padded_h, padded_w, C_c}, in.dtype(), nullptr, {});
+  {
+    // fill_gpu: a broadcast zero copied into every padded element.
+    array zero(0, in.dtype());
+    array fill(in_padded.shape(), in.dtype(), nullptr, {});
+    fill.copy_shared_buffer(zero, Strides(4, 0), {true, false, false}, 1);
+    dispatch_copy(fill, in_padded);
+  }
+  const int64_t pad_offset = int64_t(conv_params.pad[0]) * in_padded.strides()[1] +
+      int64_t(conv_params.pad[1]) * in_padded.strides()[2];
+  const std::vector<int64_t> padded_strides(
+      in_padded.strides().begin(), in_padded.strides().end());
+  const std::vector<int64_t> in_strides(in.strides().begin(), in.strides().end());
+
+  for (int n_offset = 0; n_offset < conv_params.N; n_offset += n_step) {
+    const int tile_n = std::min(n_step, conv_params.N - n_offset);
+    const int N_tiles = tile_n * tiles_per_n;
+    // copy_gpu_inplace's GeneralGeneral copy of the tile's rows into the
+    // padded slice; the zero border stays.
+    dispatch_strided_copy(
+        in, in_padded, Shape{tile_n, conv_params.iS[0], conv_params.iS[1], C_c},
+        in_strides, int64_t(n_offset) * in.strides()[0], padded_strides, pad_offset, true);
+
+    array out_tile({tile_n, conv_params.oS[0], conv_params.oS[1], O_c}, out.dtype(), nullptr, {});
+    out_tile.copy_shared_buffer(
+        out, out.strides(), out.flags(), out_tile.size(),
+        int64_t(n_offset) * out.strides()[0]);
+
+    MLXConvParams<2> conv_params_updated{
+        tile_n,
+        C_c,
+        O_c,
+        {padded_h, padded_w},
+        {static_cast<int>(wt.shape(1)), static_cast<int>(wt.shape(2))},
+        {static_cast<int>(out.shape(1)), static_cast<int>(out.shape(2))},
+        {1, 1},
+        {0, 0},
+        {1, 1},
+        {1, 1},
+        {in_padded.strides()[0], in_padded.strides()[1], in_padded.strides()[2],
+         in_padded.strides()[3]},
+        {wt.strides()[0], wt.strides()[1], wt.strides()[2], wt.strides()[3]},
+        {out.strides()[0], out.strides()[1], out.strides()[2], out.strides()[3]},
+        1,
+        false,
+    };
+    const CrosstlMlxLaunch tiles_launch{
+        {conv_groups(N_tiles_w), conv_groups(N_tiles_h), conv_groups(tile_n)}, {32, 2, 2}};
+    {
+      const std::string entry =
+          std::string("winograd_conv_2d_input_transform_") + storage + "_bc32";
+      require_entry(entry);
+      const size_t written = size_t(8 * 8) * N_tiles * C_c;
+      std::vector<CrosstlMlxBuffer> buffers = {
+          {"inp_in", storage, data(in_padded), in_padded.size(), 0},
+          {"inp_out", storage, inp_wg.data<void>(), written, 1},
+          {"params", "uint8", &conv_params_updated, sizeof(conv_params_updated), 0},
+      };
+      conv_launch(entry, buffers, written, tiles_launch);
+    }
+    {
+      array inp_wg_tile({8 * 8, N_tiles, C_c}, inp_wg.dtype(), nullptr, {});
+      inp_wg_tile.copy_shared_buffer(
+          inp_wg, {int64_t(N_tiles) * C_c, C_c, 1}, inp_wg.flags(), inp_wg_tile.size());
+      array out_wg_tile({8 * 8, N_tiles, O_c}, out_wg.dtype(), nullptr, {});
+      out_wg_tile.copy_shared_buffer(
+          out_wg, {int64_t(N_tiles) * O_c, O_c, 1}, out_wg.flags(), out_wg_tile.size());
+      // steel_matmul_axpby collapses the 64 batches into M only when B's batch
+      // stride is zero; filt_wg's is C * O, so 64 batched products run.
+      auto [batch_shape, A_batch_stride, B_batch_stride] =
+          collapse_batches(inp_wg_tile, filt_wg);
+      dispatch_steel_gemm(
+          inp_wg_tile, filt_wg, out_wg_tile, N_tiles, O_c, C_c, 8 * 8, C_c, O_c, false,
+          false, batch_shape, A_batch_stride, B_batch_stride);
+    }
+    {
+      const std::string entry =
+          std::string("winograd_conv_2d_output_transform_") + storage + "_bo32";
+      require_entry(entry);
+      std::vector<CrosstlMlxBuffer> buffers = {
+          {"out_in", storage, data(out_wg), size_t(8 * 8) * N_tiles * O_c, 0},
+          {"out_out", storage, out_tile.data<void>(), out_tile.size(), 1},
+          {"params", "uint8", &conv_params_updated, sizeof(conv_params_updated), 0},
+      };
+      conv_launch(entry, buffers, out_tile.size(), tiles_launch);
+    }
+  }
+}
+
 // conv.cpp pad_in_channels_conv_2D_gpu: zero-pad the input and weight
 // channels to a multiple of 16 through Pad and run the implicit GEMM on the
 // padded parameters. Only the input channels grow, so the kernel writes
@@ -595,7 +769,10 @@ void conv_dispatch_2d(
   if (!conv_params.flip && is_stride_one && is_kdil_one && is_idil_one &&
       conv_params.wS[0] == 3 && conv_params.wS[1] == 3 && conv_params.C % 32 == 0 &&
       conv_params.O % 32 == 0 && inp_large && channels_large) {
-    conv_unported("winograd_conv_2D_gpu");
+    // Only use winograd conv when having enough memory.
+    if (int n_step = conv_winograd_batch_step(in, conv_params); n_step > 0) {
+      return conv_winograd(in, wt, out, conv_params, n_step);
+    }
   }
   const bool specialized_channels = (conv_params.C <= 4 || conv_params.C % 16 == 0) &&
       (conv_params.O <= 16 || conv_params.O % 16 == 0);

@@ -231,7 +231,7 @@ def plan(name, info, counts, parameters, threads, execution):
 
     p = parameters["params"]
     in_shape, wt_shape, out_shape = _check_params(p)
-    if route(p) != ROUTE:
+    if route(p, info["dtype"]) != ROUTE:
         raise ValueError("Convolution general GEMM differs from conv.cpp's routing")
     if entry(p, info["dtype"]) != name:
         raise ValueError("Convolution general GEMM entry differs from conv.cpp's")

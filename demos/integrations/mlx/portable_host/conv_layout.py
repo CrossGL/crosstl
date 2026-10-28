@@ -9,9 +9,11 @@ and multiply the unfolded rows with the steel GEMM, whose launches
 ``depthwise_conv_2d`` with conv.cpp's function constants; and the implicit
 GEMM routes run steel_conv's ``implicit_gemm_conv_2d`` and
 ``implicit_gemm_conv_3d``; ``conv_general_layout`` holds the general implicit
-GEMM route's ``implicit_gemm_conv_2d_general``. The 3-D padded-channel,
-small-depth and stride-two transpose routes compose those launches with
-padding, binary additions, steel GEMMs and strided copies. ``route`` mirrors
+GEMM route's ``implicit_gemm_conv_2d_general`` and ``conv_winograd_layout``
+the Winograd route's three transforms, whose batched products run the steel
+GEMM. The 3-D padded-channel, small-depth and stride-two transpose routes
+compose those launches with padding, binary additions, steel GEMMs and
+strided copies. ``route`` mirrors
 conv.cpp's routing, and ``plan`` checks every launch against it and proves
 each read and write in bounds before a translated kernel runs.
 
@@ -37,6 +39,7 @@ import re
 import struct
 
 from demos.integrations.mlx.portable_host import conv_general_layout as general
+from demos.integrations.mlx.portable_host import conv_winograd_layout as winograd
 from demos.integrations.mlx.portable_host import gemv_layout
 from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
 from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
@@ -76,6 +79,7 @@ ENTRY_PREFIXES = (
     "depthwise_conv_2d_",
     "implicit_gemm_conv_2d_",
     "implicit_gemm_conv_3d_",
+    winograd.PREFIX,
 )
 WORKGROUP = (1, 1, 1)
 # conv.metal's [[buffer(i)]] parameters, in index order.
@@ -87,6 +91,8 @@ PARAMETERS = {
     "implicit": ("A", "B", "C", "params", "gemm_params"),
     # steel_conv_general's, with its jump record and residue tables.
     "general": general.PARAMETERS,
+    # conv.metal's Winograd transforms, by stage.
+    **{f"winograd_{stage}": names for stage, names in winograd.PARAMETERS.items()},
 }
 OUTPUTS = {
     "unfold": "out",
@@ -94,6 +100,7 @@ OUTPUTS = {
     "dw2": "out",
     "implicit": "C",
     "general": general.OUTPUT,
+    **{f"winograd_{stage}": name for stage, name in winograd.OUTPUTS.items()},
 }
 ARRAYS = {
     "unfold": ("in", "out"),
@@ -101,6 +108,7 @@ ARRAYS = {
     "dw2": ("in", "wt", "out"),
     "implicit": ("A", "B", "C"),
     "general": general.ARRAYS,
+    **{f"winograd_{stage}": names for stage, names in winograd.ARRAYS.items()},
 }
 SCALAR_TYPES = {
     "row_offset": "int32",
@@ -108,6 +116,8 @@ SCALAR_TYPES = {
     "kernel_size": "int32",
     "gemm_params": "int32",
     **{name: "int32" for name in general.RECORDS},
+    # The Winograd weight transform's channel and filter counts.
+    **{name: "int32" for name in winograd.SCALARS},
 }
 # ImplicitGemmConv{2,3}DParams' int fields, in declaration order.
 GEMM_FIELDS = {
@@ -179,6 +189,7 @@ PORTED_ROUTES = (
     "implicit_gemm_conv_3D_gpu",
     "pad_in_channels_conv_2D_gpu",
     general.ROUTE,
+    winograd.ROUTE,
     "pad_and_slice_conv_3D_gpu",
     "small_kd_conv_3D_gpu",
     "stride_two_conv_transpose_3D_gpu",
@@ -210,6 +221,8 @@ def signature(entry):
             return _dw2_signature(entry, match)
         if general.is_entry(entry):
             return general.signature(entry)
+        if winograd.is_entry(entry):
+            return winograd.signature(entry)
         model = steel.BY_NAME.get(entry)
         if model is not None:
             return {
@@ -288,6 +301,8 @@ def workgroup_size(entry):
     info = signature(entry)
     if info["kind"] in {"implicit", "general"}:
         return info["model"].workgroup_size
+    if "stage" in info:
+        return winograd.WORKGROUPS[info["stage"]]
     return DW2_WORKGROUP if info["kind"] == "dw2" else WORKGROUP
 
 
@@ -390,11 +405,13 @@ def as_2d(p):
     return q
 
 
-def _route_2d(p):
-    """dispatch_conv_2D_gpu's route.
+def _route_2d(p, dtype=None, environ=None):
+    """dispatch_conv_2D_gpu's route for elements of ``dtype``.
 
-    The host has no working-set size for winograd_batch_step, so it names
-    winograd whenever conv.cpp's static conditions hold.
+    Winograd takes the convolutions its static conditions admit whenever
+    ``conv_winograd_layout.batch_step`` finds a batch tile under ``environ``
+    (the process environment by default); the element type matters only when
+    MLX_CONV_WINOGRAD_WORKING_SET names a working set.
     """
     stride_one = all(value == 1 for value in p["str"])
     kdil_one = all(value == 1 for value in p["kdil"])
@@ -432,8 +449,9 @@ def _route_2d(p):
         and o % 32 == 0
         and inp_large
         and channels_large
+        and winograd.batch_step(p, dtype, environ) > 0
     ):
-        return "winograd_conv_2D_gpu"
+        return winograd.ROUTE
     specialized = (c <= 4 or c % 16 == 0) and (o <= 16 or o % 16 == 0)
     if (
         idil_one
@@ -556,9 +574,11 @@ def pad_in_channels_source(p):
     return False
 
 
-def route(p):
+def route(p, dtype=None, environ=None):
     """The conv.cpp route ``MLXConvParams`` field map ``p`` takes."""
-    return {1: _route_1d, 2: _route_2d, 3: _route_3d}[len(p["iS"])](p)
+    if len(p["iS"]) == 2:
+        return _route_2d(p, dtype, environ)
+    return {1: _route_1d, 3: _route_3d}[len(p["iS"])](p)
 
 
 def read_storage(entry, buffers):
@@ -577,14 +597,19 @@ def read_storage(entry, buffers):
     for name in names:
         buffer, dtype = buffers[name], parameter_type(entry, name)
         itemsize = 1 if dtype == "uint8" else ITEM_SIZES.get(dtype, 4)
-        limit = {
-            "params": PARAMS_SIZES.get(info.get("spatial")),
-            "gemm_params": len(GEMM_FIELDS.get(info.get("spatial"), ())),
-            "row_offset": 1,
-            "strides": 3,
-            "kernel_size": 1,
-            **{record: general.limit(record) for record in general.RECORDS},
-        }.get(name, MAX_ELEMENTS)
+        limit = (
+            MAX_ELEMENTS
+            if name in ARRAYS[info["kind"]]
+            else {
+                "params": PARAMS_SIZES.get(info.get("spatial")),
+                "gemm_params": len(GEMM_FIELDS.get(info.get("spatial"), ())),
+                "row_offset": 1,
+                "strides": 3,
+                "kernel_size": 1,
+                **{record: general.limit(record) for record in general.RECORDS},
+                **{name: 1 for name in winograd.SCALARS},
+            }.get(name, MAX_ELEMENTS)
+        )
         count = buffer.count
         if (
             not buffer.data
@@ -853,7 +878,7 @@ def _plan_implicit(entry, info, counts, parameters, threads, execution):
     p, model = parameters["params"], info["model"]
     in_shape, wt_shape, out_shape = _check_implicit_params(info, p)
     expected = f"implicit_gemm_conv_{model.rank}D_gpu"
-    routed = _route_2d(p) if model.rank == 2 else _route_3d(p)
+    routed = _route_2d(p, info["dtype"]) if model.rank == 2 else _route_3d(p)
     # The padded-channel routes launch this kernel on padded channels.
     padded = pad_in_channels_source(p) if model.rank == 2 else pad_and_slice_source(p)
     if routed != expected and not padded:
@@ -989,4 +1014,6 @@ def plan(entry, counts, parameters, threads, execution):
         return general.plan(entry, info, counts, parameters, threads, execution)
     if info["kind"] == "dw2":
         return _plan_dw2(entry, info, counts, parameters, threads, execution)
+    if "stage" in info:
+        return winograd.plan(entry, info, counts, parameters, threads, execution)
     return _plan_dw1(counts, parameters, threads, execution)
