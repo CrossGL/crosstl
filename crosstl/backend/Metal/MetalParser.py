@@ -1943,7 +1943,7 @@ class MetalParser:
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "decltype"
         ):
-            alias_type = self.parse_decltype_type()
+            alias_type = self.parse_decltype_member_type()
         else:
             alias_type, qualifiers = self.parse_type_specifier()
             qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
@@ -2151,6 +2151,15 @@ class MetalParser:
         if depth != 0:
             raise SyntaxError("Unterminated decltype typedef")
         return f"decltype({self.format_generic_type_tokens(parts)})"
+
+    def parse_decltype_member_type(self):
+        """``decltype(e)`` optionally followed by a nested member such as ``::elem_type`` ([dcl.type.decltype])."""
+        text = self.parse_decltype_type()
+        while self.current_token[0] == "SCOPE" and self.peek(1)[0] == "IDENTIFIER":
+            self.eat("SCOPE")
+            text += f"::{self.current_token[1]}"
+            self.eat("IDENTIFIER")
+        return text
 
     def parse_typedef_struct(self):
         self.eat("STRUCT")
@@ -2385,7 +2394,15 @@ class MetalParser:
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "decltype"
         ):
-            base_type = self.parse_decltype_type()
+            base_type = self.parse_decltype_member_type()
+        elif (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "typename"
+            and self.peek(1) == ("IDENTIFIER", "decltype")
+            and self.peek(2)[0] == "LPAREN"
+        ):
+            self.eat("IDENTIFIER")
+            base_type = self.parse_decltype_member_type()
         elif self.current_token[0] in {"METAL", "SCOPE"} or (
             self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "SCOPE"
         ):

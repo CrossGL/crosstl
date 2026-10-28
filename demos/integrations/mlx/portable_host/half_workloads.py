@@ -3,6 +3,7 @@
 import struct
 
 from demos.integrations.mlx.portable_host.binary_workloads import mlx_operand
+from demos.integrations.mlx.portable_host.cast_workloads import contiguous_span
 from demos.integrations.mlx.portable_host.packages import (
     COPY_ENTRY,
     HALF_CAST_ENTRIES,
@@ -119,8 +120,12 @@ def entries(case, source):
         return []
     if case["entry"] == HALF_COPY_ENTRY:
         return [] if source.flags.c_contiguous else [HALF_COPY_ENTRY]
+    # Casts run in place over the contiguous span MLX's layout marks, as the
+    # Metal vector copy does; other layouts are materialized first.
+    if contiguous_span(source) is not None:
+        return [case["entry"]]
     copy = HALF_COPY_ENTRY if source.dtype.name == "float16" else COPY_ENTRY
-    return ([] if source.flags.c_contiguous else [copy]) + [case["entry"]]
+    return [copy, case["entry"]]
 
 
 def run(mx, np, host, save):
@@ -157,6 +162,21 @@ def widen_reference(word):
     )[0]
 
 
+def written(np, case, source, expected):
+    """The values a case's last dispatch writes, in its output's memory order.
+
+    A cast runs in place over the contiguous span MLX's layout marks and
+    converts it in memory order; copies and other casts write ``expected``.
+    """
+    if case["entry"] == HALF_COPY_ENTRY:
+        return expected
+    span = contiguous_span(source)
+    if span is None:
+        return expected
+    memory = np.lib.stride_tricks.as_strided(source, (span,), (source.itemsize,))
+    return reference(np, case, memory)
+
+
 def validate(records, trace, *, native):
     import numpy as np
 
@@ -191,8 +211,9 @@ def validate(records, trace, *, native):
         if not events:
             continue
         event = events[-1]
-        half = expected.dtype == np.float16
-        bits = words(np, expected)
+        stored = written(np, case, source, expected)
+        half = stored.dtype == np.float16
+        bits = words(np, stored)
         guard = [0x3555 if half else 0x6A15BEEF] * 32
         physical, physical_guard = bits, guard
         if half and event["target"] == "opengl":
@@ -210,7 +231,7 @@ def validate(records, trace, *, native):
                 "guardValues": physical_guard,
                 "logicalWords": bits,
             }
-            or event.get("threads") != expected.size
+            or event.get("threads") != stored.size
         ):
             raise ValueError("Half native readback, guards or logical storage differs")
     if cursor != len(trace):

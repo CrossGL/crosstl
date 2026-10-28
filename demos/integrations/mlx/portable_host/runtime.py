@@ -6,6 +6,7 @@ import ctypes
 import hashlib
 import json
 import math
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,11 +14,13 @@ from crosstl.project import (
     build_native_loader_dispatch_request,
     prepare_native_loader_dispatch_regions,
 )
+from crosstl.project.metal_runtime import MetalComputeRuntime
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
 )
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
+from crosstl.project.runtime_values import exact_types_within
 from crosstl.project.runtime_verification import (
     DirectXRuntimeParityAdapter,
     MetalRuntimeParityAdapter,
@@ -30,9 +33,22 @@ from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
     bfloat_storage,
     column_reduction_layout,
+    column_small_layout,
     copy_layout,
+    divmod_dispatch,
+    fp_matmul_layout,
+    fp_qmm_layout,
     gather_dispatch,
+    gemm_dispatch,
+    gemm_layout,
+    gemm_splitk_dispatch,
+    gemm_splitk_layout,
+    gemv_dispatch,
+    gemv_layout,
     half_storage,
+    matmul_dispatch,
+    matmul_layout,
+    qmm_layout,
     quantization_dispatch,
     quantization_layout,
     random_dispatch,
@@ -42,11 +58,52 @@ from demos.integrations.mlx.portable_host import (
     scan_layout,
     slice_update_layout,
 )
+from demos.integrations.mlx.portable_host.column_small_packages import (
+    CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
+)
+from demos.integrations.mlx.portable_host.column_small_packages import (
+    SmallColumnPackageCache,
+)
+from demos.integrations.mlx.portable_host.divmod_packages import CACHE as DIVMOD_CACHE
+from demos.integrations.mlx.portable_host.divmod_packages import DivModPackageCache
+from demos.integrations.mlx.portable_host.divmod_packages import (
+    signature as divmod_signature,
+)
+from demos.integrations.mlx.portable_host.fp_matmul_packages import (
+    CACHE_DIRECTORY as FP_QUANTIZED_MATMUL_CACHE,
+)
+from demos.integrations.mlx.portable_host.fp_matmul_packages import (
+    FpQuantizedMatmulPackageCache,
+)
+from demos.integrations.mlx.portable_host.fp_qmm_packages import (
+    CACHE_DIRECTORY as FP_QUANTIZED_QMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.fp_qmm_packages import (
+    FpQuantizedQmmPackageCache,
+)
 from demos.integrations.mlx.portable_host.gather_packages import (
     GatherPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     signature as gather_signature,
+)
+from demos.integrations.mlx.portable_host.gemm_packages import (
+    CACHE_DIRECTORY as GEMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.gemm_packages import GemmPackageCache
+from demos.integrations.mlx.portable_host.gemm_splitk_packages import (
+    CACHE_DIRECTORY as SPLITK_GEMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.gemm_splitk_packages import SplitKPackageCache
+from demos.integrations.mlx.portable_host.gemv_packages import (
+    CACHE_DIRECTORY as GEMV_CACHE,
+)
+from demos.integrations.mlx.portable_host.gemv_packages import GemvPackageCache
+from demos.integrations.mlx.portable_host.matmul_packages import (
+    CACHE_DIRECTORY as QUANTIZED_MATMUL_CACHE,
+)
+from demos.integrations.mlx.portable_host.matmul_packages import (
+    QuantizedMatmulPackageCache,
 )
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
@@ -85,6 +142,10 @@ from demos.integrations.mlx.portable_host.packages import (
     SLICE_UPDATE_ENTRIES,
     UNARY_ENTRIES,
 )
+from demos.integrations.mlx.portable_host.qmm_packages import (
+    CACHE_DIRECTORY as QUANTIZED_QMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.qmm_packages import QuantizedQmmPackageCache
 from demos.integrations.mlx.portable_host.quantization_packages import (
     QuantizationPackageCache,
 )
@@ -102,6 +163,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
 from demos.integrations.mlx.portable_host.reduction_packages import (
     COLUMN_ENTRIES,
     INIT_ENTRIES,
+    PARTITION_SUM_ENTRIES,
     ROW_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
@@ -113,6 +175,7 @@ from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
 )
+from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
 class Buffer(ctypes.Structure):
@@ -178,6 +241,10 @@ TYPES = {
     "uint64": ctypes.c_uint64,
 }
 _installed_runtime = None
+INT_TYPES = frozenset({int})
+BOOL_TYPES = frozenset({bool})
+INTEGRAL_TYPES = frozenset({bool, int})
+FLOAT_TYPES = frozenset({float})
 COPY_GUARD = [0x6A15BEEF] * 32
 BOOLEAN_GUARD = [index % 2 == 0 for index in range(32)]
 ALL_CAST_ENTRIES = {
@@ -227,16 +294,29 @@ def physical_dtype(dtype, target):
 
 
 def boolean_values(values, dtype):
-    expected_type = bool if dtype == "bool" else int
-    if any(type(value) is not expected_type or value not in (0, 1) for value in values):
+    expected_types = BOOL_TYPES if dtype == "bool" else INT_TYPES
+    if not exact_types_within(values, expected_types) or (
+        values and not (min(values) >= 0 and max(values) <= 1)
+    ):
         raise ValueError("Boolean storage must contain canonical zero or one values")
-    return [bool(value) if dtype == "bool" else int(value) for value in values]
+    # Exact bools or ints already are their canonical storage values.
+    return list(values)
 
 
 def wire_value(value):
     if isinstance(value, float) and not math.isfinite(value):
         return "nan" if math.isnan(value) else "+infinity" if value > 0 else "-infinity"
     return value
+
+
+def wire_values(values):
+    """``[wire_value(value) for value in values]``, in bulk for exact scalars."""
+    values = list(values)
+    if exact_types_within(values, INTEGRAL_TYPES) or (
+        exact_types_within(values, FLOAT_TYPES) and all(map(math.isfinite, values))
+    ):
+        return values
+    return [wire_value(value) for value in values]
 
 
 class HostRuntime:
@@ -257,16 +337,28 @@ class HostRuntime:
         half_arithmetic=None,
         bfloat=None,
         retain_native_modules=False,
+        trace_values=True,
     ):
         if type(retain_native_modules) is not bool:
             raise ValueError("Native module retention must be a Boolean")
+        if type(trace_values) is not bool:
+            raise ValueError("Trace value retention must be a Boolean")
         self.retain_native_modules = retain_native_modules
+        # False keeps each long scalar array as its length and SHA-256 only.
+        self.trace_values = trace_values
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
         index = json.loads((self.directory / "index.json").read_text(encoding="utf-8"))
         self.target = index["target"]
         self.small_rows = (
             SmallRowPackageCache(mlx_root, self.directory / "small-rows", self.target)
+            if mlx_root is not None
+            else None
+        )
+        self.small_columns = (
+            SmallColumnPackageCache(
+                mlx_root, self.directory / SMALL_COLUMN_CACHE, self.target
+            )
             if mlx_root is not None
             else None
         )
@@ -282,8 +374,58 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.quantized_matmuls = (
+            QuantizedMatmulPackageCache(
+                mlx_root, self.directory / QUANTIZED_MATMUL_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.fp_quantized_matmuls = (
+            FpQuantizedMatmulPackageCache(
+                mlx_root, self.directory / FP_QUANTIZED_MATMUL_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.quantized_qmms = (
+            QuantizedQmmPackageCache(
+                mlx_root, self.directory / QUANTIZED_QMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.fp_quantized_qmms = (
+            FpQuantizedQmmPackageCache(
+                mlx_root, self.directory / FP_QUANTIZED_QMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.gemvs = (
+            GemvPackageCache(mlx_root, self.directory / GEMV_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        self.gemms = (
+            GemmPackageCache(mlx_root, self.directory / GEMM_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        self.splitk_gemms = (
+            SplitKPackageCache(
+                mlx_root, self.directory / SPLITK_GEMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
+            if mlx_root is not None
+            else None
+        )
+        self.divmods = (
+            DivModPackageCache(mlx_root, self.directory / DIVMOD_CACHE, self.target)
             if mlx_root is not None
             else None
         )
@@ -390,14 +532,26 @@ class HostRuntime:
             self.reduction_descriptors.update(descriptors)
             self.reduction_directories.update({key: directory for key in descriptors})
         self.trace.parent.mkdir(parents=True, exist_ok=True)
+        # Each package artifact is compiled and validated once per session;
+        # later dispatches of byte-identical sources reuse the validated module
+        # and record the reuse on every validation step.
         if self.target == "opengl":
             adapter = OpenGLRuntimeParityAdapter(
-                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+                runtime=OpenGLComputeRuntime(context_backends=("egl",)),
+                reuse_validated_modules=True,
             )
         elif self.target == "directx":
-            adapter = DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+            adapter = DirectXRuntimeParityAdapter(
+                runtime=DirectXComputeRuntime(), reuse_validated_modules=True
+            )
         elif self.target == "metal":
-            adapter = MetalRuntimeParityAdapter()
+            # An explicit resolver gives this session its own helper, built
+            # once, instead of re-keying the shared helper on the toolchain
+            # with three xcrun lookups before every dispatch.
+            adapter = MetalRuntimeParityAdapter(
+                runtime=MetalComputeRuntime(tool_resolver=shutil.which),
+                reuse_validated_modules=True,
+            )
         else:
             raise ValueError(f"Unsupported host target: {self.target}")
         self.executor = RuntimeParityExecutor(
@@ -421,8 +575,50 @@ class HostRuntime:
             if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
                 scan_layout.signature(name)
                 return 1
+            if (
+                name.startswith(divmod_dispatch.ENTRY_PREFIXES)
+                and self.divmods is not None
+            ):
+                divmod_signature(name)
+                return 1
             if name.startswith(("gather", "scatter")) and self.gathers is not None:
                 gather_signature(name)
+                return 1
+            if (
+                name.startswith(matmul_layout.ENTRY_PREFIXES)
+                and self.quantized_matmuls is not None
+            ):
+                matmul_layout.signature(name)
+                return 1
+            if (
+                name.startswith(fp_matmul_layout.ENTRY_PREFIXES)
+                and self.fp_quantized_matmuls is not None
+            ):
+                fp_matmul_layout.signature(name)
+                return 1
+            if (
+                name.startswith(qmm_layout.ENTRY_PREFIXES)
+                and self.quantized_qmms is not None
+            ):
+                qmm_layout.signature(name)
+                return 1
+            if (
+                name.startswith(fp_qmm_layout.ENTRY_PREFIXES)
+                and self.fp_quantized_qmms is not None
+            ):
+                fp_qmm_layout.signature(name)
+                return 1
+            if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
+                gemv_layout.signature(name)
+                return 1
+            if name.startswith(gemm_layout.ENTRY_PREFIXES) and self.gemms is not None:
+                gemm_layout.signature(name)
+                return 1
+            if (
+                name.startswith(gemm_splitk_layout.ENTRY_PREFIXES)
+                and self.splitk_gemms is not None
+            ):
+                gemm_splitk_layout.signature(name)
                 return 1
             if (
                 name.startswith(quantization_layout.ENTRY_PREFIXES)
@@ -475,6 +671,55 @@ class HostRuntime:
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
         if entry.startswith(scan_layout.ENTRY_PREFIXES):
             return scan_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(divmod_dispatch.ENTRY_PREFIXES):
+            return divmod_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry.startswith(matmul_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry.startswith(fp_matmul_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                fp_matmul_layout,
+                self.fp_quantized_matmuls,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
+            )
+        if entry.startswith(qmm_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                qmm_layout,
+                self.quantized_qmms,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
+            )
+        if entry.startswith(fp_qmm_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                fp_qmm_layout,
+                self.fp_quantized_qmms,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
+            )
+        if entry.startswith(gemv_layout.ENTRY_PREFIXES):
+            return gemv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(gemm_layout.ENTRY_PREFIXES):
+            return gemm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(gemm_splitk_layout.ENTRY_PREFIXES):
+            return gemm_splitk_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(quantization_layout.ENTRY_PREFIXES):
             return quantization_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
@@ -490,10 +735,15 @@ class HostRuntime:
         initialization = entry in INIT_ENTRIES
         small_row = entry in SMALL_ROW_ENTRIES
         row_reduction = entry in ROW_ENTRIES or small_row
-        column_reduction = entry in COLUMN_ENTRIES
+        small_column = entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES
+        column_reduction = (
+            entry in COLUMN_ENTRIES or entry in PARTITION_SUM_ENTRIES or small_column
+        )
         shaped_reduction = row_reduction or column_reduction
         layout_module = (
-            column_reduction_layout if column_reduction else row_reduction_layout
+            (column_small_layout if small_column else column_reduction_layout)
+            if column_reduction
+            else row_reduction_layout
         )
         reduction = entry in REDUCTION_ENTRIES or shaped_reduction or initialization
         if entry not in self.descriptors and not reduction:
@@ -537,7 +787,11 @@ class HostRuntime:
                 else (
                     reduction_layout.MAX_ELEMENTS
                     if entry in REDUCTION_ENTRIES
-                    else 65535
+                    else (
+                        column_reduction_layout.MAX_ELEMENTS
+                        if column_reduction
+                        else 65535
+                    )
                 )
             )
         ):
@@ -551,7 +805,7 @@ class HostRuntime:
                 "Reduction initialization requires one invocation per output"
             )
         checked_reduction = None
-        if reduction and not small_row:
+        if reduction and not small_row and not small_column:
             key = f'w{execution["workgroupSize"][0]}/{entry}'
             checked_reduction = getattr(self, "checked_reductions", {}).get(key)
             if checked_reduction is None and key not in self.reduction_descriptors:
@@ -559,7 +813,7 @@ class HostRuntime:
             if checked_reduction is None:
                 descriptor = self.reduction_descriptors[key]
                 package_directory = self.reduction_directories[key] / "package"
-        elif not small_row:
+        elif not small_row and not small_column:
             descriptor = self.descriptors[entry]
             package_directory = (
                 self.bfloat_directory
@@ -726,6 +980,16 @@ class HostRuntime:
             shaped_metadata = layout_module.validate(
                 entry, supplied, threads, execution
             )
+            if small_column:
+                if self.small_columns is None:
+                    raise ValueError(
+                        "Small column dispatch requires the pinned MLX source root"
+                    )
+                descriptor, package_directory = self.small_columns.get(
+                    column_small_layout.variant(
+                        entry, tuple(execution["workgroupSize"])
+                    )
+                )
             if checked_reduction is not None:
                 descriptor, package_directory = checked_reduction.get(
                     entry,
@@ -904,11 +1168,7 @@ class HostRuntime:
                     ).contents
                 )
             else:
-                values = (
-                    [0] * buffer.count
-                    if buffer.output == 1
-                    else [wire_value(value) for value in view]
-                )
+                values = [0] * buffer.count if buffer.output == 1 else wire_values(view)
             if initialization:
                 # Unwritten outputs must differ from the reduction identity.
                 initial_value = int("sum" in entry or entry == "init_reduce_orbool_")
@@ -1079,9 +1339,9 @@ class HostRuntime:
                     if dtype.startswith("int")
                     else (0, 2**bits - 1)
                 )
-                if any(
-                    type(value) is not int or not low <= value <= high
-                    for value in output["values"]
+                readback = output["values"]
+                if not exact_types_within(readback, INT_TYPES) or (
+                    readback and not (low <= min(readback) and max(readback) <= high)
                 ):
                     raise RuntimeError(
                         "Native integer readback is outside its integer type"
@@ -1103,7 +1363,12 @@ class HostRuntime:
                         ).value
                     return value
 
-                if any(
+                # Validated destinations lie in [0, count), so as many distinct
+                # written indices as elements leave no untouched storage.
+                every_element_written = len(written) == buffer.count and (
+                    not written or (min(written) >= 0 and max(written) < buffer.count)
+                )
+                if not every_element_written and any(
                     storage_word(value) != storage_word(initial[index])
                     for index, value in enumerate(output["values"][: buffer.count])
                     if index not in written
@@ -1121,234 +1386,217 @@ class HostRuntime:
                 result_values = bfloat_storage.unpack(result_values, self.target)
             values = (storage_type * buffer.count)(
                 *(
-                    float(value) if storage_type is ctypes.c_float else value
-                    for value in result_values
+                    map(float, result_values)
+                    if storage_type is ctypes.c_float
+                    else result_values
                 )
             )
             ctypes.memmove(buffer.data, values, ctypes.sizeof(values))
-        with self.trace.open("a", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(
+        write_trace(
+            self,
+            {
+                "entry": entry,
+                "target": self.target,
+                "threads": threads,
+                **execution,
+                "dispatchVersion": DISPATCH_VERSION,
+                "artifact": descriptor["artifact"],
+                "details": result.details,
+                **(
                     {
-                        "entry": entry,
-                        "target": self.target,
-                        "threads": threads,
-                        **execution,
-                        "dispatchVersion": DISPATCH_VERSION,
-                        "artifact": descriptor["artifact"],
-                        "details": result.details,
+                        (
+                            "bfloatStorage"
+                            if entry in BFLOAT_ENTRIES
+                            else "halfStorage"
+                        ): {
+                            "logicalType": output_dtype,
+                            "physicalType": storage,
+                            "encoding": expected_encoding,
+                            "values": output["values"][: buffer.count],
+                            "guardValues": output["values"][buffer.count :],
+                            "logicalWords": list(values),
+                        },
+                        "inputs": inputs,
+                        "packageRoot": str(package_directory),
+                    }
+                    if entry in (*ALL_HALF_ENTRIES, *BFLOAT_ENTRIES)
+                    else {}
+                ),
+                **(
+                    {
+                        "sliceUpdateValues": output["values"][: buffer.count],
+                        "sliceUpdateGuardValues": output["values"][buffer.count :],
+                        "sliceUpdateMetadata": slice_metadata,
                         **(
                             {
-                                (
-                                    "bfloatStorage"
-                                    if entry in BFLOAT_ENTRIES
-                                    else "halfStorage"
-                                ): {
-                                    "logicalType": output_dtype,
-                                    "physicalType": storage,
-                                    "encoding": expected_encoding,
-                                    "values": output["values"][: buffer.count],
-                                    "guardValues": output["values"][buffer.count :],
-                                    "logicalWords": list(values),
-                                },
                                 "inputs": inputs,
                                 "packageRoot": str(package_directory),
                             }
-                            if entry in (*ALL_HALF_ENTRIES, *BFLOAT_ENTRIES)
+                            if self.retain_native_modules
                             else {}
                         ),
                         **(
                             {
-                                "sliceUpdateValues": output["values"][: buffer.count],
-                                "sliceUpdateGuardValues": output["values"][
+                                "sliceUpdateStorageWords": output["values"][
+                                    : buffer.count
+                                ],
+                                "sliceUpdateGuardWords": output["values"][
                                     buffer.count :
                                 ],
-                                "sliceUpdateMetadata": slice_metadata,
-                                **(
-                                    {
-                                        "inputs": inputs,
-                                        "packageRoot": str(package_directory),
-                                    }
-                                    if self.retain_native_modules
-                                    else {}
-                                ),
-                                **(
-                                    {
-                                        "sliceUpdateStorageWords": output["values"][
-                                            : buffer.count
-                                        ],
-                                        "sliceUpdateGuardWords": output["values"][
-                                            buffer.count :
-                                        ],
-                                        "sliceUpdateValues": [
-                                            wire_value(
-                                                ctypes.c_float.from_buffer_copy(
-                                                    ctypes.c_uint32(word)
-                                                ).value
-                                            )
-                                            for word in output["values"][: buffer.count]
-                                        ],
-                                        "sliceUpdateGuardValues": [
-                                            ctypes.c_float.from_buffer_copy(
-                                                ctypes.c_uint32(word)
-                                            ).value
-                                            for word in output["values"][buffer.count :]
-                                        ],
-                                    }
-                                    if bit_storage
-                                    else {}
-                                ),
-                            }
-                            if slice_update
-                            else {}
-                        ),
-                        **(
-                            {
-                                "integer64Values": output["values"][: buffer.count],
-                                "integer64GuardValues": output["values"][
-                                    buffer.count :
-                                ],
-                            }
-                            if entry in INTEGER64_ENTRIES
-                            else {}
-                        ),
-                        **(
-                            {
-                                "selectionValues": output["values"][: buffer.count],
-                                "selectionGuardValues": output["values"][
-                                    buffer.count :
-                                ],
-                            }
-                            if selection
-                            else {}
-                        ),
-                        **(
-                            {"bitwiseValues": output["values"][: buffer.count]}
-                            if bitwise
-                            else {}
-                        ),
-                        **(
-                            {"absoluteValues": output["values"][: buffer.count]}
-                            if absolute
-                            else {}
-                        ),
-                        **(
-                            {"unaryGuardValues": output["values"][buffer.count :]}
-                            if unary and guarded
-                            else {}
-                        ),
-                        **(
-                            {
-                                "unaryValues": output["values"][: buffer.count],
-                                "inputs": inputs,
-                                "packageRoot": str(package_directory),
-                            }
-                            if unary and self.retain_native_modules
-                            else {}
-                        ),
-                        **(
-                            {"initializationValue": initial_value}
-                            if initialization
-                            else {}
-                        ),
-                        **(
-                            {
-                                "reductionGuardValues": output["values"][
-                                    buffer.count :
-                                ],
-                                "reductionValues": output["values"][: buffer.count],
-                                **(
-                                    {
-                                        "reductionLayout": dict(
-                                            inputCount=supplied["in"].count,
-                                            outputCount=supplied["out"].count,
-                                        )
-                                    }
-                                    if shaped_reduction
-                                    and checked_reduction is not None
-                                    else {}
-                                ),
-                                **(
-                                    {
-                                        "inputs": inputs,
-                                        "packageRoot": str(package_directory),
-                                    }
-                                    if self.retain_native_modules
-                                    or checked_reduction is not None
-                                    else {}
-                                ),
-                                "reductionMetadata": (
-                                    {"outputSize": threads}
-                                    if initialization
-                                    else (
-                                        shaped_metadata
-                                        if shaped_reduction
-                                        else {
-                                            name: ctypes.cast(
-                                                supplied[name].data,
-                                                ctypes.POINTER(ctypes.c_uint64),
-                                            )[0]
-                                            for name in ("in_size", "row_size")
-                                        }
+                                "sliceUpdateValues": [
+                                    wire_value(
+                                        ctypes.c_float.from_buffer_copy(
+                                            ctypes.c_uint32(word)
+                                        ).value
                                     )
-                                ),
+                                    for word in output["values"][: buffer.count]
+                                ],
+                                "sliceUpdateGuardValues": [
+                                    ctypes.c_float.from_buffer_copy(
+                                        ctypes.c_uint32(word)
+                                    ).value
+                                    for word in output["values"][buffer.count :]
+                                ],
                             }
-                            if reduction
-                            else {}
-                        ),
-                        **(
-                            {
-                                "copyGuardWords": output["values"][buffer.count :],
-                                "copyMetadata": copy_metadata,
-                                "copyValues": output["values"][: buffer.count],
-                                **(
-                                    {
-                                        "inputs": inputs,
-                                        "packageRoot": str(package_directory),
-                                    }
-                                    if self.retain_native_modules
-                                    else {}
-                                ),
-                            }
-                            if copy
-                            else {}
-                        ),
-                        **(
-                            {"binaryGuardValues": output["values"][buffer.count :]}
-                            if binary_operation
-                            else {}
-                        ),
-                        **(
-                            {
-                                "binaryValues": output["values"][: buffer.count],
-                                "inputs": inputs,
-                                "packageRoot": str(package_directory),
-                            }
-                            if binary_operation and self.retain_native_modules
-                            else {}
-                        ),
-                        **(
-                            {
-                                "castGuardValues": output["values"][buffer.count :],
-                                "castValues": output["values"][: buffer.count],
-                                "inputs": inputs,
-                                "packageRoot": str(package_directory),
-                            }
-                            if cast
-                            else {}
-                        ),
-                        **(
-                            {
-                                "booleanGuardValues": output["values"][buffer.count :],
-                                "physicalBooleanType": physical_dtype(
-                                    "bool_", self.target
-                                ),
-                            }
-                            if output_dtype == "bool_"
+                            if bit_storage
                             else {}
                         ),
                     }
-                )
-                + "\n"
-            )
+                    if slice_update
+                    else {}
+                ),
+                **(
+                    {
+                        "integer64Values": output["values"][: buffer.count],
+                        "integer64GuardValues": output["values"][buffer.count :],
+                    }
+                    if entry in INTEGER64_ENTRIES
+                    else {}
+                ),
+                **(
+                    {
+                        "selectionValues": output["values"][: buffer.count],
+                        "selectionGuardValues": output["values"][buffer.count :],
+                    }
+                    if selection
+                    else {}
+                ),
+                **(
+                    {"bitwiseValues": output["values"][: buffer.count]}
+                    if bitwise
+                    else {}
+                ),
+                **(
+                    {"absoluteValues": output["values"][: buffer.count]}
+                    if absolute
+                    else {}
+                ),
+                **(
+                    {"unaryGuardValues": output["values"][buffer.count :]}
+                    if unary and guarded
+                    else {}
+                ),
+                **(
+                    {
+                        "unaryValues": output["values"][: buffer.count],
+                        "inputs": inputs,
+                        "packageRoot": str(package_directory),
+                    }
+                    if unary and self.retain_native_modules
+                    else {}
+                ),
+                **({"initializationValue": initial_value} if initialization else {}),
+                **(
+                    {
+                        "reductionGuardValues": output["values"][buffer.count :],
+                        "reductionValues": output["values"][: buffer.count],
+                        **(
+                            {
+                                "reductionLayout": dict(
+                                    inputCount=supplied["in"].count,
+                                    outputCount=supplied["out"].count,
+                                )
+                            }
+                            if shaped_reduction and checked_reduction is not None
+                            else {}
+                        ),
+                        **(
+                            {
+                                "inputs": inputs,
+                                "packageRoot": str(package_directory),
+                            }
+                            if self.retain_native_modules
+                            or checked_reduction is not None
+                            else {}
+                        ),
+                        "reductionMetadata": (
+                            {"outputSize": threads}
+                            if initialization
+                            else (
+                                shaped_metadata
+                                if shaped_reduction
+                                else {
+                                    name: ctypes.cast(
+                                        supplied[name].data,
+                                        ctypes.POINTER(ctypes.c_uint64),
+                                    )[0]
+                                    for name in ("in_size", "row_size")
+                                }
+                            )
+                        ),
+                    }
+                    if reduction
+                    else {}
+                ),
+                **(
+                    {
+                        "copyGuardWords": output["values"][buffer.count :],
+                        "copyMetadata": copy_metadata,
+                        "copyValues": output["values"][: buffer.count],
+                        **(
+                            {
+                                "inputs": inputs,
+                                "packageRoot": str(package_directory),
+                            }
+                            if self.retain_native_modules
+                            else {}
+                        ),
+                    }
+                    if copy
+                    else {}
+                ),
+                **(
+                    {"binaryGuardValues": output["values"][buffer.count :]}
+                    if binary_operation
+                    else {}
+                ),
+                **(
+                    {
+                        "binaryValues": output["values"][: buffer.count],
+                        "inputs": inputs,
+                        "packageRoot": str(package_directory),
+                    }
+                    if binary_operation and self.retain_native_modules
+                    else {}
+                ),
+                **(
+                    {
+                        "castGuardValues": output["values"][buffer.count :],
+                        "castValues": output["values"][: buffer.count],
+                        "inputs": inputs,
+                        "packageRoot": str(package_directory),
+                    }
+                    if cast
+                    else {}
+                ),
+                **(
+                    {
+                        "booleanGuardValues": output["values"][buffer.count :],
+                        "physicalBooleanType": physical_dtype("bool_", self.target),
+                    }
+                    if output_dtype == "bool_"
+                    else {}
+                ),
+            },
+        )
         self.dispatch_count = getattr(self, "dispatch_count", 0) + 1
