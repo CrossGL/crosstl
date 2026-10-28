@@ -31,6 +31,7 @@ from .idioms import GLSL as _IDIOMS_GLSL
 from .initializers import FAMILY as _INITIALIZERS
 from .initializers import GLSL as _INITIALIZERS_GLSL
 from .integers import WEBGL as _INTEGERS
+from .interfaces import WEBGL as _INTERFACES
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
@@ -39,12 +40,14 @@ from .packing import WEBGL as _PACKING
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
+from .rasterization import WEBGL as _RASTERIZATION
 from .records import WEBGL as _RECORDS
 from .relations import GLSL as _RELATIONS
 from .rows import WEBGL as _ROWS
 from .scopes import WEBGL as _SCOPES
 from .values import FAMILY as _VALUES
 from .vectors import GLSL as _VECTORS
+from .vertices import WEBGL as _VERTICES
 from .workgroups import WEBGL as _WORKGROUPS
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
@@ -113,6 +116,9 @@ WEBGL = {
     **_VECTORS,
     **_RELATIONS,
     **_FRAGMENTS,
+    **_INTERFACES,
+    **_VERTICES,
+    **_RASTERIZATION,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

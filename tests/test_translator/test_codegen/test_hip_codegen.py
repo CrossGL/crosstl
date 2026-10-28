@@ -296,7 +296,7 @@ class TestHipCodeGen:
 
         assert "const float PI = 3.14159f;" in hip_code
         assert "const int WARP_SIZE = 32;" in hip_code
-        assert "const float3 UP_VECTOR = make_float3(0.0f, 1.0f, 0.0f);" in hip_code
+        assert "__device__ const float3 UP_VECTOR = {0.0f, 1.0f, 0.0f};" in hip_code
         assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in hip_code
 
     def test_compute_shader_to_kernel(self):
@@ -1702,8 +1702,9 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "__device__ float rsqrt(float x)" in hip_code
-        assert "float inv = rsqrt(4.0f);" in hip_code
+        # rsqrt is a HIP math function, so the user function is renamed (issue #3326).
+        assert "__device__ float rsqrt_fn(float x)" in hip_code
+        assert "float inv = rsqrt_fn(4.0f);" in hip_code
         assert "rsqrtf(4.0)" not in hip_code
         assert "rsqrtf(4.0f)" not in hip_code
 
@@ -3768,8 +3769,9 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(ast)
 
-        assert "__device__ float atan(float y, float x)" in hip_code
-        assert "float angle = atan(1.0f, 2.0f);" in hip_code
+        # atan is a HIP math function, so the user function is renamed (issue #3326).
+        assert "__device__ float atan_fn(float y, float x)" in hip_code
+        assert "float angle = atan_fn(1.0f, 2.0f);" in hip_code
         assert "atan2f(1.0, 2.0)" not in hip_code
         assert "atan2f(1.0f, 2.0f)" not in hip_code
 
@@ -6281,36 +6283,36 @@ class TestHipCodeGen:
             line.strip() for line in hip_code.splitlines() if line.strip().endswith(";")
         }
 
-        assert "hipTextureObject_t linearState;" in declarations
-        assert "hipTextureObject_t ramp;" in declarations
-        assert "hipTextureObject_t rampLayers;" in declarations
-        assert "hipTextureObject_t colorMap;" in declarations
-        assert "hipTextureObject_t volumeMap;" in declarations
-        assert "hipTextureObject_t environmentMap;" in declarations
-        assert "hipTextureObject_t layers;" in declarations
-        assert "hipTextureObject_t shadowMap;" in declarations
-        assert "hipTextureObject_t cascades;" in declarations
-        assert "hipTextureObject_t cubeShadow;" in declarations
-        assert "hipTextureObject_t probes;" in declarations
-        assert "hipTextureObject_t shadowProbes;" in declarations
-        assert "hipTextureObject_t msTex;" in declarations
-        assert "hipTextureObject_t msArray;" in declarations
-        assert "hipSurfaceObject_t signedImage;" in declarations
-        assert "hipSurfaceObject_t signedVolume;" in declarations
-        assert "hipSurfaceObject_t signedLayers;" in declarations
-        assert "hipSurfaceObject_t signedMs;" in declarations
-        assert "hipSurfaceObject_t signedMsLayers;" in declarations
-        assert "hipSurfaceObject_t unsignedImage;" in declarations
-        assert "hipSurfaceObject_t unsignedVolume;" in declarations
-        assert "hipSurfaceObject_t unsignedLayers;" in declarations
-        assert "hipSurfaceObject_t unsignedMs;" in declarations
-        assert "hipSurfaceObject_t unsignedMsLayers;" in declarations
-        assert "hipSurfaceObject_t outputImage;" in declarations
-        assert "hipSurfaceObject_t volumeImage;" in declarations
-        assert "hipSurfaceObject_t cubeImage;" in declarations
-        assert "hipSurfaceObject_t layerImage;" in declarations
-        assert "hipSurfaceObject_t outputMs;" in declarations
-        assert "hipSurfaceObject_t layerMs;" in declarations
+        assert "__device__ hipTextureObject_t linearState;" in declarations
+        assert "__device__ hipTextureObject_t ramp;" in declarations
+        assert "__device__ hipTextureObject_t rampLayers;" in declarations
+        assert "__device__ hipTextureObject_t colorMap;" in declarations
+        assert "__device__ hipTextureObject_t volumeMap;" in declarations
+        assert "__device__ hipTextureObject_t environmentMap;" in declarations
+        assert "__device__ hipTextureObject_t layers;" in declarations
+        assert "__device__ hipTextureObject_t shadowMap;" in declarations
+        assert "__device__ hipTextureObject_t cascades;" in declarations
+        assert "__device__ hipTextureObject_t cubeShadow;" in declarations
+        assert "__device__ hipTextureObject_t probes;" in declarations
+        assert "__device__ hipTextureObject_t shadowProbes;" in declarations
+        assert "__device__ hipTextureObject_t msTex;" in declarations
+        assert "__device__ hipTextureObject_t msArray;" in declarations
+        assert "__device__ hipSurfaceObject_t signedImage;" in declarations
+        assert "__device__ hipSurfaceObject_t signedVolume;" in declarations
+        assert "__device__ hipSurfaceObject_t signedLayers;" in declarations
+        assert "__device__ hipSurfaceObject_t signedMs;" in declarations
+        assert "__device__ hipSurfaceObject_t signedMsLayers;" in declarations
+        assert "__device__ hipSurfaceObject_t unsignedImage;" in declarations
+        assert "__device__ hipSurfaceObject_t unsignedVolume;" in declarations
+        assert "__device__ hipSurfaceObject_t unsignedLayers;" in declarations
+        assert "__device__ hipSurfaceObject_t unsignedMs;" in declarations
+        assert "__device__ hipSurfaceObject_t unsignedMsLayers;" in declarations
+        assert "__device__ hipSurfaceObject_t outputImage;" in declarations
+        assert "__device__ hipSurfaceObject_t volumeImage;" in declarations
+        assert "__device__ hipSurfaceObject_t cubeImage;" in declarations
+        assert "__device__ hipSurfaceObject_t layerImage;" in declarations
+        assert "__device__ hipSurfaceObject_t outputMs;" in declarations
+        assert "__device__ hipSurfaceObject_t layerMs;" in declarations
 
         raw_resource_types = [
             "sampler",

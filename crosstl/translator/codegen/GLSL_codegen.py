@@ -258,6 +258,11 @@ from .glsl_interface_block_io import (
     block_member_location_type,
     stage_block_member_layout,
 )
+from .glsl_invariant_builtins import (
+    has_invariant_attribute,
+    invariant_builtin_redeclaration,
+    invariant_builtin_redeclarations,
+)
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_mesh_locations import mesh_fragment_input_layouts, mesh_output_layouts
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
@@ -281,6 +286,13 @@ from .glsl_shadow_lod import (
     zero_lod_compare_gradient_call,
 )
 from .glsl_specialization_macros import glsl_specialization_macro_name
+from .glsl_stage_builtin_members import (
+    fragment_member_builtin_alias,
+    fragment_parameter_builtin_expression,
+    is_vertex_layer_output,
+    note_vertex_builtin_output,
+    refuse_unmapped_vertex_output,
+)
 from .glsl_stage_distances import (
     distance_input_alias,
     distance_output_epilogue,
@@ -510,6 +522,11 @@ from .pointer_reinterpret import (
     PointerReinterpretationError,
     same_scalar_lane_view,
     scalar_storage_layout,
+)
+from .private_member_views import (
+    glsl_member_view_root,
+    is_single_object_type,
+    member_view_chain,
 )
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases
@@ -3084,6 +3101,8 @@ class GLSLCodeGen(
             "sample_position": "gl_SamplePosition",
             "gl_SampleMaskIn": "gl_SampleMaskIn",
             "sample_mask_in": "gl_SampleMaskIn",
+            # GL_NV_conservative_raster_underestimation spells SPIR-V's FullyCoveredEXT this way.
+            "gl_FullyCoveredEXT": "gl_FragFullyCoveredNV",
             # Compute shader specific
             "gl_GlobalInvocationID": "gl_GlobalInvocationID",
             "SV_DispatchThreadID": "gl_GlobalInvocationID",
@@ -9098,6 +9117,7 @@ class GLSLCodeGen(
         self.current_target_stage = target_stage
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
         self.glsl_shadow_lod_extension_used = False
+        self.glsl_stage_builtin_extensions = []
         stage_names = {
             stage_name
             for stage_name in self.glsl_stage_names(ast, target_stage)
@@ -9802,6 +9822,7 @@ class GLSLCodeGen(
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
         code += stage_io_code
+        code += invariant_builtin_redeclarations(self, target_stage)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -10574,7 +10595,9 @@ class GLSLCodeGen(
             code = require_shadow_lod_extension(code)
         code = self.ensure_glsl_formatted_image_load_support(code)
         code = self.ensure_glsl_precise_support(code)
-        code = require_builtin_extensions(code)
+        code = require_builtin_extensions(
+            code, getattr(self, "glsl_stage_builtin_extensions", ())
+        )
         return self.ensure_glsl_int64_support(code)
 
     def collect_called_function_names(self, root):
@@ -22424,6 +22447,7 @@ class GLSLCodeGen(
             or mapped_type == "sampler"
             or self.is_opaque_resource_type(mapped_type)
             or self.is_structured_buffer_type(vtype)
+            or self.is_constant_buffer_type(vtype)
             or self.is_glsl_buffer_block_variable(node, vtype)
         )
 
@@ -23489,7 +23513,7 @@ class GLSLCodeGen(
             struct = self.structs_by_name.get(struct_name)
             for member in getattr(struct, "members", []) or []:
                 output_name = self.vertex_output_member_name(member)
-                if self.is_vertex_builtin_output(output_name):
+                if self.is_vertex_stage_builtin_output(output_name):
                     continue
                 if distance_private_output_declaration(self, member) is None:
                     names.add(output_name)
@@ -23529,7 +23553,8 @@ class GLSLCodeGen(
         semantic = self.semantic_from_node(param)
         mapped_semantic = self.map_semantic(semantic)
         if normalize_stage_name(stage_name) == "vertex":
-            if self.is_vertex_builtin_output(mapped_semantic):
+            if self.is_vertex_stage_builtin_output(mapped_semantic):
+                note_vertex_builtin_output(self, mapped_semantic)
                 return mapped_semantic
             reserved = set(self.vertex_input_member_names)
             reserved.update(self.stage_io_declared_names("vertex", "output"))
@@ -23777,7 +23802,7 @@ class GLSLCodeGen(
         code = ""
         for member in getattr(node, "members", []) or []:
             output_name = self.vertex_output_member_name(member)
-            if self.is_vertex_builtin_output(output_name):
+            if self.is_vertex_stage_builtin_output(output_name):
                 continue
             private_distance = distance_private_output_declaration(self, member)
             if private_distance is not None:
@@ -23949,8 +23974,10 @@ class GLSLCodeGen(
         mapped_semantic = self.map_semantic(semantic)
         if distance_semantic(mapped_semantic) is not None:
             return distance_output_name(self, member, mapped_semantic)
-        if self.is_vertex_builtin_output(mapped_semantic):
+        if self.is_vertex_stage_builtin_output(mapped_semantic):
+            note_vertex_builtin_output(self, mapped_semantic)
             return mapped_semantic
+        refuse_unmapped_vertex_output(self, semantic, mapped_semantic)
         if (
             member.name in self.vertex_input_member_names
             or member.name in self.stage_io_reserved_value_names
@@ -23994,7 +24021,7 @@ class GLSLCodeGen(
             return None
         if struct_name in self.vertex_output_struct_names:
             output_name = self.vertex_output_member_name(member)
-            if self.is_vertex_builtin_output(output_name):
+            if self.is_vertex_stage_builtin_output(output_name):
                 return None
             return self.combined_fragment_input_member_name(output_name)
         linked_name = self.linked_vertex_output_member_name(member.name)
@@ -24013,7 +24040,7 @@ class GLSLCodeGen(
                 if member.name != member_name:
                     continue
                 output_name = self.vertex_output_member_name(member)
-                if self.is_vertex_builtin_output(output_name):
+                if self.is_vertex_stage_builtin_output(output_name):
                     return None
                 return output_name
         return None
@@ -24035,7 +24062,7 @@ class GLSLCodeGen(
             "gl_SamplePosition",
             "gl_SampleMaskIn",
         }:
-            return None
+            return fragment_member_builtin_alias(self, semantic, mapped_semantic)
         return self.stage_input_builtin_alias(semantic, "fragment")
 
     def combined_fragment_input_member_name(self, input_name):
@@ -24052,6 +24079,10 @@ class GLSLCodeGen(
             "gl_ClipDistance",
             "gl_CullDistance",
         }
+
+    def is_vertex_stage_builtin_output(self, name):
+        # A vertex stage also writes the layer and viewport (glsl_stage_builtin_members); a mesh vertex does not.
+        return self.is_vertex_builtin_output(name) or is_vertex_layer_output(name)
 
     def stage_input_member_maps(self, func, shader_type):
         if shader_type not in {"vertex", "fragment"}:
@@ -24181,9 +24212,9 @@ class GLSLCodeGen(
         if array_suffix:
             return None
 
-        expression = self.stage_builtin_parameter_local_alias_expression(
-            builtin, base_type
-        )
+        expression = fragment_parameter_builtin_expression(
+            self, builtin, base_type, shader_type
+        ) or self.stage_builtin_parameter_local_alias_expression(builtin, base_type)
         if expression is None:
             return None
         parameter_name = self.glsl_local_identifier_name(param.name)
@@ -32709,6 +32740,15 @@ class GLSLCodeGen(
                     self.current_identifier_aliases[source_name] = builtin_name
                 else:
                     self.current_identifier_aliases.pop(source_name, None)
+            if has_invariant_attribute(node):
+                return invariant_builtin_redeclaration(
+                    self,
+                    builtin_name,
+                    getattr(
+                        self, "current_global_stage_io_stage", self.current_target_stage
+                    ),
+                    source_name or builtin_name,
+                )
             return ""
 
         vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
@@ -51425,11 +51465,11 @@ complex64_t crossgl_complex64_mod_assign(
                 "unsupported-private-byte-view",
                 "the destination is not a supported 8-, 16-, or 32-bit scalar view",
             )
-        if binding.get("root_kind") != "scalar" or binding.get("offset") not in {
-            0,
-            "0",
-            "0u",
-        }:
+        if (
+            binding.get("root_kind") != "scalar"
+            or binding.get("member_view")
+            or binding.get("offset") not in {0, "0", "0u"}
+        ):
             self.glsl_private_pointer_byte_view_error(
                 expression,
                 source_type,
@@ -53450,6 +53490,13 @@ complex64_t crossgl_complex64_mod_assign(
                 if binding is not None and binding.get("root_kind") == "scalar_value":
                     binding["root_kind"] = "scalar"
                     return binding
+            if isinstance(operand, MemberAccessNode):
+                root, _members = member_view_chain(operand)
+                return glsl_member_view_root(
+                    self,
+                    operand,
+                    (lexical_bindings or {}).get(root),
+                )
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.glsl_private_pointer_static_binding(
@@ -55323,6 +55370,27 @@ complex64_t crossgl_complex64_mod_assign(
             return base
         return f"({base} + {delta})"
 
+    def glsl_private_pointer_member_view_binding(self, operand):
+        """Bind ``&root.member`` to the member lvalue of a private value."""
+        root, _members = member_view_chain(operand)
+        source_type = self.local_variable_source_types.get(root)
+        if source_type is None:
+            source_type = self.local_variable_types.get(root)
+        if not is_single_object_type(self.type_name_string(source_type)):
+            return None
+        binding = glsl_member_view_root(
+            self, operand, {"root_kind": "scalar_value", "root": root}
+        )
+        if binding is None:
+            return None
+        return {
+            "backing": self.generate_expression(operand),
+            "offset": "0",
+            "root_kind": "scalar",
+            "source_type": binding["source_type"],
+            "member_view": True,
+        }
+
     def glsl_private_pointer_view_binding(self, expression):
         function_name = self.current_glsl_private_pointer_function_name
         local_arrays = self.function_private_pointer_local_arrays.get(function_name, {})
@@ -55417,6 +55485,8 @@ complex64_t crossgl_complex64_mod_assign(
                         "root_kind": "scalar",
                         "source_type": source_type,
                     }
+            if isinstance(operand, MemberAccessNode):
+                return self.glsl_private_pointer_member_view_binding(operand)
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.glsl_private_pointer_view_binding(operand.array)

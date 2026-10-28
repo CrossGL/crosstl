@@ -86,5 +86,8 @@ def test_generated_helpers_compile_with_glslang(tmp_path, target):
     command = [compiler, "-S", "comp", str(source)]
     if target.startswith("vulkan"):
         command[1:1] = ["--target-env", target]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    # A Vulkan target writes comp.spv to the working directory.
+    result = subprocess.run(
+        command, capture_output=True, text=True, timeout=120, cwd=tmp_path
+    )
     assert result.returncode == 0, result.stdout + result.stderr

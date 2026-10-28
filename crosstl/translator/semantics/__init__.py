@@ -24,9 +24,16 @@ from .binding_constants import BindingIndexUnresolvedError, fold_binding_constan
 from .boolean_reductions import lower_boolean_reductions
 from .buffer_strides import materialize_buffer_strides
 from .builtin_input_reads import pass_builtin_inputs
+from .builtin_names import resolve_builtin_names
+from .builtin_output_writes import (
+    convert_signed_builtin_outputs,
+    declare_builtin_outputs,
+)
+from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
+from .constant_buffer_layouts import hoist_constant_buffer_layouts
 from .constant_buffer_size import (
     ConstantBufferTooLargeError,
     refuse_large_constant_buffers,
@@ -107,6 +114,7 @@ from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
@@ -137,6 +145,7 @@ from .storage_blocks import (
     normalize_spirv_storage_blocks,
 )
 from .struct_constructor_conversions import convert_struct_constructor_arguments
+from .struct_methods import StructMethodUnsupportedError, lower_struct_methods
 from .struct_scalar_splats import expand_struct_scalar_splats
 from .structured_layouts import (
     StructuredLayoutUnsupportedError,
@@ -211,6 +220,7 @@ __all__ = [
     "SpirvArrayLengthUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
+    "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
@@ -251,6 +261,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
     Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
+    Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
+    A ``gl_`` built-in value attribute CrossGL does not define is refused with :class:`BuiltinValueUnsupportedError`,
+    and the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` take their canonical names (:mod:`.builtin_names`).
+    A ``gl_`` built-in used in a stage or direction GLSL does not declare it for is refused (:mod:`.builtin_stages`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
@@ -295,7 +309,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
     layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
     ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
-    (:mod:`.buffer_strides`), and constant
+    (:mod:`.buffer_strides`), ``ConstantBuffer<T>`` declarations with a layout the target's constant buffers do not
+    give constant blocks holding one ``T`` (:mod:`.constant_buffer_layouts`), and constant
     references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
@@ -318,7 +333,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     Row-major struct members are stored as their column-major transpose, with every use rewritten, for targets
-    whose structs cannot carry a matrix layout (:mod:`.row_major_members`).
+    whose structs cannot carry a matrix layout (:mod:`.row_major_members`), and so are the row-major members of
+    Metal's unmarked constant blocks (:mod:`.row_major_constant_members`).
     Mutable stage-scope values become module-scope ``static`` variables for the targets that declare per-invocation
     storage at module scope (:mod:`.stage_private_variables`).
     For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
@@ -326,7 +342,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
     (:mod:`.subpass_inputs`).
     Fragment built-in inputs read by name are passed to the HLSL and MSL entry point and its helpers
-    (:mod:`.builtin_input_reads`).
+    (:mod:`.builtin_input_reads`). For them, the built-in outputs a vertex or fragment stage writes by name and its
+    ``in``/``out`` variables become stage-level interface variables, and ``int`` ones carrying a ``uint`` system value
+    are retyped with conversions at each use (:mod:`.builtin_output_writes`).
     Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
@@ -347,8 +365,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     hoist_local_structs(program, report.target)
+    lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
     refuse_undeclared_types(program, report.target)
+    resolve_builtin_names(program, report.target)
+    refuse_misplaced_builtins(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
@@ -361,6 +382,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
     store_row_major_members_transposed(program, report.target)
+    store_row_major_constant_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
@@ -377,6 +399,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
+    declare_builtin_outputs(program, report.target)
     pass_builtin_inputs(program, report.target)
     name_fragment_colour_outputs(program, report.target)
     attribute_vertex_input_positions(program, report.target)
@@ -384,6 +407,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
     adopt_module_stage_outputs(program, report.target)
+    convert_signed_builtin_outputs(program, report.target)
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
@@ -401,6 +425,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
+    hoist_constant_buffer_layouts(program, report.target)
     hoist_constant_reference_layouts(program, report.target)
     refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)

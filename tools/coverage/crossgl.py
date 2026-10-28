@@ -63,6 +63,7 @@ from .templates.idioms import SHADOW_HELPERS
 from .templates.initializers import CROSSGL as INITIALIZERS_CROSSGL
 from .templates.initializers import FAMILY as INITIALIZERS
 from .templates.integers import CROSSGL as INTEGERS_CROSSGL
+from .templates.interfaces import CROSSGL as INTERFACES
 from .templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
@@ -77,12 +78,14 @@ from .templates.portability import (
     constants,
     intrinsic_names,
 )
+from .templates.rasterization import CROSSGL as RASTERIZATION
 from .templates.records import CROSSGL as RECORDS_CROSSGL
 from .templates.relations import CROSSGL as RELATIONS
 from .templates.rows import CROSSGL as ROWS_CROSSGL
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 from .templates.vectors import GLSL as VECTORS
+from .templates.vertices import CROSSGL as VERTICES
 from .templates.workgroups import CROSSGL as WORKGROUPS_CROSSGL
 
 # The stage block of each ray-tracing stage a probe runs in.
@@ -625,6 +628,9 @@ CONSTRUCTS: dict[str, Template] = {
     **VECTORS,
     **RELATIONS,
     **FRAGMENTS,
+    **INTERFACES,
+    **VERTICES,
+    **RASTERIZATION,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),
