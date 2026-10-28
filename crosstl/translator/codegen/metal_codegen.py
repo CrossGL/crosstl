@@ -363,6 +363,7 @@ from .image_access_contracts import (
     unsupported_texture_samples_query_call_expression,
     validate_texture_operation_arity,
 )
+from .interface_qualifiers import is_interface_qualifier_attribute
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -393,6 +394,7 @@ from .metal_hlsl_matrix import (
 )
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
+from .metal_invariant_position import metal_invariant_attribute_suffix
 from .metal_keyword_identifiers import (
     METAL_KEYWORD_IDENTIFIERS,
     rename_metal_keyword_members,
@@ -3938,6 +3940,12 @@ class MetalCodeGen(
         return self.METAL_INTERPOLATION_ATTRIBUTES.get(normalized)
 
     def metal_interpolation_attribute_suffix(self, node):
+        # The stage-value attributes that follow the semantic: interpolation, then invariance.
+        return self.metal_interpolation_only_suffix(
+            node
+        ) + metal_invariant_attribute_suffix(self, node)
+
+    def metal_interpolation_only_suffix(self, node):
         for attr in getattr(node, "attributes", []) or []:
             interpolation = self.metal_interpolation_attribute_name(attr)
             if interpolation is not None:
@@ -7610,7 +7618,11 @@ class MetalCodeGen(
     ):
         semantic = self.function_return_semantic(func)
         metal_semantic = self.canonical_metal_semantic(semantic)
-        if not self.function_return_semantic_requires_wrapper(semantic, metal_semantic):
+        # MSL has no attribute on a return value, so an invariant position is returned through a structure.
+        invariant_attr = metal_invariant_attribute_suffix(self, func, semantic)
+        if not invariant_attr and not self.function_return_semantic_requires_wrapper(
+            semantic, metal_semantic
+        ):
             return None
         expected_type = self.function_return_builtin_semantic_type(
             semantic, metal_semantic
@@ -7625,7 +7637,7 @@ class MetalCodeGen(
             "field_type": mapped_return_type,
             "field_name": self.return_wrapper_field_name(semantic, metal_semantic),
             "source_type": raw_return_type,
-            "semantic_attr": self.map_semantic(semantic),
+            "semantic_attr": self.map_semantic(semantic) + invariant_attr,
         }
 
     def function_return_semantic_requires_wrapper(self, semantic, metal_semantic):
@@ -22628,6 +22640,7 @@ class MetalCodeGen(
                 or self.normalized_metal_abi_attribute_name(attr) == "function_constant"
                 or self.metal_interpolation_attribute_name(attr) is not None
                 or self.is_precision_qualifier_attribute(attr)
+                or is_interface_qualifier_attribute(attr)
                 or str(getattr(attr, "name", "")).lower()
                 in (BUFFER_LAYOUT_ATTRIBUTE, "packed")
                 # DXR payload access qualifiers; a Metal payload is a ray_data reference every stage may access.
@@ -22753,6 +22766,7 @@ class MetalCodeGen(
                 or self.is_metal_texture_element_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.is_precision_qualifier_attribute(attr)
+                or is_interface_qualifier_attribute(attr)
             ):
                 continue
             if hasattr(attr, "name"):

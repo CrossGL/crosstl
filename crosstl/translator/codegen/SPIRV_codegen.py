@@ -112,6 +112,7 @@ from .image_access_contracts import (
     image_access_requirement_label,
     image_access_satisfies_requirement,
 )
+from .interface_qualifiers import INTERFACE_QUALIFIER_ATTRIBUTES
 from .pack_builtins import PACK_FUNCTIONS, spirv_pack_call, spirv_pack_result_type
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -158,6 +159,7 @@ from .spirv_interface_locations import (
     plan_entry_input_locations,
     plan_struct_member_locations,
 )
+from .spirv_invariant_outputs import decorate_invariant_builtin_output
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_location_conflicts import InterfaceLocationConflictError
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -14347,6 +14349,8 @@ class VulkanSPIRVCodeGen(
             "tessellation_evaluation",
             "vertex",
             "writeonly",
+            # Interpolation, invariance and precision qualifiers decorate the value; they never name it.
+            *INTERFACE_QUALIFIER_ATTRIBUTES,
         }
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
@@ -14620,6 +14624,9 @@ class VulkanSPIRVCodeGen(
             if cache_key in self.global_variables:
                 variable = self.global_variables[cache_key]
                 self.mark_fragment_depth_replacing_if_needed(builtin_name, "Output")
+                decorate_invariant_builtin_output(
+                    self, variable, function_node, "Output"
+                )
                 self.mark_function_interface_variable(variable)
                 return variable
 
@@ -14627,6 +14634,7 @@ class VulkanSPIRVCodeGen(
                 name, builtin_type, builtin_name, "Output"
             )
             self.global_variables[cache_key] = variable
+            decorate_invariant_builtin_output(self, variable, function_node, "Output")
             self.mark_function_interface_variable(variable)
             return variable
 
@@ -15031,6 +15039,7 @@ class VulkanSPIRVCodeGen(
         )
         builtin = self.entry_point_builtin_variable(semantic, storage_class)
         if builtin is not None:
+            decorate_invariant_builtin_output(self, builtin, node, storage_class)
             return builtin
 
         interface_node = node
@@ -20836,6 +20845,7 @@ class VulkanSPIRVCodeGen(
                 self.decorate_global_interface_variable(node, var_id)
         elif storage_class == "Output":
             var_id = self.global_interface_builtin_variable(node, "Output", var_type)
+            decorate_invariant_builtin_output(self, var_id, node, storage_class)
             if var_id is None:
                 location = self.global_interface_location(node, "Output")
                 var_id = self.register_output(
