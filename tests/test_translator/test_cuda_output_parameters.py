@@ -138,6 +138,9 @@ shader main {{
     buffer float* results;
     void bump<T>(inout T value, T step) {{ value = value + step; }}
     void both<T>(inout T x, inout T y) {{ x = x + y; }}
+    void inc<T>(inout T value) {{ value = value + T(1.0); }}
+    void inc<T>(inout T value, T step) {{ value = value + step; }}
+    void twice<T>(inout T x) {{ both<T>(x, x); }}
     compute {{
     @ numthreads(1, 1, 1)
     void main() {{
@@ -158,6 +161,11 @@ shader main {{
     [
         ("bump<vec2>(v.xy, vec2(1.0));", "swizzle passed to an out/inout parameter"),
         ("both<float>(a, a);", "overlapping out/inout arguments"),
+        # Deduced type arguments, an overload, and a call in a specialized body.
+        ("bump(v.xy, vec2(1.0));", "bump_vec2 receives '.xy' as argument 1"),
+        ("both(a, a);", "both_float receives a through more than one parameter"),
+        ("inc<vec2>(v.zw, w);", "inc_vec2_overload1 receives '.zw' as argument 1"),
+        ("twice<float>(a);", "both_float receives x through more than one parameter"),
     ],
 )
 def test_generic_callees_get_the_reference_argument_checks(
