@@ -22,7 +22,8 @@ from demos.integrations.mlx.portable_host.element_storage import (
 )
 from demos.integrations.mlx.portable_host.gather_layout import WORD_TYPES
 
-VALUES = frozenset({"src", "out"})
+# Scatter destinations of these types travel as scatter_storage atomic words.
+VALUES = frozenset({"src", "updates", "out"})
 LAYOUT_KEYS = ("dtype", "encoding", "shape")
 # NumPy storage types that hold each extended dtype's logical words.
 NUMPY_WORDS = {

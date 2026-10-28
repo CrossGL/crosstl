@@ -1,4 +1,28 @@
-"""General indexed updates through public MLX array operations."""
+"""General indexed updates through public MLX array operations.
+
+The ``narrow`` profile scatters into the 8- and 16-bit integers, float16 and
+bfloat16, whose destinations MLX updates as lanes of packed atomic words.
+NumPy has no bfloat16, so its arrays here hold bfloat16 values as float32;
+``storage_words`` turns any profile's array into its storage words.
+"""
+
+from demos.integrations.mlx.portable_host import scatter_arithmetic
+
+FLOATS = frozenset({"float32", "float16", "bfloat16"})
+NARROW_TYPES = ("uint8", "int8", "uint16", "int16", "float16", "bfloat16")
+OPERATIONS = ("none", "sum", "prod", "min", "max")
+INDEX_TYPES = ("int32", "uint32", "int64", "uint64")
+# Layouts whose neighbouring destinations share packed words across threads.
+NARROW_LAYOUTS = (
+    "dense",
+    "update-broadcast",
+    "update-strided",
+    "index-reversed",
+    "multiple",
+    "scalar",
+    "work4",
+)
+PROFILES = ("integer", "float32", "narrow")
 
 LAYOUTS = (
     "dense",
@@ -75,17 +99,149 @@ def float_cases():
     }
 
 
+def narrow_cases():
+    for dtype in NARROW_TYPES:
+        for operation in OPERATIONS:
+            for i, layout in enumerate(NARROW_LAYOUTS):
+                yield {
+                    "id": f"{dtype}-{operation}-{layout}",
+                    "dtype": dtype,
+                    "operation": operation,
+                    "layout": layout,
+                    "index_dtype": INDEX_TYPES[i % 4],
+                }
+    # Integer sums and products wrap within their lanes, never into a neighbour.
+    for dtype in NARROW_TYPES[:4]:
+        for operation in ("sum", "prod"):
+            yield {
+                "id": f"{dtype}-{operation}-wrap",
+                "dtype": dtype,
+                "operation": operation,
+                "layout": "wrap",
+                "index_dtype": "int64",
+            }
+    # Contending 16-bit float sums that round run in index order.
+    for dtype in ("float16", "bfloat16"):
+        yield {
+            "id": f"{dtype}-sum-rounding",
+            "dtype": dtype,
+            "operation": "sum",
+            "layout": "rounding",
+            "index_dtype": "int64",
+        }
+
+
+def profile_cases(profile):
+    if profile not in PROFILES:
+        raise ValueError(f"Unknown scatter workload profile: {profile!r}")
+    return {"integer": cases, "float32": float_cases, "narrow": narrow_cases}[profile]()
+
+
+def host_array(xp, np, values, dtype):
+    """``values`` as ``dtype``; NumPy keeps bfloat16 values as float32."""
+    if dtype != "bfloat16":
+        return xp.array(np.asarray(values).astype(dtype))
+    values = np.asarray(values).astype(np.float32)
+    if xp is np:
+        scatter_arithmetic.storage_words(np, dtype, values)
+        return values
+    return xp.array(values).astype(xp.bfloat16)
+
+
+def storage_words(np, dtype, array):
+    """The unsigned storage words of a NumPy result or workload array."""
+    if dtype == "bfloat16":
+        return scatter_arithmetic.storage_words(np, dtype, array)
+    array = np.ascontiguousarray(array)
+    unsigned = {1: np.uint8, 2: np.uint16, 4: np.uint32, 8: np.uint64}
+    return array.view(unsigned[array.dtype.itemsize]).reshape(-1).tolist()
+
+
+def host_words(mx, np, array):
+    """The unsigned storage words of an MLX array of any profile's type."""
+    if array.dtype == mx.bfloat16:
+        array = array.view(mx.uint16)
+    return storage_words(np, None, np.array(array))
+
+
+# Destination rows of the wrapping and rounding workloads' six index rows.
+SPECIAL_INDEX = (1, 0, 1, 1, 2, 1)
+
+
+def ordered_runs(case):
+    """The launches of a rounding sum as ``(first, rows)``, else ``None``.
+
+    scatter.inc issues a contended float sum that some order would round as
+    maximal runs of consecutive index rows whose destinations are disjoint, so
+    each destination receives its updates in index order. Every row of
+    SPECIAL_INDEX updates a whole destination row, so two rows share a
+    destination exactly when their indices are equal.
+    """
+    if case["layout"] != "rounding":
+        return None
+    runs, touched, first = [], set(), 0
+    for row, destination in enumerate(SPECIAL_INDEX):
+        if destination in touched:
+            runs.append((first, row - first))
+            touched.clear()
+            first = row
+        touched.add(destination)
+    runs.append((first, len(SPECIAL_INDEX) - first))
+    return runs
+
+
+def special_arrays(xp, np, case):
+    """Wrapping integer and rounding float sums, mostly into row 1.
+
+    Their 3x5 destinations end inside a packed word, so the last word keeps
+    padding lanes that no update may change.
+    """
+    dtype, layout = case["dtype"], case["layout"]
+    index = host_array(xp, np, np.array(SPECIAL_INDEX, dtype=np.int64), "int64")
+    if layout == "wrap":
+        # Row 1's odd lanes overflow; a carry into a neighbouring lane shows.
+        source = np.arange(15).reshape(3, 5) + 10
+        bits = 8 * np.dtype(dtype).itemsize
+        prod = case["operation"] == "prod"
+        update = np.full((6, 5), (1 << bits // 2) + 3 if prod else 3 << (bits - 3))
+        update[:, ::2] = 1 if prod else 0
+        update = update.astype(np.int64).astype(dtype)
+        return (
+            host_array(xp, np, source, dtype),
+            [index],
+            host_array(xp, np, update, dtype),
+        )
+    # Terms of half and quarter units of 1.0 tie and round to even; row 1's
+    # first two lanes reach different sums in reverse order.
+    precision = 11 if dtype == "float16" else 8
+    source = np.full((3, 5), 1.0, dtype=np.float32)
+    update = np.array(
+        [
+            [0.5, -0.25, 0.5, 1.5, -0.25],
+            [1.0, -1.0, 2.0, 0.5, 4.0],
+            [0.5, -0.25, 1.0, 0.5, -0.25],
+            [1.0, -0.5, 0.5, -1.0, -0.5],
+            [3.0, 2.0, -1.0, -2.0, 0.5],
+            [0.0, 0.0, -0.5, 0.25, 0.75],
+        ],
+        dtype=np.float32,
+    ) * np.float32(2.0 ** (1 - precision))
+    return host_array(xp, np, source, dtype), [index], host_array(xp, np, update, dtype)
+
+
 def arrays(xp, np, case):
     layout = case["layout"]
+    if layout in ("wrap", "rounding"):
+        return special_arrays(xp, np, case)
     shape = (2, 2) if layout.startswith("work") else (3, 4)
     if layout == "capacity":
         shape = (65535,)
     raw_source = np.arange(np.prod(shape)).reshape(shape)
-    if case["dtype"] == "float32":
+    if case["dtype"] in FLOATS:
         raw_source = (raw_source + 1) * np.where(raw_source % 2, -0.5, 0.5)
     else:
         raw_source = raw_source + 10
-    source = xp.array(raw_source.astype(case["dtype"]))
+    source = host_array(xp, np, raw_source, case["dtype"])
     if layout == "capacity":
         return (
             source,
@@ -164,31 +320,31 @@ def arrays(xp, np, case):
         positions = np.arange(update.size).reshape(update.shape)
         # Bound intermediate products independently of contending update order.
         update = np.where(positions < 8, 2, 1)
-        if case["dtype"] == "int32":
+        if case["dtype"] in ("int32", "int8", "int16"):
             update = np.where(positions % 7 == 1, -update, update)
         update = np.where(positions == 0, 0, update)
-        if case["dtype"] == "float32":
+        if case["dtype"] in FLOATS:
             update = np.where(
                 positions < 8, np.take([-1.0, 0.5, -2.0, 1.0], positions % 4), 1.0
             )
     elif case["operation"] != "none":
         update = np.arange(update.size).reshape(update.shape) % 19 + 1
-    if case["dtype"] == "float32" and case["operation"] != "prod":
+    if case["dtype"] in FLOATS and case["operation"] != "prod":
         update = -update / 4 if case["operation"] == "none" else (update - 10) / 4
-    update = update.astype(case["dtype"])
     if layout == "update-strided":
-        update = xp.array(np.repeat(update, 2, axis=-1))[..., ::2]
+        update = host_array(xp, np, np.repeat(update, 2, axis=-1), case["dtype"])
+        update = update[..., ::2]
     elif layout == "update-broadcast":
         update = xp.broadcast_to(
-            xp.array(
+            host_array(
+                xp,
+                np,
                 np.array(
-                    (
-                        (0.5 if case["operation"] == "prod" else -1.75)
-                        if case["dtype"] == "float32"
-                        else (2 if case["operation"] == "prod" else 7)
-                    ),
-                    dtype=case["dtype"],
-                )
+                    (0.5 if case["operation"] == "prod" else -1.75)
+                    if case["dtype"] in FLOATS
+                    else (2 if case["operation"] == "prod" else 7)
+                ),
+                case["dtype"],
             ),
             update.shape,
         )
@@ -196,7 +352,7 @@ def arrays(xp, np, case):
         update = source[:2]
         indices = [xp.array(np.array([1, 0], dtype=case["index_dtype"]))]
     else:
-        update = xp.array(update)
+        update = host_array(xp, np, update, case["dtype"])
     if layout == "index-reversed":
         indices = [index[::-1] for index in indices]
         update = update[::-1]
@@ -209,7 +365,15 @@ def reference(np, case):
     operation = case["operation"]
     for coordinate in np.ndindex(indices[0].shape):
         destination = tuple(int(index[coordinate]) for index in indices)
-        if operation == "none":
+        if case["dtype"] in NARROW_TYPES:
+            # Lane by lane, as MLX's packed atomic update applies them.
+            current = expected[destination]
+            update = np.broadcast_to(updates[coordinate], np.shape(current))
+            for offset in np.ndindex(np.shape(current)):
+                expected[destination + offset] = scatter_arithmetic.combine(
+                    np, case["dtype"], operation, current[offset], update[offset]
+                )
+        elif operation == "none":
             expected[destination] = updates[coordinate]
         elif operation == "sum":
             expected[destination] += updates[coordinate]

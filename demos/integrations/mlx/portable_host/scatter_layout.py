@@ -11,10 +11,11 @@ import itertools
 import math
 import re
 
+from demos.integrations.mlx.portable_host import scatter_storage
+from demos.integrations.mlx.portable_host.element_storage import CTYPES
 from demos.integrations.mlx.portable_host.gather_layout import (
     MAX_ELEMENTS,
     MAX_STORAGE_ELEMENTS,
-    TYPES,
     values,
 )
 
@@ -36,14 +37,22 @@ METADATA = {
 ATOMIC_TYPES = {"int32": "int", "uint32": "uint", "float32": "float"}
 
 
+# Element types of the scatter specializations the host dispatches. The
+# 8- and 16-bit ones update lanes of packed atomic words (scatter_storage).
+VALUE_TYPES = ("int32", "uint32", "float32", *scatter_storage.LANE_BYTES)
+
+
 def atomic_storage_dtype(dtype, target):
     """Return the reflected physical type of the output atomic allocation."""
+    if scatter_storage.packed(dtype):
+        return "uint32"
     return "uint32" if dtype == "float32" and target == "opengl" else dtype
 
 
 def signature(entry):
     match = re.fullmatch(
-        r"scatter(int32|uint32|float32)(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"
+        rf"scatter({'|'.join(VALUE_TYPES)})(int32|uint32|int64|uint64)_"
+        r"(none|sum|prod|min|max)_"
         r"([1-9]|10)_updc_(true|false)_nwork(1|4|8|16|32)_int",
         entry,
     )
@@ -188,9 +197,9 @@ def validate(entry, buffers, logical_size, execution):
             if not 0 <= value <= shape[axis] - slices[axis]:
                 raise ValueError("Native scatter index would exceed its output slice")
     output = buffers["out"]
-    output_end = output.data + output.count * ctypes.sizeof(TYPES[dtype])
+    output_end = output.data + output.count * ctypes.sizeof(CTYPES[dtype])
     for name, buffer in buffers.items():
-        end = buffer.data + buffer.count * ctypes.sizeof(TYPES[dtypes[name]])
+        end = buffer.data + buffer.count * ctypes.sizeof(CTYPES[dtypes[name]])
         if name != "out" and max(buffer.data, output.data) < min(end, output_end):
             raise ValueError("Native scatter output overlaps an input allocation")
     return {

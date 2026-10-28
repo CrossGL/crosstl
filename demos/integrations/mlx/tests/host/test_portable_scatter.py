@@ -331,7 +331,9 @@ def test_scatter_rejects_invalid_layout_before_translation(fault):
 @pytest.mark.parametrize(
     "entry",
     (
-        "scatterfloat16int32_sum_1_updc_true_nwork1_int",
+        "scattercomplex64int32_sum_1_updc_true_nwork1_int",
+        "scatterint64int32_sum_1_updc_true_nwork1_int",
+        "scatterbool_int32_none_1_updc_true_nwork1_int",
         "scatterint32int32_median_1_updc_true_nwork1_int",
         "scatterint32int32_sum_0_updc_true_nwork1_int",
         "scatterint32int32_sum_01_updc_true_nwork1_int",

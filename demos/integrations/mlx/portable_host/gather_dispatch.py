@@ -16,6 +16,7 @@ from demos.integrations.mlx.portable_host import (
     gather_storage,
     scatter_axis_layout,
     scatter_layout,
+    scatter_storage,
 )
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
@@ -132,7 +133,9 @@ def bind(host, entry, descriptor, supplied, dtype, scatter, guard):
             raise ValueError("Reflected gather binding identity does not match")
         matched.add(name)
         buffer = supplied[name]
-        if name in gather_storage.VALUES and gather_storage.extended(dtype):
+        if scatter and name == "out" and scatter_storage.packed(dtype):
+            value = scatter_storage.bind_output(dtype, buffer, layout)
+        elif name in gather_storage.VALUES and gather_storage.extended(dtype):
             value = gather_storage.bind_value(
                 dtype, host.target, buffer, layout, name == "out"
             )
@@ -228,7 +231,10 @@ def dispatch(host, entry, buffers, count, threads, launch):
     metadata = layout_module.validate(entry, supplied, threads, execution)
     descriptor, directory = host.gathers.get(entry, metadata["maximumIndex"])
     extended = gather_storage.extended(dtype)
-    if extended:
+    packed = scatter and scatter_storage.packed(dtype)
+    if packed:
+        guard = []
+    elif extended:
         guard = gather_storage.guard_words(dtype)
     else:
         guard = list(BOOLEAN_GUARD if dtype == "bool_" else COPY_GUARD)
@@ -249,7 +255,13 @@ def dispatch(host, entry, buffers, count, threads, launch):
     if result.status != "ok" or set(result.outputs) != {output_name}:
         raise RuntimeError("Native gather executor did not return its output")
     output = result.outputs[output_name]
-    if extended:
+    if packed:
+        values, trailing = scatter_storage.readback(
+            dtype, outputs[output_name], output, threads
+        )
+        readback = values + trailing
+        native = scatter_storage.native_words(dtype, values)
+    elif extended:
         readback = gather_storage.readback(
             dtype, host.target, outputs[output_name], output, threads
         )
