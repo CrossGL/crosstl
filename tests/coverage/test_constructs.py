@@ -589,6 +589,40 @@ def test_buffer_row_major_probes_store_struct_matrices_by_rows():
         ], language
 
 
+def test_vector_probes_shift_by_scalars_and_resize_with_constructors():
+    crossgl = probes.build(_feature("glsl", "vector-shift"), "crossgl").source
+    assert "ivec2 r = a >> 1;" in crossgl and "uvec2 w = u << 3u;" in crossgl
+    # WGSL shifts by an unsigned vector of the operand's width and has no scalar operand on a bitwise operator.
+    wgsl = probes.build(_feature("wgsl", "vector-shift"), "wgsl").source
+    assert "let r = a >> vec2<u32>(1u);" in wgsl
+    wgsl = probes.build(_feature("wgsl", "vector-bitwise"), "wgsl").source
+    assert "(a ^ vec2<i32>(9))" in wgsl and "~a & vec2<i32>(15)" in wgsl
+    crossgl = probes.build(_feature("glsl", "matrix-resize"), "crossgl").source
+    assert "mat2 a = mat2(m);" in crossgl and "mat2x3 n = mat2x3(m);" in crossgl
+    # HLSL casts and indexes by rows; Slang casts only matrices; Metal takes swizzles and columns.
+    hlsl = probes.build(_feature("hlsl", "matrix-resize"), "hlsl").source
+    assert "float2x2 a = (float2x2)m;" in hlsl and "n[2][1] * 8192.0" in hlsl
+    for language, line in (
+        ("hlsl", "float2 a = (float2)v;"),
+        ("slang", "float2 a = v.xy;"),
+        ("metal", "int2 j = k.xy;"),
+        ("rust", "let b = v.truncate();"),
+    ):
+        source = probes.build(_feature(language, "vector-truncation"), language).source
+        assert line in source, language
+    metal = probes.build(_feature("metal", "matrix-resize"), "metal").source
+    assert "float2x2 a = float2x2(m[0].xy, m[1].xy);" in metal
+    rust = probes.build(_feature("rust", "matrix-resize"), "rust").source
+    assert "Mat3::from_mat2(a * 2.0)" in rust and "n[1].z * 8192.0" in rust
+    for language, absent in (
+        ("cuda", {"vector-shift", "vector-truncation", "matrix-resize"}),
+        ("opencl", {"matrix-resize"}),
+        ("mojo", {"vector-truncation", "matrix-resize"}),
+    ):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & absent, language
+
+
 def test_packing_probes_name_the_layout_rule_and_declare_its_offsets():
     for name, rule in (
         ("uniform-std140-vector", "std140"),

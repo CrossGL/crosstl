@@ -42,6 +42,7 @@ from .records import WEBGL as _RECORDS
 from .rows import WEBGL as _ROWS
 from .scopes import WEBGL as _SCOPES
 from .values import FAMILY as _VALUES
+from .vectors import GLSL as _VECTORS
 from .workgroups import WEBGL as _WORKGROUPS
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
@@ -107,6 +108,7 @@ WEBGL = {
     **_PACKING,
     **_ORIENTATION,
     **_ROWS,
+    **_VECTORS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,
