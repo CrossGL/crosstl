@@ -27,6 +27,7 @@ from .builtin_input_reads import pass_builtin_inputs
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
+from .constant_buffer_layouts import hoist_constant_buffer_layouts
 from .constant_buffer_size import (
     ConstantBufferTooLargeError,
     refuse_large_constant_buffers,
@@ -107,6 +108,7 @@ from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
@@ -295,7 +297,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
     layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
     ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
-    (:mod:`.buffer_strides`), and constant
+    (:mod:`.buffer_strides`), ``ConstantBuffer<T>`` declarations with a layout the target's constant buffers do not
+    give constant blocks holding one ``T`` (:mod:`.constant_buffer_layouts`), and constant
     references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
@@ -318,7 +321,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
     Row-major struct members are stored as their column-major transpose, with every use rewritten, for targets
-    whose structs cannot carry a matrix layout (:mod:`.row_major_members`).
+    whose structs cannot carry a matrix layout (:mod:`.row_major_members`), and so are the row-major members of
+    Metal's unmarked constant blocks (:mod:`.row_major_constant_members`).
     Mutable stage-scope values become module-scope ``static`` variables for the targets that declare per-invocation
     storage at module scope (:mod:`.stage_private_variables`).
     For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
@@ -361,6 +365,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
     store_row_major_members_transposed(program, report.target)
+    store_row_major_constant_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
@@ -401,6 +406,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
+    hoist_constant_buffer_layouts(program, report.target)
     hoist_constant_reference_layouts(program, report.target)
     refuse_unplaced_packed_members(program, report.target)
     hoist_array_constructors(program, report.target)

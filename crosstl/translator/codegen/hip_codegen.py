@@ -57,11 +57,16 @@ from .c_reference_parameters import (
     reference_declarator,
 )
 from .c_vector_reductions import generate_vector_reduction_call
+from .c_wide_integer_vectors import (
+    wide_integer_vector_constructor,
+    wide_integer_vector_type,
+)
 from .comma_expressions import (
     CommaExpressionVisitorMixin,
     comma_result_operand,
     is_comma_expression,
 )
+from .cuda_library_functions import rename_cuda_library_functions
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -112,6 +117,11 @@ from .generic_struct_utils import (
     generic_struct_specialized_fields,
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
+)
+from .gpu_device_globals import (
+    at_file_scope,
+    constant_in_device_memory,
+    file_scope_placement,
 )
 from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
@@ -838,6 +848,8 @@ class HipCodeGen(
         """Render complete HIP source for a CrossGL AST."""
         # A HIP texture object is the image whatever sampler state a separate CrossGL texture is paired with.
         node = canonicalize_separate_textures(node)
+        # A user function named like a device library function would redefine it or make its calls ambiguous.
+        node = rename_cuda_library_functions(node)
         # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
         lower_relational_builtins(node)
         # HIP has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
@@ -3457,20 +3469,21 @@ class HipCodeGen(
         metadata_comment = self.hip_resource_metadata_comment(node, var_type)
         if metadata_comment:
             self.add_line(metadata_comment)
-        self.add_line(f"{self.format_variable_declaration(node)};")
+        place = file_scope_placement(self, node, metadata_comment)
+        self.add_line(f"{place(self.format_variable_declaration(node))};")
         metadata_declaration = self.query_metadata_declaration(node.name, var_type)
         if metadata_declaration:
-            self.add_line(f"{metadata_declaration};")
+            self.add_line(f"{place(metadata_declaration)};")
         length_declaration = self.structured_buffer_length_declaration(
             node.name, var_type
         )
         if length_declaration:
-            self.add_line(f"{length_declaration};")
+            self.add_line(f"{place(length_declaration)};")
         counter_declaration = self.structured_buffer_counter_declaration(
             node.name, var_type
         )
         if counter_declaration:
-            self.add_line(f"{counter_declaration};")
+            self.add_line(f"{place(counter_declaration)};")
         return ""
 
     def visit_ConstantNode(self, node: ConstantNode) -> str:
@@ -3481,7 +3494,10 @@ class HipCodeGen(
         declaration = self.format_typed_declarator(declaration_type, node.name)
         if value is not None:
             declaration += f" = {self.visit(value)}"
-        self.add_line(f"const {declaration};")
+        declaration = f"const {declaration}"
+        if at_file_scope(self):
+            declaration = constant_in_device_memory(declaration)
+        self.add_line(f"{declaration};")
         return ""
 
     def format_variable_declaration(self, node: VariableNode) -> str:
@@ -3503,6 +3519,15 @@ class HipCodeGen(
         declaration = self.apply_resource_memory_qualifiers_to_declaration(
             declaration, node.name, node
         )
+        if (
+            initial_value is not None
+            and "const" in self.declaration_qualifier_names(node)
+            and "*" not in declaration
+            and not declaration.startswith("const ")
+        ):
+            # A CrossGL constant stays one: file-scope device code can read a const scalar with a constant
+            # initializer, but not a mutable host variable.
+            declaration = f"const {declaration}"
 
         qualifiers = self.variable_memory_qualifiers(node)
         if qualifiers:
@@ -4365,7 +4390,9 @@ class HipCodeGen(
             # The structure has no constructor; aggregate initialization sets its members in order.
             return f"{self.map_type(func_name)}{{{', '.join(args)}}}"
 
-        mapped_name = self.function_map.get(func_name, func_name)
+        mapped_name = wide_integer_vector_constructor(
+            func_name
+        ) or self.function_map.get(func_name, func_name)
 
         reduction_call = generate_vector_reduction_call(
             self, "HIP", func_name, raw_args, args
@@ -9476,6 +9503,8 @@ class HipCodeGen(
                     return f"int{size}"
                 elif element_type in {"i8", "u8", "i16", "u16"}:
                     return f"vec{size}<{element_type}>"
+                elif wide_integer_vector_type(f"vec{size}<{element_type}>"):
+                    return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
         else:
@@ -9530,6 +9559,16 @@ class HipCodeGen(
         if byte_address_buffer_type is not None:
             return byte_address_buffer_type
 
+        wide_vector_type = wide_integer_vector_type(type_str)
+        if wide_vector_type is not None:
+            return wide_vector_type
+        indirect_info = self.hip_pointer_or_reference_type_info(type_str)
+        if indirect_info is not None:
+            pointee_type = wide_integer_vector_type(indirect_info["pointee_type"])
+            if pointee_type is not None:
+                prefix = "const " if indirect_info["readonly"] else ""
+                suffix = "*" if indirect_info["kind"] == "pointer" else "&"
+                return f"{prefix}{pointee_type}{suffix}"
         if type_str.startswith("ptr<") and type_str.endswith(">"):
             return f"{self.map_type(type_str[4:-1])}*"
 
