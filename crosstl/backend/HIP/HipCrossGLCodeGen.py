@@ -548,6 +548,8 @@ class HipToCrossGLConverter:
         self.union_active_member_scopes = [{}]
         self.union_object_identity_scopes = [{}]
         self.union_indirect_object_scopes = [set()]
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
 
     def generate(self, ast_node):
         self.output = []
@@ -581,6 +583,7 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.anonymous_enum_count = 0
+        self.namespace_constant_names = set()
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
@@ -6005,6 +6008,7 @@ class HipToCrossGLConverter:
 
             value = self.format_variable_initializer_value(node.value)
             if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(raw_name)
                 self.emit(f"const {var_type} {output_name} = {value};")
                 return
             self.emit(f"var {output_name}: {var_type} = {value};")
@@ -6017,9 +6021,9 @@ class HipToCrossGLConverter:
         Such a constant imports as a CrossGL ``const`` so every target can read it
         from device code; a mutable global would become a host variable.
         """
-        return getattr(
-            self, "namespace_scope_variable", False
-        ) and is_c_family_namespace_constant(node)
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def format_variable_initializer_value(self, value):
         string_value = self.format_single_string_initializer(value)

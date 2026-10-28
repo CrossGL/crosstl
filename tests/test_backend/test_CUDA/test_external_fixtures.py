@@ -1133,7 +1133,7 @@ def test_cutlass_static_member_value_expression_codegen_reparse():
 
     crossgl = cuda_to_crossgl(source)
 
-    assert "const bool is_integral_v = is_integral_T_value;" in crossgl
+    assert "var is_integral_v: bool = is_integral_T_value;" in crossgl
     assert "::value" not in crossgl
     assert_crossgl_reparse(crossgl)
 
@@ -3866,7 +3866,7 @@ def test_current_cccl_scalar_brace_initializer_scoped_call_codegen_reparse():
     crossgl = cuda_to_crossgl(source)
 
     assert ast.global_variables[0].name == "__typeid_v"
-    assert "const __type_info __typeid_v = cuda_std___pretty_nameof__Tp();" in crossgl
+    assert "var __typeid_v: __type_info = cuda_std___pretty_nameof__Tp();" in crossgl
     assert "cuda_std___pretty_nameof_helper_typename___pretty_name_begin" in crossgl
     assert "{::cuda::std" not in crossgl
     assert "::cuda::std" not in crossgl

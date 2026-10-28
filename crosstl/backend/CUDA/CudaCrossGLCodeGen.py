@@ -263,6 +263,8 @@ class CudaToCrossGLConverter:
         self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
 
     def generate(self, ast_node):
         self.output = []
@@ -291,6 +293,7 @@ class CudaToCrossGLConverter:
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
+        self.namespace_constant_names = set()
         self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
@@ -4379,6 +4382,7 @@ class CudaToCrossGLConverter:
             value = self.format_variable_initializer_value(node.value)
             self.register_warp_mask_value(node.name, output_name, value)
             if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(node.name)
                 self.emit(f"const {var_type} {output_name} = {value};")
                 return
             self.emit(f"var {output_name}: {var_type} = {value};")
@@ -4392,9 +4396,9 @@ class CudaToCrossGLConverter:
         Such a constant imports as a CrossGL ``const`` so every target can read it
         from device code; a mutable global would become a host variable.
         """
-        return getattr(
-            self, "namespace_scope_variable", False
-        ) and is_c_family_namespace_constant(node)
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def push_packed_argument_scope(self):
         self.packed_argument_scopes.append({})

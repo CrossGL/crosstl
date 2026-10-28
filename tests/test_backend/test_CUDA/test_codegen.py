@@ -655,6 +655,30 @@ class TestCudaCodeGen:
         assert "const int N = 3;" in output
         assert "const int M = 2;" in output
 
+    def test_namespace_scope_const_with_dynamic_initializer_stays_variable(self):
+        # A const whose initializer calls a function or reads a variable is set
+        # when the program starts, so it imports as a variable, not a constant.
+        code = """
+        constexpr int N = 4;
+        float scale = 2.0f;
+        const dim3 BLOCK(16, 16, 1);
+        const unsigned int CELLS = BLOCK.x * BLOCK.y;
+        const float2 STEP = make_float2(1.0f / N, -0.5f);
+        const float FROM_VARIABLE = scale;
+        const float ROOT = sqrtf(2.0f);
+        __device__ float twice(float x) { return 2.0f * x; }
+        const float CALLED = twice(1.5f);
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "const vec3<u32> BLOCK = vec3<u32>(16, 16, 1);" in result
+        assert "const u32 CELLS = (BLOCK.x * BLOCK.y);" in result
+        assert "const vec2<f32> STEP = vec2<f32>((1.0f / N), (-0.5f));" in result
+        assert "var FROM_VARIABLE: f32 = scale;" in result
+        assert "var ROOT: f32 = sqrt(2.0f);" in result
+        assert "var CALLED: f32 = twice(1.5f);" in result
+
     def test_public_cuda_samples_const_dim3_constructor_global_conversion(self):
         code = """
         const dim3 windowSize(512, 512);

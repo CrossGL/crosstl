@@ -1223,7 +1223,7 @@ def test_external_rocm_vulkan_interop_numeric_limits_max_codegen_reparse():
     assert declaration.name == "frame_timeout"
     assert declaration.vtype == "uint64_t"
     assert declaration.value.name == "std::numeric_limits<uint64_t>::max"
-    assert "const u64 frame_timeout = numeric_limits_max<u64>();" in crossgl
+    assert "var frame_timeout: u64 = numeric_limits_max<u64>();" in crossgl
     assert "std::numeric_limits<uint64_t>::max()" not in crossgl
 
 
