@@ -72,13 +72,21 @@ COMPUTE_VARIABLE = """shader Probe {
 """
 
 MISPLACED = [
-    pytest.param(VERTEX_OUTPUT_MEMBER, "@gl_SubgroupSize", "vertex output", id="vertex-output"),
-    pytest.param(VERTEX_INPUT_PARAMETER, "@gl_FrontFacing", "vertex input", id="vertex-input"),
+    pytest.param(
+        VERTEX_OUTPUT_MEMBER, "@gl_SubgroupSize", "vertex output", id="vertex-output"
+    ),
+    pytest.param(
+        VERTEX_INPUT_PARAMETER, "@gl_FrontFacing", "vertex input", id="vertex-input"
+    ),
     pytest.param(
         FRAGMENT_INPUT_MEMBER, "@gl_LaunchIDEXT", "fragment input", id="fragment-input"
     ),
-    pytest.param(FRAGMENT_RETURN, "@gl_FragCoord", "fragment output", id="fragment-output"),
-    pytest.param(COMPUTE_VARIABLE, "@gl_FragCoord", "compute input", id="compute-input"),
+    pytest.param(
+        FRAGMENT_RETURN, "@gl_FragCoord", "fragment output", id="fragment-output"
+    ),
+    pytest.param(
+        COMPUTE_VARIABLE, "@gl_FragCoord", "compute input", id="compute-input"
+    ),
 ]
 
 # A vertex output structure the fragment stage also takes, as HLSL shaders commonly declare it: the fragment reads
@@ -207,7 +215,9 @@ def test_rule_lookup_folds_indices_and_case(name, expected):
     assert builtin_stage_rule(name) is BUILTIN_STAGE_RULES[expected]
 
 
-@pytest.mark.parametrize("name", ["", None, "gl_FragBogus", "SV_Position", "gl_FragColorX"])
+@pytest.mark.parametrize(
+    "name", ["", None, "gl_FragBogus", "SV_Position", "gl_FragColorX"]
+)
 def test_rule_lookup_has_no_rule_for_other_names(name):
     assert builtin_stage_rule(name) is None
 

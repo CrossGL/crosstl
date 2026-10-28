@@ -85,9 +85,21 @@ FRAGMENT_BUILTINS = [
 
 ANY_STAGE_BUILTINS = [
     ("gl_DeviceIndex", "int", "DeviceIndex", "DeviceGroup", "SPV_KHR_device_group"),
-    ("gl_SMCountNV", "uint", "SMCountNV", "ShaderSMBuiltinsNV", "SPV_NV_shader_sm_builtins"),
+    (
+        "gl_SMCountNV",
+        "uint",
+        "SMCountNV",
+        "ShaderSMBuiltinsNV",
+        "SPV_NV_shader_sm_builtins",
+    ),
     ("gl_SMIDNV", "uint", "SMIDNV", "ShaderSMBuiltinsNV", "SPV_NV_shader_sm_builtins"),
-    ("gl_WarpIDNV", "uint", "WarpIDNV", "ShaderSMBuiltinsNV", "SPV_NV_shader_sm_builtins"),
+    (
+        "gl_WarpIDNV",
+        "uint",
+        "WarpIDNV",
+        "ShaderSMBuiltinsNV",
+        "SPV_NV_shader_sm_builtins",
+    ),
     (
         "gl_WarpsPerSMNV",
         "uint",

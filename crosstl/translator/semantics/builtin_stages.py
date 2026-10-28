@@ -143,7 +143,11 @@ _RULE_TEXT = (
     ("gl_TaskCountNV", "", "TASK"),
     ("gl_MeshViewCountNV gl_MeshViewIndicesNV", "TASK MESH", ""),
     # GL_EXT_ray_tracing, GL_EXT_ray_cull_mask, GL_EXT_ray_tracing_position_fetch and GL_NV_ray_tracing.
-    ("gl_LaunchIDEXT gl_LaunchSizeEXT gl_LaunchIDNV gl_LaunchSizeNV", "RG IS AH CH MS CA", ""),
+    (
+        "gl_LaunchIDEXT gl_LaunchSizeEXT gl_LaunchIDNV gl_LaunchSizeNV",
+        "RG IS AH CH MS CA",
+        "",
+    ),
     (
         "gl_InstanceCustomIndexEXT gl_GeometryIndexEXT gl_ObjectRayOriginEXT gl_ObjectRayDirectionEXT "
         "gl_ObjectToWorldEXT gl_WorldToObjectEXT gl_ObjectToWorld3x4EXT gl_WorldToObject3x4EXT",
@@ -206,7 +210,9 @@ def refuse_misplaced_builtins(program, target) -> int:
         function = getattr(stage, "entry_point", None)
         if function is not None:
             name = getattr(function, "name", "main")
-            checker.check(function, stage_name, _OUTPUT, f"the return value of '{name}'")
+            checker.check(
+                function, stage_name, _OUTPUT, f"the return value of '{name}'"
+            )
             checker.collect(getattr(function, "return_type", None), _OUTPUT, uses)
             for parameter in getattr(function, "parameters", None) or []:
                 direction = _parameter_direction(parameter)
@@ -222,12 +228,17 @@ def refuse_misplaced_builtins(program, target) -> int:
             if direction is None:
                 continue
             checker.check(
-                variable, stage_name, direction, f"variable '{getattr(variable, 'name', '')}'"
+                variable,
+                stage_name,
+                direction,
+                f"variable '{getattr(variable, 'name', '')}'",
             )
             checker.collect(getattr(variable, "var_type", None), direction, uses)
         for struct_name in sorted(uses):
             struct = checker.structs[struct_name]
-            direction = _BOTH if len(uses[struct_name]) > 1 else next(iter(uses[struct_name]))
+            direction = (
+                _BOTH if len(uses[struct_name]) > 1 else next(iter(uses[struct_name]))
+            )
             for member in getattr(struct, "members", None) or []:
                 checker.check(
                     member,

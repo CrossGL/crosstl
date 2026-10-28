@@ -60,8 +60,9 @@ _OUTPUTS = {
         "gl_FragStencilRefARB": _INT,
     },
 }
-# The built-in each spelling names, for spellings ARB and EXT extensions share.
-_CANONICAL = {"gl_FragStencilRefARB": "gl_FragStencilRefEXT"}
+# The built-in each spelling names: itself, or the EXT spelling an ARB extension shares.
+_CANONICAL = {name: name for outputs in _OUTPUTS.values() for name in outputs}
+_CANONICAL["gl_FragStencilRefARB"] = "gl_FragStencilRefEXT"
 # Arrays sized by the largest constant index the stage uses.
 _SIZED_ARRAYS = frozenset({"gl_ClipDistance", "gl_CullDistance"})
 # Built-in outputs HLSL and MSL deliver as uint and GLSL types int.
@@ -284,7 +285,7 @@ def declare_builtin_outputs(program, target) -> int:
         for function in _stage_functions(program, stage):
             for use in _uses(function, candidates):
                 name = _use_name(use[3])
-                uses.setdefault(_CANONICAL.get(name, name), []).append(use)
+                uses.setdefault(_CANONICAL[name], []).append(use)
         for builtin in sorted(uses):
             context = (names, taken, target)
             _rewrite_uses(
