@@ -77,6 +77,7 @@ from .value_traits import (
     simdgroup_type_trait,
     struct_value_trait_definitions,
 )
+from .variable_templates import materialize_value_variable_templates
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
 # Macros the Metal compiler predefines for every source (`metal -dM -E`): the language version as
@@ -1200,6 +1201,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             processed
         )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
+        processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
         # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
         # bound) as for the source's own concrete code.
@@ -23749,7 +23751,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             declaration_start = angle_end + 1
             header = code[declaration_start : declaration_start + 512]
             header_match = re.match(
-                r"\s*(?:\[\[[^\]]*\]\]\s*)*(?:struct|class)\s+"
+                r"\s*(?:\[\[[^\]]*\]\]\s*)*(?:struct|class|union)\s+"
                 r"(?P<name>[A-Za-z_][A-Za-z0-9_:]*)\b",
                 header,
                 re.DOTALL,
@@ -29170,7 +29172,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         *,
         strip_specialization_arguments: bool = False,
     ) -> str:
-        pattern = re.compile(rf"\b(struct|class)\s+{re.escape(old_name)}\b")
+        pattern = re.compile(rf"\b(struct|class|union)\s+{re.escape(old_name)}\b")
         match = pattern.search(source)
         if match is None:
             return source

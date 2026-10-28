@@ -21,6 +21,10 @@ union Wide { uint4 words; uchar4 bytes[4]; };
 union Word { uint word; float value; int signed_word; uchar4 bytes; };
 union Flags { uint word; bool4 lanes; };
 union FloatPair { float2 values; uint2 words; float scalars[2]; int signed_words[2]; };
+union Lanes { uint word; uchar bytes[4]; char signed_bytes[4]; ushort halves[2]; short signed_halves[2]; half floats[2]; };
+union WideLanes { uint2 words; uchar bytes[8]; };
+template <typename T> constexpr constant uint lanes_per_word = sizeof(uint) / sizeof(T);
+template <typename T> union Packed { T val[lanes_per_word<T>]; uint bits; };
 struct Holder { Bits values[2]; };
 Bits make_bits(uint word) { Bits value; value.words = uint2(word, 0x88776655u); return value; }
 Bits copy_bits(Bits value) { value.bytes[1] = uchar4(9u, 10u, 11u, 12u); return value; }
@@ -116,6 +120,46 @@ CASES = {
         "Bits value = make_bits(0x04030201u); value.words.x += 2u; value.words.y++;",
         ["value.bytes[0].x", "value.bytes[1].x"],
         [3, 86],
+    ),
+    "byte_lanes": (
+        "Lanes value; value.word = 0x80FF7F01u; uint count = 0u; value.bytes[next_index(count) + 1u] = 0x22u;",
+        [
+            "value.word",
+            "uint(value.bytes[3])",
+            "uint(int(value.signed_bytes[3]) == -128)",
+            "uint(int(value.signed_bytes[2]))",
+            "count",
+        ],
+        [0x80FF2201, 128, 1, 0xFFFFFFFF, 1],
+    ),
+    "signed_lanes": (
+        "Lanes value; value.word = 0u; value.signed_bytes[0] = char(-2); value.signed_halves[1] = short(-3); uint chained = value.signed_bytes[1] = char(-5);",
+        [
+            "value.word",
+            "uint(int(value.signed_halves[0]))",
+            "uint(value.halves[1])",
+            "chained",
+        ],
+        [0xFFFDFBFE, 0xFFFFFBFE, 0xFFFD, 0xFFFFFFFB],
+    ),
+    "half_lanes": (
+        "Lanes value; value.word = 0x3C00C000u; value.floats[0] = half(0.5f);",
+        [
+            "value.word",
+            "uint(float(value.floats[1]) * 8.0f)",
+            "uint(float(value.floats[0]) * 4.0f)",
+        ],
+        [0x3C003800, 8, 2],
+    ),
+    "wide_lanes": (
+        "WideLanes value; value.words = uint2(0x04030201u, 0x08070605u); value.bytes[6] = 0xAAu; uint selected = value.bytes[4];",
+        ["value.words.x", "value.words.y", "selected"],
+        [0x04030201, 0x08AA0605, 5],
+    ),
+    "template_lanes": (
+        "Packed<ushort> value; value.bits = 0x00020001u; value.val[1] = ushort(7u);",
+        ["value.bits", "uint(value.val[0])"],
+        [0x00070001, 1],
     ),
     "read_selector": (
         "Holder holder; holder.values[0] = make_bits(0x04030201u); uint count = 0u; uint selected = holder.values[next_index(count)].bytes[1][2];",
@@ -217,6 +261,14 @@ def test_union_storage_rejects_unrepresented_layouts(tmp_path, declaration, reas
             "interpreted-subcomponent-write-unsupported",
         ),
         ("mutate(value.value);", "member-reference-unsupported"),
+        (
+            "Lanes lanes; lanes.word = 0u; lanes.bytes[0] += 1u;",
+            "lane-compound-write-unsupported",
+        ),
+        (
+            "Lanes lanes; lanes.word = 0u; lanes.bytes[1]++;",
+            "interpreted-address-or-update-unsupported",
+        ),
     ],
 )
 def test_union_storage_unsupported_mutations_report_diagnostics(tmp_path, body, reason):

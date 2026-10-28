@@ -49,6 +49,9 @@ from crosstl.backend.Metal.text_scanners import (
     brace_block_spans,
     mask_comments_and_literals,
 )
+from crosstl.backend.Metal.variable_templates import (
+    materialize_value_variable_templates,
+)
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
@@ -21482,6 +21485,7 @@ def _unresolved_metal_template_placeholders_in_type(
     template_parameter_names: set[str],
     concrete_type_names: set[str] | None = None,
     template_type_names: set[str] | None = None,
+    materialized_specializations: Mapping[str, Sequence[Any]] | None = None,
 ) -> list[str]:
     normalized = _strip_metal_type_qualifiers(type_text)
     if "." in normalized or "->" in normalized:
@@ -21491,6 +21495,8 @@ def _unresolved_metal_template_placeholders_in_type(
     # A declared struct or template name is a type, whatever its spelling
     # (``MD<float>``, ``RGB``), not a placeholder for a template argument.
     declared_names = concrete_names | (template_type_names or set())
+    registry = materialized_specializations or {}
+    identifier_pattern = r"[A-Za-z_][A-Za-z0-9_]*"
 
     def looks_like_placeholder(identifier: str) -> bool:
         return (
@@ -21498,12 +21504,28 @@ def _unresolved_metal_template_placeholders_in_type(
             and _metal_looks_like_template_placeholder_identifier(identifier)
         )
 
+    def embedded_parts(token: str, depth: int = 0) -> list[str]:
+        # A materialized specialization records its template arguments, so read
+        # them instead of splitting the mangled name on underscores: an argument
+        # such as ``__Add<uint>`` would otherwise leave a bare ``Add`` fragment.
+        specialization = registry.get(token)
+        if specialization is None or len(specialization) < 2 or depth > 8:
+            return token.split("_")[1:]
+        parts: list[str] = []
+        for argument in specialization[1]:
+            for part in re.findall(identifier_pattern, str(argument)):
+                if part in concrete_names and part in registry:
+                    parts.extend(embedded_parts(part, depth + 1))
+                else:
+                    parts.append(part)
+        return parts
+
     missing: list[str] = []
-    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
+    for token in re.findall(identifier_pattern, normalized):
         if token in concrete_names:
             embedded_missing = [
                 part
-                for part in token.split("_")[1:]
+                for part in embedded_parts(token)
                 if (part in template_parameter_names or looks_like_placeholder(part))
             ]
             for part in embedded_missing:
@@ -21752,6 +21774,7 @@ def _unresolved_metal_standalone_template_type_records(
             template_parameter_names,
             concrete_type_names,
             declared_template_type_names,
+            getattr(preprocessor, "_materialized_struct_specializations", None),
         )
         if not missing:
             return
@@ -23388,7 +23411,6 @@ def _project_template_materialization_for_artifact(
         known_materializations=late_known_materializations,
     )
     specializations.extend(late_helper_specializations)
-
     removable_template_names = {
         *deferred_constexpr_template_names,
         *late_materialized_template_names,
@@ -23405,6 +23427,8 @@ def _project_template_materialization_for_artifact(
                 late_template_replacements,
             )
         materialized = preprocessor._evaluate_static_assertions(materialized)
+    # Every concrete body exists now; read value variable templates at their uses.
+    materialized = materialize_value_variable_templates(preprocessor, materialized)
 
     # Missing-argument records gathered before late member lowering are only
     # provisional.  Drop one when every reachable call for that helper was

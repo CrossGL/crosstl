@@ -2632,7 +2632,12 @@ class MetalToCrossGLConverter(
         member_size, member_alignment = layout
         for extent_expression in getattr(member, "array_sizes", []) or []:
             extent = evaluate_literal_int_expression(extent_expression)
-            if extent is None or extent <= 0:
+            if extent is None and extent_expression is not None:
+                # ``sizeof`` and named constants fold only once rendered.
+                extent = self.evaluate_concrete_array_extent(
+                    self.format_array_extent(extent_expression)
+                )
+            if isinstance(extent, bool) or not isinstance(extent, int) or extent <= 0:
                 return None
             stride = self.align_metal_layout_offset(member_size, member_alignment)
             if stride > ((1 << 63) - 1) // extent:

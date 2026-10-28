@@ -589,7 +589,12 @@ from .texture_residency import (
     TEXTURE_RESIDENT_OPERATION,
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
-from .union_layout import UnionLayoutCollector
+from .union_lanes import (
+    hlsl_lane_call,
+    hlsl_lane_helper_definitions,
+    hlsl_lane_helpers,
+)
+from .union_layout import UnionLayoutCollector, is_lane_kind
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 # Specialization contract for a workgroup pointer parameter bound to ``nullptr``.
@@ -4351,6 +4356,7 @@ class HLSLCodeGen(
         )
         self.remove_hlsl_static_struct_member_types(structs)
         self.hlsl_union_layouts = self.collect_hlsl_union_layouts(structs)
+        self.hlsl_union_lanes = hlsl_lane_helpers(self)
         self.refresh_hlsl_fixed_array_return_struct_member_types()
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
@@ -10373,7 +10379,7 @@ bool __crossgl_union_set_bool4_lane(
 }
 
 """
-        return code
+        return code + hlsl_lane_helper_definitions(self)
 
     def generate_hlsl_complex64_helpers(self):
         if not getattr(self, "required_hlsl_complex64_helpers", set()):
@@ -11120,6 +11126,8 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         info = self.hlsl_union_array_access_info(expression)
         if info is None:
             return None
+        if is_lane_kind(info["member"]["kind"]):
+            return hlsl_lane_call(self, info, "get")
         storage = self.hlsl_union_storage_expression(info, info["index"])
         kind = info["member"]["kind"]
         if kind == "uint32_array":
@@ -11239,6 +11247,15 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         array_info = self.hlsl_union_array_access_info(target)
         if array_info is not None:
             kind = array_info["member"]["kind"]
+            if is_lane_kind(kind):
+                if operator != "=":
+                    raise self.hlsl_union_usage_error(
+                        array_info,
+                        target,
+                        "lane-compound-write-unsupported",
+                        "compound lane writes need a read-modify-write contract",
+                    )
+                return hlsl_lane_call(self, array_info, "set", value)
             storage = self.hlsl_union_storage_expression(
                 array_info, array_info["index"]
             )
