@@ -25,6 +25,11 @@ from .boolean_reductions import lower_boolean_reductions
 from .buffer_strides import materialize_buffer_strides
 from .builtin_input_reads import pass_builtin_inputs
 from .builtin_names import resolve_builtin_names
+from .builtin_output_writes import (
+    convert_signed_builtin_outputs,
+    declare_builtin_outputs,
+)
+from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
 from .compute_entry_values import ComputeEntryValueNameError, lower_compute_entry_values
@@ -259,6 +264,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
     A ``gl_`` built-in value attribute CrossGL does not define is refused with :class:`BuiltinValueUnsupportedError`,
     and the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` take their canonical names (:mod:`.builtin_names`).
+    A ``gl_`` built-in used in a stage or direction GLSL does not declare it for is refused (:mod:`.builtin_stages`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
@@ -336,7 +342,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
     (:mod:`.subpass_inputs`).
     Fragment built-in inputs read by name are passed to the HLSL and MSL entry point and its helpers
-    (:mod:`.builtin_input_reads`).
+    (:mod:`.builtin_input_reads`). For them, the built-in outputs a vertex or fragment stage writes by name and its
+    ``in``/``out`` variables become stage-level interface variables, and ``int`` ones carrying a ``uint`` system value
+    are retyped with conversions at each use (:mod:`.builtin_output_writes`).
     Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
@@ -361,6 +369,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_constant_blocks(program, report.target)
     refuse_undeclared_types(program, report.target)
     resolve_builtin_names(program, report.target)
+    refuse_misplaced_builtins(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
@@ -390,6 +399,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
+    declare_builtin_outputs(program, report.target)
     pass_builtin_inputs(program, report.target)
     name_fragment_colour_outputs(program, report.target)
     attribute_vertex_input_positions(program, report.target)
@@ -397,6 +407,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     deliver_unsigned_system_values(program, report.target)
     lower_compute_entry_values(program, report.target)
     adopt_module_stage_outputs(program, report.target)
+    convert_signed_builtin_outputs(program, report.target)
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)

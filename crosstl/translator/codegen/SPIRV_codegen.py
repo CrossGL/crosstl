@@ -142,6 +142,13 @@ from .spirv_exponent_builtins import (
     spirv_ldexp_call,
     spirv_output_operand_call,
 )
+from .spirv_extension_builtins import BUILTIN_ALIASES as SPIRV_EXTENSION_BUILTIN_ALIASES
+from .spirv_extension_builtins import (
+    extension_any_stage_builtin_info,
+    extension_builtin_info,
+    require_extension_builtin_capability,
+    unmapped_builtin_reason,
+)
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
@@ -15041,6 +15048,9 @@ class VulkanSPIRVCodeGen(
         if builtin is not None:
             decorate_invariant_builtin_output(self, builtin, node, storage_class)
             return builtin
+        unmapped = unmapped_builtin_reason(semantic, storage_class, execution_model)
+        if unmapped is not None:
+            self.refuse_lowering(unmapped)
 
         interface_node = node
         if interface_node is None:
@@ -30526,7 +30536,7 @@ class VulkanSPIRVCodeGen(
             ),
             **SPIRV_SUBGROUP_BUILTINS,
         }
-        return builtins.get(name)
+        return builtins.get(name) or extension_any_stage_builtin_info(name)
 
     def spirv_builtin_alias(self, name: str) -> str:
         aliases = {
@@ -30556,6 +30566,7 @@ class VulkanSPIRVCodeGen(
                 if self.current_execution_model == "Fragment"
                 else "gl_PrimitiveShadingRateEXT"
             ),
+            **SPIRV_EXTENSION_BUILTIN_ALIASES,
         }
         return aliases.get(str(name).upper(), name)
 
@@ -30624,6 +30635,9 @@ class VulkanSPIRVCodeGen(
         shading_rate = shading_rate_builtin_info(name)
         if shading_rate is not None:
             return shading_rate
+        extension_builtin = extension_builtin_info(name)
+        if extension_builtin is not None:
+            return extension_builtin
         builtins = {
             "gl_VertexID": (
                 "uint",
@@ -31022,6 +31036,8 @@ class VulkanSPIRVCodeGen(
 
     def require_stage_builtin_capabilities(self, builtin_name: str):
         if require_shading_rate_capability(self, builtin_name):
+            return
+        if require_extension_builtin_capability(self, builtin_name):
             return
         if builtin_name in {"BaryCoordKHR", "BaryCoordNoPerspKHR"}:
             self.require_capability("FragmentBarycentricKHR")

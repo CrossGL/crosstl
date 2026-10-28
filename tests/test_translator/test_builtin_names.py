@@ -204,6 +204,7 @@ def test_spirv_reads_the_arb_stencil_reference_as_the_builtin(tmp_path):
     [
         ("directx", r"uint stencil\s*:\s*SV_StencilRef;"),
         ("opengl", r"gl_FragStencilRefARB = "),
+        ("metal", r"uint stencil \[\[stencil\]\];"),
     ],
 )
 def test_arb_stencil_reference_keeps_its_builtin(tmp_path, backend, expected):

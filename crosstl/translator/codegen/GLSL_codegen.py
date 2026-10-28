@@ -286,6 +286,13 @@ from .glsl_shadow_lod import (
     zero_lod_compare_gradient_call,
 )
 from .glsl_specialization_macros import glsl_specialization_macro_name
+from .glsl_stage_builtin_members import (
+    fragment_member_builtin_alias,
+    fragment_parameter_builtin_expression,
+    is_vertex_layer_output,
+    note_vertex_builtin_output,
+    refuse_unmapped_vertex_output,
+)
 from .glsl_stage_distances import (
     distance_input_alias,
     distance_output_epilogue,
@@ -3089,6 +3096,8 @@ class GLSLCodeGen(
             "sample_position": "gl_SamplePosition",
             "gl_SampleMaskIn": "gl_SampleMaskIn",
             "sample_mask_in": "gl_SampleMaskIn",
+            # GL_NV_conservative_raster_underestimation spells SPIR-V's FullyCoveredEXT this way.
+            "gl_FullyCoveredEXT": "gl_FragFullyCoveredNV",
             # Compute shader specific
             "gl_GlobalInvocationID": "gl_GlobalInvocationID",
             "SV_DispatchThreadID": "gl_GlobalInvocationID",
@@ -9103,6 +9112,7 @@ class GLSLCodeGen(
         self.current_target_stage = target_stage
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
         self.glsl_shadow_lod_extension_used = False
+        self.glsl_stage_builtin_extensions = []
         stage_names = {
             stage_name
             for stage_name in self.glsl_stage_names(ast, target_stage)
@@ -10580,7 +10590,9 @@ class GLSLCodeGen(
             code = require_shadow_lod_extension(code)
         code = self.ensure_glsl_formatted_image_load_support(code)
         code = self.ensure_glsl_precise_support(code)
-        code = require_builtin_extensions(code)
+        code = require_builtin_extensions(
+            code, getattr(self, "glsl_stage_builtin_extensions", ())
+        )
         return self.ensure_glsl_int64_support(code)
 
     def collect_called_function_names(self, root):
@@ -23496,7 +23508,7 @@ class GLSLCodeGen(
             struct = self.structs_by_name.get(struct_name)
             for member in getattr(struct, "members", []) or []:
                 output_name = self.vertex_output_member_name(member)
-                if self.is_vertex_builtin_output(output_name):
+                if self.is_vertex_stage_builtin_output(output_name):
                     continue
                 if distance_private_output_declaration(self, member) is None:
                     names.add(output_name)
@@ -23536,7 +23548,8 @@ class GLSLCodeGen(
         semantic = self.semantic_from_node(param)
         mapped_semantic = self.map_semantic(semantic)
         if normalize_stage_name(stage_name) == "vertex":
-            if self.is_vertex_builtin_output(mapped_semantic):
+            if self.is_vertex_stage_builtin_output(mapped_semantic):
+                note_vertex_builtin_output(self, mapped_semantic)
                 return mapped_semantic
             reserved = set(self.vertex_input_member_names)
             reserved.update(self.stage_io_declared_names("vertex", "output"))
@@ -23784,7 +23797,7 @@ class GLSLCodeGen(
         code = ""
         for member in getattr(node, "members", []) or []:
             output_name = self.vertex_output_member_name(member)
-            if self.is_vertex_builtin_output(output_name):
+            if self.is_vertex_stage_builtin_output(output_name):
                 continue
             private_distance = distance_private_output_declaration(self, member)
             if private_distance is not None:
@@ -23956,8 +23969,10 @@ class GLSLCodeGen(
         mapped_semantic = self.map_semantic(semantic)
         if distance_semantic(mapped_semantic) is not None:
             return distance_output_name(self, member, mapped_semantic)
-        if self.is_vertex_builtin_output(mapped_semantic):
+        if self.is_vertex_stage_builtin_output(mapped_semantic):
+            note_vertex_builtin_output(self, mapped_semantic)
             return mapped_semantic
+        refuse_unmapped_vertex_output(self, semantic, mapped_semantic)
         if (
             member.name in self.vertex_input_member_names
             or member.name in self.stage_io_reserved_value_names
@@ -24001,7 +24016,7 @@ class GLSLCodeGen(
             return None
         if struct_name in self.vertex_output_struct_names:
             output_name = self.vertex_output_member_name(member)
-            if self.is_vertex_builtin_output(output_name):
+            if self.is_vertex_stage_builtin_output(output_name):
                 return None
             return self.combined_fragment_input_member_name(output_name)
         linked_name = self.linked_vertex_output_member_name(member.name)
@@ -24020,7 +24035,7 @@ class GLSLCodeGen(
                 if member.name != member_name:
                     continue
                 output_name = self.vertex_output_member_name(member)
-                if self.is_vertex_builtin_output(output_name):
+                if self.is_vertex_stage_builtin_output(output_name):
                     return None
                 return output_name
         return None
@@ -24042,7 +24057,7 @@ class GLSLCodeGen(
             "gl_SamplePosition",
             "gl_SampleMaskIn",
         }:
-            return None
+            return fragment_member_builtin_alias(self, semantic, mapped_semantic)
         return self.stage_input_builtin_alias(semantic, "fragment")
 
     def combined_fragment_input_member_name(self, input_name):
@@ -24059,6 +24074,10 @@ class GLSLCodeGen(
             "gl_ClipDistance",
             "gl_CullDistance",
         }
+
+    def is_vertex_stage_builtin_output(self, name):
+        # A vertex stage also writes the layer and viewport (glsl_stage_builtin_members); a mesh vertex does not.
+        return self.is_vertex_builtin_output(name) or is_vertex_layer_output(name)
 
     def stage_input_member_maps(self, func, shader_type):
         if shader_type not in {"vertex", "fragment"}:
@@ -24188,9 +24207,9 @@ class GLSLCodeGen(
         if array_suffix:
             return None
 
-        expression = self.stage_builtin_parameter_local_alias_expression(
-            builtin, base_type
-        )
+        expression = fragment_parameter_builtin_expression(
+            self, builtin, base_type, shader_type
+        ) or self.stage_builtin_parameter_local_alias_expression(builtin, base_type)
         if expression is None:
             return None
         parameter_name = self.glsl_local_identifier_name(param.name)
