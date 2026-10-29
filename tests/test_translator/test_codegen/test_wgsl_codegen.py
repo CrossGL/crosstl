@@ -1843,6 +1843,27 @@ def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
     assert ".length()" not in generated
 
 
+def test_wgsl_codegen_maps_pointer_buffer_length_to_array_length():
+    # A `buffer float*` global is a PointerType, not an ArrayType, so its
+    # `.length()` used to be copied unchanged and naga rejected it.
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                outp[0] = float(outp.length());
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "i32(arrayLength(&outp))" in generated
+    assert "outp.length()" not in generated
+
+
 @pytest.mark.parametrize(
     ("statement", "expected"),
     [
