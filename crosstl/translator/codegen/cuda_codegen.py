@@ -58,6 +58,7 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_refusals import CudaLoweringRefused
 from .float_remainder_assignment import float_remainder_assignment
@@ -403,6 +404,7 @@ class CudaCodeGen(
         A construct with no faithful CUDA lowering is refused; no program is returned while a refusal is
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
+        refuse_cooperative_matrices(ast_node, label="CUDA", target="cuda")
         return self.refusals.run(self.render_program, ast_node)
 
     def render_program(self, ast_node):
