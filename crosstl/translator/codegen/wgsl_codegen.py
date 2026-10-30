@@ -71,13 +71,17 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
-from .wgsl_array_constructors import wgsl_array_constructor
+from .wgsl_array_constructors import (
+    wgsl_array_constructor,
+    wgsl_array_constructor_type,
+)
 from .wgsl_boolean_xor import (
     wgsl_boolean_xor,
     wgsl_boolean_xor_assignment,
     wgsl_boolean_xor_assignment_statement,
 )
 from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
+from .wgsl_composite_conditionals import WGSLCompositeConditionalMixin
 from .wgsl_cube_texture_offsets import (
     OFFSET_TEXTURE_LOOKUPS,
     WGSLCubeTextureOffsetUnsupportedError,
@@ -138,7 +142,11 @@ from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
-class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
+class WGSLCodeGen(
+    WGSLValueSideEffectsMixin,
+    WGSLCompositeConditionalMixin,
+    WGSLParameterLoweringMixin,
+):
     """Generate WebGPU WGSL output from CrossGL ASTs."""
 
     SUPPORTED_STAGE_NAMES = {"vertex", "fragment", "compute"}
@@ -2800,6 +2808,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return "\n".join(
                 self.generate_statement(statement, indent) for statement in lowered
             )
+        lowered = self.lower_composite_ternary(stmt)
+        if lowered is not None:
+            return "\n".join(
+                self.generate_statement(statement, indent) for statement in lowered
+            )
         if isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
         if isinstance(stmt, VariableNode):
@@ -3342,6 +3355,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 return f"({operand} * -1.0)"
             return f"{expr.operator}{prefix_unary_operand(expr.operator, operand)}"
         if isinstance(expr, TernaryOpNode):
+            self.require_select_operands(expr)
             return (
                 f"select({self.generate_expression(expr.false_expr)}, "
                 f"{self.generate_expression(expr.true_expr)}, "
@@ -3459,6 +3473,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         ):
             return None
         array_type = self.expression_type(function.object_expr)
+        if isinstance(array_type, PointerType):
+            # A `buffer float*` global is declared as a storage array, so its
+            # length is the runtime-sized array's length, just like an
+            # unsized ArrayType. A helper parameter of that type is already a
+            # pointer to the array and is passed to arrayLength unchanged.
+            pointer = self.pointer_argument_expression(function.object_expr)
+            return f"i32(arrayLength({pointer}))"
         if not isinstance(array_type, ArrayType):
             return None
         if array_type.size is None:
@@ -6692,6 +6713,14 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 return option_call_type
             if self.is_type_constructor_name(function_name):
                 return self.type_name_string(function_name)
+            if function_name in self._structs_by_name and not (
+                self.is_user_function_name(function_name)
+            ):
+                # A structure constructor such as Pair(a, b) has the structure's type.
+                return NamedType(function_name)
+            array_type = wgsl_array_constructor_type(self, expr)
+            if array_type is not None:
+                return array_type
             if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
                 return "uint"
             packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(
