@@ -4,6 +4,7 @@ import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
+from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -262,6 +263,8 @@ class CudaToCrossGLConverter:
         self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
 
     def generate(self, ast_node):
         self.output = []
@@ -290,6 +293,7 @@ class CudaToCrossGLConverter:
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
+        self.namespace_constant_names = set()
         self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
@@ -4040,7 +4044,11 @@ class CudaToCrossGLConverter:
 
         if hasattr(node, "global_variables") and node.global_variables:
             for var in node.global_variables:
-                self.visit(var)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(var)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
 
         self.reference_parameters = ReferenceParameters(node)
@@ -4373,10 +4381,24 @@ class CudaToCrossGLConverter:
 
             value = self.format_variable_initializer_value(node.value)
             self.register_warp_mask_value(node.name, output_name, value)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(node.name)
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.register_warp_mask_value(node.name, output_name, None)
             self.emit(f"var {output_name}: {var_type};")
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def push_packed_argument_scope(self):
         self.packed_argument_scopes.append({})

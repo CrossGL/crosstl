@@ -7,6 +7,7 @@ from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -547,6 +548,8 @@ class HipToCrossGLConverter:
         self.union_active_member_scopes = [{}]
         self.union_object_identity_scopes = [{}]
         self.union_indirect_object_scopes = [set()]
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
 
     def generate(self, ast_node):
         self.output = []
@@ -580,6 +583,7 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.anonymous_enum_count = 0
+        self.namespace_constant_names = set()
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
@@ -5080,7 +5084,11 @@ class HipToCrossGLConverter:
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, VariableNode):
-                self.visit(stmt)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(stmt)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
             elif isinstance(stmt, TypeAliasNode):
                 self.visit(stmt)
@@ -5999,9 +6007,23 @@ class HipToCrossGLConverter:
                 return
 
             value = self.format_variable_initializer_value(node.value)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(raw_name)
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.emit(f"var {output_name}: {var_type};")
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def format_variable_initializer_value(self, value):
         string_value = self.format_single_string_initializer(value)
