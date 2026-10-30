@@ -1,10 +1,11 @@
 """Language-level features: control flow, operators, types, compute and graphics built-ins, resources and stages.
 
 The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches, what
-its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core grammar items it needs (an
-instruction, a capability, a storage class, a built-in or an execution model), and the anchors are checked against the
-pinned grammar. The stages are the grammar's shader execution models and the scalar types its width capabilities, so
-a new stage or width upstream shows up as untested until it has a probe.
+its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core
+grammar items it needs (an instruction, a capability, a storage class, a built-in, an image dimension or an execution
+model), and the anchors are checked against the pinned grammar. The stages are the grammar's shader execution models
+and the scalar types its width capabilities, so a new stage or width upstream shows up as untested until it has a
+probe.
 
 Probe templates are written per language: CrossGL's in :mod:`.crossgl`, the others in :mod:`.templates`. A language
 with no spelling for a feature, such as WGSL for a geometry stage, leaves it out of its feature list; one that has the
@@ -467,6 +468,19 @@ def _curated() -> list[Construct]:
             "OpImageSampleExplicitLod",
         ),
         c("resource", "storage-image", "OpTypeImage", "OpImageWrite"),
+        c("resource", "texture-1d", "OpTypeImage", "Dim.1D", "Capability.Sampled1D"),
+        c("resource", "texture-3d", "OpTypeImage", "Dim.3D"),
+        c("resource", "texture-cube", "OpTypeImage", "Dim.Cube"),
+        c("resource", "texture-2d-array", "OpTypeImage", "Dim.2D"),
+        # DXC and slangc declare no SampledCubeArray capability for a cube array, so its shape is the anchor.
+        c("resource", "texture-cube-array", "OpTypeImage", "Dim.Cube"),
+        c(
+            "resource",
+            "texel-buffer",
+            "OpTypeImage",
+            "Dim.Buffer",
+            "Capability.SampledBuffer",
+        ),
         c(
             "resource",
             "buffer-in-helper",
@@ -873,6 +887,7 @@ def universe(grammar_text: str) -> list[Construct]:
         "Decoration",
         "ExecutionModel",
         "ExecutionMode",
+        "Dim",
     ):
         found |= {f"{kind}.{e['enumerant']}" for e in kinds[kind]}
     found |= {f"Capability.{name}" for name in capabilities}

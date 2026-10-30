@@ -46,6 +46,7 @@ from . import (
     specializations,
     statements,
     subgroups,
+    textures,
     values,
     vectors,
     vertices,
@@ -134,6 +135,7 @@ CUDA = {
     **subgroups.CUDA,
     **specializations.KERNELS,
     **qualifiers.CUDA,
+    **textures.CUDA,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
     "vector-scalar-product": ABSENT,
@@ -186,6 +188,7 @@ HIP = {
     **CUDA,
     **subgroups.HIP,
     **qualifiers.HIP,
+    **textures.HIP,
     "half": scalar("__half", "fin", "#include <hip/hip_fp16.h>"),
     "sampled-texture": Template(
         CUDA["sampled-texture"].body, params="hipTextureObject_t tex"
@@ -278,6 +281,7 @@ OPENCL = {
     **subgroups.OPENCL,
     **specializations.KERNELS,
     **qualifiers.OPENCL,
+    **textures.OPENCL,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
     ),
@@ -439,6 +443,7 @@ MOJO = {
     **subgroups.MOJO,
     **specializations.KERNELS,
     **qualifiers.MOJO,
+    **textures.MOJO,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
     "int8": _mojo_scalar("Int8"),
@@ -667,6 +672,7 @@ RUST = {
     **subgroups.RUST,
     **specializations.RUST,
     **qualifiers.RUST,
+    **textures.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),
     "compute": Template("outp[i] = fin[i];"),

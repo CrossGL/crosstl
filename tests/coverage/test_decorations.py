@@ -49,7 +49,7 @@ def test_a_translation_must_keep_each_anchor_of_its_graphics_feature():
     )
 
 
-def test_only_graphics_and_compute_features_are_checked():
+def test_only_graphics_compute_and_resource_features_are_checked():
     loop = Feature("glsl", "control-flow", "for-loop", None, group="OpLoopMerge")
     shift = Feature("glsl", "operator", "vector-shift", None, group="Decoration.Flat")
     assert decorations.lost(loop, "spirv", "") == ""
@@ -63,6 +63,85 @@ def test_only_graphics_and_compute_features_are_checked():
         group="StorageClass.Workgroup OpControlBarrier",
     )
     assert decorations.lost(shared, "spirv", "") == ""
+    # A resource keeps only the shape of its image; its buffer decorations are left to running the probe.
+    buffer = Feature(
+        "glsl",
+        "resource",
+        "read-only-buffer",
+        None,
+        group="StorageClass.StorageBuffer Decoration.NonWritable",
+    )
+    assert decorations.lost(buffer, "spirv", "") == ""
+
+
+def _texture(name, group):
+    return Feature("glsl", "resource", name, None, group=f"OpTypeImage {group}")
+
+
+def test_a_texture_translation_must_keep_the_shape_of_its_image():
+    cube = _texture("texture-cube", "Dim.Cube")
+    array = _texture("texture-cube-array", "Dim.Cube")
+    line = "%type_cube_image = OpTypeImage %float Cube 2 {arrayed} 0 1 Unknown\n"
+    assert decorations.lost(cube, "spirv", line.format(arrayed=0)) == ""
+    assert decorations.lost(array, "spirv", line.format(arrayed=1)) == ""
+    # An array texture must stay arrayed, and a single texture must not become one.
+    assert decorations.lost(array, "spirv", line.format(arrayed=0)) == (
+        "the translation loses Dim.Cube"
+    )
+    assert decorations.lost(cube, "spirv", line.format(arrayed=1)) == (
+        "the translation loses Dim.Cube"
+    )
+    flat = "%7 = OpTypeImage %float 2D 0 0 0 1 Unknown\n"
+    assert decorations.lost(cube, "spirv", flat) == "the translation loses Dim.Cube"
+    line1d = "OpCapability Sampled1D\n%5 = OpTypeImage %float 1D 0 0 0 1 Unknown\n"
+    texture1d = _texture("texture-1d", "Dim.1D Capability.Sampled1D")
+    assert decorations.lost(texture1d, "spirv", line1d) == ""
+    assert decorations.lost(texture1d, "spirv", line1d.split("\n", 1)[1]) == (
+        "the translation loses Capability.Sampled1D"
+    )
+
+
+def test_a_metal_texture_translation_keeps_the_air_type_of_its_shape(monkeypatch):
+    air = {"source": ""}
+    monkeypatch.setattr(validators, "air", lambda source: air["source"])
+    array = _texture("texture-2d-array", "Dim.2D")
+    air["source"] = "%struct._texture_2d_array_t = type opaque\n"
+    assert decorations.lost(array, "metal", "kernel") == ""
+    air["source"] = "%struct._texture_2d_t = type opaque\n"
+    assert decorations.lost(array, "metal", "kernel") == (
+        "the translation loses Dim.2D"
+    )
+    # A capability has no AIR type, so a 1D texture is checked for its shape only.
+    texture1d = _texture("texture-1d", "Dim.1D Capability.Sampled1D")
+    air["source"] = "%struct._texture_1d_t = type opaque\n"
+    assert decorations.lost(texture1d, "metal", "kernel") == ""
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+@pytest.mark.parametrize(
+    ("texture", "read", "air"),
+    [
+        (
+            "texturecube<float>",
+            "tex.sample(smp, float3(fin[0]), level(0.0))",
+            "texture_cube",
+        ),
+        (
+            "texturecube_array<float>",
+            "tex.sample(smp, float3(fin[0]), 1, level(0.0))",
+            "texture_cube_array",
+        ),
+        ("texture_buffer<float>", "tex.read(0u)", "texture_buffer_1d"),
+    ],
+)
+def test_the_metal_compiler_names_each_texture_shape_in_air(texture, read, air):
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        f"kernel void probe(device float* fin [[buffer(0)]], {texture} tex [[texture(0)]],\n"
+        "                  sampler smp [[sampler(0)]]) {\n"
+        f"    fin[0] = {read}.x;\n}}\n"
+    )
+    assert f"%struct._{air}_t = type opaque" in validators.air(source)
 
 
 def _compute(name, group):

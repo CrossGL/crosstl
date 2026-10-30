@@ -49,6 +49,7 @@ from . import (
     specializations,
     statements,
     subgroups,
+    textures,
     values,
     vectors,
     vertices,
@@ -134,6 +135,7 @@ GLSL = {
     **subgroups.GLSL,
     **specializations.GLSL,
     **qualifiers.GLSL,
+    **textures.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -280,6 +282,7 @@ HLSL = {
     **subgroups.HLSL,
     **specializations.HLSL,
     **qualifiers.HLSL,
+    **textures.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -471,6 +474,7 @@ METAL = {
     **subgroups.METAL,
     **specializations.METAL,
     **qualifiers.METAL,
+    **textures.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -700,6 +704,7 @@ WGSL = {
     **subgroups.WGSL,
     **specializations.WGSL,
     **qualifiers.WGSL,
+    **textures.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(

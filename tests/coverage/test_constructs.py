@@ -25,6 +25,7 @@ from tools.coverage.templates import (
     relations,
     specializations,
     subgroups,
+    textures,
     vertices,
 )
 from tools.coverage.templates.base import ABSENT, OPERATORS
@@ -60,6 +61,7 @@ def _grammar(drop: str = "") -> str:
         "Decoration": [],
         "ExecutionModel": [],
         "ExecutionMode": [],
+        "Dim": [],
     }
     instructions = []
     for anchor in sorted(anchors - {drop}):
@@ -1133,6 +1135,59 @@ def test_qualifier_probes_give_their_buffers_each_languages_memory_qualifiers():
         "metal": {"write-only-buffer"},
         **dict.fromkeys(("cuda", "hip", "opencl"), names - kernels),
         **dict.fromkeys(("wgsl", "webgl", "rust", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_texture_probes_read_each_shape_of_texture_per_language():
+    feature = _feature("glsl", "texture-1d")
+    assert (feature.category, feature.stage) == ("resource", "compute")
+    assert feature.group == "OpTypeImage Dim.1D Capability.Sampled1D"
+    assert _feature("hlsl", "texture-cube-array").group == "OpTypeImage Dim.Cube"
+    for language, name, line in (
+        ("glsl", "texture-1d", "layout(binding = 3) uniform sampler1D tex;"),
+        (
+            "glsl",
+            "texture-cube-array",
+            "textureLod(tex, vec4(fin[i], 0.5, 1.0, 1.0), 0.0)",
+        ),
+        ("glsl", "texel-buffer", "texelFetch(tex, int(fin[i]))"),
+        ("webgl", "texture-2d-array", "uniform highp sampler2DArray tex;"),
+        ("hlsl", "texture-cube", "TextureCube<float4> tex : register(t1);"),
+        ("hlsl", "texel-buffer", "tex.Load(int(fin[i]))"),
+        ("slang", "texture-3d", "Texture3D<float4> tex;"),
+        ("metal", "texture-1d", "tex.sample(smp, fin[i]).x"),
+        ("metal", "texture-2d-array", "texture2d_array<float> tex [[texture(0)]]"),
+        ("metal", "texel-buffer", "texture_buffer<float> tex [[texture(0)]]"),
+        ("wgsl", "texture-1d", "textureLoad(tex, i32(fin[i]), 0)"),
+        ("wgsl", "texture-cube-array", "var tex: texture_cube_array<f32>;"),
+        (
+            "cuda",
+            "texture-2d-array",
+            "tex2DLayeredLod<float4>(tex, fin[i], 0.5f, 1, 0.0f)",
+        ),
+        ("hip", "texel-buffer", "tex1Dfetch<float4>(tex, int(fin[i]))"),
+        ("opencl", "texel-buffer", "__read_only image1d_buffer_t tex"),
+        ("rust", "texture-cube-array", "&Image!(cube, type=f32, sampled, arrayed)"),
+        ("rust", "texel-buffer", "OpImageFetch typeof*{color} %image %coordinate"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "texture-cube"), "crossgl").source
+    assert "uniform samplerCube tex;" in crossgl
+    # WGSL has no buffer textures, OpenCL C no cube images, GLSL ES 3.00 no 1D, cube-array or buffer textures, and
+    # Mojo's kernels no textures.
+    names = set(textures.NAMES)
+    absent = {
+        **dict.fromkeys(
+            ("glsl", "hlsl", "slang", "metal", "cuda", "hip", "rust"), set()
+        ),
+        "wgsl": {"texel-buffer"},
+        "opencl": {"texture-cube", "texture-cube-array"},
+        "webgl": {"texture-1d", "texture-cube-array", "texel-buffer"},
+        "mojo": names,
     }
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
