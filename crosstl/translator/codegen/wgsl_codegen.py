@@ -111,9 +111,12 @@ from .wgsl_parameter_lowering import (
 )
 from .wgsl_stage_io import (
     entry_parameter_locations,
+    interpolation_qualifiers,
     is_system_semantic_key,
+    member_interpolation,
     refuse_unmapped_system_semantic,
-    with_flat_integer_interpolation,
+    vertex_output_interpolation,
+    with_interpolation,
 )
 from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
@@ -783,6 +786,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._hlsl_register_source_owners = {}
         self._stage_output_lowerings = {}
         self._stage_interface_member_locations = {}
+        self._vertex_output_interpolation = {}
         self._stage_interface_struct_names = set()
         self._fragment_output_struct_names = set()
         self._stage_interface_structs_by_name = {}
@@ -851,6 +855,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._hlsl_register_source_owners = {}
         self._stage_output_lowerings = {}
         self._stage_interface_member_locations = {}
+        self._vertex_output_interpolation = {}
         self._stage_interface_struct_names = set()
         self._fragment_output_struct_names = set()
         self._stage_interface_structs_by_name = {}
@@ -890,6 +895,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         )
         self._stage_interface_member_locations = self.stage_interface_member_locations(
             ast, target_stage, structs
+        )
+        self._vertex_output_interpolation = vertex_output_interpolation(
+            self, self._stage_nodes(ast, target_stage)
         )
         cbuffers = self._collect_cbuffers(ast, target_stage)
         global_variable_nodes = self._collect_global_variables(ast, target_stage)
@@ -1739,8 +1747,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 part for part in (f"@location({implicit_location})", attributes) if part
             )
         if "@location(" in attributes:
-            attributes = with_flat_integer_interpolation(
-                attributes, self.type_name_string(node.param_type)
+            attributes = with_interpolation(
+                attributes,
+                self.type_name_string(node.param_type),
+                interpolation_qualifiers(self, node.attributes),
+                f"entry-point parameter '{node.name}'",
             )
         prefix = f"{attributes} " if attributes else ""
         parameter_name = self.identifier_name(node.name)
@@ -2009,8 +2020,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                             )
                             if part
                         )
-                    field_attributes = with_flat_integer_interpolation(
-                        field_attributes, stage_array["element_type_name"]
+                    field_attributes = with_interpolation(
+                        field_attributes,
+                        stage_array["element_type_name"],
+                        member_interpolation(
+                            self, node.name, member, base_location + index
+                        ),
+                        f"member {node.name}.{member.name}",
                     )
                     prefix = f"{field_attributes} " if field_attributes else ""
                     lines.append(
@@ -2039,6 +2055,14 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                             )
                             if part
                         )
+                    field_attributes = with_interpolation(
+                        field_attributes,
+                        stage_matrix["column_type_name"],
+                        member_interpolation(
+                            self, node.name, member, base_location + index
+                        ),
+                        f"member {node.name}.{member.name}",
+                    )
                     prefix = f"{field_attributes} " if field_attributes else ""
                     lines.append(
                         f"    {prefix}{field_name}: {stage_matrix['column_type_name']},"
@@ -2054,7 +2078,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 member_type_name = self.uniform_buffer_member_type_name(member_type)
             else:
                 member_type_name = self.type_name_string(member_type)
-            attributes = with_flat_integer_interpolation(attributes, member_type_name)
+            attributes = with_interpolation(
+                attributes,
+                member_type_name,
+                member_interpolation(self, node.name, member, base_location),
+                f"member {node.name}.{member.name}",
+            )
             prefix = f"{attributes} " if attributes else ""
             lines.append(f"    {prefix}{member_name}: {member_type_name},")
         lines.append("};")
