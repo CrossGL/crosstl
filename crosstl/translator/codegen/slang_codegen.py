@@ -66,6 +66,11 @@ from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
+from .comma_expressions import (
+    c_family_comma_expression,
+    comma_result_operand,
+    is_comma_expression,
+)
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -5753,9 +5758,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         result = f"{declaration} {{\n"
         for member in node.members:
             if hasattr(member, "member_type"):
-                member_type = self.convert_type(
-                    self.convert_type_node_to_string(member.member_type)
-                )
+                member_type_name = self.convert_type_node_to_string(member.member_type)
+                # A block's members are module-scope names; their types pick mul() for matrix products.
+                self.variable_types[member.name] = member_type_name
+                member_type = self.convert_type(member_type_name)
             else:
                 member_type = self.convert_type(getattr(member, "vtype", "float"))
             result += f"    {self.format_declaration(member_type, member.name)};\n"
@@ -8466,10 +8472,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         right = self.generate_expression_with_expected(
             node.right, self.expression_result_type(node.left)
         )
-        if node.operator == "%=" and self.modulo_requires_slang_floor(
-            node.left, node.right
-        ):
-            return f"{left} = {self.generate_slang_mod_expression(left, right)}"
+        # Slang's floating % and %= are the truncated remainder, as CrossGL's.
         return f"{left} {node.operator} {right}"
 
     def generate_assignment_statement(self, node):
@@ -8492,12 +8495,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         prelude, _results, right = self.generate_expression_with_prelude(
             node.right, self.expression_result_type(node.left)
         )
-        if node.operator == "%=" and self.modulo_requires_slang_floor(
-            node.left, node.right
-        ):
-            statement = f"{left} = {self.generate_slang_mod_expression(left, right)};"
-        else:
-            statement = f"{left} {node.operator} {right};"
+        # Slang's floating % and %= are the truncated remainder, as CrossGL's.
+        statement = f"{left} {node.operator} {right};"
         return self.statement_with_prelude(prelude, statement)
 
     def tail_expression_returns(self, node):
@@ -9019,19 +9018,6 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.register_helper_function(helper_name, helper)
         return helper_name
 
-    def modulo_requires_slang_floor(self, left_expr, right_expr):
-        """Return whether scalar/vector modulo needs GLSL floor semantics lowering."""
-        left_component = self.vector_component_type(
-            self.expression_result_type(left_expr)
-        )
-        right_component = self.vector_component_type(
-            self.expression_result_type(right_expr)
-        )
-        return left_component in {"float", "double"} or right_component in {
-            "float",
-            "double",
-        }
-
     def generate_slang_mod_expression(self, left, right):
         return f"(({left}) - (floor(({left}) / ({right})) * ({right})))"
 
@@ -9106,6 +9092,8 @@ class SlangCodeGen(LoweringRefusalMixin):
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if is_comma_expression(expr):
+            return self.expression_result_type(comma_result_operand(expr))
         if isinstance(expr, VariableNode):
             return self.local_variable_types.get(
                 getattr(expr, "name", None)
@@ -9578,8 +9566,6 @@ class SlangCodeGen(LoweringRefusalMixin):
             left = f"({left})"
         if self.binary_child_needs_parentheses(node.op, node.right, True):
             right = f"({right})"
-        if node.op == "%" and self.modulo_requires_slang_floor(node.left, node.right):
-            return self.generate_slang_mod_expression(left, right)
         if node.op == "*" and self.binary_requires_slang_mul(
             self.expression_result_type(node.left),
             self.expression_result_type(node.right),
@@ -9601,6 +9587,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.generate_literal(node)
         elif isinstance(node, ExpressionStatementNode):
             return self.generate_expression(node.expression)
+        elif is_comma_expression(node):
+            return c_family_comma_expression(node, self.generate_expression)
         elif isinstance(node, AssignmentNode):
             return assignment_value_expression(self.generate_assignment(node))
         elif isinstance(node, ArrayAccessNode):

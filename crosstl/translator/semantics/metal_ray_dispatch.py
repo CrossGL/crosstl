@@ -19,6 +19,10 @@ Refused with :class:`MetalRayDispatchUnsupportedError`:
 
 * the launch index or size in any other ray stage: those stages become ``[[visible]]`` functions, which receive no
   grid position (MSL section 5.1.4 lists the attributes a kernel's parameters may take);
+* in those stages, the state of the ray the stage runs for (``gl_WorldRayDirectionEXT``, ``gl_HitTEXT``,
+  ``WorldRayDirection()``, ``RayTCurrent()``, ``ObjectToWorld3x4()``, ...): a ``[[visible]]`` function receives only
+  its caller's arguments, and ``intersector<>::intersect`` calls no hit or miss function with the ray. The
+  generator emitted those names verbatim;
 * a GLSL ``traceRayEXT`` whose payload location names a ``rayPayloadEXT`` variable. Only the closest-hit and miss
   shaders a trace invokes write that payload, and ``intersector<>::intersect`` invokes neither: Metal has no shader
   binding table and returns the ``intersection_result`` to the kernel instead. The generator declared the payload as
@@ -72,6 +76,25 @@ _RAY_FLAGS = {
     name: value for name, value in _CONSTANTS.items() if name.startswith("gl_RayFlags")
 }
 _PAYLOAD_ATTRIBUTES = frozenset({"raypayloadext", "raypayloadnv"})
+# The state of the ray a hit, miss or intersection shader runs for: GLSL_EXT_ray_tracing section 8.19 and
+# GL_NV_ray_tracing built-ins, and the DXR intrinsics that read the same values.
+_RAY_STATE_VARIABLES = frozenset(
+    (
+        "gl_WorldRayOriginEXT gl_WorldRayDirectionEXT gl_ObjectRayOriginEXT gl_ObjectRayDirectionEXT "
+        "gl_RayTminEXT gl_RayTmaxEXT gl_HitTEXT gl_HitKindEXT gl_IncomingRayFlagsEXT gl_InstanceCustomIndexEXT "
+        "gl_GeometryIndexEXT gl_ObjectToWorldEXT gl_WorldToObjectEXT gl_ObjectToWorld3x4EXT gl_WorldToObject3x4EXT "
+        "gl_WorldRayOriginNV gl_WorldRayDirectionNV gl_ObjectRayOriginNV gl_ObjectRayDirectionNV gl_RayTminNV "
+        "gl_RayTmaxNV gl_HitTNV gl_HitKindNV gl_IncomingRayFlagsNV gl_InstanceCustomIndexNV gl_ObjectToWorldNV "
+        "gl_WorldToObjectNV gl_PrimitiveID gl_InstanceID"
+    ).split()
+)
+_RAY_STATE_CALLS = frozenset(
+    (
+        "WorldRayOrigin WorldRayDirection ObjectRayOrigin ObjectRayDirection RayTMin RayTCurrent HitKind "
+        "RayFlags PrimitiveIndex InstanceIndex InstanceID GeometryIndex ObjectToWorld ObjectToWorld3x4 "
+        "ObjectToWorld4x3 WorldToObject WorldToObject3x4 WorldToObject4x3"
+    ).split()
+)
 
 
 class MetalRayDispatchUnsupportedError(TranslationDiagnostic):
@@ -160,6 +183,32 @@ def _refuse_launch_values(stage, functions, where):
                 )
 
 
+def _ray_state_name(node):
+    if isinstance(node, A.IdentifierNode) and node.name in _RAY_STATE_VARIABLES:
+        return node.name
+    if isinstance(node, A.FunctionCallNode) and not node.arguments:
+        function = node.function
+        name = function.name if isinstance(function, A.IdentifierNode) else function
+        if isinstance(name, str) and name in _RAY_STATE_CALLS:
+            return f"{name}()"
+    return None
+
+
+def _refuse_ray_state(stage, functions):
+    for function in functions:
+        for node in _walk(function):
+            name = _ray_state_name(node)
+            if name is not None:
+                raise MetalRayDispatchUnsupportedError(
+                    _stage_label(stage),
+                    "ray-state-value",
+                    f"{name} reads the state of the ray this stage runs for, but the stage becomes a [[visible]] "
+                    "function, which receives only the arguments its caller passes: intersector<>::intersect "
+                    "returns the hit to the kernel and invokes no hit or miss function with the ray (MSL "
+                    "section 6.18), so pass the value to it as an argument",
+                )
+
+
 def _refuse_traced_payloads(program, stage, functions):
     payloads = _payload_variables(program, stage)
     if not payloads:
@@ -202,6 +251,7 @@ def lower_metal_ray_dispatch(program, target) -> int:
             _refuse_launch_values(
                 stage, functions, "this stage becomes a [[visible]] function"
             )
+            _refuse_ray_state(stage, functions)
         for function in functions:
             _transform(function, _rewrite)
     return visited

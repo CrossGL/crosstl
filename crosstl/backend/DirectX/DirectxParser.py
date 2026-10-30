@@ -4075,15 +4075,10 @@ class HLSLParser:
             self.eat("CHAR_LITERAL")
             return value
         if token_type == "LPAREN":
+            # ``(a, b)`` is the comma operator, as in C: DXC and FXC evaluate ``(1, 0, 0, 1)`` to ``1``
+            # (FXC warns X3081, "comma expression used where a vector constructor may have been intended").
             self.eat("LPAREN")
-            expr = self.parse_expression()
-            if self.current_token[0] == "COMMA":
-                elements = [expr]
-                while self.current_token[0] == "COMMA":
-                    self.eat("COMMA")
-                    elements.append(self.parse_expression())
-                self.eat("RPAREN")
-                return InitializerListNode(elements)
+            expr = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
             return expr
         if token_type == "LBRACE":
