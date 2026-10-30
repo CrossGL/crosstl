@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -403,11 +404,62 @@ def test_target_jobs_require_the_hlsl_cbuffer_layout_dispatches():
         ]
         assert len(checks) == 1, name
         assert checks[0]["env"]["CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION"] == "1"
-        assert checks[0]["if"] == "${{ !cancelled() }}"
+        assert checks[0]["if"] == "${{ success() }}"
         assert "--junitxml=evidence/" in checks[0]["run"]
+        dependent_steps = [
+            step
+            for step in steps
+            if step.get("name")
+            in {
+                "Run the companion test projects on Metal with negative controls",
+                "Evaluate the HLSL intrinsics on Metal",
+                "Dispatch the HLSL constant-buffer layout checks on Metal",
+                "Run the companion test projects on OpenGL with negative controls",
+                "Evaluate the HLSL intrinsics on OpenGL",
+                "Dispatch the HLSL constant-buffer layout checks on OpenGL",
+            }
+        ]
+        assert dependent_steps
+        assert {step.get("if") for step in dependent_steps} == {"${{ success() }}"}
     assert PLAN.is_relevant(
         "tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py"
     )
+
+
+def test_portable_runtime_keeps_the_pinned_dependency_and_audit_scope():
+    """Portable test builds retain the immutable upstream package graph."""
+    runtime = ET.parse(ROOT / "runtime" / "ComputeSharp.Portable.csproj")
+    references = runtime.findall(".//PackageReference[@Include='SixLabors.ImageSharp']")
+    assert [reference.attrib["Version"] for reference in references] == ["3.1.11"]
+
+    # Portable.targets is passed globally to every portable build, so the runtime and
+    # the companion projects all import the same advisory exceptions through it.
+    targets = ET.parse(ROOT / "runtime" / "Portable.targets").getroot()
+    imports = [element.attrib["Project"] for element in targets.iter("Import")]
+    assert imports == ["$(MSBuildThisFileDirectory)../baseline-audit.props"]
+    assert "CustomAfterMicrosoftCommonTargets" not in (
+        ROOT / "runtime" / "Portable.targets"
+    ).read_text(encoding="utf-8").split("-->", 1)[1]
+
+    # Every advisory exception is documented, and the ImageSharp advisories fixed
+    # only by license-gated releases (3.2.0, 4.1.x) stay suppressed for the corpus.
+    audit = (ROOT / "baseline-audit.props").read_text(encoding="utf-8")
+    suppressed = re.findall(r"advisories/(GHSA-[0-9a-z-]+)", audit)
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert suppressed and all(advisory in readme for advisory in suppressed)
+    assert "GHSA-v76p-62qx-wwq2" in suppressed
+
+    dependabot = yaml.safe_load(
+        (REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    )
+    nuget = [
+        update
+        for update in dependabot["updates"]
+        if update["package-ecosystem"] == "nuget"
+        and "/demos/integrations/computesharp/**" in update.get("directories", [])
+    ]
+    assert len(nuget) == 1
+    assert {"dependency-name": "SixLabors.ImageSharp"} in nuget[0].get("ignore", [])
 
 
 def test_relevant_paths_exclude_other_projects():
