@@ -947,11 +947,21 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._function_resource_member_parameters = (
             self.function_resource_member_parameters(ast, target_stage)
         )
-        self._module_variable_types = {
-            getattr(node, "name", ""): getattr(node, "var_type", None)
-            for node in global_variable_nodes
-            if getattr(node, "name", "")
-        }
+        self._module_variable_types = {}
+        for node in global_variable_nodes:
+            name = getattr(node, "name", "")
+            if not name:
+                continue
+            var_type = getattr(node, "var_type", None)
+            if var_type is None and getattr(node, "initial_value", None) is not None:
+                var_type = self.expression_type(node.initial_value)
+                if var_type is None:
+                    raise ValueError(
+                        "WGSL target cannot infer the type of untyped global "
+                        f"{name} from its initializer"
+                    )
+                node.var_type = var_type
+            self._module_variable_types[name] = var_type
         self._module_variable_types.update(
             {
                 getattr(parameter, "name", ""): self.stage_resource_module_type(
