@@ -272,11 +272,11 @@ shader S {
 
 
 def test_unmapped_system_semantic_parameter_is_refused():
-    with pytest.raises(WGSLStageIOUnsupportedError, match="SV_PrimitiveID"):
+    with pytest.raises(WGSLStageIOUnsupportedError, match="SV_ClipDistance0"):
         generate_wgsl("""
 shader S {
     fragment {
-        vec4 main(vec4 color, uint primitive @ SV_PrimitiveID) @ gl_FragColor {
+        vec4 main(vec4 color, float clip @ SV_ClipDistance0) @ gl_FragColor {
             return color;
         }
     }

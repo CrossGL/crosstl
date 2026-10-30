@@ -1,11 +1,12 @@
 """Integer built-in inputs whose source type is not the WGSL one.
 
 WGSL declares the compute built-in inputs ``global_invocation_id``, ``local_invocation_id``, ``workgroup_id`` and
-``num_workgroups`` as ``vec3<u32>``, and ``vertex_index``, ``instance_index``, ``local_invocation_index`` and
-``sample_index`` as ``u32``, and nothing else (WGSL section 13.3.1.1). MSL accepts ``uint`` and ``uint2`` for the
-three-dimensional attributes (``thread_position_in_grid`` and the like, MSL section 5.2.3.6), HLSL accepts ``uint``,
-``uint2``, ``int`` and ``int2`` forms of ``SV_DispatchThreadID`` and its siblings, and CrossGL types ``gl_VertexID``
-and its siblings ``int`` as GLSL does. A narrower value holds the leading components of the three-dimensional one.
+``num_workgroups`` as ``vec3<u32>``, and ``vertex_index``, ``instance_index``, ``local_invocation_index``,
+``sample_index`` and ``primitive_index`` as ``u32``, and nothing else (WGSL section 13.3.1.1). MSL accepts ``uint``
+and ``uint2`` for the three-dimensional attributes (``thread_position_in_grid`` and the like, MSL section 5.2.3.6),
+HLSL accepts ``uint``, ``uint2``, ``int`` and ``int2`` forms of ``SV_DispatchThreadID`` and its siblings, and CrossGL
+types ``gl_VertexID``, ``gl_PrimitiveID`` and their siblings ``int`` as GLSL does. A narrower value holds the leading
+components of the three-dimensional one.
 
 :func:`lower_integer_builtin_inputs` receives such an entry-point parameter in the WGSL type under a fresh name,
 and declares the source parameter as a local at the top of the body, initialized with the leading components
@@ -26,7 +27,13 @@ VECTOR_COMPUTE_BUILTINS = frozenset(
     {"global_invocation_id", "local_invocation_id", "workgroup_id", "num_workgroups"}
 )
 SCALAR_BUILTINS = frozenset(
-    {"vertex_index", "instance_index", "local_invocation_index", "sample_index"}
+    {
+        "vertex_index",
+        "instance_index",
+        "local_invocation_index",
+        "sample_index",
+        "primitive_index",
+    }
 )
 _COMPONENTS = "xyz"
 
