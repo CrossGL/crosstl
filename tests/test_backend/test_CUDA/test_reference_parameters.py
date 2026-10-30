@@ -5,6 +5,7 @@ import re
 import pytest
 
 import crosstl
+from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.reference_parameters import (
     ReferenceParameterError,
     reference_kind,
@@ -74,6 +75,12 @@ def test_record_type_underscores_are_preserved_on_import(
     crossgl = crosstl.translate(str(path), backend="cgl", format_output=False)
     assert f"struct {record_name}" in crossgl
     assert f"var t: {record_name}" in crossgl
+
+
+def test_non_ascii_type_name_sanitizes_to_crossgl_identifier():
+    converter = CudaToCrossGLConverter()
+    sanitized = converter.sanitize_crossgl_type_identifier("café")
+    assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", sanitized)
 
 
 @pytest.mark.parametrize("extension", ["cu", "hip"])
