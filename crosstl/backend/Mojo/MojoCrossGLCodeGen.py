@@ -2,6 +2,7 @@
 
 import re
 
+from ..comma_expressions import crossgl_tuple_literal
 from .MojoAst import *
 from .MojoLexer import *
 from .MojoParser import *
@@ -1537,8 +1538,9 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, VariableDeclarationNode):
             return self.generate_variable_declaration(expr)
         elif isinstance(expr, TupleNode):
-            elements = ", ".join(self.generate_expression(e) for e in expr.elements)
-            return f"({elements})"
+            return crossgl_tuple_literal(
+                self.generate_expression(e) for e in expr.elements
+            )
         elif isinstance(expr, ListLiteralNode):
             elements = ", ".join(self.generate_expression(e) for e in expr.elements)
             return f"[{elements}]"

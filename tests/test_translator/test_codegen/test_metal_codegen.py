@@ -7912,7 +7912,7 @@ def test_metal_global_function_constants_validate_declarations(
         MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
-def test_metal_stencil_ref_return_semantic_reports_unsupported():
+def test_metal_stencil_ref_return_semantic_uses_stencil_attribute():
     code = """
     shader StencilOut {
         fragment {
@@ -7923,14 +7923,30 @@ def test_metal_stencil_ref_return_semantic_reports_unsupported():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match="gl_FragStencilRefEXT.*function return semantic",
-    ):
+    # MSL 3.2 section 5.2.3.4: a fragment function returns its stencil reference value as uint [[stencil]].
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+    assert "uint value [[stencil]];" in generated
+    assert "return fragment_main_Return{7};" in generated
+
+
+def test_metal_stencil_ref_return_semantic_requires_uint():
+    code = """
+    shader StencilOut {
+        fragment {
+            float main() @ gl_FragStencilRefEXT {
+                return 7.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="gl_FragStencilRefEXT"):
         MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
-def test_metal_stencil_ref_struct_member_reports_unsupported():
+def test_metal_stencil_ref_struct_member_uses_stencil_attribute():
     code = """
     shader StencilOut {
         struct FragmentOutput {
@@ -7949,8 +7965,9 @@ def test_metal_stencil_ref_struct_member_reports_unsupported():
     }
     """
 
-    with pytest.raises(ValueError, match="stencil_ref.*not supported"):
-        MetalCodeGen().generate(crosstl.translator.parse(code))
+    generated = MetalCodeGen().generate(crosstl.translator.parse(code))
+    assert "uint stencil [[stencil]];" in generated
+    assert "output.stencil = 7;" in generated
 
 
 def test_metal_argument_buffer_resource_members_preserve_id_attributes():
@@ -16900,7 +16917,8 @@ def test_void_function_return_semantics_are_rejected(stage, semantic):
     ("stage", "return_type", "semantic", "metal_semantic", "expected_type"),
     [
         ("vertex", "int", "gl_Position", "position", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "color\\(0\\)", "float4"),
+        # MSL takes any scalar or vector colour value, so only a bool is refused.
+        ("fragment", "bool", "gl_FragColor", "color\\(0\\)", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "depth\\(any\\)", "float"),
         ("fragment", "int", "gl_SampleMask", "sample_mask", "uint"),
     ],
@@ -16909,6 +16927,7 @@ def test_function_return_builtin_types_are_validated(
     stage, return_type, semantic, metal_semantic, expected_type
 ):
     value = {
+        "bool": "true",
         "int": "0",
         "vec2": "vec2(0.0)",
         "vec3": "vec3(0.0)",

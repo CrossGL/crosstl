@@ -49,6 +49,10 @@ from .integral_constant_arithmetic import (
     fold_integral_constant_parameter_arithmetic,
 )
 from .local_decltypes import complete_declared_type, substitute_local_decltypes_in
+from .member_address_types import (
+    addressed_member_pointer_type,
+    merge_receiver_variable_types,
+)
 from .member_lowering_layers import lower_members_with_late_specializations
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .static_member_constants import (
@@ -77,6 +81,7 @@ from .value_traits import (
     simdgroup_type_trait,
     struct_value_trait_definitions,
 )
+from .variable_templates import materialize_value_variable_templates
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
 # Macros the Metal compiler predefines for every source (`metal -dM -E`): the language version as
@@ -1200,6 +1205,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             processed
         )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
+        processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
         # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
         # bound) as for the source's own concrete code.
@@ -16903,7 +16909,18 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             concrete_value_type = self._canonical_template_binding_pointee_type(
                 concrete_value_type
             )
-            if resolved_declared_type != concrete_value_type:
+            # A materialized specialization such as `S_float16_t` expands to the
+            # argument spelling it was named from, so canonicalize both sides'
+            # aliases again after the expansion.
+            resolved_declared_type = canonicalize_declared_aliases(
+                resolved_declared_type
+            )
+            concrete_value_type = canonicalize_argument_aliases(concrete_value_type)
+            if (
+                resolved_declared_type is None
+                or concrete_value_type is None
+                or resolved_declared_type != concrete_value_type
+            ):
                 return None
         return bindings
 
@@ -22169,6 +22186,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 declared = local_variable_types.get(operand)
                 if isinstance(declared, _MetalAddressableValueType):
                     return declared.pointer_type
+            member_pointer = addressed_member_pointer_type(
+                self, operand, local_variable_types, struct_field_types
+            )
+            if member_pointer is not None:
+                return member_pointer
             return self._infer_addressed_buffer_element_pointer_type(
                 expr,
                 buffer_element_types,
@@ -23738,7 +23760,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             declaration_start = angle_end + 1
             header = code[declaration_start : declaration_start + 512]
             header_match = re.match(
-                r"\s*(?:\[\[[^\]]*\]\]\s*)*(?:struct|class)\s+"
+                r"\s*(?:\[\[[^\]]*\]\]\s*)*(?:struct|class|union)\s+"
                 r"(?P<name>[A-Za-z_][A-Za-z0-9_:]*)\b",
                 header,
                 re.DOTALL,
@@ -26623,10 +26645,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             code,
             scan_skip_spans,
         )
-        for name, entries in receiver_variable_types.items():
-            existing = local_variable_types.setdefault(name, [])
-            existing.extend(entry for entry in entries if entry not in existing)
-            existing.sort(key=lambda item: item[0])
+        merge_receiver_variable_types(
+            code, local_variable_types, receiver_variable_types
+        )
         self._collect_function_parameter_types(
             code,
             scan_skip_spans,
@@ -29159,7 +29180,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         *,
         strip_specialization_arguments: bool = False,
     ) -> str:
-        pattern = re.compile(rf"\b(struct|class)\s+{re.escape(old_name)}\b")
+        pattern = re.compile(rf"\b(struct|class|union)\s+{re.escape(old_name)}\b")
         match = pattern.search(source)
         if match is None:
             return source

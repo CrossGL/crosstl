@@ -5,6 +5,23 @@ import re
 from ..ast import StructNode
 from .array_utils import evaluate_literal_int_expression, split_array_type_suffix
 
+# Sub-word scalar elements that a fixed array can pack into canonical 32-bit
+# words: CrossGL element type -> (lane element, lane width in bits). Lane ``i``
+# occupies bits ``(i % lanes_per_word) * width`` of word ``i / lanes_per_word``,
+# which is the little-endian byte order the union contract requires.
+LANE_ELEMENTS = {
+    "uint8": ("uint8", 8),
+    "int8": ("int8", 8),
+    "uint16": ("uint16", 16),
+    "int16": ("int16", 16),
+    "half": ("float16", 16),
+    "float16": ("float16", 16),
+}
+
+
+def is_lane_kind(kind):
+    return str(kind).endswith("_lane_array") or str(kind).endswith("_lane")
+
 
 class UnionLayoutCollector:
     """Collect overlapping value views without changing the source member types."""
@@ -257,6 +274,30 @@ class UnionLayoutCollector:
                     alignment=alignment,
                 )
             extent = int(match.group(1))
+            lane = LANE_ELEMENTS.get(base_type)
+            if lane is not None:
+                element, lane_bits = lane
+                lanes = word_count * (32 // lane_bits)
+                if extent != lanes:
+                    raise self.error(
+                        node,
+                        reason="member-storage-shape-mismatch",
+                        detail=(
+                            f"packed lane view '{type_name}' does not provide "
+                            f"exactly {lanes} {lane_bits}-bit lanes"
+                        ),
+                        member=member,
+                        member_type=type_name,
+                        size=size,
+                        alignment=alignment,
+                    )
+                return {
+                    "kind": f"{element}_lane_array",
+                    "type": type_name,
+                    "extent": extent,
+                    "element": element,
+                    "lane_bits": lane_bits,
+                }
             if word_count == 1:
                 raise self.error(
                     node,
