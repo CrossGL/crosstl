@@ -399,6 +399,28 @@ class TestHipCodeGen:
         assert "__managed__" not in result
         assert "__shared__" not in result
 
+    def test_constant_memory_globals_use_distinct_crossgl_bindings(self):
+        code = """
+        #include <hip/hip_runtime.h>
+        __constant__ float scale[4];
+        __constant__ float bias[4];
+        extern "C" __global__ void k(float* values) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            values[i] = values[i] * scale[i % 4] + bias[i % 4];
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "@group(0) @binding(0) var<uniform> scale: array<f32, 4>;" in result
+        assert "@group(0) @binding(1) var<uniform> bias: array<f32, 4>;" in result
+        assert "@group(0) @binding(2) var<storage, read_write> values: array<f32>" in (
+            result
+        )
+        assert result.count("@group(0) @binding(0)") == 1
+        assert "__constant__" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_official_amd_aligned_struct_attribute_conversion(self):
         code = """
         struct __align__(16) MyStruct {
