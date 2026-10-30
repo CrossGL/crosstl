@@ -2241,11 +2241,19 @@ def component_kind_mismatch(expected_kind, actual_kind):
     return actual_kind
 
 
+# Implicit conversions GLSL 4.60 section 4.1.10 applies to a loaded value: (to, from).
+IMPLICIT_LOAD_CONVERSIONS = frozenset(
+    {("float", "int"), ("float", "uint"), ("uint", "int")}
+)
+
+
 def image_load_result_kind_mismatch(expected_kind, component_kind):
     """Return expected result kind when an image load result kind conflicts."""
     if expected_kind is None or component_kind not in NUMERIC_COMPONENT_KINDS:
         return None
     if expected_kind == component_kind:
+        return None
+    if (expected_kind, component_kind) in IMPLICIT_LOAD_CONVERSIONS:
         return None
     return expected_kind
 
