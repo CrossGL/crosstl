@@ -586,6 +586,28 @@ def _curated() -> list[Construct]:
         c("graphics", "sample-mask-input", "BuiltIn.SampleMask", stage="fragment"),
         c("graphics", "sample-mask", "BuiltIn.SampleMask", stage="fragment"),
         c(
+            "graphics",
+            "helper-invocation",
+            "BuiltIn.HelperInvocation",
+            stage="fragment",
+        ),
+        c(
+            "graphics",
+            "early-fragment-tests",
+            "ExecutionMode.EarlyFragmentTests",
+            stage="fragment",
+        ),
+        c("graphics", "layer", "BuiltIn.Layer", stage="fragment"),
+        c("graphics", "viewport-index", "BuiltIn.ViewportIndex", stage="fragment"),
+        c("graphics", "point-coordinate", "BuiltIn.PointCoord", stage="fragment"),
+        c(
+            "graphics",
+            "conservative-depth",
+            "BuiltIn.FragDepth",
+            "ExecutionMode.DepthGreater",
+            stage="fragment",
+        ),
+        c(
             "resource",
             "uniform-struct",
             "StorageClass.Uniform",
@@ -737,7 +759,13 @@ def universe(grammar_text: str) -> list[Construct]:
     kinds = _kinds(grammar)
     capabilities = {e["enumerant"] for e in kinds["Capability"]}
     found = {i["opname"] for i in grammar["instructions"]}
-    for kind in ("StorageClass", "BuiltIn", "Decoration", "ExecutionModel"):
+    for kind in (
+        "StorageClass",
+        "BuiltIn",
+        "Decoration",
+        "ExecutionModel",
+        "ExecutionMode",
+    ):
         found |= {f"{kind}.{e['enumerant']}" for e in kinds[kind]}
     found |= {f"Capability.{name}" for name in capabilities}
     constructs = _curated()

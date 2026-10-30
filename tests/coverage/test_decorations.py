@@ -149,6 +149,93 @@ def test_a_metal_coverage_mask_input_has_its_own_air_attribute(monkeypatch):
     )
 
 
+def _fragment(name, group):
+    return Feature("hlsl", "graphics", name, None, group=group, stage="fragment")
+
+
+def test_a_translation_must_keep_each_execution_mode_of_its_feature():
+    depth = _fragment(
+        "conservative-depth", "BuiltIn.FragDepth ExecutionMode.DepthGreater"
+    )
+    kept = (
+        "OpExecutionMode %main OriginUpperLeft\nOpExecutionMode %main DepthReplacing\n"
+        "OpExecutionMode %main DepthGreater\nOpDecorate %depth BuiltIn FragDepth\n"
+    )
+    assert decorations.lost(depth, "spirv", kept) == ""
+    assert decorations.lost(
+        depth, "spirv", kept.replace("DepthGreater", "DepthGreaterX")
+    ) == ("the translation loses ExecutionMode.DepthGreater")
+    early = _fragment("early-fragment-tests", "ExecutionMode.EarlyFragmentTests")
+    assert decorations.lost(
+        early, "spirv", "OpExecutionMode %main OriginUpperLeft\n"
+    ) == ("the translation loses ExecutionMode.EarlyFragmentTests")
+
+
+def test_a_helper_query_may_be_the_built_in_or_the_demote_instruction():
+    # DXC and slangc lower IsHelperLane() to OpIsHelperInvocationEXT; glslang reads the built-in.
+    helper = _fragment("helper-invocation", "BuiltIn.HelperInvocation")
+    builtin = "OpDecorate %gl_HelperInvocation BuiltIn HelperInvocation\n"
+    instruction = "         %12 = OpIsHelperInvocationEXT %bool\n"
+    assert decorations.lost(helper, "spirv", builtin) == ""
+    assert decorations.lost(helper, "spirv", instruction) == ""
+    assert decorations.lost(helper, "spirv", "%12 = OpConstantTrue %bool\n") == (
+        "the translation loses BuiltIn.HelperInvocation"
+    )
+
+
+def test_a_metal_translation_keeps_the_air_of_each_pipeline_feature(monkeypatch):
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    helper = _fragment("helper-invocation", "BuiltIn.HelperInvocation")
+    call = "%3 = tail call i1 @air.simd_is_helper_thread() #2\n"
+    assert decorations.lost(helper, "metal", call) == ""
+    assert decorations.lost(helper, "metal", "%3 = icmp eq i32 0, 0\n") == (
+        "the translation loses BuiltIn.HelperInvocation"
+    )
+    # The Metal compiler writes the early tests without the air prefix.
+    early = _fragment("early-fragment-tests", "ExecutionMode.EarlyFragmentTests")
+    assert (
+        decorations.lost(
+            early, "metal", '!9 = !{ptr @probe, !"early_fragment_tests"}\n'
+        )
+        == ""
+    )
+    depth = _fragment(
+        "conservative-depth", "BuiltIn.FragDepth ExecutionMode.DepthGreater"
+    )
+    greater = '!10 = !{!"air.depth", !"air.depth_qualifier", !"air.greater"}\n'
+    assert decorations.lost(depth, "metal", greater) == ""
+    assert decorations.lost(depth, "metal", greater.replace("greater", "any")) == (
+        "the translation loses ExecutionMode.DepthGreater"
+    )
+    layer = _fragment("layer", "BuiltIn.Layer")
+    assert decorations.lost(layer, "metal", '!{!"air.render_target_array_index"}') == ""
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_records_early_tests_and_conservative_depth_in_air():
+    header = "#include <metal_stdlib>\nusing namespace metal;\n"
+    early = _fragment("early-fragment-tests", "ExecutionMode.EarlyFragmentTests")
+    source = (
+        header
+        + "[[early_fragment_tests]] fragment float4 probe() { return float4(1.0); }\n"
+    )
+    assert decorations.lost(early, "metal", source) == ""
+    assert decorations.lost(
+        early, "metal", source.replace("[[early_fragment_tests]] ", "")
+    ) == ("the translation loses ExecutionMode.EarlyFragmentTests")
+    depth = _fragment(
+        "conservative-depth", "BuiltIn.FragDepth ExecutionMode.DepthGreater"
+    )
+    source = header + (
+        "struct Out { float4 color [[color(0)]]; float depth [[depth(greater)]]; };\n"
+        "fragment Out probe() { Out out; out.color = float4(1.0); out.depth = 0.5; return out; }\n"
+    )
+    assert decorations.lost(depth, "metal", source) == ""
+    assert decorations.lost(depth, "metal", source.replace("greater", "any")) == (
+        "the translation loses ExecutionMode.DepthGreater"
+    )
+
+
 def test_a_webgl_translation_is_lowered_as_glsl_es_3_10(monkeypatch):
     calls = []
 
