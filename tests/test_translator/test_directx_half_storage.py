@@ -10,7 +10,10 @@ import pytest
 from crosstl import translate
 from crosstl.translator import parse
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
-from crosstl.translator.codegen.hlsl_half_storage import DirectXHalfStorageError
+from crosstl.translator.codegen.hlsl_half_storage import (
+    DirectXHalfStorageError,
+    HLSLHalfStorage,
+)
 from crosstl.translator.resource_storage import (
     BINARY16_STORAGE,
     parse_resource_storage_header,
@@ -148,6 +151,33 @@ def test_non_half_buffers_do_not_get_storage_codecs(tmp_path, scalar):
     assert parse_resource_storage_header(generated) == {}
     assert "__crossgl_half_storage_" not in generated
     assert "asfloat16(" not in generated
+
+
+def _many_kernel_source(count):
+    # One distinct binary16 buffer per entry point, as in a library of template instantiations.
+    return "#include <metal_stdlib>\nusing namespace metal;\n" + "".join(
+        f"kernel void scale{index}(device half* values{index} [[buffer(0)]], "
+        "uint i [[thread_position_in_grid]]) "
+        f"{{ values{index}[i] = values{index}[i] * half(2.0f); }}\n"
+        for index in range(count)
+    )
+
+
+def test_storage_contract_records_every_buffer_of_a_many_kernel_module(tmp_path):
+    generated = _translate(tmp_path, _many_kernel_source(300))
+    assert parse_resource_storage_header(generated) == {
+        f"values{index}": BINARY16_STORAGE for index in range(300)
+    }
+
+
+def test_storage_contract_over_the_header_limit_is_a_typed_refusal():
+    storage = HLSLHalfStorage(generator=None)
+    storage.resources = {
+        f"values_{index:04}_" + "x" * 64: dict(BINARY16_STORAGE) for index in range(600)
+    }
+    with pytest.raises(DirectXHalfStorageError, match="600 buffers") as caught:
+        storage.header()
+    assert caught.value.reason == "resource-storage-contract-limit"
 
 
 UPDATE_CASES = {
