@@ -404,7 +404,7 @@ def test_target_jobs_require_the_hlsl_cbuffer_layout_dispatches():
         ]
         assert len(checks) == 1, name
         assert checks[0]["env"]["CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION"] == "1"
-        assert checks[0]["if"] == "${{ success() }}"
+        assert checks[0]["if"] == "${{ !cancelled() }}"
         assert "--junitxml=evidence/" in checks[0]["run"]
         dependent_steps = [
             step
