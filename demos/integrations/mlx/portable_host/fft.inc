@@ -34,6 +34,9 @@ constexpr int fft_max_rader_size = 2048;
 constexpr int fft_max_bluestein_size = 2048;
 constexpr int fft_min_threadgroup_mem_size = 256;
 constexpr int fft_min_coalesce_width = 4;
+// fft.cpp spells pi as M_PI, which MSVC's <cmath> leaves undefined unless
+// _USE_MATH_DEFINES precedes its first inclusion; this is the same double.
+constexpr double fft_pi = 3.14159265358979323846;
 
 // fft.cpp FFTPlan.
 struct HostFFTPlan {
@@ -233,7 +236,7 @@ FFTRaderTables fft_rader_tables(int rader_n) {
   }
   std::vector<std::complex<float>> b_q(rader_n - 1);
   for (int i = 0; i < rader_n - 1; i++) {
-    float pi_i = (float)tables.g_minus_q[i] * -2.0 * M_PI / rader_n;
+    float pi_i = (float)tables.g_minus_q[i] * -2.0 * fft_pi / rader_n;
     b_q[i] = std::exp(std::complex<float>(0, pi_i));
   }
   tables.b_q.resize(rader_n - 1);
@@ -275,7 +278,7 @@ FFTBluesteinTables fft_bluestein_tables(
   tables.w_k.resize(n);
   std::vector<std::complex<float>> w_q_vec(bluestein_n, 0);
   for (int i = -n + 1; i < n; i++) {
-    double theta = pow(i, 2) * M_PI / (double)n;
+    double theta = pow(i, 2) * fft_pi / (double)n;
     w_q_vec[i + n - 1] = std::exp(std::complex<double>(0, theta));
     if (i >= 0) {
       tables.w_k[i] = std::exp(std::complex<double>(0, -theta));
