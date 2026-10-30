@@ -101,3 +101,27 @@ def test_array_constructor_argument(tmp_path):
 def test_size_mismatch_is_refused(tmp_path):
     with pytest.raises(Exception, match="needs exactly 3"):
         translate(tmp_path, "values[i] = float[3](x, 1.0)[1];")
+
+
+def test_one_argument_constructor_in_declaration_zero_fills(tmp_path):
+    # WGSL array(0.0) is a one-element array, which a declared array<f32, 3> rejects (#3563).
+    output = translate(
+        tmp_path,
+        "float a[3] = float[3](0.0);\n"
+        " vec4 v[2] = vec4[2](0.0);\n"
+        " values[i] = a[2] + v[1].x;",
+    )
+    assert "var a: array<f32, 3> = array<f32, 3>(0.0, f32(), f32());" in output
+    assert (
+        "var v: array<vec4<f32>, 2> = "
+        "array<vec4<f32>, 2>(vec4<f32>(0.0), vec4<f32>());"
+    ) in output
+    assert "array(0.0)" not in output
+
+
+def test_short_braced_initializer_zero_fills_the_rest(tmp_path):
+    # The elements a braced initializer leaves out are zero, as in GLSL output.
+    output = translate(
+        tmp_path, "float a[3] = {x, 1.0};\n values[i] = a[0] + a[1] + a[2];"
+    )
+    assert "var a: array<f32, 3> = array<f32, 3>(x, 1.0, f32());" in output
