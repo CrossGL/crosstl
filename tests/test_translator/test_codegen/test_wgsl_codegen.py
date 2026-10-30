@@ -2518,6 +2518,28 @@ def test_wgsl_codegen_lowers_texture_bias_on_every_biased_texture_type(
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_converts_an_integer_texture_bias_to_f32(tmp_path):
+    # GLSL converts an int bias to the float parameter; WGSL converts no i32
+    # or u32 value implicitly, so naga rejects textureSampleBias(..., b).
+    shader = """
+    shader WGSLTextureBias {
+        uniform sampler2D tex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, int level @ TEXCOORD1) @ gl_FragColor {
+                uint shift = uint(level);
+                return texture(tex, uv, level) + texture(tex, uv, shift);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureSampleBias(tex, tex_sampler, uv, f32(level))" in generated
+    assert "textureSampleBias(tex, tex_sampler, uv, f32(shift))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 @pytest.mark.parametrize(
     ("declaration", "coord_type", "call", "message"),
     [

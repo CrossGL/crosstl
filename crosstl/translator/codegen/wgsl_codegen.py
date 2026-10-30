@@ -4439,7 +4439,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             f"textureSampleBias({texture_name}, "
             f"{self.texture_sampler_expression(texture)}, "
             f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
-            f"{self.generate_expression(bias)})"
+            f"{self.generate_expression_for_target(bias, 'float')})"
         )
 
     def generate_sampled_texture_array_sample_call(self, texture, coords, array_info):
