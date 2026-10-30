@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "crosstl"
-version = "3.4.0"
+version = "3.5.0"
 description = "Translate GPU shaders and compute kernels between languages through the CrossGL IR"
 readme = "README.md"
 requires-python = ">=3.11"
