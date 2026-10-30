@@ -313,6 +313,80 @@ def test_the_metal_compiler_records_early_tests_and_conservative_depth_in_air():
     )
 
 
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_records_barycentrics_views_and_stencil_in_air():
+    header = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "struct In { float2 uv; };\n"
+    )
+    bary = _fragment(
+        "barycentric-coordinate",
+        "BuiltIn.BaryCoordKHR Capability.FragmentBarycentricKHR",
+    )
+    source = header + (
+        "fragment float4 probe(In in [[stage_in]], float3 b [[barycentric_coord]]) "
+        "{ return float4(b, in.uv.x); }\n"
+    )
+    assert decorations.lost(bary, "metal", source) == ""
+    assert decorations.lost(
+        bary,
+        "metal",
+        source.replace(", float3 b [[barycentric_coord]]", "").replace(
+            "float4(b,", "float4(in.uv, 0.0,"
+        ),
+    ) == ("the translation loses BuiltIn.BaryCoordKHR")
+    view = _fragment("view-index", "BuiltIn.ViewIndex Capability.MultiView")
+    source = header + (
+        "fragment float4 probe(In in [[stage_in]], uint v [[amplification_id]]) "
+        "{ return float4(in.uv, float(v), 1.0); }\n"
+    )
+    assert decorations.lost(view, "metal", source) == ""
+    assert decorations.lost(
+        view, "metal", source.replace("[[amplification_id]]", "[[primitive_id]]")
+    ) == ("the translation loses BuiltIn.ViewIndex")
+    stencil = _fragment(
+        "stencil-export", "BuiltIn.FragStencilRefEXT Capability.StencilExportEXT"
+    )
+    source = header + (
+        "struct Out { float4 color [[color(0)]]; uint s [[stencil]]; };\n"
+        "fragment Out probe(In in [[stage_in]]) { Out out; out.color = float4(in.uv, 0.0, 1.0); "
+        "out.s = 1; return out; }\n"
+    )
+    assert decorations.lost(stencil, "metal", source) == ""
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_extension_built_ins_with_their_capabilities():
+    rate = _fragment(
+        "shading-rate", "BuiltIn.ShadingRateKHR Capability.FragmentShadingRateKHR"
+    )
+    source = (
+        "#version 460\n#extension GL_EXT_fragment_shading_rate : require\n"
+        "layout(location = 0) out vec4 color;\n"
+        "void main() {\n    color = vec4(float(gl_ShadingRateEXT));\n}\n"
+    )
+    assert decorations.lost(rate, "glsl", source) == ""
+    assert decorations.lost(
+        rate, "glsl", source.replace("gl_ShadingRateEXT", "gl_FrontFacing")
+    ) == (
+        "the translation loses BuiltIn.ShadingRateKHR, Capability.FragmentShadingRateKHR"
+    )
+    stencil = _fragment(
+        "stencil-export", "BuiltIn.FragStencilRefEXT Capability.StencilExportEXT"
+    )
+    source = (
+        "#version 460\n#extension GL_ARB_shader_stencil_export : require\n"
+        "layout(location = 0) out vec4 color;\n"
+        "void main() {\n    color = vec4(1.0);\n    gl_FragStencilRefARB = 1;\n}\n"
+    )
+    assert decorations.lost(stencil, "glsl", source) == ""
+    assert decorations.lost(
+        stencil, "glsl", source.replace("    gl_FragStencilRefARB = 1;\n", "")
+    ) == (
+        "the translation loses BuiltIn.FragStencilRefEXT, Capability.StencilExportEXT"
+    )
+
+
 def test_a_webgl_translation_is_lowered_as_glsl_es_3_10(monkeypatch):
     calls = []
 

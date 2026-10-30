@@ -68,6 +68,9 @@ CAPABILITIES = (
     "DrawParameters",
     "SampleRateShading",
     "MultiViewport",
+    "MultiView",
+    "FragmentBarycentricKHR",
+    "StencilExportEXT",
     "Geometry",
     "GeometryStreams",
     "Tessellation",
@@ -79,6 +82,8 @@ EXTENSIONS = (
     "SPV_EXT_shader_atomic_float_add",
     "SPV_EXT_shader_atomic_float_min_max",
     "SPV_KHR_shader_clock",
+    "SPV_KHR_fragment_shader_barycentric",
+    "SPV_EXT_shader_stencil_export",
 )
 MESH_CAPABILITIES = ("MeshShadingEXT",)
 MESH_EXTENSIONS = ("SPV_EXT_mesh_shader",)

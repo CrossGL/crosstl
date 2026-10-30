@@ -70,6 +70,9 @@ AIR = {
     "BuiltIn.SubgroupLocalInvocationId": "air.thread_index_in_simdgroup",
     "BuiltIn.NumSubgroups": "air.simdgroups_per_threadgroup",
     "BuiltIn.SubgroupId": "air.simdgroup_index_in_threadgroup",
+    "BuiltIn.BaryCoordKHR": "air.barycentric_coord",
+    "BuiltIn.ViewIndex": "air.amplification_id",
+    "BuiltIn.FragStencilRefEXT": "air.stencil",
 }
 # The attributes that AIR names apart when a fragment function reads them: a ``[[sample_mask]]`` input is
 # ``!"air.sample_mask_in"``. A feature whose name ends in ``-input`` reads its built-in.

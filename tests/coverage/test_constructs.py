@@ -16,6 +16,7 @@ from tools.coverage import (
 from tools.coverage.model import Feature, Result
 from tools.coverage.templates import (
     draws,
+    extensions,
     fragments,
     interfaces,
     pipeline,
@@ -897,6 +898,62 @@ def test_pipeline_probes_use_each_languages_fragment_built_ins_and_modes():
         "hlsl": {"point-coordinate"},
         "wgsl": names,
         "webgl": names - {"point-coordinate"},
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_extension_probes_read_each_languages_fragment_built_ins():
+    feature = _feature("glsl", "barycentric-coordinate")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    assert feature.group == "BuiltIn.BaryCoordKHR Capability.FragmentBarycentricKHR"
+    assert _feature("hlsl", "stencil-export").group == (
+        "BuiltIn.FragStencilRefEXT Capability.StencilExportEXT"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "barycentric-coordinate",
+            "#extension GL_EXT_fragment_shader_barycentric : require\n",
+        ),
+        ("glsl", "shading-rate", "float(gl_ShadingRateEXT)"),
+        ("glsl", "view-index", "#extension GL_EXT_multiview : require\n"),
+        ("glsl", "stencil-export", "gl_FragStencilRefARB = int(uv.x * 255.0);"),
+        ("webgl", "view-index", "float(gl_ViewID_OVR)"),
+        ("hlsl", "barycentric-coordinate", "float3 bary : SV_Barycentrics"),
+        ("hlsl", "shading-rate", "uint rate : SV_ShadingRate"),
+        ("hlsl", "stencil-export", "uint stencil : SV_StencilRef;"),
+        ("slang", "view-index", '[shader("fragment")]\nfloat4 main('),
+        (
+            "slang",
+            "stencil-export",
+            '};\n\n[shader("fragment")]\nFragmentOutput main(',
+        ),
+        ("metal", "barycentric-coordinate", "float3 bary [[barycentric_coord]]"),
+        ("metal", "view-index", "uint view [[amplification_id]]"),
+        ("metal", "stencil-export", "uint stencil [[stencil]];"),
+        ("rust", "view-index", "#[spirv(view_index, flat)] view: u32"),
+        ("rust", "stencil-export", "#[spirv(fragment(stencil_ref_replacing_ext))]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "barycentric-coordinate"), "crossgl").source
+    assert "        vec3 bary @ gl_BaryCoordEXT;\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "stencil-export"), "crossgl").source
+    assert "        int stencil @ gl_FragStencilRefARB;\n" in crossgl
+    # Metal has no shading-rate input and rust-gpu no shading-rate built-in, WGSL none of the four, GLSL ES 3.00 only
+    # the view index, and the kernel languages no fragment stage.
+    names = set(extensions.NAMES)
+    absent = {
+        "glsl": set(),
+        "hlsl": set(),
+        "slang": set(),
+        "metal": {"shading-rate"},
+        "rust": {"shading-rate"},
+        "wgsl": names,
+        "webgl": names - {"view-index"},
         **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
     }
     for language, missing in absent.items():

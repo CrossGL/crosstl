@@ -22,6 +22,7 @@ from .draws import WEBGL as _DRAWS
 from .edges import FAMILY as _EDGES
 from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
+from .extensions import WEBGL as _EXTENSIONS
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
 from .fragments import WEBGL as _FRAGMENTS
@@ -126,6 +127,7 @@ WEBGL = {
     **_DRAWS,
     **_RASTERIZATION,
     **_PIPELINE,
+    **_EXTENSIONS,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

@@ -49,6 +49,7 @@ from .templates.columns import CROSSGL as COLUMNS_CROSSGL
 from .templates.draws import CROSSGL as DRAWS
 from .templates.edges import FAMILY as EDGES
 from .templates.elements import CROSSGL as ELEMENTS_CROSSGL
+from .templates.extensions import CROSSGL as EXTENSIONS
 from .templates.forms import FAMILY as FORMS
 from .templates.fragments import CROSSGL as FRAGMENTS
 from .templates.helpers import CROSSGL as HELPERS_CROSSGL
@@ -638,6 +639,7 @@ CONSTRUCTS: dict[str, Template] = {
     **DRAWS,
     **RASTERIZATION,
     **PIPELINE,
+    **EXTENSIONS,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,
