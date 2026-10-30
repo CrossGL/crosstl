@@ -9315,7 +9315,8 @@ class HipToCrossGLConverter:
                 return
         if self.indent_level == 0:
             alias_type = self.normalize_top_level_type_alias(alias_type)
-        self.emit(f"typedef {alias_type} {node.name};")
+        # An alias named ``let`` is declared as ``let_``, the name its uses get.
+        self.emit(f"typedef {alias_type} {self.sanitize_identifier_name(node.name)};")
 
     def normalize_top_level_type_alias(self, alias_type):
         """Keep C++ trait aliases reparsable by CrossGL's top-level typedef parser."""
@@ -10410,7 +10411,10 @@ class HipToCrossGLConverter:
         return normalized_name
 
     def visit_EnumNode(self, node):
-        name = node.name or self.next_anonymous_enum_name()
+        # An enum named ``let`` is declared as ``let_``, the name its uses get.
+        name = (
+            self.sanitize_identifier_name(node.name) or self.next_anonymous_enum_name()
+        )
         underlying = getattr(node, "underlying_type", None)
         if getattr(node, "name", None):
             self.enum_underlying_types[node.name] = underlying or "int"

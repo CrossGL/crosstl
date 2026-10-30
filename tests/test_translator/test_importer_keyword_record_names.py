@@ -169,3 +169,66 @@ def test_rename_skips_names_the_source_uses(tmp_path, file_name, template, name)
     assert f"var {name}__: f32 = 2.0f;" in code
     assert f"{name}_ = ({name}_ + {name}__);" in code
     Parser(Lexer(code).tokens).parse()
+
+
+SIZEOF = """\
+struct {name} {{
+    float a;
+}};
+
+__global__ void probe(float* outp) {{
+    outp[threadIdx.x] = (float)sizeof({name}) + (float)sizeof({name}[2]);
+}}
+"""
+
+
+@pytest.mark.parametrize("name", KEYWORDS)
+def test_cuda_sizeof_names_the_renamed_struct(tmp_path, name):
+    # HIP input refuses ``sizeof`` of a struct with ``HipRecordSemanticError``.
+    code = _translate(tmp_path, "probe.cu", SIZEOF.format(name=name))
+
+    assert f"(f32(sizeof({name}_)) + f32(sizeof({name}_ [2])))" in code
+    Parser(Lexer(code).tokens).parse()
+
+
+ENUM = """\
+enum {name} {{ A = 1, B = 2 }};
+
+__global__ void probe(float* outp) {{
+    {name} e = B;
+    outp[threadIdx.x] = (float)e;
+}}
+"""
+
+
+@pytest.mark.parametrize(("file_name", "template", "name"), _cuda_and_hip(ENUM))
+def test_enum_declaration_names_the_renamed_enum(tmp_path, file_name, template, name):
+    code = _translate(tmp_path, file_name, template.format(name=name))
+
+    assert f"enum {name}_ {{" in code
+    assert f"var e: {name}_ = B;" in code
+    Parser(Lexer(code).tokens).parse()
+
+
+ALIAS = """\
+typedef float {name};
+
+__device__ {name} twice({name} x) {{
+    return x * 2.0f;
+}}
+
+__global__ void probe(float* outp) {{
+    {name} x = 1.0f;
+    outp[threadIdx.x] = twice(x);
+}}
+"""
+
+
+@pytest.mark.parametrize("name", KEYWORDS)
+def test_cuda_typedef_names_the_renamed_alias(tmp_path, name):
+    # HIP input writes the aliased type itself, ``f32``, at each use.
+    code = _translate(tmp_path, "probe.cu", ALIAS.format(name=name))
+
+    assert f"typedef f32 {name}_;" in code
+    assert f"{name}_ twice({name}_ x) {{" in code
+    Parser(Lexer(code).tokens).parse()

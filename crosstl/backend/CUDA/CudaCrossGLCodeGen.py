@@ -426,6 +426,18 @@ class CudaToCrossGLConverter:
             return unused_identifier_name(name, self.source_identifier_names)
         return name
 
+    def rename_keyword_record_names(self, type_text):
+        """Rename the structs that a type spelling such as ``let [2]`` names."""
+        return re.sub(
+            r"[A-Za-z_]\w*",
+            lambda word: (
+                self.sanitize_identifier_name(word.group())
+                if word.group() in self.cuda_record_names
+                else word.group()
+            ),
+            type_text,
+        )
+
     def format_crossgl_array_extent(self, size):
         size = str(size).strip()
         if not size:
@@ -4116,7 +4128,10 @@ class CudaToCrossGLConverter:
         self.emit("};")
 
     def visit_EnumNode(self, node):
-        name = node.name or self.next_anonymous_enum_name()
+        # An enum named ``let`` is declared as ``let_``, the name its uses get.
+        name = (
+            self.sanitize_identifier_name(node.name) or self.next_anonymous_enum_name()
+        )
         underlying = getattr(node, "underlying_type", None)
         suffix = (
             f" : {self.convert_cuda_type_to_crossgl(underlying)}" if underlying else ""
@@ -4768,6 +4783,9 @@ class CudaToCrossGLConverter:
             return self.format_cuda_comma_expression(node.args)
 
         args = [self.visit(arg) for arg in node.args]
+        if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
+            # The type operand of ``sizeof(let)`` names the struct as its declaration does.
+            args = [self.rename_keyword_record_names(args[0])]
         args_str = ", ".join(args)
         make_unique = self.format_make_unique_call(raw_name, args)
         if make_unique is not None:
@@ -6172,6 +6190,8 @@ class CudaToCrossGLConverter:
         uses are refused downstream as undeclared types.
         """
         self.register_type_alias(node.name, node.alias_type)
+        # An alias named ``let`` is declared as ``let_``, the name its uses get.
+        alias_name = self.sanitize_identifier_name(node.name)
         elaborated = re.fullmatch(
             r"(?:struct|union)\s+([A-Za-z_]\w*)", str(node.alias_type).strip()
         )
@@ -6181,6 +6201,7 @@ class CudaToCrossGLConverter:
             alias_type = elaborated.group(1)
             if alias_type == node.name:
                 return
+            alias_type = self.rename_keyword_record_names(alias_type)
         elif str(node.alias_type).strip().startswith(("struct ", "union ")):
             alias_type = node.alias_type
         elif self.is_decltype_type_name(node.alias_type):
@@ -6194,8 +6215,8 @@ class CudaToCrossGLConverter:
                 and not getattr(node, "array_sizes", None)
                 and not getattr(node, "declarator_type_suffix", "")
             ):
-                layouts.alias(node.name, alias_type)
-        self.emit(f"typedef {alias_type} {node.name};")
+                layouts.alias(alias_name, alias_type)
+        self.emit(f"typedef {alias_type} {alias_name};")
 
     def format_atomic_argument(self, arg, index):
         if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
