@@ -4,10 +4,6 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
-### Fixed
-
-- WGSL output keeps `@ flat`, `@ noperspective`, `@ centroid` and `@ sample` on floating-point fragment inputs as `@interpolate(...)`, instead of dropping them and leaving WGSL's default perspective-centre interpolation (Fixes #3483, #3519, #3520, #3521, #3522).
-
 ### Breaking Changes
 
 - CrossGL refuses non-square `floatNxM` and `doubleNxM` matrix spellings, such as `float2x3`, with `AmbiguousMatrixSpellingError` (`project.translate.ambiguous-matrix-spelling`): MSL reads `float2x3` as 2 columns of 3 rows and HLSL as 2 rows of 3 columns, and the Metal, GLSL, HLSL and SPIR-V generators each took a different one. Write `matCxR` or `dmatCxR`. The SPIR-V importer now writes non-square matrices as `matCxR`. Square `float3x3(...)` and `float3x3(s)` now fill columns and build a diagonal matrix in HLSL output, as `mat3` does; HLSL output filled rows and repeated `s`.
@@ -131,6 +127,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - WGSL output of a `switch` has one `default` arm and keeps fallthrough by merging case bodies, writes `discard;`, and converts scalar operands of vector stores, shifts and bitwise operators, which naga used to reject.
 - WGSL output declares the integer and unsigned 1D, 3D, cube and cube array samplers, such as `isampler3D` or `usamplerCube`, as `texture_3d<i32>`, `texture_cube<u32>` and so on. It used to declare them under their CrossGL names, which naga rejects. `sampler2DRect`, `samplerBuffer` and the other samplers with no WGSL texture type are refused with a diagnostic, as `sampler2DMS` already was.
 - An HLSL vertex input with `SV_Position` is a regular vertex attribute on GLSL, Metal, WGSL and SPIR-V. Metal and WGSL rejected it, and SPIR-V read the `gl_Position` output instead.
+- WGSL output writes the `flat`, `noperspective`, `centroid` and `sample` qualifiers of floating-point vertex outputs and fragment inputs, from CrossGL, GLSL and the HLSL `nointerpolation`, `noperspective`, `centroid` and `sample` modifiers, as `@interpolate(flat)`, `@interpolate(linear)`, `@interpolate(perspective, centroid)`, `@interpolate(perspective, sample)` and their `linear` combinations, and gives a vertex output the interpolation of the fragment input at its location, which WebGPU requires to match. They used to be dropped, so every such value was interpolated with perspective correction at the pixel centre. `flat` with `centroid` or `sample` becomes `@interpolate(flat)`, its meaning in GLSL, and integer IO with `noperspective` or `smooth` is refused with `WGSLStageIOUnsupportedError` (#3483, #3519, #3520, #3521, #3522).
 - WGSL output refuses `texture()`, `textureLod()`, `textureGrad()`, `textureOffset()` and their offset forms on integer samplers such as `isampler2D` or `usampler2DArray` with `WGSLIntegerTextureSampleUnsupportedError`. It used to write `textureSample`, which WGSL only defines for `f32` textures, so naga rejected the output. `texelFetch()` and `textureSize()` on these samplers still translate.
 - Function-scope `static` variables keep their value across calls on every target, and HLSL output keeps the initializers of static globals.
 - HIP output keeps `static` and `const` on variable declarations, as CUDA output does, so an HLSL `static const int N = 3;` stays a constant that kernels can read and use as an array size. It used to be written as `int N = 3;`, a mutable host variable that hipcc rejects in device code and as the size of `float a[N]`.
