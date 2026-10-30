@@ -93,9 +93,7 @@ jobs:
         with:
           cache: pip
           cache-dependency-path: |
-            requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
       - uses: actions/setup-dotnet@v6
         with:
@@ -299,9 +297,7 @@ jobs:
         with:
           cache: pip
           cache-dependency-path: |
-            requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
       - uses: actions/setup-dotnet@v6
         with:
@@ -391,9 +387,7 @@ jobs:
         with:
           cache: pip
           cache-dependency-path: |
-            requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
       - uses: actions/setup-dotnet@v6
         with:
@@ -482,9 +476,7 @@ jobs:
         with:
           cache: pip
           cache-dependency-path: |
-            requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
       - name: Install image comparison dependencies
         run: python -m pip install numpy==2.5.4 pillow==13.0.0
