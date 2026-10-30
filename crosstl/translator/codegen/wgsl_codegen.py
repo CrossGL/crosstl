@@ -87,6 +87,11 @@ from .wgsl_entry_outputs import (
     entry_output_parameters,
     lower_entry_output_parameters,
 )
+from .wgsl_frexp_modf import (
+    is_two_argument_frexp_or_modf,
+    wgsl_frexp_modf_call,
+    wgsl_frexp_modf_helpers,
+)
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
 from .wgsl_integer_builtins import lower_integer_builtin_inputs
 from .wgsl_integer_operands import (
@@ -775,6 +780,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._module_resource_bindings = {}
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
+        self._frexp_modf_helpers = {}
         self._constant_values = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -844,6 +850,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._module_resource_bindings = {}
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
+        self._frexp_modf_helpers = {}
         self._constant_values = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -1084,6 +1091,10 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         dispatch_helpers = self.generate_sampled_texture_array_dispatch_helpers()
         if dispatch_helpers:
             emitted_sections.append(dispatch_helpers)
+
+        frexp_modf_helpers = wgsl_frexp_modf_helpers(self)
+        if frexp_modf_helpers:
+            emitted_sections.append(frexp_modf_helpers)
 
         if emitted_sections:
             lines.append("")
@@ -3520,6 +3531,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         packed_dot = self.PACKED_DOT4ADD_FUNCTIONS.get(normalized_name)
         if packed_dot is not None and not self.is_user_function_name(function_name):
             return self.generate_packed_dot4add_call(node, function_name, packed_dot)
+        if is_two_argument_frexp_or_modf(self, node):
+            return wgsl_frexp_modf_call(self, node)
 
         if self.is_type_constructor_name(function_name):
             if len(node.arguments) == 1:

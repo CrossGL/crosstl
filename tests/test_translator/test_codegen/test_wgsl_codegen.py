@@ -3837,6 +3837,159 @@ def test_two_argument_atan_lowers_to_atan2(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_two_argument_frexp_and_modf_lower_to_wgsl_helpers(tmp_path):
+    # WGSL's frexp and modf take one argument and return a structure; the
+    # two-argument GLSL form goes through a helper that writes the second
+    # part through a pointer (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec3* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 a0 = vec3(fin[i + 0u], fin[i + 1u], fin[i + 2u]);
+                ivec3 e;
+                vec3 w;
+                int k;
+                int n;
+                vec3 r = frexp(a0, e) + modf(a0, w);
+                float s = frexp(fin[i], k) + frexp(2.5, n);
+                outp[i] = r + vec3(s + float(k + n));
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert (
+        "var r: vec3<f32> = (crosstl_frexp_vec3_f32_vec3_i32(a0, &e) + "
+        "crosstl_modf_vec3_f32_vec3_f32(a0, &w));"
+    ) in generated
+    assert (
+        "var s: f32 = (crosstl_frexp_f32_i32(fin[i], &k) + "
+        "crosstl_frexp_f32_i32(2.5, &n));"
+    ) in generated
+    assert (
+        "fn crosstl_frexp_vec3_f32_vec3_i32(value: vec3<f32>, "
+        "out: ptr<function, vec3<i32>>) -> vec3<f32> {\n"
+        "    let result = frexp(value);\n"
+        "    *out = result.exp;\n"
+        "    return result.fract;\n"
+        "}"
+    ) in generated
+    assert (
+        "fn crosstl_modf_vec3_f32_vec3_f32(value: vec3<f32>, "
+        "out: ptr<function, vec3<f32>>) -> vec3<f32> {\n"
+        "    let result = modf(value);\n"
+        "    *out = result.whole;\n"
+        "    return result.fract;\n"
+        "}"
+    ) in generated
+    # One helper per built-in, value type and written type.
+    assert generated.count("fn crosstl_frexp_f32_i32(") == 1
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_frexp_with_float_exponent_converts_wgsl_result(tmp_path):
+    # HLSL imports give the frexp exponent the value's type, so the helper
+    # converts the builtin's i32 part to the caller's type (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                float e;
+                float r = frexp(fin[i], e);
+                outp[i] = r + e;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "crosstl_frexp_f32_f32(fin[i], &e)" in generated
+    assert "*out = f32(result.exp);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_frexp_and_modf_write_through_parameters(tmp_path):
+    # An out or inout parameter is already a pointer and is passed as it is; a
+    # value parameter that frexp writes is copied into a local variable first,
+    # since WGSL parameters are immutable.
+    code = """
+    shader Probe {
+        float split(float v, out int e) { return frexp(v, e); }
+        vec3 whole(vec3 v, inout vec3 w) { return modf(v, w); }
+        float mantissa(float v, int e) { return frexp(v, e) + float(e); }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int e;
+                vec3 w;
+                vec3 f = whole(vec3(fin[i]), w);
+                outp[i] = split(fin[i], e) + mantissa(fin[i], 0) + f.x + w.x;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "return crosstl_frexp_f32_i32(v, e);" in generated
+    assert "return crosstl_modf_vec3_f32_vec3_f32(v, w);" in generated
+    assert "fn mantissa(v: f32, e_in: i32) -> f32 {\n    var e: i32 = e_in;" in (
+        generated
+    )
+    assert "return (crosstl_frexp_f32_i32(v, &e) + f32(e));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    "declaration, call",
+    [
+        ("ivec3 e;", "frexp(x, e.x)"),
+        ("ivec4 e;", "frexp(vec2(x), e.xy).x"),
+        ("int e[2];", "frexp(x, e[1])"),
+        ("Parts e;", "modf(x, e.whole)"),
+        ("", "frexp(x, counts[i])"),
+        ("", "frexp(x, shared_exponent)"),
+    ],
+)
+def test_frexp_and_modf_refuse_written_arguments_without_a_function_pointer(
+    declaration, call
+):
+    # A ptr<function, T> argument must be a whole function-scope variable
+    # (WGSL 11.3.1), and no pointer may name a vector component (WGSL 8.14).
+    code = f"""
+    shader Probe {{
+        struct Parts {{ float whole; }};
+        int shared_exponent;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer int* counts;
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                float x = fin[i];
+                {declaration}
+                fin[i] = {call};
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(
+        ValueError, match="a ptr<function, T> argument must be a whole function-scope"
+    ):
+        WGSLCodeGen().generate(parse_shader(code))
+
+
 def test_wgsl_maps_glsl_imported_fine_and_coarse_fwidth(tmp_path):
     # The GLSL importer writes fwidthFine as fwidth_fine (issue #3093).
     shader = """
