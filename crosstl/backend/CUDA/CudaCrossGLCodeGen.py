@@ -4400,6 +4400,15 @@ class CudaToCrossGLConverter:
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
+        dim3_value = self.format_cuda_dim3_initializer(node)
+        if dim3_value is not None:
+            self.register_warp_mask_value(node.name, output_name, None)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(node.name)
+                self.emit(f"const {var_type} {output_name} = {dim3_value};")
+                return
+            self.emit(f"var {output_name}: {var_type} = {dim3_value};")
+            return
         if node.value:
             runtime_expression = self.format_cuda_runtime_expression(node.value)
             if runtime_expression is not None:
@@ -4420,6 +4429,28 @@ class CudaToCrossGLConverter:
         else:
             self.register_warp_mask_value(node.name, output_name, None)
             self.emit(f"var {output_name}: {var_type};")
+
+    def format_cuda_dim3_initializer(self, node):
+        """Return a ``vec3<u32>`` for a defaulted or braced ``dim3`` declaration.
+
+        CUDA sets every ``dim3`` component that is not given to 1, so
+        ``dim3 unit;`` is (1, 1, 1) and ``dim3 block = {16, 16};`` is (16, 16, 1).
+        Return None for any other declaration.
+        """
+        if (
+            self.strip_type_qualifiers(getattr(node, "vtype", "") or "").strip()
+            != "dim3"
+        ):
+            return None
+        value = getattr(node, "value", None)
+        if value is None:
+            args = []
+        elif isinstance(value, InitializerListNode) and len(value.elements) <= 3:
+            args = [self.visit(element) for element in value.elements]
+        else:
+            return None
+        padded_args = list(args) + ["1"] * (3 - len(args))
+        return f"vec3<u32>({', '.join(padded_args)})"
 
     def is_namespace_scope_constant(self, node):
         """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
