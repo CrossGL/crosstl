@@ -348,3 +348,43 @@ def test_glslang_lowers_a_glsl_es_3_00_vertex_shader():
     assert decorations.lost(
         INVARIANT, "webgl", source.replace("invariant gl_Position;\n", "")
     ) == ("the translation loses Decoration.Invariant")
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_records_the_base_vertex_and_instance_in_air():
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "vertex float4 probe(uint base [[base_vertex]]) { return float4(float(base)); }\n"
+    )
+    base = Feature(
+        "metal",
+        "graphics",
+        "base-vertex",
+        None,
+        group="BuiltIn.BaseVertex Capability.DrawParameters",
+        stage="vertex",
+    )
+    assert decorations.lost(base, "metal", source) == ""
+    assert decorations.lost(
+        base, "metal", source.replace("[[base_vertex]]", "[[vertex_id]]")
+    ) == ("the translation loses BuiltIn.BaseVertex")
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_a_draw_index_read_with_its_capability():
+    source = (
+        "#version 460\nvoid main() {\n"
+        "    gl_Position = vec4(float(gl_DrawID), 0.0, 0.0, 1.0);\n}\n"
+    )
+    draw = Feature(
+        "glsl",
+        "graphics",
+        "draw-index",
+        None,
+        group="BuiltIn.DrawIndex Capability.DrawParameters",
+        stage="vertex",
+    )
+    assert decorations.lost(draw, "glsl", source) == ""
+    assert decorations.lost(
+        draw, "glsl", source.replace("gl_DrawID", "gl_VertexID")
+    ) == ("the translation loses BuiltIn.DrawIndex, Capability.DrawParameters")

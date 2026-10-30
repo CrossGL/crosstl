@@ -57,6 +57,8 @@ AIR = {
     "Decoration.Location": "air.render_target",
     "ExecutionMode.EarlyFragmentTests": "early_fragment_tests",
     "ExecutionMode.DepthGreater": "air.greater",
+    "BuiltIn.BaseVertex": "air.base_vertex",
+    "BuiltIn.BaseInstance": "air.base_instance",
     "BuiltIn.GlobalInvocationId": "air.thread_position_in_grid",
     "BuiltIn.LocalInvocationId": "air.thread_position_in_threadgroup",
     "BuiltIn.WorkgroupId": "air.threadgroup_position_in_grid",

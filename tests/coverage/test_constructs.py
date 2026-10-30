@@ -15,6 +15,7 @@ from tools.coverage import (
 )
 from tools.coverage.model import Feature, Result
 from tools.coverage.templates import (
+    draws,
     fragments,
     interfaces,
     pipeline,
@@ -764,6 +765,43 @@ def test_vertex_probes_use_each_languages_built_ins():
     for language, names in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & set(vertices.NAMES) == set(vertices.NAMES) - names, language
+
+
+def test_draw_parameter_probes_use_each_languages_built_ins():
+    feature = _feature("glsl", "base-vertex")
+    assert (feature.category, feature.stage) == ("graphics", "vertex")
+    assert feature.group == "BuiltIn.BaseVertex Capability.DrawParameters"
+    for language, name, line in (
+        ("glsl", "draw-index", "vec4(float(gl_DrawID), 0.0, 0.0, 0.0)"),
+        ("glsl", "base-instance", "vec4(float(gl_BaseInstance), 0.0, 0.0, 0.0)"),
+        ("glsl", "cull-distance", "gl_CullDistance[0] = position.x;"),
+        ("hlsl", "base-vertex", "int base : SV_StartVertexLocation"),
+        ("hlsl", "cull-distance", "float cull : SV_CullDistance0;"),
+        ("slang", "draw-index", "uint base : SV_DrawIndex"),
+        ("slang", "cull-distance", "float cull[1] : SV_CullDistance;"),
+        ("metal", "base-instance", "uint base [[base_instance]]"),
+        ("rust", "draw-index", "#[spirv(draw_index)] base: u32"),
+        ("rust", "cull-distance", "#[spirv(cull_distance)] cull: &mut [f32; 1]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "base-vertex"), "crossgl").source
+    assert "        int base @ gl_BaseVertex;\n" in crossgl and "    vertex {\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "cull-distance"), "crossgl").source
+    assert "float cull @ gl_CullDistance;" in crossgl
+    # HLSL has no draw index, Metal neither a draw index nor cull distances, and GLSL ES 3.00 and WGSL none of the four.
+    names = set(draws.NAMES)
+    absent = {
+        "hlsl": {"draw-index"},
+        "slang": set(),
+        "metal": {"draw-index", "cull-distance"},
+        "wgsl": names,
+        "webgl": names,
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
 
 
 def test_rasterization_probes_read_the_primitive_and_sample_or_write_coverage():

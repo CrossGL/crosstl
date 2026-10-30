@@ -49,6 +49,7 @@ from .scopes import WEBGL as _SCOPES
 from .subgroups import WEBGL as _SUBGROUPS
 from .values import FAMILY as _VALUES
 from .vectors import GLSL as _VECTORS
+from .draws import WEBGL as _DRAWS
 from .vertices import WEBGL as _VERTICES
 from .workgroups import WEBGL as _WORKGROUPS
 
@@ -120,6 +121,7 @@ WEBGL = {
     **_FRAGMENTS,
     **_INTERFACES,
     **_VERTICES,
+    **_DRAWS,
     **_RASTERIZATION,
     **_PIPELINE,
     **_SUBGROUPS,
