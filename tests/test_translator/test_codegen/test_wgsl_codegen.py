@@ -1850,6 +1850,35 @@ def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
     assert ".length()" not in generated
 
 
+def test_wgsl_codegen_maps_structured_buffer_length_to_array_length(tmp_path):
+    # StructuredBuffer / RWStructuredBuffer are NamedType, not ArrayType, so
+    # `.length()` used to be copied unchanged and naga rejected it (#3582).
+    shader = """
+    shader Probe {
+        StructuredBuffer<float> values;
+        RWStructuredBuffer<float> outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(values.length()) + float(outp.length());
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var<storage, read> values: array<f32>;" in generated
+    assert "var<storage, read_write> outp: array<f32>;" in generated
+    assert (
+        "outp[0] = (f32(i32(arrayLength(&values))) + f32(i32(arrayLength(&outp))));"
+        in generated
+    )
+    assert ".length()" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+
 def test_wgsl_codegen_maps_pointer_buffer_length_to_array_length(tmp_path):
     # A `buffer float*` global is a PointerType, not an ArrayType, so its
     # `.length()` used to be copied unchanged and naga rejected it.
