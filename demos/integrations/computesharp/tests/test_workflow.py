@@ -434,12 +434,12 @@ def test_portable_runtime_keeps_the_pinned_dependency_and_audit_scope():
 
     # Portable.targets is passed globally to every portable build, so the runtime and
     # the companion projects all import the same advisory exceptions through it.
-    targets = ET.parse(ROOT / "runtime" / "Portable.targets").getroot()
+    targets_path = ROOT / "runtime" / "Portable.targets"
+    targets = ET.parse(targets_path).getroot()
     imports = [element.attrib["Project"] for element in targets.iter("Import")]
     assert imports == ["$(MSBuildThisFileDirectory)../baseline-audit.props"]
-    assert "CustomAfterMicrosoftCommonTargets" not in (
-        ROOT / "runtime" / "Portable.targets"
-    ).read_text(encoding="utf-8").split("-->", 1)[1]
+    targets_body = targets_path.read_text(encoding="utf-8").split("-->", 1)[1]
+    assert "CustomAfterMicrosoftCommonTargets" not in targets_body
 
     # Every advisory exception is documented, and the ImageSharp advisories fixed
     # only by license-gated releases (3.2.0, 4.1.x) stay suppressed for the corpus.
