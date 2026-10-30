@@ -1878,7 +1878,6 @@ def test_wgsl_codegen_maps_structured_buffer_length_to_array_length(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
-
 def test_wgsl_codegen_maps_pointer_buffer_length_to_array_length(tmp_path):
     # A `buffer float*` global is a PointerType, not an ArrayType, so its
     # `.length()` used to be copied unchanged and naga rejected it.
