@@ -3030,7 +3030,9 @@ class HLSLCodeGen(
             "gl_Position": "SV_POSITION",
             "gl_FragCoord": "SV_Position",
             "gl_BaryCoordEXT": "SV_Barycentrics",
-            "gl_BaryCoordNoPerspEXT": "SV_Barycentrics",
+            # Semantic index 1, so that it does not overlap a perspective-correct SV_Barycentrics input (DXC
+            # rejects two SV_Barycentrics parameters with the same index).
+            "gl_BaryCoordNoPerspEXT": "SV_Barycentrics1",
             "gl_PointSize": "PSIZE",
             "gl_ClipDistance": "SV_ClipDistance",
             "gl_CullDistance": "SV_CullDistance",
