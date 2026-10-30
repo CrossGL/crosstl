@@ -3459,6 +3459,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         ):
             return None
         array_type = self.expression_type(function.object_expr)
+        if isinstance(array_type, PointerType):
+            # A `buffer float*` global is declared as a storage array, so its
+            # length is the runtime-sized array's length, just like an
+            # unsized ArrayType. A helper parameter of that type is already a
+            # pointer to the array and is passed to arrayLength unchanged.
+            pointer = self.pointer_argument_expression(function.object_expr)
+            return f"i32(arrayLength({pointer}))"
         if not isinstance(array_type, ArrayType):
             return None
         if array_type.size is None:
