@@ -459,7 +459,10 @@ class CudaToCrossGLConverter:
                 parts.append("_")
 
         raw_name = str(name)
-        sanitized = raw_name if raw_name.isidentifier() else ("".join(parts).strip("_") or "anonymous")
+        if raw_name.isidentifier():
+            sanitized = raw_name
+        else:
+            sanitized = "".join(parts).strip("_") or "anonymous"
         if sanitized[0].isdigit():
             sanitized = f"type_{sanitized}"
         return self.sanitize_identifier_name(sanitized)
