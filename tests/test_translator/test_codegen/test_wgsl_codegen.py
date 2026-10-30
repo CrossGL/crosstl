@@ -15,8 +15,12 @@ from crosstl.translator.codegen.wgsl_cube_texture_offsets import (
 from crosstl.translator.codegen.wgsl_integer_textures import (
     WGSLIntegerTextureSampleUnsupportedError,
 )
+from crosstl.translator.codegen.wgsl_texture_bias import (
+    WGSLTextureBiasUnsupportedError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.semantics import ImplicitLodStageUnsupportedError
 
 WGSL_SHADER = """
 shader WGSLSmoke {
@@ -1846,6 +1850,83 @@ def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
     assert ".length()" not in generated
 
 
+def test_wgsl_codegen_maps_pointer_buffer_length_to_array_length(tmp_path):
+    # A `buffer float*` global is a PointerType, not an ArrayType, so its
+    # `.length()` used to be copied unchanged and naga rejected it.
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                outp[0] = float(outp.length());
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "outp[0] = f32(i32(arrayLength(&outp)));" in generated
+    assert "outp.length()" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_maps_struct_buffer_pointer_length_to_element_count(tmp_path):
+    # `buffer Item* items` is one storage buffer of Item elements, array<Item>,
+    # so its length is the number of elements.
+    shader = """
+    shader Probe {
+        struct Item {
+            vec2 pos;
+            float weight;
+        };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer Item* items;
+            void main() {
+                items[0].weight = float(items.length());
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var<storage, read_write> items: array<Item>;" in generated
+    assert "items[0].weight = f32(i32(arrayLength(&items)));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_passes_buffer_pointer_parameter_to_array_length():
+    # A `buffer float*` helper parameter is already a pointer to the storage
+    # array, so arrayLength takes it as it is; `&values` is not a reference.
+    # naga 30 refuses storage pointer parameters themselves (they need WGSL's
+    # unrestricted_pointer_parameters extension), so only the text is pinned.
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            int count(buffer float* values) {
+                return values.length();
+            }
+            void main() {
+                outp[0] = float(count(outp));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn count(values: ptr<storage, array<f32>, read_write>) -> i32 {" in (
+        generated
+    )
+    assert "return i32(arrayLength(values));" in generated
+    assert "outp[0] = f32(count(&outp));" in generated
+
+
 @pytest.mark.parametrize(
     ("statement", "expected"),
     [
@@ -2446,6 +2527,173 @@ def test_wgsl_codegen_lowers_explicit_sampler_texture_calls():
 
     assert "@group(0) @binding(2)\nvar linearSampler: sampler;" in generated
     assert "return textureSample(colorTex, linearSampler, uv);" in generated
+
+
+def test_wgsl_codegen_lowers_texture_bias_to_texture_sample_bias(tmp_path):
+    # A three-argument texture() whose second argument is a coordinate, not a
+    # sampler, is GLSL's bias form; the split sampler is used and the bias
+    # goes to textureSampleBias (issue #2462).
+    code = """
+    shader Probe {
+        struct FragmentInput {
+            vec2 uv;
+        }
+        struct FragmentOutput {
+            vec4 color;
+        }
+        fragment {
+            buffer float* fin;
+            uniform sampler2D u0;
+            FragmentOutput main(FragmentInput input) {
+                FragmentOutput output;
+                output.color = texture(u0, input.uv, fin[0]);
+                return output;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "textureSampleBias(u0, u0_sampler, input.uv, fin[0])" in generated
+    assert "textureSample(u0, input.uv, fin[0])" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("sampler_type", "coord_type", "expected"),
+    [
+        ("samplerCube", "vec3", "textureSampleBias(tex, tex_sampler, uv, 0.5)"),
+        ("sampler3D", "vec3", "textureSampleBias(tex, tex_sampler, uv, 0.5)"),
+        (
+            "sampler2DArray",
+            "vec3",
+            "textureSampleBias(tex, tex_sampler, uv.xy, i32(floor(uv.z + 0.5)), 0.5)",
+        ),
+        (
+            "samplerCubeArray",
+            "vec4",
+            "textureSampleBias(tex, tex_sampler, uv.xyz, i32(floor(uv.w + 0.5)), 0.5)",
+        ),
+    ],
+)
+def test_wgsl_codegen_lowers_texture_bias_on_every_biased_texture_type(
+    tmp_path, sampler_type, coord_type, expected
+):
+    # textureSampleBias has 2D, 2D array, 3D, cube and cube array overloads;
+    # an array texture takes the layer as its own argument before the bias.
+    shader = f"""
+    shader WGSLTextureBias {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0) @ gl_FragColor {{
+                return texture(tex, uv, 0.5);
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"return {expected};" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_an_integer_texture_bias_to_f32(tmp_path):
+    # GLSL converts an int bias to the float parameter; WGSL converts no i32
+    # or u32 value implicitly, so naga rejects textureSampleBias(..., b).
+    shader = """
+    shader WGSLTextureBias {
+        uniform sampler2D tex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, int level @ TEXCOORD1) @ gl_FragColor {
+                uint shift = uint(level);
+                return texture(tex, uv, level) + texture(tex, uv, shift);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureSampleBias(tex, tex_sampler, uv, f32(level))" in generated
+    assert "textureSampleBias(tex, tex_sampler, uv, f32(shift))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "coord_type", "call", "message"),
+    [
+        (
+            "uniform sampler1D tex;",
+            "float",
+            "texture(tex, uv, 0.5)",
+            r"bias on tex: textureSampleBias has no overload for texture_1d<f32>",
+        ),
+        (
+            "uniform sampler2D tex[2];",
+            "vec2",
+            "texture(tex[layer], uv, 0.5)",
+            r"bias on tex\[layer\]: an element of a sampled texture array selected "
+            r"at run time",
+        ),
+        (
+            "uniform sampler2D tex;",
+            "vec2",
+            "texture(tex, uv, uv)",
+            r"bias on tex: the bias is a float scalar, but the third argument is "
+            r"vec2",
+        ),
+    ],
+)
+def test_wgsl_codegen_refuses_texture_bias_without_a_wgsl_overload(
+    declaration, coord_type, call, message
+):
+    shader = f"""
+    shader WGSLTextureBias {{
+        {declaration}
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0, int layer @ TEXCOORD1)
+                @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(WGSLTextureBiasUnsupportedError, match=message) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_texture_bias_in_compute():
+    # textureSampleBias needs derivatives, which a compute stage has none of,
+    # so the bias form is refused rather than emitted as invalid WGSL. Vertex
+    # stages are refused the same way before the emitter runs.
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec4* outp;
+            uniform sampler2D u0;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outp[i] = texture(u0, vec2(0.5), fin[0]);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ImplicitLodStageUnsupportedError,
+        match=r"operation 'texture' is reached from the compute stage",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(code))
+
+    assert raised.value.code == (
+        "project.translate.wgsl-implicit-lod-stage-unsupported"
+    )
 
 
 def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings():

@@ -65,6 +65,7 @@ CAPABILITIES = (
     "VulkanMemoryModelDeviceScope",
     "ClipDistance",
     "SampleRateShading",
+    "MultiViewport",
     "Geometry",
     "GeometryStreams",
     "Tessellation",

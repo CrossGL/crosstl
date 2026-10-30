@@ -37,6 +37,7 @@ from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
 from .orientation import WEBGL as _ORIENTATION
 from .packing import WEBGL as _PACKING
+from .pipeline import WEBGL as _PIPELINE
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
@@ -119,6 +120,7 @@ WEBGL = {
     **_INTERFACES,
     **_VERTICES,
     **_RASTERIZATION,
+    **_PIPELINE,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

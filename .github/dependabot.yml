@@ -16,7 +16,9 @@ updates:
       interval: weekly
     open-pull-requests-limit: 0
     labels: [dependencies]
-  # Likewise for the NuGet packages of the ComputeSharp demo.
+  # Likewise for the NuGet packages of the ComputeSharp demo. Its portable runtime
+  # must resolve the ImageSharp version pinned by the upstream ComputeSharp commit;
+  # see demos/integrations/computesharp/README.md, "Pinned Dependency Exceptions".
   - package-ecosystem: nuget
     directories:
       - /demos/integrations/computesharp/**
@@ -24,3 +26,5 @@ updates:
       interval: weekly
     open-pull-requests-limit: 0
     labels: [dependencies]
+    ignore:
+      - dependency-name: SixLabors.ImageSharp
