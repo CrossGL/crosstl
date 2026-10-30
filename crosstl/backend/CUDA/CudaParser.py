@@ -5274,11 +5274,13 @@ class CudaParser:
         ):
             return False
 
+        # ``(b) * r``, ``(b) & r``, ``(b) + r`` and ``(b) - r`` are binary operations unless ``b`` names a type.
         if (
             not self.is_identifier_type_name(identifier_name)
             and not saw_declarator_marker
             and operand_index < len(self.tokens)
-            and self.tokens[operand_index][0] in {"MULTIPLY", "BITWISE_AND"}
+            and self.tokens[operand_index][0]
+            in {"MULTIPLY", "BITWISE_AND", "PLUS", "MINUS"}
         ):
             return False
 

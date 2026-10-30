@@ -14,6 +14,13 @@ from tools.coverage import (
     validators,
 )
 from tools.coverage.model import Feature, Result
+from tools.coverage.templates import (
+    fragments,
+    interfaces,
+    rasterization,
+    relations,
+    vertices,
+)
 from tools.coverage.templates.base import ABSENT, OPERATORS
 
 _MODELS = [
@@ -367,6 +374,536 @@ def test_a_kernel_probe_declares_only_the_input_buffers_it_reads():
     )
 
 
+def test_a_kernel_template_can_give_the_output_element_type():
+    # The output buffer holds float unless the template names another element type, in the language's spelling.
+    vectors = probes.build(_feature("glsl", "vector-buffer"), "glsl").source
+    assert "buffer B1 { vec4 outp[]; };" in vectors
+    pairs = probes.build(_feature("wgsl", "struct-buffer"), "wgsl").source
+    assert "array<Pair>" in pairs and "array<f32>" in pairs
+    crossgl_probe = probes.build(_feature("glsl", "vector-buffer"), "crossgl").source
+    assert "vec4* outp" in crossgl_probe
+
+
+def test_a_uniform_float_array_reads_one_word_per_row_in_every_language():
+    # std140 and a cbuffer give each float its own 16-byte row; languages that pack a float array declare vectors.
+    padded = probes.build(_feature("glsl", "uniform-array"), "glsl").source
+    assert "float w[4];" in padded and "+ w[k])" in padded
+    for language, declaration in (
+        ("metal", "float4 w[4];"),
+        ("wgsl", "w: array<vec4<f32>, 4>,"),
+        ("cuda", "float4 w[4];"),
+        ("rust", "w: [Vec4; 4],"),
+    ):
+        source = probes.build(_feature(language, "uniform-array"), language).source
+        assert declaration in source and "w[k].x" in source
+
+
+def test_a_uniform_struct_is_declared_before_its_block_and_copied_into_a_mutable_local():
+    glsl = probes.build(_feature("glsl", "uniform-struct"), "glsl").source
+    assert glsl.index("struct Light {") < glsl.index("uniform Params {")
+    assert "    Light light;\n    vec4 tint;" in glsl
+    for language, copy in (
+        ("wgsl", "var l = params.light;"),
+        ("rust", "let mut l = params.light;"),
+        ("mojo", "var l = params.light\n"),
+        ("hlsl", "Light l = light;"),
+    ):
+        source = probes.build(
+            _feature(language, "uniform-struct-copy"), language
+        ).source
+        assert copy in source
+    # Mojo reads a vector's lanes by index.
+    mojo = probes.build(_feature("mojo", "uniform-struct-array"), "mojo").source
+    assert "params.lights[k].color[0]" in mojo and "var lights: Array[Light, 2]" in mojo
+
+
+def test_reserved_name_probes_use_their_own_language_s_words_at_every_declaration_and_use():
+    crossgl = probes.build(_feature("glsl", "reserved-type-name"), "crossgl").source
+    assert crossgl.index("struct type {") < crossgl.index("compute {")
+    assert "type make(float x)" in crossgl and "float weigh(type t)" in crossgl
+    for language, declaration, use in (
+        ("metal", "constant float var = 2.0;", "fin[i] * var + input[k]"),
+        ("hlsl", "static const float loop = 2.0;", "fin[i] * loop + type[k]"),
+        ("cuda", "__constant__ float var = 2.0f;", "mod[2 - k] * 1024.0f"),
+        ("wgsl", "const half: f32 = 2.0;", "fin[i] * half + output[k]"),
+        ("mojo", "comptime output: Array[Float32, 3]", "materialize[output]()"),
+    ):
+        source = probes.build(
+            _feature(language, "reserved-global-name"), language
+        ).source
+        assert declaration in source and use in source
+    opencl = probes.build(_feature("opencl", "reserved-type-name"), "opencl").source
+    assert "} let;" in opencl and "let make(float x)" in opencl
+    cuda = probes.build(_feature("cuda", "reserved-member-name"), "cuda").source
+    assert (
+        "__device__ float total(Rec r)" in cuda
+        and "r.fn = (float)(iin[i] & 7);" in cuda
+    )
+    rust = probes.build(_feature("rust", "reserved-type-name"), "rust").source
+    assert "pub struct var {" in rust and "var { a: x * 2.0, b: 3 }" in rust
+
+
+def test_uniform_matrix_probes_read_every_column_from_its_own_16_byte_row():
+    crossgl = probes.build(_feature("glsl", "uniform-matrix3"), "crossgl").source
+    assert "cbuffer Params @binding(3) {\n        mat3 m;\n        vec4 v;" in crossgl
+    # Metal, WGSL and Rust give a 2x2 matrix an 8-byte column stride, so they build it from 16-byte vectors.
+    for language, member, build in (
+        (
+            "metal",
+            "float4 c[2];",
+            "float2x2 m = float2x2(params.c[0].xy, params.c[1].xy);",
+        ),
+        (
+            "wgsl",
+            "c: array<vec4<f32>, 2>,",
+            "let m = mat2x2<f32>(params.c[0].xy, params.c[1].xy);",
+        ),
+        (
+            "rust",
+            "c: [Vec4; 2],",
+            "let m = Mat2::from_cols(Vec2::new(params.c[0].x, params.c[0].y)",
+        ),
+    ):
+        source = probes.build(_feature(language, "uniform-matrix2"), language).source
+        assert member in source and build in source, language
+    rust = probes.build(_feature("rust", "uniform-matrix3"), "rust").source
+    assert "c: [Vec4; 3],\n    v: Vec4," in rust and "m.z_axis.y * params.v.w" in rust
+    # HLSL names CrossGL's mat2x3 float3x2 and swaps the indices.
+    hlsl = probes.build(_feature("hlsl", "uniform-non-square-matrix"), "hlsl").source
+    assert "float3x2 m;" in hlsl and "mul(v.xyz, m)" in hlsl and "m[2][1] * v.w" in hlsl
+    wgsl = probes.build(_feature("wgsl", "uniform-non-square-matrix"), "wgsl").source
+    assert "m: mat2x3<f32>," in wgsl and "params.m[1][2] * params.v.w" in wgsl
+    for language in ("cuda", "hip", "opencl", "mojo"):
+        assert not [
+            f
+            for f in constructs.features(language, GRAMMAR)
+            if f.name.startswith("uniform-matrix")
+            or f.name == "uniform-non-square-matrix"
+        ], language
+
+
+def test_uniform_bool_probes_store_each_boolean_in_a_32_bit_word():
+    crossgl = probes.build(_feature("glsl", "uniform-bool-vector"), "crossgl").source
+    assert (
+        "cbuffer Params @binding(3) {\n        bvec4 f;\n        bvec2 g;\n        bool h;"
+        in crossgl
+    )
+    hlsl = probes.build(_feature("hlsl", "uniform-bool-vector"), "hlsl").source
+    assert "bool4 f;\n    bool2 g;" in hlsl and "bool4 c = f;" in hlsl
+    # Metal's bool is one byte and the others cannot put a boolean in a host-written block, so they test a uint.
+    for language, member, test in (
+        ("metal", "uint b0;", "bool b0 = bool(params.b0);"),
+        ("wgsl", "b0: u32,", "let b0 = bool(params.b0);"),
+        ("cuda", "unsigned int b0;", "bool b0 = params.b0 != 0u;"),
+        ("opencl", "uint b0;", "bool b0 = params.b0 != 0u;"),
+        ("rust", "b0: u32,", "let b0 = params.b0 != 0;"),
+        ("mojo", "var b0: UInt32", "var b0 = params.b0 != 0"),
+    ):
+        source = probes.build(_feature(language, "uniform-bool"), language).source
+        assert member in source and test in source, language
+    for language, member, test in (
+        ("metal", "uint4 f;\n    uint2 g;", "bool4 f = bool4(params.f);"),
+        ("wgsl", "f: vec4<u32>,\n    g: vec2<u32>,", "var c = vec4<bool>(params.f);"),
+        ("rust", "f: UVec4,\n    g: UVec2,", "params.f.cmpne(UVec4::ZERO)"),
+        ("mojo", "var f: SIMD[DType.uint32, 4]", "params.f.cast[DType.bool]()"),
+    ):
+        source = probes.build(
+            _feature(language, "uniform-bool-vector"), language
+        ).source
+        assert member in source and test in source, language
+    for language in ("cuda", "hip", "opencl"):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert "uniform-bool" in names and "uniform-bool-vector" not in names, language
+
+
+def test_row_major_probes_store_each_matrix_row_on_its_own_16_byte_row():
+    crossgl = probes.build(
+        _feature("glsl", "uniform-row-major-non-square"), "crossgl"
+    ).source
+    assert (
+        "cbuffer Params @binding(3) {\n        @ row_major mat2x3 m;\n        vec4 v;"
+        in crossgl
+    )
+    glsl = probes.build(_feature("glsl", "uniform-row-major-array"), "glsl").source
+    assert "layout(row_major) mat2 m[2];" in glsl and "m[0][1][0] * 8.0" in glsl
+    # HLSL indexes by rows, so CrossGL's element in column 1 and row 2 is m[2][1].
+    hlsl = probes.build(_feature("hlsl", "uniform-row-major-non-square"), "hlsl").source
+    assert "row_major float3x2 m;\n    float4 v;" in hlsl and "m[2][1] * v.w" in hlsl
+    # Metal, WGSL and Rust have no row-major matrices, so they transpose the matrix whose columns are the rows.
+    for language, member, build in (
+        (
+            "metal",
+            "float4 r[3];\n    float4 v;",
+            "float3x3 m = transpose(float3x3(params.r[0].xyz,",
+        ),
+        (
+            "wgsl",
+            "r: array<vec4<f32>, 3>,\n    v: vec4<f32>,",
+            "let m = transpose(mat3x3<f32>(params.r[0].xyz,",
+        ),
+        (
+            "rust",
+            "r: [Vec4; 3],\n    v: Vec4,",
+            ".transpose();\n    let t = m * params.v",
+        ),
+    ):
+        source = probes.build(
+            _feature(language, "uniform-row-major-matrix"), language
+        ).source
+        assert member in source and build in source, language
+    names = {f.name for f in constructs.features("rust", GRAMMAR)}
+    assert "uniform-row-major-array" in names
+    assert "uniform-row-major-non-square" not in names
+    for language in ("cuda", "hip", "opencl", "mojo"):
+        assert not [
+            f
+            for f in constructs.features(language, GRAMMAR)
+            if f.name.startswith("uniform-row-major")
+        ], language
+
+
+def test_buffer_row_major_probes_store_struct_matrices_by_rows():
+    crossgl = probes.build(
+        _feature("glsl", "buffer-row-major-non-square"), "crossgl"
+    ).source
+    assert "struct Rows {\n        @ row_major mat2x3 m;\n        vec2 w;" in crossgl
+    assert "buffer Rows* outp;" in crossgl
+    # GLSL has no layout qualifier on a structure member, so the buffer's array is row-major.
+    glsl = probes.build(_feature("glsl", "buffer-row-major-array"), "glsl").source
+    assert "{ layout(row_major) Rows outp[]; }" in glsl and "mat2 m[2];" in glsl
+    hlsl = probes.build(_feature("hlsl", "buffer-row-major-matrix"), "hlsl").source
+    assert "row_major float2x2 m;" in hlsl and "RWStructuredBuffer<Rows>" in hlsl
+    assert "outp[i].m[1][0] += 0.25;" in hlsl
+    # Metal, WGSL and Rust store the rows of the matrix's transpose.
+    for language, member, store in (
+        ("metal", "float2 r[3];", "outp[i].r[2][1] += 0.25;"),
+        ("wgsl", "r: array<vec2<f32>, 3>,", "let t = transpose(mat2x3<f32>("),
+    ):
+        source = probes.build(
+            _feature(language, "buffer-row-major-non-square"), language
+        ).source
+        assert member in source and store in source, language
+    rust = probes.build(_feature("rust", "buffer-row-major-array"), "rust").source
+    assert "r: [[Vec2; 2]; 2]," in rust and "outp[i].r[k][0].y += 0.25;" in rust
+    names = {f.name for f in constructs.features("rust", GRAMMAR)}
+    assert "buffer-row-major-matrix" in names
+    assert "buffer-row-major-non-square" not in names
+    for language in ("webgl", "cuda", "hip", "opencl", "mojo"):
+        assert not [
+            f
+            for f in constructs.features(language, GRAMMAR)
+            if f.name.startswith("buffer-row-major")
+        ], language
+
+
+def test_vector_probes_shift_by_scalars_and_resize_with_constructors():
+    crossgl = probes.build(_feature("glsl", "vector-shift"), "crossgl").source
+    assert "ivec2 r = a >> 1;" in crossgl and "uvec2 w = u << 3u;" in crossgl
+    # WGSL shifts by an unsigned vector of the operand's width and has no scalar operand on a bitwise operator.
+    wgsl = probes.build(_feature("wgsl", "vector-shift"), "wgsl").source
+    assert "let r = a >> vec2<u32>(1u);" in wgsl
+    wgsl = probes.build(_feature("wgsl", "vector-bitwise"), "wgsl").source
+    assert "(a ^ vec2<i32>(9))" in wgsl and "~a & vec2<i32>(15)" in wgsl
+    crossgl = probes.build(_feature("glsl", "matrix-resize"), "crossgl").source
+    assert "mat2 a = mat2(m);" in crossgl and "mat2x3 n = mat2x3(m);" in crossgl
+    # HLSL casts and indexes by rows; Slang casts only matrices; Metal takes swizzles and columns.
+    hlsl = probes.build(_feature("hlsl", "matrix-resize"), "hlsl").source
+    assert "float2x2 a = (float2x2)m;" in hlsl and "n[2][1] * 8192.0" in hlsl
+    for language, line in (
+        ("hlsl", "float2 a = (float2)v;"),
+        ("slang", "float2 a = v.xy;"),
+        ("metal", "int2 j = k.xy;"),
+        ("rust", "let b = v.truncate();"),
+    ):
+        source = probes.build(_feature(language, "vector-truncation"), language).source
+        assert line in source, language
+    metal = probes.build(_feature("metal", "matrix-resize"), "metal").source
+    assert "float2x2 a = float2x2(m[0].xy, m[1].xy);" in metal
+    rust = probes.build(_feature("rust", "matrix-resize"), "rust").source
+    assert "Mat3::from_mat2(a * 2.0)" in rust and "n[1].z * 8192.0" in rust
+    for language, absent in (
+        ("cuda", {"vector-shift", "vector-truncation", "matrix-resize"}),
+        ("opencl", {"matrix-resize"}),
+        ("mojo", {"vector-truncation", "matrix-resize"}),
+    ):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & absent, language
+
+
+def test_fragment_probes_use_each_languages_built_ins():
+    # The built-ins are graphics features of the fragment stage, which the kernel languages do not have.
+    feature = _feature("glsl", "front-facing")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    for language, name, line in (
+        (
+            "glsl",
+            "fragment-coordinate",
+            "vec4(gl_FragCoord.xy * 0.5 + uv, gl_FragCoord.z, 1.0)",
+        ),
+        ("webgl", "fragment-depth", "gl_FragDepth = uv.x * 0.5 + 0.25;"),
+        (
+            "hlsl",
+            "front-facing",
+            "float4 main(float2 uv : TEXCOORD0, bool front : SV_IsFrontFace)",
+        ),
+        (
+            "slang",
+            "fragment-depth",
+            '[shader("fragment")]\nFragmentOutput main(float2 uv : TEXCOORD0)',
+        ),
+        ("metal", "fragment-depth", "float depth [[depth(any)]];"),
+        ("wgsl", "fragment-coordinate", "@builtin(position) position: vec4<f32>"),
+        ("rust", "fragment-depth", "#[spirv(fragment(depth_replacing))]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, language
+    assert probes.build(_feature("glsl", "fragment-depth"), "glsl").suffix == ".frag"
+    hlsl = probes.build(_feature("hlsl", "fragment-depth"), "hlsl").source
+    assert hlsl.startswith("struct FragmentOutput {") and "[shader(" not in hlsl
+    crossgl = probes.build(_feature("glsl", "fragment-depth"), "crossgl").source
+    assert "        float depth @ gl_FragDepth;\n" in crossgl
+    assert "output.depth = input.uv.x * 0.5 + 0.25;" in crossgl
+    crossgl = probes.build(_feature("glsl", "front-facing"), "crossgl").source
+    assert "bool front @ gl_FrontFacing;" in crossgl and "input.front ? " in crossgl
+    for language in ("cuda", "hip", "opencl", "mojo"):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & set(fragments.NAMES), language
+
+
+def test_interface_probes_qualify_the_fragment_input_or_add_a_second_target():
+    feature = _feature("glsl", "sample-interpolation")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    assert feature.group == "Decoration.Sample Capability.SampleRateShading"
+    for language, name, line in (
+        (
+            "glsl",
+            "noperspective-interpolation",
+            "layout(location = 0) noperspective in vec2 uv;",
+        ),
+        ("webgl", "centroid-interpolation", "centroid in vec2 uv;"),
+        (
+            "hlsl",
+            "flat-interpolation",
+            "float4 main(nointerpolation float2 uv : TEXCOORD0)",
+        ),
+        ("slang", "sample-interpolation", "float4 main(sample float2 uv : TEXCOORD0)"),
+        (
+            "metal",
+            "noperspective-interpolation",
+            "float2 uv [[center_no_perspective]];",
+        ),
+        (
+            "wgsl",
+            "centroid-interpolation",
+            "@interpolate(perspective, centroid) uv: vec2<f32>",
+        ),
+        ("rust", "flat-interpolation", "#[spirv(flat)] uv: Vec2"),
+        ("glsl", "multiple-render-targets", "layout(location = 1) out vec4 extra;"),
+        ("hlsl", "multiple-render-targets", "float4 extra : SV_Target1;"),
+        ("metal", "multiple-render-targets", "float4 extra [[color(1)]];"),
+        ("rust", "multiple-render-targets", "#[spirv(location = 1)] extra: &mut Vec4"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "flat-interpolation"), "crossgl").source
+    assert "        vec2 uv @ flat;\n" in crossgl
+    crossgl = probes.build(
+        _feature("glsl", "multiple-render-targets"), "crossgl"
+    ).source
+    assert "vec4 extra @location(1);" in crossgl and "output.extra = vec4(" in crossgl
+    # GLSL ES 3.00 has no noperspective or sample qualifier, and rust-gpu marks only flat inputs.
+    absent = {
+        "webgl": {"noperspective-interpolation", "sample-interpolation"},
+        "rust": set(interfaces.INTERPOLATIONS) - {"flat-interpolation"},
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), set(interfaces.NAMES)),
+    }
+    for language, names in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & set(interfaces.NAMES) == set(interfaces.NAMES) - names, language
+
+
+def test_vertex_probes_use_each_languages_built_ins():
+    feature = _feature("glsl", "clip-distance")
+    assert (feature.category, feature.stage) == ("graphics", "vertex")
+    assert feature.group == "BuiltIn.ClipDistance Capability.ClipDistance"
+    for language, name, line in (
+        ("glsl", "vertex-index", "vec4(float(gl_VertexID), 0.0, 0.0, 0.0)"),
+        ("webgl", "instance-index", "vec4(float(gl_InstanceID), 0.0, 0.0, 0.0)"),
+        ("glsl", "point-size", "gl_PointSize = 2.0;"),
+        ("glsl", "clip-distance", "gl_ClipDistance[0] = position.x;"),
+        ("webgl", "invariant-position", "invariant gl_Position;\n"),
+        ("hlsl", "vertex-index", "uint vid : SV_VertexID"),
+        ("hlsl", "clip-distance", "float clip : SV_ClipDistance0;"),
+        ("slang", "point-size", "float size : SV_PointSize;"),
+        ("metal", "instance-index", "uint iid [[instance_id]]"),
+        ("metal", "clip-distance", "float clip [[clip_distance]] [1];"),
+        ("metal", "invariant-position", "float4 position [[position, invariant]];"),
+        ("wgsl", "vertex-index", "@builtin(vertex_index) vid: u32"),
+        ("wgsl", "clip-distance", "@builtin(clip_distances) clip: array<f32, 1>"),
+        ("wgsl", "invariant-position", "@builtin(position) @invariant vec4<f32>"),
+        ("rust", "point-size", "#[spirv(point_size)] size: &mut f32"),
+        ("rust", "invariant-position", "#[spirv(position, invariant)]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "vertex-index"), "crossgl").source
+    assert "        int vid @ gl_VertexID;\n" in crossgl and "    vertex {\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "invariant-position"), "crossgl").source
+    assert "vec4 position @ gl_Position @ invariant;" in crossgl
+    # Direct3D and WGSL have no point size, HLSL no invariance qualifier and GLSL ES 3.00 no clip distances.
+    absent = {
+        "hlsl": {"point-size", "invariant-position"},
+        "slang": {"invariant-position"},
+        "wgsl": {"point-size"},
+        "webgl": {"clip-distance"},
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), set(vertices.NAMES)),
+    }
+    for language, names in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & set(vertices.NAMES) == set(vertices.NAMES) - names, language
+
+
+def test_rasterization_probes_read_the_primitive_and_sample_or_write_coverage():
+    feature = _feature("glsl", "sample-index")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    assert feature.group == "BuiltIn.SampleId Capability.SampleRateShading"
+    for language, name, line in (
+        ("glsl", "primitive-id", "float(gl_PrimitiveID)"),
+        ("glsl", "sample-mask-input", "gl_SampleMaskIn[0] & 1"),
+        ("glsl", "sample-mask", "gl_SampleMask[0] = 1;"),
+        ("hlsl", "sample-index", "uint sid : SV_SampleIndex"),
+        ("hlsl", "sample-mask", "uint mask : SV_Coverage;"),
+        ("slang", "primitive-id", "uint pid : SV_PrimitiveID"),
+        ("metal", "sample-mask-input", "uint mask [[sample_mask]]"),
+        ("metal", "sample-mask", "uint mask [[sample_mask]];"),
+        ("wgsl", "primitive-id", "enable primitive_index;"),
+        ("wgsl", "sample-index", "@builtin(sample_index) sid: u32"),
+        ("rust", "sample-mask-input", "#[spirv(sample_mask, flat)] mask: [u32; 1]"),
+        ("rust", "primitive-id", "#[spirv(primitive_id, flat)] pid: u32"),
+        ("rust", "sample-mask", "#[spirv(sample_mask)] mask: &mut [u32; 1]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "sample-mask-input"), "crossgl").source
+    assert "        uint mask @ gl_SampleMaskIn;\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "sample-mask"), "crossgl").source
+    assert "output.mask = 1u;" in crossgl and "uint mask @ gl_SampleMask;" in crossgl
+    # GLSL ES 3.00 has none of the four built-ins, and the kernel languages have no fragment stage.
+    absent = dict.fromkeys(
+        ("webgl", "cuda", "hip", "opencl", "mojo"), set(rasterization.NAMES)
+    )
+    for language, names in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert (
+            listed & set(rasterization.NAMES) == set(rasterization.NAMES) - names
+        ), language
+
+
+def test_relation_probes_compare_integer_and_boolean_vectors_per_language():
+    # CrossGL and the C family compare with operators; GLSL spells each comparison and negation as a function.
+    crossgl = probes.build(
+        _feature("glsl", "integer-vector-comparison"), "crossgl"
+    ).source
+    assert "bvec2 gt = u > uvec2(5u, 7u);" in crossgl and "if (all(ne)) {" in crossgl
+    glsl = probes.build(_feature("glsl", "integer-vector-comparison"), "glsl").source
+    assert "bvec2 gt = greaterThan(u, uvec2(5u, 7u));" in glsl
+    glsl = probes.build(_feature("glsl", "bool-vector-logic"), "glsl").source
+    assert "bvec2 n = not(b);" in glsl and "if (any(not(c))) {" in glsl
+    crossgl = probes.build(_feature("glsl", "bool-vector-logic"), "crossgl").source
+    assert "bvec2 e = b == c;" in crossgl and "if (any(!c)) {" in crossgl
+    for language, line in (
+        ("hlsl", "bool2 b = (bool2)k;"),
+        ("metal", "bool2 b = bool2(k);"),
+        ("wgsl", "let u = vec2<u32>(vec2<bool>(fin[i] > 1.0, true));"),
+        ("rust", "let g = Vec2::select(b, Vec2::ONE, Vec2::ZERO);"),
+        ("mojo", "var j = c.cast[DType.int32]()"),
+    ):
+        source = probes.build(
+            _feature(language, "bool-vector-conversion"), language
+        ).source
+        assert line in source, language
+    opencl = probes.build(
+        _feature("opencl", "integer-vector-comparison"), "opencl"
+    ).source
+    assert "int2 gt = u > (uint2)(5u, 7u);" in opencl and "r += 128.0f;" in opencl
+    rust = probes.build(_feature("rust", "bool-vector-logic"), "rust").source
+    assert "let e = !(b ^ c);" in rust and "if (!c).any() {" in rust
+    for language, absent in (
+        ("cuda", set(relations.NAMES)),
+        ("opencl", {"bool-vector-logic", "bool-vector-conversion"}),
+    ):
+        names = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not names & absent, language
+
+
+def test_packing_probes_name_the_layout_rule_and_declare_its_offsets():
+    for name, rule in (
+        ("uniform-std140-vector", "std140"),
+        ("uniform-cbuffer-vector", "hlsl_cbuffer"),
+        ("uniform-std140-array", "std140"),
+    ):
+        crossgl = probes.build(_feature("glsl", name), "crossgl").source
+        assert f"cbuffer Params @binding(3) @buffer_layout({rule}) {{" in crossgl, name
+    # slangc lays out a plain cbuffer by std140 for SPIR-V, so HLSL and Slang name every member's offset.
+    for language in ("hlsl", "slang"):
+        std140 = probes.build(_feature(language, "uniform-std140-vector"), language)
+        assert (
+            "float3 b : packoffset(c1);\n    float c : packoffset(c1.w);"
+            in std140.source
+        )
+        cbuffer = probes.build(_feature(language, "uniform-cbuffer-vector"), language)
+        assert (
+            "float3 b : packoffset(c0.y);\n    float c : packoffset(c1);"
+            in cbuffer.source
+        )
+        array = probes.build(_feature(language, "uniform-std140-array"), language)
+        assert "float d : packoffset(c2);" in array.source
+    # No GLSL, WGSL or OpenCL C rule puts a three-component vector at offset 4, so those declare its components.
+    for language, member, build in (
+        ("glsl", "float b0;", "vec3 b = vec3(b0, b1, b2);"),
+        ("wgsl", "b0: f32,", "let b = vec3<f32>(params.b0, params.b1, params.b2);"),
+        (
+            "opencl",
+            "float b0;",
+            "float3 b = (float3)(params.b0, params.b1, params.b2);",
+        ),
+    ):
+        source = probes.build(_feature(language, "uniform-cbuffer-vector"), language)
+        assert member in source.source and build in source.source, language
+    # The languages without std140 rules declare its padding.
+    for language, padded in (
+        ("metal", "float pad2;\n    packed_float3 b;"),
+        ("cuda", "float pad2;\n    float3 b;"),
+        ("rust", "pad2: f32,\n    b: Vec3,"),
+        ("mojo", "var pad2: Float32\n    var b0: Float32"),
+    ):
+        source = probes.build(_feature(language, "uniform-std140-vector"), language)
+        assert padded in source.source and "pad3" in source.source, language
+
+
+def test_uniform_integer_probes_keep_each_member_s_signedness_in_every_language():
+    crossgl = probes.build(_feature("glsl", "uniform-integer"), "crossgl").source
+    assert "cbuffer Params @binding(3) {\n        int n0;" in crossgl
+    for language, member, use in (
+        ("wgsl", "u1: u32,", "f32(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("cuda", "unsigned int u1;", "(float)(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("opencl", "uint u1;", "(float)(params.u2 % 1000u + (params.u3 >> 24))"),
+        ("rust", "u1: u32,", "(params.u2 % 1000 + (params.u3 >> 24)) as f32"),
+        ("mojo", "var u1: UInt32", "Float32(params.u2 % 1000 + (params.u3 >> 24))"),
+    ):
+        source = probes.build(_feature(language, "uniform-unsigned"), language).source
+        assert member in source and use in source, language
+    mojo = probes.build(_feature("mojo", "uniform-integer"), "mojo").source
+    assert "params.n3 // 1000000" in mojo
+    for language, local in (
+        ("wgsl", "let v = params.iv;"),
+        ("mojo", "var v = params.iv"),
+    ):
+        vector = probes.build(_feature(language, "uniform-integer-vector"), language)
+        assert local in vector.source and "$" not in vector.source, language
+    assert "(v[0] >> 20) + (v[1] >> 20) + (v[3] >> 24)" in vector.source
+
+
 # Each HLSL matrix probe with its matrices written as CrossGL lists them, by columns, and transposed into HLSL's rows.
 # The indexing probe keeps CrossGL's columns as HLSL rows instead, and indexes them as CrossGL does.
 _HLSL_BY_COLUMNS = {
@@ -434,9 +971,15 @@ def test_the_hlsl_matrix_probes_compute_what_the_crossgl_probes_compute(name):
 
 # glslang folds the swizzle probe's v.wzyx.x to one OpCompositeExtract.
 _UNANCHORED_TYPES = {"swizzle"}
-# GLSL has no float remainder with the dividend's sign, so its probe computes one through trunc, and no typedef;
-# DXC lowers the HLSL probes of both.
-_HLSL_ANCHORED = {"float-remainder", "type-alias"}
+# GLSL has no float remainder with the dividend's sign, so its probe computes one through trunc, and no typedef,
+# enumeration, member function or boolean bitwise operator; DXC lowers the HLSL probes of all five.
+_HLSL_ANCHORED = {
+    "float-remainder",
+    "type-alias",
+    "enum-constant",
+    "struct-method",
+    "bool-bitwise",
+}
 
 
 def _missing_anchors(language: str, names: set[str] | None = None) -> list[str]:

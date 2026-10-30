@@ -2,6 +2,7 @@
 
 import re
 
+from ..comma_expressions import crossgl_tuple_literal
 from .RustAst import *
 from .RustLexer import *
 from .RustParser import *
@@ -1109,6 +1110,14 @@ class RustToCrossGLConverter:
                 qualifier = "out"
                 if not semantic and str(shader_type).lower() == "fragment":
                     semantic = " @ gl_FragColor"
+            elif (
+                shader_type is None
+                and not qualifier
+                and self.is_mutable_reference_value_parameter(param, param_type)
+            ):
+                # A `&mut T` parameter writes the caller's place. Safe Rust lets nothing else reach that place
+                # during the call, so CrossGL's copy-in/copy-out `inout` observes the same values.
+                qualifier = "inout"
             declaration = self.format_typed_declarator(param_type, name)
             if qualifier:
                 declaration = f"{qualifier} {declaration}"
@@ -1116,6 +1125,29 @@ class RustToCrossGLConverter:
             param_types.append((name, param_type))
 
         return ", ".join(declarations), param_types, aliases
+
+    _OPAQUE_TYPE_WORDS = (
+        "sampler",
+        "image",
+        "texture",
+        "buffer",
+        "accelerationstructure",
+        "subpass",
+        "rayquery",
+    )
+
+    def is_mutable_reference_value_parameter(self, param, param_type):
+        """Whether ``param`` is ``&mut T`` of a sized value ``T``, not a resource handle, buffer or slice."""
+        raw_type = str(getattr(param, "vtype", "")).strip()
+        if not re.match(r"^&\s*(?:'\w+\s+)?mut\b", raw_type):
+            return False
+        crossgl_type = str(param_type).strip()
+        if "[]" in crossgl_type or "&" in crossgl_type:
+            return False
+        base = re.split(r"[\s<\[]", crossgl_type, maxsplit=1)[0]
+        if base in self.struct_member_types:
+            return True
+        return not any(word in base.lower() for word in self._OPAQUE_TYPE_WORDS)
 
     def get_parameter_qualifier_from_attributes(self, attributes):
         if not attributes:
@@ -9563,11 +9595,10 @@ class RustToCrossGLConverter:
             # Dereferences are typically not needed in CrossGL
             return self.generate_expression(expr.expression)
         elif isinstance(expr, TupleNode):
-            # Tuples might not be directly supported, convert to struct or multiple variables
-            elements = ", ".join(
+            # ``(a, b,)``: without the trailing comma CrossGL reads the comma operator.
+            return crossgl_tuple_literal(
                 self.generate_expression(elem) for elem in expr.elements
             )
-            return f"({elements})"
         elif isinstance(expr, ArrayNode):
             if expr.size is not None and len(expr.elements) == 1:
                 repeated = self.expand_repeated_array_literal(

@@ -54,8 +54,11 @@ from ..ast import (
 from ..matrix_shape import matrix_type_spelling
 from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .assignment_values import is_reevaluable_place
+from .c_reference_parameters import is_output_parameter
+from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
+from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustLoweringRefused
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import (
@@ -65,7 +68,7 @@ from .stage_utils import (
 )
 
 
-class RustCodeGen(LoweringRefusalMixin):
+class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     """Emit Rust-like GPU shader source from the shared CrossGL AST."""
 
     LOWERING_REFUSAL_TYPE = RustLoweringRefused
@@ -4223,6 +4226,8 @@ class RustCodeGen(LoweringRefusalMixin):
         saved_generic_param_names = self.current_generic_param_names
         saved_function_generic_constraints = self.current_function_generic_constraints
         saved_mutated_names = self.current_mutated_names
+        saved_output_parameters = self.current_rust_output_parameters
+        self.current_rust_output_parameters = []
         self.current_generic_param_names = set(self.generic_param_names(func))
         self.current_shader_type = shader_type
         param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
@@ -4317,6 +4322,21 @@ class RustCodeGen(LoweringRefusalMixin):
 
             self.register_variable_type(source_param_name, param_type, scope="local")
             param_name = self.rust_identifier(source_param_name)
+            if shader_type is None and is_output_parameter(p):
+                # GLSL copy-in/copy-out; see rust_output_parameters.
+                reference_name = self.rust_output_parameter_reference_name(
+                    func, param_name
+                )
+                mapped_param_type = self.map_function_parameter_type_with_lifetime(
+                    param_type, reference_lifetime
+                )
+                params.append(f"{reference_name}: &mut {mapped_param_type}")
+                local_alias_declarations.append(
+                    f"let mut {param_name}: {mapped_param_type} = *{reference_name};"
+                )
+                self.current_rust_output_parameters.append((reference_name, param_name))
+                emitted_param_names.add(reference_name)
+                continue
             if source_param_name in self.current_mutated_names or (
                 self.function_parameter_requires_mut_binding(
                     p,
@@ -4414,6 +4434,10 @@ class RustCodeGen(LoweringRefusalMixin):
             body_statements = body
             for stmt in body:
                 code += self.generate_statement(stmt, indent + 1)
+        if self.current_rust_output_parameters and not self.statement_body_terminates(
+            body_statements
+        ):
+            code += self.rust_output_parameter_copy_back("    " * (indent + 1))
         if fragment_output_info is not None and not self.statement_body_terminates(
             body_statements
         ):
@@ -4433,6 +4457,7 @@ class RustCodeGen(LoweringRefusalMixin):
         self.current_generic_param_names = saved_generic_param_names
         self.current_function_generic_constraints = saved_function_generic_constraints
         self.current_mutated_names = saved_mutated_names
+        self.current_rust_output_parameters = saved_output_parameters
         return code
 
     def is_function_prototype(self, func):
@@ -4736,6 +4761,7 @@ class RustCodeGen(LoweringRefusalMixin):
                     if reference_parts is None or not reference_parts[0]:
                         continue
                     names.update(self.mutable_reference_borrow_root_names(argument))
+                names.update(self.rust_output_argument_roots(func_name, args))
                 collect(current.function)
                 collect(args)
                 return
@@ -5389,9 +5415,13 @@ class RustCodeGen(LoweringRefusalMixin):
                             return_expr,
                             indent,
                         )
+                    if self.current_rust_output_parameters:
+                        return self.generate_rust_output_return(indent_str, return_expr)
                     return f"{indent_str}return {return_expr};\n"
             else:
                 # Void return
+                if self.current_rust_output_parameters:
+                    return self.generate_rust_output_return(indent_str, None)
                 return f"{indent_str}return;\n"
 
         elif isinstance(stmt, BreakNode):
@@ -6814,6 +6844,7 @@ class RustCodeGen(LoweringRefusalMixin):
                 func_name=func_name,
                 move_counts=move_counts,
             )
+            self.apply_rust_output_arguments(func_name, args, generated_args)
             generated_args.extend(self.generate_captured_function_call_args(func_name))
             return f"{self.rust_callable_name(callee)}({', '.join(generated_args)})"
 
@@ -8871,6 +8902,8 @@ class RustCodeGen(LoweringRefusalMixin):
         """Render a CrossGL expression as Rust expression syntax."""
         if expr is None:
             return ""
+        elif is_comma_expression(expr):
+            return refuse_comma_expression("Rust", expr)
         elif isinstance(expr, str):
             return expr
         elif isinstance(expr, (int, float, bool)):
@@ -10630,7 +10663,9 @@ class RustCodeGen(LoweringRefusalMixin):
 
     def generate_lambda_node_body(self, body, return_type=None):
         saved_return_type = self.current_return_type
+        saved_output_parameters = self.current_rust_output_parameters
         self.current_return_type = return_type
+        self.current_rust_output_parameters = []
         try:
             if isinstance(body, BlockNode):
                 return self.generate_block_expression(
@@ -10642,6 +10677,7 @@ class RustCodeGen(LoweringRefusalMixin):
             return self.generate_return_branch_expression_with_type(body, return_type)
         finally:
             self.current_return_type = saved_return_type
+            self.current_rust_output_parameters = saved_output_parameters
 
     def generate_lambda_parameter(self, arg):
         raw = self.lambda_raw_argument_text(arg).strip()
@@ -10978,6 +11014,7 @@ class RustCodeGen(LoweringRefusalMixin):
                 target_type,
             )
             generated_args.append(arg_expr)
+        self.apply_rust_output_arguments(func_name, args, generated_args)
         generated_args.extend(self.generate_captured_function_call_args(func_name))
         return generated_args
 

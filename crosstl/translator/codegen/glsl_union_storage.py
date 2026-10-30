@@ -2,7 +2,8 @@
 
 from ..ast import ArrayAccessNode, MemberAccessNode, UnaryOpNode
 from .array_utils import split_array_type_suffix
-from .union_layout import UnionLayoutCollector
+from .union_lanes import LaneHelpers
+from .union_layout import UnionLayoutCollector, is_lane_kind
 
 
 class OpenGLUnionLayoutError(ValueError):
@@ -22,6 +23,13 @@ class UnionStorage:
             generator, self.error, generator.glsl_static_struct_member
         ).collect(structs)
         self.helpers = {}
+        self.lanes = LaneHelpers(
+            "glsl",
+            generator.map_type,
+            lambda operation, kind: generator.glsl_generated_module_identifier(
+                ("union-storage", operation, kind), f"crossgl_union_{operation}_{kind}"
+            ),
+        )
 
     def error(self, node, *, reason, detail, member=None, **details):
         name = getattr(node, "name", None)
@@ -134,6 +142,24 @@ class UnionStorage:
             value += f"[{g.generate_expression_with_expected(info['index'], 'uint')}]"
         return value
 
+    def lane_call(self, info, operation, value=None):
+        g = self.generator
+        layout = info["layout"]
+        storage = g.generate_expression_with_expected(info["object"], None)
+        storage = f"{storage}.{layout['storage_field']}"
+        name = self.lanes.name(
+            operation,
+            info["member"],
+            layout["word_count"],
+            lambda reason, detail: self.reject(info, reason, detail),
+        )
+        index = g.generate_expression_with_expected(info["index"], "uint")
+        if operation == "get":
+            return f"{name}({storage}, {index})"
+        element, _suffix = split_array_type_suffix(info["member"]["type"])
+        rendered = g.generate_expression_with_expected(value, element)
+        return f"{name}({storage}, {index}, {rendered})"
+
     def value_kind(self, info):
         kind = info["member"]["kind"]
         if kind.endswith("_array"):
@@ -184,6 +210,8 @@ class UnionStorage:
         if info is None:
             return None
         kind = self.value_kind(info)
+        if is_lane_kind(kind):
+            return self.lane_call(info, "get")
         value = self.storage(info)
         if kind == "int32":
             return f"{self.word_type(info, signed=True)}({value})"
@@ -244,6 +272,14 @@ class UnionStorage:
         info = self.access(target)
         if info is not None:
             kind = self.value_kind(info)
+            if is_lane_kind(kind):
+                if operator != "=":
+                    self.reject(
+                        info,
+                        "lane-compound-write-unsupported",
+                        "compound lane writes need a read-modify-write contract",
+                    )
+                return self.lane_call(info, "set", value)
             if kind != "uint32" and (operator != "=" or not statement_context):
                 self.reject(
                     info,
@@ -352,4 +388,7 @@ class UnionStorage:
                     f"    word = (word & ~(255u << shift)) | ({encoded} << shift);\n"
                     f"    return {result};\n}}\n"
                 )
+        lanes = self.lanes.definitions()
+        if lanes:
+            code.append(lanes)
         return "\n".join(code)

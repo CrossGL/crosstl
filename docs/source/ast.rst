@@ -100,6 +100,15 @@ parameters, and attributes each have dedicated node classes. Code generators
 use these nodes to preserve semantics such as bindings, qualifiers, generic
 arguments, and stage annotations.
 
+A ``StructNode`` keeps the member functions a CrossGL structure declares in
+``methods``. An instance method names its receiver's members and the
+structure's other methods unqualified, or through ``this``; a ``static`` method
+has no receiver and is called as ``Owner::name(...)``. Before code generation
+the ``struct_methods`` rule pass gives every target each method as a free
+function ``Owner_name`` whose first parameter is the receiver, ``inout`` when
+the body may write it and ``in`` otherwise, and rewrites ``recv.name(args)``
+into ``Owner_name(recv, args)``.
+
 Statement and expression nodes
 ------------------------------
 
@@ -108,6 +117,14 @@ switches, returns, breaks, and continues. Expression nodes cover literals,
 identifiers, binary/unary operators, function calls, member and array access,
 casts, constructors, lambdas, resource operations, wave intrinsics, ray tracing
 operations, and mesh operations.
+
+``CommaExpressionNode`` is the C comma operator, spelled ``(a, b, ...)`` in
+CrossGL. Its operands run left to right and its value is the last operand's; it
+is never an l-value. A trailing comma, ``(a, b,)``, keeps the tuple literal
+(``ArrayLiteralNode``). C-family targets print the operator in parentheses,
+SPIR-V evaluates the operands in order, WGSL hoists the discarded operands into
+statements where that keeps the evaluation order, and Rust and Mojo refuse it
+with a typed diagnostic.
 
 Compatibility helpers
 ---------------------

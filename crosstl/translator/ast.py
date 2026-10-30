@@ -637,6 +637,7 @@ class StructNode(ASTNode):
         attributes: List["AttributeNode"] = None,
         inheritance: List[NamedType] = None,
         visibility: str = "public",
+        methods: List["FunctionNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -646,6 +647,8 @@ class StructNode(ASTNode):
         self.attributes = attributes or []
         self.inheritance = inheritance or []
         self.visibility = visibility
+        # Member functions; the struct_methods rule pass lowers them to free functions.
+        self.methods = methods or []
 
     def __repr__(self):
         return f"StructNode(name={self.name}, members={len(self.members)})"
@@ -1342,6 +1345,17 @@ class ArrayLiteralNode(ExpressionNode):
 
     def __repr__(self):
         return f"ArrayLiteralNode(elements={len(self.elements)})"
+
+
+class CommaExpressionNode(ExpressionNode):
+    """Comma expression ``(a, b)``: evaluates its operands left to right, and its value is the last one's."""
+
+    def __init__(self, expressions: List[ExpressionNode], **kwargs):
+        super().__init__(**kwargs)
+        self.expressions = expressions
+
+    def __repr__(self):
+        return f"CommaExpressionNode(expressions={len(self.expressions)})"
 
 
 class SwizzleNode(ExpressionNode):

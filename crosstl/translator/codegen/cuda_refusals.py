@@ -1,7 +1,8 @@
 """Typed refusal for constructs the CUDA emitter cannot lower.
 
-The CUDA emitter does not collect refusals through :class:`~.lowering_refusals.LoweringRefusals` yet, so it raises
-:class:`CudaLoweringRefused` where it meets the construct.
+The CUDA emitter generates through :meth:`~.lowering_refusals.LoweringRefusals.run`: a site that meets a construct
+it cannot express either raises :class:`CudaLoweringRefused` at once or leaves a ``/* unsupported ... */`` loss marker,
+and a rendered program that carries a marker is refused with every marked reason. No program is returned with one.
 """
 
 from __future__ import annotations

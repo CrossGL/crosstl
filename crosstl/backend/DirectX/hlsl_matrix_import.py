@@ -508,29 +508,35 @@ class HLSLMatrixImportMixin:
             )
             return self.row_filled_matrix_expression(shape, rendered)
         elements = list(initializer.elements or [])
-        groups = [self.flatten_initializer(element) for element in elements]
-        if elements and all(
-            None not in (
-                c := [self.initializer_component_count(leaf) for leaf in group]
-            )
-            and sum(c) == size
-            for group in groups
-        ):
-            matrices = ", ".join(
-                self.column_filled_matrix_expression(shape, group, is_main)
-                or self.row_filled_matrix_expression(
-                    shape,
-                    ", ".join(
-                        self.generate_expression(leaf, is_main) for leaf in group
-                    ),
-                )
-                for group in groups
-            )
-            return f"{{{matrices}}}"
+        matrices = [
+            self.array_element_matrix_expression(shape, element, is_main)
+            for element in elements
+        ]
+        if elements and None not in matrices:
+            return f"{{{', '.join(matrices)}}}"
         return self.refuse_import(
             f"HLSL initializer list for {shape[0]}{shape[1]}x{shape[2]} whose component count "
             "the importer cannot match to the matrix",
             "{}",
+        )
+
+    def array_element_matrix_expression(self, shape, element, is_main):
+        """One element of an array-of-matrices initializer, or ``None`` when its shape differs."""
+        if not isinstance(element, InitializerListNode):
+            element_shape = self.matrix_expression_shape(element)
+            if element_shape is not None:
+                if element_shape != shape:
+                    return None
+                return self.generate_expression(element, is_main)
+        group = self.flatten_initializer(element)
+        counts = [self.initializer_component_count(leaf) for leaf in group]
+        if None in counts or sum(counts) != shape[1] * shape[2]:
+            return None
+        return self.column_filled_matrix_expression(
+            shape, group, is_main
+        ) or self.row_filled_matrix_expression(
+            shape,
+            ", ".join(self.generate_expression(leaf, is_main) for leaf in group),
         )
 
     def flatten_initializer(self, node):
