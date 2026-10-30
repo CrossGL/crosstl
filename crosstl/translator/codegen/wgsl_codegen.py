@@ -767,6 +767,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._module_resource_bindings = {}
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
+        self._exponent_helpers = {}
         self._constant_values = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -835,6 +836,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         self._module_resource_bindings = {}
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
+        self._exponent_helpers = {}
         self._constant_values = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
@@ -1061,6 +1063,10 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         dispatch_helpers = self.generate_sampled_texture_array_dispatch_helpers()
         if dispatch_helpers:
             emitted_sections.append(dispatch_helpers)
+
+        exponent_helpers = self.generate_exponent_helpers()
+        if exponent_helpers:
+            emitted_sections.append(exponent_helpers)
 
         if emitted_sections:
             lines.append("")
@@ -3520,6 +3526,16 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             # GLSL atan(y, x) is the two-argument arctangent; WGSL's atan takes one
             # argument and spells the two-argument form atan2(y, x).
             return f"atan2({args})"
+        if (
+            function_name in ("frexp", "modf")
+            and len(node.arguments) == 2
+            and isinstance(node.function, IdentifierNode)
+            and not self.is_user_function_name(function_name)
+        ):
+            # WGSL's frexp and modf take one argument and return a structure, so
+            # the two-argument GLSL form goes through a helper that writes the
+            # structure's second part through a pointer (issue #2520).
+            return self.generate_exponent_call(node, function_name)
         if mapped_name == function_name and isinstance(node.function, IdentifierNode):
             if resolved_function is not None:
                 mapped_name = self.function_declaration_identifier_name(
@@ -4159,6 +4175,115 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                     self.generate_sampled_texture_array_dispatch_helper(info)
                 )
         return "\n\n".join(helpers)
+
+    # WGSL frexp and modf take one argument and return a structure, while
+    # CrossGL spells them with a second, written argument (GLSL 4.60 section
+    # 8.3). Each distinct (value type, written type) pair gets a helper that
+    # calls the one-argument builtin, writes the structure's second part
+    # through a pointer to the caller's variable, and returns the first part,
+    # so the call stays a single expression in any position (issue #2520).
+    EXPONENT_BUILTINS = {
+        # name: structure part written through the pointer
+        "frexp": "exp",
+        "modf": "whole",
+    }
+
+    def generate_exponent_call(self, node, function_name):
+        value_arg, out_arg = node.arguments
+        if not isinstance(
+            out_arg, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+        ):
+            raise ValueError(
+                f"WGSL target cannot lower {function_name}() with a written "
+                "argument that is not a variable, member or element"
+            )
+        value_type = self.type_name_string(self.expression_type(value_arg))
+        out_type = self.type_name_string(self.expression_type(out_arg))
+        if value_type == "void" or out_type == "void":
+            raise ValueError(
+                f"WGSL target cannot lower {function_name}() without known "
+                "operand types"
+            )
+        if not self._is_exponent_value_type(value_type):
+            raise ValueError(
+                f"WGSL target cannot lower {function_name}() on {value_type}; "
+                "only float scalars and vectors are supported"
+            )
+        if self._vector_size(value_type) != self._vector_size(out_type):
+            raise ValueError(
+                f"WGSL target cannot lower {function_name}() on {value_type} "
+                f"writing {out_type}; the written argument must have the same "
+                "number of components"
+            )
+        helper_name = self.exponent_helper_name(
+            function_name, value_type, out_type
+        )
+        self._exponent_helpers.setdefault(
+            helper_name,
+            {
+                "helper_name": helper_name,
+                "function_name": function_name,
+                "value_type": value_type,
+                "out_type": out_type,
+            },
+        )
+        value_expr = self.generate_expression_for_target(
+            value_arg, self.expression_type(value_arg)
+        )
+        out_expr = self.generate_expression(out_arg)
+        return f"{helper_name}({value_expr}, &{out_expr})"
+
+    def _is_exponent_value_type(self, wgsl_type):
+        element = self._vector_element(wgsl_type)
+        return element in ("f32", "f16")
+
+    def _vector_element(self, wgsl_type):
+        match = re.match(r"^vec\d<(.+)>$", wgsl_type)
+        return match.group(1) if match else wgsl_type
+
+    def _vector_size(self, wgsl_type):
+        match = re.match(r"^vec(\d)<.+>$", wgsl_type)
+        return int(match.group(1)) if match else 1
+
+    def exponent_helper_name(self, function_name, value_type, out_type):
+        def flat(wgsl_type):
+            return re.sub(r"[<>, ]+", "_", wgsl_type).strip("_")
+
+        return self.safe_wgsl_identifier(
+            f"crosstl_{function_name}_{flat(value_type)}_{flat(out_type)}"
+        )
+
+    def generate_exponent_helpers(self):
+        if not self._exponent_helpers:
+            return ""
+        return "\n\n".join(
+            self.generate_exponent_helper(info)
+            for info in self._exponent_helpers.values()
+        )
+
+    def generate_exponent_helper(self, info):
+        function_name = info["function_name"]
+        value_type = info["value_type"]
+        out_type = info["out_type"]
+        part = self.EXPONENT_BUILTINS[function_name]
+        if function_name == "frexp":
+            size = self._vector_size(value_type)
+            part_type = f"vec{size}<i32>" if size > 1 else "i32"
+        else:
+            part_type = value_type
+        assignment = f"*out = result.{part};"
+        if part_type != out_type:
+            assignment = f"*out = {out_type}(result.{part});"
+        return "\n".join(
+            [
+                f"fn {info['helper_name']}(value: {value_type}, "
+                f"out: ptr<function, {out_type}>) -> {value_type} {{",
+                f"    let result = {function_name}(value);",
+                f"    {assignment}",
+                "    return result.fract;",
+                "}",
+            ]
+        )
 
     def generate_sampled_texture_array_sample_helper(self, info):
         array_info = info["array_info"]

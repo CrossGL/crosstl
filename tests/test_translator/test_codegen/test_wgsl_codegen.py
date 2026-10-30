@@ -3693,6 +3693,67 @@ def test_two_argument_atan_lowers_to_atan2(tmp_path):
     assert "atan(a0)" in generated
     assert "atan2(fin[(i)], 2.0)" in generated or "atan2(fin[i], 2.0)" in generated
     assert "atan(a0, a0)" not in generated
+
+
+def test_two_argument_frexp_and_modf_lower_to_wgsl_helpers(tmp_path):
+    # WGSL's frexp and modf take one argument and return a structure; the
+    # two-argument GLSL form goes through a helper that writes the second
+    # part through a pointer (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec3* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 a0 = vec3(fin[i + 0u], fin[i + 1u], fin[i + 2u]);
+                ivec3 e;
+                vec3 w;
+                vec3 r = frexp(a0, e) + modf(a0, w);
+                float s = frexp(fin[i], e.x);
+                outp[i] = r + vec3(s);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "crosstl_frexp_vec3_f32_vec3_i32(a0, &e)" in generated
+    assert "crosstl_modf_vec3_f32_vec3_f32(a0, &w)" in generated
+    assert "crosstl_frexp_f32_i32(fin[i], &e.x)" in generated
+    assert "frexp(a0, e)" not in generated
+    assert "modf(a0, w)" not in generated
+    assert "let result = frexp(value);" in generated
+    assert "*out = result.exp;" in generated
+    assert "let result = modf(value);" in generated
+    assert "*out = result.whole;" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_frexp_with_float_exponent_converts_wgsl_result(tmp_path):
+    # HLSL imports give the frexp exponent the value's type, so the helper
+    # converts the builtin's i32 part to the caller's type (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                float e;
+                float r = frexp(fin[i], e);
+                outp[i] = r + e;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "crosstl_frexp_f32_f32(fin[i], &e)" in generated
+    assert "*out = f32(result.exp);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
     validate_wgsl_with_naga(tmp_path, generated)
 
 

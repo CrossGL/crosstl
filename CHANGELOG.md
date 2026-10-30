@@ -57,6 +57,8 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- WGSL output lowers the two-argument `frexp(x, e)` and `modf(x, i)` forms through a generated helper that calls the one-argument builtin, writes the structure's second part (`exp` or `whole`) through a pointer to the caller's variable, and returns the first part (`fract`), converting the part when the written variable has a different type, as with an HLSL-imported float exponent. They used to be copied unchanged, as in `frexp(a0, e)`, which naga rejects because WGSL's builtins take one argument.
+
 - HIP output lowers `ptr<T>` helper parameters imported from HIP or CUDA to native pointer types instead of emitting the CrossGL spelling unchanged.
 
 - CrossGL accepts an empty statement, a `;` on its own, which it used to refuse with `CrossGLFunctionBodyParseError`, so every target refused a function containing one. A switch whose last `case` or `default` label is followed by no statement now leaves the switch there with `break;`; Metal and GLSL ES output used to end the switch on the bare label, which the Metal compiler and GLSL ES 3.00 refuse.
