@@ -420,7 +420,7 @@ def test_target_jobs_require_the_hlsl_cbuffer_layout_dispatches():
             }
         ]
         assert dependent_steps
-        assert {step.get("if") for step in dependent_steps} == {"${{ success() }}"}
+        assert {step.get("if") for step in dependent_steps} == {"${{ !cancelled() }}"}
     assert PLAN.is_relevant(
         "tests/test_backend/test_directx/test_hlsl_cbuffer_layouts.py"
     )
