@@ -235,9 +235,7 @@ def _fragment_input_qualifiers(codegen, entry_point):
         for parameter in parameters
         if codegen.is_stage_resource_parameter(parameter)
     }
-    implicit = entry_parameter_locations(
-        codegen, entry_point, "fragment", resource_ids
-    )
+    implicit = entry_parameter_locations(codegen, entry_point, "fragment", resource_ids)
     qualifiers = {}
     for parameter in parameters:
         if id(parameter) in resource_ids:
