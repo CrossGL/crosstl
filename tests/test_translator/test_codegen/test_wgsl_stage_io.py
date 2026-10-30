@@ -17,7 +17,7 @@ from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.codegen.wgsl_stage_io import (
     WGSLStageIOUnsupportedError,
     is_integer_io_type,
-    with_flat_integer_interpolation,
+    with_interpolation,
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
@@ -357,10 +357,208 @@ def test_integer_io_type_detection(type_name, expected):
 
 
 def test_flat_interpolation_needs_a_location():
-    assert with_flat_integer_interpolation("", "i32") == ""
-    assert with_flat_integer_interpolation("@builtin(sample_index)", "u32") == (
+    assert with_interpolation("", "i32") == ""
+    assert with_interpolation("", "vec2<f32>", ("flat", None)) == ""
+    assert with_interpolation("@builtin(sample_index)", "u32") == (
         "@builtin(sample_index)"
     )
-    assert with_flat_integer_interpolation("@location(1)", "i32") == (
+    assert with_interpolation("@location(1)", "i32") == (
         "@location(1) @interpolate(flat)"
     )
+
+
+def test_float_interpolation_qualifiers_become_interpolate(tmp_path):
+    code = generate_wgsl("""
+shader Probe {
+    struct FragmentInput {
+        vec2 a @ flat;
+        vec2 b @ noperspective;
+        vec2 c @ centroid;
+        vec2 d @ sample;
+        vec2 e @ noperspective @ centroid;
+        vec2 f @ noperspective @ sample;
+        vec2 g @ smooth;
+    }
+    fragment {
+        vec4 main(FragmentInput input) @ gl_FragColor {
+            return vec4(input.a + input.b + input.e + input.f, input.c + input.d + input.g);
+        }
+    }
+}
+""")
+    assert struct_body(code, "FragmentInput").splitlines() == [
+        "    @location(0) @interpolate(flat) a: vec2<f32>,",
+        "    @location(1) @interpolate(linear) b: vec2<f32>,",
+        "    @location(2) @interpolate(perspective, centroid) c: vec2<f32>,",
+        "    @location(3) @interpolate(perspective, sample) d: vec2<f32>,",
+        "    @location(4) @interpolate(linear, centroid) e: vec2<f32>,",
+        "    @location(5) @interpolate(linear, sample) f: vec2<f32>,",
+        "    @location(6) g: vec2<f32>,",
+    ]
+    validate_with_naga(tmp_path, code)
+
+
+def test_hlsl_interpolation_modifiers_on_parameters_become_interpolate(tmp_path):
+    code = generate_wgsl("""
+shader Probe {
+    fragment {
+        vec4 main(
+            vec2 a @ nointerpolation,
+            vec2 b @ linear_noperspective,
+            vec2 c @ linear_centroid,
+            vec2 d @ linear_sample,
+            vec2 e @ linear_noperspective_centroid,
+            vec2 f @ linear
+        ) @ gl_FragColor {
+            return vec4(a + b + c, d + e + f);
+        }
+    }
+}
+""")
+    assert entry_signature(code, "fragment") == (
+        "@location(0) @interpolate(flat) a: vec2<f32>, "
+        "@location(1) @interpolate(linear) b: vec2<f32>, "
+        "@location(2) @interpolate(perspective, centroid) c: vec2<f32>, "
+        "@location(3) @interpolate(perspective, sample) d: vec2<f32>, "
+        "@location(4) @interpolate(linear, centroid) e: vec2<f32>, "
+        "@location(5) f: vec2<f32>"
+    )
+    validate_with_naga(tmp_path, code)
+
+
+def test_flat_with_centroid_or_sample_is_flat(tmp_path):
+    # GLSL 4.60 section 4.5: flat with centroid or sample means flat, and WGSL's
+    # flat interpolation takes only the first or either sampling.
+    code = generate_wgsl("""
+shader Probe {
+    struct FragmentInput {
+        vec2 a @ flat @ centroid;
+        vec2 b @ flat @ sample;
+        uint c @ flat @ centroid;
+        int d @ sample;
+    }
+    fragment {
+        vec4 main(FragmentInput input) @ gl_FragColor {
+            return vec4(input.a + input.b, float(input.c), float(input.d));
+        }
+    }
+}
+""")
+    assert struct_body(code, "FragmentInput").splitlines() == [
+        "    @location(0) @interpolate(flat) a: vec2<f32>,",
+        "    @location(1) @interpolate(flat) b: vec2<f32>,",
+        "    @location(2) @interpolate(flat) c: u32,",
+        "    @location(3) @interpolate(flat) d: i32,",
+    ]
+    validate_with_naga(tmp_path, code)
+
+
+@pytest.mark.parametrize("qualifier", ["noperspective", "smooth"])
+def test_interpolated_integer_io_is_refused(qualifier):
+    with pytest.raises(
+        WGSLStageIOUnsupportedError,
+        match=rf"integer member FragmentInput.cell with {qualifier}",
+    ):
+        generate_wgsl(f"""
+shader Probe {{
+    struct FragmentInput {{
+        ivec2 cell @ {qualifier};
+    }}
+    fragment {{
+        vec4 main(FragmentInput input) @ gl_FragColor {{
+            return vec4(vec2(input.cell), 0.0, 1.0);
+        }}
+    }}
+}}
+""")
+
+
+def test_interpolation_qualifiers_on_matrix_and_array_members(tmp_path):
+    code = generate_wgsl("""
+shader Probe {
+    struct FragmentInput {
+        mat2 m @ flat;
+        vec2 rows[2] @ noperspective @ centroid;
+    }
+    fragment {
+        vec4 main(FragmentInput input) @ gl_FragColor {
+            return vec4(input.m[0] + input.rows[1], input.m[1]);
+        }
+    }
+}
+""")
+    assert struct_body(code, "FragmentInput").splitlines() == [
+        "    @location(0) @interpolate(flat) m_0: vec2<f32>,",
+        "    @location(1) @interpolate(flat) m_1: vec2<f32>,",
+        "    @location(2) @interpolate(linear, centroid) rows_0: vec2<f32>,",
+        "    @location(3) @interpolate(linear, centroid) rows_1: vec2<f32>,",
+    ]
+    validate_with_naga(tmp_path, code)
+
+
+def test_interpolation_qualifier_outside_stage_io_is_dropped(tmp_path):
+    # @interpolate needs a @location (WGSL section 12.9).
+    code = generate_wgsl("""
+shader Probe {
+    struct Helper {
+        vec2 a @ flat;
+    }
+    fragment {
+        vec4 main(vec2 uv) @ gl_FragColor {
+            Helper h;
+            h.a = uv;
+            return vec4(h.a, 0.0, 1.0);
+        }
+    }
+}
+""")
+    assert struct_body(code, "Helper") == "    a: vec2<f32>,"
+    validate_with_naga(tmp_path, code)
+
+
+def test_vertex_output_takes_the_interpolation_of_its_fragment_input(tmp_path):
+    # WebGPU refuses a pipeline whose vertex output and fragment input at one
+    # location interpolate differently; the fragment input's qualifiers decide.
+    code = generate_wgsl("""
+shader Probe {
+    struct VSOut {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0 @ flat;
+        vec2 st @ TEXCOORD1;
+        vec2 extra @ TEXCOORD2 @ noperspective;
+    }
+    struct PSIn {
+        vec2 uv @ TEXCOORD0;
+        vec2 st @ TEXCOORD1 @ noperspective @ sample;
+    }
+    vertex {
+        VSOut main(vec3 p @ POSITION) {
+            VSOut o;
+            o.position = vec4(p, 1.0);
+            o.uv = p.xy;
+            o.st = p.yz;
+            o.extra = p.xz;
+            return o;
+        }
+    }
+    fragment {
+        vec4 main(PSIn input, vec2 tail @ TEXCOORD2 @ centroid) @ gl_FragColor {
+            return vec4(input.uv + tail, input.st);
+        }
+    }
+}
+""")
+    assert struct_body(code, "VSOut").splitlines() == [
+        "    @builtin(position) position: vec4<f32>,",
+        "    @location(5) uv: vec2<f32>,",
+        "    @location(6) @interpolate(linear, sample) st: vec2<f32>,",
+        "    @location(7) @interpolate(perspective, centroid) extra: vec2<f32>,",
+    ]
+    assert struct_body(code, "PSIn").splitlines() == [
+        "    @location(5) uv: vec2<f32>,",
+        "    @location(6) @interpolate(linear, sample) st: vec2<f32>,",
+    ]
+    assert "@location(7) @interpolate(perspective, centroid) tail: vec2<f32>" in (
+        entry_signature(code, "fragment")
+    )
+    validate_with_naga(tmp_path, code)

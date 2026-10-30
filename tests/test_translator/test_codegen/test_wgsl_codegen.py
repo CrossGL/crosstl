@@ -3907,32 +3907,3 @@ def test_wgsl_codegen_refuses_one_scalar_matrix_constructor_with_side_effects():
 
     with pytest.raises(ValueError, match="one-scalar matrix constructor"):
         WGSLCodeGen().generate(parse_shader(shader))
-
-
-def test_wgsl_preserves_glsl_style_interpolation_qualifiers_on_float_inputs():
-    """@ flat / @ noperspective / @ centroid / @ sample must become @interpolate."""
-    shader = """
-    shader Probe {
-        struct FragmentInput {
-            vec2 a @ flat;
-            vec2 b @ noperspective;
-            vec2 c @ centroid;
-            vec2 d @ sample;
-        }
-        struct FragmentOutput {
-            vec4 color;
-        }
-        fragment {
-            FragmentOutput main(FragmentInput input) {
-                FragmentOutput output;
-                output.color = vec4(input.a + input.b, input.c + input.d);
-                return output;
-            }
-        }
-    }
-    """
-    generated = WGSLCodeGen().generate(parse_shader(shader))
-    assert "@location(0) @interpolate(flat) a: vec2<f32>," in generated
-    assert "@location(1) @interpolate(linear) b: vec2<f32>," in generated
-    assert "@location(2) @interpolate(perspective, centroid) c: vec2<f32>," in generated
-    assert "@location(3) @interpolate(perspective, sample) d: vec2<f32>," in generated
