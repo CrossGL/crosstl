@@ -28,14 +28,11 @@ SMOKE_PATHS = (
     "crosstl/**",
     "tests/**",
     "tools/**",
-    "support/**",
     ".github/actions/**",
     ".github/actionlint.yaml",
     ".pre-commit-config.yaml",
     "conftest.py",
     "pyproject.toml",
-    "requirements*.txt",
-    "setup.cfg",
 )
 
 

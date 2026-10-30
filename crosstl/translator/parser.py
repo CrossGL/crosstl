@@ -18,6 +18,7 @@ from .ast import (
     BlockNode,
     BreakNode,
     CaseNode,
+    CommaExpressionNode,
     ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
@@ -79,6 +80,7 @@ from .ast import (
     WildcardPatternNode,
     create_legacy_shader_node,
 )
+from .codegen.array_utils import evaluate_literal_int_expression
 from .host_workgroup_size import (
     HOST_WORKGROUP_SIZE_ATTRIBUTE,
     HOST_WORKGROUP_SIZE_KEY,
@@ -344,6 +346,8 @@ class Parser:
         self.anonymous_buffer_blocks = []
         self.active_generic_parameter_names = set()
         self.value_type_scopes = [{}]
+        # Declared values with their own parameters, which `name[...]` specializes.
+        self.parameterized_value_names = set()
         self.current_function_return_type = None
         self.declared_type_names = {
             str(tokens[index + 1][1])
@@ -559,7 +563,9 @@ class Parser:
             elif self.current_token[0] == "SHADER":
                 shader_node = self.parse_shader_declaration()
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffers.append(self.parse_attributed_cbuffer())
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(), cbuffers, structs, global_variables
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
@@ -567,7 +573,9 @@ class Parser:
             elif self.current_token[0] == "ENUM":
                 enums.append(self.parse_enum())
             elif self.is_cbuffer_declaration():
-                cbuffers.append(self.parse_cbuffer_as_struct())
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(), cbuffers, structs, global_variables
+                )
             elif (
                 self.current_token[0] == "CONST" and not self.is_function_declaration()
             ):
@@ -583,9 +591,19 @@ class Parser:
                     structs.append(struct_node)
                     global_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         global_variables, self.parse_variable_declaration(attributes)
@@ -658,7 +676,9 @@ class Parser:
                 stage_node = self.parse_shader_stage_block()
                 stages.append(stage_node.stage, stage_node)
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffers.append(self.parse_attributed_cbuffer())
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(), cbuffers, structs, global_variables
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 structs.append(self.parse_attributed_struct())
             elif self.current_token[0] == "STRUCT":
@@ -688,7 +708,9 @@ class Parser:
                     stages,
                 )
             elif self.is_cbuffer_declaration():
-                cbuffers.append(self.parse_cbuffer_as_struct())
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(), cbuffers, structs, global_variables
+                )
             elif (
                 self.current_token[0] == "CONST" and not self.is_function_declaration()
             ):
@@ -704,9 +726,19 @@ class Parser:
                     structs.append(struct_node)
                     global_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        cbuffers,
+                        structs,
+                        global_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         global_variables, self.parse_variable_declaration(attributes)
@@ -809,9 +841,19 @@ class Parser:
                     local_structs.append(struct_node)
                     local_variables.append(variable_node)
                 elif self.current_token_starts_attributed_cbuffer_declaration():
-                    local_cbuffers.append(self.parse_attributed_cbuffer(attributes))
+                    self.append_constant_block(
+                        self.parse_attributed_cbuffer(attributes),
+                        local_cbuffers,
+                        local_structs,
+                        local_variables,
+                    )
                 elif self.is_cbuffer_declaration():
-                    local_cbuffers.append(self.parse_cbuffer_as_struct(attributes))
+                    self.append_constant_block(
+                        self.parse_cbuffer_as_struct(attributes),
+                        local_cbuffers,
+                        local_structs,
+                        local_variables,
+                    )
                 elif self.is_variable_declaration():
                     self.append_parsed_nodes(
                         local_variables, self.parse_variable_declaration(attributes)
@@ -819,9 +861,12 @@ class Parser:
                 else:
                     self.skip_unknown_token()
             elif self.current_token_starts_attributed_cbuffer_declaration():
-                cbuffer = self.parse_attributed_cbuffer()
-                if cbuffer:
-                    local_cbuffers.append(cbuffer)
+                self.append_constant_block(
+                    self.parse_attributed_cbuffer(),
+                    local_cbuffers,
+                    local_structs,
+                    local_variables,
+                )
             elif self.current_token_starts_attributed_struct_declaration():
                 struct_node = self.parse_attributed_struct()
                 if struct_node:
@@ -831,9 +876,12 @@ class Parser:
                 if struct_node:
                     local_structs.append(struct_node)
             elif self.is_cbuffer_declaration():
-                cbuffer = self.parse_cbuffer_as_struct()
-                if cbuffer:
-                    local_cbuffers.append(cbuffer)
+                self.append_constant_block(
+                    self.parse_cbuffer_as_struct(),
+                    local_cbuffers,
+                    local_structs,
+                    local_variables,
+                )
             elif self.is_function_declaration():
                 func = self.parse_function()
                 parsed_functions.append(func)
@@ -1435,10 +1483,19 @@ class Parser:
 
         self.eat("LBRACE")
         members = []
+        methods = []
 
         previous_scope = self.enter_generic_parameter_scope(generic_params)
         try:
             while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                if self.is_function_declaration():
+                    # A member function reads its receiver's members by name.
+                    static_member = self.current_token[0] == "STATIC"
+                    method = self.parse_function()
+                    if static_member and "static" not in method.qualifiers:
+                        method.qualifiers.append("static")
+                    methods.append(method)
+                    continue
                 member = self.parse_struct_member()
                 self.append_parsed_nodes(members, member)
         finally:
@@ -1457,6 +1514,7 @@ class Parser:
             members=members,
             generic_params=generic_params,
             attributes=attributes,
+            methods=methods,
         )
 
     def parse_struct_member(self):
@@ -1588,6 +1646,12 @@ class Parser:
                 self.eat("SEMICOLON")
                 return members[0] if len(members) == 1 else members
 
+            if self.current_token[0] == "LPAREN":
+                # Skipping to the next ';' would drop a member function silently.
+                raise SyntaxError(
+                    f"Struct member '{name}' is declared like a function that CrossGL "
+                    "cannot read as a member function"
+                )
             # Skip malformed member suffix while preserving earlier declarators.
             while self.current_token[0] not in ["SEMICOLON", "RBRACE", "EOF"]:
                 self.skip_unknown_token()
@@ -2103,6 +2167,26 @@ class Parser:
             return ArrayType(element_type, size)
 
         return self.parse_type()
+
+    def parse_array_template_type(self):
+        """Parse ``array<T, N>`` as the ``ArrayType`` that ``T name[N]`` declares, wherever a type is written.
+
+        Parameters, locals, struct members, globals and return types all take this spelling, and a plain
+        ``NamedType`` left every generator without array semantics for it. Two forms keep the ``array`` template
+        type: an extent of zero, the zero-extent standard array that C-style ``T name[0]`` cannot declare
+        (MSL 2.3.4 ``array<T, 0>``), and ``array<T>`` with no extent, whose meaning depends on where it is declared.
+        """
+        self.eat("IDENTIFIER")
+        generic_args = self.parse_generic_arguments()
+        if len(generic_args) == 2:
+            element_type, extent = generic_args
+            if isinstance(element_type, IdentifierNode):
+                element_type = NamedType(element_type.name, [])
+            if isinstance(element_type, TypeNode) and (
+                evaluate_literal_int_expression(extent) != 0
+            ):
+                return ArrayType(element_type, extent)
+        return NamedType("array", generic_args)
 
     def current_token_starts_var_address_space_declaration(self):
         """Return whether the current token starts ``var<address-space>`` syntax."""
@@ -2780,6 +2864,13 @@ class Parser:
         elif self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "def":
             base_type = self.parse_callable_type()
 
+        elif (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "array"
+            and self.peek()[0] == "LESS_THAN"
+        ):
+            base_type = self.parse_array_template_type()
+
         elif self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -3449,6 +3540,8 @@ class Parser:
                 variable.initial_value
             )
         self.register_value_type(variable.name, effective_type)
+        if getattr(variable, "generic_params", None):
+            self.parameterized_value_names.add(str(variable.name))
         return variable
 
     def parse_callable_type(self):
@@ -4147,6 +4240,11 @@ class Parser:
         """Parse any statement form supported by CrossGL."""
         if self.current_token_starts_statement_attribute():
             return self.parse_attributed_statement()
+        if self.current_token[0] == "SEMICOLON":
+            # A null statement does nothing (GLSL 4.60 section 6.1, C++ [stmt.expr]/1): it adds no node, and a
+            # braceless body made of one becomes an empty block through parse_substatement.
+            self.eat("SEMICOLON")
+            return []
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -4175,6 +4273,9 @@ class Parser:
             return ContinueNode()
         elif self.current_token[0] == "LBRACE":
             return self.parse_block()
+        elif self.current_token[0] == "STRUCT" and self.peek()[0] == "IDENTIFIER":
+            # A structure declared in a block; semantics.local_structs hoists it to module scope.
+            return self.parse_local_struct_statement()
         elif self.current_token_starts_inferred_var_declaration():
             return self.parse_inferred_var_declaration()
         elif self.is_variable_declaration():
@@ -4188,6 +4289,35 @@ class Parser:
                 return ExpressionStatementNode(expr, is_tail_expression=True)
             self.eat("SEMICOLON")
             return ExpressionStatementNode(expr)
+
+    def parse_local_struct_statement(self):
+        """Parse ``struct Name { ... } [declarators];`` in a block, refusing one it cannot read.
+
+        Declarators after the closing brace (``struct S { float x; } a, b[2];``) declare variables of the
+        structure, as in C and GLSL, and follow it in the block.
+        """
+        node = self.parse_struct()
+        if not isinstance(node, StructNode):
+            raise SyntaxError(
+                "CrossGL could not parse the structure declared in a block, at "
+                f"{self.current_token[0]} {self.current_token[1]!r}"
+            )
+        node.is_local_declaration = True
+        if self.peek(-1)[0] == "SEMICOLON" or not (
+            self.current_token[0] == "IDENTIFIER"
+            and self.peek()[0] in {"SEMICOLON", "COMMA", "LBRACKET", "EQUALS"}
+        ):
+            return node
+        declarations = []
+        while True:
+            declarations.append(
+                self.parse_variable_declarator(NamedType(node.name), [], [])
+            )
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+        self.eat("SEMICOLON")
+        return [node, *declarations]
 
     def current_token_starts_statement_attribute(self):
         """Return whether the current token starts statement-level metadata."""
@@ -4381,10 +4511,21 @@ class Parser:
             self.restore_value_type_scope()
 
     def parse_expression_sequence(self):
-        expressions = [self.parse_expression()]
+        """A for-loop update: ``a, b`` and the comma operator ``(a, b)`` both give the list ``[a, b]``.
+
+        The update's value is discarded, so its operands are the same updates run left to right.
+        """
+        expressions = []
+        pending = [self.parse_expression()]
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
-            expressions.append(self.parse_expression())
+            pending.append(self.parse_expression())
+        while pending:
+            expr = pending.pop(0)
+            if isinstance(expr, CommaExpressionNode):
+                pending[:0] = list(expr.expressions)
+            else:
+                expressions.append(expr)
         return expressions[0] if len(expressions) == 1 else expressions
 
     def parse_for_in_statement_after_for(self):
@@ -5132,6 +5273,7 @@ class Parser:
             elif (
                 self.current_token[0] == "LBRACKET"
                 and isinstance(left, (IdentifierNode, MemberAccessNode))
+                and not self.brackets_subscript_a_declared_value(left)
                 and self.square_brackets_form_expression_type_arguments()
             ):
                 generic_args = self.parse_square_expression_generic_arguments()
@@ -5278,6 +5420,49 @@ class Parser:
 
         self.eat("RBRACKET")
         return args
+
+    def brackets_subscript_a_declared_value(self, left):
+        """Whether ``left[...]`` indexes a declared variable rather than specializing a name.
+
+        ``t[j = k + 1]`` and ``t[i, j]`` look like specialization arguments (``name = value``, a comma) to
+        :meth:`square_brackets_form_expression_type_arguments`, but a declared variable cannot be specialized:
+        its brackets are a subscript whose index is an assignment or a comma expression. A call after the
+        brackets keeps the specialization reading.
+        """
+        root = left
+        while isinstance(root, MemberAccessNode):
+            root = root.object
+        if not isinstance(root, IdentifierNode):
+            return False
+        name = root.name
+        if (
+            name in self.declared_type_names
+            or name in self.active_generic_parameter_names
+            or name in self.parameterized_value_names
+        ):
+            return False
+        if not any(name in scope for scope in self.value_type_scopes):
+            return False
+        return self.token_after_matching_bracket() != "LPAREN"
+
+    def token_after_matching_bracket(self):
+        """Type of the token after the ``]`` that closes the current ``[``."""
+        depth = 0
+        index = self.pos
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    return (
+                        self.tokens[index + 1][0]
+                        if index + 1 < len(self.tokens)
+                        else "EOF"
+                    )
+            index += 1
+        return "EOF"
 
     def square_brackets_form_expression_type_arguments(self):
         """Return whether expression ``[...]`` is a specialization suffix."""
@@ -5649,14 +5834,19 @@ class Parser:
                 return ArrayLiteralNode([])
             expr = self.parse_expression()
             if self.current_token[0] == "COMMA":
+                # ``(a, b)`` is the comma operator; a trailing comma, ``(a, b,)``, keeps the tuple form.
                 elements = [expr]
+                trailing_comma = False
                 while self.current_token[0] == "COMMA":
                     self.eat("COMMA")
                     if self.current_token[0] == "RPAREN":
+                        trailing_comma = True
                         break
                     elements.append(self.parse_expression())
                 self.eat("RPAREN")
-                return ArrayLiteralNode(elements)
+                if trailing_comma:
+                    return ArrayLiteralNode(elements)
+                return CommaExpressionNode(elements)
             self.eat("RPAREN")
             return expr
 
@@ -5849,12 +6039,66 @@ class Parser:
 
         self.eat("RBRACE")
 
+        if self.current_token_is_declaration_binding_identifier() and self.peek()[
+            0
+        ] in (
+            "SEMICOLON",
+            "LBRACKET",
+            "AT",
+            "ATTRIBUTE",
+        ):
+            # Without ';' or '[' next, the name is the type of the next declaration.
+            return self.parse_constant_block_instance(name, members, attributes)
+
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
         node = StructNode(name=name, members=members, attributes=attributes)
         node.is_cbuffer = True
         return node
+
+    def parse_constant_block_instance(self, block_name, members, attributes):
+        """Desugar ``cbuffer Block { ... } instance[N];`` into ``struct Block`` and ``ConstantBuffer<Block>``.
+
+        An instance name scopes the block's members, which are then read as ``instance.member`` (GLSL's named
+        uniform blocks and arrays of them). The block becomes a plain struct and the instance a uniform
+        ``ConstantBuffer`` of it that carries the block's attributes, the spelling every generator lowers.
+        """
+        instance_name = self.parse_binding_identifier()
+        sizes = []
+        while self.current_token[
+            0
+        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
+            allow_single_square=False
+        ):
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            sizes.append(size)
+        attributes.extend(self.parse_post_declaration_attributes())
+        self.eat("SEMICOLON")
+
+        struct_node = StructNode(name=block_name, members=members)
+        variable_node = VariableNode(
+            name=instance_name,
+            var_type=self.wrap_array_dimensions(
+                NamedType("ConstantBuffer", [NamedType(block_name)]), sizes
+            ),
+            qualifiers=["uniform"],
+            attributes=attributes,
+        )
+        return [struct_node, variable_node]
+
+    def append_constant_block(self, parsed, cbuffers, structs, variables):
+        """Route a parsed constant block, or the struct and variable of an instance-named one."""
+        if isinstance(parsed, list):
+            struct_node, variable_node = parsed
+            structs.append(struct_node)
+            variables.append(variable_node)
+        elif parsed:
+            cbuffers.append(parsed)
 
     # Helper methods
     def is_cbuffer_declaration(self):
@@ -6504,6 +6748,10 @@ class Parser:
 
         self.eat("RBRACE")
 
+        if cases and not cases[-1].statements:
+            # GLSL ES 3.00 section 6.2 and C++ [stmt.label] (before C++23), which MSL and HLSL follow, need a
+            # statement after the last label. Leaving the switch from there is what that label already does.
+            cases[-1].statements.append(BreakNode())
         return SwitchNode(expression=expression, cases=cases)
 
     def parse_case(self):

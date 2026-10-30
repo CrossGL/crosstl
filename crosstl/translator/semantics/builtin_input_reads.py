@@ -1,9 +1,10 @@
-"""Fragment built-in inputs read by name, passed to the HLSL and MSL entry point and on to the helpers that read them.
+"""Stage built-in inputs read by name, passed to the entry point and on to the helpers that read them.
 
 GLSL reads a fragment shader's built-in inputs as global variables: ``gl_FragCoord``, ``gl_FrontFacing``,
-``gl_PointCoord``, ``gl_SampleID`` and ``gl_PrimitiveID`` (GLSL 4.60 section 7.1.5), anywhere in the stage,
-helpers included, and the CrossGL import keeps those reads. HLSL and MSL have no such globals. A built-in input is a
-parameter of the entry point carrying a system-value semantic (``SV_IsFrontFace``, ``SV_SampleIndex``) or an
+``gl_PointCoord``, ``gl_SampleID`` and ``gl_PrimitiveID`` (GLSL 4.60 section 7.1.5), the barycentric coordinates
+(``gl_BaryCoordEXT``, ``gl_BaryCoordNoPerspEXT`` and their NV spellings) and ``gl_ShadingRateEXT``, anywhere in the
+stage, helpers included, and the CrossGL import keeps those reads. HLSL and MSL have no such globals. A built-in input
+is a parameter of the entry point carrying a system-value semantic (``SV_IsFrontFace``, ``SV_SampleIndex``) or an
 attribute (``[[front_facing]]``, ``[[sample_id]]``), and a helper sees it only as an argument. The generators bound
 only ``gl_FragCoord``, and the Metal one only in the entry point. Every other read was emitted verbatim, as an
 undeclared identifier.
@@ -12,7 +13,8 @@ undeclared identifier.
 
 * the entry point takes each built-in input that it or a helper reads as a parameter carrying the built-in
   (``bool cgl_FrontFacing @ gl_FrontFacing``), or reuses a parameter or input-structure member that already
-  carries it. ``gl_SampleID`` and ``gl_PrimitiveID``, which HLSL and MSL deliver as ``uint``, arrive in a ``uint``
+  carries it. ``gl_SampleID``, ``gl_PrimitiveID`` and ``gl_ShadingRateEXT``, which HLSL and MSL deliver as ``uint``,
+  arrive in a ``uint``
   parameter and are converted to GLSL's ``int`` once at the start of the entry point;
 * each helper that reads one, directly or through the helpers it calls, takes it as a trailing parameter, and every
   call passes it on.
@@ -21,6 +23,14 @@ The built-in attributes are then spelled for the target by :mod:`.builtin_values
 target lacks (HLSL has no point-sprite coordinate). The HLSL generator already threads ``gl_FragCoord`` through
 helpers itself, so for HLSL that one is left to it. The Metal generator binds ``gl_FragCoord`` in the entry point
 only, so for Metal it is passed here as soon as a helper reads it.
+
+The compute and vertex built-in inputs behave the same way. GLSL reads ``gl_GlobalInvocationID``,
+``gl_LocalInvocationID``, ``gl_WorkGroupID``, ``gl_LocalInvocationIndex`` and ``gl_NumWorkGroups`` (GLSL 4.60
+section 7.1.3), and ``gl_VertexID`` and ``gl_InstanceID`` (section 7.1.1), anywhere in the stage. HLSL, MSL, Slang
+and WGSL (WGSL section 13.3.1) deliver them only as entry-point parameters. The generators bind the ones the entry
+point reads itself, so for those stages, and for every stage on Slang and WGSL, a built-in is passed here only when
+a helper reads it. ``gl_VertexID`` and ``gl_InstanceID`` arrive as ``uint`` (``SV_VertexID``, ``[[vertex_id]]``,
+``@builtin(vertex_index)``) and are converted to GLSL's ``int`` at the start of the entry point.
 """
 
 from __future__ import annotations
@@ -33,16 +43,48 @@ from .rewrite import child_slots, get_child, set_child
 __all__ = ["pass_builtin_inputs"]
 
 _HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
-TARGETS = _HLSL_TARGETS | {"metal"}
+# Targets whose fragment generators bind only gl_FragCoord, so every other fragment input is passed here.
+_FRAGMENT_BINDING_TARGETS = _HLSL_TARGETS | {"metal"}
+TARGETS = _FRAGMENT_BINDING_TARGETS | {"slang", "wgsl"}
 _FRAGMENT_INPUTS = {
     "gl_FragCoord": "vec4",
     "gl_FrontFacing": "bool",
     "gl_PointCoord": "vec2",
     "gl_SampleID": "int",
     "gl_PrimitiveID": "int",
+    # GL_EXT_fragment_shader_barycentric, GL_NV_fragment_shader_barycentric and GL_EXT_fragment_shading_rate.
+    "gl_BaryCoordEXT": "vec3",
+    "gl_BaryCoordNoPerspEXT": "vec3",
+    "gl_BaryCoordNV": "vec3",
+    "gl_BaryCoordNoPerspNV": "vec3",
+    "gl_ShadingRateEXT": "int",
 }
-# HLSL SV_SampleIndex and SV_PrimitiveID, and MSL [[sample_id]] and [[primitive_id]], are uint.
-_UNSIGNED = frozenset({"gl_SampleID", "gl_PrimitiveID"})
+_COMPUTE_INPUTS = {
+    "gl_GlobalInvocationID": "uvec3",
+    "gl_LocalInvocationID": "uvec3",
+    "gl_WorkGroupID": "uvec3",
+    "gl_LocalInvocationIndex": "uint",
+    "gl_NumWorkGroups": "uvec3",
+}
+_VERTEX_INPUTS = {"gl_VertexID": "int", "gl_InstanceID": "int"}
+_STAGE_INPUTS = {
+    "fragment": _FRAGMENT_INPUTS,
+    "pixel": _FRAGMENT_INPUTS,
+    "compute": _COMPUTE_INPUTS,
+    "vertex": _VERTEX_INPUTS,
+}
+_INPUT_TYPES = {**_FRAGMENT_INPUTS, **_COMPUTE_INPUTS, **_VERTEX_INPUTS}
+# HLSL SV_SampleIndex, SV_PrimitiveID, SV_VertexID, SV_InstanceID and SV_ShadingRate, the MSL attributes and the
+# WGSL built-ins for them are uint.
+_UNSIGNED = frozenset(
+    {
+        "gl_SampleID",
+        "gl_PrimitiveID",
+        "gl_VertexID",
+        "gl_InstanceID",
+        "gl_ShadingRateEXT",
+    }
+)
 
 
 def _stages(program):
@@ -50,9 +92,17 @@ def _stages(program):
     return list(stages.values() if isinstance(stages, dict) else stages)
 
 
-def _is_fragment(stage):
+def _type_node(name):
+    """The CrossGL type node the parser builds for ``name``: ``uvec3`` is a vector of three ``uint``."""
+    for prefix, element in (("uvec", "uint"), ("vec", "float")):
+        if name.startswith(prefix) and name[len(prefix) :].isdigit():
+            return A.VectorType(A.PrimitiveType(element), int(name[len(prefix) :]))
+    return A.PrimitiveType(name)
+
+
+def _stage_kind(stage):
     value = getattr(stage, "stage", None)
-    return str(getattr(value, "value", value) or "").lower() in {"fragment", "pixel"}
+    return str(getattr(value, "value", value) or "").lower()
 
 
 def _walk(node, seen=None):
@@ -163,7 +213,10 @@ def _copy(expression):
     return A.IdentifierNode(expression.name)
 
 
-def _passes(target, builtin, helper_reads):
+def _passes(target, kind, builtin, helper_reads):
+    if kind not in {"fragment", "pixel"} or target not in _FRAGMENT_BINDING_TARGETS:
+        # The generator binds the built-ins the entry point reads; only a helper's read needs a parameter.
+        return builtin in helper_reads
     if target in _HLSL_TARGETS and builtin == "gl_FragCoord":
         return False
     if target == "metal" and builtin == "gl_FragCoord":
@@ -172,7 +225,7 @@ def _passes(target, builtin, helper_reads):
 
 
 def pass_builtin_inputs(program, target) -> int:
-    """Pass the fragment built-in inputs ``program`` reads by name as parameters; returns the stages changed."""
+    """Pass the stage built-in inputs ``program`` reads by name as parameters; returns the stages changed."""
     target = str(target or "").lower()
     if target not in TARGETS or not isinstance(program, A.ShaderNode):
         return 0
@@ -180,9 +233,9 @@ def pass_builtin_inputs(program, target) -> int:
     changed = 0
     for stage in _stages(program):
         entry = getattr(stage, "entry_point", None)
-        if not _is_fragment(stage) or not isinstance(
-            getattr(entry, "body", None), A.BlockNode
-        ):
+        kind = _stage_kind(stage)
+        inputs = _STAGE_INPUTS.get(kind)
+        if inputs is None or not isinstance(getattr(entry, "body", None), A.BlockNode):
             continue
         helpers = [
             function
@@ -191,7 +244,7 @@ def pass_builtin_inputs(program, target) -> int:
             )
             if function is not entry and getattr(function, "body", None) is not None
         ]
-        candidates = set(_FRAGMENT_INPUTS) - program_names
+        candidates = set(inputs) - program_names
         direct = {
             function.name: _reads(function, candidates - _declared(function))
             for function in [entry, *helpers]
@@ -204,7 +257,7 @@ def pass_builtin_inputs(program, target) -> int:
         builtins = sorted(
             builtin
             for builtin in set().union(*direct.values())
-            if _passes(target, builtin, helper_reads)
+            if _passes(target, kind, builtin, helper_reads)
         )
         if not builtins:
             continue
@@ -221,7 +274,7 @@ def _thread(program, entry, helpers, direct, builtins, taken):
             sources[builtin] = existing
             continue
         name = _fresh(f"cgl_{builtin[3:]}", taken)
-        type_node = A.PrimitiveType(_FRAGMENT_INPUTS[builtin])
+        type_node = _type_node(_INPUT_TYPES[builtin])
         attribute = [A.AttributeNode(builtin)]
         if builtin in _UNSIGNED:
             raw = _fresh(f"{name}_bits", taken)
@@ -274,9 +327,7 @@ def _thread(program, entry, helpers, direct, builtins, taken):
             if builtin in needs[helper.name]:
                 names[builtin] = _fresh(f"cgl_{builtin[3:]}", taken)
                 helper.parameters = list(helper.parameters or []) + [
-                    A.ParameterNode(
-                        names[builtin], A.PrimitiveType(_FRAGMENT_INPUTS[builtin])
-                    )
+                    A.ParameterNode(names[builtin], _type_node(_INPUT_TYPES[builtin]))
                 ]
         parameter_names[helper.name] = names
 

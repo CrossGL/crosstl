@@ -8,8 +8,47 @@ buffers, images, shared variables or runtime-sized arrays, which GLSL ES 3.10 ad
 
 from __future__ import annotations
 
+from .abstractions import FAMILY as _ABSTRACTIONS
+from .abstractions import GLSL as _ABSTRACTIONS_GLSL
+from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
+from .blocks import WEBGL as _BLOCKS
+from .booleans import WEBGL as _BOOLEANS
+from .calls import WEBGL as _CALLS
+from .columns import WEBGL as _COLUMNS
 from .composites import WEBGL as _COMPOSITES
+from .constructors import GLSL as _CONSTRUCTORS
+from .edges import FAMILY as _EDGES
+from .elements import WEBGL as _ELEMENTS
+from .evaluation import WEBGL as _EVALUATION
+from .forms import FAMILY as _FORMS
+from .forms import GLSL as _FORMS_GLSL
+from .fragments import WEBGL as _FRAGMENTS
+from .helpers import WEBGL as _HELPERS
+from .identifiers import WEBGL as _IDENTIFIERS
+from .idioms import FAMILY as _IDIOMS
+from .idioms import GLSL as _IDIOMS_GLSL
+from .initializers import FAMILY as _INITIALIZERS
+from .initializers import GLSL as _INITIALIZERS_GLSL
+from .integers import WEBGL as _INTEGERS
+from .interfaces import WEBGL as _INTERFACES
+from .layouts import WEBGL as _LAYOUTS
+from .lexical import FAMILY as _LEXICAL
+from .lexical import WEBGL as _LEXICAL_WEBGL
+from .orientation import WEBGL as _ORIENTATION
+from .packing import WEBGL as _PACKING
+from .portability import FAMILY as _PORTABILITY
+from .portability import GLSL as _PORTABILITY_GLSL
+from .portability import WEBGL as _PORTABILITY_WEBGL
+from .rasterization import WEBGL as _RASTERIZATION
+from .records import WEBGL as _RECORDS
+from .relations import GLSL as _RELATIONS
+from .rows import WEBGL as _ROWS
+from .scopes import WEBGL as _SCOPES
+from .values import FAMILY as _VALUES
+from .vectors import GLSL as _VECTORS
+from .vertices import WEBGL as _VERTICES
+from .workgroups import WEBGL as _WORKGROUPS
 
 _HEADER = "#version 300 es\nprecision highp float;\n"
 _ABSENT = (
@@ -45,8 +84,47 @@ _ABSENT = (
 
 WEBGL = {
     **C_FAMILY,
+    **_AGGREGATES,
+    **_VALUES,
+    **_EDGES,
+    **_LEXICAL,
+    **_LEXICAL_WEBGL,
+    **_FORMS,
+    **_FORMS_GLSL,
+    **_IDIOMS,
+    **_IDIOMS_GLSL,
+    **_ABSTRACTIONS,
+    **_ABSTRACTIONS_GLSL,
+    **_PORTABILITY,
+    **_PORTABILITY_GLSL,
+    **_PORTABILITY_WEBGL,
+    **_INITIALIZERS,
+    **_INITIALIZERS_GLSL,
+    **_HELPERS,
+    **_LAYOUTS,
+    **_ELEMENTS,
+    **_BLOCKS,
+    **_WORKGROUPS,
+    **_RECORDS,
+    **_IDENTIFIERS,
+    **_INTEGERS,
+    **_COLUMNS,
+    **_BOOLEANS,
+    **_PACKING,
+    **_ORIENTATION,
+    **_ROWS,
+    **_VECTORS,
+    **_RELATIONS,
+    **_FRAGMENTS,
+    **_INTERFACES,
+    **_VERTICES,
+    **_RASTERIZATION,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
+    **_CONSTRUCTORS,
+    **_SCOPES,
+    **_CALLS,
+    **_EVALUATION,
     "global-constant": Template(
         "outp[i] = fin[i] * SCALE;", "const float SCALE = 2.0;"
     ),

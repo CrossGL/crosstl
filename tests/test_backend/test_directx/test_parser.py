@@ -5,6 +5,7 @@ import pytest
 
 from crosstl.backend.common_ast import (
     AssignmentNode,
+    BinaryOpNode,
     CastNode,
     FunctionCallNode,
     FunctionNode,
@@ -20,6 +21,7 @@ from crosstl.backend.DirectX.DirectxAst import (
     PragmaNode,
     ScopedBlockNode,
     StructNode,
+    TypeAliasNode,
     VariableNode,
     WhileNode,
 )
@@ -1223,9 +1225,12 @@ def test_parse_block_scope_typedef_from_dxc_linalg_vectors():
     ast = parse_code(code)
 
     assert ast.typedefs == []
-    assert len(ast.functions[0].body) == 1
-    assert ast.functions[0].body[0].vtype == "half16"
-    assert ast.functions[0].body[0].name == "srcF16"
+    assert len(ast.functions[0].body) == 2
+    alias, variable = ast.functions[0].body
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "half16"
+    assert variable.vtype == "half16"
+    assert variable.name == "srcF16"
 
 
 def test_parse_block_scope_class_declarations_from_dxc_spec():
@@ -3462,7 +3467,18 @@ def test_parse_inline_struct_array_member_in_cbuffer_from_directx_sdk_samples():
     assert light_data.packoffset == "c4"
 
 
-def test_parse_parenthesized_vector_values_from_directx_graphics_samples():
+def _comma_operands(expr):
+    operands = []
+    while isinstance(expr, BinaryOpNode) and expr.op == ",":
+        operands.insert(0, expr.right)
+        expr = expr.left
+    return [expr, *operands]
+
+
+def test_parse_parenthesized_values_from_directx_graphics_samples_as_comma_operator():
+    # ``(1, 0, 0, 1)`` is the comma operator, not a vector: DXC evaluates it to ``1`` and splats that
+    # to ``float4(1, 1, 1, 1)``, and FXC warns X3081, "comma expression used where a vector
+    # constructor may have been intended".
     ast = parse_code("""
     struct MyPayload {
         float4 color;
@@ -3476,10 +3492,10 @@ def test_parse_parenthesized_vector_values_from_directx_graphics_samples():
 
     plus_assign, assign = ast.functions[0].body
 
-    assert isinstance(plus_assign.right, InitializerListNode)
-    assert plus_assign.right.elements == [0.1, 0.1, 0.1, 1]
-    assert isinstance(assign.right, InitializerListNode)
-    assert assign.right.elements == [1, 0, 0, 1]
+    assert not isinstance(plus_assign.right, InitializerListNode)
+    assert _comma_operands(plus_assign.right) == [0.1, 0.1, 0.1, 1]
+    assert not isinstance(assign.right, InitializerListNode)
+    assert _comma_operands(assign.right) == [1, 0, 0, 1]
 
 
 def test_parse_local_struct_declaration_from_directx_graphics_samples():

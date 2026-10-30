@@ -52,9 +52,16 @@ WORDS = 16
 # Input elements one thread may read past its own: three 4x4 matrix arguments.
 SPAN = 48
 _INPUT = re.compile(r"\b(fin|iin|uin)\b")
-# The bytes of the constants block a probe declares: four 32-bit floats, one 16-byte std140 row, of which a probe reads
-# the first. The words differ so that a translation reading another offset computes something else.
-CONSTANTS = struct.pack("<4f", 2.5, -1.75, 3.25, 0.5)
+# The bytes of the constants block a probe declares: sixteen 32-bit floats, four 16-byte std140 rows. A probe reads the
+# first row, the first word of each row, or all four rows as a 4x4 matrix. The words differ so that a translation
+# reading another offset computes something else.
+CONSTANTS = struct.pack(
+    "<16f",
+    *(2.5, -1.75, 3.25, 0.5),
+    *(1.5, -0.25, 4.0, 0.75),
+    *(-2.0, 1.25, 0.125, -3.5),
+    *(2.75, 0.375, -1.0, 5.0),
+)
 # llvmpipe implements OpenGL 4.5, so GLSL written for 4.60 runs as GLSL 4.50. A native probe that needs 4.60 is then
 # rejected by the driver and keeps its validation result, and so does a translation that declares 4.60, since it may
 # use what 4.60 adds.

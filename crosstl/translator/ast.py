@@ -33,10 +33,20 @@ class ASTNode:
         return self.annotations.get(key, default)
 
     def child_nodes(self):
-        """Yield direct structural AST children, excluding metadata backlinks."""
+        """Yield direct structural AST children, excluding metadata backlinks.
+
+        Several nodes keep one child under two field names (``ArrayAccessNode.array`` and ``array_expr``,
+        ``AssignmentNode.target`` and ``left``). Such a child is yielded once, so a visitor that acts on every child
+        does not evaluate it twice: ``vals[k++]`` increments ``k`` once.
+        """
+        yielded_fields = []
         for field_name, value in vars(self).items():
             if field_name in AST_CHILD_FIELD_EXCLUSIONS:
                 continue
+            if isinstance(value, (ASTNode, list, tuple, dict, set)):
+                if any(value is earlier for earlier in yielded_fields):
+                    continue
+                yielded_fields.append(value)
             yield from iter_ast_child_nodes(value)
 
     def walk(self):
@@ -627,6 +637,7 @@ class StructNode(ASTNode):
         attributes: List["AttributeNode"] = None,
         inheritance: List[NamedType] = None,
         visibility: str = "public",
+        methods: List["FunctionNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -636,6 +647,8 @@ class StructNode(ASTNode):
         self.attributes = attributes or []
         self.inheritance = inheritance or []
         self.visibility = visibility
+        # Member functions; the struct_methods rule pass lowers them to free functions.
+        self.methods = methods or []
 
     def __repr__(self):
         return f"StructNode(name={self.name}, members={len(self.members)})"
@@ -1332,6 +1345,17 @@ class ArrayLiteralNode(ExpressionNode):
 
     def __repr__(self):
         return f"ArrayLiteralNode(elements={len(self.elements)})"
+
+
+class CommaExpressionNode(ExpressionNode):
+    """Comma expression ``(a, b)``: evaluates its operands left to right, and its value is the last one's."""
+
+    def __init__(self, expressions: List[ExpressionNode], **kwargs):
+        super().__init__(**kwargs)
+        self.expressions = expressions
+
+    def __repr__(self):
+        return f"CommaExpressionNode(expressions={len(self.expressions)})"
 
 
 class SwizzleNode(ExpressionNode):

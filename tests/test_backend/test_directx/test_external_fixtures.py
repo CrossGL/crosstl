@@ -8,6 +8,7 @@ import pytest
 from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.backend.import_refusals import DirectXImportRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -673,7 +674,7 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "type symmetry_t = LuminairePlanesSymmetry;",
+            "typedef LuminairePlanesSymmetry symmetry_t;",
             "symmetry_t symmetry;",
             "const uint i0 = symmetry == symmetry_t::ISOTROPIC ? 0u : 1u;",
         ),
@@ -791,7 +792,7 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "vec4 vecret(mat2 pmat @ M, vec4 pvec @ V) @ gl_FragColor",
-            "return pmat , pvec;",
+            "return (pmat, pvec);",
             "mat2 matret(mat2 pmat @ M, vec4 pvec @ V)",
         ),
     ),
@@ -826,8 +827,8 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "type uint32_t3 = uvec3;",
-            "type uint16_t3 = u16vec3;",
+            "typedef uvec3 uint32_t3;",
+            "typedef u16vec3 uint16_t3;",
             "@ numthreads(1, 1, 1)",
             "u16vec3 dims = u16vec3(gl_WorkGroupSize());",
         ),
@@ -979,30 +980,6 @@ EXTERNAL_FIXTURES = [
             "@ numthreads(4, 4, 4)",
             "MatrixAF16WTy MatA1 = MatrixAF16WTy::Splat(1.5);",
             "MatrixAccF32WTy MatCFlt1 = Multiply<ComponentType::F32>(MatA1, MatB1);",
-        ),
-    ),
-    ExternalFixture(
-        name="directx_shader_compiler_block_scope_typedef_linalg_vector",
-        repo=DIRECTX_SHADER_COMPILER_REPO,
-        commit=DIRECTX_SHADER_COMPILER_COMMIT,
-        path="tools/clang/test/CodeGenDXIL/hlsl/linalg/api/vectors.hlsl",
-        code=textwrap.dedent("""
-            #include <dx/linalg.h>
-            using namespace dx::linalg;
-
-            ByteAddressBuffer BAB : register(t0);
-
-            [numthreads(4, 4, 4)]
-            void main(uint ID : SV_GroupID) {
-              typedef vector<half, 16> half16;
-              half16 srcF16 = BAB.Load<half16>(128);
-              InterpretedVector<uint, 4, ComponentEnum::F8_E4M3FN> convertedPacked =
-                  Convert<ComponentEnum::F8_E4M3FN, ComponentEnum::F16>(srcF16);
-            }
-        """).strip(),
-        contains=(
-            "half16 srcF16 = buffer_load(BAB, 128);",
-            "convertedPacked = Convert<ComponentEnum::F8_E4M3FN, ComponentEnum::F16>(srcF16);",
         ),
     ),
     ExternalFixture(
@@ -1941,6 +1918,38 @@ def test_parse_external_directx_fixture(fixture):
     assert ast is not None
     assert ast.functions
     assert fixture.source_url.startswith(fixture.repo)
+
+
+# A block-scope alias reaches CrossGL as a ``typedef``, so the 16-lane vector it
+# names must be refused rather than narrowed to ``vec4`` (#3309).
+LONG_VECTOR_TYPEDEF_FIXTURE = ExternalFixture(
+    name="directx_shader_compiler_block_scope_typedef_linalg_vector",
+    repo=DIRECTX_SHADER_COMPILER_REPO,
+    commit=DIRECTX_SHADER_COMPILER_COMMIT,
+    path="tools/clang/test/CodeGenDXIL/hlsl/linalg/api/vectors.hlsl",
+    code=textwrap.dedent("""
+        #include <dx/linalg.h>
+        using namespace dx::linalg;
+
+        ByteAddressBuffer BAB : register(t0);
+
+        [numthreads(4, 4, 4)]
+        void main(uint ID : SV_GroupID) {
+          typedef vector<half, 16> half16;
+          half16 srcF16 = BAB.Load<half16>(128);
+          InterpretedVector<uint, 4, ComponentEnum::F8_E4M3FN> convertedPacked =
+              Convert<ComponentEnum::F8_E4M3FN, ComponentEnum::F16>(srcF16);
+        }
+    """).strip(),
+    contains=(),
+)
+
+
+def test_codegen_dxc_block_scope_long_vector_typedef_is_refused():
+    with pytest.raises(
+        DirectXImportRefused, match=r"vector<half, 16> has 16 components"
+    ):
+        generate_crossgl(LONG_VECTOR_TYPEDEF_FIXTURE.code)
 
 
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)

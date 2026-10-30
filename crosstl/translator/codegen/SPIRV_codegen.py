@@ -76,6 +76,7 @@ from .array_utils import (
 from .ast_walk import walk_ast_values
 from .bitfield_builtins import BITFIELD_ARITIES, spirv_bitfield_call
 from .call_graph import validate_recursion_free
+from .comma_expressions import is_comma_expression, spirv_comma_expression
 from .enum_utils import (
     collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
@@ -111,6 +112,7 @@ from .image_access_contracts import (
     image_access_requirement_label,
     image_access_satisfies_requirement,
 )
+from .interface_qualifiers import INTERFACE_QUALIFIER_ATTRIBUTES
 from .pack_builtins import PACK_FUNCTIONS, spirv_pack_call, spirv_pack_result_type
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -140,6 +142,13 @@ from .spirv_exponent_builtins import (
     spirv_ldexp_call,
     spirv_output_operand_call,
 )
+from .spirv_extension_builtins import BUILTIN_ALIASES as SPIRV_EXTENSION_BUILTIN_ALIASES
+from .spirv_extension_builtins import (
+    extension_any_stage_builtin_info,
+    extension_builtin_info,
+    require_extension_builtin_capability,
+    unmapped_builtin_reason,
+)
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
@@ -157,6 +166,7 @@ from .spirv_interface_locations import (
     plan_entry_input_locations,
     plan_struct_member_locations,
 )
+from .spirv_invariant_outputs import decorate_invariant_builtin_output
 from .spirv_local_references import SpirvLocalReferenceMixin
 from .spirv_location_conflicts import InterfaceLocationConflictError
 from .spirv_math_polyfills import SpirvMathPolyfillMixin
@@ -204,6 +214,11 @@ from .spirv_short_circuit import (
     lower_logical_intrinsic,
     lower_short_circuit_logical,
     lower_short_circuit_ternary,
+)
+from .spirv_single_evaluation import (
+    evaluate_subscript_index,
+    recording_subscript_indices,
+    subscript_index_scope,
 )
 from .spirv_stage_distances import (
     entry_point_distance_layout,
@@ -566,6 +581,8 @@ class VulkanSPIRVCodeGen(
         self.named_constant_debug_ids = set()
         self.resource_alias_variables = set()
         self.variable_value_types = {}
+        # Results of OpAccessChain: pointers that are not memory object declarations.
+        self.access_chain_ids = set()
         self.value_types = {}
         self.constants = {}
         self.constant_values_by_id = {}
@@ -2617,6 +2634,7 @@ class VulkanSPIRVCodeGen(
         )
 
         spirv_id = SpirvId(id_value, result_type.type)
+        self.access_chain_ids.add(id_value)
         if pointee_type is not None:
             self.variable_value_types[id_value] = pointee_type
         if self.is_non_uniform_value(base_id) or any(
@@ -4916,10 +4934,15 @@ class VulkanSPIRVCodeGen(
         self.merge_function_interface_variables_from_callee(
             function_name, function_id.id
         )
+        value_array_indices = self.function_value_array_parameter_indices_by_id.get(
+            function_id.id, set()
+        )
         prepared_args = []
         for index, arg in enumerate(args):
             if index < len(param_types):
                 arg = self.prepare_function_call_argument(arg, param_types[index])
+                if index in value_array_indices:
+                    arg = self.value_array_argument_object(arg, param_types[index])
             prepared_args.append(arg)
         args = prepared_args
 
@@ -7775,6 +7798,30 @@ class VulkanSPIRVCodeGen(
             return self.process_array_literal(arg, target_type)
 
         return self.process_expression(arg)
+
+    def value_array_argument_object(self, value, expected_type):
+        """Pass a by-value array held in a member or element through its own Function variable.
+
+        Logical addressing accepts only memory object declarations as pointer operands of ``OpFunctionCall`` (SPIR-V
+        1.6, section 2.16.1, "Universal Validation Rules"), so an ``OpAccessChain`` result cannot be the argument.
+        The callee copies a by-value array parameter on entry, so a copy taken here keeps the same meaning.
+        """
+        if (
+            value is None
+            or expected_type is None
+            or value.id not in self.access_chain_ids
+            or value.type.storage_class != "Function"
+            or expected_type.type.storage_class != "Function"
+        ):
+            return value
+        expected_pointee = self.pointer_type_pointee_type(expected_type)
+        if (
+            expected_pointee is None
+            or self.array_type_info_from_type(expected_pointee) is None
+        ):
+            return value
+        copied = self.copy_array_pointer_to_function_storage(value, expected_pointee)
+        return value if copied is None else copied
 
     def contains_lambda_expression(self, expr) -> bool:
         if isinstance(expr, FunctionCallNode):
@@ -14309,6 +14356,8 @@ class VulkanSPIRVCodeGen(
             "tessellation_evaluation",
             "vertex",
             "writeonly",
+            # Interpolation, invariance and precision qualifiers decorate the value; they never name it.
+            *INTERFACE_QUALIFIER_ATTRIBUTES,
         }
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
@@ -14582,6 +14631,9 @@ class VulkanSPIRVCodeGen(
             if cache_key in self.global_variables:
                 variable = self.global_variables[cache_key]
                 self.mark_fragment_depth_replacing_if_needed(builtin_name, "Output")
+                decorate_invariant_builtin_output(
+                    self, variable, function_node, "Output"
+                )
                 self.mark_function_interface_variable(variable)
                 return variable
 
@@ -14589,6 +14641,7 @@ class VulkanSPIRVCodeGen(
                 name, builtin_type, builtin_name, "Output"
             )
             self.global_variables[cache_key] = variable
+            decorate_invariant_builtin_output(self, variable, function_node, "Output")
             self.mark_function_interface_variable(variable)
             return variable
 
@@ -14993,7 +15046,11 @@ class VulkanSPIRVCodeGen(
         )
         builtin = self.entry_point_builtin_variable(semantic, storage_class)
         if builtin is not None:
+            decorate_invariant_builtin_output(self, builtin, node, storage_class)
             return builtin
+        unmapped = unmapped_builtin_reason(semantic, storage_class, execution_model)
+        if unmapped is not None:
+            self.refuse_lowering(unmapped)
 
         interface_node = node
         if interface_node is None:
@@ -20133,6 +20190,11 @@ class VulkanSPIRVCodeGen(
 
     def process_variable_declaration(self, node: VariableNode):
         """Process a local CrossGL variable declaration."""
+        # spirv_single_evaluation.py: the alias probes and the value path share one index evaluation.
+        with subscript_index_scope(self):
+            return self.process_variable_declaration_body(node)
+
+    def process_variable_declaration_body(self, node: VariableNode):
         var_type_source = self.current_cooperative_matrix_role_overrides.get(
             id(node), getattr(node, "var_type", getattr(node, "vtype", "float"))
         )
@@ -20144,14 +20206,14 @@ class VulkanSPIRVCodeGen(
             var_type_source = None
         var_type_name = self.type_name_from_value(var_type_source)
         infer_declared_type = var_type_source is None or var_type_name == "auto"
-        if self.process_local_resource_alias_declaration(
-            node, var_type_source, var_type_name
-        ):
-            return
-        if self.process_local_array_pointer_alias_declaration(
-            node, var_type_source, var_type_name
-        ):
-            return
+        # Alias probes build the initializer's access chain; the value path below reuses its index.
+        with recording_subscript_indices(self):
+            if self.process_local_resource_alias_declaration(
+                node, var_type_source, var_type_name
+            ) or self.process_local_array_pointer_alias_declaration(
+                node, var_type_source, var_type_name
+            ):
+                return
 
         if self.local_variable_requires_descriptor_storage(node, var_type_name):
             raise ValueError(
@@ -20793,6 +20855,7 @@ class VulkanSPIRVCodeGen(
                 self.decorate_global_interface_variable(node, var_id)
         elif storage_class == "Output":
             var_id = self.global_interface_builtin_variable(node, "Output", var_type)
+            decorate_invariant_builtin_output(self, var_id, node, storage_class)
             if var_id is None:
                 location = self.global_interface_location(node, "Output")
                 var_id = self.register_output(
@@ -26840,7 +26903,7 @@ class VulkanSPIRVCodeGen(
         elif isinstance(expr, str):
             name = expr
         elif isinstance(expr, ArrayAccessNode):
-            index = self.process_expression(expr.index)
+            index = evaluate_subscript_index(self, expr.index)
             if index is None:
                 return None
             access, _ = self.create_array_element_access(expr.array, index, expr.index)
@@ -27459,7 +27522,7 @@ class VulkanSPIRVCodeGen(
                 )
             return access
         if isinstance(expr, ArrayAccessNode):
-            index = self.process_expression(expr.index)
+            index = evaluate_subscript_index(self, expr.index)
             if index is None:
                 return None
             if not self.validate_tessellation_patch_builtin_index(
@@ -28660,8 +28723,10 @@ class VulkanSPIRVCodeGen(
 
     def process_for(self, node: ForNode):
         """Process a CrossGL for loop."""
-        if node.init:
-            self.process_statement(node.init)
+        # ``for (int a = 0, b = n; ...)`` keeps its declarations as a list, run in order.
+        for init in node.init if isinstance(node.init, list) else [node.init]:
+            if init:
+                self.process_statement(init)
 
         header_label = SpirvId(self.get_id(), SpirvType("label"))
         body_label = SpirvId(self.get_id(), SpirvType("label"))
@@ -29881,7 +29946,7 @@ class VulkanSPIRVCodeGen(
             return self.process_array_literal(expr)
 
         elif isinstance(expr, ArrayAccessNode):
-            index = self.process_expression(expr.index)
+            index = evaluate_subscript_index(self, expr.index)
 
             if index is None:
                 self.refuse_lowering(f"Failed to evaluate array access")
@@ -29909,17 +29974,20 @@ class VulkanSPIRVCodeGen(
             return self.load_from_variable(access, element_type)
 
         elif isinstance(expr, AssignmentNode):
-            self.process_assignment(expr)
             target = getattr(
                 expr, "name", getattr(expr, "target", getattr(expr, "left", None))
             )
-            return (
-                self.process_expression(target)
-                if isinstance(
-                    target, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+            # spirv_single_evaluation.py: reading the target back reuses the index the store used.
+            with subscript_index_scope(self):
+                with recording_subscript_indices(self):
+                    self.process_assignment(expr)
+                return (
+                    self.process_expression(target)
+                    if isinstance(
+                        target, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+                    )
+                    else None
                 )
-                else None
-            )
 
         elif isinstance(expr, BinaryOpNode):
             if expr.op == ",":
@@ -30394,6 +30462,9 @@ class VulkanSPIRVCodeGen(
             )
             return None
 
+        elif is_comma_expression(expr):
+            return spirv_comma_expression(self, expr)
+
         else:
             self.refuse_lowering(f"Unknown expression type {type(expr).__name__}")
             return None
@@ -30465,7 +30536,7 @@ class VulkanSPIRVCodeGen(
             ),
             **SPIRV_SUBGROUP_BUILTINS,
         }
-        return builtins.get(name)
+        return builtins.get(name) or extension_any_stage_builtin_info(name)
 
     def spirv_builtin_alias(self, name: str) -> str:
         aliases = {
@@ -30495,6 +30566,7 @@ class VulkanSPIRVCodeGen(
                 if self.current_execution_model == "Fragment"
                 else "gl_PrimitiveShadingRateEXT"
             ),
+            **SPIRV_EXTENSION_BUILTIN_ALIASES,
         }
         return aliases.get(str(name).upper(), name)
 
@@ -30563,6 +30635,9 @@ class VulkanSPIRVCodeGen(
         shading_rate = shading_rate_builtin_info(name)
         if shading_rate is not None:
             return shading_rate
+        extension_builtin = extension_builtin_info(name)
+        if extension_builtin is not None:
+            return extension_builtin
         builtins = {
             "gl_VertexID": (
                 "uint",
@@ -30961,6 +31036,8 @@ class VulkanSPIRVCodeGen(
 
     def require_stage_builtin_capabilities(self, builtin_name: str):
         if require_shading_rate_capability(self, builtin_name):
+            return
+        if require_extension_builtin_capability(self, builtin_name):
             return
         if builtin_name in {"BaryCoordKHR", "BaryCoordNoPerspKHR"}:
             self.require_capability("FragmentBarycentricKHR")
@@ -31930,9 +32007,22 @@ class VulkanSPIRVCodeGen(
             entry_function = getattr(stage, "entry_point", None)
             if requests_early_fragment_tests(entry_function, stage):
                 self.emit(f"OpExecutionMode %{function_id.id} EarlyFragmentTests")
-            if function_id.id in self.fragment_depth_replacing_function_ids:
+            # A stage-level output variable is created before its entry function, so the interface, not the
+            # function being generated when the built-in was registered, says which outputs the entry writes.
+            interface_builtins = {
+                self.builtin_names_by_variable_id.get(variable.id)
+                for variable in interface_variables
+                if variable.type.storage_class == "Output"
+            }
+            if (
+                function_id.id in self.fragment_depth_replacing_function_ids
+                or "FragDepth" in interface_builtins
+            ):
                 self.emit(f"OpExecutionMode %{function_id.id} DepthReplacing")
-            if function_id.id in self.fragment_stencil_ref_replacing_function_ids:
+            if (
+                function_id.id in self.fragment_stencil_ref_replacing_function_ids
+                or "FragStencilRefEXT" in interface_builtins
+            ):
                 self.emit(f"OpExecutionMode %{function_id.id} StencilRefReplacingEXT")
         elif execution_model == "Geometry":
             self.emit_geometry_execution_modes(function_id, stage)

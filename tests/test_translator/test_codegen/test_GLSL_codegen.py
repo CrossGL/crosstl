@@ -4481,9 +4481,10 @@ def test_opengl_fixed_array_mutation_analysis_uses_for_in_lexical_call_type(
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
             void main() {{
-                float values[1] = {{1.0}};
-                forward(values);
-                output[0] = values[0];
+                // &value is caller-visible storage, so the writes forward makes reach it.
+                float value = 1.0;
+                forward(&value);
+                output[0] = value;
             }}
         }}
     }}
@@ -7364,7 +7365,7 @@ def test_glsl_compiler_set_zero_buffer_pointer_resource_lowers_to_ssbo():
     assert "PointerType" not in generated
 
 
-def test_glsl_buffer_pointer_helper_parameters_lower_to_array_parameters():
+def test_glsl_buffer_pointer_helper_parameters_specialize_per_buffer():
     code = """
     shader BufferPointerHelperParameter {
         float readValue(buffer float* values, int index) {
@@ -7388,8 +7389,15 @@ def test_glsl_buffer_pointer_helper_parameters_lower_to_array_parameters():
         "layout(std430, binding = 0) buffer valuesBuffer { float values[]; };"
         in generated
     )
-    assert "float readValue(float values[], int index)" in generated
-    assert "float value = readValue(values, 0);" in generated
+    # GLSL 4.60 section 6.1: an array parameter must be explicitly sized, so the
+    # helper is specialized for the buffer it reads and takes an element offset.
+    assert "float readValue(float values[]" not in generated
+    assert (
+        "float readValue_glsl_values_values_float(int index, int values_offset) {"
+        in generated
+    )
+    assert "return values[(values_offset + index)];" in generated
+    assert "float value = readValue_glsl_values_values_float(0, int(0));" in generated
     assert "PointerType" not in generated
 
 

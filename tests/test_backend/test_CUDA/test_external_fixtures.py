@@ -26,6 +26,7 @@ from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import cuda_partial_output
 
 EXTERNAL_SAMPLES = [
     {
@@ -271,7 +272,12 @@ shader MatrixConstructorComputeShader {
 
 
 def assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
-    cuda_code = crossgl_to_cuda(source)
+    return assert_cuda_reverse_codegen_prunes_generated_matrix_helpers(
+        crossgl_to_cuda(source)
+    )
+
+
+def assert_cuda_reverse_codegen_prunes_generated_matrix_helpers(cuda_code):
     assert "struct float2x2" in cuda_code
 
     crossgl = cuda_to_crossgl(cuda_code)
@@ -291,12 +297,17 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
 
 
-def test_compiler_manual_sampler_fixture_reverse_codegen_prunes_cuda_helpers():
+def test_compiler_manual_sampler_fixture_refuses_cuda_depth_compare_and_prunes_helpers():
     # Reduced from CrossGL-Compiler/tests/fixtures/
-    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl.
-    crossgl = assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(
-        COMPILER_MANUAL_SAMPLER_FIXTURE
-    )
+    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl. A CUDA texture object has no
+    # depth comparison, so the program is refused; its partial output still round-trips.
+    program = CrossGLParser(
+        CrossGLLexer(COMPILER_MANUAL_SAMPLER_FIXTURE).tokens
+    ).parse()
+    cuda_code, refusal = cuda_partial_output(CudaCodeGen().generate, program)
+    assert "CUDA shadow resource call: textureCompare on sampler2DShadow" in refusal
+
+    crossgl = assert_cuda_reverse_codegen_prunes_generated_matrix_helpers(cuda_code)
 
     assert len(crossgl) < 2_000
     assert "textureCompareLodManual(" in crossgl
@@ -313,7 +324,7 @@ def test_compiler_matrix_constructor_fixture_reverse_codegen_prunes_cuda_helpers
     assert (
         "void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis)" in crossgl
     )
-    assert "var flattened: mat2 = mat2(1.0, 2.0, 3.0, 4.0);" in crossgl
+    assert "var flattened: mat2 = mat2(1.0f, 2.0f, 3.0f, 4.0f);" in crossgl
     assert "var basis: mat3 = mat3(c0, c1, c2);" in crossgl
 
 
@@ -1100,7 +1111,13 @@ def test_cuda_samples_batch_cublas_unsigned_inline_union_and_comma_codegen_repar
     assert "u32 floatAsUInt(f32 x)" in crossgl
     assert "struct anonymous_xx_layout" in crossgl
     assert "var xx: anonymous_xx_layout;" in crossgl
-    assert "CUDA comma expression" in crossgl
+    # The comma operator survives as CrossGL's ``(a, b, c)``, not as a comment and a neutral value.
+    assert "CUDA comma expression" not in crossgl
+    assert (
+        "return (cuda_jsr = (cuda_jsr ^ (cuda_jsr << 17)), "
+        "cuda_jsr = (cuda_jsr ^ (cuda_jsr >> 13)), "
+        "cuda_jsr = (cuda_jsr ^ (cuda_jsr << 5)));"
+    ) in crossgl
     assert_crossgl_reparse(crossgl)
 
 

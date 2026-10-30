@@ -150,3 +150,47 @@ def test_other_targets_keep_their_launch_spelling(tmp_path, backend, expected):
     code = translate(tmp_path, "shader.rgen", GLSL_RAYGEN, backend)
     assert expected in code
     assert "threads_per_grid" not in code
+
+
+HLSL_CLOSEST_HIT_STATE = """struct Payload { float3 v; };
+struct Attributes { float2 bary; };
+[shader("closesthit")]
+void main(inout Payload p, in Attributes attribs) {
+    p.v = WorldRayDirection() * RayTCurrent() + float3(attribs.bary, 0.0);
+}
+"""
+
+HLSL_MISS_TRANSFORM = """struct Payload { float3 v; };
+[shader("miss")]
+void main(inout Payload p) {
+    p.v = mul(WorldToObject4x3(), float4(p.v, 1.0));
+}
+"""
+
+GLSL_CLOSEST_HIT_STATE = """#version 460
+#extension GL_EXT_ray_tracing : require
+layout(location = 0) rayPayloadInEXT vec3 hitValue;
+void main() { hitValue = gl_WorldRayDirectionEXT * gl_HitTEXT; }
+"""
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "spelling"),
+    [
+        ("shader.hlsl", HLSL_CLOSEST_HIT_STATE, "WorldRayDirection()"),
+        ("shader.hlsl", HLSL_MISS_TRANSFORM, "WorldToObject4x3()"),
+        ("shader.rchit", GLSL_CLOSEST_HIT_STATE, "gl_WorldRayDirectionEXT"),
+    ],
+)
+def test_ray_state_in_a_visible_function_is_refused(tmp_path, name, text, spelling):
+    # The DXR intrinsics used to be printed verbatim, which MSL does not declare.
+    with pytest.raises(MetalRayDispatchUnsupportedError) as caught:
+        translate(tmp_path, name, text)
+    assert caught.value.code == "project.translate.metal-ray-dispatch-unsupported"
+    assert spelling in caught.value.reason
+    assert "[[visible]]" in caught.value.reason
+
+
+def test_ray_state_keeps_its_spelling_on_hlsl(tmp_path):
+    code = translate(tmp_path, "shader.hlsl", HLSL_CLOSEST_HIT_STATE, "directx")
+    assert "WorldRayDirection()" in code and "RayTCurrent()" in code

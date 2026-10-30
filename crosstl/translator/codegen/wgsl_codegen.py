@@ -54,6 +54,7 @@ from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
 from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
+from .comma_expressions import is_comma_expression
 from .enum_utils import (
     generic_enum_specialization_name,
     generic_type_parts,
@@ -69,6 +70,13 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .wgsl_array_constructors import wgsl_array_constructor
+from .wgsl_boolean_xor import (
+    wgsl_boolean_xor,
+    wgsl_boolean_xor_assignment,
+    wgsl_boolean_xor_assignment_statement,
+)
+from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
     entry_output_parameters,
@@ -81,6 +89,11 @@ from .wgsl_integer_operands import (
     SHIFT_OPERATORS,
     wgsl_bitwise_operands,
     wgsl_shift_amount,
+)
+from .wgsl_integer_textures import (
+    FILTERED_TEXTURE_LOOKUPS,
+    WGSLIntegerTextureSampleUnsupportedError,
+    is_integer_sampler_type_name,
 )
 from .wgsl_must_use import wgsl_call_statement
 from .wgsl_numeric_types import (
@@ -98,6 +111,7 @@ from .wgsl_stage_io import (
     with_flat_integer_interpolation,
 )
 from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
+from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
@@ -2875,6 +2889,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
     def generate_assignment(self, node):
         self.validate_storage_assignment_target(node.target)
+        boolean_xor = wgsl_boolean_xor_assignment(self, node)
+        if boolean_xor is not None:
+            return boolean_xor
         target_type = self.expression_type(node.target)
         if node.operator[:-1] in SHIFT_OPERATORS:
             value = wgsl_shift_amount(self, node.value, target_type)
@@ -2896,6 +2913,9 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         swizzle_assignment = self.generate_swizzle_assignment_statement(node, indent)
         if swizzle_assignment is not None:
             return swizzle_assignment
+        boolean_xor = wgsl_boolean_xor_assignment_statement(self, node, indent)
+        if boolean_xor is not None:
+            return boolean_xor
         pad = "    " * indent
         return f"{pad}{self.generate_assignment(node)};"
 
@@ -3150,6 +3170,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_expression(self, expr):
         if expr is None:
             return ""
+        if is_comma_expression(expr):
+            # Statement lowering hoists every comma it can reach (wgsl_value_side_effects).
+            raise ValueError(
+                "WGSL target cannot lower a comma expression in this position; WGSL has no "
+                "comma operator"
+            )
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
         if isinstance(expr, IdentifierNode):
@@ -3186,6 +3212,12 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                     self, expr.right, self.expression_type(expr.left)
                 )
                 return f"({left} {expr.operator} {amount})"
+            if expr.operator == "^":
+                boolean_xor = wgsl_boolean_xor(
+                    self, expr.left, expr.right, wgsl_bitwise_operands
+                )
+                if boolean_xor is not None:
+                    return boolean_xor
             if expr.operator in BITWISE_OPERATORS:
                 left, right = wgsl_bitwise_operands(self, expr.left, expr.right)
                 return f"({left} {expr.operator} {right})"
@@ -3199,6 +3231,15 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
                 return f"{operand}{expr.operator}"
+            if expr.operator == "+":
+                # WGSL has no unary plus. On a number it is the identity, and the
+                # operand text already stands on its own as an expression.
+                if self.boolean_expression_width(expr.operand) is not None:
+                    raise ValueError(
+                        "WGSL has no unary plus, and unary plus on a boolean "
+                        "value has no numeric meaning to preserve"
+                    )
+                return operand
             if expr.operator == "!":
                 operand_type = self.expression_type(expr.operand)
                 if operand_type is not None and not isinstance(operand_type, str):
@@ -3207,6 +3248,10 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 if converted != operand:
                     # A bool conversion is a constructor call, a primary.
                     return f"!{converted}"
+            if expr.operator == "-":
+                negation = wgsl_unsigned_negation(self, expr.operand, operand)
+                if negation is not None:
+                    return negation
             if expr.operator == "-" and self.matrix_shape(
                 self.expression_type(expr.operand)
             ):
@@ -3345,6 +3390,17 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_function_call(self, node, expected_type=None):
         node = self.specialize_generic_function_call(node)
         function_name = self.expression_name(node.function)
+        if isinstance(node.function, IdentifierNode):
+            declared = self.resolve_function_overload(
+                function_name, node.arguments, expected_type=expected_type
+            )
+            if declared is not None:
+                # A call resolves to a function the shader declares before any built-in or
+                # built-in alias of the same name, such as HLSL lerp for WGSL mix.
+                return self.generate_declared_function_call(node, declared)
+        array_value = wgsl_array_constructor(self, node)
+        if array_value is not None:
+            return array_value
         normalized_name = self.semantic_key(function_name)
         option_call = self.generate_builtin_option_call(node, function_name)
         if option_call is not None:
@@ -3542,6 +3598,19 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             self.generate_expression(argument) for argument in node.arguments
         )
         return f"({accumulator} + {mapped_name}({left}, {right}))"
+
+    def generate_declared_function_call(self, node, function):
+        """A call of ``function``, one of the functions the shader declares."""
+        dispatch_call = self.generate_sampled_texture_array_dispatch_call(
+            node, function
+        )
+        if dispatch_call is not None:
+            return dispatch_call
+        function_name = self.expression_name(node.function)
+        args = self.generate_call_arguments(
+            function_name, node.arguments, function=function
+        )
+        return f"{self.function_declaration_identifier_name(function)}({args})"
 
     def is_user_function_name(self, name):
         return bool(getattr(self, "_function_overloads_by_name", {}).get(name))
@@ -4191,6 +4260,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     def generate_texture_function_call(self, node, function_name):
         normalized_name = self.semantic_key(function_name)
         args = list(node.arguments)
+        if normalized_name in FILTERED_TEXTURE_LOOKUPS and args:
+            self.refuse_integer_texture_sample(args[0], function_name)
         if normalized_name == "texture":
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturelod":
@@ -4225,6 +4296,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             "WGSL target does not support CrossGL texture function "
             f"{function_name} yet"
         )
+
+    def refuse_integer_texture_sample(self, texture_expr, function_name):
+        type_name = self.resource_type_name(self.expression_type(texture_expr))
+        if is_integer_sampler_type_name(type_name):
+            raise WGSLIntegerTextureSampleUnsupportedError(
+                function_name, self.generate_expression(texture_expr)
+            )
 
     def generate_texture_call_args(self, args, *, function_name, implicit, explicit):
         if len(args) == implicit:
@@ -4277,7 +4355,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return (
                 f"{sample_function}({self.generate_expression(texture)}, "
                 f"{self.texture_sampler_expression(texture)}, "
-                f"{self.generate_expression(coords)}{level_argument})"
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}"
+                f"{level_argument})"
             )
         if len(args) == 3:
             texture, sampler, coords = args
@@ -4290,7 +4369,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return (
                 f"{sample_function}({self.generate_expression(texture)}, "
                 f"{self.generate_expression(sampler)}, "
-                f"{self.generate_expression(coords)}{level_argument})"
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}"
+                f"{level_argument})"
             )
         raise ValueError(
             "WGSL target supports texture() calls with texture/coords or "
@@ -4321,7 +4401,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return (
                 f"textureSampleLevel({self.generate_expression(texture)}, "
                 f"{self.texture_sampler_expression(texture)}, "
-                f"{self.generate_expression(coords)}, "
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
                 f"{self.generate_expression(level)})"
             )
         if len(args) == 4:
@@ -4329,7 +4409,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return (
                 f"textureSampleLevel({self.generate_expression(texture)}, "
                 f"{self.generate_expression(sampler)}, "
-                f"{self.generate_expression(coords)}, "
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
                 f"{self.generate_expression(level)})"
             )
         raise ValueError(
@@ -4526,6 +4606,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 f"arguments; got {len(args)} for {function_name}"
             )
         texture, coords, level = args
+        split = self.split_array_texture_coordinates(texture, coords, function_name)
+        if split is not None:
+            texel, layer = split
+            return (
+                f"textureLoad({self.generate_expression(texture)}, {texel}, "
+                f"{layer}, {self.generate_expression(level)})"
+            )
         return (
             f"textureLoad({self.generate_expression(texture)}, "
             f"{self.generate_expression(coords)}, "
@@ -4540,6 +4627,14 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 f"arguments; got {len(args)} for {function_name}"
             )
         texture, coords, level, offset = args
+        split = self.split_array_texture_coordinates(texture, coords, function_name)
+        if split is not None:
+            texel, layer = split
+            return (
+                f"textureLoad({self.generate_expression(texture)}, "
+                f"({texel} + {self.generate_expression(offset)}), {layer}, "
+                f"{self.generate_expression(level)})"
+            )
         return (
             f"textureLoad({self.generate_expression(texture)}, "
             f"({self.generate_expression(coords)} + {self.generate_expression(offset)}), "
@@ -4574,6 +4669,60 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             f"{', '.join(call_args)}, "
             f"{self.generate_expression(value)})"
         )
+
+    # Array textures whose GLSL coordinate carries the layer in its last
+    # component. WGSL passes the layer as a separate array_index argument.
+    ARRAY_TEXTURE_COORDINATE_SIZES = {
+        "texture_2d_array": 2,
+        "texture_cube_array": 3,
+    }
+
+    def array_texture_coordinate_size(self, texture_expr):
+        texture_type = self.sampled_texture_type(self.expression_type(texture_expr))
+        if texture_type is None:
+            return None
+        return self.ARRAY_TEXTURE_COORDINATE_SIZES.get(
+            re.sub(r"<[^>]*>$", "", texture_type)
+        )
+
+    def split_array_texture_coordinates(self, texture_expr, coords_expr, function_name):
+        """``(coordinate, layer)`` for a lookup on an array texture, else None.
+
+        GLSL and HLSL put the layer in the last coordinate component, WGSL
+        takes it as its own ``array_index`` argument.
+        """
+        size = self.array_texture_coordinate_size(texture_expr)
+        if size is None:
+            return None
+        if not self.is_repeatable_matrix_operand(coords_expr):
+            raise ValueError(
+                f"WGSL target splits the layer out of the {function_name}() "
+                "coordinate of an array texture, which reads the coordinate twice; "
+                "assign the coordinate to a local variable first"
+            )
+        rendered = self.generate_expression(coords_expr)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", rendered):
+            rendered = f"({rendered})"
+        components = "xyzw"
+        return (
+            f"{rendered}.{components[:size]}",
+            f"{rendered}.{components[size]}",
+        )
+
+    def sampled_texture_coordinates(self, texture_expr, coords_expr, function_name):
+        """The coordinate arguments of a ``textureSample*`` call.
+
+        For an array texture this is ``coordinate, layer``. GLSL selects the
+        layer of a filtered lookup as ``floor(layer + 0.5)`` (GLSL 4.60
+        section 8.9), so the float layer is rounded before the conversion.
+        """
+        split = self.split_array_texture_coordinates(
+            texture_expr, coords_expr, function_name
+        )
+        if split is None:
+            return self.generate_expression(coords_expr)
+        coordinate, layer = split
+        return f"{coordinate}, i32(floor({layer} + 0.5))"
 
     def texture_sampler_expression(self, texture_expr):
         array_binding = self.sampled_texture_array_element_binding(texture_expr)
@@ -6340,13 +6489,23 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return self._struct_member_types.get((struct_name, expr.member))
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_type(expr)
+        if isinstance(expr, TernaryOpNode):
+            # WGSL lowers a ternary to select, whose branches share one type.
+            return self._common_value_type(
+                self.expression_type(expr.true_expr),
+                self.expression_type(expr.false_expr),
+            )
         if (
             isinstance(expr, UnaryOpNode)
-            and expr.operator in {"-", "+"}
+            and expr.operator in {"-", "+", "~"}
             and not expr.is_postfix
         ):
             operand_type = self.expression_type(expr.operand)
-            if self.matrix_shape(operand_type) is not None:
+            if (
+                self.matrix_shape(operand_type) is not None
+                or self.vector_shape(operand_type) is not None
+                or self.scalar_type_name(operand_type) is not None
+            ):
                 return operand_type
         if isinstance(expr, FunctionCallNode):
             expr = self.specialize_generic_function_call(expr)
@@ -6432,7 +6591,29 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             return self.array_element_type(array_type)
         return None
 
+    def _common_value_type(self, left_type, right_type):
+        """The type two WGSL bitwise operands or select branches share, or None."""
+        left_vector = self.vector_shape(left_type)
+        right_vector = self.vector_shape(right_type)
+        left_scalar = self.scalar_type_name(left_type)
+        right_scalar = self.scalar_type_name(right_type)
+        if left_vector is not None and left_vector == right_vector:
+            return left_type
+        if left_vector is not None and right_scalar is not None:
+            return left_type
+        if right_vector is not None and left_scalar is not None:
+            return right_type
+        if left_scalar is not None and left_scalar == right_scalar:
+            return left_scalar
+        return None
+
     def binary_expression_type(self, expr):
+        if expr.operator in BITWISE_OPERATORS:
+            # WGSL's bitwise operators need both operands of one type; a scalar is
+            # replicated at rendering, so the result is the type the sides share.
+            return self._common_value_type(
+                self.expression_type(expr.left), self.expression_type(expr.right)
+            )
         if expr.operator not in {"+", "-", "*", "/", "%"}:
             return None
         left_type = self.expression_type(expr.left)
@@ -6716,7 +6897,11 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
     def unique_function_module_name(self, base_name, used_names):
         candidate = self.safe_wgsl_identifier(base_name)
-        if candidate in used_names or self.requires_wgsl_identifier_escape(candidate):
+        if (
+            candidate in used_names
+            or self.requires_wgsl_identifier_escape(candidate)
+            or candidate in WGSL_BUILTIN_FUNCTIONS
+        ):
             candidate = self.unique_wgsl_identifier(
                 self.escaped_wgsl_identifier_base(candidate), used_names
             )

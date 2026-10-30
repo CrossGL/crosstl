@@ -814,3 +814,91 @@ def test_uniform_loop_masked_reductions_execute(tmp_path, directx_runtime):
     words = _strided_words()
     expected = _uniform_masked_expected(words)
     assert _execute_words(tmp_path, generated, words, expected) == expected
+
+
+DEAD_BRANCH_HELPERS = """uint repeat(uint stop, uint value) {
+            uint total = 0u;
+            for (uint step = 0u; step < stop; ++step) { total += WaveActiveSum(value); }
+            return total;
+        }"""
+# A second helper level, so the facts must also skip the forwarding call.
+FORWARD_HELPER = """
+        uint forward(uint stop, uint value) { return repeat(stop, value); }"""
+# Guards a constant decides, with the call each never selects passing a
+# lane-varying trip count.
+DEAD_BRANCH_GUARDS = (
+    ("true", "group.x + 1u", "invocation"),
+    ("aligned || invocation == 0u", "group.x + 1u", "invocation"),
+    ("!aligned && invocation == 0u", "invocation", "group.x + 1u"),
+    ("false", "invocation", "group.x + 1u"),
+)
+
+
+def _dead_branch_source(guard, then_stop, else_stop, callee="repeat"):
+    return _source(
+        "uint",
+        f"""const bool aligned = true;
+        uint total = 0u;
+        if ({guard}) {{
+            total = {callee}({then_stop}, index);
+        }} else {{
+            total = {callee}({else_stop}, index);
+        }}
+        outputWords[index] = total;
+        """,
+        DEAD_BRANCH_HELPERS + (FORWARD_HELPER if callee == "forward" else ""),
+    )
+
+
+@pytest.mark.parametrize("callee", ("repeat", "forward"))
+@pytest.mark.parametrize("guard,then_stop,else_stop", DEAD_BRANCH_GUARDS)
+def test_unselected_branch_calls_do_not_constrain_helpers(
+    tmp_path, guard, then_stop, else_stop, callee
+):
+    generated = _codegen().generate_stage(
+        parse(_dead_branch_source(guard, then_stop, else_stop, callee)), "compute"
+    )
+    assert "WaveActiveSum" not in generated
+    assert "GroupMemoryBarrierWithGroupSync();" in generated
+    _compile(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "guard,then_stop,else_stop",
+    (
+        # The constant side does not decide these guards.
+        ("invocation == 0u || aligned", "group.x + 1u", "invocation"),
+        ("aligned && invocation == 0u", "group.x + 1u", "invocation"),
+        # The selected call itself is lane-varying.
+        ("true", "invocation", "group.x + 1u"),
+        ("false", "group.x + 1u", "invocation"),
+    ),
+)
+def test_selected_branch_calls_still_constrain_helpers(guard, then_stop, else_stop):
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(
+            parse(_dead_branch_source(guard, then_stop, else_stop)), "compute"
+        )
+
+
+def test_helper_reached_from_live_and_dead_calls_keeps_live_facts():
+    body = """uint total = repeat(invocation, index);
+        if (false) { total += repeat(group.x, index); }
+        outputWords[index] = total;
+    """
+    with pytest.raises(DirectXSoftwareSubgroupError):
+        _codegen().generate_stage(
+            parse(_source("uint", body, DEAD_BRANCH_HELPERS)), "compute"
+        )
+
+
+def test_unselected_branch_calls_execute(tmp_path, directx_runtime):
+    generated = _codegen().generate_stage(
+        parse(_dead_branch_source(*DEAD_BRANCH_GUARDS[1], "forward")), "compute"
+    )
+    words = [index * 7 + 3 for index in range(384)]
+    expected = [
+        (index // 128 + 1) * sum(range(index // 32 * 32, index // 32 * 32 + 32))
+        for index in range(len(words))
+    ]
+    assert _execute_words(tmp_path, generated, words, expected) == expected

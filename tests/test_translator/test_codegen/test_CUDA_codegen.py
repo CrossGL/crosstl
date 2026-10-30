@@ -28,6 +28,7 @@ from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.lowering_refusal_helpers import cuda_partial_output
 
 
 def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
@@ -228,9 +229,9 @@ class TestCudaCodeGen:
     def test_global_constants_are_emitted(self):
         source_code = """
         shader TestShader {
-            const float PI = 3.14159;
+            const float PI = 3.14159f;
             const int WARP_SIZE = 32;
-            const vec3 UP_VECTOR = vec3(0.0, 1.0, 0.0);
+            const vec3 UP_VECTOR = vec3(0.0f, 1.0f, 0.0f);
 
             compute {
                 void main(float *out) {
@@ -246,9 +247,9 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "const float PI = 3.14159;" in cuda_code
+        assert "const float PI = 3.14159f;" in cuda_code
         assert "const int WARP_SIZE = 32;" in cuda_code
-        assert "const float3 UP_VECTOR = make_float3(0.0, 1.0, 0.0);" in cuda_code
+        assert "__device__ const float3 UP_VECTOR = {0.0f, 1.0f, 0.0f};" in cuda_code
         assert "out[0] = ((PI + float(WARP_SIZE)) + UP_VECTOR.y);" in cuda_code
 
     def test_compute_shader_to_kernel(self):
@@ -692,10 +693,10 @@ class TestCudaCodeGen:
                     uvec3 launch = gl_LaunchIDEXT;
                     uint launchWidth = gl_LaunchSizeEXT.x;
                     RayDesc ray = RayDesc(
-                        vec3(0.0, 0.0, 0.0),
-                        0.001,
-                        vec3(0.0, 0.0, 1.0),
-                        100.0
+                        vec3(0.0f, 0.0f, 0.0f),
+                        0.001f,
+                        vec3(0.0f, 0.0f, 1.0f),
+                        100.0f
                     );
                     RayPayload payload;
                     CallableData data;
@@ -710,7 +711,7 @@ class TestCudaCodeGen:
                     HitAttributes attributes @ hit_attribute,
                     float hitT @ gl_HitTEXT
                 ) {
-                    payload.color = vec3(1.0, 0.0, hitT);
+                    payload.color = vec3(1.0f, 0.0f, hitT);
                 }
             }
 
@@ -720,7 +721,7 @@ class TestCudaCodeGen:
                     HitAttributes attributes @ hit_attribute,
                     uint hitKind @ gl_HitKindEXT
                 ) {
-                    payload.color = vec3(0.5, 0.0, float(hitKind));
+                    payload.color = vec3(0.5f, 0.0f, float(hitKind));
                     IgnoreHit();
                     AcceptHitAndEndSearch();
                 }
@@ -728,7 +729,7 @@ class TestCudaCodeGen:
 
             ray_miss {
                 void main(RayPayload payload @ rayPayloadInEXT) {
-                    payload.color = vec3(0.0, 0.0, 0.0);
+                    payload.color = vec3(0.0f, 0.0f, 0.0f);
                 }
             }
 
@@ -741,8 +742,8 @@ class TestCudaCodeGen:
             ray_intersection {
                 void main() {
                     HitAttributes attributes;
-                    bool accepted = ReportHit(1.0, 0, attributes);
-                    bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+                    bool accepted = ReportHit(1.0f, 0, attributes);
+                    bool acceptedWithoutAttributes = ReportHit(2.0f, 1);
                 }
             }
         }
@@ -773,10 +774,10 @@ class TestCudaCodeGen:
         assert "cgl_call_shader(0, data);" in cuda_code
         assert "cgl_ignore_hit();" in cuda_code
         assert "cgl_accept_hit_and_end_search();" in cuda_code
-        assert "bool accepted = cgl_report_hit(1.0, 0, attributes);" in cuda_code
+        assert "bool accepted = cgl_report_hit(1.0f, 0, attributes);" in cuda_code
         assert (
             "bool acceptedWithoutAttributes = cgl_report_hit"
-            "(2.0, 1, CglBuiltInTriangleIntersectionAttributes{});" in cuda_code
+            "(2.0f, 1, CglBuiltInTriangleIntersectionAttributes{});" in cuda_code
         )
 
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
@@ -867,11 +868,11 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 float scale(float value) {
-                    return value * 2.0;
+                    return value * 2.0f;
                 }
 
                 void main() {
-                    float y = scale(3.0);
+                    float y = scale(3.0f);
                 }
             }
         }
@@ -890,7 +891,7 @@ class TestCudaCodeGen:
         assert helper_signature in cuda_code
         assert kernel_signature in cuda_code
         assert cuda_code.index(helper_signature) < cuda_code.index(kernel_signature)
-        assert "float y = scale(3.0);" in cuda_code
+        assert "float y = scale(3.0f);" in cuda_code
 
     def test_user_defined_mix_function_is_not_lowered_to_cuda_builtin(self):
         source_code = """
@@ -901,7 +902,7 @@ class TestCudaCodeGen:
                 }
 
                 void main() {
-                    float adjusted = mix(0.0, 1.0, 0.25);
+                    float adjusted = mix(0.0f, 1.0f, 0.25f);
                 }
             }
         }
@@ -914,8 +915,9 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "__device__ float mix(float x, float y, float t)" in cuda_code
-        assert "float adjusted = mix(0.0, 1.0, 0.25);" in cuda_code
+        assert "float adjusted = mix(0.0f, 1.0f, 0.25f);" in cuda_code
         assert "float adjusted = lerp(0.0, 1.0, 0.25);" not in cuda_code
+        assert "float adjusted = lerp(0.0f, 1.0f, 0.25f);" not in cuda_code
 
     def test_user_defined_lerp_function_is_not_lowered_to_cuda_builtin(self):
         source_code = """
@@ -926,7 +928,7 @@ class TestCudaCodeGen:
                 }
 
                 void main() {
-                    float adjusted = lerp(0.0, 1.0, 0.25);
+                    float adjusted = lerp(0.0f, 1.0f, 0.25f);
                 }
             }
         }
@@ -939,8 +941,9 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "__device__ float lerp(float x, float y, float t)" in cuda_code
-        assert "float adjusted = lerp(0.0, 1.0, 0.25);" in cuda_code
+        assert "float adjusted = lerp(0.0f, 1.0f, 0.25f);" in cuda_code
         assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in cuda_code
+        assert "float adjusted = (0.0f + ((1.0f - 0.0f) * 0.25f));" not in cuda_code
 
     def test_user_defined_builtin_name_result_type_is_not_reinferred_as_cuda_builtin(
         self,
@@ -957,10 +960,10 @@ class TestCudaCodeGen:
                 }
 
                 void main() {
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(4.0, 5.0, 6.0);
-                    vec3 c = vec3(7.0, 8.0, 9.0);
-                    float wrappedMix = fract(mix(a, b, 0.25));
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(4.0f, 5.0f, 6.0f);
+                    vec3 c = vec3(7.0f, 8.0f, 9.0f);
+                    float wrappedMix = fract(mix(a, b, 0.25f));
                     float wrappedFma = fract(fma(a, b, c));
                 }
             }
@@ -974,10 +977,11 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "__device__ float mix(float3 x, float3 y, float t)" in cuda_code
-        assert "__device__ float fma(float3 x, float3 y, float3 z)" in cuda_code
-        assert "float wrappedMix = cgl_fract_float(mix(a, b, 0.25));" in cuda_code
-        assert "float wrappedFma = cgl_fract_float(fma(a, b, c));" in cuda_code
+        assert "__device__ float fma_fn(float3 x, float3 y, float3 z)" in cuda_code
+        assert "float wrappedMix = cgl_fract_float(mix(a, b, 0.25f));" in cuda_code
+        assert "float wrappedFma = cgl_fract_float(fma_fn(a, b, c));" in cuda_code
         assert "float wrappedMix = cgl_float3_fract(mix(a, b, 0.25));" not in cuda_code
+        assert "float wrappedMix = cgl_float3_fract(mix(a, b, 0.25f));" not in cuda_code
         assert "float wrappedFma = cgl_float3_fract(fma(a, b, c));" not in cuda_code
         assert (
             "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(a, b, c)" not in cuda_code
@@ -998,8 +1002,8 @@ class TestCudaCodeGen:
                 }
 
                 void main() {
-                    float fused = fma(1.0, 2.0, 3.0);
-                    float multiplyAdd = mad(1.0, 2.0, 3.0);
+                    float fused = fma(1.0f, 2.0f, 3.0f);
+                    float multiplyAdd = mad(1.0f, 2.0f, 3.0f);
                 }
             }
         }
@@ -1011,12 +1015,15 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "__device__ float fma(float x, float y, float z)" in cuda_code
+        # fma is a CUDA math function, so the user function is renamed (issue #3326).
+        assert "__device__ float fma_fn(float x, float y, float z)" in cuda_code
         assert "__device__ float mad(float x, float y, float z)" in cuda_code
-        assert "float fused = fma(1.0, 2.0, 3.0);" in cuda_code
-        assert "float multiplyAdd = mad(1.0, 2.0, 3.0);" in cuda_code
+        assert "float fused = fma_fn(1.0f, 2.0f, 3.0f);" in cuda_code
+        assert "float multiplyAdd = mad(1.0f, 2.0f, 3.0f);" in cuda_code
         assert "float fused = fmaf(1.0, 2.0, 3.0);" not in cuda_code
+        assert "float fused = fmaf(1.0f, 2.0f, 3.0f);" not in cuda_code
         assert "float multiplyAdd = fmaf(1.0, 2.0, 3.0);" not in cuda_code
+        assert "float multiplyAdd = fmaf(1.0f, 2.0f, 3.0f);" not in cuda_code
 
     def test_type_conversion(self):
         codegen = CudaCodeGen()
@@ -1387,7 +1394,9 @@ class TestCudaCodeGen:
         }
         """
 
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        cuda_code, _ = cuda_partial_output(
+            CudaCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert (
             "float bitwiseFloat = /* unsupported CUDA wave intrinsic "
@@ -1635,7 +1644,7 @@ class TestCudaCodeGen:
             compute {
                 void synchronizeTile() {
                     shared float tile[32];
-                    tile[gl_LocalInvocationID.x] = 0.0;
+                    tile[gl_LocalInvocationID.x] = 0.0f;
                     barrier();
                     memoryBarrierShared();
                 }
@@ -1656,7 +1665,7 @@ class TestCudaCodeGen:
         assert kernel_signature in cuda_code
         assert cuda_code.index(helper_signature) < cuda_code.index(kernel_signature)
         assert "__shared__ float tile[32];" in cuda_code
-        assert "tile[threadIdx.x] = 0.0;" in cuda_code
+        assert "tile[threadIdx.x] = 0.0f;" in cuda_code
         assert "__syncthreads();" in cuda_code
         assert "__threadfence_block();" in cuda_code
         assert "synchronizeTile();" in cuda_code
@@ -1719,7 +1728,7 @@ class TestCudaCodeGen:
                 }
 
                 void main() {
-                    vec3 gl_GlobalInvocationID = vec3(1.25, 2.5, 3.75);
+                    vec3 gl_GlobalInvocationID = vec3(1.25f, 2.5f, 3.75f);
                     float x = gl_GlobalInvocationID.x;
                     vec2 xy = gl_GlobalInvocationID.xy;
                     vec3 wrapped = fract(gl_GlobalInvocationID);
@@ -1741,7 +1750,8 @@ class TestCudaCodeGen:
         assert "__device__ uint readX(uint3 gl_GlobalInvocationID)" in cuda_code
         assert "return gl_GlobalInvocationID.x;" in cuda_code
         assert (
-            "float3 gl_GlobalInvocationID = make_float3(1.25, 2.5, 3.75);" in cuda_code
+            "float3 gl_GlobalInvocationID = make_float3(1.25f, 2.5f, 3.75f);"
+            in cuda_code
         )
         assert "float x = gl_GlobalInvocationID.x;" in cuda_code
         assert (
@@ -2085,8 +2095,8 @@ class TestCudaCodeGen:
 
             compute {
                 void main() {
-                    Light positional = Light{vec3(1.0, 0.5, 0.25), 2.0};
-                    Light named = Light{intensity: 4.0, color: vec3(0.25, 0.5, 1.0)};
+                    Light positional = Light{vec3(1.0f, 0.5f, 0.25f), 2.0f};
+                    Light named = Light{intensity: 4.0f, color: vec3(0.25f, 0.5f, 1.0f)};
                 }
             }
         }
@@ -2099,9 +2109,10 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert (
-            "Light positional = Light{make_float3(1.0, 0.5, 0.25), 2.0};" in cuda_code
+            "Light positional = Light{make_float3(1.0f, 0.5f, 0.25f), 2.0f};"
+            in cuda_code
         )
-        assert "Light named = Light{make_float3(0.25, 0.5, 1.0), 4.0};" in cuda_code
+        assert "Light named = Light{make_float3(0.25f, 0.5f, 1.0f), 4.0f};" in cuda_code
         assert "ConstructorNode(" not in cuda_code
 
     def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
@@ -2419,7 +2430,7 @@ class TestCudaCodeGen:
                     shared float sharedData[16];
                     uniform float constants;
                     const int limit = 4;
-                    static float cached = 1.0;
+                    static float cached = 1.0f;
                 }
             }
         }
@@ -2435,12 +2446,13 @@ class TestCudaCodeGen:
         assert "__shared__ float sharedData[16];" in cuda_code
         assert "__constant__ float constants;" in cuda_code
         assert "const int limit = 4;" in cuda_code
-        assert "static float cached = 1.0;" in cuda_code
+        assert "static float cached = 1.0f;" in cuda_code
         lines = set(cuda_code.splitlines())
         assert "    float sharedData[16];" not in lines
         assert "    float constants;" not in lines
         assert "    int limit = 4;" not in lines
         assert "    float cached = 1.0;" not in lines
+        assert "    float cached = 1.0f;" not in lines
 
         # Legacy/direct ASTs may still use the old workgroup spelling.
         ast = ShaderNode(
@@ -2512,11 +2524,11 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 1.0);
-                    vec3 normal = vec3(1.0, 2.0, 3.0);
-                    vec4 color = vec4(1.0, 0.5, 0.25, 1.0);
-                    dvec2 precise = dvec2(1.0, 2.0);
-                    dvec4 weights = dvec4(1.0, 2.0, 3.0, 4.0);
+                    vec2 uv = vec2(0.5f, 1.0f);
+                    vec3 normal = vec3(1.0f, 2.0f, 3.0f);
+                    vec4 color = vec4(1.0f, 0.5f, 0.25f, 1.0f);
+                    dvec2 precise = dvec2(1.0f, 2.0f);
+                    dvec4 weights = dvec4(1.0f, 2.0f, 3.0f, 4.0f);
                     ivec3 index = ivec3(1, 2, 3);
                     uvec4 mask = uvec4(1, 2, 3, 4);
                 }
@@ -2531,11 +2543,11 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "float2 uv = make_float2(0.5, 1.0);" in cuda_code
-        assert "float3 normal = make_float3(1.0, 2.0, 3.0);" in cuda_code
-        assert "float4 color = make_float4(1.0, 0.5, 0.25, 1.0);" in cuda_code
-        assert "double2 precise = make_double2(1.0, 2.0);" in cuda_code
-        assert "double4 weights = make_double4(1.0, 2.0, 3.0, 4.0);" in cuda_code
+        assert "float2 uv = make_float2(0.5f, 1.0f);" in cuda_code
+        assert "float3 normal = make_float3(1.0f, 2.0f, 3.0f);" in cuda_code
+        assert "float4 color = make_float4(1.0f, 0.5f, 0.25f, 1.0f);" in cuda_code
+        assert "double2 precise = make_double2(1.0f, 2.0f);" in cuda_code
+        assert "double4 weights = make_double4(1.0f, 2.0f, 3.0f, 4.0f);" in cuda_code
         assert "int3 index = make_int3(1, 2, 3);" in cuda_code
         assert "uint4 mask = make_uint4(1, 2, 3, 4);" in cuda_code
         assert " = vec2(" not in cuda_code
@@ -2551,12 +2563,12 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 f16 tone(f16 input) {
-                    f16 bias = f16(0.5);
+                    f16 bias = f16(0.5f);
                     return bias;
                 }
 
                 vec2<f16> pair(vec2<f16> input) {
-                    vec2<f16> scale = vec2<f16>(1.0, 2.0);
+                    vec2<f16> scale = vec2<f16>(1.0f, 2.0f);
                     vec2<f16> same = vec2<f16>(input);
                     return same;
                 }
@@ -2569,9 +2581,9 @@ class TestCudaCodeGen:
 
         assert "#include <cuda_fp16.h>" in cuda_code
         assert "__device__ half tone(half input)" in cuda_code
-        assert "half bias = __float2half(0.5);" in cuda_code
+        assert "half bias = __float2half(0.5f);" in cuda_code
         assert "__device__ half2 pair(half2 input)" in cuda_code
-        assert "half2 scale = __floats2half2_rn(1.0, 2.0);" in cuda_code
+        assert "half2 scale = __floats2half2_rn(1.0f, 2.0f);" in cuda_code
         assert "half2 same = input;" in cuda_code
         assert "vec2<f16>" not in cuda_code
         assert "f162" not in cuda_code
@@ -2582,8 +2594,8 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 f16vec3 tint(f16vec3 input) {
-                    f16 scalar = f16(0.5);
-                    f16vec3 from_scalars = f16vec3(1.0, scalar, input.z);
+                    f16 scalar = f16(0.5f);
+                    f16vec3 from_scalars = f16vec3(1.0f, scalar, input.z);
                     f16vec3 from_vector = f16vec3(input);
                     f16vec3 from_swizzle = f16vec3(input.zyx);
                     f16 component = from_scalars.x;
@@ -2599,9 +2611,9 @@ class TestCudaCodeGen:
         assert "#include <cuda_fp16.h>" in cuda_code
         assert "struct cgl_half3" in cuda_code
         assert "__device__ cgl_half3 tint(cgl_half3 input)" in cuda_code
-        assert "half scalar = __float2half(0.5);" in cuda_code
+        assert "half scalar = __float2half(0.5f);" in cuda_code
         assert (
-            "cgl_half3 from_scalars = cgl_make_half3(1.0, scalar, input.z);"
+            "cgl_half3 from_scalars = cgl_make_half3(1.0f, scalar, input.z);"
             in cuda_code
         )
         assert (
@@ -2619,7 +2631,7 @@ class TestCudaCodeGen:
         )
         assert "f16vec3" not in cuda_code
 
-    def test_half_vector_modulo_uses_float_mod_helper(self):
+    def test_half_vector_remainder_takes_the_float_fmodf(self):
         source_code = """
         shader Mod {
             f16vec3 f(f16vec3 v, f16vec3 w) {
@@ -2637,22 +2649,69 @@ class TestCudaCodeGen:
         ast = Parser(Lexer(source_code).tokens).parse()
         cuda_code = CudaCodeGen().generate(ast)
 
+        # `%` is the truncated remainder of the float components (fmodf);
+        # GLSL mod() floors the quotient.
         assert (
-            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+            "__float2half(fmodf(__half2float(lhs.x), __half2float(rhs.x)))" in cuda_code
         )
         assert (
-            "__float2half(cgl_mod_float(__half2float(lhs.x), __half2float(rhs.x)))"
-            in cuda_code
+            "__float2half(fmodf(__half2float(lhs.z), __half2float(rhs)))" in cuda_code
         )
-        assert (
-            "__float2half(cgl_mod_float(__half2float(lhs.z), __half2float(rhs)))"
-            in cuda_code
-        )
-        assert "fmodf(__half2float" not in cuda_code
+        assert "floorf(__half2float(lhs.x) / __half2float(rhs.x))" in cuda_code
         assert "return cgl_cgl_half3_mod(v, w);" in cuda_code
         assert "return cgl_cgl_half3_mod_scalar(v, h);" in cuda_code
+        assert "return cgl_cgl_half3_glsl_mod(v, w);" in cuda_code
         assert "(lhs.x % rhs.x)" not in cuda_code
         assert "(lhs.x % rhs)" not in cuda_code
+
+    def test_half_vector_mix_fract_step_atan_fma_use_float_helpers(self):
+        source_code = """
+        shader M {
+            f16vec3 f(f16vec3 v, f16vec3 w, half s) {
+                f16vec3 e = mix(v, w, s);
+                f16vec3 g = fract(v);
+                f16vec3 h = step(w, v);
+                f16vec3 m = atan(v, w);
+                f16vec3 o = fma(v, w, v);
+                return e + g + h + m + o;
+            }
+            f16vec4 q(f16vec4 v) {
+                return fract(v);
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "cgl_half3 e = cgl_cgl_half3_mix_scalar(v, w, s);" in cuda_code
+        assert "cgl_half3 g = cgl_cgl_half3_fract(v);" in cuda_code
+        assert (
+            "cgl_half3 h = cgl_cgl_half3_step_vector_edge_vector_value(w, v);"
+            in cuda_code
+        )
+        assert "cgl_half3 m = cgl_cgl_half3_atan2(v, w);" in cuda_code
+        assert (
+            "cgl_half3 o = cgl_cgl_half3_fma_cgl_half3_xyz_cgl_half3_xyz_cgl_half3_xyz(v, w, v);"
+            in cuda_code
+        )
+        assert "return cgl_cgl_half4_fract(v);" in cuda_code
+        assert "__float2half(cgl_fract_float(__half2float(value.x)))" in cuda_code
+        assert "__float2half((__half2float(x.x)" in cuda_code
+        assert (
+            "__float2half(((__half2float(value.x)) < (__half2float(edge.x))"
+            in cuda_code
+        )
+        assert "__float2half(atan2f(__half2float(y.x), __half2float(x.x)))" in cuda_code
+        assert (
+            "__float2half(fmaf(__half2float(arg0.x), __half2float(arg1.x), __half2float(arg2.x)))"
+            in cuda_code
+        )
+        assert "cgl_half3 e = lerp(v, w, s);" not in cuda_code
+        assert "cgl_half3 g = fract(v);" not in cuda_code
+        assert "cgl_half3 h = step(w, v);" not in cuda_code
+        assert "cgl_half3 m = atanf(v, w);" not in cuda_code
+        assert "cgl_half3 o = fmaf(v, w, v);" not in cuda_code
 
     def test_half_vector_with_half_scalar_uses_scalar_helpers(self):
         source_code = """
@@ -2751,6 +2810,99 @@ class TestCudaCodeGen:
         assert "o.xy" not in cuda_code
         assert "o.zw" not in cuda_code
 
+    def test_native_half2_swizzles_and_constructors_expand_components(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec4 f(f16vec2 a, f16vec2 b, half h, f16vec4 d) {
+                    half x = a.x;
+                    f16vec2 xy = a.xy;
+                    f16vec2 xx = a.xx;
+                    f16vec2 yy = a.yy;
+                    f16vec2 s = a.yx;
+                    f16vec4 c1 = f16vec4(a, b);
+                    f16vec3 c2 = f16vec3(a, h);
+                    f16vec4 c3 = f16vec4(d.xy, a);
+                    return c1 + c3;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "half x = a.x;" in cuda_code
+        assert "half2 xy = __floats2half2_rn(a.x, a.y);" in cuda_code
+        assert "half2 xx = __floats2half2_rn(a.x, a.x);" in cuda_code
+        assert "half2 yy = __floats2half2_rn(a.y, a.y);" in cuda_code
+        assert "half2 s = __floats2half2_rn(a.y, a.x);" in cuda_code
+        assert "cgl_make_half4(a.x, a.y, b.x, b.y)" in cuda_code
+        assert "cgl_make_half4(d.x, d.y, a.x, a.y)" in cuda_code
+        assert "cgl_make_half3(a.x, a.y, h)" in cuda_code
+
+    def test_native_half2_swizzle_assignment_writes_each_component(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec2 assign(f16vec2 a, f16vec2 b) {
+                    f16vec2 t = a;
+                    t.yx = b;
+                    t.xy += b;
+                    return t;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "half2 __crossgl_swizzle_value_0 = b;" in cuda_code
+        assert "t.y = __crossgl_swizzle_value_0.x;" in cuda_code
+        assert "t.x = __crossgl_swizzle_value_0.y;" in cuda_code
+        assert "half2 __crossgl_swizzle_value_1 = b;" in cuda_code
+        assert "t.x = (t.x + __crossgl_swizzle_value_1.x);" in cuda_code
+        assert "t.y = (t.y + __crossgl_swizzle_value_1.y);" in cuda_code
+        assert "__floats2half2_rn(t." not in cuda_code
+        assert "t.yx" not in cuda_code
+
+    def test_native_half2_constructor_operands_are_evaluated_once(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16vec2 pick(f16vec2 a) { return a; }
+                f16vec4 widen(f16vec4 d) { return d; }
+                f16vec4 f(f16vec2 a, f16vec2 b, f16vec4 d, half h) {
+                    f16vec4 c = f16vec4(pick(a), b);
+                    f16vec4 e = f16vec4(widen(d).xy, a);
+                    f16vec3 g = f16vec3(pick(b).yx, h);
+                    return c + e + f16vec4(g, h);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "cgl_half4 c = cgl_cgl_half4_construct_half2_xy_half2_xy(pick(a), b);"
+            in cuda_code
+        )
+        assert (
+            "cgl_half4 e = cgl_cgl_half4_construct_cgl_half4_xy_half2_xy(widen(d), a);"
+            in cuda_code
+        )
+        assert (
+            "cgl_half3 g = cgl_cgl_half3_construct_half2_yx_half(pick(b), h);"
+            in cuda_code
+        )
+        assert "return cgl_make_half4(arg0.x, arg0.y, arg1.x, arg1.y);" in cuda_code
+        assert "return cgl_make_half3(arg0.y, arg0.x, arg1);" in cuda_code
+        assert "pick(a).x" not in cuda_code
+        assert "pick(b).y" not in cuda_code
+
     def test_half_vector_math_builtins_use_component_helpers(self):
         source_code = """
         shader TestShader {
@@ -2762,6 +2914,15 @@ class TestCudaCodeGen:
                     f16vec3 d = pow(h, e);
                     f16vec3 g = pow(h, s);
                     return a + b.xyz + c + d + g;
+                }
+                f16vec2 f2(f16vec2 h, f16vec2 e, half s) {
+                    f16vec2 a = sin(h);
+                    f16vec2 b = exp2(h);
+                    f16vec2 c = inversesqrt(h);
+                    f16vec2 d = pow(h, e);
+                    f16vec2 g = pow(h, s);
+                    f16vec2 fl = floor(h);
+                    return a + b + c + d + g + fl;
                 }
             }
         }
@@ -2775,6 +2936,12 @@ class TestCudaCodeGen:
         assert "cgl_half3 c = cgl_cgl_half3_inversesqrt(h);" in cuda_code
         assert "cgl_half3 d = cgl_cgl_half3_pow_vector(h, e);" in cuda_code
         assert "cgl_half3 g = cgl_cgl_half3_pow_scalar(h, s);" in cuda_code
+        assert "half2 a = cgl_half2_sin(h);" in cuda_code
+        assert "half2 b = cgl_half2_exp2(h);" in cuda_code
+        assert "half2 c = cgl_half2_inversesqrt(h);" in cuda_code
+        assert "half2 d = cgl_half2_pow_vector(h, e);" in cuda_code
+        assert "half2 g = cgl_half2_pow_scalar(h, s);" in cuda_code
+        assert "half2 fl = cgl_half2_floor(h);" in cuda_code
         assert "__float2half(sinf(__half2float(value.x)))" in cuda_code
         assert "__float2half(rsqrtf(__half2float(value.z)))" in cuda_code
         assert (
@@ -2785,9 +2952,36 @@ class TestCudaCodeGen:
             "__device__ inline cgl_half3 cgl_cgl_half3_pow_scalar"
             "(cgl_half3 base, half exponent)" in cuda_code
         )
+        assert (
+            "__floats2half2_rn(sinf(__half2float(value.x)), sinf(__half2float(value.y)))"
+            in cuda_code
+        )
+        assert (
+            "__floats2half2_rn(exp2f(__half2float(value.x)), exp2f(__half2float(value.y)))"
+            in cuda_code
+        )
+        assert (
+            "__floats2half2_rn(rsqrtf(__half2float(value.x)), rsqrtf(__half2float(value.y)))"
+            in cuda_code
+        )
+        assert (
+            "__floats2half2_rn(powf(__half2float(base.x), __half2float(exponent.x)), "
+            "powf(__half2float(base.y), __half2float(exponent.y)))" in cuda_code
+        )
+        assert (
+            "__floats2half2_rn(powf(__half2float(base.x), __half2float(exponent)), "
+            "powf(__half2float(base.y), __half2float(exponent)))" in cuda_code
+        )
+        assert (
+            "__floats2half2_rn(floorf(__half2float(value.x)), floorf(__half2float(value.y)))"
+            in cuda_code
+        )
         assert "sinf(h)" not in cuda_code
         assert "expf(q)" not in cuda_code
+        assert "exp2f(h)" not in cuda_code
+        assert "rsqrtf(h)" not in cuda_code
         assert "powf(h" not in cuda_code
+        assert "floorf(h)" not in cuda_code
 
     def test_half_vector_constructor_splats_native_half2_component(self):
         source_code = """
@@ -2874,9 +3068,9 @@ class TestCudaCodeGen:
         assert "#include <cuda_fp16.h>" in cuda_code
         assert "struct alignas(8) cgl_half4" in cuda_code
         assert "__device__ cgl_half4 tint(cgl_half4 input)" in cuda_code
-        assert "half scalar = __float2half(0.5);" in cuda_code
+        assert "half scalar = __float2half(0.5f);" in cuda_code
         assert (
-            "cgl_half4 from_scalars = cgl_make_half4(1.0, scalar, input.z, input.w);"
+            "cgl_half4 from_scalars = cgl_make_half4(1.0f, scalar, input.z, input.w);"
             in cuda_code
         )
         assert (
@@ -2946,10 +3140,10 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec2 uv = vec2(0.25, 0.5);
-                    vec4 color = vec4(uv, 0.75, 1.0);
-                    vec3 normal = vec3(1.0, 2.0, 3.0);
-                    vec4 packed = vec4(normal, 1.0);
+                    vec2 uv = vec2(0.25f, 0.5f);
+                    vec4 color = vec4(uv, 0.75f, 1.0f);
+                    vec3 normal = vec3(1.0f, 2.0f, 3.0f);
+                    vec4 packed = vec4(normal, 1.0f);
                     vec3 rgb = vec3(color.rgb);
                 }
             }
@@ -2963,14 +3157,16 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "float4 color = make_float4(uv.x, uv.y, 0.75, 1.0);" in cuda_code
+        assert "float4 color = make_float4(uv.x, uv.y, 0.75f, 1.0f);" in cuda_code
         assert (
-            "float4 packed = make_float4(normal.x, normal.y, normal.z, 1.0);"
+            "float4 packed = make_float4(normal.x, normal.y, normal.z, 1.0f);"
             in cuda_code
         )
         assert "float3 rgb = make_float3(color.x, color.y, color.z);" in cuda_code
         assert "make_float4(uv, 0.75, 1.0)" not in cuda_code
+        assert "make_float4(uv, 0.75f, 1.0f)" not in cuda_code
         assert "make_float4(normal, 1.0)" not in cuda_code
+        assert "make_float4(normal, 1.0f)" not in cuda_code
         assert "make_float3(make_float3(color.x, color.y, color.z))" not in cuda_code
 
     def test_typed_brace_vector_constructors_emit_cuda_make_functions(self):
@@ -2978,14 +3174,14 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 vec2 makeUv() {
-                    return vec2(0.25, 0.5);
+                    return vec2(0.25f, 0.5f);
                 }
 
                 void main() {
-                    vec4 color = vec4{1.0, 0.5, 0.25, 1.0};
-                    vec2 uv = vec2{0.25, 0.5};
-                    vec4 packed = vec4{uv, 0.0, 1.0};
-                    vec4 fromCall = vec4{makeUv(), 0.0, 1.0};
+                    vec4 color = vec4{1.0f, 0.5f, 0.25f, 1.0f};
+                    vec2 uv = vec2{0.25f, 0.5f};
+                    vec4 packed = vec4{uv, 0.0f, 1.0f};
+                    vec4 fromCall = vec4{makeUv(), 0.0f, 1.0f};
                 }
             }
         }
@@ -2997,25 +3193,27 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float4 color = make_float4(1.0, 0.5, 0.25, 1.0);" in cuda_code
-        assert "float2 uv = make_float2(0.25, 0.5);" in cuda_code
-        assert "float4 packed = make_float4(uv.x, uv.y, 0.0, 1.0);" in cuda_code
+        assert "float4 color = make_float4(1.0f, 0.5f, 0.25f, 1.0f);" in cuda_code
+        assert "float2 uv = make_float2(0.25f, 0.5f);" in cuda_code
+        assert "float4 packed = make_float4(uv.x, uv.y, 0.0f, 1.0f);" in cuda_code
         assert (
             "float4 fromCall = "
-            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0, 1.0);"
+            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0f, 1.0f);"
             in cuda_code
         )
         assert "float4 color = float4(" not in cuda_code
         assert "float4 color = float4{" not in cuda_code
         assert "float4 packed = make_float4(uv, 0.0, 1.0)" not in cuda_code
+        assert "float4 packed = make_float4(uv, 0.0f, 1.0f)" not in cuda_code
         assert "make_float4(makeUv().x, makeUv().y, 0.0, 1.0)" not in cuda_code
+        assert "make_float4(makeUv().x, makeUv().y, 0.0f, 1.0f)" not in cuda_code
 
     def test_complex_scalar_vector_constructor_splats_use_cuda_helpers(self):
         source_code = """
         shader TestShader {
             compute {
                 float makeWeight() {
-                    return 0.5;
+                    return 0.5f;
                 }
 
                 int nextIndex() {
@@ -3031,7 +3229,7 @@ class TestCudaCodeGen:
                     vec3 fromCast = vec3(nextIndex());
                     bvec4 fromBoolCall = bvec4(nextFlag());
                     bvec2 fromInt = bvec2(nextIndex());
-                    vec3 simple = vec3(1.0);
+                    vec3 simple = vec3(1.0f);
                 }
             }
         }
@@ -3050,7 +3248,7 @@ class TestCudaCodeGen:
         assert "float3 fromCast = cgl_float3_splat(nextIndex());" in cuda_code
         assert "uchar4 fromBoolCall = cgl_uchar4_splat(nextFlag());" in cuda_code
         assert "uchar2 fromInt = cgl_uchar2_splat(nextIndex());" in cuda_code
-        assert "float3 simple = make_float3(1.0, 1.0, 1.0);" in cuda_code
+        assert "float3 simple = make_float3(1.0f, 1.0f, 1.0f);" in cuda_code
         assert "make_float3(makeWeight(), makeWeight(), makeWeight())" not in cuda_code
         assert "make_float3(nextIndex(), nextIndex(), nextIndex())" not in cuda_code
         assert "make_uchar4(nextFlag(), nextFlag()" not in cuda_code
@@ -3061,27 +3259,27 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 vec2 makeUv() {
-                    return vec2(0.25, 0.5);
+                    return vec2(0.25f, 0.5f);
                 }
 
                 vec3 makeNormal() {
-                    return vec3(0.0, 1.0, 0.0);
+                    return vec3(0.0f, 1.0f, 0.0f);
                 }
 
                 vec4 makeColor() {
-                    return vec4(1.0, 2.0, 3.0, 4.0);
+                    return vec4(1.0f, 2.0f, 3.0f, 4.0f);
                 }
 
                 float makeWeight() {
-                    return 0.75;
+                    return 0.75f;
                 }
 
                 void main() {
-                    vec4 color = vec4(makeUv(), 0.0, 1.0);
+                    vec4 color = vec4(makeUv(), 0.0f, 1.0f);
                     vec4 packed = vec4(makeNormal(), makeWeight());
                     vec3 rgb = vec3(makeColor().rgb);
-                    vec2 uv = vec2(0.25, 0.5);
-                    vec4 simple = vec4(uv, 0.0, 1.0);
+                    vec2 uv = vec2(0.25f, 0.5f);
+                    vec4 simple = vec4(uv, 0.0f, 1.0f);
                 }
             }
         }
@@ -3111,7 +3309,7 @@ class TestCudaCodeGen:
         assert "return make_float3(arg0.x, arg0.y, arg0.z);" in cuda_code
         assert (
             "float4 color = "
-            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0, 1.0);"
+            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0f, 1.0f);"
             in cuda_code
         )
         assert (
@@ -3120,8 +3318,9 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert "float3 rgb = cgl_float3_construct_float4_xyz(makeColor());" in cuda_code
-        assert "float4 simple = make_float4(uv.x, uv.y, 0.0, 1.0);" in cuda_code
+        assert "float4 simple = make_float4(uv.x, uv.y, 0.0f, 1.0f);" in cuda_code
         assert "make_float4(makeUv().x, makeUv().y, 0.0, 1.0)" not in cuda_code
+        assert "make_float4(makeUv().x, makeUv().y, 0.0f, 1.0f)" not in cuda_code
         assert "make_float4(makeNormal().x, makeNormal().y" not in cuda_code
         assert (
             "make_float3(makeColor().x, makeColor().y, makeColor().z)" not in cuda_code
@@ -3132,12 +3331,12 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float weight = 0.5;
-                    vec4 base = vec4(1.0);
-                    vec4 offset = vec4(0.25, 0.5, 0.75, 1.0);
+                    float weight = 0.5f;
+                    vec4 base = vec4(1.0f);
+                    vec4 offset = vec4(0.25f, 0.5f, 0.75f, 1.0f);
                     vec4 scaled = base * weight;
                     vec4 biased = weight + base;
-                    vec4 shifted = base - 1.0;
+                    vec4 shifted = base - 1.0f;
                     vec4 divided = base / weight;
                     vec4 combined = base + offset;
                     base *= weight;
@@ -3153,7 +3352,7 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "float4 base = make_float4(1.0, 1.0, 1.0, 1.0);" in cuda_code
+        assert "float4 base = make_float4(1.0f, 1.0f, 1.0f, 1.0f);" in cuda_code
         assert "__device__ inline float4 cgl_float4_mul_scalar" in cuda_code
         assert "__device__ inline float4 cgl_scalar_add_float4" in cuda_code
         assert "__device__ inline float4 cgl_float4_sub_scalar" in cuda_code
@@ -3161,13 +3360,14 @@ class TestCudaCodeGen:
         assert "__device__ inline float4 cgl_float4_add" in cuda_code
         assert "float4 scaled = cgl_float4_mul_scalar(base, weight);" in cuda_code
         assert "float4 biased = cgl_scalar_add_float4(weight, base);" in cuda_code
-        assert "float4 shifted = cgl_float4_sub_scalar(base, 1.0);" in cuda_code
+        assert "float4 shifted = cgl_float4_sub_scalar(base, 1.0f);" in cuda_code
         assert "float4 divided = cgl_float4_div_scalar(base, weight);" in cuda_code
         assert "float4 combined = cgl_float4_add(base, offset);" in cuda_code
         assert "base = cgl_float4_mul_scalar(base, weight);" in cuda_code
         assert "(base * weight)" not in cuda_code
         assert "(weight + base)" not in cuda_code
         assert "make_float4(1.0);" not in cuda_code
+        assert "make_float4(1.0f);" not in cuda_code
 
     def test_vector_unary_negation_uses_cuda_helpers(self):
         source_code = """
@@ -3303,12 +3503,12 @@ class TestCudaCodeGen:
                 void main() {
                     bool cond = true;
                     bvec3 mask = bvec3(true, false, true);
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(4.0, 5.0, 6.0);
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(4.0f, 5.0f, 6.0f);
                     vec3 scalarSelected = cond ? a : b;
                     vec3 laneSelected = mask ? a : b;
-                    vec3 scalarArms = mask ? 1.0 : 0.0;
-                    vec3 mixedArm = mask ? a : 0.0;
+                    vec3 scalarArms = mask ? 1.0f : 0.0f;
+                    vec3 mixedArm = mask ? a : 0.0f;
                 }
             }
         }
@@ -3326,16 +3526,18 @@ class TestCudaCodeGen:
             "(mask.y ? a.y : b.y), (mask.z ? a.z : b.z));" in cuda_code
         )
         assert (
-            "float3 scalarArms = make_float3((mask.x ? 1.0 : 0.0), "
-            "(mask.y ? 1.0 : 0.0), (mask.z ? 1.0 : 0.0));" in cuda_code
+            "float3 scalarArms = make_float3((mask.x ? 1.0f : 0.0f), "
+            "(mask.y ? 1.0f : 0.0f), (mask.z ? 1.0f : 0.0f));" in cuda_code
         )
         assert (
-            "float3 mixedArm = make_float3((mask.x ? a.x : 0.0), "
-            "(mask.y ? a.y : 0.0), (mask.z ? a.z : 0.0));" in cuda_code
+            "float3 mixedArm = make_float3((mask.x ? a.x : 0.0f), "
+            "(mask.y ? a.y : 0.0f), (mask.z ? a.z : 0.0f));" in cuda_code
         )
         assert "float3 laneSelected = (mask ? a : b);" not in cuda_code
         assert "float3 scalarArms = (mask ? 1.0 : 0.0);" not in cuda_code
+        assert "float3 scalarArms = (mask ? 1.0f : 0.0f);" not in cuda_code
         assert "float3 mixedArm = (mask ? a : 0.0);" not in cuda_code
+        assert "float3 mixedArm = (mask ? a : 0.0f);" not in cuda_code
 
     def test_integer_vector_bitwise_ops_expand_cuda_components(self):
         source_code = """
@@ -3454,15 +3656,15 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 a = vec3(5.5, 6.5, 7.5);
-                    vec3 b = vec3(2.0, 2.5, 3.0);
+                    vec3 a = vec3(5.5f, 6.5f, 7.5f);
+                    vec3 b = vec3(2.0f, 2.5f, 3.0f);
                     vec3 vf = a % b;
-                    vec3 vs = a % 2.0;
-                    vec3 sv = 10.0 % b;
+                    vec3 vs = a % 2.0f;
+                    vec3 sv = 10.0f % b;
                     vec3 builtin = mod(a, b);
                     a %= b;
-                    dvec2 da = dvec2(5.5, 6.5);
-                    dvec2 db = dvec2(2.0, 2.5);
+                    dvec2 da = dvec2(5.5f, 6.5f);
+                    dvec2 db = dvec2(2.0f, 2.5f);
                     dvec2 dm = da % db;
                     da %= db;
                     ivec3 ia = ivec3(5, 6, 7);
@@ -3487,39 +3689,27 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "int scalar = (5 % 2);" in cuda_code
+        # `%` and `%=` are the truncated remainder (fmodf); mod() floors.
         assert (
-            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+            "return make_float3(fmodf(lhs.x, rhs.x), "
+            "fmodf(lhs.y, rhs.y), fmodf(lhs.z, rhs.z));" in cuda_code
         )
-        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
         assert (
-            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            "return make_double2(fmod(lhs.x, rhs.x), fmod(lhs.y, rhs.y));" in cuda_code
+        )
+        assert (
+            "__device__ inline float3 cgl_float3_glsl_mod(float3 lhs, float3 rhs)"
             in cuda_code
         )
-        assert "return lhs - rhs * floor(lhs / rhs);" in cuda_code
-        assert (
-            "__device__ inline float3 cgl_float3_mod(float3 lhs, float3 rhs)"
-            in cuda_code
-        )
-        assert (
-            "return make_float3(cgl_mod_float(lhs.x, rhs.x), "
-            "cgl_mod_float(lhs.y, rhs.y), cgl_mod_float(lhs.z, rhs.z));" in cuda_code
-        )
-        assert (
-            "__device__ inline double2 cgl_double2_mod(double2 lhs, double2 rhs)"
-            in cuda_code
-        )
-        assert (
-            "return make_double2(cgl_mod_double(lhs.x, rhs.x), "
-            "cgl_mod_double(lhs.y, rhs.y));" in cuda_code
-        )
+        assert "(lhs.x - rhs.x * floorf(lhs.x / rhs.x))" in cuda_code
         assert "__device__ inline int3 cgl_int3_mod(int3 lhs, int3 rhs)" in cuda_code
         assert (
             "__device__ inline uint4 cgl_uint4_mod(uint4 lhs, uint4 rhs)" in cuda_code
         )
         assert "float3 vf = cgl_float3_mod(a, b);" in cuda_code
-        assert "float3 vs = cgl_float3_mod_scalar(a, 2.0);" in cuda_code
-        assert "float3 sv = cgl_scalar_mod_float3(10.0, b);" in cuda_code
-        assert "float3 builtin = cgl_float3_mod(a, b);" in cuda_code
+        assert "float3 vs = cgl_float3_mod_scalar(a, 2.0f);" in cuda_code
+        assert "float3 sv = cgl_scalar_mod_float3(10.0f, b);" in cuda_code
+        assert "float3 builtin = cgl_float3_glsl_mod(a, b);" in cuda_code
         assert "a = cgl_float3_mod(a, b);" in cuda_code
         assert "double2 dm = cgl_double2_mod(da, db);" in cuda_code
         assert "da = cgl_double2_mod(da, db);" in cuda_code
@@ -3530,27 +3720,19 @@ class TestCudaCodeGen:
         assert "ua = cgl_uint4_mod(ua, ub);" in cuda_code
         assert "float3 vf = (a % b);" not in cuda_code
         assert "float3 builtin = fmodf(a, b);" not in cuda_code
-        assert "a %= b;" not in cuda_code
-        assert "da %= db;" not in cuda_code
-        assert "fmodf(" not in cuda_code
-        assert "fmod(" not in cuda_code
-        assert "int3 im = (ia % ib);" not in cuda_code
-        assert "ia %= ib;" not in cuda_code
-        assert "uint4 um = (ua % ub);" not in cuda_code
-        assert "ua %= ub;" not in cuda_code
 
-    def test_scalar_float_modulo_uses_cuda_floor_semantics(self, tmp_path):
+    def test_scalar_float_remainder_is_truncated_fmodf(self, tmp_path):
         source_code = """
         shader TestShader {
             compute {
                 void main() {
-                    float fa = 5.5;
-                    float fb = 2.0;
+                    float fa = 5.5f;
+                    float fb = 2.0f;
                     float fm = fa % fb;
-                    float flit = 5.5 % 2.0;
+                    float flit = 5.5f % 2.0f;
                     fa %= fb;
-                    double da = 5.5;
-                    double db = 2.0;
+                    double da = 5.5f;
+                    double db = 2.0f;
                     double dm = da % db;
                     da %= db;
                     int ia = 5;
@@ -3572,30 +3754,20 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert (
-            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
-        )
-        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
-        assert (
-            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
-            in cuda_code
-        )
-        assert "return lhs - rhs * floor(lhs / rhs);" in cuda_code
-        assert "float fm = cgl_mod_float(fa, fb);" in cuda_code
-        assert "float flit = cgl_mod_float(5.5, 2.0);" in cuda_code
-        assert "fa = cgl_mod_float(fa, fb);" in cuda_code
-        assert "double dm = cgl_mod_double(da, db);" in cuda_code
-        assert "da = cgl_mod_double(da, db);" in cuda_code
+        # `%` and `%=` on floats are the truncated remainder, as in HLSL, MSL and C.
+        assert "float fm = fmodf(fa, fb);" in cuda_code
+        assert "float flit = fmodf(5.5f, 2.0f);" in cuda_code
+        assert "fa = fmodf(fa, fb);" in cuda_code
+        assert "double dm = fmod(da, db);" in cuda_code
+        assert "da = fmod(da, db);" in cuda_code
         assert "int im = (ia % ib);" in cuda_code
         assert "ia %= ib;" in cuda_code
         assert "uint um = (ua % ub);" in cuda_code
         assert "ua %= ub;" in cuda_code
-        assert "float fm = (fa % fb);" not in cuda_code
-        assert "double dm = (da % db);" not in cuda_code
         assert "fa %= fb;" not in cuda_code
         assert "da %= db;" not in cuda_code
-        assert "fmodf(" not in cuda_code
-        assert "fmod(" not in cuda_code
+        assert "floorf(" not in cuda_code
+        assert "cgl_mod_float" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_user_defined_mod_function_is_not_lowered_to_cuda_builtin(self):
@@ -3607,7 +3779,7 @@ class TestCudaCodeGen:
 
             compute {
                 void main() {
-                    float value = mod(1.0, 2.0);
+                    float value = mod(1.0f, 2.0f);
                 }
             }
         }
@@ -3621,7 +3793,7 @@ class TestCudaCodeGen:
 
         assert "__device__ float mod(float x, float y)" in cuda_code
         assert "return (x + y);" in cuda_code
-        assert "float value = mod(1.0, 2.0);" in cuda_code
+        assert "float value = mod(1.0f, 2.0f);" in cuda_code
         assert "cgl_mod_float" not in cuda_code
 
     def test_vector_comparisons_emit_cuda_bool_vector_constructors(self):
@@ -3629,15 +3801,15 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(1.0, 0.0, 4.0);
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(1.0f, 0.0f, 4.0f);
                     bvec3 lt = a < b;
                     bvec3 le = a <= b;
                     bvec3 gt = a > b;
-                    bvec3 ge = a >= 0.0;
-                    bvec3 scalarLeft = 1.0 < b;
-                    vec4 c = vec4(1.0);
-                    vec4 d = vec4(2.0);
+                    bvec3 ge = a >= 0.0f;
+                    bvec3 scalarLeft = 1.0f < b;
+                    vec4 c = vec4(1.0f);
+                    vec4 d = vec4(2.0f);
                     bvec4 eq = c == d;
                     ivec2 ia = ivec2(1, 2);
                     ivec2 ib = ivec2(2, 2);
@@ -3666,12 +3838,12 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "uchar3 ge = make_uchar3((a.x >= 0.0), (a.y >= 0.0), (a.z >= 0.0));"
+            "uchar3 ge = make_uchar3((a.x >= 0.0f), (a.y >= 0.0f), (a.z >= 0.0f));"
             in cuda_code
         )
         assert (
-            "uchar3 scalarLeft = make_uchar3((1.0 < b.x), "
-            "(1.0 < b.y), (1.0 < b.z));" in cuda_code
+            "uchar3 scalarLeft = make_uchar3((1.0f < b.x), "
+            "(1.0f < b.y), (1.0f < b.z));" in cuda_code
         )
         assert (
             "uchar4 eq = make_uchar4((c.x == d.x), (c.y == d.y), "
@@ -3699,15 +3871,15 @@ class TestCudaCodeGen:
                 }
 
                 vec3 makeA() {
-                    return vec3(1.0, 2.0, 3.0);
+                    return vec3(1.0f, 2.0f, 3.0f);
                 }
 
                 vec3 makeB() {
-                    return vec3(4.0, 5.0, 6.0);
+                    return vec3(4.0f, 5.0f, 6.0f);
                 }
 
                 float nextWeight() {
-                    return 0.5;
+                    return 0.5f;
                 }
 
                 void main() {
@@ -3718,7 +3890,7 @@ class TestCudaCodeGen:
                     bvec3 ge = makeA() >= nextWeight();
                     bvec3 scalarLeft = nextWeight() < makeB();
                     vec3 selected = makeMask() ? makeA() : makeB();
-                    vec3 scalarBranch = makeMask() ? nextWeight() : 0.0;
+                    vec3 scalarBranch = makeMask() ? nextWeight() : 0.0f;
                 }
             }
         }
@@ -3801,68 +3973,136 @@ class TestCudaCodeGen:
         )
         assert (
             "float3 scalarBranch = cgl_float3_select_uchar3_xyz_float_float("
-            "makeMask(), nextWeight(), 0.0);" in cuda_code
+            "makeMask(), nextWeight(), 0.0f);" in cuda_code
         )
         assert "makeMask().x && makeOtherMask().x" not in cuda_code
         assert "makeA().x < makeB().x" not in cuda_code
         assert "makeMask().x ? makeA().x" not in cuda_code
         assert "makeMask().x ? nextWeight()" not in cuda_code
 
-    def test_scalar_geometric_builtins_use_abs(self):
+    def test_scalar_geometric_builtins_emit_cuda_math_calls(self):
         source_code = """
-        shader G {
-            float f(float a, float b, half h, half k, double d, double e) {
-                float x = length(a);
-                float y = distance(a, b);
-                float z = normalize(a);
-                half w = distance(h, k);
-                half v = length(h);
-                half u = normalize(h);
-                double q = distance(d, e) + length(d) + normalize(d);
-                return x + y + z + float(w) + float(v) + float(u) + float(q);
+        shader TestShader {
+            compute {
+                void main() {
+                    float f1 = 1.0;
+                    float f2 = 2.0;
+                    float fl = length(f1);
+                    float fd = distance(f1, f2);
+                    float fn = normalize(f1);
+
+                    double d1 = 3.0;
+                    double d2 = 4.0;
+                    double dl = length(d1);
+                    double dd = distance(d1, d2);
+                    double dn = normalize(d1);
+
+                    half h1 = half(1.0);
+                    half h2 = half(2.0);
+                    half hl = length(h1);
+                    half hd = distance(h1, h2);
+                    half hn = normalize(h1);
+
+                    int i1 = 2;
+                    bool b1 = true;
+
+                    float hf = distance(h1, f1);
+                    float f_lit = distance(f1, 1.0);
+                    float fi = distance(f1, 1);
+                    float hi = distance(h1, i1);
+                    float fb = distance(f1, b1);
+                }
             }
         }
         """
 
-        code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
 
-        assert "float x = fabsf(a);" in code
-        assert "float y = fabsf((a) - (b));" in code
-        assert "float z = cgl_float_normalize(a);" in code
-        assert "half w = cgl_half_distance(h, k);" in code
-        assert "half v = cgl_half_length(h);" in code
-        assert "half u = cgl_half_normalize(h);" in code
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float fl = fabsf(f1);" in cuda_code
+        assert "float fd = fabsf(f1 - f2);" in cuda_code
+        assert "float fn = (f1 / fabsf(f1));" in cuda_code
+        assert "double dl = fabs(d1);" in cuda_code
+        assert "double dd = fabs(d1 - d2);" in cuda_code
+        assert "double dn = (d1 / fabs(d1));" in cuda_code
+        assert "half hl = __float2half(fabsf(__half2float(h1)));" in cuda_code
         assert (
-            "double q = ((fabs((d) - (e)) + fabs(d)) + cgl_double_normalize(d));"
-            in code
+            "half hd = __float2half(fabsf(__half2float(h1) - __half2float(h2)));"
+            in cuda_code
         )
-        assert "return value / fabsf(value);" in code
-        assert "return value / fabs(value);" in code
         assert (
-            "return __float2half(fabsf(__half2float(lhs) - __half2float(rhs)));" in code
+            "half hn = __float2half(__half2float(h1) / fabsf(__half2float(h1)));"
+            in cuda_code
         )
-        assert "return __float2half(fabsf(__half2float(value)));" in code
-        assert "return __float2half(component / fabsf(component));" in code
-        for bare in ("length(a)", "distance(a, b)", "normalize(a)", "distance(h, k)"):
-            assert f" = {bare};" not in code
+        assert "float hf = fabsf(__half2float(h1) - f1);" in cuda_code
+        assert "float f_lit = fabsf(f1 - 1.0f);" in cuda_code
+        assert "float fi = fabsf(f1 - 1);" in cuda_code
+        assert "float hi = fabsf(__half2float(h1) - i1);" in cuda_code
+        assert "float fb = distance(f1, b1);" in cuda_code
+        assert "h1 - f1" not in cuda_code
+        assert "h1 - i1" not in cuda_code
+        assert "fabsf(f1 - b1)" not in cuda_code
+        assert "length(" not in cuda_code
+        assert "normalize(" not in cuda_code
+        assert "distance(f1, f2)" not in cuda_code
+        assert "distance(d1, d2)" not in cuda_code
+        assert "distance(h1, h2)" not in cuda_code
+        assert "distance(h1, f1)" not in cuda_code
+        assert "distance(f1, 1.0)" not in cuda_code
+        assert "distance(f1, 1)" not in cuda_code
+        assert "distance(h1, i1)" not in cuda_code
+
+    def test_scalar_normalize_evaluates_operand_once_and_distance_is_typed(self):
+        source_code = """
+        shader TestShader {
+            float next(float x) {
+                return x * 3.0 + 1.0;
+            }
+            float f(vec3 v, float a, half h) {
+                float n = normalize(next(a));
+                half hn = normalize(half(next(a)));
+                vec3 m = v * distance(h, a);
+                return n + float(hn) + m.x;
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float n = cgl_normalize_float(next(a));" in cuda_code
+        assert "half hn = cgl_normalize_half(__float2half(next(a)));" in cuda_code
+        assert "return value / fabsf(value);" in cuda_code
+        assert "return __float2half(widened / fabsf(widened));" in cuda_code
+        assert cuda_code.count("next(a)") == 2
+        assert (
+            "float3 m = cgl_float3_mul_scalar(v, fabsf(__half2float(h) - a));"
+            in cuda_code
+        )
 
     def test_vector_geometric_builtins_emit_cuda_helpers(self):
         source_code = """
         shader TestShader {
             compute {
                 void main() {
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(4.0, 5.0, 6.0);
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(4.0f, 5.0f, 6.0f);
                     float d = dot(a, b);
                     vec3 c = cross(a, b);
                     vec3 n = normalize(a);
-                    float weight = 0.5;
+                    float weight = 0.5f;
                     vec3 scaled = normalize(a) * weight;
                     vec3 wave = sin(a);
-                    vec3 noisy = -1.0 + 2.0 * fract(sin(a) * 43758.5453);
-                    vec3 fresnel = (1.0 - a) * pow(max(1.0 - weight, 0.0), 5.0);
+                    vec3 noisy = -1.0f + 2.0f * fract(sin(a) * 43758.5453f);
+                    vec3 fresnel = (1.0f - a) * pow(max(1.0f - weight, 0.0f), 5.0f);
                     float l = length(a);
-                    dvec2 da = dvec2(3.0, 4.0);
+                    dvec2 da = dvec2(3.0f, 4.0f);
                     double dl = length(da);
                 }
             }
@@ -3910,9 +4150,9 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert "float3 wave = cgl_float3_sin(a);" in cuda_code
-        assert "cgl_float3_mul_scalar(cgl_float3_sin(a), 43758.5453)" in cuda_code
-        assert "cgl_scalar_mul_float3(2.0, cgl_float3_fract" in cuda_code
-        assert "cgl_float3_mul_scalar(cgl_scalar_sub_float3(1.0, a), powf" in cuda_code
+        assert "cgl_float3_mul_scalar(cgl_float3_sin(a), 43758.5453f)" in cuda_code
+        assert "cgl_scalar_mul_float3(2.0f, cgl_float3_fract" in cuda_code
+        assert "cgl_float3_mul_scalar(cgl_scalar_sub_float3(1.0f, a), powf" in cuda_code
         assert "float l = cgl_float3_length(a);" in cuda_code
         assert "double dl = cgl_double2_length(da);" in cuda_code
         assert "float d = dot(a, b);" not in cuda_code
@@ -3921,24 +4161,70 @@ class TestCudaCodeGen:
         assert "sinf(a)" not in cuda_code
         assert "cgl_float3_normalize(a) * weight" not in cuda_code
         assert "2.0 * cgl_float3_fract" not in cuda_code
+        assert "2.0f * cgl_float3_fract" not in cuda_code
         assert "float l = length(a);" not in cuda_code
+
+    def test_half_vector_geometric_builtins_use_float_helpers(self):
+        source_code = """
+        shader G {
+            half f(f16vec3 s, f16vec3 r, f16vec4 q) {
+                half b = length(s);
+                f16vec3 n = normalize(s);
+                half d = distance(s, r);
+                f16vec3 c = cross(s, r);
+                half e = length(q);
+                f16vec3 m = r * distance(s, r);
+                return b + n.x + d + c.x + e + m.x;
+            }
+            float g(vec3 a, vec3 b) {
+                return distance(a, b);
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "half b = cgl_cgl_half3_length(s);" in cuda_code
+        assert "cgl_half3 n = cgl_cgl_half3_normalize(s);" in cuda_code
+        assert "half d = cgl_cgl_half3_distance(s, r);" in cuda_code
+        assert "cgl_half3 c = cgl_cgl_half3_cross(s, r);" in cuda_code
+        assert "half e = cgl_cgl_half4_length(q);" in cuda_code
+        assert (
+            "cgl_half3 m = cgl_cgl_half3_mul_scalar(r, cgl_cgl_half3_distance(s, r));"
+            in cuda_code
+        )
+        assert "return cgl_float3_distance(a, b);" in cuda_code
+        assert (
+            "__device__ inline half cgl_cgl_half3_length(cgl_half3 value)" in cuda_code
+        )
+        assert "__float2half(sqrtf((__half2float(value.x) *" in cuda_code
+        assert "float inv_length = 1.0f / sqrtf(" in cuda_code
+        assert "float dx = __half2float(lhs.x) - __half2float(rhs.x);" in cuda_code
+        assert "float dx = lhs.x - rhs.x;" in cuda_code
+        assert (
+            "(__half2float(lhs.y) * __half2float(rhs.z) - "
+            "__half2float(lhs.z) * __half2float(rhs.y))" in cuda_code
+        )
+        for bare in ("length(s)", "normalize(s)", "distance(s, r)", "cross(s, r)"):
+            assert f" = {bare};" not in cuda_code
+        assert "return distance(a, b);" not in cuda_code
 
     def test_matrix_types_and_constructors_emit_cuda_names(self, tmp_path):
         source_code = """
         shader TestShader {
             compute {
                 void main() {
-                    mat2 transform = mat2(1.0, 0.0, 0.0, 1.0);
-                    mat2 transform2 = mat2(1.0);
+                    mat2 transform = mat2(1.0f, 0.0f, 0.0f, 1.0f);
+                    mat2 transform2 = mat2(1.0f);
                     mat2 combined = transform + transform2;
                     mat2 product = transform * transform2;
-                    mat2 scaled = 2.0 * transform;
-                    vec2 direction = vec2(1.0, 2.0);
+                    mat2 scaled = 2.0f * transform;
+                    vec2 direction = vec2(1.0f, 2.0f);
                     vec2 transformed = transform * direction;
                     vec2 projected = direction * transform;
                     mat3x4 affine;
-                    dmat2 precise = dmat2(1.0, 0.0, 0.0, 1.0);
-                    dmat2 preciseProduct = precise * dmat2(1.0);
+                    dmat2 precise = dmat2(1.0f, 0.0f, 0.0f, 1.0f);
+                    dmat2 preciseProduct = precise * dmat2(1.0f);
                     dmat4x3 jacobian;
                 }
             }
@@ -3952,16 +4238,16 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "float2x2 transform = float2x2(1.0, 0.0, 0.0, 1.0);" in cuda_code
-        assert "float2x2 transform2 = float2x2(1.0);" in cuda_code
+        assert "float2x2 transform = float2x2(1.0f, 0.0f, 0.0f, 1.0f);" in cuda_code
+        assert "float2x2 transform2 = float2x2(1.0f);" in cuda_code
         assert "float2x2 combined = (transform + transform2);" in cuda_code
         assert "float2x2 product = (transform * transform2);" in cuda_code
-        assert "float2x2 scaled = (2.0 * transform);" in cuda_code
+        assert "float2x2 scaled = (2.0f * transform);" in cuda_code
         assert "float2 transformed = (transform * direction);" in cuda_code
         assert "float2 projected = (direction * transform);" in cuda_code
         assert "float3x4 affine;" in cuda_code
-        assert "double2x2 precise = double2x2(1.0, 0.0, 0.0, 1.0);" in cuda_code
-        assert "double2x2 preciseProduct = (precise * double2x2(1.0));" in cuda_code
+        assert "double2x2 precise = double2x2(1.0f, 0.0f, 0.0f, 1.0f);" in cuda_code
+        assert "double2x2 preciseProduct = (precise * double2x2(1.0f));" in cuda_code
         assert "double4x3 jacobian;" in cuda_code
         assert "__host__ __device__ explicit float2x2(float diagonal)" in cuda_code
         assert (
@@ -4013,12 +4299,12 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec2<f64> precise = vec2<f64>(1.0, 2.0);
+                    vec2<f64> precise = vec2<f64>(1.0f, 2.0f);
                     vec3<i32> index = vec3<i32>(1, 2, 3);
                     vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
                     vec4<u8> bytes = vec4<u8>(1, 2, 3, 4);
                     vec2<i16> shorts = vec2<i16>(1, 2);
-                    vec2<f16> halves = vec2<f16>(1.0, 2.0);
+                    vec2<f16> halves = vec2<f16>(1.0f, 2.0f);
                     vec2<bool> flags = vec2<bool>(true, false);
                 }
             }
@@ -4032,12 +4318,12 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "double2 precise = make_double2(1.0, 2.0);" in cuda_code
+        assert "double2 precise = make_double2(1.0f, 2.0f);" in cuda_code
         assert "int3 index = make_int3(1, 2, 3);" in cuda_code
         assert "uint4 mask = make_uint4(1, 2, 3, 4);" in cuda_code
         assert "uchar4 bytes = make_uchar4(1, 2, 3, 4);" in cuda_code
         assert "short2 shorts = make_short2(1, 2);" in cuda_code
-        assert "half2 halves = __floats2half2_rn(1.0, 2.0);" in cuda_code
+        assert "half2 halves = __floats2half2_rn(1.0f, 2.0f);" in cuda_code
         assert "uchar2 flags = make_uchar2(true, false);" in cuda_code
         assert "u84" not in cuda_code
         assert "i162" not in cuda_code
@@ -4051,16 +4337,16 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = 2.5;
+                    float x = 2.5f;
                     float a = inversesqrt(x);
                     float b = round(x);
                     float c = trunc(x);
-                    float d = mod(x, 2.0);
+                    float d = mod(x, 2.0f);
                     float e = asin(x);
-                    float f = atan2(x, 1.0);
+                    float f = atan2(x, 1.0f);
                     float g = exp2(x);
                     float h = log2(x);
-                    float i = mix(0.0, 1.0, 0.25);
+                    float i = mix(0.0f, 1.0f, 0.25f);
                 }
             }
         }
@@ -4080,13 +4366,14 @@ class TestCudaCodeGen:
             "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
         )
         assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
-        assert "float d = cgl_mod_float(x, 2.0);" in cuda_code
+        assert "float d = cgl_mod_float(x, 2.0f);" in cuda_code
         assert "float e = asinf(x);" in cuda_code
-        assert "float f = atan2f(x, 1.0);" in cuda_code
+        assert "float f = atan2f(x, 1.0f);" in cuda_code
         assert "float g = exp2f(x);" in cuda_code
         assert "float h = log2f(x);" in cuda_code
-        assert "float i = (0.0 + ((1.0 - 0.0) * 0.25));" in cuda_code
+        assert "float i = (0.0f + ((1.0f - 0.0f) * 0.25f));" in cuda_code
         assert "float i = lerp(0.0, 1.0, 0.25);" not in cuda_code
+        assert "float i = lerp(0.0f, 1.0f, 0.25f);" not in cuda_code
         assert "inversesqrt(" not in cuda_code
         assert "mod(" not in cuda_code
         assert "fmodf(" not in cuda_code
@@ -4155,16 +4442,16 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 float inverseSqrt(float x) {
-                    return x + 1.0;
+                    return x + 1.0f;
                 }
 
                 float rsqrt(float x) {
-                    return x - 1.0;
+                    return x - 1.0f;
                 }
 
                 void main() {
-                    float value = inverseSqrt(4.0);
-                    float hlslValue = rsqrt(4.0);
+                    float value = inverseSqrt(4.0f);
+                    float hlslValue = rsqrt(4.0f);
                 }
             }
         }
@@ -4177,11 +4464,14 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "__device__ float inverseSqrt(float x)" in cuda_code
-        assert "__device__ float rsqrt(float x)" in cuda_code
-        assert "float value = inverseSqrt(4.0);" in cuda_code
-        assert "float hlslValue = rsqrt(4.0);" in cuda_code
+        # rsqrt is a CUDA math function, so the user function is renamed (issue #3326).
+        assert "__device__ float rsqrt_fn(float x)" in cuda_code
+        assert "float value = inverseSqrt(4.0f);" in cuda_code
+        assert "float hlslValue = rsqrt_fn(4.0f);" in cuda_code
         assert "float value = rsqrtf(4.0);" not in cuda_code
+        assert "float value = rsqrtf(4.0f);" not in cuda_code
         assert "float hlslValue = rsqrtf(4.0);" not in cuda_code
+        assert "float hlslValue = rsqrtf(4.0f);" not in cuda_code
 
     def test_inverse_sqrt_aliases_feed_cuda_bitcasts(self, tmp_path):
         source_code = """
@@ -4479,11 +4769,11 @@ class TestCudaCodeGen:
                 }
 
                 float asfloat(uint value) {
-                    return 1.0;
+                    return 1.0f;
                 }
 
                 void main() {
-                    int signedBits = floatBitsToInt(1.0);
+                    int signedBits = floatBitsToInt(1.0f);
                     float fromUint = asfloat(1u);
                 }
             }
@@ -4498,9 +4788,10 @@ class TestCudaCodeGen:
 
         assert "__device__ int floatBitsToInt(float value)" in cuda_code
         assert "__device__ float asfloat(uint value)" in cuda_code
-        assert "int signedBits = floatBitsToInt(1.0);" in cuda_code
+        assert "int signedBits = floatBitsToInt(1.0f);" in cuda_code
         assert "float fromUint = asfloat(1u);" in cuda_code
         assert "__float_as_int(1.0)" not in cuda_code
+        assert "__float_as_int(1.0f)" not in cuda_code
         assert "__uint_as_float(1u)" not in cuda_code
 
     def test_integer_bit_builtins_lower_to_cuda_intrinsics(self):
@@ -4692,23 +4983,23 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = 2.0;
-                    float y = 3.0;
-                    float z = 4.0;
+                    float x = 2.0f;
+                    float y = 3.0f;
+                    float z = 4.0f;
                     float fused = fma(x, y, z);
                     float multiplyAdd = mad(x, y, z);
 
-                    double dx = 2.0;
-                    double dy = 3.0;
-                    double dz = 4.0;
+                    double dx = 2.0f;
+                    double dy = 3.0f;
+                    double dz = 4.0f;
                     double preciseFused = fma(dx, dy, dz);
                     double preciseMad = mad(dx, dy, dz);
 
-                    vec3 vx = vec3(1.0, 2.0, 3.0);
-                    vec3 vy = vec3(4.0, 5.0, 6.0);
-                    vec3 vz = vec3(7.0, 8.0, 9.0);
+                    vec3 vx = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 vy = vec3(4.0f, 5.0f, 6.0f);
+                    vec3 vz = vec3(7.0f, 8.0f, 9.0f);
                     vec3 vectorFused = fma(vx, vy, vz);
-                    vec3 scalarMiddle = mad(vx, 2.0, vz);
+                    vec3 scalarMiddle = mad(vx, 2.0f, vz);
                     vec3 nested = fract(fma(vx, vy, vz));
                 }
             }
@@ -4740,7 +5031,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float3 scalarMiddle = "
-            "cgl_float3_fma_float3_xyz_float_float3_xyz(vx, 2.0, vz);" in cuda_code
+            "cgl_float3_fma_float3_xyz_float_float3_xyz(vx, 2.0f, vz);" in cuda_code
         )
         assert (
             "float3 nested = cgl_float3_fract("
@@ -4754,8 +5045,8 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    double x = 4.0;
-                    double y = 2.0;
+                    double x = 4.0f;
+                    double y = 2.0f;
                     double a = sqrt(x);
                     double b = sin(x);
                     double c = cos(x);
@@ -4770,9 +5061,9 @@ class TestCudaCodeGen:
                     double l = trunc(x);
                     double m = inversesqrt(x);
                     double n = sqrt(sin(x) + cos(x));
-                    float fx = 4.0;
+                    float fx = 4.0f;
                     float fa = sqrt(fx);
-                    float fb = pow(fx, 2.0);
+                    float fb = pow(fx, 2.0f);
                 }
             }
         }
@@ -4799,7 +5090,7 @@ class TestCudaCodeGen:
         assert "double m = (1.0 / sqrt(x));" in cuda_code
         assert "double n = sqrt((sin(x) + cos(x)));" in cuda_code
         assert "float fa = sqrtf(fx);" in cuda_code
-        assert "float fb = powf(fx, 2.0);" in cuda_code
+        assert "float fb = powf(fx, 2.0f);" in cuda_code
         assert "sqrtf(x)" not in cuda_code
         assert "sinf(x)" not in cuda_code
         assert "cosf(x)" not in cuda_code
@@ -4882,8 +5173,8 @@ class TestCudaCodeGen:
 
             compute {
                 void main() {
-                    float a = norm(2, 1.5);
-                    float b = rnorm(1.0, 2.0, 3.0);
+                    float a = norm(2, 1.5f);
+                    float b = rnorm(1.0f, 2.0f, 3.0f);
                 }
             }
         }
@@ -4895,8 +5186,9 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float a = norm(2, 1.5);" in cuda_code
-        assert "float b = rnorm(1.0, 2.0, 3.0);" in cuda_code
+        # norm and rnorm are CUDA math functions, so the user functions are renamed (issue #3326).
+        assert "float a = norm_fn(2, 1.5f);" in cuda_code
+        assert "float b = rnorm_fn(1.0f, 2.0f, 3.0f);" in cuda_code
         assert "normf" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
@@ -4934,13 +5226,13 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 y = vec3(1.0, 2.0, 3.0);
-                    vec3 x = vec3(4.0, 5.0, 6.0);
+                    vec3 y = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 x = vec3(4.0f, 5.0f, 6.0f);
                     vec3 a = atan2(y, x);
-                    dvec2 dy = dvec2(1.0, 2.0);
-                    dvec2 dx = dvec2(3.0, 4.0);
+                    dvec2 dy = dvec2(1.0f, 2.0f);
+                    dvec2 dx = dvec2(3.0f, 4.0f);
                     dvec2 da = atan2(dy, dx);
-                    float s = atan2(1.0, 2.0);
+                    float s = atan2(1.0f, 2.0f);
                 }
             }
         }
@@ -4966,7 +5258,7 @@ class TestCudaCodeGen:
         assert "return make_double2(atan2(y.x, x.x), atan2(y.y, x.y));" in cuda_code
         assert "float3 a = cgl_float3_atan2(y, x);" in cuda_code
         assert "double2 da = cgl_double2_atan2(dy, dx);" in cuda_code
-        assert "float s = atan2f(1.0, 2.0);" in cuda_code
+        assert "float s = atan2f(1.0f, 2.0f);" in cuda_code
         assert "float3 a = atan2f(" not in cuda_code
         assert "double2 da = atan2f(" not in cuda_code
 
@@ -4975,14 +5267,14 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 y = vec3(1.0, 2.0, 3.0);
-                    vec3 x = vec3(4.0, 5.0, 6.0);
+                    vec3 y = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 x = vec3(4.0f, 5.0f, 6.0f);
                     vec3 a = atan(y, x);
-                    float s = atan(1.0, 2.0);
-                    double dy = 1.0;
-                    double dx = 2.0;
+                    float s = atan(1.0f, 2.0f);
+                    double dy = 1.0f;
+                    double dx = 2.0f;
                     double ds = atan(dy, dx);
-                    float slope = atan(1.0 / 2.0);
+                    float slope = atan(1.0f / 2.0f);
                 }
             }
         }
@@ -4995,11 +5287,12 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert "float3 a = cgl_float3_atan2(y, x);" in cuda_code
-        assert "float s = atan2f(1.0, 2.0);" in cuda_code
+        assert "float s = atan2f(1.0f, 2.0f);" in cuda_code
         assert "double ds = atan2(dy, dx);" in cuda_code
-        assert "float slope = atanf((1.0 / 2.0));" in cuda_code
+        assert "float slope = atanf((1.0f / 2.0f));" in cuda_code
         assert "atanf(y, x)" not in cuda_code
         assert "atanf(1.0, 2.0)" not in cuda_code
+        assert "atanf(1.0f, 2.0f)" not in cuda_code
         assert "atan(dy, dx)" not in cuda_code
 
     def test_user_defined_two_argument_atan_is_not_lowered_to_cuda_atan2(self):
@@ -5011,7 +5304,7 @@ class TestCudaCodeGen:
                 }
 
                 void main() {
-                    float angle = atan(1.0, 2.0);
+                    float angle = atan(1.0f, 2.0f);
                 }
             }
         }
@@ -5023,9 +5316,11 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "__device__ float atan(float y, float x)" in cuda_code
-        assert "float angle = atan(1.0, 2.0);" in cuda_code
+        # atan is a CUDA math function, so the user function is renamed (issue #3326).
+        assert "__device__ float atan_fn(float y, float x)" in cuda_code
+        assert "float angle = atan_fn(1.0f, 2.0f);" in cuda_code
         assert "atan2f(1.0, 2.0)" not in cuda_code
+        assert "atan2f(1.0f, 2.0f)" not in cuda_code
 
     def test_sign_builtin_lowers_to_cuda_expressions(self):
         source_code = """
@@ -5088,12 +5383,12 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 float nextWeight() {
-                    return 0.5;
+                    return 0.5f;
                 }
 
                 void main() {
-                    vec3 a = vec3(1.0, 2.0, 3.0);
-                    vec3 b = vec3(3.0, 2.0, 1.0);
+                    vec3 a = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 b = vec3(3.0f, 2.0f, 1.0f);
                     vec3 lo = min(a, b);
                     vec3 hi = max(a, b);
                     vec3 capped = min(a, nextWeight());
@@ -5101,7 +5396,7 @@ class TestCudaCodeGen:
                     ivec3 ia = ivec3(1, 2, 3);
                     ivec3 ib = ivec3(3, 2, 1);
                     ivec3 ilo = min(ia, ib);
-                    float scalar = min(0.25, 1.0);
+                    float scalar = min(0.25f, 1.0f);
                 }
             }
         }
@@ -5144,7 +5439,7 @@ class TestCudaCodeGen:
         assert "float3 capped = cgl_float3_min_scalar(a, nextWeight());" in cuda_code
         assert "float3 raised = cgl_scalar_max_float3(nextWeight(), b);" in cuda_code
         assert "int3 ilo = cgl_int3_min(ia, ib);" in cuda_code
-        assert "float scalar = fminf(0.25, 1.0);" in cuda_code
+        assert "float scalar = fminf(0.25f, 1.0f);" in cuda_code
         assert "float3 lo = fminf(a, b);" not in cuda_code
         assert "float3 hi = fmaxf(a, b);" not in cuda_code
         assert "float3 capped = fminf(a, nextWeight());" not in cuda_code
@@ -5161,10 +5456,10 @@ class TestCudaCodeGen:
                     uint mixed = min(y, 32u);
                     int64_t w = 7;
                     uint64_t uw = 7u;
-                    double d = 1.5;
-                    double wide = max(d, 2.0);
-                    float f = 0.5;
-                    float narrow = min(f, 1.0);
+                    double d = 1.5f;
+                    double wide = max(d, 2.0f);
+                    float f = 0.5f;
+                    float narrow = min(f, 1.0f);
                     int64_t wide64 = max(w, 3);
                     uint64_t big = min(uw, 3u);
                     int64_t same64 = min(w, w);
@@ -5182,8 +5477,8 @@ class TestCudaCodeGen:
         assert "uint a = min(x, 32u);" in cuda_code
         assert "int b = max(y, 3);" in cuda_code
         assert "uint mixed = min(static_cast<unsigned int>(y), 32u);" in cuda_code
-        assert "double wide = fmax(d, 2.0);" in cuda_code
-        assert "float narrow = fminf(f, 1.0);" in cuda_code
+        assert "double wide = fmax(d, 2.0f);" in cuda_code
+        assert "float narrow = fminf(f, 1.0f);" in cuda_code
         # int64_t is long on LP64 Linux, so both operands are cast to one type.
         assert (
             "int64_t wide64 = max(static_cast<long long>(w), "
@@ -5197,6 +5492,7 @@ class TestCudaCodeGen:
         assert "fminf(x, 32u)" not in cuda_code
         assert "fmaxf(y, 3)" not in cuda_code
         assert "fminf(d, 2.0)" not in cuda_code
+        assert "fminf(d, 2.0f)" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_mix_builtin_lowers_vector_cases_to_cuda_helpers(self):
@@ -5204,13 +5500,13 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 vx = vec3(1.0, 2.0, 3.0);
-                    vec3 vy = vec3(4.0, 5.0, 6.0);
-                    vec3 v = mix(vx, vy, 0.5);
-                    vec3 wrapped = fract(mix(vx, vy, 0.5));
-                    dvec2 px = dvec2(1.0, 2.0);
-                    dvec2 py = dvec2(3.0, 4.0);
-                    dvec2 p = mix(px, py, dvec2(0.25, 0.75));
+                    vec3 vx = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 vy = vec3(4.0f, 5.0f, 6.0f);
+                    vec3 v = mix(vx, vy, 0.5f);
+                    vec3 wrapped = fract(mix(vx, vy, 0.5f));
+                    dvec2 px = dvec2(1.0f, 2.0f);
+                    dvec2 py = dvec2(3.0f, 4.0f);
+                    dvec2 p = mix(px, py, dvec2(0.25f, 0.75f));
                 }
             }
         }
@@ -5239,14 +5535,14 @@ class TestCudaCodeGen:
             "return make_double2((x.x + ((y.x - x.x) * a.x)), "
             "(x.y + ((y.y - x.y) * a.y)));" in cuda_code
         )
-        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5);" in cuda_code
+        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5f);" in cuda_code
         assert (
             "float3 wrapped = cgl_float3_fract("
-            "cgl_float3_mix_scalar(vx, vy, 0.5));" in cuda_code
+            "cgl_float3_mix_scalar(vx, vy, 0.5f));" in cuda_code
         )
         assert (
             "double2 p = cgl_double2_mix_vector(px, py, "
-            "make_double2(0.25, 0.75));" in cuda_code
+            "make_double2(0.25f, 0.75f));" in cuda_code
         )
         assert "float3 v = lerp(" not in cuda_code
         assert "double2 p = lerp(" not in cuda_code
@@ -5257,11 +5553,11 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float scalar = lerp(0.0, 1.0, 0.25);
-                    vec3 vx = vec3(1.0, 2.0, 3.0);
-                    vec3 vy = vec3(4.0, 5.0, 6.0);
-                    vec3 v = lerp(vx, vy, 0.5);
-                    vec3 wrapped = fract(lerp(vx, vy, 0.5));
+                    float scalar = lerp(0.0f, 1.0f, 0.25f);
+                    vec3 vx = vec3(1.0f, 2.0f, 3.0f);
+                    vec3 vy = vec3(4.0f, 5.0f, 6.0f);
+                    vec3 v = lerp(vx, vy, 0.5f);
+                    vec3 wrapped = fract(lerp(vx, vy, 0.5f));
                 }
             }
         }
@@ -5273,15 +5569,15 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float scalar = (0.0 + ((1.0 - 0.0) * 0.25));" in cuda_code
+        assert "float scalar = (0.0f + ((1.0f - 0.0f) * 0.25f));" in cuda_code
         assert (
             "__device__ inline float3 cgl_float3_mix_scalar"
             "(float3 x, float3 y, float a)" in cuda_code
         )
-        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5);" in cuda_code
+        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5f);" in cuda_code
         assert (
             "float3 wrapped = cgl_float3_fract("
-            "cgl_float3_mix_scalar(vx, vy, 0.5));" in cuda_code
+            "cgl_float3_mix_scalar(vx, vy, 0.5f));" in cuda_code
         )
         assert "lerp(" not in cuda_code
         assert "float3 wrapped = cgl_fract_float(" not in cuda_code
@@ -5347,11 +5643,11 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 float nextX() {
-                    return 0.0;
+                    return 0.0f;
                 }
 
                 float nextY() {
-                    return 1.0;
+                    return 1.0f;
                 }
 
                 bool nextFlag() {
@@ -5360,7 +5656,7 @@ class TestCudaCodeGen:
 
                 void main() {
                     bool flag = true;
-                    float literal = mix(0.0, 1.0, flag);
+                    float literal = mix(0.0f, 1.0f, flag);
                     float complexValue = mix(nextX(), nextY(), nextFlag());
                 }
             }
@@ -5378,12 +5674,13 @@ class TestCudaCodeGen:
             "(bool condition, float true_value, float false_value)" in cuda_code
         )
         assert "return condition ? true_value : false_value;" in cuda_code
-        assert "float literal = (flag ? 1.0 : 0.0);" in cuda_code
+        assert "float literal = (flag ? 1.0f : 0.0f);" in cuda_code
         assert (
             "float complexValue = cgl_float_select("
             "nextFlag(), nextY(), nextX());" in cuda_code
         )
         assert "float literal = lerp(0.0, 1.0, flag);" not in cuda_code
+        assert "float literal = lerp(0.0f, 1.0f, flag);" not in cuda_code
         assert (
             "float complexValue = lerp(nextX(), nextY(), nextFlag());" not in cuda_code
         )
@@ -5439,12 +5736,12 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = fract(1.25);
-                    float y = frac(1.75);
-                    double d = 1.25;
+                    float x = fract(1.25f);
+                    float y = frac(1.75f);
+                    double d = 1.25f;
                     double z = fract(d);
-                    vec3 v = fract(vec3(1.25, 2.5, 3.75));
-                    dvec2 p = fract(dvec2(1.25, 2.5));
+                    vec3 v = fract(vec3(1.25f, 2.5f, 3.75f));
+                    dvec2 p = fract(dvec2(1.25f, 2.5f));
                 }
             }
         }
@@ -5473,13 +5770,17 @@ class TestCudaCodeGen:
             "cgl_fract_double(value.x), "
             "cgl_fract_double(value.y));" in cuda_code
         )
-        assert "float x = cgl_fract_float(1.25);" in cuda_code
-        assert "float y = cgl_fract_float(1.75);" in cuda_code
+        assert "float x = cgl_fract_float(1.25f);" in cuda_code
+        assert "float y = cgl_fract_float(1.75f);" in cuda_code
         assert "double z = cgl_fract_double(d);" in cuda_code
-        assert "float3 v = cgl_float3_fract(make_float3(1.25, 2.5, 3.75));" in cuda_code
-        assert "double2 p = cgl_double2_fract(make_double2(1.25, 2.5));" in cuda_code
+        assert (
+            "float3 v = cgl_float3_fract(make_float3(1.25f, 2.5f, 3.75f));" in cuda_code
+        )
+        assert "double2 p = cgl_double2_fract(make_double2(1.25f, 2.5f));" in cuda_code
         assert "float x = fract(1.25);" not in cuda_code
+        assert "float x = fract(1.25f);" not in cuda_code
         assert "float y = frac(1.75);" not in cuda_code
+        assert "float y = frac(1.75f);" not in cuda_code
         assert "double z = fract(d);" not in cuda_code
         assert " = fract(make_" not in cuda_code
 
@@ -5488,11 +5789,11 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = -0.25;
-                    float y = clamp(x, 0.0, 1.0);
-                    double v = 0.25;
-                    double lo = 0.0;
-                    double hi = 1.0;
+                    float x = -0.25f;
+                    float y = clamp(x, 0.0f, 1.0f);
+                    double v = 0.25f;
+                    double lo = 0.0f;
+                    double hi = 1.0f;
                     double d = clamp(v, lo, hi);
                     int n = 2;
                     int i = clamp(n, 0, 1);
@@ -5508,7 +5809,7 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "float y = fmaxf(0.0, fminf(1.0, x));" in cuda_code
+        assert "float y = fmaxf(0.0f, fminf(1.0f, x));" in cuda_code
         assert "double d = fmax(lo, fmin(hi, v));" in cuda_code
         assert "int i = ((n) < (0) ? (0) : ((n) > (1) ? (1) : (n)));" in cuda_code
         assert "double d = fmaxf(" not in cuda_code
@@ -5566,8 +5867,8 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 v = vec3(2.0, -1.0, 0.5);
-                    vec3 c = clamp(v, vec3(0.0), vec3(1.0));
+                    vec3 v = vec3(2.0f, -1.0f, 0.5f);
+                    vec3 c = clamp(v, vec3(0.0f), vec3(1.0f));
                 }
             }
         }
@@ -5584,7 +5885,8 @@ class TestCudaCodeGen:
         assert "return make_float3(" in cuda_code
         assert (
             "float3 c = cgl_float3_clamp("
-            "v, make_float3(0.0, 0.0, 0.0), make_float3(1.0, 1.0, 1.0));" in cuda_code
+            "v, make_float3(0.0f, 0.0f, 0.0f), make_float3(1.0f, 1.0f, 1.0f));"
+            in cuda_code
         )
         assert "float3 c = clamp(" not in cuda_code
 
@@ -5593,8 +5895,8 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    vec3 v = vec3(2.0, -1.0, 0.5);
-                    vec3 c = clamp(v, 0.0, 1.0);
+                    vec3 v = vec3(2.0f, -1.0f, 0.5f);
+                    vec3 c = clamp(v, 0.0f, 1.0f);
                 }
             }
         }
@@ -5612,7 +5914,7 @@ class TestCudaCodeGen:
             "cgl_float3_clamp_scalar_min_scalar_max" in cuda_code
         )
         assert (
-            "float3 c = cgl_float3_clamp_scalar_min_scalar_max(v, 0.0, 1.0);"
+            "float3 c = cgl_float3_clamp_scalar_min_scalar_max(v, 0.0f, 1.0f);"
             in cuda_code
         )
         assert "float3 c = clamp(" not in cuda_code
@@ -5622,10 +5924,10 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 void main() {
-                    float x = saturate(1.25);
-                    double d = 1.25;
+                    float x = saturate(1.25f);
+                    double d = 1.25f;
                     double y = saturate(d);
-                    vec3 v = saturate(vec3(2.0, -1.0, 0.5));
+                    vec3 v = saturate(vec3(2.0f, -1.0f, 0.5f));
                     int n = 2;
                     int i = saturate(n);
                 }
@@ -5640,7 +5942,7 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "float x = fmaxf(0.0, fminf(1.0, 1.25));" in cuda_code
+        assert "float x = fmaxf(0.0, fminf(1.0, 1.25f));" in cuda_code
         assert "double y = fmax(0.0, fmin(1.0, d));" in cuda_code
         assert (
             "__device__ inline float3 "
@@ -5648,7 +5950,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float3 v = cgl_float3_clamp_scalar_min_scalar_max("
-            "make_float3(2.0, -1.0, 0.5), 0.0, 1.0);" in cuda_code
+            "make_float3(2.0f, -1.0f, 0.5f), 0.0, 1.0);" in cuda_code
         )
         assert "int i = saturate(n);" in cuda_code
         assert "float x = saturate(" not in cuda_code
@@ -5660,27 +5962,27 @@ class TestCudaCodeGen:
         shader TestShader {
             compute {
                 float edgeValue() {
-                    return 0.4;
+                    return 0.4f;
                 }
 
                 vec3 edgeVector() {
-                    return vec3(0.1, 0.2, 0.3);
+                    return vec3(0.1f, 0.2f, 0.3f);
                 }
 
                 vec3 valueVector() {
-                    return vec3(0.2, 0.1, 0.4);
+                    return vec3(0.2f, 0.1f, 0.4f);
                 }
 
                 void main() {
-                    float scalar = 0.75;
-                    float scalarGate = step(0.5, scalar);
-                    double precise = 0.75;
-                    double preciseGate = step(0.5, precise);
-                    vec3 value = vec3(0.2, 0.1, 0.4);
-                    vec3 vectorGate = step(0.25, value);
+                    float scalar = 0.75f;
+                    float scalarGate = step(0.5f, scalar);
+                    double precise = 0.75f;
+                    double preciseGate = step(0.5f, precise);
+                    vec3 value = vec3(0.2f, 0.1f, 0.4f);
+                    vec3 vectorGate = step(0.25f, value);
                     vec3 vectorEdgeGate = step(edgeVector(), edgeValue());
                     vec3 vectorBoth = step(edgeVector(), valueVector());
-                    vec3 nested = fract(step(0.25, value));
+                    vec3 nested = fract(step(0.25f, value));
                 }
             }
         }
@@ -5692,8 +5994,8 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float scalarGate = ((scalar) < (0.5) ? 0.0f : 1.0f);" in cuda_code
-        assert "double preciseGate = ((precise) < (0.5) ? 0.0 : 1.0);" in cuda_code
+        assert "float scalarGate = ((scalar) < (0.5f) ? 0.0f : 1.0f);" in cuda_code
+        assert "double preciseGate = ((precise) < (0.5f) ? 0.0 : 1.0);" in cuda_code
         assert (
             "__device__ inline float3 "
             "cgl_float3_step_scalar_edge_vector_value"
@@ -5716,7 +6018,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float3 vectorGate = "
-            "cgl_float3_step_scalar_edge_vector_value(0.25, value);" in cuda_code
+            "cgl_float3_step_scalar_edge_vector_value(0.25f, value);" in cuda_code
         )
         assert (
             "float3 vectorEdgeGate = "
@@ -5730,7 +6032,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float3 nested = cgl_float3_fract("
-            "cgl_float3_step_scalar_edge_vector_value(0.25, value));" in cuda_code
+            "cgl_float3_step_scalar_edge_vector_value(0.25f, value));" in cuda_code
         )
         assert " = step(" not in cuda_code
 
@@ -5743,9 +6045,9 @@ class TestCudaCodeGen:
             fragment {
                 void main() {
                     sampler2D tex;
-                    vec2 uv = vec2(0.5, 0.5);
+                    vec2 uv = vec2(0.5f, 0.5f);
                     vec4 color = texture(tex, uv);
-                    vec4 lodColor = textureLod(tex, uv, 1.0);
+                    vec4 lodColor = textureLod(tex, uv, 1.0f);
                     vec4 gradColor = textureGrad(tex, uv, uv, uv);
                 }
             }
@@ -5760,9 +6062,9 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert "cudaTextureObject_t tex;" in cuda_code
-        assert "float2 uv = make_float2(0.5, 0.5);" in cuda_code
+        assert "float2 uv = make_float2(0.5f, 0.5f);" in cuda_code
         assert "float4 color = tex2D<float4>(tex, uv.x, uv.y);" in cuda_code
-        assert "float4 lodColor = tex2DLod<float4>(tex, uv.x, uv.y, 1.0);" in cuda_code
+        assert "float4 lodColor = tex2DLod<float4>(tex, uv.x, uv.y, 1.0f);" in cuda_code
         assert (
             "float4 gradColor = tex2DGrad<float4>(tex, uv.x, uv.y, uv, uv);"
             in cuda_code
@@ -5778,7 +6080,7 @@ class TestCudaCodeGen:
 
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 0.25);
+                    vec2 uv = vec2(0.5f, 0.25f);
                     vec4 color = texture(tex, uv);
                 }
             }
@@ -5805,7 +6107,7 @@ class TestCudaCodeGen:
                 vec2 ddy
             ) {
                 vec4 sampled = texture(tex, sampleState, uv);
-                vec4 mip = textureLod(tex, sampleState, uv, 2.0);
+                vec4 mip = textureLod(tex, sampleState, uv, 2.0f);
                 vec4 grad = textureGrad(tex, sampleState, uv, ddx, ddy);
             }
 
@@ -5827,7 +6129,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert "float4 sampled = tex2D<float4>(tex, uv.x, uv.y);" in cuda_code
-        assert "float4 mip = tex2DLod<float4>(tex, uv.x, uv.y, 2.0);" in cuda_code
+        assert "float4 mip = tex2DLod<float4>(tex, uv.x, uv.y, 2.0f);" in cuda_code
         assert (
             "float4 grad = tex2DGrad<float4>(tex, uv.x, uv.y, ddx, ddy);" in cuda_code
         )
@@ -5855,7 +6157,9 @@ class TestCudaCodeGen:
         }
         """
 
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        cuda_code, _ = cuda_partial_output(
+            CudaCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert (
             "float4 biased = /* unsupported CUDA sampled resource call: "
@@ -6231,25 +6535,25 @@ class TestCudaCodeGen:
                 vec4 ddyCube
             ) {
                 vec4 rampColor = texture(ramp, u);
-                vec4 rampMip = textureLod(ramp, u, 1.0);
+                vec4 rampMip = textureLod(ramp, u, 1.0f);
                 vec4 rampGrad = textureGrad(ramp, u, du, du);
                 vec4 lineLayerColor = texture(lineLayers, lineCoord);
-                vec4 lineLayerMip = textureLod(lineLayers, lineCoord, 1.0);
+                vec4 lineLayerMip = textureLod(lineLayers, lineCoord, 1.0f);
                 vec4 lineLayerGrad = textureGrad(lineLayers, lineCoord, du, du);
                 vec4 color = texture(paramTex, uv);
-                vec4 texMip = textureLod(paramTex, uv, 2.0);
+                vec4 texMip = textureLod(paramTex, uv, 2.0f);
                 vec4 texGrad = textureGrad(paramTex, uv, ddx2, ddy2);
                 vec4 layerColor = texture(paramLayers, uvLayer);
-                vec4 layerMip = textureLod(paramLayers, uvLayer, 2.0);
+                vec4 layerMip = textureLod(paramLayers, uvLayer, 2.0f);
                 vec4 layerGrad = textureGrad(paramLayers, uvLayer, ddx2, ddy2);
                 vec4 volumeColor = texture(paramVolume, uvw);
-                vec4 volumeMip = textureLod(paramVolume, uvw, 1.0);
+                vec4 volumeMip = textureLod(paramVolume, uvw, 1.0f);
                 vec4 volumeGrad = textureGrad(paramVolume, uvw, ddx3, ddy3);
                 vec4 cubeColor = texture(paramCube, dir);
-                vec4 cubeMip = textureLod(paramCube, dir, 1.0);
+                vec4 cubeMip = textureLod(paramCube, dir, 1.0f);
                 vec4 cubeGrad = textureGrad(paramCube, dir, ddxCube, ddyCube);
                 vec4 cubeLayerColor = texture(paramCubes, dirLayer);
-                vec4 cubeLayerMip = textureLod(paramCubes, dirLayer, 2.0);
+                vec4 cubeLayerMip = textureLod(paramCubes, dirLayer, 2.0f);
                 vec4 cubeLayerGrad = textureGrad(
                     paramCubes,
                     dirLayer,
@@ -6266,19 +6570,19 @@ class TestCudaCodeGen:
                 vec3 uvLayer
             ) {
                 vec4 globalSample = texture(textureGrid[index], uv);
-                vec4 globalMip = textureLod(textureGrid[index], uv, 1.0);
+                vec4 globalMip = textureLod(textureGrid[index], uv, 1.0f);
                 vec4 globalGrad = textureGrad(textureGrid[index], uv, uv, uv);
                 vec4 globalLayer = texture(layerGrid[index], uvLayer);
-                vec4 globalLayerMip = textureLod(layerGrid[index], uvLayer, 1.0);
+                vec4 globalLayerMip = textureLod(layerGrid[index], uvLayer, 1.0f);
                 vec4 globalLayerGrad = textureGrad(layerGrid[index], uvLayer, uv, uv);
                 vec4 paramSample = texture(paramTextures[index], uv);
-                vec4 paramMip = textureLod(paramTextures[index], uv, 1.0);
+                vec4 paramMip = textureLod(paramTextures[index], uv, 1.0f);
                 vec4 paramGrad = textureGrad(paramTextures[index], uv, uv, uv);
                 vec4 paramLayer = texture(paramLayerTextures[index], uvLayer);
                 vec4 paramLayerMip = textureLod(
                     paramLayerTextures[index],
                     uvLayer,
-                    1.0
+                    1.0f
                 );
                 vec4 paramLayerGrad = textureGrad(
                     paramLayerTextures[index],
@@ -6319,7 +6623,7 @@ class TestCudaCodeGen:
             "cudaTextureObject_t paramLayerTextures[2], int index"
         ) in cuda_code
         assert "float4 rampColor = tex1D<float4>(ramp, u);" in cuda_code
-        assert "float4 rampMip = tex1DLod<float4>(ramp, u, 1.0);" in cuda_code
+        assert "float4 rampMip = tex1DLod<float4>(ramp, u, 1.0f);" in cuda_code
         assert "float4 rampGrad = tex1DGrad<float4>(ramp, u, du, du);" in cuda_code
         assert (
             "float4 lineLayerColor = tex1DLayered<float4>"
@@ -6327,7 +6631,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 lineLayerMip = tex1DLayeredLod<float4>"
-            "(lineLayers, lineCoord.x, lineCoord.y, 1.0);" in cuda_code
+            "(lineLayers, lineCoord.x, lineCoord.y, 1.0f);" in cuda_code
         )
         assert (
             "float4 lineLayerGrad = tex1DLayeredGrad<float4>"
@@ -6335,7 +6639,7 @@ class TestCudaCodeGen:
         )
         assert "float4 color = tex2D<float4>(paramTex, uv.x, uv.y);" in cuda_code
         assert (
-            "float4 texMip = tex2DLod<float4>(paramTex, uv.x, uv.y, 2.0);" in cuda_code
+            "float4 texMip = tex2DLod<float4>(paramTex, uv.x, uv.y, 2.0f);" in cuda_code
         )
         assert (
             "float4 texGrad = tex2DGrad<float4>(paramTex, uv.x, uv.y, ddx2, ddy2);"
@@ -6347,7 +6651,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 layerMip = tex2DLayeredLod<float4>"
-            "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, 2.0);" in cuda_code
+            "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, 2.0f);" in cuda_code
         )
         assert (
             "float4 layerGrad = tex2DLayeredGrad<float4>"
@@ -6358,7 +6662,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0f);"
             in cuda_code
         )
         assert (
@@ -6372,7 +6676,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 cubeMip = texCubemapLod<float4>(paramCube, dir.x, dir.y, dir.z, 1.0);"
+            "float4 cubeMip = texCubemapLod<float4>(paramCube, dir.x, dir.y, dir.z, 1.0f);"
             in cuda_code
         )
         assert (
@@ -6385,7 +6689,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 cubeLayerMip = texCubemapLayeredLod<float4>"
-            "(paramCubes, dirLayer.x, dirLayer.y, dirLayer.z, dirLayer.w, 2.0);"
+            "(paramCubes, dirLayer.x, dirLayer.y, dirLayer.z, dirLayer.w, 2.0f);"
             in cuda_code
         )
         assert (
@@ -6398,7 +6702,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 globalMip = tex2DLod<float4>(textureGrid[index], uv.x, uv.y, 1.0);"
+            "float4 globalMip = tex2DLod<float4>(textureGrid[index], uv.x, uv.y, 1.0f);"
             in cuda_code
         )
         assert (
@@ -6411,7 +6715,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 globalLayerMip = tex2DLayeredLod<float4>"
-            "(layerGrid[index], uvLayer.x, uvLayer.y, uvLayer.z, 1.0);" in cuda_code
+            "(layerGrid[index], uvLayer.x, uvLayer.y, uvLayer.z, 1.0f);" in cuda_code
         )
         assert (
             "float4 globalLayerGrad = tex2DLayeredGrad<float4>"
@@ -6422,7 +6726,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 paramMip = tex2DLod<float4>(paramTextures[index], uv.x, uv.y, 1.0);"
+            "float4 paramMip = tex2DLod<float4>(paramTextures[index], uv.x, uv.y, 1.0f);"
             in cuda_code
         )
         assert (
@@ -6435,7 +6739,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 paramLayerMip = tex2DLayeredLod<float4>"
-            "(paramLayerTextures[index], uvLayer.x, uvLayer.y, uvLayer.z, 1.0);"
+            "(paramLayerTextures[index], uvLayer.x, uvLayer.y, uvLayer.z, 1.0f);"
             in cuda_code
         )
         assert (
@@ -6457,7 +6761,7 @@ class TestCudaCodeGen:
 
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 0.25);
+                    vec2 uv = vec2(0.5f, 0.25f);
                     vec4 color = texture(tex, uv);
                 }
             }
@@ -6528,7 +6832,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "struct CglResourceQueryInfo" in cuda_code
         assert "__device__ inline int cgl_lod_extent" in cuda_code
@@ -6809,7 +7113,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const int* input;" in cuda_code
         assert "int* values;" in cuda_code
@@ -6911,7 +7215,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "struct ReadBlock" in cuda_code
         assert "uint values[4];" in cuda_code
@@ -6999,7 +7303,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "return /* unsupported CUDA GLSL buffer block atomicAdd: resource "
@@ -7403,7 +7707,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "__device__ Particle* chooseAppend(bool useGlobal)" in cuda_code
         assert "__device__ const Particle* chooseConsume(bool useGlobal)" in cuda_code
@@ -7468,7 +7772,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "__shared__ uint sharedCounters[32];" in cuda_code
         assert "__shared__ uint2 vectorCounters[32];" in cuda_code
@@ -7548,7 +7852,7 @@ class TestCudaCodeGen:
                     uint d = atomicCAS_system(outp[i], a, b);
                     int e = atomicMax_block(signedOut[i], -1);
                     int f = atomicExch_system(signedOut[i], 2);
-                    float g = atomicAdd_system(floatOut[i], 1.0);
+                    float g = atomicAdd_system(floatOut[i], 1.0f);
                     int signedInc = atomicInc_block(signedOut[i], 1);
                     uint missing = atomicInc_block(outp[i]);
                     uint2 badVector = atomicAdd_system(
@@ -7561,7 +7865,7 @@ class TestCudaCodeGen:
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "uint a = atomicInc_block(&outp[i], 7u);" in cuda_code
         assert "uint b = atomicDec_system(&outp[i], 7u);" in cuda_code
@@ -7569,7 +7873,7 @@ class TestCudaCodeGen:
         assert "uint d = atomicCAS_system(&outp[i], a, b);" in cuda_code
         assert "int e = atomicMax_block(&signedOut[i], -1);" in cuda_code
         assert "int f = atomicExch_system(&signedOut[i], 2);" in cuda_code
-        assert "float g = atomicAdd_system(&floatOut[i], 1.0);" in cuda_code
+        assert "float g = atomicAdd_system(&floatOut[i], 1.0f);" in cuda_code
         assert (
             "int signedInc = /* unsupported CUDA atomic call: atomicInc_block on "
             "int requires supported scalar uint target */ 0;" in cuda_code
@@ -7697,7 +8001,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "PointerType(" not in cuda_code
         assert "ReferenceType(" not in cuda_code
@@ -8003,7 +8307,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const uint* readonlyCounts;" in cuda_code
         assert "uint* counters;" in cuda_code
@@ -8148,7 +8452,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "uint* counters;" in cuda_code
         assert "uint* counterArrays[2];" in cuda_code
@@ -8207,7 +8511,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float* values;" in cuda_code
         assert "float oldAdd = atomicAdd(&values[index], value);" in cuda_code
@@ -8250,7 +8554,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "uint* counters;" in cuda_code
         assert "int* signedCounters;" in cuda_code
@@ -8315,7 +8619,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const unsigned char* readBytes;" in cuda_code
         assert "unsigned char* writeBytes;" in cuda_code
@@ -8493,7 +8797,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const unsigned char* readBytes;" in cuda_code
         assert "unsigned char* writeBytes;" in cuda_code
@@ -8615,7 +8919,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "unsigned char* output;" in cuda_code
         assert "unsigned char* outputs[2];" in cuda_code
@@ -8664,10 +8968,10 @@ class TestCudaCodeGen:
                 vec3 ddy3
             ) {
                 vec4 layerColor = texture(paramLayers, uvLayer);
-                vec4 layerMip = textureLod(paramLayers, uvLayer, 2.0);
+                vec4 layerMip = textureLod(paramLayers, uvLayer, 2.0f);
                 vec4 layerGrad = textureGrad(paramLayers, uvLayer, ddx2, ddy2);
                 vec4 volumeColor = texture(paramVolume, uvw);
-                vec4 volumeMip = textureLod(paramVolume, uvw, 1.0);
+                vec4 volumeMip = textureLod(paramVolume, uvw, 1.0f);
                 vec4 volumeGrad = textureGrad(paramVolume, uvw, ddx3, ddy3);
             }
 
@@ -8692,7 +8996,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 layerMip = tex2DLayeredLod<float4>"
-            "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, 2.0);" in cuda_code
+            "(paramLayers, uvLayer.x, uvLayer.y, uvLayer.z, 2.0f);" in cuda_code
         )
         assert (
             "float4 layerGrad = tex2DLayeredGrad<float4>"
@@ -8703,7 +9007,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 volumeMip = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 1.0f);"
             in cuda_code
         )
         assert (
@@ -8732,10 +9036,10 @@ class TestCudaCodeGen:
                 vec4 ddyCube
             ) {
                 vec4 rampColor = texture(paramRamp, u);
-                vec4 rampMip = textureLod(paramRamp, u, 2.0);
+                vec4 rampMip = textureLod(paramRamp, u, 2.0f);
                 vec4 rampGrad = textureGrad(paramRamp, u, du, du);
                 vec4 envColor = texture(paramEnv, dir);
-                vec4 envMip = textureLod(paramEnv, dir, 1.0);
+                vec4 envMip = textureLod(paramEnv, dir, 1.0f);
                 vec4 envGrad = textureGrad(paramEnv, dir, ddxCube, ddyCube);
             }
 
@@ -8755,14 +9059,14 @@ class TestCudaCodeGen:
         assert "cudaTextureObject_t ramp;" in cuda_code
         assert "cudaTextureObject_t envMap;" in cuda_code
         assert "float4 rampColor = tex1D<float4>(paramRamp, u);" in cuda_code
-        assert "float4 rampMip = tex1DLod<float4>(paramRamp, u, 2.0);" in cuda_code
+        assert "float4 rampMip = tex1DLod<float4>(paramRamp, u, 2.0f);" in cuda_code
         assert "float4 rampGrad = tex1DGrad<float4>(paramRamp, u, du, du);" in cuda_code
         assert (
             "float4 envColor = texCubemap<float4>(paramEnv, dir.x, dir.y, dir.z);"
             in cuda_code
         )
         assert (
-            "float4 envMip = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 1.0);"
+            "float4 envMip = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 1.0f);"
             in cuda_code
         )
         assert (
@@ -8786,7 +9090,7 @@ class TestCudaCodeGen:
             ) {
                 vec4 color = texture(lineArray, uvLayer);
                 vec4 paramColor = texture(paramLineArray, uvLayer);
-                vec4 mip = textureLod(paramLineArray, uvLayer, 1.0);
+                vec4 mip = textureLod(paramLineArray, uvLayer, 1.0f);
                 vec4 grad = textureGrad(paramLineArray, uvLayer, dudx, dudy);
                 ivec2 dims = textureSize(lineArray, 0);
                 ivec2 paramDims = textureSize(paramLineArray, 0);
@@ -8825,7 +9129,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 mip = tex1DLayeredLod<float4>"
-            "(paramLineArray, uvLayer.x, uvLayer.y, 1.0);" in cuda_code
+            "(paramLineArray, uvLayer.x, uvLayer.y, 1.0f);" in cuda_code
         )
         assert (
             "float4 grad = tex1DLayeredGrad<float4>"
@@ -8866,7 +9170,7 @@ class TestCudaCodeGen:
                 vec4 ddyCube
             ) {
                 vec4 color = texture(paramProbes, dirLayer);
-                vec4 mip = textureLod(paramProbes, dirLayer, 2.0);
+                vec4 mip = textureLod(paramProbes, dirLayer, 2.0f);
                 vec4 grad = textureGrad(paramProbes, dirLayer, ddxCube, ddyCube);
             }
 
@@ -8891,7 +9195,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 mip = texCubemapLayeredLod<float4>"
-            "(paramProbes, dirLayer.x, dirLayer.y, dirLayer.z, dirLayer.w, 2.0);"
+            "(paramProbes, dirLayer.x, dirLayer.y, dirLayer.z, dirLayer.w, 2.0f);"
             in cuda_code
         )
         assert (
@@ -9012,7 +9316,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "float paramValue = /* unsupported CUDA shadow resource call: "
@@ -9160,7 +9464,7 @@ class TestCudaCodeGen:
                 );
                 vec4 gatheredVolume = textureGather(volumeTex, uvLayer);
                 vec4 offsetSample = textureOffset(colorMap, uv, offset);
-                vec4 lodOffsetSample = textureLodOffset(colorMap, uv, 1.0, offset);
+                vec4 lodOffsetSample = textureLodOffset(colorMap, uv, 1.0f, offset);
                 vec4 gradOffsetSample = textureGradOffset(
                     colorMap,
                     uv,
@@ -9170,11 +9474,11 @@ class TestCudaCodeGen:
                 );
                 vec4 projected = textureProj(colorMap, uvw);
                 vec4 projectedOffset = textureProjOffset(colorMap, uvw, offset);
-                vec4 projectedLod = textureProjLod(colorMap, uvw, 1.0);
+                vec4 projectedLod = textureProjLod(colorMap, uvw, 1.0f);
                 vec4 projectedLodOffset = textureProjLodOffset(
                     colorMap,
                     uvw,
-                    1.0,
+                    1.0f,
                     offset
                 );
                 vec4 projectedGrad = textureProjGrad(colorMap, uvw, ddx, ddy);
@@ -9187,8 +9491,8 @@ class TestCudaCodeGen:
                 );
                 vec4 fetchedOffset = texelFetchOffset(colorMap, offset, 0, offset);
                 vec4 projectedSum = textureProj(colorMap, uvw) +
-                    textureProjLod(colorMap, uvw, 1.0);
-                vec4 offsetSum = textureLodOffset(colorMap, uv, 1.0, offset) +
+                    textureProjLod(colorMap, uvw, 1.0f);
+                vec4 offsetSum = textureLodOffset(colorMap, uv, 1.0f, offset) +
                     textureGradOffset(colorMap, uv, ddx, ddy, offset);
             }
 
@@ -9203,7 +9507,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "float4 gathered = tex2Dgather<float4>(colorMap, uv.x, uv.y);" in cuda_code
@@ -9241,7 +9545,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 lodOffsetSample = tex2DLod<float4>"
-            "(colorMap, (uv.x + offset.x), (uv.y + offset.y), 1.0);" in cuda_code
+            "(colorMap, (uv.x + offset.x), (uv.y + offset.y), 1.0f);" in cuda_code
         )
         assert (
             "float4 gradOffsetSample = tex2DGrad<float4>"
@@ -9258,12 +9562,12 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 projectedLod = tex2DLod<float4>"
-            "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0);" in cuda_code
+            "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0f);" in cuda_code
         )
         assert (
             "float4 projectedLodOffset = tex2DLod<float4>"
             "(colorMap, ((uvw.x / uvw.z) + offset.x), "
-            "((uvw.y / uvw.z) + offset.y), 1.0);" in cuda_code
+            "((uvw.y / uvw.z) + offset.y), 1.0f);" in cuda_code
         )
         assert (
             "float4 projectedGrad = tex2DGrad<float4>"
@@ -9337,7 +9641,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float4 valid = tex2Dgather<float4>(colorMap, uv.x, uv.y);" in cuda_code
         assert (
@@ -9447,7 +9751,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         for name, func_name, texture_type in (
             ("badLineVec", "textureOffset", "sampler1D"),
@@ -9533,7 +9837,9 @@ class TestCudaCodeGen:
         }
         """
 
-        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        cuda_code, _ = cuda_partial_output(
+            CudaCodeGen().generate, Parser(Lexer(source_code).tokens).parse()
+        )
 
         assert "float4 line = tex1D<float4>(lineTex, (uq.x / uq.y));" in cuda_code
         assert (
@@ -9634,7 +9940,7 @@ class TestCudaCodeGen:
                 );
                 vec4 offsetSample = textureOffset(paramTex, uv, offset);
                 vec4 layerOffset = textureOffset(paramLayers, uvLayer, offset);
-                vec4 lodOffsetSample = textureLodOffset(paramTex, uv, 1.0, offset);
+                vec4 lodOffsetSample = textureLodOffset(paramTex, uv, 1.0f, offset);
                 vec4 gradOffsetSample = textureGradOffset(
                     paramTex,
                     uv,
@@ -9644,11 +9950,11 @@ class TestCudaCodeGen:
                 );
                 vec4 projected = textureProj(paramTex, uvw);
                 vec4 projectedOffset = textureProjOffset(paramTex, uvw, offset);
-                vec4 projectedLod = textureProjLod(paramTex, uvw, 1.0);
+                vec4 projectedLod = textureProjLod(paramTex, uvw, 1.0f);
                 vec4 projectedLodOffset = textureProjLodOffset(
                     paramTex,
                     uvw,
-                    1.0,
+                    1.0f,
                     offset
                 );
                 vec4 projectedGrad = textureProjGrad(paramTex, uvw, ddx, ddy);
@@ -9673,7 +9979,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "cudaTextureObject_t colorMap;" in cuda_code
         assert "cudaTextureObject_t layers;" in cuda_code
@@ -9729,7 +10035,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 lodOffsetSample = tex2DLod<float4>"
-            "(paramTex, (uv.x + offset.x), (uv.y + offset.y), 1.0);" in cuda_code
+            "(paramTex, (uv.x + offset.x), (uv.y + offset.y), 1.0f);" in cuda_code
         )
         assert (
             "float4 gradOffsetSample = tex2DGrad<float4>"
@@ -9746,12 +10052,12 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 projectedLod = tex2DLod<float4>"
-            "(paramTex, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0);" in cuda_code
+            "(paramTex, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0f);" in cuda_code
         )
         assert (
             "float4 projectedLodOffset = tex2DLod<float4>"
             "(paramTex, ((uvw.x / uvw.z) + offset.x), "
-            "((uvw.y / uvw.z) + offset.y), 1.0);" in cuda_code
+            "((uvw.y / uvw.z) + offset.y), 1.0f);" in cuda_code
         )
         assert (
             "float4 projectedGrad = tex2DGrad<float4>"
@@ -9795,7 +10101,7 @@ class TestCudaCodeGen:
 
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 0.25);
+                    vec2 uv = vec2(0.5f, 0.25f);
                     ivec2 offset = ivec2(1, 0);
                     vec4 color = textureOffset(tex, uv, offset);
                 }
@@ -9856,35 +10162,35 @@ class TestCudaCodeGen:
             if line.strip().endswith(";")
         }
 
-        assert "cudaTextureObject_t linearState;" in declarations
-        assert "cudaTextureObject_t ramp;" in declarations
-        assert "cudaTextureObject_t colorMap;" in declarations
-        assert "cudaTextureObject_t volumeMap;" in declarations
-        assert "cudaTextureObject_t environmentMap;" in declarations
-        assert "cudaTextureObject_t layers;" in declarations
-        assert "cudaTextureObject_t shadowMap;" in declarations
-        assert "cudaTextureObject_t cascades;" in declarations
-        assert "cudaTextureObject_t cubeShadow;" in declarations
-        assert "cudaTextureObject_t probes;" in declarations
-        assert "cudaTextureObject_t shadowProbes;" in declarations
-        assert "cudaTextureObject_t msTex;" in declarations
-        assert "cudaTextureObject_t msArray;" in declarations
-        assert "cudaSurfaceObject_t signedImage;" in declarations
-        assert "cudaSurfaceObject_t signedVolume;" in declarations
-        assert "cudaSurfaceObject_t signedLayers;" in declarations
-        assert "cudaSurfaceObject_t signedMs;" in declarations
-        assert "cudaSurfaceObject_t signedMsLayers;" in declarations
-        assert "cudaSurfaceObject_t unsignedImage;" in declarations
-        assert "cudaSurfaceObject_t unsignedVolume;" in declarations
-        assert "cudaSurfaceObject_t unsignedLayers;" in declarations
-        assert "cudaSurfaceObject_t unsignedMs;" in declarations
-        assert "cudaSurfaceObject_t unsignedMsLayers;" in declarations
-        assert "cudaSurfaceObject_t outputImage;" in declarations
-        assert "cudaSurfaceObject_t volumeImage;" in declarations
-        assert "cudaSurfaceObject_t cubeImage;" in declarations
-        assert "cudaSurfaceObject_t layerImage;" in declarations
-        assert "cudaSurfaceObject_t outputMs;" in declarations
-        assert "cudaSurfaceObject_t layerMs;" in declarations
+        assert "__device__ cudaTextureObject_t linearState;" in declarations
+        assert "__device__ cudaTextureObject_t ramp;" in declarations
+        assert "__device__ cudaTextureObject_t colorMap;" in declarations
+        assert "__device__ cudaTextureObject_t volumeMap;" in declarations
+        assert "__device__ cudaTextureObject_t environmentMap;" in declarations
+        assert "__device__ cudaTextureObject_t layers;" in declarations
+        assert "__device__ cudaTextureObject_t shadowMap;" in declarations
+        assert "__device__ cudaTextureObject_t cascades;" in declarations
+        assert "__device__ cudaTextureObject_t cubeShadow;" in declarations
+        assert "__device__ cudaTextureObject_t probes;" in declarations
+        assert "__device__ cudaTextureObject_t shadowProbes;" in declarations
+        assert "__device__ cudaTextureObject_t msTex;" in declarations
+        assert "__device__ cudaTextureObject_t msArray;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedVolume;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t signedMsLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedVolume;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t unsignedMsLayers;" in declarations
+        assert "__device__ cudaSurfaceObject_t outputImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t volumeImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t cubeImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t layerImage;" in declarations
+        assert "__device__ cudaSurfaceObject_t outputMs;" in declarations
+        assert "__device__ cudaSurfaceObject_t layerMs;" in declarations
 
         raw_resource_types = [
             "sampler",
@@ -9989,7 +10295,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert "cudaSurfaceObject_t colorImage;" in cuda_code
         assert "cudaSurfaceObject_t lineImage;" in cuda_code
@@ -10156,7 +10462,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 line = surf1Dread<float4>(lineImage, x * sizeof(float4));"
@@ -10312,7 +10618,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedParamRead = /* unsupported CUDA image access: "
@@ -10426,7 +10732,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "const int* readOnlyValues;" in cuda_code
         assert "int* writeOnlyValues;" in cuda_code
@@ -10545,7 +10851,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedAliasRead = /* unsupported CUDA image access: "
@@ -10609,7 +10915,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedMemberRead = /* unsupported CUDA image access: "
@@ -10683,7 +10989,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 2
         assert cuda_code.count("imageStore requires writable image resource") == 2
@@ -10817,7 +11123,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedRead = /* unsupported CUDA image access: imageLoad "
@@ -10955,7 +11261,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 2
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11075,7 +11381,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11183,7 +11489,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11302,7 +11608,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11432,7 +11738,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11576,7 +11882,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert cuda_code.count("imageLoad requires readable image resource") == 1
         assert cuda_code.count("imageStore requires writable image resource") == 1
@@ -11659,7 +11965,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo writeOnlyImage_metadata = {};" in cuda_code
         assert (
@@ -11750,7 +12056,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "float4 blockedChainRead = /* unsupported CUDA image access: "
@@ -11861,7 +12167,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo writeImages_metadata[4] = {};" in cuda_code
         assert (
@@ -12016,7 +12322,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "uint writeMember = /* unsupported CUDA image atomic resource call: "
@@ -12155,7 +12461,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "uint returnedParamAdd = /* unsupported CUDA image atomic resource "
@@ -12210,7 +12516,7 @@ class TestCudaCodeGen:
                 int slot
             ) {
                 vec4 sampled = texture(bundle.tex, uv);
-                vec4 sampledLod = textureLod(bundle.tex, uv, 1.0);
+                vec4 sampledLod = textureLod(bundle.tex, uv, 1.0f);
                 vec4 sampledElement = texture(bundle.textures[slot], uv);
                 vec4 msSample = texture(bundle.msTex, uv);
                 ivec2 dims = textureSize(bundle.tex, 0);
@@ -12225,11 +12531,11 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float4 sampled = tex2D<float4>(bundle.tex, uv.x, uv.y);" in cuda_code
         assert (
-            "float4 sampledLod = tex2DLod<float4>(bundle.tex, uv.x, uv.y, 1.0);"
+            "float4 sampledLod = tex2DLod<float4>(bundle.tex, uv.x, uv.y, 1.0f);"
             in cuda_code
         )
         assert (
@@ -12290,24 +12596,24 @@ class TestCudaCodeGen:
                 vec4 ddy4
             ) {
                 vec4 line = texture(lineTex, u);
-                vec4 lineLod = textureLod(lineTex, u, 1.0);
+                vec4 lineLod = textureLod(lineTex, u, 1.0f);
                 vec4 lineGrad = textureGrad(lineTex, u, du, du);
                 vec4 lineLayer = texture(lineLayers, uv);
                 vec4 color = texture(tex, uv);
                 vec4 typedColor = texture(typedTex, uv);
-                vec4 colorLod = textureLod(tex, uv, 1.0);
+                vec4 colorLod = textureLod(tex, uv, 1.0f);
                 vec4 colorGrad = textureGrad(tex, uv, ddx2, ddy2);
                 vec4 layer = texture(layers, uvw);
-                vec4 layerLod = textureLod(layers, uvw, 1.0);
+                vec4 layerLod = textureLod(layers, uvw, 1.0f);
                 vec4 layerGrad = textureGrad(layers, uvw, ddx2, ddy2);
                 vec4 volumeColor = texture(volume, uvw);
-                vec4 volumeLod = textureLod(volume, uvw, 1.0);
+                vec4 volumeLod = textureLod(volume, uvw, 1.0f);
                 vec4 volumeGrad = textureGrad(volume, uvw, ddx3, ddy3);
                 vec4 cube = texture(cubeTex, uvw);
-                vec4 cubeLod = textureLod(cubeTex, uvw, 1.0);
+                vec4 cubeLod = textureLod(cubeTex, uvw, 1.0f);
                 vec4 cubeGrad = textureGrad(cubeTex, uvw, ddx3, ddy3);
                 vec4 cubeLayer = texture(cubeLayers, uvqw);
-                vec4 cubeLayerLod = textureLod(cubeLayers, uvqw, 1.0);
+                vec4 cubeLayerLod = textureLod(cubeLayers, uvqw, 1.0f);
                 vec4 cubeLayerGrad = textureGrad(cubeLayers, uvqw, ddx4, ddy4);
                 vec4 badLine = texture(lineTex, uv);
                 vec4 badLineLayer = texture(lineLayers, u);
@@ -12316,7 +12622,7 @@ class TestCudaCodeGen:
                 vec4 badVolume = texture(volume, uv);
                 vec4 badCube = texture(cubeTex, uv);
                 vec4 badCubeArray = texture(cubeLayers, uvw);
-                vec4 badTexLod = textureLod(tex, u, 1.0);
+                vec4 badTexLod = textureLod(tex, u, 1.0f);
                 vec4 badTexGrad = textureGrad(tex, u, ddx2, ddy2);
             }
 
@@ -12330,10 +12636,10 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float4 line = tex1D<float4>(lineTex, u);" in cuda_code
-        assert "float4 lineLod = tex1DLod<float4>(lineTex, u, 1.0);" in cuda_code
+        assert "float4 lineLod = tex1DLod<float4>(lineTex, u, 1.0f);" in cuda_code
         assert "float4 lineGrad = tex1DGrad<float4>(lineTex, u, du, du);" in cuda_code
         assert (
             "float4 lineLayer = tex1DLayered<float4>(lineLayers, uv.x, uv.y);"
@@ -12341,7 +12647,7 @@ class TestCudaCodeGen:
         )
         assert "float4 color = tex2D<float4>(tex, uv.x, uv.y);" in cuda_code
         assert "float4 typedColor = tex2D<float4>(typedTex, uv.x, uv.y);" in cuda_code
-        assert "float4 colorLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0);" in cuda_code
+        assert "float4 colorLod = tex2DLod<float4>(tex, uv.x, uv.y, 1.0f);" in cuda_code
         assert (
             "float4 colorGrad = tex2DGrad<float4>(tex, uv.x, uv.y, ddx2, ddy2);"
             in cuda_code
@@ -12352,7 +12658,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 layerLod = tex2DLayeredLod<float4>"
-            "(layers, uvw.x, uvw.y, uvw.z, 1.0);" in cuda_code
+            "(layers, uvw.x, uvw.y, uvw.z, 1.0f);" in cuda_code
         )
         assert (
             "float4 layerGrad = tex2DLayeredGrad<float4>"
@@ -12363,7 +12669,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 volumeLod = tex3DLod<float4>(volume, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 volumeLod = tex3DLod<float4>(volume, uvw.x, uvw.y, uvw.z, 1.0f);"
             in cuda_code
         )
         assert (
@@ -12377,7 +12683,7 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 cubeLod = texCubemapLod<float4>(cubeTex, uvw.x, uvw.y, uvw.z, 1.0);"
+            "float4 cubeLod = texCubemapLod<float4>(cubeTex, uvw.x, uvw.y, uvw.z, 1.0f);"
             in cuda_code
         )
         assert (
@@ -12392,7 +12698,7 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 cubeLayerLod = texCubemapLayeredLod<float4>"
-            "(cubeLayers, uvqw.x, uvqw.y, uvqw.z, uvqw.w, 1.0);" in cuda_code
+            "(cubeLayers, uvqw.x, uvqw.y, uvqw.z, uvqw.w, 1.0f);" in cuda_code
         )
         assert (
             "float4 cubeLayerGrad = texCubemapLayeredGrad<float4>"
@@ -12436,7 +12742,7 @@ class TestCudaCodeGen:
 
             void sample(vec2 uv, ivec2 pixel) {
                 ivec4 signedColor = texture(signedTex, uv);
-                uvec4 unsignedColor = textureLod(unsignedTex, uv, 1.0);
+                uvec4 unsignedColor = textureLod(unsignedTex, uv, 1.0f);
                 ivec4 signedFetch = texelFetch(signedTex, pixel, 0);
                 uvec4 unsignedFetch = texelFetchOffset(unsignedTex, pixel, 0, pixel);
             }
@@ -12457,7 +12763,7 @@ class TestCudaCodeGen:
         assert "cudaTextureObject_t unsignedTex;" in cuda_code
         assert "int4 signedColor = tex2D<int4>(signedTex, uv.x, uv.y);" in cuda_code
         assert (
-            "uint4 unsignedColor = tex2DLod<uint4>(unsignedTex, uv.x, uv.y, 1.0);"
+            "uint4 unsignedColor = tex2DLod<uint4>(unsignedTex, uv.x, uv.y, 1.0f);"
             in cuda_code
         )
         assert (
@@ -12526,7 +12832,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "float4 validLine = tex1DGrad<float4>(lineTex, u, du, du);" in cuda_code
         assert (
@@ -12662,7 +12968,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "cudaTextureObject_t lineTex;" in cuda_code
         assert "cudaTextureObject_t lineLayers;" in cuda_code
@@ -12759,7 +13065,7 @@ class TestCudaCodeGen:
             ) {
                 vec4 sampled = texture(textureGrid[layer][slot], uv);
                 vec4 sampledLayer = texture(layerGrid[layer][slot], uvLayer);
-                vec4 mip = textureLod(textureGrid[layer][slot], uv, 1.0);
+                vec4 mip = textureLod(textureGrid[layer][slot], uv, 1.0f);
                 vec4 grad = textureGrad(textureGrid[layer][slot], uv, uv, uv);
                 vec4 sampledParam = texture(paramTextures[layer][slot], uv);
                 vec4 gathered = textureGather(textureGrid[layer][slot], uv, 1);
@@ -12784,7 +13090,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert "cudaTextureObject_t textureGrid[2][3];" in cuda_code
         assert "cudaTextureObject_t layerGrid[2][2];" in cuda_code
@@ -12807,7 +13113,7 @@ class TestCudaCodeGen:
             "(layerGrid[layer][slot], uvLayer.x, uvLayer.y, uvLayer.z);" in cuda_code
         )
         assert (
-            "float4 mip = tex2DLod<float4>(textureGrid[layer][slot], uv.x, uv.y, 1.0);"
+            "float4 mip = tex2DLod<float4>(textureGrid[layer][slot], uv.x, uv.y, 1.0f);"
             in cuda_code
         )
         assert (
@@ -14500,14 +14806,14 @@ class TestCudaCodeGen:
             compute {
                 void main() {
                     SampleParams params;
-                    params.uv = vec2(0.5, 0.25);
+                    params.uv = vec2(0.5f, 0.25f);
                     params.pixel = ivec2(0, 0);
                     params.layer = 1;
                     params.slot = 2;
                     vec4 value = passPacked(
                         params,
                         textureGrid,
-                        0.5,
+                        0.5f,
                         imageGrid,
                         textureGrid[1],
                         imageGrid[1]
@@ -14552,7 +14858,7 @@ class TestCudaCodeGen:
             "fixedImages_metadata);" in cuda_code
         )
         assert (
-            "passPacked(params, textureGrid, textureGrid_metadata, 0.5, imageGrid, "
+            "passPacked(params, textureGrid, textureGrid_metadata, 0.5f, imageGrid, "
             "imageGrid_metadata, textureGrid[1], textureGrid_metadata[1], "
             "imageGrid[1], imageGrid_metadata[1]);" in cuda_code
         )
@@ -14727,11 +15033,11 @@ class TestCudaCodeGen:
             "(dynImages_metadata[layer][slot]);" in cuda_code
         )
         assert (
-            "return SampleResult(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
+            "return SampleResult{tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
             "surf2Dread<float4>(dynImages[layer][slot], "
             "pixel.x * sizeof(float4), pixel.y), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
-            "cgl_imageSize_image2D(dynImages_metadata[layer][slot]));" in cuda_code
+            "cgl_imageSize_image2D(dynImages_metadata[layer][slot])};" in cuda_code
         )
         assert (
             "SampleResult assigned = buildAssigned(dynTex, dynTex_metadata, "
@@ -15024,7 +15330,7 @@ class TestCudaCodeGen:
                 ivec2 pixel
             ) {
                 SampleEnvelope envelope;
-                envelope.accum = vec4(0.0);
+                envelope.accum = vec4(0.0f);
                 envelope.chosen = slot;
 
                 if (useAlternate) {
@@ -15074,7 +15380,7 @@ class TestCudaCodeGen:
 
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 0.25);
+                    vec2 uv = vec2(0.5f, 0.25f);
                     ivec2 pixel = ivec2(0, 0);
                     vec4 value = consumeControlled(
                         textureGrid,
@@ -15109,7 +15415,7 @@ class TestCudaCodeGen:
         assert "for (int i = 0; (i < 3); i++)" in cuda_code
         assert "continue;" in cuda_code
         assert "break;" in cuda_code
-        assert "envelope.accum = make_float4(0.0, 0.0, 0.0, 0.0);" in cuda_code
+        assert "envelope.accum = make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         assert "envelope.chosen = slot;" in cuda_code
         assert (
             "envelope.result.sampled = tex2D<float4>(dynTex[layer][slot], uv.x, uv.y);"
@@ -15204,13 +15510,13 @@ class TestCudaCodeGen:
                     uv,
                     pixel
                 );
-                SampleResult adjusted = adjustResult(raw, 0.5);
+                SampleResult adjusted = adjustResult(raw, 0.5f);
                 return adjusted.sampled + adjusted.loaded;
             }
 
             compute {
                 void main() {
-                    vec2 uv = vec2(0.5, 0.25);
+                    vec2 uv = vec2(0.5f, 0.25f);
                     ivec2 pixel = ivec2(0, 0);
                     vec4 value = consumeAdjusted(textureGrid, imageGrid, 1, 2, uv, pixel);
                 }
@@ -15263,7 +15569,7 @@ class TestCudaCodeGen:
             "dynTex, dynTex_metadata, dynImages, dynImages_metadata, "
             "layer, slot, uv, pixel);" in cuda_code
         )
-        assert "SampleResult adjusted = adjustResult(raw, 0.5);" in cuda_code
+        assert "SampleResult adjusted = adjustResult(raw, 0.5f);" in cuda_code
         assert (
             "consumeAdjusted(textureGrid, textureGrid_metadata, imageGrid, "
             "imageGrid_metadata, 1, 2, uv, pixel);" in cuda_code
@@ -15277,23 +15583,23 @@ class TestCudaCodeGen:
         source_code = """
         shader MutableParams {
             float bumpScalar(float weight) {
-                weight = weight + 1.0;
-                return weight * 2.0;
+                weight = weight + 1.0f;
+                return weight * 2.0f;
             }
 
             float bumpArray(float values[3], int slot) {
-                values[slot] = values[slot] + 1.0;
-                values[0] = values[slot] * 0.5;
+                values[slot] = values[slot] + 1.0f;
+                values[0] = values[slot] * 0.5f;
                 return values[slot] + values[0];
             }
 
             compute {
                 void main() {
                     float values[3];
-                    values[0] = 1.0;
-                    values[1] = 2.0;
-                    values[2] = 3.0;
-                    float a = bumpScalar(0.5);
+                    values[0] = 1.0f;
+                    values[1] = 2.0f;
+                    values[2] = 3.0f;
+                    float a = bumpScalar(0.5f);
                     float b = bumpArray(values, 1);
                 }
             }
@@ -15308,14 +15614,14 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert "__device__ float bumpScalar(float weight)" in cuda_code
-        assert "weight = (weight + 1.0);" in cuda_code
-        assert "return (weight * 2.0);" in cuda_code
+        assert "weight = (weight + 1.0f);" in cuda_code
+        assert "return (weight * 2.0f);" in cuda_code
         assert "__device__ float bumpArray(float values[3], int slot)" in cuda_code
-        assert "values[slot] = (values[slot] + 1.0);" in cuda_code
-        assert "values[0] = (values[slot] * 0.5);" in cuda_code
+        assert "values[slot] = (values[slot] + 1.0f);" in cuda_code
+        assert "values[0] = (values[slot] * 0.5f);" in cuda_code
         assert "return (values[slot] + values[0]);" in cuda_code
         assert "float values[3];" in cuda_code
-        assert "float a = bumpScalar(0.5);" in cuda_code
+        assert "float a = bumpScalar(0.5f);" in cuda_code
         assert "float b = bumpArray(values, 1);" in cuda_code
 
     def test_nested_array_and_struct_member_params_emit_cuda_updates(self):
@@ -15327,26 +15633,26 @@ class TestCudaCodeGen:
 
         shader NestedMutableParams {
             float bumpNested(float values[2][3], int row, int col) {
-                values[row][col] = values[row][col] + 1.0;
-                values[0][col] = values[row][col] * 0.5;
+                values[row][col] = values[row][col] + 1.0f;
+                values[0][col] = values[row][col] * 0.5f;
                 return values[row][col] + values[0][col];
             }
 
             float bumpPayload(Payload payload, int slot) {
                 payload.values[slot] = payload.values[slot] + payload.bias;
-                payload.bias = payload.values[slot] * 0.5;
+                payload.bias = payload.values[slot] * 0.5f;
                 return payload.values[slot] + payload.bias;
             }
 
             compute {
                 void main() {
                     float grid[2][3];
-                    grid[0][0] = 1.0;
-                    grid[1][2] = 3.0;
+                    grid[0][0] = 1.0f;
+                    grid[1][2] = 3.0f;
                     Payload payload;
-                    payload.values[0] = 2.0;
-                    payload.values[1] = 4.0;
-                    payload.bias = 0.25;
+                    payload.values[0] = 2.0f;
+                    payload.values[1] = 4.0f;
+                    payload.bias = 0.25f;
                     float a = bumpNested(grid, 1, 2);
                     float b = bumpPayload(payload, 1);
                 }
@@ -15367,14 +15673,14 @@ class TestCudaCodeGen:
             "__device__ float bumpNested(float values[2][3], int row, int col)"
             in cuda_code
         )
-        assert "values[row][col] = (values[row][col] + 1.0);" in cuda_code
-        assert "values[0][col] = (values[row][col] * 0.5);" in cuda_code
+        assert "values[row][col] = (values[row][col] + 1.0f);" in cuda_code
+        assert "values[0][col] = (values[row][col] * 0.5f);" in cuda_code
         assert "return (values[row][col] + values[0][col]);" in cuda_code
         assert "__device__ float bumpPayload(Payload payload, int slot)" in cuda_code
         assert (
             "payload.values[slot] = (payload.values[slot] + payload.bias);" in cuda_code
         )
-        assert "payload.bias = (payload.values[slot] * 0.5);" in cuda_code
+        assert "payload.bias = (payload.values[slot] * 0.5f);" in cuda_code
         assert "return (payload.values[slot] + payload.bias);" in cuda_code
         assert "float grid[2][3];" in cuda_code
         assert "float a = bumpNested(grid, 1, 2);" in cuda_code
@@ -15411,7 +15717,7 @@ class TestCudaCodeGen:
             }
 
             float consumeAdjustedOuter(int slot) {
-                OuterPayload adjusted = adjustOuter(makeOuter(1.0, 2.0, 0.25, 4.0), slot);
+                OuterPayload adjusted = adjustOuter(makeOuter(1.0f, 2.0f, 0.25f, 4.0f), slot);
                 return adjusted.inner.values[slot] + adjusted.inner.values[0] + adjusted.scale;
             }
 
@@ -15450,7 +15756,7 @@ class TestCudaCodeGen:
         assert "__device__ float consumeAdjustedOuter(int slot)" in cuda_code
         assert (
             "OuterPayload adjusted = adjustOuter("
-            "makeOuter(1.0, 2.0, 0.25, 4.0), slot);" in cuda_code
+            "makeOuter(1.0f, 2.0f, 0.25f, 4.0f), slot);" in cuda_code
         )
         assert (
             "return ((adjusted.inner.values[slot] + adjusted.inner.values[0]) + "
@@ -15483,15 +15789,15 @@ class TestCudaCodeGen:
 
             OuterPayload chooseBranch(bool useSecond) {
                 if (useSecond) {
-                    return makeOuter(3.0, 4.0, 0.5, 5.0);
+                    return makeOuter(3.0f, 4.0f, 0.5f, 5.0f);
                 }
-                return makeOuter(1.0, 2.0, 0.25, 4.0);
+                return makeOuter(1.0f, 2.0f, 0.25f, 4.0f);
             }
 
             OuterPayload chooseTernary(bool useSecond) {
                 return useSecond
-                    ? makeOuter(3.0, 4.0, 0.5, 5.0)
-                    : makeOuter(1.0, 2.0, 0.25, 4.0);
+                    ? makeOuter(3.0f, 4.0f, 0.5f, 5.0f)
+                    : makeOuter(1.0f, 2.0f, 0.25f, 4.0f);
             }
 
             float consumeConditional(int slot, bool useSecond) {
@@ -15520,12 +15826,12 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert "__device__ OuterPayload chooseBranch(bool useSecond)" in cuda_code
-        assert "return makeOuter(3.0, 4.0, 0.5, 5.0);" in cuda_code
-        assert "return makeOuter(1.0, 2.0, 0.25, 4.0);" in cuda_code
+        assert "return makeOuter(3.0f, 4.0f, 0.5f, 5.0f);" in cuda_code
+        assert "return makeOuter(1.0f, 2.0f, 0.25f, 4.0f);" in cuda_code
         assert "__device__ OuterPayload chooseTernary(bool useSecond)" in cuda_code
         assert (
-            "return (useSecond ? makeOuter(3.0, 4.0, 0.5, 5.0) : "
-            "makeOuter(1.0, 2.0, 0.25, 4.0));" in cuda_code
+            "return (useSecond ? makeOuter(3.0f, 4.0f, 0.5f, 5.0f) : "
+            "makeOuter(1.0f, 2.0f, 0.25f, 4.0f));" in cuda_code
         )
         assert "OuterPayload branchPayload = chooseBranch(useSecond);" in cuda_code
         assert "OuterPayload ternaryPayload = chooseTernary(useSecond);" in cuda_code
@@ -15562,9 +15868,9 @@ class TestCudaCodeGen:
             }
 
             float readTemporary(int slot) {
-                float dynamicValue = makePayload(1.0, 2.0, 0.25).values[slot];
-                float fixedValue = makePayload(3.0, 4.0, 0.5).values[0];
-                float biasValue = makePayload(5.0, 6.0, 0.75).bias;
+                float dynamicValue = makePayload(1.0f, 2.0f, 0.25f).values[slot];
+                float fixedValue = makePayload(3.0f, 4.0f, 0.5f).values[0];
+                float biasValue = makePayload(5.0f, 6.0f, 0.75f).bias;
                 return dynamicValue + fixedValue + biasValue;
             }
 
@@ -15590,11 +15896,13 @@ class TestCudaCodeGen:
         assert "payload.values[2] = (first + second);" in cuda_code
         assert "__device__ float readTemporary(int slot)" in cuda_code
         assert (
-            "float dynamicValue = makePayload(1.0, 2.0, 0.25).values[slot];"
+            "float dynamicValue = makePayload(1.0f, 2.0f, 0.25f).values[slot];"
             in cuda_code
         )
-        assert "float fixedValue = makePayload(3.0, 4.0, 0.5).values[0];" in cuda_code
-        assert "float biasValue = makePayload(5.0, 6.0, 0.75).bias;" in cuda_code
+        assert (
+            "float fixedValue = makePayload(3.0f, 4.0f, 0.5f).values[0];" in cuda_code
+        )
+        assert "float biasValue = makePayload(5.0f, 6.0f, 0.75f).bias;" in cuda_code
         assert "return ((dynamicValue + fixedValue) + biasValue);" in cuda_code
         assert "float value = readTemporary(1);" in cuda_code
 
@@ -15622,10 +15930,10 @@ class TestCudaCodeGen:
             }
 
             float readNestedTemporary(int slot) {
-                float dynamicValue = makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];
-                float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];
-                float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;
-                float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;
+                float dynamicValue = makeOuter(1.0f, 2.0f, 0.25f, 4.0f).inner.values[slot];
+                float fixedValue = makeOuter(3.0f, 4.0f, 0.5f, 5.0f).inner.values[0];
+                float biasValue = makeOuter(5.0f, 6.0f, 0.75f, 6.0f).inner.bias;
+                float scaleValue = makeOuter(7.0f, 8.0f, 1.0f, 9.0f).scale;
                 return dynamicValue + fixedValue + biasValue + scaleValue;
             }
 
@@ -15656,16 +15964,19 @@ class TestCudaCodeGen:
         assert "__device__ float readNestedTemporary(int slot)" in cuda_code
         assert (
             "float dynamicValue = "
-            "makeOuter(1.0, 2.0, 0.25, 4.0).inner.values[slot];" in cuda_code
+            "makeOuter(1.0f, 2.0f, 0.25f, 4.0f).inner.values[slot];" in cuda_code
         )
         assert (
-            "float fixedValue = makeOuter(3.0, 4.0, 0.5, 5.0).inner.values[0];"
+            "float fixedValue = makeOuter(3.0f, 4.0f, 0.5f, 5.0f).inner.values[0];"
             in cuda_code
         )
         assert (
-            "float biasValue = makeOuter(5.0, 6.0, 0.75, 6.0).inner.bias;" in cuda_code
+            "float biasValue = makeOuter(5.0f, 6.0f, 0.75f, 6.0f).inner.bias;"
+            in cuda_code
         )
-        assert "float scaleValue = makeOuter(7.0, 8.0, 1.0, 9.0).scale;" in cuda_code
+        assert (
+            "float scaleValue = makeOuter(7.0f, 8.0f, 1.0f, 9.0f).scale;" in cuda_code
+        )
         assert (
             "return (((dynamicValue + fixedValue) + biasValue) + scaleValue);"
             in cuda_code
@@ -15695,7 +16006,7 @@ class TestCudaCodeGen:
             }
 
             float mutateReturnedLocal(int slot) {
-                OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);
+                OuterPayload outer = makeOuter(1.0f, 2.0f, 0.25f, 4.0f);
                 outer.inner.values[slot] = outer.inner.values[slot] + outer.inner.bias;
                 outer.inner.values[0] = outer.inner.values[slot] * outer.scale;
                 outer.scale = outer.inner.values[0] + outer.inner.bias;
@@ -15717,7 +16028,7 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);" in cuda_code
+        assert "OuterPayload outer = makeOuter(1.0f, 2.0f, 0.25f, 4.0f);" in cuda_code
         assert (
             "outer.inner.values[slot] = "
             "(outer.inner.values[slot] + outer.inner.bias);" in cuda_code
@@ -15760,7 +16071,7 @@ class TestCudaCodeGen:
             }
 
             float mutateReturnedLocalControl(int slot) {
-                OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);
+                OuterPayload outer = makeOuter(1.0f, 2.0f, 0.25f, 4.0f);
                 for (int i = 0; i < 3; i++) {
                     outer.inner.values[i] = outer.inner.values[i] + outer.inner.bias;
                     if (i == slot) {
@@ -15791,7 +16102,7 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert "__device__ float mutateReturnedLocalControl(int slot)" in cuda_code
-        assert "OuterPayload outer = makeOuter(1.0, 2.0, 0.25, 4.0);" in cuda_code
+        assert "OuterPayload outer = makeOuter(1.0f, 2.0f, 0.25f, 4.0f);" in cuda_code
         assert "for (int i = 0; (i < 3); i++)" in cuda_code
         assert (
             "outer.inner.values[i] = "
@@ -15853,7 +16164,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "int added = /* unsupported CUDA image atomic resource call: "
@@ -15946,7 +16257,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "uint validLine = /* unsupported CUDA image atomic resource call: "
@@ -16209,7 +16520,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "float2 paramLod = /* unsupported CUDA resource query: "
@@ -16256,7 +16567,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "int badTextureSamples = /* unsupported CUDA resource query: "
@@ -16310,7 +16621,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert (
             "int2 validTextureSize = cgl_textureSize_sampler2D"
@@ -16512,7 +16823,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo textures_metadata[2] = {};" in cuda_code
@@ -16649,7 +16960,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo textureGrid_metadata[4][4] = {};" in cuda_code
         assert "CglResourceQueryInfo imageGrid_metadata[4][4] = {};" in cuda_code
@@ -16777,7 +17088,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
@@ -16889,7 +17200,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
@@ -17248,7 +17559,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
         assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
@@ -17469,7 +17780,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "cudaTextureObject_t selected = chooseWithLocalWork();" in cuda_code
         assert (
@@ -17535,7 +17846,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "__device__ void consume(cudaTextureObject_t tex, "
@@ -17638,8 +17949,8 @@ class TestCudaCodeGen:
         assert "CglResourceQueryInfo msTex_metadata;" in cuda_code
         assert "CglResourceQueryInfo img_metadata;" in cuda_code
         assert (
-            "return ResourceBundle(colorMap, colorMap_metadata, samplesMap, "
-            "samplesMap_metadata, imageMap, imageMap_metadata);" in cuda_code
+            "return ResourceBundle{colorMap, colorMap_metadata, samplesMap, "
+            "samplesMap_metadata, imageMap, imageMap_metadata};" in cuda_code
         )
         assert (
             "int2 directCallMember = cgl_textureSize_sampler2D"
@@ -17852,8 +18163,8 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(ast)
 
         assert (
-            "ResourceBundle bundle = ResourceBundle("
-            "colorMap, colorMap_metadata, imageMap, imageMap_metadata);" in cuda_code
+            "ResourceBundle bundle = ResourceBundle{"
+            "colorMap, colorMap_metadata, imageMap, imageMap_metadata};" in cuda_code
         )
         assert (
             "int2 texDims = cgl_textureSize_sampler2D"
@@ -18304,7 +18615,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo textures_metadata[8] = {};" in cuda_code
         assert (
@@ -18367,7 +18678,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "CglResourceQueryInfo textureGrid_metadata[4][4] = {};" in cuda_code
         assert (
@@ -18663,7 +18974,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert "struct CglResourceQueryInfo" in cuda_code
         assert "cudaTextureObject_t msTex;" in cuda_code
@@ -18863,7 +19174,7 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        cuda_code = codegen.generate(ast)
+        cuda_code, _ = cuda_partial_output(codegen.generate, ast)
 
         assert "cudaTextureObject_t msTex;" in cuda_code
         assert "cudaTextureObject_t msLayers;" in cuda_code
@@ -18985,6 +19296,33 @@ class TestCudaCodeGen:
         assert "for (int j = 0; (j < 2); j++)" in cuda_code
         assert "for (None;" not in cuda_code
         assert "++i++" not in cuda_code
+
+    def test_postfix_update_keeps_parentheses_around_dereference(self):
+        source_code = """
+        shader main {
+            buffer float* results;
+            void inc(float* p) { (*p)++; }
+            void dec(float* p) { (*p)--; }
+            compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                float a = 1.0;
+                inc(&a);
+                dec(&a);
+                int i = 0;
+                i++;
+                results[i] = a;
+            }
+            }
+        }
+        """
+        code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "(*p)++;" in code
+        assert "(*p)--;" in code
+        assert "*p++" not in code
+        assert "*p--" not in code
+        assert "i++;" in code
 
     def test_for_header_assignment_expressions_do_not_emit_stray_statements(self):
         source_code = """
@@ -19559,7 +19897,7 @@ class TestCudaCodeGen:
         parser = Parser(lexer.tokens)
         ast = parser.parse()
 
-        cuda_code = CudaCodeGen().generate(ast)
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
 
         assert (
             "fallback = /* unsupported CUDA match expression: "
@@ -19656,15 +19994,15 @@ class TestCudaCodeGen:
 
     def test_array_literals_emit_cuda_brace_initializers(self):
         source_code = """
-        float globalWeights[4] = {1.0, 2.0};
+        float globalWeights[4] = {1.0f, 2.0f};
 
         float pickScalar(int index) {
-            float values[4] = {1.0, 2.0, 3.0, 4.0};
+            float values[4] = {1.0f, 2.0f, 3.0f, 4.0f};
             return values[index];
         }
 
         vec3 pickColor(int index) {
-            vec3 colors[2] = {vec3(1.0, 2.0, 3.0), vec3(4.0, 5.0, 6.0)};
+            vec3 colors[2] = {vec3(1.0f, 2.0f, 3.0f), vec3(4.0f, 5.0f, 6.0f)};
             return colors[index];
         }
         """
@@ -19676,11 +20014,11 @@ class TestCudaCodeGen:
         codegen = CudaCodeGen()
         cuda_code = codegen.generate(ast)
 
-        assert "float globalWeights[4] = {1.0, 2.0};" in cuda_code
-        assert "float values[4] = {1.0, 2.0, 3.0, 4.0};" in cuda_code
+        assert "float globalWeights[4] = {1.0f, 2.0f};" in cuda_code
+        assert "float values[4] = {1.0f, 2.0f, 3.0f, 4.0f};" in cuda_code
         assert (
-            "float3 colors[2] = {make_float3(1.0, 2.0, 3.0), "
-            "make_float3(4.0, 5.0, 6.0)};"
+            "float3 colors[2] = {make_float3(1.0f, 2.0f, 3.0f), "
+            "make_float3(4.0f, 5.0f, 6.0f)};"
         ) in cuda_code
         assert "ArrayLiteralNode" not in cuda_code
 
@@ -19913,9 +20251,9 @@ class TestCudaCodeGen:
 
             fragment {
                 void main() {
-                    vec2 uv = vec2(0.5, 0.5);
-                    vec4 mip0 = textureLod(mipMap, uv, 0.0);
-                    vec4 mip3 = textureLod(mipMap, uv, 3.0);
+                    vec2 uv = vec2(0.5f, 0.5f);
+                    vec4 mip0 = textureLod(mipMap, uv, 0.0f);
+                    vec4 mip3 = textureLod(mipMap, uv, 3.0f);
                 }
             }
         }
@@ -19929,8 +20267,8 @@ class TestCudaCodeGen:
         cuda_code = codegen.generate(ast)
 
         assert "cudaTextureObject_t mipMap;" in cuda_code
-        assert "float4 mip0 = tex2DLod<float4>(mipMap, uv.x, uv.y, 0.0);" in cuda_code
-        assert "float4 mip3 = tex2DLod<float4>(mipMap, uv.x, uv.y, 3.0);" in cuda_code
+        assert "float4 mip0 = tex2DLod<float4>(mipMap, uv.x, uv.y, 0.0f);" in cuda_code
+        assert "float4 mip3 = tex2DLod<float4>(mipMap, uv.x, uv.y, 3.0f);" in cuda_code
         assert "textureLod(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
@@ -20064,8 +20402,8 @@ class TestCudaCodeGen:
                 uint index
             ) {
                 float val = input.Load(index);
-                results.Store(index, val * 2.0);
-                output[index] = val + 1.0;
+                results.Store(index, val * 2.0f);
+                output[index] = val + 1.0f;
                 float readBack = results[index];
             }
 
@@ -20086,8 +20424,8 @@ class TestCudaCodeGen:
         assert "float* results" in cuda_code
         assert "const float* input" in cuda_code
         assert "float val = input[index];" in cuda_code
-        assert "results[index] = (val * 2.0);" in cuda_code
-        assert "output[index] = (val + 1.0);" in cuda_code
+        assert "results[index] = (val * 2.0f);" in cuda_code
+        assert "output[index] = (val + 1.0f);" in cuda_code
         assert "float readBack = results[index];" in cuda_code
         assert "RWStructuredBuffer<" not in cuda_code
         assert ".Store(" not in cuda_code

@@ -1098,7 +1098,7 @@ def test_binary_expression_precedence_preserves_grouping_in_metal():
     assert "float t = -nearPoint.y / (farPoint.y - nearPoint.y);" in generated_code
     assert (
         "__attribute__((unused)) float3 pos = nearPoint + "
-        "float3(t) * (farPoint - nearPoint);"
+        "t * (farPoint - nearPoint);"
     ) in generated_code
     assert "float t = -nearPoint.y / farPoint.y - nearPoint.y;" not in generated_code
     assert "float3(t) * farPoint - nearPoint" not in generated_code
@@ -1389,8 +1389,8 @@ def test_metal_mod_builtin_lowers_to_glsl_semantics_expression():
     )
 
     assert (
-        "float2 tile = ((uv * float2(4.0) - float2(2.0)) - "
-        "((1.0) * floor((uv * float2(4.0) - float2(2.0)) / (1.0))));"
+        "float2 tile = ((uv * 4.0 - float2(2.0)) - "
+        "((1.0) * floor((uv * 4.0 - float2(2.0)) / (1.0))));"
     ) in generated_code
     assert (
         "float2 wrapped = ((tile) - "
@@ -1731,7 +1731,9 @@ def test_metal_saturate_builtin_qualifies_when_local_name_shadows_it():
     )
 
 
-def test_metal_user_defined_stdlib_function_names_are_preserved():
+def test_metal_user_defined_stdlib_function_names_are_renamed():
+    # using namespace metal makes min and normalize ambiguous with the user's
+    # functions of the same signature (#3156), so the user functions are renamed.
     shader = """
     shader MetalUserStdlibNames {
         compute {
@@ -1755,15 +1757,14 @@ def test_metal_user_defined_stdlib_function_names_are_preserved():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "float min(float left, float right)" in generated_code
-    assert "float3 normalize(float3 value)" in generated_code
-    assert "__attribute__((unused)) float total = min(1.0, 2.0);" in generated_code
+    assert "float min_fn(float left, float right)" in generated_code
+    assert "float3 normalize_fn(float3 value)" in generated_code
+    assert "__attribute__((unused)) float total = min_fn(1.0, 2.0);" in generated_code
     assert (
         "__attribute__((unused)) float3 shifted = "
-        "normalize(float3(float(tid.x), 0.0, 0.0));" in generated_code
+        "normalize_fn(float3(float(tid.x), 0.0, 0.0));" in generated_code
     )
-    assert "metal::min(" not in generated_code
-    assert "metal::normalize(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
@@ -1846,7 +1847,7 @@ def test_metal_two_argument_atan_qualifies_atan2_when_local_name_shadows_it():
     assert "float angle = atan2(float(tid.y), float(tid.x));" not in generated_code
 
 
-def test_metal_user_defined_two_argument_atan_is_preserved():
+def test_metal_user_defined_two_argument_atan_is_renamed():
     shader = """
     shader MetalUserAtan {
         compute {
@@ -1865,12 +1866,13 @@ def test_metal_user_defined_two_argument_atan_is_preserved():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "float atan(float y, float x)" in generated_code
+    assert "float atan_fn(float y, float x)" in generated_code
     assert (
         "__attribute__((unused)) float angle = "
-        "atan(float(tid.y), float(tid.x));" in generated_code
+        "atan_fn(float(tid.y), float(tid.x));" in generated_code
     )
     assert "atan2(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_glsl_bitcast_builtins_lower_to_as_type():
@@ -2154,12 +2156,12 @@ def test_metal_integer_bit_intrinsics_use_namespace_when_shadowed():
         crosstl.translator.parse(shader), "compute"
     )
 
-    assert "uint popcount(uint value)" in generated_code
-    assert "uint reverse_bits(uint value)" in generated_code
-    assert "uint count = metal::popcount(tid.x);" in generated_code
-    assert "uint reversed = metal::reverse_bits(tid.y);" in generated_code
-    assert "uint count = popcount(tid.x);" not in generated_code
-    assert "uint reversed = reverse_bits(tid.y);" not in generated_code
+    # The user functions are renamed (#3156), so the library calls reach the library.
+    assert "uint popcount_fn(uint value)" in generated_code
+    assert "uint reverse_bits_fn(uint value)" in generated_code
+    assert "uint count = popcount(tid.x);" in generated_code
+    assert "uint reversed = reverse_bits(tid.y);" in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_user_defined_bitcast_function_names_are_preserved():
@@ -2408,7 +2410,7 @@ def test_metal_fine_and_coarse_derivatives_lower_to_plain_msl_derivatives():
     assert "float fy = dfdy(uv.x);" in generated_code
     assert "float cy = dfdy(uv.y);" in generated_code
     assert "float2 fw = fwidth(uv);" in generated_code
-    assert "float2 cw = fwidth(uv * float2(2.0));" in generated_code
+    assert "float2 cw = fwidth(uv * 2.0);" in generated_code
     for name in (
         "dFdxFine(",
         "dFdxCoarse(",
@@ -3314,7 +3316,8 @@ def test_metal_relative_shuffle_result_type_supports_nested_bitcast():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "as_type<uint64_t>(metal::simd_shuffle_down(" in generated_code
+    assert "uint64_t simd_shuffle_down_fn(uint64_t data" in generated_code
+    assert "as_type<uint64_t>(simd_shuffle_down(" in generated_code
     assert "as_type<uint2>(data)" in generated_code
     assert "WaveShuffleDown" not in generated_code
     compile_with_metal_if_available(generated_code)
@@ -4949,6 +4952,34 @@ def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     assert "payloads[0].value = values[0];" in generated_code
     assert "float value = payloads[0].value;" in generated_code
     assert "payloads[0]->value" not in generated_code
+
+
+def test_metal_postfix_update_keeps_parentheses_around_dereference():
+    source_code = """
+    shader main {
+        buffer float* results;
+        void inc(float* p) { (*p)++; }
+        void dec(float* p) { (*p)--; }
+        compute {
+        @ numthreads(1, 1, 1)
+        void main() {
+            float a = 1.0;
+            inc(&a);
+            dec(&a);
+            int i = 0;
+            i++;
+            results[i] = a;
+        }
+        }
+    }
+    """
+    code = MetalCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "(*p)++;" in code
+    assert "(*p)--;" in code
+    assert "*p++" not in code
+    assert "*p--" not in code
+    assert "i++;" in code
 
 
 def test_metal_structured_buffer_constant_metadata_and_postfix_updates_roundtrip():
@@ -7881,7 +7912,7 @@ def test_metal_global_function_constants_validate_declarations(
         MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
-def test_metal_stencil_ref_return_semantic_reports_unsupported():
+def test_metal_stencil_ref_return_semantic_uses_stencil_attribute():
     code = """
     shader StencilOut {
         fragment {
@@ -7892,14 +7923,30 @@ def test_metal_stencil_ref_return_semantic_reports_unsupported():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match="gl_FragStencilRefEXT.*function return semantic",
-    ):
+    # MSL 3.2 section 5.2.3.4: a fragment function returns its stencil reference value as uint [[stencil]].
+    generated = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+    assert "uint value [[stencil]];" in generated
+    assert "return fragment_main_Return{7};" in generated
+
+
+def test_metal_stencil_ref_return_semantic_requires_uint():
+    code = """
+    shader StencilOut {
+        fragment {
+            float main() @ gl_FragStencilRefEXT {
+                return 7.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="gl_FragStencilRefEXT"):
         MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
-def test_metal_stencil_ref_struct_member_reports_unsupported():
+def test_metal_stencil_ref_struct_member_uses_stencil_attribute():
     code = """
     shader StencilOut {
         struct FragmentOutput {
@@ -7918,8 +7965,9 @@ def test_metal_stencil_ref_struct_member_reports_unsupported():
     }
     """
 
-    with pytest.raises(ValueError, match="stencil_ref.*not supported"):
-        MetalCodeGen().generate(crosstl.translator.parse(code))
+    generated = MetalCodeGen().generate(crosstl.translator.parse(code))
+    assert "uint stencil [[stencil]];" in generated
+    assert "output.stencil = 7;" in generated
 
 
 def test_metal_argument_buffer_resource_members_preserve_id_attributes():
@@ -16869,7 +16917,8 @@ def test_void_function_return_semantics_are_rejected(stage, semantic):
     ("stage", "return_type", "semantic", "metal_semantic", "expected_type"),
     [
         ("vertex", "int", "gl_Position", "position", "float4"),
-        ("fragment", "vec3", "gl_FragColor", "color\\(0\\)", "float4"),
+        # MSL takes any scalar or vector colour value, so only a bool is refused.
+        ("fragment", "bool", "gl_FragColor", "color\\(0\\)", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "depth\\(any\\)", "float"),
         ("fragment", "int", "gl_SampleMask", "sample_mask", "uint"),
     ],
@@ -16878,6 +16927,7 @@ def test_function_return_builtin_types_are_validated(
     stage, return_type, semantic, metal_semantic, expected_type
 ):
     value = {
+        "bool": "true",
         "int": "0",
         "vec2": "vec2(0.0)",
         "vec3": "vec3(0.0)",
@@ -34610,6 +34660,35 @@ def test_translate_hlsl_packed_byte_results_convert_to_declared_metal_vectors(
     assert "uint4w=uint4(int4(as_type<char4>(uint(iin[1]))));" in compact
     assert "float4f=float4(int4(as_type<char4>(uint(iin[2]))));" in compact
     assert "int4s=int4(ushort4(as_type<uchar4>(uint(iin[3]))));" in compact
+
+
+def test_scalar_geometric_builtins_lower_to_scalar_expressions(tmp_path):
+    source_path = tmp_path / "scalar_geometric.hlsl"
+    source_path.write_text(
+        """
+        RWStructuredBuffer<float> results : register(u0);
+        RWStructuredBuffer<int> counts : register(u1);
+        [numthreads(1, 1, 1)]
+        void CSMain(uint3 id : SV_DispatchThreadID)
+        {
+            float x = results[1];
+            float y = results[2];
+            int a = counts[1];
+            int b = counts[2];
+            float3 v = float3(x, y, x);
+            results[0] = length(x) + dot(x, y) + distance(x, y) + normalize(x);
+            counts[0] = dot(a, b);
+            results[3] = length(v) + dot(v, v) + distance(v, v) + normalize(v).x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    compact = re.sub(r"\s+", "", crosstl.translate(str(source_path), backend="metal"))
+
+    assert "results[0]=abs(x)+((x)*(y))+abs((x)-(y))+sign(x);" in compact
+    assert "counts[0]=((a)*(b));" in compact
+    assert "results[3]=length(v)+dot(v,v)+distance(v,v)+normalize(v).x;" in compact
 
 
 if __name__ == "__main__":

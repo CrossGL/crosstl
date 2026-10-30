@@ -2,6 +2,8 @@
 
 import re
 
+from ...translator.integer_literals import crossgl_legacy_octal
+from ..assignment_operands import grouped_operand
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -11,6 +13,7 @@ from .buffer_layout_import import EmittedBufferLayouts
 from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
+    BlockNode,
     CastNode,
     DesignatedInitializerNode,
     EnumNode,
@@ -22,6 +25,7 @@ from .CudaAst import (
     UnaryOpNode,
     VariableNode,
 )
+from .reference_parameters import ReferenceParameters
 
 
 class CudaToCrossGLConverter:
@@ -316,6 +320,9 @@ class CudaToCrossGLConverter:
         text = str(value)
         if "'" in text and bool(text) and (text[0].isdigit() or text.startswith(".")):
             return True
+        if re.fullmatch(r"0\d+", text):
+            # A leading zero makes an integer literal octal (C++17 [lex.icon]).
+            return True
         return (
             re.fullmatch(
                 r"(?i)(?:0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+)(?:u|l|ul|lu|ull|llu)",
@@ -331,13 +338,13 @@ class CudaToCrossGLConverter:
             text,
         )
         if match is None:
-            return text
+            return crossgl_legacy_octal(text)
 
         digits, suffix = match.groups()
         if "u" in suffix.lower():
             unsigned_suffix = "U" if "U" in suffix else "u"
-            return f"{digits}{unsigned_suffix}"
-        return digits
+            return crossgl_legacy_octal(f"{digits}{unsigned_suffix}")
+        return crossgl_legacy_octal(digits)
 
     def is_cuda_char_literal_text(self, value):
         return re.fullmatch(r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'", str(value)) is not None
@@ -4036,6 +4043,7 @@ class CudaToCrossGLConverter:
                 self.visit(var)
                 self.emit("")
 
+        self.reference_parameters = ReferenceParameters(node)
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
                 if getattr(func, "body", None) is None:
@@ -4152,6 +4160,9 @@ class CudaToCrossGLConverter:
                 )
                 self.register_vector1_name(param.name, param.vtype)
                 param_name = self.crossgl_parameter_name(param, index)
+                mode = self.function_reference_parameters().mode(node, index)
+                if mode:
+                    param_type = f"{mode} {param_type}"
                 params.append(f"{param_type} {param_name}")
 
             param_str = ", ".join(params)
@@ -4548,6 +4559,14 @@ class CudaToCrossGLConverter:
     def register_type_alias(self, name, alias_type):
         self.type_alias_scopes[-1][name] = alias_type
 
+    def function_reference_parameters(self):
+        """The :class:`ReferenceParameters` of the program being converted."""
+        analysis = getattr(self, "reference_parameters", None)
+        if analysis is None:
+            analysis = ReferenceParameters(None)
+            self.reference_parameters = analysis
+        return analysis
+
     def resolve_type_alias(self, type_name):
         type_name = self.strip_type_qualifiers(type_name)
         for scope in reversed(self.type_alias_scopes):
@@ -4701,12 +4720,12 @@ class CudaToCrossGLConverter:
         axis = global_invocation_axis(node)
         if axis is not None:
             return f"gl_GlobalInvocationID.{axis}"
-        left = self.visit(node.left)
-        right = self.visit(node.right)
+        left = grouped_operand(self, node.left)
+        right = grouped_operand(self, node.right)
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
-        operand = self.visit(node.operand)
+        operand = grouped_operand(self, node.operand)
         if node.op.startswith("post"):
             return f"({operand}{node.op[4:]})"
         else:
@@ -4836,11 +4855,8 @@ class CudaToCrossGLConverter:
         )
 
     def format_cuda_comma_expression(self, args):
-        args_text = ", ".join(self.visit(arg) for arg in args)
-        return (
-            f"(/* CUDA comma expression {args_text} "
-            "not directly supported in CrossGL */ 0)"
-        )
+        # CrossGL has the C comma operator: ``(a, b)`` evaluates ``a``, then yields ``b``.
+        return f"({', '.join(self.visit(arg) for arg in args)})"
 
     def format_cuda_nanosleep_call(self, function_name, args):
         if not isinstance(function_name, str):
@@ -6134,11 +6150,26 @@ class CudaToCrossGLConverter:
             self.emit(f"// delete: {target}")
 
     def visit_TypeAliasNode(self, node):
+        """Write ``typedef``/``using`` as a CrossGL ``typedef`` (#3309).
+
+        CrossGL has no ``decltype``, so such an alias stays a comment and its
+        uses are refused downstream as undeclared types.
+        """
         self.register_type_alias(node.name, node.alias_type)
-        if str(node.alias_type).strip().startswith(("struct ", "union ")):
+        elaborated = re.fullmatch(
+            r"(?:struct|union)\s+([A-Za-z_]\w*)", str(node.alias_type).strip()
+        )
+        if elaborated is not None:
+            # ``typedef struct Pair PairT;`` names the record ``Pair``; the
+            # self-alias ``typedef struct Q {...} Q;`` declares nothing new.
+            alias_type = elaborated.group(1)
+            if alias_type == node.name:
+                return
+        elif str(node.alias_type).strip().startswith(("struct ", "union ")):
             alias_type = node.alias_type
         elif self.is_decltype_type_name(node.alias_type):
-            alias_type = node.alias_type
+            self.emit(f"// typedef {node.alias_type} {node.name};")
+            return
         else:
             alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
             layouts = getattr(self, "emitted_buffer_layouts", None)
@@ -6148,7 +6179,7 @@ class CudaToCrossGLConverter:
                 and not getattr(node, "declarator_type_suffix", "")
             ):
                 layouts.alias(node.name, alias_type)
-        self.emit(f"// typedef {alias_type} {node.name};")
+        self.emit(f"typedef {alias_type} {node.name};")
 
     def format_atomic_argument(self, arg, index):
         if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
@@ -6273,6 +6304,22 @@ class CudaToCrossGLConverter:
 
         value = self.visit(node.value)
         return f"{''.join(designators)} = {value}"
+
+    def visit_BlockNode(self, node):
+        """A nested ``{ ... }`` stays a CrossGL block, with its own variable and name scopes."""
+        self.emit("{")
+        self.indent_level += 1
+        self.push_variable_type_scope()
+        self.push_identifier_name_scope()
+        try:
+            for stmt in node.statements:
+                self.emit_statement(stmt)
+        finally:
+            self.pop_identifier_name_scope()
+            self.pop_variable_type_scope()
+            self.indent_level -= 1
+        self.emit("}")
+        return ""
 
     def visit_IfNode(self, node):
         condition = self.visit(node.condition)
@@ -6435,9 +6482,9 @@ class CudaToCrossGLConverter:
         self.emit("continue;")
 
     def visit_TernaryOpNode(self, node):
-        condition = self.visit(node.condition)
-        true_expr = self.visit(node.true_expr)
-        false_expr = self.visit(node.false_expr)
+        condition = grouped_operand(self, node.condition)
+        true_expr = grouped_operand(self, node.true_expr)
+        false_expr = grouped_operand(self, node.false_expr)
         return f"({condition} ? {true_expr} : {false_expr})"
 
     def visit_CastNode(self, node):

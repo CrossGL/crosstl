@@ -102,7 +102,7 @@ float4 PSMain(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
 COMPUTE_OUT_PARAMETER = """
 RWStructuredBuffer<float> results : register(u0);
 [numthreads(8, 1, 1)]
-void CSMain(uint3 id : SV_DispatchThreadID, out float value : SV_Target0) {
+void CSMain(uint3 id : SV_DispatchThreadID, out float value : RESULT0) {
     value = 1.0;
     results[id.x] = 2.0;
 }
