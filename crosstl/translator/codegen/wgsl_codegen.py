@@ -4190,9 +4190,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
 
     def generate_exponent_call(self, node, function_name):
         value_arg, out_arg = node.arguments
-        if not isinstance(
-            out_arg, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
-        ):
+        if not isinstance(out_arg, (IdentifierNode, MemberAccessNode, ArrayAccessNode)):
             raise ValueError(
                 f"WGSL target cannot lower {function_name}() with a written "
                 "argument that is not a variable, member or element"
@@ -4215,9 +4213,7 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 f"writing {out_type}; the written argument must have the same "
                 "number of components"
             )
-        helper_name = self.exponent_helper_name(
-            function_name, value_type, out_type
-        )
+        helper_name = self.exponent_helper_name(function_name, value_type, out_type)
         self._exponent_helpers.setdefault(
             helper_name,
             {
