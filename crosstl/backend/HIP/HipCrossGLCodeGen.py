@@ -537,6 +537,7 @@ class HipToCrossGLConverter:
         self.namespace_aliases = {}
         self.source_identifier_names = frozenset()
         self.anonymous_enum_count = 0
+        self.global_resource_binding_count = 0
         self.function_local_record_definitions = {}
         self.function_local_record_node_ids = set()
         self.function_local_record_declaration_types = {}
@@ -587,6 +588,7 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.anonymous_enum_count = 0
+        self.global_resource_binding_count = 0
         self.namespace_constant_names = set()
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
@@ -5289,7 +5291,7 @@ class HipToCrossGLConverter:
                             element_type,
                         )
                         params.append(
-                            f"@group(0) @binding({len(params)}) "
+                            f"@group(0) @binding({self.global_resource_binding_count + len(params)}) "
                             f"var<storage, {access}> "
                             f"{output_name}: array<{element_type}>"
                         )
@@ -5302,7 +5304,7 @@ class HipToCrossGLConverter:
                         self.register_variable_type(param_name, param_type)
                         if self.is_crossgl_scalar_type(param_type):
                             params.append(
-                                f"@group(0) @binding({len(params)}) "
+                                f"@group(0) @binding({self.global_resource_binding_count + len(params)}) "
                                 f"var<uniform> {output_name}: {param_type}"
                             )
                         else:
@@ -5976,15 +5978,16 @@ class HipToCrossGLConverter:
             return
 
         if "__constant__" in qualifiers:
+            binding = self.allocate_global_resource_binding()
             if hasattr(node, "value") and node.value:
                 value = self.format_variable_initializer_value(node.value)
                 self.emit(
-                    f"@group(0) @binding(0) var<uniform> {output_name}: "
+                    f"@group(0) @binding({binding}) var<uniform> {output_name}: "
                     f"{var_type} = {value};"
                 )
             else:
                 self.emit(
-                    f"@group(0) @binding(0) var<uniform> {output_name}: {var_type};"
+                    f"@group(0) @binding({binding}) var<uniform> {output_name}: {var_type};"
                 )
             return
 
@@ -6098,14 +6101,22 @@ class HipToCrossGLConverter:
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
         output_name = self.register_identifier_name(node.name)
         self.register_variable_type(node.name, var_type)
+        binding = self.allocate_global_resource_binding()
         if node.value is not None:
             value = self.visit(node.value)
             self.emit(
-                f"@group(0) @binding(0) var<uniform> {output_name}: "
+                f"@group(0) @binding({binding}) var<uniform> {output_name}: "
                 f"{var_type} = {value};"
             )
         else:
-            self.emit(f"@group(0) @binding(0) var<uniform> {output_name}: {var_type};")
+            self.emit(
+                f"@group(0) @binding({binding}) var<uniform> {output_name}: {var_type};"
+            )
+
+    def allocate_global_resource_binding(self):
+        binding = self.global_resource_binding_count
+        self.global_resource_binding_count += 1
+        return binding
 
     def visit_HipErrorHandlingNode(self, node):
         error_type = self.visit(node.error_type)
