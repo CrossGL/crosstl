@@ -70,7 +70,10 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
-from .wgsl_array_constructors import wgsl_array_constructor
+from .wgsl_array_constructors import (
+    wgsl_array_constructor,
+    wgsl_array_constructor_type,
+)
 from .wgsl_boolean_xor import (
     wgsl_boolean_xor,
     wgsl_boolean_xor_assignment,
@@ -6531,6 +6534,9 @@ class WGSLCodeGen(
             ):
                 # A structure constructor such as Pair(a, b) has the structure's type.
                 return NamedType(function_name)
+            array_type = wgsl_array_constructor_type(self, expr)
+            if array_type is not None:
+                return array_type
             if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
                 return "uint"
             packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(

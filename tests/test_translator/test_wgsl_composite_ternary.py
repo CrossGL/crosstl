@@ -129,6 +129,32 @@ def test_struct_constructor_ternary_inside_an_expression_is_refused():
         compute("data[2] = (data[1] > 7.0 ? Pair(1.0, 2.0) : Pair(3.0, 4.0)).a;")
 
 
+def test_array_constructor_ternary_inside_an_expression_is_refused():
+    with pytest.raises(ValueError, match=r"of type array<f32, 2> here"):
+        compute(
+            "data[2] = (data[1] > 7.0 ? float[2](1.0, 2.0) : float[2](3.0, 4.0))[1];"
+        )
+
+
+def test_array_constructor_initializer_becomes_if_else(tmp_path):
+    output = compute(
+        "float a[2] = data[1] > 7.0 ? float[2](1.0, 2.0) : float[2](3.0, 4.0);\n"
+        "data[2] = a[1];"
+    )
+    lines = body_lines(output)
+    assert not any("select(" in line for line in lines)
+    assert follows(
+        lines,
+        "var a: array<f32, 2>;",
+        "if ((data[1] > 7.0))     {",
+        "a = array<f32, 2>(1.0, 2.0);",
+        "} else     {",
+        "a = array<f32, 2>(3.0, 4.0);",
+        "}",
+    )
+    naga_accepts(output, tmp_path)
+
+
 def test_struct_constructor_ternary_as_a_module_constant_is_refused():
     source = """
         shader Probe {
