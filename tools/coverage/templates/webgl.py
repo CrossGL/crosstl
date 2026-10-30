@@ -18,6 +18,7 @@ from .calls import WEBGL as _CALLS
 from .columns import WEBGL as _COLUMNS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
+from .draws import WEBGL as _DRAWS
 from .edges import FAMILY as _EDGES
 from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
@@ -49,7 +50,6 @@ from .scopes import WEBGL as _SCOPES
 from .subgroups import WEBGL as _SUBGROUPS
 from .values import FAMILY as _VALUES
 from .vectors import GLSL as _VECTORS
-from .draws import WEBGL as _DRAWS
 from .vertices import WEBGL as _VERTICES
 from .workgroups import WEBGL as _WORKGROUPS
 

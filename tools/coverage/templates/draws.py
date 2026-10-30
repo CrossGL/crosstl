@@ -25,7 +25,9 @@ _GLSL_STATEMENTS = {
     "draw-index": _GLSL_INDEX.format(name="gl_DrawID"),
     "base-vertex": _GLSL_INDEX.format(name="gl_BaseVertex"),
     "base-instance": _GLSL_INDEX.format(name="gl_BaseInstance"),
-    "cull-distance": "gl_Position = position * 2.0;\n    gl_CullDistance[0] = position.x;",
+    "cull-distance": (
+        "gl_Position = position * 2.0;\n    gl_CullDistance[0] = position.x;"
+    ),
 }
 GLSL = {
     name: Template(

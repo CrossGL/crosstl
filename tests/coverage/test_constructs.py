@@ -786,7 +786,9 @@ def test_draw_parameter_probes_use_each_languages_built_ins():
         probe = probes.build(_feature(language, name), language)
         assert line in probe.source, (language, name)
     crossgl = probes.build(_feature("glsl", "base-vertex"), "crossgl").source
-    assert "        int base @ gl_BaseVertex;\n" in crossgl and "    vertex {\n" in crossgl
+    assert (
+        "        int base @ gl_BaseVertex;\n" in crossgl and "    vertex {\n" in crossgl
+    )
     crossgl = probes.build(_feature("glsl", "cull-distance"), "crossgl").source
     assert "float cull @ gl_CullDistance;" in crossgl
     # HLSL has no draw index, Metal neither a draw index nor cull distances, and GLSL ES 3.00 and WGSL none of the four.
