@@ -387,6 +387,15 @@ def _curated() -> list[Construct]:
         c("compute", "workgroup-id", "BuiltIn.WorkgroupId"),
         c("compute", "local-invocation-index", "BuiltIn.LocalInvocationIndex"),
         c("compute", "num-workgroups", "BuiltIn.NumWorkgroups"),
+        c("compute", "subgroup-size", "BuiltIn.SubgroupSize"),
+        c(
+            "compute",
+            "subgroup-invocation-id",
+            "BuiltIn.SubgroupLocalInvocationId",
+        ),
+        c("compute", "num-subgroups", "BuiltIn.NumSubgroups"),
+        c("compute", "subgroup-id", "BuiltIn.SubgroupId"),
+        c("compute", "workgroup-size", "BuiltIn.WorkgroupSize"),
         c(
             "compute",
             "invocation-id-in-helper",

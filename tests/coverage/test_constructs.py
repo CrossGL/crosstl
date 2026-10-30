@@ -20,6 +20,7 @@ from tools.coverage.templates import (
     pipeline,
     rasterization,
     relations,
+    subgroups,
     vertices,
 )
 from tools.coverage.templates.base import ABSENT, OPERATORS
@@ -855,6 +856,56 @@ def test_pipeline_probes_use_each_languages_fragment_built_ins_and_modes():
         "wgsl": names,
         "webgl": names - {"point-coordinate"},
         **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_subgroup_probes_read_each_languages_built_ins():
+    feature = _feature("glsl", "subgroup-invocation-id")
+    assert (feature.category, feature.stage) == ("compute", "compute")
+    assert feature.group == "BuiltIn.SubgroupLocalInvocationId"
+    for language, name, line in (
+        ("glsl", "subgroup-size", "#extension GL_KHR_shader_subgroup_basic : require"),
+        ("glsl", "subgroup-id", "outp[i] = float(gl_SubgroupID);"),
+        ("glsl", "workgroup-size", "outp[i] = float(gl_WorkGroupSize.x);"),
+        ("hlsl", "subgroup-invocation-id", "outp[i] = float(WaveGetLaneIndex());"),
+        ("slang", "num-subgroups", "outp[i] = float(WaveGetNumWaves());"),
+        ("slang", "workgroup-size", "outp[i] = float(WorkgroupSize().x);"),
+        ("metal", "subgroup-size", "uint width [[threads_per_simdgroup]]"),
+        ("metal", "subgroup-id", "uint group [[simdgroup_index_in_threadgroup]]"),
+        ("metal", "workgroup-size", "uint3 size [[threads_per_threadgroup]]"),
+        (
+            "wgsl",
+            "subgroup-invocation-id",
+            "@builtin(subgroup_invocation_id) lane: u32",
+        ),
+        (
+            "rust",
+            "subgroup-invocation-id",
+            "#[spirv(subgroup_local_invocation_id)] lane: u32",
+        ),
+        ("cuda", "subgroup-invocation-id", "outp[i] = float(index % warpSize);"),
+        ("hip", "subgroup-invocation-id", "outp[i] = float(__lane_id());"),
+        ("opencl", "num-subgroups", "outp[i] = (float)get_num_sub_groups();"),
+        ("mojo", "subgroup-id", "outp[i] = Float32(warp_id())"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "num-subgroups"), "crossgl").source
+    assert "outp[i] = float(gl_NumSubgroups);" in crossgl
+    # naga accepts the subgroup built-ins only without the enable directive it has not implemented.
+    wgsl = probes.build(_feature("wgsl", "subgroup-size"), "wgsl").source
+    assert "enable subgroups" not in wgsl
+    # HLSL has no built-in for the waves in a group or the group's size, WGSL and Rust none for the group's size, and
+    # WebGL 2 no compute stage.
+    names = set(subgroups.NAMES)
+    absent = {
+        "hlsl": {"num-subgroups", "subgroup-id", "workgroup-size"},
+        "wgsl": {"workgroup-size"},
+        "rust": {"workgroup-size"},
+        "webgl": names,
     }
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}

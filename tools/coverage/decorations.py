@@ -1,10 +1,12 @@
-"""Whether a translated graphics probe keeps the decorations, built-ins, capabilities and execution modes its feature
-is anchored to.
+"""Whether a translated graphics or compute probe keeps the decorations, built-ins, capabilities and execution modes
+its feature is anchored to.
 
 A graphics probe is validated but never run, so a translation that drops an interpolation qualifier or a built-in
-still validates. Where the target language compiles to SPIR-V, the translation is lowered with the language's
-reference compiler and must keep every ``Decoration``, ``BuiltIn``, ``Capability`` and ``ExecutionMode`` anchor of
-its feature, as each native probe does. GLSL ES 3.00 is lowered as GLSL ES 3.10, the first version glslang compiles
+still validates. A compute probe runs with one invocation per workgroup, so a translation that writes a constant in
+place of a built-in such as the subgroup invocation index computes what the native probe computes. Where the target
+language compiles to SPIR-V, the translation is lowered with the language's reference compiler and must keep every
+``Decoration``, ``BuiltIn``, ``Capability`` and ``ExecutionMode`` anchor of its feature, as each native probe does,
+except the anchors in :data:`FOLDED`. GLSL ES 3.00 is lowered as GLSL ES 3.10, the first version glslang compiles
 for Vulkan. Metal compiles to AIR instead, where a translation must keep the attribute of each anchor (:data:`AIR`)
 or the call that stands for it (:data:`AIR_CALLS`). A translation that its validator accepts but its compiler does
 not lower here is only validated.
@@ -16,6 +18,7 @@ import re
 
 from . import validators
 from .model import Feature
+from .templates import ABSENT, TEMPLATES
 
 _PATTERNS = {
     "Decoration": r"^\s*Op(?:Member)?Decorate %\w+(?: \d+)? {name}\b",
@@ -54,6 +57,16 @@ AIR = {
     "Decoration.Location": "air.render_target",
     "ExecutionMode.EarlyFragmentTests": "early_fragment_tests",
     "ExecutionMode.DepthGreater": "air.greater",
+    "BuiltIn.GlobalInvocationId": "air.thread_position_in_grid",
+    "BuiltIn.LocalInvocationId": "air.thread_position_in_threadgroup",
+    "BuiltIn.WorkgroupId": "air.threadgroup_position_in_grid",
+    "BuiltIn.LocalInvocationIndex": "air.thread_index_in_threadgroup",
+    "BuiltIn.NumWorkgroups": "air.threadgroups_per_grid",
+    "BuiltIn.WorkgroupSize": "air.threads_per_threadgroup",
+    "BuiltIn.SubgroupSize": "air.threads_per_simdgroup",
+    "BuiltIn.SubgroupLocalInvocationId": "air.thread_index_in_simdgroup",
+    "BuiltIn.NumSubgroups": "air.simdgroups_per_threadgroup",
+    "BuiltIn.SubgroupId": "air.simdgroup_index_in_threadgroup",
 }
 # The attributes that AIR names apart when a fragment function reads them: a ``[[sample_mask]]`` input is
 # ``!"air.sample_mask_in"``. A feature whose name ends in ``-input`` reads its built-in.
@@ -61,17 +74,27 @@ AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
 # The anchors that AIR carries as a call rather than an attribute: ``simd_is_helper_thread()`` calls
 # ``@air.simd_is_helper_thread``.
 AIR_CALLS = {"BuiltIn.HelperInvocation": "air.simd_is_helper_thread"}
+# The built-ins that are constants: GLSL defines ``gl_WorkGroupSize`` as the local size, so a translation may write
+# the value itself, as slangc does for ``WorkgroupSize()``.
+FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
 
 _ESSL_300 = re.compile(r"\A(\s*#version\s+)300(\s+es\b)")
 
 
 def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
-    """The anchors of a graphics ``feature`` that the compiled ``language`` shows, as ``(anchor, pattern)`` pairs."""
-    if feature.category != "graphics":
+    """The anchors of a graphics or compute ``feature`` that the compiled ``language`` shows, as ``(anchor,
+    pattern)`` pairs."""
+    if feature.category not in ("graphics", "compute"):
+        return []
+    # A language that cannot spell the feature has no native probe to match, as HLSL has no workgroup count for the
+    # OpenCL C translations it carries, so its translation is only validated.
+    if TEMPLATES.get(language, {}).get(feature.name) is ABSENT:
         return []
     wanted = []
     for anchor in feature.group.split():
         kind, _, name = anchor.partition(".")
+        if anchor in FOLDED:
+            continue
         if language == "metal":
             air = AIR_INPUTS if feature.name.endswith("-input") else {}
             attribute = air.get(anchor, AIR.get(anchor))

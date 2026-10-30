@@ -47,11 +47,86 @@ def test_a_translation_must_keep_each_anchor_of_its_graphics_feature():
     )
 
 
-def test_only_graphics_features_are_checked():
+def test_only_graphics_and_compute_features_are_checked():
     loop = Feature("glsl", "control-flow", "for-loop", None, group="OpLoopMerge")
     shift = Feature("glsl", "operator", "vector-shift", None, group="Decoration.Flat")
     assert decorations.lost(loop, "spirv", "") == ""
     assert decorations.lost(shift, "spirv", "") == ""
+    # Workgroup memory and barriers are instructions and storage classes, which only running the probe checks.
+    shared = Feature(
+        "glsl",
+        "compute",
+        "shared-memory",
+        None,
+        group="StorageClass.Workgroup OpControlBarrier",
+    )
+    assert decorations.lost(shared, "spirv", "") == ""
+
+
+def _compute(name, group):
+    return Feature("glsl", "compute", name, None, group=group)
+
+
+def test_a_compute_translation_must_keep_its_built_in():
+    # One invocation per workgroup makes the lane index 0, so only the decoration tells it from a constant.
+    lane = _compute("subgroup-invocation-id", "BuiltIn.SubgroupLocalInvocationId")
+    decorated = (
+        "OpDecorate %gl_SubgroupInvocationID BuiltIn SubgroupLocalInvocationId\n"
+    )
+    assert decorations.lost(lane, "spirv", decorated) == ""
+    assert decorations.lost(lane, "spirv", "%float_0 = OpConstant %float 0\n") == (
+        "the translation loses BuiltIn.SubgroupLocalInvocationId"
+    )
+
+
+def test_a_constant_built_in_may_be_written_as_its_value(monkeypatch):
+    size = _compute("workgroup-size", "BuiltIn.WorkgroupSize")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(
+        validators,
+        "lower",
+        lambda *args, **kwargs: ("%uint_1 = OpConstant %uint 1\n", ""),
+    )
+    assert decorations.lost(size, "slang", "outp[i] = float(WorkgroupSize().x);") == ""
+    assert decorations.lost(size, "spirv", "%uint_1 = OpConstant %uint 1\n") == ""
+
+
+def test_a_language_without_the_feature_only_validates_its_translation():
+    # HLSL has no workgroup count, so the HLSL that CrossTL writes for an OpenCL C probe cannot keep one.
+    count = _compute("num-workgroups", "BuiltIn.NumWorkgroups")
+    assert decorations.lost(count, "hlsl", "outp[i] = float(_num_groups.x);") == ""
+    assert decorations.lost(count, "spirv", "%uint_1 = OpConstant %uint 1\n") == (
+        "the translation loses BuiltIn.NumWorkgroups"
+    )
+
+
+def test_a_metal_compute_translation_keeps_the_air_of_its_built_in(monkeypatch):
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    groups = _compute("num-subgroups", "BuiltIn.NumSubgroups")
+    assert (
+        decorations.lost(groups, "metal", '!{!"air.simdgroups_per_threadgroup"}') == ""
+    )
+    assert decorations.lost(groups, "metal", '!{!"air.thread_position_in_grid"}') == (
+        "the translation loses BuiltIn.NumSubgroups"
+    )
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_records_the_subgroup_attributes_in_air():
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "kernel void probe(device float* outp [[buffer(0)]], uint lane [[thread_index_in_simdgroup]]) {\n"
+        "    outp[0] = float(lane);\n}\n"
+    )
+    lane = _compute("subgroup-invocation-id", "BuiltIn.SubgroupLocalInvocationId")
+    assert decorations.lost(lane, "metal", source) == ""
+    assert decorations.lost(
+        lane,
+        "metal",
+        source.replace(
+            "lane [[thread_index_in_simdgroup]]", "lane [[thread_index_in_threadgroup]]"
+        ),
+    ) == ("the translation loses BuiltIn.SubgroupLocalInvocationId")
 
 
 def test_a_translation_is_lowered_with_its_entry_point_and_automatic_locations(
