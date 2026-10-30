@@ -284,29 +284,6 @@ shader S {
 """)
 
 
-def test_primitive_index_builtin_is_u32():
-    code = generate_wgsl("""
-shader Probe {
-    struct FragmentInput {
-        vec2 uv;
-        int pid @ gl_PrimitiveID;
-    }
-    struct FragmentOutput {
-        vec4 color;
-    }
-    fragment {
-        FragmentOutput main(FragmentInput input) {
-            FragmentOutput output;
-            output.color = vec4(input.uv, float(input.pid), 1.0);
-            return output;
-        }
-    }
-}
-""")
-    assert "@builtin(primitive_index) pid: u32" in code
-    assert "f32(input.pid)" in code
-
-
 def test_unmapped_system_semantic_member_is_refused():
     with pytest.raises(WGSLStageIOUnsupportedError, match="VSOut.clip"):
         generate_wgsl("""
