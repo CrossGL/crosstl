@@ -4,6 +4,10 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Fixed
+
+- WGSL output writes the `length()` of an HLSL-style `StructuredBuffer<T>` or `RWStructuredBuffer<T>`, such as `values.length()` for `StructuredBuffer<float> values`, as `i32(arrayLength(&values))`. It used to copy `values.length()` unchanged, which naga rejects (#3582).
+
 ---
 
 ## [3.5.0] - 2026-10-30
@@ -157,7 +161,6 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - GLSL output declares `long`, `ulong`, `size_t` and `ptrdiff_t` as 64-bit integers instead of 32-bit ones, which changed arithmetic and block layouts; GLSL ES and WebGL refuse them. SPIR-V output converts `size_t(x)` and `ptrdiff_t(x)` and widens `uint` without sign extension.
 - 8- and 16-bit integer vector arithmetic wraps at its own width on GLSL and Metal, and Metal widens native `ushort2` and similar fields and buffer elements when it reads them.
 - Storage buffer arrays translate to GLSL, SPIR-V, HLSL, WGSL, Slang and Metal. Sized arrays on HLSL used to be `static` arrays whose stores never reached memory, and unsized arrays of structures were refused on HLSL and WGSL.
-- WGSL output writes the `length()` of an HLSL-style `StructuredBuffer<T>` or `RWStructuredBuffer<T>`, such as `values.length()` for `StructuredBuffer<float> values`, as `i32(arrayLength(&values))`. It used to copy `values.length()` unchanged, which naga rejects (#3582).
 - WGSL output writes the `length()` of a `buffer T*` storage buffer, such as `outp.length()` for `buffer float* outp`, as `i32(arrayLength(&outp))`, the number of `T` elements the bound buffer holds, and passes a `buffer T*` helper parameter, which is already a pointer, as `arrayLength(values)`. It used to copy `outp.length()` unchanged, which naga rejects (#2396).
 - A GLSL entry point that writes one of its inputs, built-ins included, writes a local copy instead of the read-only input.
 - HLSL entry points that write stage outputs through `out` and `inout` parameters translate to GLSL, HLSL, Metal, SPIR-V, WGSL and Slang, and `SV_Target<N>` reaches colour attachment N on GLSL, WGSL, Slang and Metal. Multi-stage shaders written this way used to fail, and GLSL and WGSL numbered attachments in declaration order.
