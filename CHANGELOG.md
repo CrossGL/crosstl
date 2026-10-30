@@ -4,6 +4,10 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Fixed
+
+- CUDA and HIP input keep the leading and trailing underscores of a structure name, such as `Pair_` or `__pair_base`, so the declaration has the name its variables and parameters use. They used to strip them from the declaration only, so every target refused the program with `UndeclaredTypeError`.
+
 ---
 
 ## [3.5.0] - 2026-10-30

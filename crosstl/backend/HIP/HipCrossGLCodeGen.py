@@ -1619,7 +1619,7 @@ class HipToCrossGLConverter:
     def sanitize_crossgl_type_identifier(self, name):
         parts = []
         for char in str(name):
-            if char.isalnum() or char == "_":
+            if char.isascii() and (char.isalnum() or char == "_"):
                 parts.append(char)
             elif char == ":":
                 if not parts or parts[-1] != "_":
@@ -1627,7 +1627,13 @@ class HipToCrossGLConverter:
             elif not parts or parts[-1] != "_":
                 parts.append("_")
 
-        sanitized = "".join(parts).strip("_") or "anonymous"
+        raw_name = str(name)
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw_name):
+            # A plain identifier keeps its underscores, so the declaration and
+            # every use of the type agree, as in the CUDA importer.
+            sanitized = raw_name
+        else:
+            sanitized = "".join(parts).strip("_") or "anonymous"
         if sanitized[0].isdigit():
             sanitized = f"type_{sanitized}"
         return self.sanitize_identifier_name(sanitized)
