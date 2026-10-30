@@ -8,8 +8,9 @@ language compiles to SPIR-V, the translation is lowered with the language's refe
 ``Decoration``, ``BuiltIn``, ``Capability`` and ``ExecutionMode`` anchor of its feature, as each native probe does,
 except the anchors in :data:`FOLDED`. GLSL ES 3.00 is lowered as GLSL ES 3.10, the first version glslang compiles
 for Vulkan. Metal compiles to AIR instead, where a translation must keep the attribute of each anchor (:data:`AIR`)
-or the call that stands for it (:data:`AIR_CALLS`). A translation that its validator accepts but its compiler does
-not lower here is only validated.
+or the call or metadata that stands for it (:data:`AIR_CALLS`, :data:`AIR_METADATA`). An anchor the compiler resolves
+before it writes SPIR-V is checked in the translation's own declarations instead (:data:`SOURCE`). A translation that
+its validator accepts but its compiler does not lower here is only validated.
 """
 
 from __future__ import annotations
@@ -76,6 +77,12 @@ AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
 # The anchors that AIR carries as a call rather than an attribute: ``simd_is_helper_thread()`` calls
 # ``@air.simd_is_helper_thread``.
 AIR_CALLS = {"BuiltIn.HelperInvocation": "air.simd_is_helper_thread"}
+# The anchors that AIR lists in named metadata: each function constant is an entry of ``!air.function_constants``.
+AIR_METADATA = {"Decoration.SpecId": "air.function_constants"}
+# The anchors a language's compiler resolves before it writes SPIR-V, with the declaration that keeps each one in the
+# translation itself: naga replaces every pipeline-overridable constant with its value, so a WGSL translation keeps a
+# specialization constant when it declares an ``override``.
+SOURCE = {"wgsl": {"Decoration.SpecId": r"^\s*override\s+\w+"}}
 # The built-ins that are constants: GLSL defines ``gl_WorkGroupSize`` as the local size, so a translation may write
 # the value itself, as slangc does for ``WorkgroupSize()``.
 FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
@@ -104,6 +111,8 @@ def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
                 wanted.append((anchor, rf'!"{re.escape(attribute)}"'))
             elif anchor in AIR_CALLS:
                 wanted.append((anchor, rf"@{re.escape(AIR_CALLS[anchor])}\("))
+            elif anchor in AIR_METADATA:
+                wanted.append((anchor, rf"^!{re.escape(AIR_METADATA[anchor])} = "))
         elif kind in _PATTERNS:
             pattern = _PATTERNS[kind].format(name=re.escape(name))
             if anchor in _INSTRUCTIONS:
@@ -139,12 +148,18 @@ def lost(feature: Feature, language: str, source: str) -> str:
     Empty when it keeps them all, when ``feature`` has none to check or when ``source`` cannot be compiled here.
     """
     wanted = _wanted(feature, language)
-    if not wanted:
-        return ""
-    compiled = _compiled(feature, language, source)
-    if not compiled:
-        return ""
+    declared = SOURCE.get(language, {})
     missing = [
-        anchor for anchor, pattern in wanted if not re.search(pattern, compiled, re.M)
+        anchor
+        for anchor, _ in wanted
+        if anchor in declared and not re.search(declared[anchor], source, re.M)
     ]
+    wanted = [(anchor, pattern) for anchor, pattern in wanted if anchor not in declared]
+    compiled = _compiled(feature, language, source) if wanted else ""
+    if compiled:
+        missing += [
+            anchor
+            for anchor, pattern in wanted
+            if not re.search(pattern, compiled, re.M)
+        ]
     return f"the translation loses {', '.join(missing)}" if missing else ""

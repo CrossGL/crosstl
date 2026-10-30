@@ -21,6 +21,7 @@ from tools.coverage.templates import (
     pipeline,
     rasterization,
     relations,
+    specializations,
     subgroups,
     vertices,
 )
@@ -946,6 +947,84 @@ def test_subgroup_probes_read_each_languages_built_ins():
         "wgsl": {"workgroup-size"},
         "rust": {"workgroup-size"},
         "webgl": names,
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_specialization_probes_declare_each_languages_pipeline_constants():
+    feature = _feature("glsl", "specialization-constant")
+    assert (feature.category, feature.stage) == ("compute", "compute")
+    assert feature.group == "OpSpecConstant Decoration.SpecId"
+    # Only GLSL for Vulkan has constant_id, so the GLSL probes are checked for Vulkan and the others for their usual
+    # target.
+    assert feature.target == "vulkan"
+    assert _feature("slang", "specialization-constant").target == ""
+    for language, name, line in (
+        (
+            "glsl",
+            "specialization-constant",
+            "layout(constant_id = 0) const int scale = 3;",
+        ),
+        (
+            "glsl",
+            "specialization-constant-expression",
+            "const int doubled = scale * 2 + 1;",
+        ),
+        (
+            "glsl",
+            "specialization-workgroup-size",
+            "layout(local_size_x_id = 0, local_size_y = 1",
+        ),
+        (
+            "slang",
+            "specialization-constant-bool",
+            "[vk::constant_id(0)] const bool negate = true;",
+        ),
+        ("slang", "specialization-workgroup-size", "[numthreads(size, 1, 1)]"),
+        (
+            "metal",
+            "specialization-constant",
+            "constant int scale = is_function_constant_defined(scale_value) ? scale_value : 3;",
+        ),
+        (
+            "metal",
+            "specialization-constant-bool",
+            "constant bool negate_value [[function_constant(0)]];",
+        ),
+        (
+            "wgsl",
+            "specialization-constant-expression",
+            "override doubled: i32 = scale * 2 + 1;",
+        ),
+        (
+            "wgsl",
+            "specialization-workgroup-size",
+            "@compute @workgroup_size(size, 1, 1)",
+        ),
+        (
+            "rust",
+            "specialization-constant",
+            "#[spirv(spec_constant(id = 0, default = 3))] scale: u32",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(
+        _feature("glsl", "specialization-constant-bool"), "crossgl"
+    ).source
+    assert "const bool negate @constant_id(0) = true;" in crossgl
+    # HLSL for Direct3D, GLSL ES 3.00 and the kernel languages have no specialization constants, Metal no specialized
+    # threadgroup size, and rust-gpu only u32 parameters.
+    names = set(specializations.NAMES)
+    absent = {
+        "glsl": set(),
+        "slang": set(),
+        "wgsl": set(),
+        "metal": {"specialization-workgroup-size"},
+        "rust": names - {"specialization-constant"},
+        **dict.fromkeys(("hlsl", "webgl", "cuda", "hip", "opencl", "mojo"), names),
     }
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}

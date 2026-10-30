@@ -47,6 +47,7 @@ from .records import WEBGL as _RECORDS
 from .relations import GLSL as _RELATIONS
 from .rows import WEBGL as _ROWS
 from .scopes import WEBGL as _SCOPES
+from .specializations import WEBGL as _SPECIALIZATIONS
 from .subgroups import WEBGL as _SUBGROUPS
 from .values import FAMILY as _VALUES
 from .vectors import GLSL as _VECTORS
@@ -125,6 +126,7 @@ WEBGL = {
     **_RASTERIZATION,
     **_PIPELINE,
     **_SUBGROUPS,
+    **_SPECIALIZATIONS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

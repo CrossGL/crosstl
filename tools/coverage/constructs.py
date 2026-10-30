@@ -396,6 +396,25 @@ def _curated() -> list[Construct]:
         c("compute", "num-subgroups", "BuiltIn.NumSubgroups"),
         c("compute", "subgroup-id", "BuiltIn.SubgroupId"),
         c("compute", "workgroup-size", "BuiltIn.WorkgroupSize"),
+        c("compute", "specialization-constant", "OpSpecConstant", "Decoration.SpecId"),
+        c(
+            "compute",
+            "specialization-constant-bool",
+            "OpSpecConstantTrue",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-constant-expression",
+            "OpSpecConstantOp",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-workgroup-size",
+            "BuiltIn.WorkgroupSize",
+            "Decoration.SpecId",
+        ),
         c(
             "compute",
             "invocation-id-in-helper",
@@ -833,7 +852,8 @@ def features(language: str, grammar_text: str) -> list[Feature]:
     """The language-level features ``language`` has. SPIR-V has all of them: they are SPIR-V's own items."""
     result = []
     for construct in universe(grammar_text):
-        if language != "spirv" and _template(construct.name, language) is ABSENT:
+        template = None if language == "spirv" else _template(construct.name, language)
+        if template is ABSENT:
             continue
         result.append(
             Feature(
@@ -843,6 +863,7 @@ def features(language: str, grammar_text: str) -> list[Feature]:
                 None,
                 group=" ".join(construct.anchors),
                 stage=construct.stage,
+                target=template.target if template else "",
             )
         )
     return result

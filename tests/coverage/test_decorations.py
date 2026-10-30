@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from tools.coverage import decorations, validators
@@ -388,3 +390,42 @@ def test_glslang_lowers_a_draw_index_read_with_its_capability():
     assert decorations.lost(
         draw, "glsl", source.replace("gl_DrawID", "gl_VertexID")
     ) == ("the translation loses BuiltIn.DrawIndex, Capability.DrawParameters")
+
+
+_SPECIALIZATION = Feature(
+    "wgsl",
+    "compute",
+    "specialization-constant",
+    None,
+    group="OpSpecConstant Decoration.SpecId",
+)
+
+
+def test_a_wgsl_translation_keeps_a_specialization_constant_as_an_override():
+    # naga resolves overrides before it writes SPIR-V, so the declaration is checked in the translation itself and no
+    # compiler is needed.
+    source = (
+        "override scale: i32 = 3;\n"
+        "@group(0) @binding(0) var<storage, read_write> outp: array<f32>;\n"
+        "@compute @workgroup_size(1, 1, 1)\n"
+        "fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+        "    outp[id.x] = f32(scale);\n}\n"
+    )
+    assert decorations.lost(_SPECIALIZATION, "wgsl", source) == ""
+    assert decorations.lost(
+        _SPECIALIZATION, "wgsl", source.replace("override scale", "const scale")
+    ) == ("the translation loses Decoration.SpecId")
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_lists_function_constants_in_air():
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "constant int scale [[function_constant(0)]];\n"
+        "kernel void probe(device float* outp [[buffer(0)]]) { outp[0] = float(scale); }\n"
+    )
+    metal = dataclasses.replace(_SPECIALIZATION, language="metal")
+    assert decorations.lost(metal, "metal", source) == ""
+    assert decorations.lost(
+        metal, "metal", source.replace(" [[function_constant(0)]]", " = 3")
+    ) == ("the translation loses Decoration.SpecId")
