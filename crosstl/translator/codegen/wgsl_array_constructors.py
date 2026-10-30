@@ -16,9 +16,16 @@ from __future__ import annotations
 
 import re
 
-from ..ast import IdentifierNode, MatrixType, NamedType, PrimitiveType, VectorType
+from ..ast import (
+    ArrayType,
+    IdentifierNode,
+    MatrixType,
+    NamedType,
+    PrimitiveType,
+    VectorType,
+)
 
-__all__ = ["wgsl_array_constructor"]
+__all__ = ["wgsl_array_constructor", "wgsl_array_constructor_type"]
 
 _ARRAY_CONSTRUCTOR = re.compile(r"\s*([A-Za-z_]\w*)\s*\[\s*(\w*)\s*\]\s*")
 
@@ -45,8 +52,8 @@ def _element_type(codegen, spelling):
     return None
 
 
-def wgsl_array_constructor(codegen, node):
-    """WGSL ``array<T, N>(...)`` for a CrossGL array constructor call, or ``None`` for any other call."""
+def _array_constructor_callee(codegen, node):
+    """``(spelling, element type)`` of a CrossGL array constructor call, or ``None`` for any other call."""
     callee = node.function
     if not isinstance(callee, IdentifierNode) or "[" not in str(callee.name):
         return None
@@ -54,6 +61,32 @@ def wgsl_array_constructor(codegen, node):
     element_type = _element_type(codegen, function_name.split("[", 1)[0])
     if element_type is None:
         return None
+    return function_name, element_type
+
+
+def wgsl_array_constructor_type(codegen, node):
+    """The ``ArrayType`` a CrossGL array constructor call constructs, or ``None`` for any other call."""
+    callee = _array_constructor_callee(codegen, node)
+    if callee is None:
+        return None
+    function_name, element_type = callee
+    match = _ARRAY_CONSTRUCTOR.fullmatch(function_name)
+    if match is None:
+        return None
+    size = match.group(2)
+    if not size:
+        return ArrayType(element_type, len(node.arguments or []))
+    if size.isdigit():
+        return ArrayType(element_type, int(size))
+    return ArrayType(element_type, IdentifierNode(size))
+
+
+def wgsl_array_constructor(codegen, node):
+    """WGSL ``array<T, N>(...)`` for a CrossGL array constructor call, or ``None`` for any other call."""
+    callee = _array_constructor_callee(codegen, node)
+    if callee is None:
+        return None
+    function_name, element_type = callee
     match = _ARRAY_CONSTRUCTOR.fullmatch(function_name)
     if match is None:
         raise ValueError(
