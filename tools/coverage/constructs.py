@@ -417,6 +417,30 @@ def _curated() -> list[Construct]:
         ),
         c(
             "compute",
+            "restrict-buffer",
+            "StorageClass.StorageBuffer",
+            "Decoration.Restrict",
+        ),
+        c(
+            "compute",
+            "coherent-buffer",
+            "StorageClass.StorageBuffer",
+            "Decoration.Coherent",
+        ),
+        c(
+            "compute",
+            "volatile-buffer",
+            "StorageClass.StorageBuffer",
+            "Decoration.Volatile",
+        ),
+        c(
+            "compute",
+            "write-only-buffer",
+            "StorageClass.StorageBuffer",
+            "Decoration.NonReadable",
+        ),
+        c(
+            "compute",
             "invocation-id-in-helper",
             "OpFunctionCall",
             "BuiltIn.GlobalInvocationId",

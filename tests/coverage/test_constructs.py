@@ -19,6 +19,7 @@ from tools.coverage.templates import (
     fragments,
     interfaces,
     pipeline,
+    qualifiers,
     rasterization,
     relations,
     specializations,
@@ -1025,6 +1026,56 @@ def test_specialization_probes_declare_each_languages_pipeline_constants():
         "metal": {"specialization-workgroup-size"},
         "rust": names - {"specialization-constant"},
         **dict.fromkeys(("hlsl", "webgl", "cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_qualifier_probes_give_their_buffers_each_languages_memory_qualifiers():
+    feature = _feature("glsl", "coherent-buffer")
+    assert (feature.category, feature.stage) == ("compute", "compute")
+    assert feature.group == "StorageClass.StorageBuffer Decoration.Coherent"
+    for language, name, line in (
+        ("glsl", "restrict-buffer", "layout(std430, binding = 0) restrict buffer B0"),
+        (
+            "glsl",
+            "write-only-buffer",
+            "layout(std430, binding = 1) writeonly buffer B1",
+        ),
+        ("hlsl", "coherent-buffer", "globallycoherent RWStructuredBuffer<float> outp"),
+        (
+            "slang",
+            "coherent-buffer",
+            "globallycoherent RWStructuredBuffer<float> outp;",
+        ),
+        ("metal", "restrict-buffer", "device float* __restrict outp [[buffer(1)]]"),
+        ("metal", "coherent-buffer", "coherent(device) device float* outp"),
+        ("metal", "volatile-buffer", "volatile device float* outp"),
+        (
+            "cuda",
+            "restrict-buffer",
+            "float* __restrict__ fin, float* __restrict__ outp",
+        ),
+        ("hip", "volatile-buffer", "float* fin, volatile float* outp"),
+        ("opencl", "restrict-buffer", "__global float* restrict outp"),
+        ("opencl", "volatile-buffer", "__global volatile float* outp"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "volatile-buffer"), "crossgl").source
+    assert "volatile buffer float* outp;" in crossgl
+    # HLSL and Slang have only coherent buffers, Metal no write-only device memory, the kernel languages no coherent
+    # or write-only buffers, and WGSL, GLSL ES 3.00, rust-gpu and Mojo no buffer memory qualifiers.
+    names = set(qualifiers.NAMES)
+    kernels = {"restrict-buffer", "volatile-buffer"}
+    absent = {
+        "glsl": set(),
+        "hlsl": names - {"coherent-buffer"},
+        "slang": names - {"coherent-buffer"},
+        "metal": {"write-only-buffer"},
+        **dict.fromkeys(("cuda", "hip", "opencl"), names - kernels),
+        **dict.fromkeys(("wgsl", "webgl", "rust", "mojo"), names),
     }
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}

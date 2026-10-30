@@ -8,7 +8,7 @@ language compiles to SPIR-V, the translation is lowered with the language's refe
 ``Decoration``, ``BuiltIn``, ``Capability`` and ``ExecutionMode`` anchor of its feature, as each native probe does,
 except the anchors in :data:`FOLDED`. GLSL ES 3.00 is lowered as GLSL ES 3.10, the first version glslang compiles
 for Vulkan. Metal compiles to AIR instead, where a translation must keep the attribute of each anchor (:data:`AIR`)
-or the call or metadata that stands for it (:data:`AIR_CALLS`, :data:`AIR_METADATA`). An anchor the compiler resolves
+or the call, metadata or qualifier that stands for it (:data:`AIR_PATTERNS`). An anchor the compiler resolves
 before it writes SPIR-V is checked in the translation's own declarations instead (:data:`SOURCE`). A translation that
 its validator accepts but its compiler does not lower here is only validated.
 """
@@ -74,11 +74,17 @@ AIR = {
 # The attributes that AIR names apart when a fragment function reads them: a ``[[sample_mask]]`` input is
 # ``!"air.sample_mask_in"``. A feature whose name ends in ``-input`` reads its built-in.
 AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
-# The anchors that AIR carries as a call rather than an attribute: ``simd_is_helper_thread()`` calls
-# ``@air.simd_is_helper_thread``.
-AIR_CALLS = {"BuiltIn.HelperInvocation": "air.simd_is_helper_thread"}
-# The anchors that AIR lists in named metadata: each function constant is an entry of ``!air.function_constants``.
-AIR_METADATA = {"Decoration.SpecId": "air.function_constants"}
+# The anchors that AIR carries otherwise than as an attribute, as patterns of its text: ``simd_is_helper_thread()``
+# calls ``@air.simd_is_helper_thread``, each function constant is an entry of ``!air.function_constants``, a
+# ``__restrict`` pointer is a ``noalias`` kernel argument, a ``volatile`` one is read and written with volatile loads
+# and stores, and a ``coherent(device)`` one through the ``device_coherent`` intrinsics.
+AIR_PATTERNS = {
+    "BuiltIn.HelperInvocation": r"@air\.simd_is_helper_thread\(",
+    "Decoration.SpecId": r"^!air\.function_constants = ",
+    "Decoration.Restrict": r"^define [^\n]*\bnoalias\b",
+    "Decoration.Volatile": r"\b(?:load|store) volatile\b",
+    "Decoration.Coherent": r"@air\.\w+\.device_coherent\.",
+}
 # The anchors a language's compiler resolves before it writes SPIR-V, with the declaration that keeps each one in the
 # translation itself: naga replaces every pipeline-overridable constant with its value, so a WGSL translation keeps a
 # specialization constant when it declares an ``override``.
@@ -109,10 +115,8 @@ def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
             attribute = air.get(anchor, AIR.get(anchor))
             if attribute:
                 wanted.append((anchor, rf'!"{re.escape(attribute)}"'))
-            elif anchor in AIR_CALLS:
-                wanted.append((anchor, rf"@{re.escape(AIR_CALLS[anchor])}\("))
-            elif anchor in AIR_METADATA:
-                wanted.append((anchor, rf"^!{re.escape(AIR_METADATA[anchor])} = "))
+            elif anchor in AIR_PATTERNS:
+                wanted.append((anchor, AIR_PATTERNS[anchor]))
         elif kind in _PATTERNS:
             pattern = _PATTERNS[kind].format(name=re.escape(name))
             if anchor in _INSTRUCTIONS:

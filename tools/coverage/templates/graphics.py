@@ -38,6 +38,7 @@ from . import (
     packing,
     pipeline,
     portability,
+    qualifiers,
     rasterization,
     records,
     relations,
@@ -130,6 +131,7 @@ GLSL = {
     **pipeline.GLSL,
     **subgroups.GLSL,
     **specializations.GLSL,
+    **qualifiers.GLSL,
     **_GLSL_RAYTRACING_STAGES,
     **constructors.GLSL,
     "global-constant": Template(
@@ -274,6 +276,7 @@ HLSL = {
     **pipeline.HLSL,
     **subgroups.HLSL,
     **specializations.HLSL,
+    **qualifiers.HLSL,
     "half": scalar("half", "fin"),
     "double": scalar("double", "fin"),
     "int8": ABSENT,
@@ -463,6 +466,7 @@ METAL = {
     **pipeline.METAL,
     **subgroups.METAL,
     **specializations.METAL,
+    **qualifiers.METAL,
     "out-parameter": Template(
         C_FAMILY["out-parameter"].body,
         "void split(float x, thread float& a, thread float& b) {\n    a = x;\n    b = x * 2.0;\n}",
@@ -690,6 +694,7 @@ WGSL = {
     **pipeline.WGSL,
     **subgroups.WGSL,
     **specializations.WGSL,
+    **qualifiers.WGSL,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = f32(arrayLength(&outp));"),
     "half": Template(
@@ -787,6 +792,7 @@ SLANG = {
     **pipeline.SLANG,
     **subgroups.SLANG,
     **specializations.SLANG,
+    **qualifiers.SLANG,
     "vertex": _slang(HLSL["vertex"], "vertex"),
     "fragment": _slang(HLSL["fragment"], "fragment"),
     # The stage attribute goes on the entry point, after the output struct.
