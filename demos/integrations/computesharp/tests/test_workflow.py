@@ -462,6 +462,38 @@ def test_portable_runtime_keeps_the_pinned_dependency_and_audit_scope():
     assert {"dependency-name": "SixLabors.ImageSharp"} in nuget[0].get("ignore", [])
 
 
+def test_upstream_project_references_have_one_build_instance():
+    """No upstream project is built twice with different global properties.
+
+    The upstream test projects reach ComputeSharp.Core without ComputeSharpRoot, while the
+    portable runtime and the intrinsic probe receive it as a global property. A reference
+    that forwards it creates a second ComputeSharp.Core instance, which MSBuild builds in
+    parallel into the same output directory (both write ComputeSharp.Core.deps.json).
+    """
+    upstream = "$(ComputeSharpRoot)/src/"
+    projects = sorted(ROOT.rglob("*.csproj")) + sorted(ROOT.rglob("*.targets"))
+    checked = []
+    for path in projects:
+        if {"bin", "obj"} & set(path.relative_to(ROOT).parts):
+            continue
+        for reference in ET.parse(path).getroot().iter("ProjectReference"):
+            include = reference.attrib.get("Include", "")
+            if not include.startswith(upstream):
+                continue
+            removed = reference.attrib.get("GlobalPropertiesToRemove", "").split(";")
+            assert "ComputeSharpRoot" in removed, (path.name, include)
+            assert "AdditionalProperties" not in reference.attrib, (path.name, include)
+            checked.append((path.name, include[len(upstream) :]))
+    assert (
+        "ComputeSharp.Portable.csproj",
+        "ComputeSharp.Core/ComputeSharp.Core.csproj",
+    ) in checked
+    assert (
+        "IntrinsicProbe.csproj",
+        "ComputeSharp.Core/ComputeSharp.Core.csproj",
+    ) in checked
+
+
 def test_relevant_paths_exclude_other_projects():
     for path in (
         "crosstl/project/pipeline.py",
