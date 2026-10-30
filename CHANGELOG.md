@@ -7,6 +7,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 ### Fixed
 
 - WGSL output writes the `length()` of an HLSL-style `StructuredBuffer<T>` or `RWStructuredBuffer<T>`, such as `values.length()` for `StructuredBuffer<float> values`, as `i32(arrayLength(&values))`. It used to copy `values.length()` unchanged, which naga rejects (#3582).
+- HIP input numbers `__constant__` bindings in declaration order and starts the kernel's buffer and uniform parameters after them, as CUDA input does. Every `__constant__` variable used to be bound at `@binding(0)`, beside the kernel's first buffer, so Metal output refused the program with a conflicting resource binding.
 - CUDA and HIP input keep the leading and trailing underscores of a structure name, such as `Pair_` or `__pair_base`, so the declaration has the name its variables and parameters use. They used to strip them from the declaration only, so every target refused the program with `UndeclaredTypeError`.
 
 ---
