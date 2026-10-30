@@ -58,6 +58,25 @@ def _signatures(code):
 
 
 @pytest.mark.parametrize("extension", ["cu", "hip"])
+@pytest.mark.parametrize("record_name", ["Pair_", "_Half"])
+def test_record_type_underscores_are_preserved_on_import(
+    tmp_path, extension, record_name
+):
+    path = tmp_path / f"record.{extension}"
+    path.write_text(
+        f"struct {record_name} {{ float a; }};\n"
+        f"__global__ void probe(float* outp) {{\n"
+        f"    {record_name} t;\n"
+        "    t.a = 2.0f;\n"
+        "    outp[0] = t.a;\n"
+        "}\n"
+    )
+    crossgl = crosstl.translate(str(path), backend="cgl", format_output=False)
+    assert f"struct {record_name}" in crossgl
+    assert f"var t: {record_name}" in crossgl
+
+
+@pytest.mark.parametrize("extension", ["cu", "hip"])
 def test_written_references_import_as_inout(tmp_path, extension):
     signatures = _signatures(_translate(tmp_path, extension))
     assert "(inout f32 a)" in signatures["grow"]
