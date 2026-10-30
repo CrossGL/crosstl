@@ -450,7 +450,7 @@ class CudaToCrossGLConverter:
     def sanitize_crossgl_type_identifier(self, name):
         parts = []
         for char in str(name):
-            if char in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_":
+            if char.isascii() and (char.isalnum() or char == "_"):
                 parts.append(char)
             elif char == ":":
                 if not parts or parts[-1] != "_":
