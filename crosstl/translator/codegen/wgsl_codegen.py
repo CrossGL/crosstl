@@ -50,6 +50,7 @@ from ..host_workgroup_size import (
     function_entry_execution_config,
     require_static_workgroup_size,
 )
+from ..semantics.implicit_lod import ImplicitLodStageUnsupportedError
 from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
 from .c_family_operands import prefix_unary_operand
@@ -111,6 +112,7 @@ from .wgsl_stage_io import (
     with_flat_integer_interpolation,
 )
 from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
+from .wgsl_texture_bias import WGSLTextureBiasUnsupportedError, has_texture_sample_bias
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
@@ -4378,32 +4380,66 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
             # GLSL texture(sampler, coords, bias): the second argument is the
             # coordinate, not a sampler, so the split sampler the declaration
             # provides is used and the bias goes to textureSampleBias
-            # (issue #2462). Bias sampling needs derivatives, which a compute
-            # stage has none of, and sampled texture arrays have no bias form.
-            if self._current_stage_name == "compute":
-                raise ValueError(
-                    "WGSL target cannot lower texture() with a bias in a "
-                    "compute stage; textureSampleBias needs derivatives"
-                )
-            array_info = self.sampled_texture_array_access(texture)
-            if (
-                array_info is not None
-                and self.sampled_texture_array_element_binding(texture) is None
-            ):
-                raise ValueError(
-                    "WGSL target cannot lower texture() with a bias on a "
-                    "sampled texture array"
-                )
-            return (
-                f"textureSampleBias({self.generate_expression(texture)}, "
-                f"{self.texture_sampler_expression(texture)}, "
-                f"{self.sampled_texture_coordinates(texture, second, function_name)}, "
-                f"{self.generate_expression(third)})"
+            # (issue #2462).
+            return self.generate_texture_sample_bias_call(
+                function_name, texture, second, third
             )
         raise ValueError(
             "WGSL target supports texture() calls with texture/coords or "
             "texture/sampler/coords arguments; got "
             f"{len(args)} argument(s) for {function_name}"
+        )
+
+    def generate_texture_sample_bias_call(self, function_name, texture, coords, bias):
+        """``texture(sampler, coords, bias)`` as ``textureSampleBias`` (see :mod:`.wgsl_texture_bias`)."""
+        if self._current_stage_name == "compute":
+            raise ImplicitLodStageUnsupportedError(
+                "wgsl",
+                function_name,
+                "compute",
+                "a level-of-detail bias needs implicit derivatives, which WGSL "
+                "has only in fragment shaders, where textureSampleBias is "
+                "available",
+            )
+        texture_name = self.generate_expression(texture)
+        array_info = self.sampled_texture_array_access(texture)
+        if (
+            array_info is not None
+            and self.sampled_texture_array_element_binding(texture) is None
+        ):
+            raise WGSLTextureBiasUnsupportedError(
+                function_name,
+                texture_name,
+                "an element of a sampled texture array selected at run time is "
+                "read through a dispatch helper that takes no bias; index the "
+                "array with a constant",
+            )
+        texture_type = self.sampled_texture_type(self.expression_type(texture))
+        if not has_texture_sample_bias(texture_type):
+            raise WGSLTextureBiasUnsupportedError(
+                function_name,
+                texture_name,
+                "textureSampleBias has no overload for "
+                f"{texture_type or 'a texture of unknown type'}; it takes 2D, "
+                "2D array, 3D, cube and cube array textures",
+            )
+        bias_type = self.expression_type(bias)
+        if bias_type is not None and self.scalar_type_name(bias_type) not in {
+            "f32",
+            "i32",
+            "u32",
+        }:
+            raise WGSLTextureBiasUnsupportedError(
+                function_name,
+                texture_name,
+                "the bias is a float scalar, but the third argument is "
+                f"{self.raw_type_name_string(bias_type)}",
+            )
+        return (
+            f"textureSampleBias({texture_name}, "
+            f"{self.texture_sampler_expression(texture)}, "
+            f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
+            f"{self.generate_expression(bias)})"
         )
 
     def generate_sampled_texture_array_sample_call(self, texture, coords, array_info):

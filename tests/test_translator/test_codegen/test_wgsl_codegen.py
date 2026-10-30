@@ -12,8 +12,12 @@ from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.codegen.wgsl_integer_textures import (
     WGSLIntegerTextureSampleUnsupportedError,
 )
+from crosstl.translator.codegen.wgsl_texture_bias import (
+    WGSLTextureBiasUnsupportedError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.semantics import ImplicitLodStageUnsupportedError
 
 WGSL_SHADER = """
 shader WGSLSmoke {
@@ -2475,9 +2479,96 @@ def test_wgsl_codegen_lowers_texture_bias_to_texture_sample_bias(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+@pytest.mark.parametrize(
+    ("sampler_type", "coord_type", "expected"),
+    [
+        ("samplerCube", "vec3", "textureSampleBias(tex, tex_sampler, uv, 0.5)"),
+        ("sampler3D", "vec3", "textureSampleBias(tex, tex_sampler, uv, 0.5)"),
+        (
+            "sampler2DArray",
+            "vec3",
+            "textureSampleBias(tex, tex_sampler, uv.xy, i32(floor(uv.z + 0.5)), 0.5)",
+        ),
+        (
+            "samplerCubeArray",
+            "vec4",
+            "textureSampleBias(tex, tex_sampler, uv.xyz, i32(floor(uv.w + 0.5)), 0.5)",
+        ),
+    ],
+)
+def test_wgsl_codegen_lowers_texture_bias_on_every_biased_texture_type(
+    tmp_path, sampler_type, coord_type, expected
+):
+    # textureSampleBias has 2D, 2D array, 3D, cube and cube array overloads;
+    # an array texture takes the layer as its own argument before the bias.
+    shader = f"""
+    shader WGSLTextureBias {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0) @ gl_FragColor {{
+                return texture(tex, uv, 0.5);
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"return {expected};" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "coord_type", "call", "message"),
+    [
+        (
+            "uniform sampler1D tex;",
+            "float",
+            "texture(tex, uv, 0.5)",
+            r"bias on tex: textureSampleBias has no overload for texture_1d<f32>",
+        ),
+        (
+            "uniform sampler2D tex[2];",
+            "vec2",
+            "texture(tex[layer], uv, 0.5)",
+            r"bias on tex\[layer\]: an element of a sampled texture array selected "
+            r"at run time",
+        ),
+        (
+            "uniform sampler2D tex;",
+            "vec2",
+            "texture(tex, uv, uv)",
+            r"bias on tex: the bias is a float scalar, but the third argument is "
+            r"vec2",
+        ),
+    ],
+)
+def test_wgsl_codegen_refuses_texture_bias_without_a_wgsl_overload(
+    declaration, coord_type, call, message
+):
+    shader = f"""
+    shader WGSLTextureBias {{
+        {declaration}
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0, int layer @ TEXCOORD1)
+                @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(WGSLTextureBiasUnsupportedError, match=message) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
 def test_wgsl_codegen_refuses_texture_bias_in_compute():
     # textureSampleBias needs derivatives, which a compute stage has none of,
-    # so the bias form is refused rather than emitted as invalid WGSL.
+    # so the bias form is refused rather than emitted as invalid WGSL. Vertex
+    # stages are refused the same way before the emitter runs.
     code = """
     shader Probe {
         compute {
@@ -2492,8 +2583,15 @@ def test_wgsl_codegen_refuses_texture_bias_in_compute():
         }
     }
     """
-    with pytest.raises(ValueError, match="cannot lower texture\\(\\) with a bias"):
+    with pytest.raises(
+        ImplicitLodStageUnsupportedError,
+        match=r"operation 'texture' is reached from the compute stage",
+    ) as raised:
         WGSLCodeGen().generate(parse_shader(code))
+
+    assert raised.value.code == (
+        "project.translate.wgsl-implicit-lod-stage-unsupported"
+    )
 
 
 def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings():

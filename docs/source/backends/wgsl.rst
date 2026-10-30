@@ -53,6 +53,12 @@ The initial WGSL target surface covers common portable shader output:
   offset forms on ``isampler*`` and ``usampler*`` textures, which WGSL cannot
   sample; ``texelFetch`` and ``textureSize`` on them become ``textureLoad`` and
   ``textureDimensions``
+* ``texture(sampler, coords, bias)`` lowered to ``textureSampleBias`` with the
+  texture's split sampler; a bias on a 1D texture, which has no
+  ``textureSampleBias`` overload, or on an element of a sampled texture array
+  selected at run time is refused with
+  ``project.translate.wgsl-texture-bias-unsupported``, and a bias in a compute
+  stage with ``project.translate.wgsl-implicit-lod-stage-unsupported``
 
 Implementation Notes
 --------------------
