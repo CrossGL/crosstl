@@ -3156,6 +3156,9 @@ class WGSLCodeGen(
         return emitted_name
 
     def generate_expression_for_target(self, expr, target_type, splat_scalars=True):
+        padded_array = self.generate_padded_array_literal(expr, target_type)
+        if padded_array is not None:
+            return padded_array
         previous_expected_type = self._current_expression_expected_type
         self._current_expression_expected_type = target_type
         try:
@@ -3191,6 +3194,30 @@ class WGSLCodeGen(
         if target_scalar == "f32" and source_scalar in {"i32", "u32"}:
             return f"f32({rendered})"
         return rendered
+
+    def generate_padded_array_literal(self, expr, target_type):
+        """``array<T, N>(...)`` for an array literal shorter than its sized array target, else ``None``.
+
+        A CrossGL aggregate such as ``float[3](0.0)`` or ``{1.0}`` leaves the elements it does not give
+        zero, as GLSL output writes them. WGSL ``array(...)`` would infer a shorter array, which a
+        declared ``array<T, N>`` rejects, so the type is spelled out and each missing element is the
+        zero value ``T()`` (WGSL, "Zero Value Expressions").
+        """
+        if not isinstance(expr, ArrayLiteralNode) or not isinstance(
+            target_type, ArrayType
+        ):
+            return None
+        size = self.literal_integer_value(target_type.size)
+        if size is None or not 0 < len(expr.elements) < size:
+            return None
+        element_type = target_type.element_type
+        element = self.type_name_string(element_type)
+        values = [
+            self.generate_expression_for_target(value, element_type)
+            for value in expr.elements
+        ]
+        values += [f"{element}()"] * (size - len(values))
+        return f"array<{element}, {size}>({', '.join(values)})"
 
     def local_variable_declaration_type(self, node):
         declared_type = getattr(node, "var_type", None)
