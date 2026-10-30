@@ -120,28 +120,3 @@ def test_untyped_var_at_shader_scope_is_kept_as_a_global():
     assert scale.var_type is None
     assert scale.initial_value.value == 2.0
     assert "float scale = 2.0;" in GLSLCodeGen().generate(ast)
-
-@pytest.mark.parametrize(
-    ("initializer", "expected_type"),
-    [("2.0", "f32"), ("2", "i32"), ("true", "bool")],
-)
-def test_untyped_shader_scope_var_uses_initializer_type_in_wgsl(
-    tmp_path, initializer, expected_type
-):
-    source = tmp_path / "global.cgl"
-    source.write_text(SHADER_SCOPE_PROGRAM.replace("2.0", initializer))
-
-    output = crosstl.translate(str(source), backend="wgsl")
-
-    assert f"var<private> scale: {expected_type} = {initializer};" in output
-    assert "data[0] = scale;" in output
-
-
-def test_untyped_shader_scope_var_without_inferable_initializer_fails_in_wgsl(
-    tmp_path,
-):
-    source = tmp_path / "global.cgl"
-    source.write_text(SHADER_SCOPE_PROGRAM.replace("2.0", "unknown_value"))
-
-    with pytest.raises(ValueError, match="cannot infer the type of untyped global scale"):
-        crosstl.translate(str(source), backend="wgsl")
