@@ -55,9 +55,9 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "03b4cf315114bac93e5eede507e21d9fbae036cb805e4d91a9277eb31103e808"
+    "5b185082c2cdeaf972cbf0d004dccafb71b478bcd93e65ed3ebfe6f1b6851a89"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1796828
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1797532
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
 REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37744695
@@ -337,6 +337,26 @@ def test_reduce_artifact_refresh_preserves_compiled_identities() -> None:
                 "reviewedBodyCount": 76,
                 "nativeCompiledChangedEntryCount": 76,
                 "changedDxilCompilerVersion": "1.9.0.5191",
+                "unchangedSourceAndInterfaceContracts": True,
+                "numericalReferencesUnchanged": True,
+                "numericalExecution": False,
+                "fullUpstreamSuite": False,
+            },
+            {
+                "reason": (
+                    "Regenerate the HLSL identities under the translator on main at "
+                    "2444d82f5; every regenerated body compiles to its recorded DXIL "
+                    "byte for byte."
+                ),
+                "previousContractSha256": (
+                    "80f420b646b84e90a4061ac04deda925a2846b4ba7c9803b6764d22b0de327d6"
+                ),
+                "changedEntryCount": 1206,
+                "unaffectedEntryCount": 1190,
+                "reviewedBodyCount": 1206,
+                "nativeCompiledChangedEntryCount": 1206,
+                "changedDxilCompilerVersion": "1.9.0.5191",
+                "compiledBodiesIdentical": True,
                 "unchangedSourceAndInterfaceContracts": True,
                 "numericalReferencesUnchanged": True,
                 "numericalExecution": False,

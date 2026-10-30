@@ -40723,6 +40723,20 @@
         "numericalReferencesUnchanged": true,
         "numericalExecution": false,
         "fullUpstreamSuite": false
+      },
+      {
+        "reason": "Regenerate the HLSL identities under the translator on main at 2444d82f5; every regenerated body compiles to its recorded DXIL byte for byte.",
+        "previousContractSha256": "80f420b646b84e90a4061ac04deda925a2846b4ba7c9803b6764d22b0de327d6",
+        "changedEntryCount": 1206,
+        "unaffectedEntryCount": 1190,
+        "reviewedBodyCount": 1206,
+        "nativeCompiledChangedEntryCount": 1206,
+        "changedDxilCompilerVersion": "1.9.0.5191",
+        "compiledBodiesIdentical": true,
+        "unchangedSourceAndInterfaceContracts": true,
+        "numericalReferencesUnchanged": true,
+        "numericalExecution": false,
+        "fullUpstreamSuite": false
       }
     ]
   }

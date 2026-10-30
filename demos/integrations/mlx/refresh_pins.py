@@ -23,7 +23,8 @@ record is accounted for. The tool does not judge the new bytes: take the drift f
 a run whose translation, compilation and numerical checks passed, and review the
 refreshed diff. Recorded native identities such as ``dxilSha256`` are not
 recomputed; entries that keep one next to a refreshed hash are listed in the
-summary.
+summary (``nativeIdentitiesToReview``). Compare them with the run's retained
+compiler output, or recompile, before relying on them.
 
 Usage::
 
@@ -126,7 +127,7 @@ class Report:
             "files": dict(sorted(self.files.items())),
             "unresolved": self.unresolved,
             "unmatchedPins": sorted(self.unmatched),
-            "staleNativeIdentities": dict(sorted(self.native_identities.items())),
+            "nativeIdentitiesToReview": dict(sorted(self.native_identities.items())),
         }
 
     @property
@@ -901,7 +902,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "changedFiles": len(summary["files"]),
                 "unresolved": len(summary["unresolved"]),
                 "unmatchedPins": len(summary["unmatchedPins"]),
-                "staleNativeIdentities": sum(report.native_identities.values()),
+                "nativeIdentitiesToReview": sum(report.native_identities.values()),
                 "written": args.write,
             },
             indent=2,
