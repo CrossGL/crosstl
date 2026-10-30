@@ -13,8 +13,8 @@ on Windows (WARP) is the independent baseline.
 ## Results
 
 The qualification job of workflow run
-[41067769947](https://github.com/CrossGL/crosstl/actions/runs/41067769947)
-(commit `20844cffb2cd5a2355a0ff47a55b9fa6bdb2badb`), the merge-queue run of the
+[41073072485](https://github.com/CrossGL/crosstl/actions/runs/41073072485)
+(commit `73569ccadcbabce56797639396eb76fd423ca1f3`), the merge-queue run of the
 commit that landed on `main`, recomputed every check from the fresh artifacts of
 the three profile jobs and passed, for the main test project, the three ported
 companion projects and the two retained projects.
