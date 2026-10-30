@@ -27102,3 +27102,27 @@ def test_mixed_sync_and_wave_ops():
     assert "workgroup_barrier()" in generated_code
     assert "subgroup_add(lane)" in generated_code
     assert "memory_barrier()" in generated_code
+
+
+def test_rust_generic_call_keeps_turbofish():
+    """A call with explicit type arguments is written ``f::<T>(x)``.
+
+    CrossGL has no path separator, so the Rust importer writes ``f::<T>(x)``
+    into CrossGL as ``f<T>(x)``; emitted back without the ``::``, rustc reads
+    the ``<`` as a comparison and the generated crate does not parse (#2342).
+    """
+    code = """
+    shader RustTurbofishCall {
+        compute {
+            void main() {
+                float a0 = 1.0;
+                float broadcast = subgroup_broadcast_const<_, 0>(a0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "subgroup_broadcast_const::<_, 0>(a0)" in generated_code
+    assert "subgroup_broadcast_const<_, 0>(a0)" not in generated_code
