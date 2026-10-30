@@ -134,7 +134,7 @@
       },
       "device": {
         "api": "Metal",
-        "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+        "driver": "macOS Version 15.8.2 (Build 24H232); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
         "fp64": false,
         "hardware": true,
         "maxThreadsPerGroup": 1024,
@@ -177,7 +177,7 @@
           "architecture": "Arm64",
           "hardware": true,
           "name": "Apple Paravirtual device",
-          "os": "macOS 15.7.9",
+          "os": "macOS 15.8.2",
           "runtime": "4.0.0.0"
         },
         "functions": {
@@ -818,11 +818,11 @@
       },
       "status": "passed",
       "translation": {
-        "compile-failed": 4,
-        "translated": 144
+        "translated": 144,
+        "translation-failed": 4
       },
       "translator": {
-        "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+        "commit": "73569ccadcbabce56797639396eb76fd423ca1f3",
         "package": "crosstl",
         "translatorTreeClean": true
       }
@@ -1578,15 +1578,15 @@
         "translated": 148
       },
       "translator": {
-        "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+        "commit": "73569ccadcbabce56797639396eb76fd423ca1f3",
         "package": "crosstl",
         "translatorTreeClean": true
       }
     }
   },
   "provenance": {
-    "sourceCommit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
-    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/39407200030/attempts/1"
+    "sourceCommit": "73569ccadcbabce56797639396eb76fd423ca1f3",
+    "workflowRun": "https://github.com/CrossGL/crosstl/actions/runs/41073072485/attempts/1"
   },
   "retained": {
     "ComputeSharp.Tests.DeviceLost": {
@@ -1775,7 +1775,7 @@
           },
           "device": {
             "api": "Metal",
-            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "driver": "macOS Version 15.8.2 (Build 24H232); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
             "fp64": false,
             "hardware": true,
             "maxThreadsPerGroup": 1024,
@@ -1855,7 +1855,7 @@
             "translated": 2
           },
           "translator": {
-            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "commit": "73569ccadcbabce56797639396eb76fd423ca1f3",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -1986,7 +1986,7 @@
             "translated": 2
           },
           "translator": {
-            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "commit": "73569ccadcbabce56797639396eb76fd423ca1f3",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -2081,7 +2081,7 @@
           },
           "device": {
             "api": "Metal",
-            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "driver": "macOS Version 15.8.2 (Build 24H232); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
             "fp64": false,
             "hardware": true,
             "maxThreadsPerGroup": 1024,
@@ -2159,7 +2159,7 @@
             "translated": 1
           },
           "translator": {
-            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "commit": "73569ccadcbabce56797639396eb76fd423ca1f3",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -2288,7 +2288,7 @@
             "translated": 1
           },
           "translator": {
-            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "commit": "73569ccadcbabce56797639396eb76fd423ca1f3",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -2401,7 +2401,7 @@
           },
           "device": {
             "api": "Metal",
-            "driver": "macOS Version 15.7.9 (Build 24G830); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
+            "driver": "macOS Version 15.8.2 (Build 24H232); families ; read-write texture tier 2; gpu cores 0; shaders math mode safe, fast floating-point functions",
             "fp64": false,
             "hardware": true,
             "maxThreadsPerGroup": 1024,
@@ -2453,12 +2453,11 @@
           },
           "status": "passed",
           "translation": {
-            "compile-failed": 3,
             "translated": 3,
-            "translation-failed": 1
+            "translation-failed": 4
           },
           "translator": {
-            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "commit": "73569ccadcbabce56797639396eb76fd423ca1f3",
             "package": "crosstl",
             "translatorTreeClean": true
           }
@@ -2572,7 +2571,7 @@
             "translated": 7
           },
           "translator": {
-            "commit": "9f2bcbcccefc11f06071a7124aa840d8f820e3ea",
+            "commit": "73569ccadcbabce56797639396eb76fd423ca1f3",
             "package": "crosstl",
             "translatorTreeClean": true
           }
