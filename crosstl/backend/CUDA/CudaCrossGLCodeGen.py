@@ -4,7 +4,6 @@ import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
-from ..keyword_renames import source_identifier_names, unused_identifier_name
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -26,6 +25,7 @@ from .CudaAst import (
     UnaryOpNode,
     VariableNode,
 )
+from .keyword_renames import source_identifier_names, unused_identifier_name
 from .reference_parameters import ReferenceParameters
 
 
