@@ -1,9 +1,10 @@
 """Stage built-in inputs read by name, passed to the entry point and on to the helpers that read them.
 
 GLSL reads a fragment shader's built-in inputs as global variables: ``gl_FragCoord``, ``gl_FrontFacing``,
-``gl_PointCoord``, ``gl_SampleID`` and ``gl_PrimitiveID`` (GLSL 4.60 section 7.1.5), anywhere in the stage,
-helpers included, and the CrossGL import keeps those reads. HLSL and MSL have no such globals. A built-in input is a
-parameter of the entry point carrying a system-value semantic (``SV_IsFrontFace``, ``SV_SampleIndex``) or an
+``gl_PointCoord``, ``gl_SampleID`` and ``gl_PrimitiveID`` (GLSL 4.60 section 7.1.5), the barycentric coordinates
+(``gl_BaryCoordEXT``, ``gl_BaryCoordNoPerspEXT`` and their NV spellings) and ``gl_ShadingRateEXT``, anywhere in the
+stage, helpers included, and the CrossGL import keeps those reads. HLSL and MSL have no such globals. A built-in input
+is a parameter of the entry point carrying a system-value semantic (``SV_IsFrontFace``, ``SV_SampleIndex``) or an
 attribute (``[[front_facing]]``, ``[[sample_id]]``), and a helper sees it only as an argument. The generators bound
 only ``gl_FragCoord``, and the Metal one only in the entry point. Every other read was emitted verbatim, as an
 undeclared identifier.
@@ -12,7 +13,8 @@ undeclared identifier.
 
 * the entry point takes each built-in input that it or a helper reads as a parameter carrying the built-in
   (``bool cgl_FrontFacing @ gl_FrontFacing``), or reuses a parameter or input-structure member that already
-  carries it. ``gl_SampleID`` and ``gl_PrimitiveID``, which HLSL and MSL deliver as ``uint``, arrive in a ``uint``
+  carries it. ``gl_SampleID``, ``gl_PrimitiveID`` and ``gl_ShadingRateEXT``, which HLSL and MSL deliver as ``uint``,
+  arrive in a ``uint``
   parameter and are converted to GLSL's ``int`` once at the start of the entry point;
 * each helper that reads one, directly or through the helpers it calls, takes it as a trailing parameter, and every
   call passes it on.
@@ -50,6 +52,12 @@ _FRAGMENT_INPUTS = {
     "gl_PointCoord": "vec2",
     "gl_SampleID": "int",
     "gl_PrimitiveID": "int",
+    # GL_EXT_fragment_shader_barycentric, GL_NV_fragment_shader_barycentric and GL_EXT_fragment_shading_rate.
+    "gl_BaryCoordEXT": "vec3",
+    "gl_BaryCoordNoPerspEXT": "vec3",
+    "gl_BaryCoordNV": "vec3",
+    "gl_BaryCoordNoPerspNV": "vec3",
+    "gl_ShadingRateEXT": "int",
 }
 _COMPUTE_INPUTS = {
     "gl_GlobalInvocationID": "uvec3",
@@ -66,9 +74,17 @@ _STAGE_INPUTS = {
     "vertex": _VERTEX_INPUTS,
 }
 _INPUT_TYPES = {**_FRAGMENT_INPUTS, **_COMPUTE_INPUTS, **_VERTEX_INPUTS}
-# HLSL SV_SampleIndex, SV_PrimitiveID, SV_VertexID and SV_InstanceID, the MSL attributes and the WGSL built-ins for
-# them are uint.
-_UNSIGNED = frozenset({"gl_SampleID", "gl_PrimitiveID", "gl_VertexID", "gl_InstanceID"})
+# HLSL SV_SampleIndex, SV_PrimitiveID, SV_VertexID, SV_InstanceID and SV_ShadingRate, the MSL attributes and the
+# WGSL built-ins for them are uint.
+_UNSIGNED = frozenset(
+    {
+        "gl_SampleID",
+        "gl_PrimitiveID",
+        "gl_VertexID",
+        "gl_InstanceID",
+        "gl_ShadingRateEXT",
+    }
+)
 
 
 def _stages(program):

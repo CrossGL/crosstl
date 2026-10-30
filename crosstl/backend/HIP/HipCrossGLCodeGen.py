@@ -6,7 +6,9 @@ import re
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -314,7 +316,8 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "precision"}
+    # ``let``, ``match`` and ``var`` are CrossGL lexer keywords.
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
     CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
         "-": "minus",
@@ -532,6 +535,7 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.generated_matrix_helper_types = set()
         self.namespace_aliases = {}
+        self.source_identifier_names = frozenset()
         self.anonymous_enum_count = 0
         self.function_local_record_definitions = {}
         self.function_local_record_node_ids = set()
@@ -547,10 +551,13 @@ class HipToCrossGLConverter:
         self.union_active_member_scopes = [{}]
         self.union_object_identity_scopes = [{}]
         self.union_indirect_object_scopes = [set()]
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
 
     def generate(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -580,6 +587,7 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.anonymous_enum_count = 0
+        self.namespace_constant_names = set()
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
@@ -1605,7 +1613,7 @@ class HipToCrossGLConverter:
 
     def sanitize_identifier_name(self, name):
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
-            return f"{name}_"
+            return unused_identifier_name(name, self.source_identifier_names)
         return name
 
     def sanitize_crossgl_type_identifier(self, name):
@@ -5080,7 +5088,11 @@ class HipToCrossGLConverter:
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, VariableNode):
-                self.visit(stmt)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(stmt)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
             elif isinstance(stmt, TypeAliasNode):
                 self.visit(stmt)
@@ -5999,9 +6011,23 @@ class HipToCrossGLConverter:
                 return
 
             value = self.format_variable_initializer_value(node.value)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(raw_name)
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.emit(f"var {output_name}: {var_type};")
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def format_variable_initializer_value(self, value):
         string_value = self.format_single_string_initializer(value)
@@ -7765,6 +7791,12 @@ class HipToCrossGLConverter:
         user_defined_call_name = self.format_user_defined_function_call_name(func_name)
         if user_defined_call_name is not None:
             return f"{user_defined_call_name}({args_str})"
+        if (
+            self.is_simple_identifier(func_name)
+            and func_name in self.record_definitions
+        ):
+            # ``let{1.0f}`` and ``let()`` construct the record under its declared name.
+            return f"{self.convert_hip_type_to_crossgl(func_name)}({args_str})"
 
         timer_intrinsic = self.format_hip_timer_intrinsic_call(func_name, args)
         if timer_intrinsic is not None:
@@ -9305,7 +9337,8 @@ class HipToCrossGLConverter:
                 return
         if self.indent_level == 0:
             alias_type = self.normalize_top_level_type_alias(alias_type)
-        self.emit(f"typedef {alias_type} {node.name};")
+        # An alias named ``let`` is declared as ``let_``, the name its uses get.
+        self.emit(f"typedef {alias_type} {self.sanitize_identifier_name(node.name)};")
 
     def normalize_top_level_type_alias(self, alias_type):
         """Keep C++ trait aliases reparsable by CrossGL's top-level typedef parser."""
@@ -10007,6 +10040,9 @@ class HipToCrossGLConverter:
         if self.is_decltype_type_name(hip_type):
             return "auto"
 
+        if hip_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A struct named after a CrossGL keyword is declared under its renamed name.
+            return self.sanitize_identifier_name(hip_type)
         return type_mapping.get(hip_type, hip_type)
 
     def is_decltype_type_name(self, type_name):
@@ -10397,7 +10433,10 @@ class HipToCrossGLConverter:
         return normalized_name
 
     def visit_EnumNode(self, node):
-        name = node.name or self.next_anonymous_enum_name()
+        # An enum named ``let`` is declared as ``let_``, the name its uses get.
+        name = (
+            self.sanitize_identifier_name(node.name) or self.next_anonymous_enum_name()
+        )
         underlying = getattr(node, "underlying_type", None)
         if getattr(node, "name", None):
             self.enum_underlying_types[node.name] = underlying or "int"

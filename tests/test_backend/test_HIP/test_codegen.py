@@ -2236,6 +2236,66 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("int3") == "vec3<i32>"
         assert codegen.convert_hip_type_to_crossgl("int4") == "vec4<i32>"
 
+    def test_namespace_scope_constants_import_as_crossgl_constants(self, tmp_path):
+        # A kernel reads namespace-scope constexpr and const constants directly,
+        # so they import as CrossGL constants rather than mutable globals (#3328).
+        code = """
+        #include <hip/hip_runtime.h>
+        constexpr int N = 3;
+        constexpr float S = N * 0.5f;
+        const int M = 2;
+        const char* NAME = "probe";
+        int counter = 0;
+        __constant__ float C = 4.0f;
+        extern "C" __global__ void k(float* values) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            const int local = 1;
+            values[i] = values[i] * S + (float)N + (float)M + C + local;
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "const i32 N = 3;" in result
+        assert "const f32 S = (N * 0.5f);" in result
+        assert "const i32 M = 2;" in result
+        # Pointers, mutable globals, __constant__ memory and locals keep their lowering.
+        assert "var NAME: ptr<i8>" in result
+        assert "var counter: i32 = 0;" in result
+        assert "var<uniform> C: f32 = 4.0f;" in result
+        assert "var local: i32 = 1;" in result
+
+        source_path = tmp_path / "constants.hip"
+        source_path.write_text(code)
+        output = translate(str(source_path), backend="hip", format_output=False)
+        assert "const int N = 3;" in output
+        assert "const int M = 2;" in output
+
+    def test_namespace_scope_const_with_dynamic_initializer_stays_variable(self):
+        # A const whose initializer calls a function or reads a variable is set
+        # when the program starts, so it imports as a variable, not a constant.
+        code = """
+        #include <hip/hip_runtime.h>
+        constexpr int N = 4;
+        float scale = 2.0f;
+        const dim3 BLOCK(16, 16, 1);
+        const unsigned int CELLS = BLOCK.x * BLOCK.y;
+        const float2 STEP = make_float2(1.0f / N, -0.5f);
+        const float FROM_VARIABLE = scale;
+        const float ROOT = sqrtf(2.0f);
+        __device__ float twice(float x) { return 2.0f * x; }
+        const float CALLED = twice(1.5f);
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "const vec3<u32> BLOCK = vec3<u32>(16, 16, 1);" in result
+        assert "const u32 CELLS = (BLOCK.x * BLOCK.y);" in result
+        assert "const vec2<f32> STEP = vec2<f32>((1.0f / N), (-0.5f));" in result
+        assert "var FROM_VARIABLE: f32 = scale;" in result
+        assert "var ROOT: f32 = sqrt(2.0f);" in result
+        assert "var CALLED: f32 = twice(1.5f);" in result
+
     def test_cuda_samples_style_const_dim3_constructor_global_conversion(self):
         code = """
         const dim3 windowSize(512, 512);
@@ -2251,10 +2311,10 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var windowSize: vec3<u32> = vec3<u32>(512, 512, 1);" in result
-        assert "var windowBlockSize: vec3<u32> = vec3<u32>(16, 16, 1);" in result
+        assert "const vec3<u32> windowSize = vec3<u32>(512, 512, 1);" in result
+        assert "const vec3<u32> windowBlockSize = vec3<u32>(16, 16, 1);" in result
         assert (
-            "var windowGridSize: vec3<u32> = "
+            "const vec3<u32> windowGridSize = "
             "vec3<u32>((windowSize.x / windowBlockSize.x), "
             "(windowSize.y / windowBlockSize.y), 1);"
         ) in result

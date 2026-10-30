@@ -1401,7 +1401,7 @@ def test_codegen_native_cube_array_shadow_texture_imports_separate_compare_refer
     metal = MetalCodeGen().generate(shader_ast)
     assert (
         "shadowCubeArray.sample_compare("
-        "sampler(mag_filter::linear, min_filter::linear), "
+        "shadowCubeArraySampler, "
         "input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), 0.5)"
         in metal
     )

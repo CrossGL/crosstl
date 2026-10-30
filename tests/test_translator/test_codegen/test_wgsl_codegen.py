@@ -9,11 +9,18 @@ import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
+from crosstl.translator.codegen.wgsl_cube_texture_offsets import (
+    WGSLCubeTextureOffsetUnsupportedError,
+)
 from crosstl.translator.codegen.wgsl_integer_textures import (
     WGSLIntegerTextureSampleUnsupportedError,
 )
+from crosstl.translator.codegen.wgsl_texture_bias import (
+    WGSLTextureBiasUnsupportedError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from crosstl.translator.semantics import ImplicitLodStageUnsupportedError
 
 WGSL_SHADER = """
 shader WGSLSmoke {
@@ -2445,6 +2452,173 @@ def test_wgsl_codegen_lowers_explicit_sampler_texture_calls():
     assert "return textureSample(colorTex, linearSampler, uv);" in generated
 
 
+def test_wgsl_codegen_lowers_texture_bias_to_texture_sample_bias(tmp_path):
+    # A three-argument texture() whose second argument is a coordinate, not a
+    # sampler, is GLSL's bias form; the split sampler is used and the bias
+    # goes to textureSampleBias (issue #2462).
+    code = """
+    shader Probe {
+        struct FragmentInput {
+            vec2 uv;
+        }
+        struct FragmentOutput {
+            vec4 color;
+        }
+        fragment {
+            buffer float* fin;
+            uniform sampler2D u0;
+            FragmentOutput main(FragmentInput input) {
+                FragmentOutput output;
+                output.color = texture(u0, input.uv, fin[0]);
+                return output;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "textureSampleBias(u0, u0_sampler, input.uv, fin[0])" in generated
+    assert "textureSample(u0, input.uv, fin[0])" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("sampler_type", "coord_type", "expected"),
+    [
+        ("samplerCube", "vec3", "textureSampleBias(tex, tex_sampler, uv, 0.5)"),
+        ("sampler3D", "vec3", "textureSampleBias(tex, tex_sampler, uv, 0.5)"),
+        (
+            "sampler2DArray",
+            "vec3",
+            "textureSampleBias(tex, tex_sampler, uv.xy, i32(floor(uv.z + 0.5)), 0.5)",
+        ),
+        (
+            "samplerCubeArray",
+            "vec4",
+            "textureSampleBias(tex, tex_sampler, uv.xyz, i32(floor(uv.w + 0.5)), 0.5)",
+        ),
+    ],
+)
+def test_wgsl_codegen_lowers_texture_bias_on_every_biased_texture_type(
+    tmp_path, sampler_type, coord_type, expected
+):
+    # textureSampleBias has 2D, 2D array, 3D, cube and cube array overloads;
+    # an array texture takes the layer as its own argument before the bias.
+    shader = f"""
+    shader WGSLTextureBias {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0) @ gl_FragColor {{
+                return texture(tex, uv, 0.5);
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"return {expected};" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_an_integer_texture_bias_to_f32(tmp_path):
+    # GLSL converts an int bias to the float parameter; WGSL converts no i32
+    # or u32 value implicitly, so naga rejects textureSampleBias(..., b).
+    shader = """
+    shader WGSLTextureBias {
+        uniform sampler2D tex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0, int level @ TEXCOORD1) @ gl_FragColor {
+                uint shift = uint(level);
+                return texture(tex, uv, level) + texture(tex, uv, shift);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureSampleBias(tex, tex_sampler, uv, f32(level))" in generated
+    assert "textureSampleBias(tex, tex_sampler, uv, f32(shift))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "coord_type", "call", "message"),
+    [
+        (
+            "uniform sampler1D tex;",
+            "float",
+            "texture(tex, uv, 0.5)",
+            r"bias on tex: textureSampleBias has no overload for texture_1d<f32>",
+        ),
+        (
+            "uniform sampler2D tex[2];",
+            "vec2",
+            "texture(tex[layer], uv, 0.5)",
+            r"bias on tex\[layer\]: an element of a sampled texture array selected "
+            r"at run time",
+        ),
+        (
+            "uniform sampler2D tex;",
+            "vec2",
+            "texture(tex, uv, uv)",
+            r"bias on tex: the bias is a float scalar, but the third argument is "
+            r"vec2",
+        ),
+    ],
+)
+def test_wgsl_codegen_refuses_texture_bias_without_a_wgsl_overload(
+    declaration, coord_type, call, message
+):
+    shader = f"""
+    shader WGSLTextureBias {{
+        {declaration}
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0, int layer @ TEXCOORD1)
+                @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(WGSLTextureBiasUnsupportedError, match=message) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_texture_bias_in_compute():
+    # textureSampleBias needs derivatives, which a compute stage has none of,
+    # so the bias form is refused rather than emitted as invalid WGSL. Vertex
+    # stages are refused the same way before the emitter runs.
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec4* outp;
+            uniform sampler2D u0;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outp[i] = texture(u0, vec2(0.5), fin[0]);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ImplicitLodStageUnsupportedError,
+        match=r"operation 'texture' is reached from the compute stage",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(code))
+
+    assert raised.value.code == (
+        "project.translate.wgsl-implicit-lod-stage-unsupported"
+    )
+
+
 def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings():
     shader = """
     shader WGSLTextureResourceArray {
@@ -2891,6 +3065,144 @@ def test_wgsl_codegen_splits_array_texture_layer_out_of_texel_fetch(
     assert "textureLoad(tex, c.xy, c.z, 0)" in code
     assert "textureLoad(tex, (c.xy + vec2<i32>(1, 0)), c.z, 0)" in code
     validate_wgsl_with_naga(tmp_path, code)
+
+
+def test_wgsl_codegen_passes_array_texture_layer_to_offset_and_gradient_lookups(
+    tmp_path,
+):
+    shader = """
+    shader WGSLArrayTextureOffsetGrad {
+        uniform sampler2DArray tex;
+        fragment {
+            vec4 main(vec3 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGrad(tex, uv, vec2(0.1), vec2(0.1))
+                    + textureOffset(tex, uv, ivec2(1, 0))
+                    + textureOffset(tex, uv, ivec2(1, 0), 0.5)
+                    + textureLodOffset(tex, uv, 1.0, ivec2(1, 0))
+                    + textureGradOffset(tex, uv, vec2(0.1), vec2(0.1), ivec2(1, 0));
+            }
+        }
+    }
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    coordinate = "uv.xy, i32(floor(uv.z + 0.5))"
+    assert (
+        f"textureSampleGrad(tex, tex_sampler, {coordinate}, "
+        "vec2<f32>(0.1), vec2<f32>(0.1))"
+    ) in code
+    assert f"textureSample(tex, tex_sampler, {coordinate}, vec2<i32>(1, 0))" in code
+    assert (
+        f"textureSampleBias(tex, tex_sampler, {coordinate}, 0.5, vec2<i32>(1, 0))"
+        in code
+    )
+    assert (
+        f"textureSampleLevel(tex, tex_sampler, {coordinate}, 1.0, vec2<i32>(1, 0))"
+        in code
+    )
+    assert (
+        f"textureSampleGrad(tex, tex_sampler, {coordinate}, "
+        "vec2<f32>(0.1), vec2<f32>(0.1), vec2<i32>(1, 0))"
+    ) in code
+    validate_wgsl_with_naga(tmp_path, code)
+
+
+@pytest.mark.parametrize(
+    ("sampler_type", "coord_type", "coord", "layer"),
+    [
+        ("sampler2DArrayShadow", "vec3", "uv.xy", "uv.z"),
+        ("samplerCubeArrayShadow", "vec4", "uv.xyz", "uv.w"),
+    ],
+)
+def test_wgsl_codegen_passes_shadow_array_texture_layer_as_its_own_argument(
+    tmp_path, sampler_type, coord_type, coord, layer
+):
+    shader = f"""
+    shader WGSLShadowArrayTextureLayer {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0) @ gl_FragColor {{
+                float d = textureCompare(tex, uv, 0.5)
+                    + textureCompareLod(tex, uv, 0.5, 0.0);
+                return vec4(d);
+            }}
+        }}
+    }}
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    rounded = f"i32(floor({layer} + 0.5))"
+    assert f"textureSampleCompare(tex, tex_sampler, {coord}, {rounded}, 0.5)" in code
+    assert (
+        f"textureSampleCompareLevel(tex, tex_sampler, {coord}, {rounded}, 0.5)" in code
+    )
+    validate_wgsl_with_naga(tmp_path, code)
+
+
+def test_wgsl_codegen_passes_cube_array_texture_layer_to_gradient_lookup(tmp_path):
+    shader = """
+    shader WGSLCubeArrayTextureGrad {
+        uniform samplerCubeArray tex;
+        fragment {
+            vec4 main(vec4 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGrad(tex, uv, vec3(0.1), vec3(0.2));
+            }
+        }
+    }
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "textureSampleGrad(tex, tex_sampler, uv.xyz, i32(floor(uv.w + 0.5)), "
+        "vec3<f32>(0.1), vec3<f32>(0.2))"
+    ) in code
+    validate_wgsl_with_naga(tmp_path, code)
+
+
+@pytest.mark.parametrize(
+    ("sampler_type", "lookup"),
+    [
+        ("samplerCubeArray", "textureOffset(tex, uv, ivec2(1, 0))"),
+        ("samplerCubeArray", "textureOffset(tex, uv, ivec2(1, 0), 0.5)"),
+        ("samplerCubeArray", "textureLodOffset(tex, uv, 1.0, ivec2(1, 0))"),
+        (
+            "samplerCubeArray",
+            "textureGradOffset(tex, uv, vec3(0.1), vec3(0.2), ivec2(1, 0))",
+        ),
+        (
+            "samplerCubeArrayShadow",
+            "vec4(textureCompareOffset(tex, uv, 0.5, ivec2(1, 0)))",
+        ),
+        (
+            "samplerCubeArrayShadow",
+            "vec4(textureCompareLodOffset(tex, uv, 0.5, 0, ivec2(1, 0)))",
+        ),
+    ],
+)
+def test_wgsl_codegen_refuses_offset_lookups_on_cube_array_textures(
+    sampler_type, lookup
+):
+    shader = f"""
+    shader WGSLCubeArrayTextureOffset {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main(vec4 uv @ TEXCOORD0) @ gl_FragColor {{
+                return {lookup};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        WGSLCubeTextureOffsetUnsupportedError,
+        match=r"cannot lower \w+\(\) on a cube array texture \(tex\)",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-cube-texture-offset-unsupported"
 
 
 def test_wgsl_codegen_refuses_array_texture_coordinate_from_a_user_function():
@@ -3694,6 +4006,159 @@ def test_two_argument_atan_lowers_to_atan2(tmp_path):
     assert "atan2(fin[(i)], 2.0)" in generated or "atan2(fin[i], 2.0)" in generated
     assert "atan(a0, a0)" not in generated
     validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_two_argument_frexp_and_modf_lower_to_wgsl_helpers(tmp_path):
+    # WGSL's frexp and modf take one argument and return a structure; the
+    # two-argument GLSL form goes through a helper that writes the second
+    # part through a pointer (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec3* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 a0 = vec3(fin[i + 0u], fin[i + 1u], fin[i + 2u]);
+                ivec3 e;
+                vec3 w;
+                int k;
+                int n;
+                vec3 r = frexp(a0, e) + modf(a0, w);
+                float s = frexp(fin[i], k) + frexp(2.5, n);
+                outp[i] = r + vec3(s + float(k + n));
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert (
+        "var r: vec3<f32> = (crosstl_frexp_vec3_f32_vec3_i32(a0, &e) + "
+        "crosstl_modf_vec3_f32_vec3_f32(a0, &w));"
+    ) in generated
+    assert (
+        "var s: f32 = (crosstl_frexp_f32_i32(fin[i], &k) + "
+        "crosstl_frexp_f32_i32(2.5, &n));"
+    ) in generated
+    assert (
+        "fn crosstl_frexp_vec3_f32_vec3_i32(value: vec3<f32>, "
+        "out: ptr<function, vec3<i32>>) -> vec3<f32> {\n"
+        "    let result = frexp(value);\n"
+        "    *out = result.exp;\n"
+        "    return result.fract;\n"
+        "}"
+    ) in generated
+    assert (
+        "fn crosstl_modf_vec3_f32_vec3_f32(value: vec3<f32>, "
+        "out: ptr<function, vec3<f32>>) -> vec3<f32> {\n"
+        "    let result = modf(value);\n"
+        "    *out = result.whole;\n"
+        "    return result.fract;\n"
+        "}"
+    ) in generated
+    # One helper per built-in, value type and written type.
+    assert generated.count("fn crosstl_frexp_f32_i32(") == 1
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_frexp_with_float_exponent_converts_wgsl_result(tmp_path):
+    # HLSL imports give the frexp exponent the value's type, so the helper
+    # converts the builtin's i32 part to the caller's type (issue #2520).
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                float e;
+                float r = frexp(fin[i], e);
+                outp[i] = r + e;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "crosstl_frexp_f32_f32(fin[i], &e)" in generated
+    assert "*out = f32(result.exp);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_frexp_and_modf_write_through_parameters(tmp_path):
+    # An out or inout parameter is already a pointer and is passed as it is; a
+    # value parameter that frexp writes is copied into a local variable first,
+    # since WGSL parameters are immutable.
+    code = """
+    shader Probe {
+        float split(float v, out int e) { return frexp(v, e); }
+        vec3 whole(vec3 v, inout vec3 w) { return modf(v, w); }
+        float mantissa(float v, int e) { return frexp(v, e) + float(e); }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int e;
+                vec3 w;
+                vec3 f = whole(vec3(fin[i]), w);
+                outp[i] = split(fin[i], e) + mantissa(fin[i], 0) + f.x + w.x;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "return crosstl_frexp_f32_i32(v, e);" in generated
+    assert "return crosstl_modf_vec3_f32_vec3_f32(v, w);" in generated
+    assert "fn mantissa(v: f32, e_in: i32) -> f32 {\n    var e: i32 = e_in;" in (
+        generated
+    )
+    assert "return (crosstl_frexp_f32_i32(v, &e) + f32(e));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    "declaration, call",
+    [
+        ("ivec3 e;", "frexp(x, e.x)"),
+        ("ivec4 e;", "frexp(vec2(x), e.xy).x"),
+        ("int e[2];", "frexp(x, e[1])"),
+        ("Parts e;", "modf(x, e.whole)"),
+        ("", "frexp(x, counts[i])"),
+        ("", "frexp(x, shared_exponent)"),
+    ],
+)
+def test_frexp_and_modf_refuse_written_arguments_without_a_function_pointer(
+    declaration, call
+):
+    # A ptr<function, T> argument must be a whole function-scope variable
+    # (WGSL 11.3.1), and no pointer may name a vector component (WGSL 8.14).
+    code = f"""
+    shader Probe {{
+        struct Parts {{ float whole; }};
+        int shared_exponent;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer int* counts;
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                float x = fin[i];
+                {declaration}
+                fin[i] = {call};
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(
+        ValueError, match="a ptr<function, T> argument must be a whole function-scope"
+    ):
+        WGSLCodeGen().generate(parse_shader(code))
 
 
 def test_wgsl_maps_glsl_imported_fine_and_coarse_fwidth(tmp_path):

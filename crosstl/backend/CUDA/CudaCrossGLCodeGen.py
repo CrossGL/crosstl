@@ -4,6 +4,7 @@ import re
 
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
+from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -25,6 +26,7 @@ from .CudaAst import (
     UnaryOpNode,
     VariableNode,
 )
+from .keyword_renames import source_identifier_names, unused_identifier_name
 from .reference_parameters import ReferenceParameters
 
 
@@ -237,7 +239,16 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "precision", "var"}
+    # ``let`` and ``match`` are CrossGL lexer keywords like ``kernel`` and ``var``.
+    CROSSGL_RESERVED_IDENTIFIERS = {
+        "buffer",
+        "in",
+        "kernel",
+        "let",
+        "match",
+        "precision",
+        "var",
+    }
 
     def __init__(self, threadgroup_size=None):
         # The host picks a CUDA kernel's block size at launch time; this option names it.
@@ -259,13 +270,17 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = {}
         self.cuda_record_names = set()
+        self.source_identifier_names = frozenset()
         self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
 
     def generate(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -290,6 +305,7 @@ class CudaToCrossGLConverter:
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
+        self.namespace_constant_names = set()
         self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
@@ -411,8 +427,20 @@ class CudaToCrossGLConverter:
 
     def sanitize_identifier_name(self, name):
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
-            return f"{name}_"
+            return unused_identifier_name(name, self.source_identifier_names)
         return name
+
+    def rename_keyword_record_names(self, type_text):
+        """Rename the structs that a type spelling such as ``let [2]`` names."""
+        return re.sub(
+            r"[A-Za-z_]\w*",
+            lambda word: (
+                self.sanitize_identifier_name(word.group())
+                if word.group() in self.cuda_record_names
+                else word.group()
+            ),
+            type_text,
+        )
 
     def format_crossgl_array_extent(self, size):
         size = str(size).strip()
@@ -4040,7 +4068,11 @@ class CudaToCrossGLConverter:
 
         if hasattr(node, "global_variables") and node.global_variables:
             for var in node.global_variables:
-                self.visit(var)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(var)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
 
         self.reference_parameters = ReferenceParameters(node)
@@ -4104,7 +4136,10 @@ class CudaToCrossGLConverter:
         self.emit("};")
 
     def visit_EnumNode(self, node):
-        name = node.name or self.next_anonymous_enum_name()
+        # An enum named ``let`` is declared as ``let_``, the name its uses get.
+        name = (
+            self.sanitize_identifier_name(node.name) or self.next_anonymous_enum_name()
+        )
         underlying = getattr(node, "underlying_type", None)
         suffix = (
             f" : {self.convert_cuda_type_to_crossgl(underlying)}" if underlying else ""
@@ -4373,10 +4408,24 @@ class CudaToCrossGLConverter:
 
             value = self.format_variable_initializer_value(node.value)
             self.register_warp_mask_value(node.name, output_name, value)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(node.name)
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.register_warp_mask_value(node.name, output_name, None)
             self.emit(f"var {output_name}: {var_type};")
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def push_packed_argument_scope(self):
         self.packed_argument_scopes.append({})
@@ -4756,6 +4805,9 @@ class CudaToCrossGLConverter:
             return self.format_cuda_comma_expression(node.args)
 
         args = [self.visit(arg) for arg in node.args]
+        if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
+            # The type operand of ``sizeof(let)`` names the struct as its declaration does.
+            args = [self.rename_keyword_record_names(args[0])]
         args_str = ", ".join(args)
         make_unique = self.format_make_unique_call(raw_name, args)
         if make_unique is not None:
@@ -4771,12 +4823,16 @@ class CudaToCrossGLConverter:
                 return integer_intrinsic
 
         if self.is_user_defined_function(raw_name):
+            # A call names the function as its declaration does, ``let_`` for ``let``.
             func_name = (
                 self.convert_cuda_function_name_to_crossgl(raw_name)
-                if isinstance(raw_name, str) and raw_name.startswith("::")
+                if raw_name.startswith("::") or self.is_simple_identifier(raw_name)
                 else raw_name
             )
             return f"{func_name}({args_str})"
+        if self.is_simple_identifier(raw_name) and raw_name in self.cuda_record_names:
+            # ``let{1.0f}`` and ``let()`` construct the record under its declared name.
+            return f"{self.convert_cuda_type_to_crossgl(raw_name)}({args_str})"
 
         load_cache_intrinsic = self.format_cuda_load_cache_intrinsic_call(
             raw_name, node.args, args
@@ -6156,6 +6212,8 @@ class CudaToCrossGLConverter:
         uses are refused downstream as undeclared types.
         """
         self.register_type_alias(node.name, node.alias_type)
+        # An alias named ``let`` is declared as ``let_``, the name its uses get.
+        alias_name = self.sanitize_identifier_name(node.name)
         elaborated = re.fullmatch(
             r"(?:struct|union)\s+([A-Za-z_]\w*)", str(node.alias_type).strip()
         )
@@ -6165,6 +6223,7 @@ class CudaToCrossGLConverter:
             alias_type = elaborated.group(1)
             if alias_type == node.name:
                 return
+            alias_type = self.rename_keyword_record_names(alias_type)
         elif str(node.alias_type).strip().startswith(("struct ", "union ")):
             alias_type = node.alias_type
         elif self.is_decltype_type_name(node.alias_type):
@@ -6178,8 +6237,8 @@ class CudaToCrossGLConverter:
                 and not getattr(node, "array_sizes", None)
                 and not getattr(node, "declarator_type_suffix", "")
             ):
-                layouts.alias(node.name, alias_type)
-        self.emit(f"typedef {alias_type} {node.name};")
+                layouts.alias(alias_name, alias_type)
+        self.emit(f"typedef {alias_type} {alias_name};")
 
     def format_atomic_argument(self, arg, index):
         if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
@@ -6706,6 +6765,9 @@ class CudaToCrossGLConverter:
         scoped_type = self.convert_cuda_scoped_type_to_crossgl(cuda_type)
         if scoped_type is not None:
             return scoped_type
+        if cuda_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A struct named after a CrossGL keyword is declared under its renamed name.
+            return self.sanitize_identifier_name(cuda_type)
         return cuda_type
 
     def unqualified_leading_cuda_std_type_name(self, cuda_type):

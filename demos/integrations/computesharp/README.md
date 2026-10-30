@@ -612,14 +612,18 @@ loosening any upstream threshold:
 ## Pinned Dependency Exceptions
 
 The unmodified upstream pin uses ImageSharp 3.1.11 and treats NuGet advisory
-warnings as errors. Five current advisories prevent restoring that historical
+warnings as errors. Six current advisories prevent restoring that historical
 baseline: [ICC profile allocation](https://github.com/advisories/GHSA-gwg2-r3hj-4w44),
 [histogram equalization](https://github.com/advisories/GHSA-j3p4-wp97-rph4),
 [TIFF T4 encoding](https://github.com/advisories/GHSA-j9gm-c75j-xc9q),
-[TIFF T6 encoding](https://github.com/advisories/GHSA-jjfr-hcj7-qf5w), and
+[TIFF T6 encoding](https://github.com/advisories/GHSA-jjfr-hcj7-qf5w),
+[tiled fax TIFF decoding](https://github.com/advisories/GHSA-v76p-62qx-wwq2), and
 [BigTIFF decoding](https://github.com/advisories/GHSA-wmxv-xphr-5c9g).
-The identified fixed release, 4.1.2, requires a separate license key to build and
-is not substituted into the original baseline. `baseline-audit.props` keeps NuGet
+The fixed releases, 3.2.0 and 4.1.2, require a separate license key to build and
+are not substituted into the original baseline: the portable runtime must resolve
+the same ImageSharp 3.1.11 as the upstream test project, which NuGet otherwise
+reports as a package downgrade (NU1605). Dependabot therefore ignores ImageSharp
+in this directory. `baseline-audit.props` keeps NuGet
 auditing enabled and adds advisory-specific exceptions only for
 `ComputeSharp.Tests`, its three ported companion test projects, the portable
 runtime and the intrinsic probe, enabled by `CrossTLTrustedCorpusBaseline=true`.

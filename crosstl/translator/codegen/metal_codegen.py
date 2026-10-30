@@ -382,6 +382,7 @@ from .metal_bit_scans import emit_metal_bit_scan_helpers, metal_bit_scan_call
 from .metal_buffer_arrays import expand_entry_buffer_array
 from .metal_buffer_component_stores import metal_buffer_component_store
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
+from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
@@ -1572,6 +1573,8 @@ class MetalCodeGen(
             "gl_FragCoord": "position",
             "gl_BaryCoordEXT": "barycentric_coord",
             "gl_BaryCoordNoPerspEXT": "barycentric_coord",
+            "gl_BaryCoordNV": "barycentric_coord",
+            "gl_BaryCoordNoPerspNV": "barycentric_coord",
             "gl_FrontFacing": "front_facing",
             "gl_PointCoord": "point_coord",
             "gl_SampleID": "sample_id",
@@ -2043,6 +2046,7 @@ class MetalCodeGen(
         )
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
+        ast = bind_combined_samplers(ast)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
@@ -3961,7 +3965,7 @@ class MetalCodeGen(
         semantic = self.semantic_from_node(node)
         if semantic is None:
             return None
-        if str(semantic).lower() == "gl_barycoordnoperspext":
+        if str(semantic).lower() in {"gl_barycoordnoperspext", "gl_barycoordnoperspnv"}:
             return "center_no_perspective"
         return None
 
@@ -17131,6 +17135,11 @@ class MetalCodeGen(
         }:
             return ""
         if semantic:
+            if shader_type == "fragment" and node is not None:
+                # A no-perspective barycentric input takes [[center_no_perspective]], as a member does.
+                implied = self.metal_semantic_implied_interpolation_attribute(node)
+                if implied is not None:
+                    return f"{self.map_semantic(semantic)} [[{implied}]]"
             return self.map_semantic(semantic)
         if shader_type in {
             "vertex",
@@ -22007,9 +22016,14 @@ class MetalCodeGen(
             dependencies.add(buffer_name)
 
     def texture_sampling_uses_implicit_sampler(self, func_name):
-        return is_texture_sampling_operation(
-            func_name
-        ) or is_texture_query_lod_operation(func_name)
+        # A depth comparison of a combined sampler samples through its sampler too.
+        return (
+            is_texture_sampling_operation(func_name)
+            or is_texture_query_lod_operation(func_name)
+            or is_texture_compare_operation(func_name)
+            or is_texture_gather_compare_operation(func_name)
+            or is_projected_texture_compare_operation(func_name)
+        )
 
     def texture_call_needs_implicit_sampler_dependency(self, func_name, args):
         if not self.texture_sampling_uses_implicit_sampler(func_name):
@@ -22021,6 +22035,20 @@ class MetalCodeGen(
 
         if is_texture_sample_operation(func_name):
             return not self.is_multisample_texture_resource(texture_type)
+
+        if (
+            is_texture_compare_operation(func_name)
+            or is_texture_gather_compare_operation(func_name)
+            or is_projected_texture_compare_operation(func_name)
+        ):
+            if self.is_multisample_texture_resource(texture_type):
+                return False
+            if is_texture_compare_offset_operation(func_name) or str(
+                func_name
+            ).startswith("textureGatherCompareOffset"):
+                # Offsets the texture cannot take are refused, and need no sampler.
+                return self.texture_sample_supports_offset(texture_type)
+            return True
 
         if is_texture_query_lod_operation(func_name):
             return not (

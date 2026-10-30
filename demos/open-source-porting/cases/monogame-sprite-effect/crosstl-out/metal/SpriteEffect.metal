@@ -30,6 +30,6 @@ vertex VSOutput SpriteVertexShader(SpriteVertexShader_Input _crossglInput [[stag
 }
 
 // Fragment Shader
-fragment float4 SpritePixelShader(VSOutput input [[stage_in]], constant HlslProgramConstants& hlslProgramConstants [[buffer(0)]], texture2d<float> Texture [[texture(0)]]) {
-    return Texture.sample(sampler(mag_filter::linear, min_filter::linear), input.texCoord) * input.color;
+fragment float4 SpritePixelShader(VSOutput input [[stage_in]], constant HlslProgramConstants& hlslProgramConstants [[buffer(0)]], texture2d<float> Texture [[texture(0)]], sampler TextureSampler [[sampler(0)]]) {
+    return Texture.sample(TextureSampler, input.texCoord) * input.color;
 }

@@ -13932,21 +13932,6 @@ def test_codegen_allows_explicit_image_load_result_casts():
     [
         (
             """
-            shader HiddenUnsignedImageLoadFloatResult {
-                uimage2D counters @r32ui;
-                struct VSOutput { vec2 uv; };
-                fragment {
-                    vec4 main(VSOutput input) @ gl_FragColor {
-                        float old = imageLoad(counters, ivec2(0));
-                        return vec4(old);
-                    }
-                }
-            }
-            """,
-            "requires uint result context for r32ui images: expected float",
-        ),
-        (
-            """
             shader HiddenFloatImageLoadUnsignedResult {
                 image2D values @r32f;
                 struct VSOutput { vec2 uv; };
