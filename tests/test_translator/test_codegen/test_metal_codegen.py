@@ -17846,12 +17846,14 @@ def test_metal_helper_threads_global_texture_parameter():
     ast = parse_code(tokenize_code(code))
     generated_code = MetalCodeGen().generate_stage(ast, "fragment")
 
-    assert "float4 sampleColor(float2 uv, texture2d<float> colorMap)" in generated_code
+    # The combined sampler's sampler state is the host's: a bound sampler, threaded with the texture.
     assert (
-        "return colorMap.sample(sampler(mag_filter::linear, min_filter::linear), uv);"
+        "float4 sampleColor(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
         in generated_code
     )
-    assert "return sampleColor(input.uv, colorMap);" in generated_code
+    assert "return colorMap.sample(colorMapSampler, uv);" in generated_code
+    assert "sampler colorMapSampler [[sampler(0)]]" in generated_code
+    assert "return sampleColor(input.uv, colorMap, colorMapSampler);" in generated_code
 
 
 def test_metal_helper_threads_global_texture_and_implicit_sampler_parameters():
@@ -17915,10 +17917,16 @@ def test_metal_transitively_threads_global_texture_parameter():
     ast = parse_code(tokenize_code(code))
     generated_code = MetalCodeGen().generate_stage(ast, "fragment")
 
-    assert "float4 sampleColor(float2 uv, texture2d<float> colorMap)" in generated_code
-    assert "float4 shade(float2 uv, texture2d<float> colorMap)" in generated_code
-    assert "return sampleColor(uv, colorMap);" in generated_code
-    assert "return shade(input.uv, colorMap);" in generated_code
+    assert (
+        "float4 sampleColor(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
+    )
+    assert (
+        "float4 shade(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
+    )
+    assert "return sampleColor(uv, colorMap, colorMapSampler);" in generated_code
+    assert "return shade(input.uv, colorMap, colorMapSampler);" in generated_code
 
 
 def test_metal_resource_array_elements_pass_to_scalar_helper_parameters():
@@ -19558,7 +19566,7 @@ def test_metal_texture_array_resources_and_indexed_sampling():
     assert "array<texture2d<float>, 4> textures [[texture(0)]]" in generated_code
     assert "texturecube<float> envMap [[texture(4)]]" in generated_code
     assert (
-        "textures[input.layer].sample(sampler(mag_filter::linear, min_filter::linear), input.uv)"
+        "textures[input.layer].sample(texturesSampler[input.layer], input.uv)"
         in generated_code
     )
     assert "envMap.sample" in generated_code
@@ -23427,9 +23435,14 @@ def test_metal_texture_array_helper_parameter_uses_resource_array():
     ast = crosstl.translator.parse(shader)
     generated_code = MetalCodeGen().generate(ast)
 
-    assert "float4 sampleLayer(array<texture2d<float>, 4> textures" in generated_code
     assert (
-        "textures[layer].sample(sampler(mag_filter::linear, min_filter::linear), uv)"
+        "float4 sampleLayer(array<texture2d<float>, 4> textures, "
+        "array<sampler, 4> texturesSampler, int layer, float2 uv)" in generated_code
+    )
+    assert "textures[layer].sample(texturesSampler[layer], uv)" in generated_code
+    assert "array<sampler, 4> texturesSampler [[sampler(0)]]" in generated_code
+    assert (
+        "return sampleLayer(textures, texturesSampler, input.layer, input.uv);"
         in generated_code
     )
     assert "texture2d<float> textures[4] [[stage_in]]" not in generated_code
@@ -25887,7 +25900,7 @@ def test_metal_direct_projected_array_texture_stage_input_members():
     assert "textureProjGradOffset(" not in generated_code
 
 
-def test_metal_implicit_projected_array_texture_stage_input_members_use_default_sampler():
+def test_metal_implicit_projected_array_texture_stage_input_members_use_bound_samplers():
     shader = """
     shader DirectImplicitProjectedArrayTexture {
         sampler2DArray layerMap;
@@ -25918,32 +25931,31 @@ def test_metal_implicit_projected_array_texture_stage_input_members_use_default_
         crosstl.translator.parse(shader), "fragment"
     )
 
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     projected_args = "input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0)))"
     assert "texture2d_array<float> layerMap [[texture(0)]]" in generated_code
-    assert "[[sampler(" not in generated_code
+    assert "[[sampler(" in generated_code
     assert (
-        f"float4 projected = layerMap.sample({default_sampler}, {projected_args});"
+        f"float4 projected = layerMap.sample(layerMapSampler, {projected_args});"
         in generated_code
     )
     assert (
-        f"float4 projectedOffset = layerMap.sample({default_sampler}, {projected_args}, input.offset);"
+        f"float4 projectedOffset = layerMap.sample(layerMapSampler, {projected_args}, input.offset);"
         in generated_code
     )
     assert (
-        f"float4 projectedLod = layerMap.sample({default_sampler}, {projected_args}, level(input.lod));"
+        f"float4 projectedLod = layerMap.sample(layerMapSampler, {projected_args}, level(input.lod));"
         in generated_code
     )
     assert (
-        f"float4 projectedLodOffset = layerMap.sample({default_sampler}, {projected_args}, level(input.lod), input.offset);"
+        f"float4 projectedLodOffset = layerMap.sample(layerMapSampler, {projected_args}, level(input.lod), input.offset);"
         in generated_code
     )
     assert (
-        f"float4 projectedGrad = layerMap.sample({default_sampler}, {projected_args}, gradient2d(input.ddx, input.ddy));"
+        f"float4 projectedGrad = layerMap.sample(layerMapSampler, {projected_args}, gradient2d(input.ddx, input.ddy));"
         in generated_code
     )
     assert (
-        f"float4 projectedGradOffset = layerMap.sample({default_sampler}, {projected_args}, gradient2d(input.ddx, input.ddy), input.offset);"
+        f"float4 projectedGradOffset = layerMap.sample(layerMapSampler, {projected_args}, gradient2d(input.ddx, input.ddy), input.offset);"
         in generated_code
     )
     assert "unsupported Metal projected texture" not in generated_code
@@ -26046,7 +26058,7 @@ def test_metal_projected_array_texture_resource_arrays_forward_samplers():
     assert "textureProj(" not in generated_code
 
 
-def test_metal_implicit_projected_array_texture_resource_arrays_use_default_sampler():
+def test_metal_implicit_projected_array_texture_resource_arrays_use_bound_samplers():
     shader = """
     shader ImplicitProjectedArrayTextureResourceArrays {
         sampler2DArray layerMaps[4];
@@ -26098,49 +26110,48 @@ def test_metal_implicit_projected_array_texture_resource_arrays_use_default_samp
         crosstl.translator.parse(shader), "fragment"
     )
 
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     projected_args = (
         "uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0)))"
     )
     assert "array<texture2d_array<float>, 4> layerMaps [[texture(0)]]" in generated_code
-    assert "[[sampler(" not in generated_code
+    assert "[[sampler(" in generated_code
     assert (
-        "float4 projectedLeaf(array<texture2d_array<float>, 4> maps, int layer, float4 uvLayerQ, float lod, float2 ddx, float2 ddy, int2 offset)"
+        "float4 projectedLeaf(array<texture2d_array<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 uvLayerQ, float lod, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        f"float4 fixedProj = maps[2].sample({default_sampler}, {projected_args});"
+        f"float4 fixedProj = maps[2].sample(mapsSampler[2], {projected_args});"
         in generated_code
     )
     assert (
-        f"float4 dynamicOffset = maps[layer].sample({default_sampler}, {projected_args}, offset);"
+        f"float4 dynamicOffset = maps[layer].sample(mapsSampler[layer], {projected_args}, offset);"
         in generated_code
     )
     assert (
-        f"float4 fixedLod = maps[1].sample({default_sampler}, {projected_args}, level(lod));"
+        f"float4 fixedLod = maps[1].sample(mapsSampler[1], {projected_args}, level(lod));"
         in generated_code
     )
     assert (
-        f"float4 dynamicLodOffset = maps[layer].sample({default_sampler}, {projected_args}, level(lod), offset);"
+        f"float4 dynamicLodOffset = maps[layer].sample(mapsSampler[layer], {projected_args}, level(lod), offset);"
         in generated_code
     )
     assert (
-        f"float4 fixedGrad = maps[3].sample({default_sampler}, {projected_args}, gradient2d(ddx, ddy));"
+        f"float4 fixedGrad = maps[3].sample(mapsSampler[3], {projected_args}, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        f"float4 dynamicGradOffset = maps[layer].sample({default_sampler}, {projected_args}, gradient2d(ddx, ddy), offset);"
+        f"float4 dynamicGradOffset = maps[layer].sample(mapsSampler[layer], {projected_args}, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        "projectedLeaf(layerMaps, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedLeaf(layerMaps, layerMapsSampler, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert "unsupported Metal projected texture" not in generated_code
     assert "textureProj(" not in generated_code
 
 
-def test_metal_implicit_projected_stage_input_members_use_default_sampler():
+def test_metal_implicit_projected_stage_input_members_use_bound_samplers():
     shader = """
     shader DirectImplicitProjection {
         sampler2D colorMap;
@@ -26176,31 +26187,30 @@ def test_metal_implicit_projected_stage_input_members_use_default_sampler():
     generated_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
     assert "texture3d<float> volumeMap [[texture(1)]]" in generated_code
     assert "depth2d<float> shadowMap [[texture(2)]]" in generated_code
     assert "depth2d_array<float> shadowArray [[texture(3)]]" in generated_code
-    assert "[[sampler(" not in generated_code
+    assert "[[sampler(" in generated_code
     assert (
-        f"float4 color = colorMap.sample({default_sampler}, input.uvq.xy / input.uvq.z);"
+        "float4 color = colorMap.sample(colorMapSampler, input.uvq.xy / input.uvq.z);"
         in generated_code
     )
     assert (
-        f"float4 colorLod = colorMap.sample({default_sampler}, input.uvqw.xy / input.uvqw.w, level(input.lod));"
+        "float4 colorLod = colorMap.sample(colorMapSampler, input.uvqw.xy / input.uvqw.w, level(input.lod));"
         in generated_code
     )
     assert (
-        f"float4 volume = volumeMap.sample({default_sampler}, input.xyzq.xyz / input.xyzq.w);"
+        "float4 volume = volumeMap.sample(volumeMapSampler, input.xyzq.xyz / input.xyzq.w);"
         in generated_code
     )
     assert (
-        f"float shadow = shadowMap.sample_compare({default_sampler}, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
+        "float shadow = shadowMap.sample_compare(shadowMapSampler, input.uvq.xy / input.uvq.z, input.depth / input.uvq.z);"
         in generated_code
     )
     assert (
-        f"float shadowGrad = shadowArray.sample_compare({default_sampler}, input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0))), input.depth / input.uvLayerQ.w, gradient2d(input.ddx, input.ddy));"
+        "float shadowGrad = shadowArray.sample_compare(shadowArraySampler, input.uvLayerQ.xy / input.uvLayerQ.w, uint(rint(clamp(float(input.uvLayerQ.z), 0.0, 2047.0))), input.depth / input.uvLayerQ.w, gradient2d(input.ddx, input.ddy));"
         in generated_code
     )
     assert "unsupported Metal projected texture" not in generated_code
@@ -26546,7 +26556,7 @@ def test_metal_projected_shadow_compare_resource_arrays_forward_samplers():
     assert "textureCompareProj(" not in generated_code
 
 
-def test_metal_implicit_projected_shadow_compare_resource_arrays_use_default_sampler():
+def test_metal_implicit_projected_shadow_compare_resource_arrays_use_bound_samplers():
     shader = """
     shader ImplicitProjectedShadowResourceArrays {
         sampler2DShadow shadowMaps[4];
@@ -26620,55 +26630,55 @@ def test_metal_implicit_projected_shadow_compare_resource_arrays_use_default_sam
     """
 
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in generated_code
     assert (
         "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in generated_code
     )
-    assert "array<sampler" not in generated_code
+    assert "array<sampler" in generated_code
     assert (
-        "float projectedLeaf(array<depth2d<float>, 4> shadowMaps, array<depth2d_array<float>, 4> shadowArrays"
+        "float projectedLeaf(array<depth2d<float>, 4> shadowMaps, array<sampler, 4> shadowMapsSampler, "
+        "array<depth2d_array<float>, 4> shadowArrays, array<sampler, 4> shadowArraysSampler"
         in generated_code
     )
     assert (
-        f"float planar = shadowMaps[layer].sample_compare({default_sampler}, uvq.xy / uvq.z, depth / uvq.z);"
+        "float planar = shadowMaps[layer].sample_compare(shadowMapsSampler[layer], uvq.xy / uvq.z, depth / uvq.z);"
         in generated_code
     )
     assert (
-        f"float planarOffset = shadowMaps[1].sample_compare({default_sampler}, uvq.xy / uvq.z, depth / uvq.z, offset);"
+        "float planarOffset = shadowMaps[1].sample_compare(shadowMapsSampler[1], uvq.xy / uvq.z, depth / uvq.z, offset);"
         in generated_code
     )
     assert (
-        f"float planarLod = shadowMaps[2].sample_compare({default_sampler}, uvq.xy / uvq.z, depth / uvq.z, level(lod));"
+        "float planarLod = shadowMaps[2].sample_compare(shadowMapsSampler[2], uvq.xy / uvq.z, depth / uvq.z, level(lod));"
         in generated_code
     )
     assert (
-        f"float planarGradOffset = shadowMaps[layer].sample_compare({default_sampler}, uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy), offset);"
+        "float planarGradOffset = shadowMaps[layer].sample_compare(shadowMapsSampler[layer], uvq.xy / uvq.z, depth / uvq.z, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        f"float arrayProjected = shadowArrays[2].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w);"
+        "float arrayProjected = shadowArrays[2].sample_compare(shadowArraysSampler[2], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w);"
         in generated_code
     )
     assert (
-        f"float arrayOffset = shadowArrays[layer].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
+        "float arrayOffset = shadowArrays[layer].sample_compare(shadowArraysSampler[layer], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, offset);"
         in generated_code
     )
     assert (
-        f"float arrayGrad = shadowArrays[1].sample_compare({default_sampler}, uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
+        "float arrayGrad = shadowArrays[1].sample_compare(shadowArraysSampler[1], uvLayerQ.xy / uvLayerQ.w, uint(rint(clamp(float(uvLayerQ.z), 0.0, 2047.0))), depth / uvLayerQ.w, gradient2d(ddx, ddy));"
         in generated_code
     )
     assert (
-        "float projectedWrapper(array<depth2d<float>, 4> shadowMaps, array<depth2d_array<float>, 4> shadowArrays"
+        "float projectedWrapper(array<depth2d<float>, 4> shadowMaps, array<sampler, 4> shadowMapsSampler, array<depth2d_array<float>, 4> shadowArrays, array<sampler, 4> shadowArraysSampler"
         in generated_code
     )
     assert (
-        "projectedLeaf(shadowMaps, shadowArrays, layer, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
+        "projectedLeaf(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, layer, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
         in generated_code
     )
     assert (
-        "projectedWrapper(shadowMaps, shadowArrays, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedWrapper(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert "textureCompareProj(" not in generated_code
@@ -26977,11 +26987,11 @@ def test_metal_direct_projected_cube_texture_lowers_supported_color_forms():
         in generated_code
     )
     assert (
-        "float4 implicitCube = cubeMap.sample(sampler(mag_filter::linear, min_filter::linear), input.cubeProj.xyz / input.cubeProj.w);"
+        "float4 implicitCube = cubeMap.sample(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w);"
         in generated_code
     )
     assert (
-        "float4 implicitCubeGrad = cubeMap.sample(sampler(mag_filter::linear, min_filter::linear), input.cubeProj.xyz / input.cubeProj.w, gradientcube(input.ddx, input.ddy));"
+        "float4 implicitCubeGrad = cubeMap.sample(cubeMapSampler, input.cubeProj.xyz / input.cubeProj.w, gradientcube(input.ddx, input.ddy));"
         in generated_code
     )
     assert (
@@ -27153,31 +27163,31 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
         in generated_code
     )
     assert (
-        "float4 projectedCube(array<texturecube<float>, 4> maps, int layer, float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 projectedCube(array<texturecube<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 cubeProj, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float4 projectedCubeArray(array<texturecube_array<float>, 4> maps, int layer, float4 cubeArrayProj, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 projectedCubeArray(array<texturecube_array<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 cubeArrayProj, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float4 projectedShadow(array<depthcube<float>, 4> maps, int layer, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 projectedShadow(array<depthcube<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 cubeProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float4 projectedShadowArray(array<depthcube_array<float>, 4> maps, int layer, float4 cubeArrayProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
+        "float4 projectedShadowArray(array<depthcube_array<float>, 4> maps, array<sampler, 4> mapsSampler, int layer, float4 cubeArrayProj, float depth, float lod, float3 ddx, float3 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        "float4 fixedProjected = maps[2].sample(sampler(mag_filter::linear, min_filter::linear), cubeProj.xyz / cubeProj.w);"
+        "float4 fixedProjected = maps[2].sample(mapsSampler[2], cubeProj.xyz / cubeProj.w);"
         in generated_code
     )
     assert (
-        "float4 dynamicLodProjected = maps[layer].sample(sampler(mag_filter::linear, min_filter::linear), cubeProj.xyz / cubeProj.w, level(lod));"
+        "float4 dynamicLodProjected = maps[layer].sample(mapsSampler[layer], cubeProj.xyz / cubeProj.w, level(lod));"
         in generated_code
     )
     assert (
-        "float4 globalProjected = cubeMaps[input.layer].sample(sampler(mag_filter::linear, min_filter::linear), input.cubeProj.xyz / input.cubeProj.w);"
+        "float4 globalProjected = cubeMaps[input.layer].sample(cubeMapsSampler[input.layer], input.cubeProj.xyz / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -27194,17 +27204,16 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
             f"projected texture: {func_name} requires 1D, 2D, or 3D projection coordinates"
             in refusal
         )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert (
-        f"float fixedProjected = maps[2].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
+        "float fixedProjected = maps[2].sample_compare(mapsSampler[2], cubeProj.xyz / cubeProj.w, depth / cubeProj.w);"
         in generated_code
     )
     assert (
-        f"float dynamicLodProjected = maps[layer].sample_compare({default_sampler}, cubeProj.xyz / cubeProj.w, depth / cubeProj.w, level(lod));"
+        "float dynamicLodProjected = maps[layer].sample_compare(mapsSampler[layer], cubeProj.xyz / cubeProj.w, depth / cubeProj.w, level(lod));"
         in generated_code
     )
     assert (
-        f"float globalShadow = shadowCubes[input.layer].sample_compare({default_sampler}, input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w);"
+        "float globalShadow = shadowCubes[input.layer].sample_compare(shadowCubesSampler[input.layer], input.cubeProj.xyz / input.cubeProj.w, input.depth / input.cubeProj.w);"
         in generated_code
     )
     assert (
@@ -27222,22 +27231,22 @@ def test_metal_projected_cube_texture_resource_arrays_lower_supported_color_form
             in refusal
         )
     assert (
-        "projectedCube(cubeMaps, input.layer, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedCube(cubeMaps, cubeMapsSampler, input.layer, input.cubeProj, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
-        "projectedCubeArray(cubeArrays, input.layer, input.cubeArrayProj, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedCubeArray(cubeArrays, cubeArraysSampler, input.layer, input.cubeArrayProj, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
-        "projectedShadow(shadowCubes, input.layer, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedShadow(shadowCubes, shadowCubesSampler, input.layer, input.cubeProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert (
-        "projectedShadowArray(shadowCubeArrays, input.layer, input.cubeArrayProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedShadowArray(shadowCubeArrays, shadowCubeArraysSampler, input.layer, input.cubeArrayProj, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
-    assert "[[sampler(" not in generated_code
+    assert "[[sampler(" in generated_code
     assert "textureProj(" not in generated_code
     assert "textureCompareProj(" not in generated_code
 
@@ -27383,7 +27392,6 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
     generated_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "depthcube<float> cubeShadow [[texture(0)]]" in generated_code
     assert "depthcube_array<float> cubeShadowArray [[texture(1)]]" in generated_code
@@ -27402,19 +27410,16 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
         in generated_code
     )
     assert (
-        "float4 implicitCubeShadow(depthcube<float> tex, float3 direction, float depth)"
+        "float4 implicitCubeShadow(depthcube<float> tex, sampler texSampler, float3 direction, float depth)"
+        in generated_code
+    )
+    assert "return tex.gather_compare(texSampler, direction, depth);" in generated_code
+    assert (
+        "float4 implicitCubeArrayShadow(depthcube_array<float> tex, sampler texSampler, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert (
-        f"return tex.gather_compare({default_sampler}, direction, depth);"
-        in generated_code
-    )
-    assert (
-        "float4 implicitCubeArrayShadow(depthcube_array<float> tex, float4 cubeLayer, float depth)"
-        in generated_code
-    )
-    assert (
-        f"return tex.gather_compare({default_sampler}, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
+        "return tex.gather_compare(texSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
@@ -27426,7 +27431,7 @@ def test_metal_cube_shadow_gather_compare_supports_cube_and_cube_array():
         in generated_code
     )
     assert (
-        f"cubeShadow.gather_compare({default_sampler}, input.direction, input.depth)"
+        "cubeShadow.gather_compare(cubeShadowSampler, input.direction, input.depth)"
         in generated_code
     )
     assert "unsupported Metal texture gather compare" not in generated_code
@@ -27472,35 +27477,35 @@ def test_metal_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_arra
     assert "depth2d_array<float> shadowArray [[texture(0)]]" in generated_code
     assert "depthcube_array<float> cubeShadowArray [[texture(1)]]" in generated_code
     assert (
-        "float4 implicitArray(depth2d_array<float> tex, float3 uvLayer, float depth, int2 offset)"
+        "float4 implicitArray(depth2d_array<float> tex, sampler texSampler, float3 uvLayer, float depth, int2 offset)"
         in generated_code
     )
     assert (
-        "tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
+        "tex.gather_compare(texSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in generated_code
     )
     assert (
-        "tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
+        "tex.gather_compare(texSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in generated_code
     )
     assert (
-        "tex.sample_compare(sampler(mag_filter::linear, min_filter::linear), uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
+        "tex.sample_compare(texSampler, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in generated_code
     )
     assert (
-        "float4 implicitCubeArray(depthcube_array<float> tex, float4 cubeLayer, float depth)"
+        "float4 implicitCubeArray(depthcube_array<float> tex, sampler texSampler, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert (
-        "return tex.gather_compare(sampler(mag_filter::linear, min_filter::linear), cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
+        "return tex.gather_compare(texSampler, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth);"
         in generated_code
     )
     assert (
-        "implicitArray(shadowArray, input.uvLayer, input.depth, input.offset)"
+        "implicitArray(shadowArray, shadowArraySampler, input.uvLayer, input.depth, input.offset)"
         in generated_code
     )
     assert (
-        "implicitCubeArray(cubeShadowArray, input.cubeLayer, input.depth)"
+        "implicitCubeArray(cubeShadowArray, cubeShadowArraySampler, input.cubeLayer, input.depth)"
         in generated_code
     )
     assert "textureGatherCompare(" not in generated_code
@@ -27569,7 +27574,6 @@ def test_metal_direct_shadow_gather_compare_stage_input_members():
     implicit_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(implicit_shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "depth2d<float> shadowMap [[texture(0)]]" in explicit_code
     assert "depth2d_array<float> shadowArray [[texture(1)]]" in explicit_code
@@ -27601,25 +27605,25 @@ def test_metal_direct_shadow_gather_compare_stage_input_members():
     assert "depth2d<float> shadowMap [[texture(0)]]" in implicit_code
     assert "depth2d_array<float> shadowArray [[texture(1)]]" in implicit_code
     assert "depthcube_array<float> cubeShadowArray [[texture(2)]]" in implicit_code
-    assert "[[sampler(" not in implicit_code
+    assert "[[sampler(" in implicit_code
     assert (
-        f"float4 planar = shadowMap.gather_compare({default_sampler}, input.uv, input.depth);"
+        "float4 planar = shadowMap.gather_compare(shadowMapSampler, input.uv, input.depth);"
         in implicit_code
     )
     assert (
-        f"float4 planarOffset = shadowMap.gather_compare({default_sampler}, input.uv, input.depth, input.offset);"
+        "float4 planarOffset = shadowMap.gather_compare(shadowMapSampler, input.uv, input.depth, input.offset);"
         in implicit_code
     )
     assert (
-        f"float4 arrayGather = shadowArray.gather_compare({default_sampler}, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth);"
+        "float4 arrayGather = shadowArray.gather_compare(shadowArraySampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth);"
         in implicit_code
     )
     assert (
-        f"float4 arrayOffset = shadowArray.gather_compare({default_sampler}, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth, input.offset);"
+        "float4 arrayOffset = shadowArray.gather_compare(shadowArraySampler, input.uvLayer.xy, uint(rint(clamp(float(input.uvLayer.z), 0.0, 2047.0))), input.depth, input.offset);"
         in implicit_code
     )
     assert (
-        f"float4 cubeArrayGather = cubeShadowArray.gather_compare({default_sampler}, input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), input.depth);"
+        "float4 cubeArrayGather = cubeShadowArray.gather_compare(cubeShadowArraySampler, input.cubeLayer.xyz, uint(rint(clamp(float(input.cubeLayer.w), 0.0, 2047.0))), input.depth);"
         in implicit_code
     )
     assert "unsupported Metal texture gather compare" not in implicit_code
@@ -27741,7 +27745,6 @@ def test_metal_shadow_gather_compare_resource_arrays_forward_samplers():
     implicit_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(implicit_shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in explicit_code
     assert "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in explicit_code
@@ -27781,34 +27784,34 @@ def test_metal_shadow_gather_compare_resource_arrays_forward_samplers():
     assert "array<depth2d<float>, 4> shadowMaps [[texture(0)]]" in implicit_code
     assert "array<depth2d_array<float>, 4> shadowArrays [[texture(4)]]" in implicit_code
     assert "array<depthcube_array<float>, 4> cubeArrays [[texture(8)]]" in implicit_code
-    assert "[[sampler(" not in implicit_code
+    assert "[[sampler(" in implicit_code
     assert (
-        "float4 gatherLayer(array<depth2d<float>, 4> maps, array<depth2d_array<float>, 4> arrays, array<depthcube_array<float>, 4> cubes, int layer, float2 uv, float3 uvLayer, float4 cubeLayer, float depth, int2 offset)"
+        "float4 gatherLayer(array<depth2d<float>, 4> maps, array<sampler, 4> mapsSampler, array<depth2d_array<float>, 4> arrays, array<sampler, 4> arraysSampler, array<depthcube_array<float>, 4> cubes, array<sampler, 4> cubesSampler, int layer, float2 uv, float3 uvLayer, float4 cubeLayer, float depth, int2 offset)"
         in implicit_code
     )
-    assert f"maps[2].gather_compare({default_sampler}, uv, depth)" in implicit_code
+    assert "maps[2].gather_compare(mapsSampler[2], uv, depth)" in implicit_code
     assert (
-        f"maps[layer].gather_compare({default_sampler}, uv, depth, offset)"
-        in implicit_code
-    )
-    assert (
-        f"arrays[1].gather_compare({default_sampler}, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
+        "maps[layer].gather_compare(mapsSampler[layer], uv, depth, offset)"
         in implicit_code
     )
     assert (
-        f"arrays[layer].gather_compare({default_sampler}, uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
+        "arrays[1].gather_compare(arraysSampler[1], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth)"
         in implicit_code
     )
     assert (
-        f"cubes[3].gather_compare({default_sampler}, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
+        "arrays[layer].gather_compare(arraysSampler[layer], uvLayer.xy, uint(rint(clamp(float(uvLayer.z), 0.0, 2047.0))), depth, offset)"
         in implicit_code
     )
     assert (
-        f"cubes[layer].gather_compare({default_sampler}, cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
+        "cubes[3].gather_compare(cubesSampler[3], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
         in implicit_code
     )
     assert (
-        "gatherLayer(shadowMaps, shadowArrays, cubeArrays, input.layer, input.uv, input.uvLayer, input.cubeLayer, input.depth, input.offset)"
+        "cubes[layer].gather_compare(cubesSampler[layer], cubeLayer.xyz, uint(rint(clamp(float(cubeLayer.w), 0.0, 2047.0))), depth)"
+        in implicit_code
+    )
+    assert (
+        "gatherLayer(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, cubeArrays, cubeArraysSampler, input.layer, input.uv, input.uvLayer, input.cubeLayer, input.depth, input.offset)"
         in implicit_code
     )
     assert "textureGatherCompare" not in implicit_code
@@ -28229,31 +28232,33 @@ def test_metal_nested_implicit_shadow_compare_lod_grad_uses_depth_overloads():
         crosstl.translator.parse(shader), "fragment"
     )
 
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert "depth2d<float> shadowMap [[texture(0)]]" in generated_code
     assert (
-        "float shadowOps(depth2d<float> tex, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
+        "float shadowOps(depth2d<float> tex, sampler texSampler, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
     assert (
-        f"float2 lod = float2(tex.calculate_clamped_lod({default_sampler}, uv), tex.calculate_unclamped_lod({default_sampler}, uv));"
+        "float2 lod = float2(tex.calculate_clamped_lod(texSampler, uv), tex.calculate_unclamped_lod(texSampler, uv));"
         in generated_code
     )
     assert (
-        f"float cmp = tex.sample_compare({default_sampler}, uv, depth, level(lod.x));"
+        "float cmp = tex.sample_compare(texSampler, uv, depth, level(lod.x));"
         in generated_code
     )
     assert (
-        f"float grad = tex.sample_compare({default_sampler}, uv, depth, gradient2d(ddx, ddy), offset);"
+        "float grad = tex.sample_compare(texSampler, uv, depth, gradient2d(ddx, ddy), offset);"
         in generated_code
     )
     assert (
-        "float wrappedShadow(depth2d<float> tex, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
+        "float wrappedShadow(depth2d<float> tex, sampler texSampler, float2 uv, float depth, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
-    assert "return shadowOps(tex, uv, depth, ddx, ddy, offset);" in generated_code
     assert (
-        "wrappedShadow(shadowMap, input.uv, input.depth, input.ddx, input.ddy, input.offset)"
+        "return shadowOps(tex, texSampler, uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "wrappedShadow(shadowMap, shadowMapSampler, input.uv, input.depth, input.ddx, input.ddy, input.offset)"
         in generated_code
     )
     assert "textureQueryLod(" not in generated_code
@@ -28295,33 +28300,32 @@ def test_metal_glsl_es_shadow_sampler_lod_overloads_lower_to_compare_sampling():
     """
 
     generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "depth2d_array<float> s2da [[texture(0)]]" in generated_code
     assert "depthcube_array<float> sca [[texture(1)]]" in generated_code
     assert "depthcube<float> sc [[texture(2)]]" in generated_code
     s2da_compare = (
-        f"c = s2da.sample_compare({default_sampler}, input.tc.xy, "
+        "c = s2da.sample_compare(s2daSampler, input.tc.xy, "
         "uint(rint(clamp(float(input.tc.z), 0.0, 2047.0))), input.tc.w"
     )
     s2da_lod_compare = (
-        f"c = s2da.sample_compare({default_sampler}, input.tc.xyz.xy, "
+        "c = s2da.sample_compare(s2daSampler, input.tc.xyz.xy, "
         "uint(rint(clamp(float(input.tc.xyz.z), 0.0, 2047.0))), input.tc.w"
     )
     assert f"{s2da_compare}, bias(0.0));" in generated_code
     assert (
-        f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
+        "c = sca.sample_compare(scaSampler, input.tc.xyz, "
         "uint(rint(clamp(float(input.tc.w), 0.0, 2047.0))), 0.0, bias(0.0));"
         in generated_code
     )
     assert f"{s2da_compare}, bias(0.0), int2(0.0));" in generated_code
     assert f"{s2da_lod_compare}, level(0.0));" in generated_code
     assert (
-        f"c = sc.sample_compare({default_sampler}, input.tc.xyz, "
+        "c = sc.sample_compare(scSampler, input.tc.xyz, "
         "input.tc.w, level(0.0));" in generated_code
     )
     assert (
-        f"c = sca.sample_compare({default_sampler}, input.tc.xyz, "
+        "c = sca.sample_compare(scaSampler, input.tc.xyz, "
         "uint(rint(clamp(float(input.tc.w), 0.0, 2047.0))), 0.0, level(0.0));"
         in generated_code
     )
@@ -30155,7 +30159,6 @@ def test_metal_direct_stage_texture_queries_mix_size_levels_and_lod():
     generated_code = MetalCodeGen().generate_stage(
         crosstl.translator.parse(shader), "fragment"
     )
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
 
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
     assert "texture2d_array<float> layerMap [[texture(1)]]" in generated_code
@@ -30203,11 +30206,11 @@ def test_metal_direct_stage_texture_queries_mix_size_levels_and_lod():
         in generated_code
     )
     assert (
-        f"float2 implicitLayerLod = float2(layerMap.calculate_clamped_lod({default_sampler}, input.uvLayer.xy), layerMap.calculate_unclamped_lod({default_sampler}, input.uvLayer.xy));"
+        "float2 implicitLayerLod = float2(layerMap.calculate_clamped_lod(layerMapSampler, input.uvLayer.xy), layerMap.calculate_unclamped_lod(layerMapSampler, input.uvLayer.xy));"
         in generated_code
     )
     assert (
-        f"float2 implicitCubeShadowLod = float2(cubeShadowArray.calculate_clamped_lod({default_sampler}, input.cubeLayer.xyz), cubeShadowArray.calculate_unclamped_lod({default_sampler}, input.cubeLayer.xyz));"
+        "float2 implicitCubeShadowLod = float2(cubeShadowArray.calculate_clamped_lod(cubeShadowArraySampler, input.cubeLayer.xyz), cubeShadowArray.calculate_unclamped_lod(cubeShadowArraySampler, input.cubeLayer.xyz));"
         in generated_code
     )
     assert "textureQueryLod(" not in generated_code
@@ -30675,25 +30678,22 @@ def test_metal_implicit_shadow_array_texture_query_lod_uses_default_sampler():
     )
     assert "sampler linearSampler" not in generated_code
     assert "linearSamplers" not in generated_code
-    default_sampler = "sampler(mag_filter::linear, min_filter::linear)"
     assert (
-        f"shadowArray.calculate_clamped_lod({default_sampler}, input.uvLayer.xy)"
+        "shadowArray.calculate_clamped_lod(shadowArraySampler, input.uvLayer.xy)"
         in generated_code
     )
     assert (
-        f"cubeShadowArray.calculate_clamped_lod({default_sampler}, input.cubeLayer.xyz)"
+        "cubeShadowArray.calculate_clamped_lod(cubeShadowArraySampler, input.cubeLayer.xyz)"
         in generated_code
     )
-    assert f"tex.calculate_clamped_lod({default_sampler}, uvLayer.xy)" in generated_code
+    assert "tex.calculate_clamped_lod(texSampler, uvLayer.xy)" in generated_code
+    assert "tex.calculate_clamped_lod(texSampler, cubeLayer.xyz)" in generated_code
     assert (
-        f"tex.calculate_clamped_lod({default_sampler}, cubeLayer.xyz)" in generated_code
-    )
-    assert (
-        f"shadowArrays[2].calculate_clamped_lod({default_sampler}, uvLayer.xy)"
+        "shadowArrays[2].calculate_clamped_lod(shadowArraysSampler[2], uvLayer.xy)"
         in generated_code
     )
     assert (
-        f"cubeShadowArrays[3].calculate_clamped_lod({default_sampler}, cubeLayer.xyz)"
+        "cubeShadowArrays[3].calculate_clamped_lod(cubeShadowArraysSampler[3], cubeLayer.xyz)"
         in generated_code
     )
     assert (
@@ -30950,12 +30950,13 @@ def test_metal_implicit_sampler_for_texture_parameter():
     generated_code = MetalCodeGen().generate(ast)
 
     assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
-    assert "float4 sampleColor(texture2d<float> tex, float2 uv)" in generated_code
     assert (
-        "tex.sample(sampler(mag_filter::linear, min_filter::linear), uv)"
+        "float4 sampleColor(texture2d<float> tex, sampler texSampler, float2 uv)"
         in generated_code
     )
-    assert "sampleColor(colorMap, input.uv)" in generated_code
+    assert "tex.sample(texSampler, uv)" in generated_code
+    assert "sampler colorMapSampler [[sampler(0)]]" in generated_code
+    assert "sampleColor(colorMap, colorMapSampler, input.uv)" in generated_code
 
 
 def test_metal_sampled_texture_inferred_local_aliases_preserve_sampler_metadata():
@@ -32491,14 +32492,15 @@ def test_metal_implicit_sampler_for_shadow_texture_parameter():
 
     assert "depth2d<float> shadowMap [[texture(0)]]" in generated_code
     assert (
-        "float sampleShadow(depth2d<float> tex, float2 uv, float depth)"
+        "float sampleShadow(depth2d<float> tex, sampler texSampler, float2 uv, float depth)"
         in generated_code
     )
+    assert "tex.sample_compare(texSampler, uv, depth)" in generated_code
+    assert "sampler shadowMapSampler [[sampler(0)]]" in generated_code
     assert (
-        "tex.sample_compare(sampler(mag_filter::linear, min_filter::linear), uv, depth)"
+        "sampleShadow(shadowMap, shadowMapSampler, input.uv, input.depth)"
         in generated_code
     )
-    assert "sampleShadow(shadowMap, input.uv, input.depth)" in generated_code
 
 
 @pytest.mark.parametrize(
