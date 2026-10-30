@@ -90,12 +90,8 @@ def wgsl_frexp_modf_call(codegen, call):
 
 def wgsl_frexp_modf_helpers(codegen):
     """The helper functions that the generated calls use, in the order of their first call."""
-    return "\n\n".join(
-        _helper(helper, name, value_type, written_type)
-        for helper, (name, value_type, written_type) in (
-            codegen._frexp_modf_helpers.items()
-        )
-    )
+    helpers = codegen._frexp_modf_helpers
+    return "\n\n".join(_helper(helper, *helpers[helper]) for helper in helpers)
 
 
 def _shape(codegen, type_name):
@@ -118,12 +114,8 @@ def _helper_name(codegen, name, value_type, written_type):
 
 def _helper(helper, name, value_type, written_type):
     member = WRITTEN_MEMBERS[name]
-    if name == "modf":
-        member_type = value_type
-    elif value_type.startswith("vec"):
-        member_type = re.sub(r"<f32>$", "<i32>", value_type)
-    else:
-        member_type = "i32"
+    # frexp's exp is i32 in the value's shape; modf's whole has the value's type.
+    member_type = value_type.replace("f32", "i32") if name == "frexp" else value_type
     stored = f"result.{member}"
     if member_type != written_type:
         stored = f"{written_type}({stored})"
