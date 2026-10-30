@@ -349,7 +349,7 @@ def test_native_templates_are_valid(language):
     for feature in _templated(language):
         probe = probes.build(feature, language)
         verdict = validators.validate(
-            language, probe.source, feature.stage, probe.entry
+            language, probe.source, feature.stage, probe.entry, feature.target
         )
         if not verdict.accepted:
             rejected.append(f"{feature.name}: {verdict.log[:200]}")
