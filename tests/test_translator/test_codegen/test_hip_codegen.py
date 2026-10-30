@@ -3716,6 +3716,38 @@ class TestHipCodeGen:
             in hip_code
         )
 
+    def test_scalar_geometric_builtins_on_parameters_use_math_calls(self):
+        source_code = """
+        shader G {
+            float f(float a, float b, half h, half k, double d, double e) {
+                float x = length(a);
+                float y = distance(a, b);
+                float z = normalize(a);
+                half w = distance(h, k);
+                half v = length(h);
+                half u = normalize(h);
+                double q = distance(d, e) + length(d) + normalize(d);
+                return x + y + z + float(w) + float(v) + float(u) + float(q);
+            }
+        }
+        """
+
+        code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "float x = fabsf(a);" in code
+        assert "float y = fabsf(a - b);" in code
+        assert "float z = (a / fabsf(a));" in code
+        assert (
+            "half w = __float2half(fabsf(__half2float(h) - __half2float(k)));" in code
+        )
+        assert "half v = __float2half(fabsf(__half2float(h)));" in code
+        assert (
+            "half u = __float2half(__half2float(h) / fabsf(__half2float(h)));" in code
+        )
+        assert "double q = ((fabs(d - e) + fabs(d)) + (d / fabs(d)));" in code
+        for bare in ("length(a)", "distance(a, b)", "normalize(a)", "distance(h, k)"):
+            assert f" = {bare};" not in code
+
     def test_vector_atan2_builtin_lowers_componentwise(self):
         source_code = """
         shader TestShader {
