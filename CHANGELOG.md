@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- WGSL output converts the `length()` of a storage buffer or `StructuredBuffer` to `u32` when assigned to a `uint` variable or argument, resolving the type mismatch that naga rejected (#3617).
 - CUDA and HIP input keep the leading and trailing underscores of a structure name, such as `Pair_` or `__pair_base`, so the declaration has the name its variables and parameters use. They used to strip them from the declaration only, so every target refused the program with `UndeclaredTypeError`.
 
 ---
