@@ -1362,7 +1362,16 @@ class _Lowering:
             ):
                 raise ResourceAggregateError("pointer-contract-mismatch", node)
 
-    def helper(self, pointer, operation, origins=None):
+    def helper(
+        self, pointer, operation, origins=None, members=(), operator="=", value=None
+    ):
+        """The access helper for ``operation`` through ``pointer``.
+
+        A store with ``members`` writes that member path of the element in
+        place with ``operator`` and returns the member, whose type ``value``
+        names, so a swizzle or field store leaves the element's other members
+        untouched, as the source store does.
+        """
         pointer = _Pointer(
             pointer.element, pointer.space, pointer.writable, pointer.readable
         )
@@ -1371,7 +1380,7 @@ class _Lowering:
             "store",
         }:
             origins = None
-        key = pointer, operation, origins
+        key = (pointer, operation, origins, *((members, operator) if members else ()))
         if key in self.helpers:
             return self.helpers[key]
         storage = (
@@ -1406,7 +1415,11 @@ class _Lowering:
             if operation == "store":
                 if not pointer.writable:
                     raise ResourceAggregateError("write-through-readonly-pointer")
-                params.append(ParameterNode("value", PrimitiveType(pointer.element)))
+                params.append(
+                    ParameterNode(
+                        "value", value if members else PrimitiveType(pointer.element)
+                    )
+                )
             params.extend(self.resource_parameters())
             # Read-only loads also read the storage views of this element.
             viewed = set()
@@ -1433,6 +1446,9 @@ class _Lowering:
                 )
                 if element == pointer.element:
                     access = ArrayAccessNode(_id(resource_name), position)
+                elif members:
+                    # A member of a storage view's element has no storage.
+                    raise ResourceAggregateError("member-write-through-storage-view")
                 elif storage_view(element, pointer.element) is not None:
                     access = view_load(
                         storage_view(element, pointer.element),
@@ -1446,12 +1462,15 @@ class _Lowering:
                         _id(resource_name),
                         position,
                     )
+                written = access
+                for member in members:
+                    written = _member(written, member)
                 statements = (
                     [ReturnNode(access)]
                     if operation == "load"
                     else [
-                        AssignmentNode(access, _id("value")),
-                        ReturnNode(_id("value")),
+                        AssignmentNode(written, _id("value"), operator),
+                        ReturnNode(deepcopy(written) if members else _id("value")),
                     ]
                 )
                 # Every handle originates at one of these compatible bindings.
@@ -1468,7 +1487,7 @@ class _Lowering:
                             BlockNode(statements),
                         )
                     )
-            result_type = PrimitiveType(pointer.element)
+            result_type = value if members else PrimitiveType(pointer.element)
         function = FunctionNode(name, result_type, params, BlockNode(body))
         function.resource_aggregate_nonmutating = operation in {"make", "shift", "load"}
         self.generated.append(function)
@@ -2027,6 +2046,37 @@ class _Lowering:
                     ],
                 )
             target_type = self.infer(node.target, env)
+            members, element = [], node.target
+            while isinstance(element, MemberAccessNode):
+                members.append(element.member)
+                element = element.object_expr
+            access = self.access(element, env) if members else None
+            if access is not None:
+                # A member or swizzle of a storage element: helper loads are
+                # values, so the store helper writes the member in place.
+                pointer, owner, index = access
+                origins = self.resource_origins.get(id(owner))
+                helper = self.helper(
+                    pointer,
+                    "store",
+                    origins,
+                    tuple(reversed(members)),
+                    node.operator,
+                    self.target_type(target_type),
+                )
+                return _call(
+                    helper,
+                    [
+                        self.expression(owner, env),
+                        _call("int64_t", [self.expression(index, env)]),
+                        self.expression(
+                            node.value,
+                            env,
+                            target_type if node.operator == "=" else None,
+                        ),
+                        *self.resource_arguments(),
+                    ],
+                )
             target = self.expression(node.target, env)
             value = self.expression(
                 node.value, env, target_type if node.operator == "=" else None

@@ -15,6 +15,7 @@ constructor of the output structure.
 from __future__ import annotations
 
 from ..ast import AssignmentNode, IdentifierNode
+from .glsl_stage_builtin_members import note_builtin_store
 
 __all__ = [
     "builtin_output_value",
@@ -25,20 +26,43 @@ __all__ = [
 
 
 # GLSL built-in outputs declared with a signed type whatever the CrossGL member naming them holds: GLSL 4.60
-# section 7.1.2 declares ``out int gl_SampleMask[]``.
-_SIGNED_BUILTIN_OUTPUTS = frozenset({"gl_SampleMask[0]"})
+# section 7.1.2 declares ``out int gl_SampleMask[]``, and sections 7.1.1 and 7.1.4 (with
+# GL_ARB_shader_viewport_layer_array for the vertex stage) ``out int gl_Layer`` and ``out int gl_ViewportIndex``.
+_SIGNED_BUILTIN_OUTPUTS = frozenset(
+    {"gl_SampleMask[0]", "gl_Layer", "gl_ViewportIndex"}
+)
 
 
 def builtin_output_value(codegen, output_name, rendered, value_type):
     """``rendered``, a value of ``value_type``, converted for storing into the stage output ``output_name``.
 
-    A uint sample mask is stored as an int; GLSL's uint-to-int conversion keeps its bits (section 5.4.1).
+    A uint sample mask, layer or viewport index is stored as an int; GLSL's uint-to-int conversion keeps its bits
+    (section 5.4.1).
     """
+    note_builtin_store(codegen, output_name)
     if output_name not in _SIGNED_BUILTIN_OUTPUTS:
         return rendered
     if value_type and codegen.map_type(value_type) == "int":
         return rendered
+    if _is_int_conversion(rendered):
+        return rendered
     return f"int({rendered})"
+
+
+def _is_int_conversion(rendered):
+    """Whether ``rendered`` is one ``int(...)`` call, as a store converted for its expected type already is."""
+    text = str(rendered).strip()
+    if not text.startswith("int(") or not text.endswith(")"):
+        return False
+    depth = 0
+    for index, character in enumerate(text[3:], start=3):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return index == len(text) - 1
+    return False
 
 
 def flattened_stage_output_assignment(codegen, expression):

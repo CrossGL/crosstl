@@ -12,7 +12,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from . import execution, probes, rustgpu, spirv_input, validators
+from . import decorations, execution, probes, rustgpu, spirv_input, validators
 from .features.spirv import is_core
 from .model import ROUND_TRIPS, Feature, Result, kept_folder
 from .semantic import lower
@@ -280,6 +280,9 @@ def run_output(feature: Feature, language: str) -> Result:
     verdict = _validated(language, translated, feature.stage, "", feature.target)
     if not verdict.accepted:
         return result("wrong", verdict.log)
+    lost = decorations.lost(feature, language, translated)
+    if lost:
+        return result("wrong", lost)
     ignored = (
         spirv_input.ignores_nan(feature, translated) if language == "spirv" else ""
     )
@@ -365,6 +368,9 @@ def run_input(feature: Feature, language: str) -> Result:
     lost = spirv_input.dropped(feature, translated) if language == "spirv" else ""
     if lost and not _encodes_otherwise(feature):
         return result("wrong", lost)
+    lost = decorations.lost(feature, emitted, translated)
+    if lost:
+        return result("wrong", f"after the round trip: {lost}")
     if emitted == language and _runs(feature, language):
         return replace(result("supported"), sources=(probe.source, translated))
     return result("supported")

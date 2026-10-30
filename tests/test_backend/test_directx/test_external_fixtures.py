@@ -792,7 +792,7 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "vec4 vecret(mat2 pmat @ M, vec4 pvec @ V) @ gl_FragColor",
-            "return pmat , pvec;",
+            "return (pmat, pvec);",
             "mat2 matret(mat2 pmat @ M, vec4 pvec @ V)",
         ),
     ),
