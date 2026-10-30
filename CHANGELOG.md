@@ -57,8 +57,6 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
-- WGSL output lowers the three-argument `texture(sampler, coords, bias)` form to `textureSampleBias` with the split sampler the declaration provides, instead of copying the bias as a third `textureSample` argument, which naga rejects. A bias in a compute stage, which has no derivatives, and a bias on a sampled texture array are refused with a clear error.
-
 - HIP output lowers `ptr<T>` helper parameters imported from HIP or CUDA to native pointer types instead of emitting the CrossGL spelling unchanged.
 
 - CrossGL accepts an empty statement, a `;` on its own, which it used to refuse with `CrossGLFunctionBodyParseError`, so every target refused a function containing one. A switch whose last `case` or `default` label is followed by no statement now leaves the switch there with `break;`; Metal and GLSL ES output used to end the switch on the bare label, which the Metal compiler and GLSL ES 3.00 refuse.
@@ -133,6 +131,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - Function-scope `static` variables keep their value across calls on every target, and HLSL output keeps the initializers of static globals.
 - HIP output keeps `static` and `const` on variable declarations, as CUDA output does, so an HLSL `static const int N = 3;` stays a constant that kernels can read and use as an array size. It used to be written as `int N = 3;`, a mutable host variable that hipcc rejects in device code and as the size of `float a[N]`.
 - WGSL output of `texture()`, `textureLod()`, `texelFetch()` and `texelFetchOffset()` on 2D array and cube array textures passes the layer as its own `array_index` argument, as WGSL requires. It used to leave the layer inside the coordinate, so naga rejected the output. Sampled lookups round the layer with `floor(layer + 0.5)`, as GLSL does.
+- WGSL output writes the bias form of `texture()`, `texture(s, coords, bias)`, as `textureSampleBias(s, s_sampler, coords, bias)` with the texture's split sampler, passing the layer of a 2D array or cube array texture as its own argument and converting an integer bias with `f32()`. It used to write `textureSample(s, coords, bias)`, which passes the coordinate as the sampler and the bias as the coordinate, so naga rejected the output (#2462). A bias on a 1D texture, which `textureSampleBias` has no overload for, or on an element of a sampled texture array selected at run time is refused with `WGSLTextureBiasUnsupportedError`, and a bias in a compute stage, which has no derivatives, with `ImplicitLodStageUnsupportedError`, as in a vertex stage.
 - Vector `&&` and `||` combine per component on every target. HLSL 2021 and WGSL output used to be invalid, and GLSL refused it.
 - Metal output of HLSL vertex inputs that mix attributes with built-ins such as `SV_VertexID` compiles, and an `int` `SV_VertexID` is accepted.
 - Metal fragment parameters whose members carry `[[color(n)]]` read colour attachments on every target, or are refused where the target has no framebuffer fetch. They used to become ordinary inputs. A default-constructed Metal `sampler` gets MSL's default sampler state.
