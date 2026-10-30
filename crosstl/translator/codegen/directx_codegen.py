@@ -521,6 +521,7 @@ from .pointer_reinterpret import (
     same_scalar_lane_view,
     scalar_storage_layout,
 )
+from .private_member_views import hlsl_aliased_scalar_view, hlsl_member_view_root
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases, references_provably_disjoint
 from .relational_builtins import lower_relational_builtins
@@ -596,7 +597,12 @@ from .texture_residency import (
     TEXTURE_RESIDENT_OPERATION,
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
-from .union_layout import UnionLayoutCollector
+from .union_lanes import (
+    hlsl_lane_call,
+    hlsl_lane_helper_definitions,
+    hlsl_lane_helpers,
+)
+from .union_layout import UnionLayoutCollector, is_lane_kind
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 # Specialization contract for a workgroup pointer parameter bound to ``nullptr``.
@@ -4359,6 +4365,7 @@ class HLSLCodeGen(
         )
         self.remove_hlsl_static_struct_member_types(structs)
         self.hlsl_union_layouts = self.collect_hlsl_union_layouts(structs)
+        self.hlsl_union_lanes = hlsl_lane_helpers(self)
         self.refresh_hlsl_fixed_array_return_struct_member_types()
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
@@ -10381,7 +10388,7 @@ bool __crossgl_union_set_bool4_lane(
 }
 
 """
-        return code
+        return code + hlsl_lane_helper_definitions(self)
 
     def generate_hlsl_complex64_helpers(self):
         if not getattr(self, "required_hlsl_complex64_helpers", set()):
@@ -11128,6 +11135,8 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         info = self.hlsl_union_array_access_info(expression)
         if info is None:
             return None
+        if is_lane_kind(info["member"]["kind"]):
+            return hlsl_lane_call(self, info, "get")
         storage = self.hlsl_union_storage_expression(info, info["index"])
         kind = info["member"]["kind"]
         if kind == "uint32_array":
@@ -11247,6 +11256,15 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         array_info = self.hlsl_union_array_access_info(target)
         if array_info is not None:
             kind = array_info["member"]["kind"]
+            if is_lane_kind(kind):
+                if operator != "=":
+                    raise self.hlsl_union_usage_error(
+                        array_info,
+                        target,
+                        "lane-compound-write-unsupported",
+                        "compound lane writes need a read-modify-write contract",
+                    )
+                return hlsl_lane_call(self, array_info, "set", value)
             storage = self.hlsl_union_storage_expression(
                 array_info, array_info["index"]
             )
@@ -20283,6 +20301,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "offset": "0",
                         "root_kind": "scalar",
                     }
+            if isinstance(operand, MemberAccessNode):
+                excluded = (
+                    set(local_extents)
+                    | set(scalar_parameters)
+                    | set(self.current_hlsl_private_pointer_base_names)
+                )
+                if hlsl_member_view_root(self, operand, excluded) is None:
+                    return None
+                return {
+                    "backing": self.generate_expression(operand),
+                    "offset": "0",
+                    "root_kind": "scalar",
+                    "member_view": True,
+                }
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.hlsl_private_pointer_view_binding(operand.array)
@@ -43495,6 +43527,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             scalar_parameters[call["callee"]].add(parameter_name)
                             changed = True
         self.function_private_pointer_scalar_parameters = scalar_parameters
+        aliased = hlsl_aliased_scalar_view(view_calls, scalar_parameters)
+        if aliased is not None:
+            call, first, second, root = aliased
+            raise DirectXPrivatePointerParameterError(
+                f"DirectX private pointer call to '{call['callee']}' binds "
+                f"parameters '{first}' and '{second}' to the same backing object "
+                f"'{root}'; HLSL inout copy-out cannot preserve aliased views",
+                function_name=call["callee"],
+                parameter_name=second,
+                reason="aliased-view-backing",
+                source_location=getattr(call.get("node"), "source_location", None),
+            )
 
         for calls in view_calls.values():
             for call in calls:
@@ -44284,6 +44328,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "offset": (0, 0),
                         "side_effecting": False,
                     }
+            if isinstance(operand, MemberAccessNode):
+                root = hlsl_member_view_root(
+                    self, operand, set(parameter_names) | set(local_extents)
+                )
+                if root is None:
+                    return None
+                return {
+                    "root_kind": "scalar",
+                    "root": root,
+                    "extent": 1,
+                    "offset": (0, 0),
+                    "side_effecting": False,
+                    "member_view": True,
+                }
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.hlsl_private_pointer_static_binding(

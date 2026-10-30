@@ -523,6 +523,11 @@ from .pointer_reinterpret import (
     same_scalar_lane_view,
     scalar_storage_layout,
 )
+from .private_member_views import (
+    glsl_member_view_root,
+    is_single_object_type,
+    member_view_chain,
+)
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases
 from .relational_builtins import glsl_vector_logical_not
@@ -51460,11 +51465,11 @@ complex64_t crossgl_complex64_mod_assign(
                 "unsupported-private-byte-view",
                 "the destination is not a supported 8-, 16-, or 32-bit scalar view",
             )
-        if binding.get("root_kind") != "scalar" or binding.get("offset") not in {
-            0,
-            "0",
-            "0u",
-        }:
+        if (
+            binding.get("root_kind") != "scalar"
+            or binding.get("member_view")
+            or binding.get("offset") not in {0, "0", "0u"}
+        ):
             self.glsl_private_pointer_byte_view_error(
                 expression,
                 source_type,
@@ -53485,6 +53490,13 @@ complex64_t crossgl_complex64_mod_assign(
                 if binding is not None and binding.get("root_kind") == "scalar_value":
                     binding["root_kind"] = "scalar"
                     return binding
+            if isinstance(operand, MemberAccessNode):
+                root, _members = member_view_chain(operand)
+                return glsl_member_view_root(
+                    self,
+                    operand,
+                    (lexical_bindings or {}).get(root),
+                )
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.glsl_private_pointer_static_binding(
@@ -55358,6 +55370,27 @@ complex64_t crossgl_complex64_mod_assign(
             return base
         return f"({base} + {delta})"
 
+    def glsl_private_pointer_member_view_binding(self, operand):
+        """Bind ``&root.member`` to the member lvalue of a private value."""
+        root, _members = member_view_chain(operand)
+        source_type = self.local_variable_source_types.get(root)
+        if source_type is None:
+            source_type = self.local_variable_types.get(root)
+        if not is_single_object_type(self.type_name_string(source_type)):
+            return None
+        binding = glsl_member_view_root(
+            self, operand, {"root_kind": "scalar_value", "root": root}
+        )
+        if binding is None:
+            return None
+        return {
+            "backing": self.generate_expression(operand),
+            "offset": "0",
+            "root_kind": "scalar",
+            "source_type": binding["source_type"],
+            "member_view": True,
+        }
+
     def glsl_private_pointer_view_binding(self, expression):
         function_name = self.current_glsl_private_pointer_function_name
         local_arrays = self.function_private_pointer_local_arrays.get(function_name, {})
@@ -55452,6 +55485,8 @@ complex64_t crossgl_complex64_mod_assign(
                         "root_kind": "scalar",
                         "source_type": source_type,
                     }
+            if isinstance(operand, MemberAccessNode):
+                return self.glsl_private_pointer_member_view_binding(operand)
             if not isinstance(operand, ArrayAccessNode):
                 return None
             binding = self.glsl_private_pointer_view_binding(operand.array)

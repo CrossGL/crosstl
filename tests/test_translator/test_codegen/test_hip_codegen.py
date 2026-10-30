@@ -1858,6 +1858,15 @@ class TestHipCodeGen:
                     f16vec3 g = pow(h, s);
                     return a + b.xyz + c + d + g;
                 }
+                f16vec2 f2(f16vec2 h, f16vec2 e, half s) {
+                    f16vec2 a = sin(h);
+                    f16vec2 b = exp2(h);
+                    f16vec2 c = inversesqrt(h);
+                    f16vec2 d = pow(h, e);
+                    f16vec2 g = pow(h, s);
+                    f16vec2 fl = floor(h);
+                    return a + b + c + d + g + fl;
+                }
             }
         }
         """
@@ -1870,6 +1879,12 @@ class TestHipCodeGen:
         assert "cgl_half3 c = cgl_cgl_half3_inversesqrt(h);" in hip_code
         assert "cgl_half3 d = cgl_cgl_half3_pow_vector(h, e);" in hip_code
         assert "cgl_half3 g = cgl_cgl_half3_pow_scalar(h, s);" in hip_code
+        assert "half2 a = cgl_half2_sin(h);" in hip_code
+        assert "half2 b = cgl_half2_exp2(h);" in hip_code
+        assert "half2 c = cgl_half2_inversesqrt(h);" in hip_code
+        assert "half2 d = cgl_half2_pow_vector(h, e);" in hip_code
+        assert "half2 g = cgl_half2_pow_scalar(h, s);" in hip_code
+        assert "half2 fl = cgl_half2_floor(h);" in hip_code
         assert "__float2half(sinf(__half2float(value.x)))" in hip_code
         assert "__float2half(rsqrtf(__half2float(value.z)))" in hip_code
         assert (
@@ -1880,9 +1895,36 @@ class TestHipCodeGen:
             "__device__ inline cgl_half3 cgl_cgl_half3_pow_scalar"
             "(cgl_half3 base, half exponent)" in hip_code
         )
+        assert (
+            "__floats2half2_rn(sinf(__half2float(value.x)), sinf(__half2float(value.y)))"
+            in hip_code
+        )
+        assert (
+            "__floats2half2_rn(exp2f(__half2float(value.x)), exp2f(__half2float(value.y)))"
+            in hip_code
+        )
+        assert (
+            "__floats2half2_rn(rsqrtf(__half2float(value.x)), rsqrtf(__half2float(value.y)))"
+            in hip_code
+        )
+        assert (
+            "__floats2half2_rn(powf(__half2float(base.x), __half2float(exponent.x)), "
+            "powf(__half2float(base.y), __half2float(exponent.y)))" in hip_code
+        )
+        assert (
+            "__floats2half2_rn(powf(__half2float(base.x), __half2float(exponent)), "
+            "powf(__half2float(base.y), __half2float(exponent)))" in hip_code
+        )
+        assert (
+            "__floats2half2_rn(floorf(__half2float(value.x)), floorf(__half2float(value.y)))"
+            in hip_code
+        )
         assert "sinf(h)" not in hip_code
         assert "expf(q)" not in hip_code
+        assert "exp2f(h)" not in hip_code
+        assert "rsqrtf(h)" not in hip_code
         assert "powf(h" not in hip_code
+        assert "floorf(h)" not in hip_code
 
     def test_half_vector_mix_fract_step_atan_fma_use_float_helpers(self):
         source_code = """
@@ -14647,3 +14689,64 @@ def test_hip_half_vector_constructor_splats_a_half_cast():
 
     assert "return cgl_cgl_half3_splat(__float2half(x));" in hip_code
     assert "cgl_make_half3(__float2half(x))" not in hip_code
+
+
+def test_hip_keeps_static_and_const_on_hlsl_constants(tmp_path):
+    import crosstl
+
+    shader = tmp_path / "constants.hlsl"
+    shader.write_text("""
+RWStructuredBuffer<float> results : register(u0);
+static const int N = 3;
+[numthreads(1, 1, 1)]
+void main() {
+    const float scale = 2.0;
+    float a[N] = { 1.0, 2.0, 3.0 };
+    results[0] = a[N - 1] * scale;
+}
+""")
+    hip_code = crosstl.translate(str(shader), backend="hip")
+
+    assert "static const int N = 3;" in hip_code
+    assert "\nint N = 3;" not in hip_code
+    assert "const float scale = 2.0f;" in hip_code
+
+
+def test_hip_const_resource_pointer_is_not_qualified_twice():
+    source_code = """
+    shader ReadOnly {
+        compute {
+            const buffer float* values;
+            void main() {
+                float x = values[0];
+            }
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "const const" not in hip_code
+
+
+def test_hip_const_match_expression_local_stays_assignable():
+    source_code = """
+    shader ConstMatch {
+        compute {
+            buffer int* outv;
+            void main() {
+                int mode = outv[1];
+                const int value = match mode {
+                    0 => 10,
+                    _ => -1,
+                };
+                outv[0] = value;
+            }
+        }
+    }
+    """
+    hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "const int value;" not in hip_code
+    assert "int value;" in hip_code
+    assert "value = 10;" in hip_code
+    assert "value = -1;" in hip_code

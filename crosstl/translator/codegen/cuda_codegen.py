@@ -39,7 +39,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
-from .c_family_operands import postfix_operand
+from .c_family_operands import postfix_operand, prefix_unary_operand
 from .c_float_literals import c_float_literal_text
 from .c_pointer_math import generate_pointer_math_call
 from .c_reference_parameters import (
@@ -3261,7 +3261,7 @@ class CudaCodeGen(
         lowered = self.lower_vector_unary_operation(node.operand, operand, operator)
         if lowered is not None:
             return lowered
-        return f"{operator}{operand}"
+        return f"{operator}{prefix_unary_operand(operator, operand)}"
 
     def visit_ConstructorNode(self, node):
         """Lower braced AST constructors to CUDA aggregate/value constructors."""
