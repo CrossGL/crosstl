@@ -5,6 +5,7 @@ import re
 import pytest
 
 import crosstl
+from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.reference_parameters import (
     ReferenceParameterError,
     reference_kind,
@@ -55,6 +56,31 @@ def _signatures(code):
         match.group(1): match.group(0)
         for match in re.finditer(r"^\S+ (\w+)\([^)]*\)", code, re.MULTILINE)
     }
+
+
+@pytest.mark.parametrize("extension", ["cu", "hip"])
+@pytest.mark.parametrize("record_name", ["Pair_", "_Half"])
+def test_record_type_underscores_are_preserved_on_import(
+    tmp_path, extension, record_name
+):
+    path = tmp_path / f"record.{extension}"
+    path.write_text(
+        f"struct {record_name} {{ float a; }};\n"
+        f"__global__ void probe(float* outp) {{\n"
+        f"    {record_name} t;\n"
+        "    t.a = 2.0f;\n"
+        "    outp[0] = t.a;\n"
+        "}\n"
+    )
+    crossgl = crosstl.translate(str(path), backend="cgl", format_output=False)
+    assert f"struct {record_name}" in crossgl
+    assert f"var t: {record_name}" in crossgl
+
+
+def test_non_ascii_type_name_sanitizes_to_crossgl_identifier():
+    converter = CudaToCrossGLConverter()
+    sanitized = converter.sanitize_crossgl_type_identifier("café")
+    assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", sanitized)
 
 
 @pytest.mark.parametrize("extension", ["cu", "hip"])
