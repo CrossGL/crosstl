@@ -1864,6 +1864,35 @@ def test_wgsl_codegen_maps_pointer_buffer_length_to_array_length():
     assert "outp.length()" not in generated
 
 
+def test_wgsl_codegen_passes_buffer_pointer_parameter_to_array_length():
+    # A `buffer float*` helper parameter is already a pointer to the storage
+    # array, so arrayLength takes it as it is; `&values` is not a reference.
+    # naga 30 refuses storage pointer parameters themselves (they need WGSL's
+    # unrestricted_pointer_parameters extension), so only the text is pinned.
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            int count(buffer float* values) {
+                return values.length();
+            }
+            void main() {
+                outp[0] = float(count(outp));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn count(values: ptr<storage, array<f32>, read_write>) -> i32 {" in (
+        generated
+    )
+    assert "return i32(arrayLength(values));" in generated
+    assert "outp[0] = f32(count(&outp));" in generated
+
+
 @pytest.mark.parametrize(
     ("statement", "expected"),
     [
