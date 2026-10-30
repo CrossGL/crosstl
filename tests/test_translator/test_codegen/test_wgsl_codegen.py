@@ -2445,6 +2445,57 @@ def test_wgsl_codegen_lowers_explicit_sampler_texture_calls():
     assert "return textureSample(colorTex, linearSampler, uv);" in generated
 
 
+def test_wgsl_codegen_lowers_texture_bias_to_texture_sample_bias(tmp_path):
+    # A three-argument texture() whose second argument is a coordinate, not a
+    # sampler, is GLSL's bias form; the split sampler is used and the bias
+    # goes to textureSampleBias (issue #2462).
+    code = """
+    shader Probe {
+        struct FragmentInput {
+            vec2 uv;
+        }
+        struct FragmentOutput {
+            vec4 color;
+        }
+        fragment {
+            buffer float* fin;
+            uniform sampler2D u0;
+            FragmentOutput main(FragmentInput input) {
+                FragmentOutput output;
+                output.color = texture(u0, input.uv, fin[0]);
+                return output;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(code))
+
+    assert "textureSampleBias(u0, u0_sampler, input.uv, fin[0])" in generated
+    assert "textureSample(u0, input.uv, fin[0])" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_refuses_texture_bias_in_compute():
+    # textureSampleBias needs derivatives, which a compute stage has none of,
+    # so the bias form is refused rather than emitted as invalid WGSL.
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec4* outp;
+            uniform sampler2D u0;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outp[i] = texture(u0, vec2(0.5), fin[0]);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="cannot lower texture\\(\\) with a bias"):
+        WGSLCodeGen().generate(parse_shader(code))
+
+
 def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings():
     shader = """
     shader WGSLTextureResourceArray {

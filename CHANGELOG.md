@@ -57,6 +57,8 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- WGSL output lowers the three-argument `texture(sampler, coords, bias)` form to `textureSampleBias` with the split sampler the declaration provides, instead of copying the bias as a third `textureSample` argument, which naga rejects. A bias in a compute stage, which has no derivatives, and a bias on a sampled texture array are refused with a clear error.
+
 - HIP output lowers `ptr<T>` helper parameters imported from HIP or CUDA to native pointer types instead of emitting the CrossGL spelling unchanged.
 
 - CrossGL accepts an empty statement, a `;` on its own, which it used to refuse with `CrossGLFunctionBodyParseError`, so every target refused a function containing one. A switch whose last `case` or `default` label is followed by no statement now leaves the switch there with `break;`; Metal and GLSL ES output used to end the switch on the bare label, which the Metal compiler and GLSL ES 3.00 refuse.

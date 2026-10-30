@@ -4359,18 +4359,46 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 f"{level_argument})"
             )
         if len(args) == 3:
-            texture, sampler, coords = args
-            sample_function = (
-                "textureSampleLevel"
-                if self._current_stage_name == "compute"
-                else "textureSample"
-            )
-            level_argument = ", 0.0" if sample_function == "textureSampleLevel" else ""
+            texture, second, third = args
+            if self.is_sampler_type(self.expression_type(second)):
+                sample_function = (
+                    "textureSampleLevel"
+                    if self._current_stage_name == "compute"
+                    else "textureSample"
+                )
+                level_argument = (
+                    ", 0.0" if sample_function == "textureSampleLevel" else ""
+                )
+                return (
+                    f"{sample_function}({self.generate_expression(texture)}, "
+                    f"{self.generate_expression(second)}, "
+                    f"{self.sampled_texture_coordinates(texture, third, function_name)}"
+                    f"{level_argument})"
+                )
+            # GLSL texture(sampler, coords, bias): the second argument is the
+            # coordinate, not a sampler, so the split sampler the declaration
+            # provides is used and the bias goes to textureSampleBias
+            # (issue #2462). Bias sampling needs derivatives, which a compute
+            # stage has none of, and sampled texture arrays have no bias form.
+            if self._current_stage_name == "compute":
+                raise ValueError(
+                    "WGSL target cannot lower texture() with a bias in a "
+                    "compute stage; textureSampleBias needs derivatives"
+                )
+            array_info = self.sampled_texture_array_access(texture)
+            if (
+                array_info is not None
+                and self.sampled_texture_array_element_binding(texture) is None
+            ):
+                raise ValueError(
+                    "WGSL target cannot lower texture() with a bias on a "
+                    "sampled texture array"
+                )
             return (
-                f"{sample_function}({self.generate_expression(texture)}, "
-                f"{self.generate_expression(sampler)}, "
-                f"{self.sampled_texture_coordinates(texture, coords, function_name)}"
-                f"{level_argument})"
+                f"textureSampleBias({self.generate_expression(texture)}, "
+                f"{self.texture_sampler_expression(texture)}, "
+                f"{self.sampled_texture_coordinates(texture, second, function_name)}, "
+                f"{self.generate_expression(third)})"
             )
         raise ValueError(
             "WGSL target supports texture() calls with texture/coords or "
