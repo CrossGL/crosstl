@@ -54,6 +54,7 @@ from .member_address_types import (
     merge_receiver_variable_types,
 )
 from .member_lowering_layers import lower_members_with_late_specializations
+from .pattern_cache import pattern as _cached_pattern
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
@@ -4577,8 +4578,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             ignored_spans = self._find_comment_and_literal_spans(text)
             replacements: List[Tuple[int, int, str]] = []
             for alias, alias_template in templates.items():
+                if alias not in text:
+                    # Both patterns below need the alias spelled in the text.
+                    continue
                 patterns = [
-                    re.compile(
+                    _cached_pattern(
                         rf"(?<![A-Za-z0-9_])(?:typename\s+)?"
                         rf"(?:::)?(?:{owner_pattern})"
                         rf"(?:\s*<[^<>{{}}()]*>)?\s*::\s*"
@@ -4587,7 +4591,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 ]
                 if not qualified_only and alias not in (excluded_aliases or set()):
                     patterns.append(
-                        re.compile(rf"(?<![A-Za-z0-9_:]){re.escape(alias)}\s*<")
+                        _cached_pattern(rf"(?<![A-Za-z0-9_:]){re.escape(alias)}\s*<")
                     )
                 for pattern in patterns:
                     for match in pattern.finditer(text):
@@ -4629,18 +4633,23 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         structs: List[_MetalStructDefinition],
     ) -> str:
         rewritten = source
+        templated = [struct for struct in structs if struct.type_alias_templates]
+        if not templated:
+            return rewritten
         owner_name_counts: Dict[str, int] = {}
         for struct in structs:
             owner_name_counts[struct.name] = owner_name_counts.get(struct.name, 0) + 1
-        for struct in structs:
-            if struct.type_alias_templates:
-                rewritten = self._canonicalize_struct_scoped_alias_templates(
-                    rewritten,
-                    struct,
-                    qualified_only=True,
-                    preserve_formatting=True,
-                    allow_unqualified_owner=owner_name_counts[struct.name] == 1,
-                )
+        for struct in templated:
+            if not any(alias in rewritten for alias in struct.type_alias_templates):
+                # Every rewrite needs an alias template spelled in the text.
+                continue
+            rewritten = self._canonicalize_struct_scoped_alias_templates(
+                rewritten,
+                struct,
+                qualified_only=True,
+                preserve_formatting=True,
+                allow_unqualified_owner=owner_name_counts[struct.name] == 1,
+            )
         return rewritten
 
     def _canonicalize_struct_static_alias_owners(self, code: str) -> str:
@@ -4735,8 +4744,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 for part in parts
             )
 
-        rules: List[Tuple[re.Pattern[str], str]] = []
-        for struct in aliased_structs:
+        # Every rule rewrites ``Owner::alias``, so a rule can match only text that spells its alias. Rules are built
+        # in a fixed order as their aliases appear in the text; each owner's patterns and each alias's target are
+        # resolved at most once per call.
+        candidates: List[Tuple[_MetalStructDefinition, str]] = [
+            (struct, alias)
+            for struct in aliased_structs
+            for alias in struct.type_aliases
+            if alias not in struct.type_alias_templates
+        ]
+        if not candidates:
+            return source
+        owners_by_struct: Dict[int, List[str]] = {}
+        targets: Dict[int, Optional[str]] = {}
+
+        def owner_patterns_of(struct: _MetalStructDefinition) -> List[str]:
+            owners = owners_by_struct.get(id(struct))
+            if owners is not None:
+                return owners
             owner_patterns = (
                 {type_pattern(struct.qualified_name)}
                 if struct.qualified_name
@@ -4750,20 +4775,27 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 owner_patterns.add(
                     type_pattern(f"{source_name}<{', '.join(source_arguments)}>")
                 )
-            for alias in struct.type_aliases:
-                if alias in struct.type_alias_templates:
+            owners = owners_by_struct[id(struct)] = sorted(owner_patterns)
+            return owners
+
+        def rules_for(text: str) -> List[Tuple[re.Pattern[str], str]]:
+            rules: List[Tuple[re.Pattern[str], str]] = []
+            for index, (struct, alias) in enumerate(candidates):
+                if alias not in text:
                     continue
-                target = self._canonicalize_struct_scoped_type(
-                    alias,
-                    struct,
-                    structs_by_name,
-                )
+                if index not in targets:
+                    targets[index] = self._canonicalize_struct_scoped_type(
+                        alias,
+                        struct,
+                        structs_by_name,
+                    )
+                target = targets[index]
                 if not target or target == alias:
                     continue
-                for owner_pattern in owner_patterns:
+                for owner_pattern in owner_patterns_of(struct):
                     rules.append(
                         (
-                            re.compile(
+                            _cached_pattern(
                                 rf"(?<![A-Za-z0-9_:])(?:typename\s+)?"
                                 rf"(?:::)?{owner_pattern}\s*::\s*"
                                 rf"{re.escape(alias)}\b"
@@ -4771,11 +4803,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                             target,
                         )
                     )
-        if not rules:
-            return source
+            return rules
 
         rewritten = source
-        for _ in range(len(rules) + 1):
+        # A struct has at most three owner spellings, so this bounds the rule count.
+        for _ in range(3 * len(candidates) + 1):
+            rules = rules_for(rewritten)
+            if not rules:
+                break
             ignored_spans = self._find_comment_and_literal_spans(rewritten)
             replacements: List[Tuple[int, int, str]] = []
             for pattern, target in rules:
@@ -4833,7 +4868,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             re.escape(owner) for owner in sorted(owner_names, key=len, reverse=True)
         )
         for alias in sorted(all_type_aliases, key=len, reverse=True):
-            qualified_alias = re.compile(
+            if alias not in text:
+                continue
+            qualified_alias = _cached_pattern(
                 rf"(?<![A-Za-z0-9_])"
                 rf"(?:(?:[A-Za-z_]\w*)\s*::\s*)*"
                 rf"(?:{owner_pattern})(?:\s*<[^<>{{}}()]*>)?\s*::\s*"
@@ -4861,26 +4898,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         for _ in range(len(type_aliases) + 2):
             previous = text
             for alias in sorted(type_aliases, key=len, reverse=True):
+                if alias not in text:
+                    # Each rewrite below needs the alias spelled in the text.
+                    continue
                 owner = struct_alias_target(alias, set())
+                escaped = re.escape(alias)
                 if owner is not None:
-                    text = re.sub(
-                        rf"(?<![A-Za-z0-9_:]){re.escape(alias)}(?=::)",
-                        owner,
-                        text,
+                    text = _cached_pattern(rf"(?<![A-Za-z0-9_:]){escaped}(?=::)").sub(
+                        owner, text
                     )
-                text = re.sub(
-                    rf"(?<![A-Za-z0-9_:]){re.escape(alias)}(?=\s*<)",
-                    f"{struct.name}::{alias}",
-                    text,
+                text = _cached_pattern(rf"(?<![A-Za-z0-9_:]){escaped}(?=\s*<)").sub(
+                    f"{struct.name}::{alias}", text
                 )
                 target = type_aliases[alias]
                 target = re.sub(r"^typename\s+", "", target).strip()
                 target = re.sub(r"::template\s+", "::", target)
-                text = re.sub(
-                    rf"(?<![A-Za-z0-9_:]){re.escape(alias)}(?![A-Za-z0-9_<])",
-                    target,
-                    text,
-                )
+                text = _cached_pattern(
+                    rf"(?<![A-Za-z0-9_:]){escaped}(?![A-Za-z0-9_<])"
+                ).sub(target, text)
             if text == previous:
                 break
         text = self._canonicalize_qualified_struct_alias_templates(
