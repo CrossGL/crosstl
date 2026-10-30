@@ -3464,7 +3464,11 @@ class WGSLCodeGen(
         return text
 
     def generate_array_length_call(self, node):
-        """GLSL ``array.length()`` (GLSL 4.60 section 4.1.9) as an i32: ``arrayLength`` or the declared size."""
+        """GLSL ``array.length()`` (GLSL 4.60 section 4.1.9) as an i32: ``arrayLength`` or the declared size.
+
+        StructuredBuffer / RWStructuredBuffer also lower to runtime-sized storage
+        arrays in WGSL, so ``values.length()`` uses the same ``arrayLength`` form.
+        """
         function = node.function
         if not (
             isinstance(function, MemberAccessNode)
@@ -3473,13 +3477,20 @@ class WGSLCodeGen(
         ):
             return None
         array_type = self.expression_type(function.object_expr)
-        if not isinstance(array_type, ArrayType):
-            return None
-        if array_type.size is None:
-            return (
-                f"i32(arrayLength(&{self.generate_expression(function.object_expr)}))"
-            )
-        return f"i32({self.generate_expression(array_type.size)})"
+        if isinstance(array_type, ArrayType):
+            if array_type.size is None:
+                return (
+                    f"i32(arrayLength(&{self.generate_expression(function.object_expr)}))"
+                )
+            return f"i32({self.generate_expression(array_type.size)})"
+        if isinstance(array_type, NamedType):
+            base_name = str(array_type.name).lower()
+            if base_name in self.STRUCTURED_BUFFER_TYPE_NAMES:
+                # Module-scope StructuredBuffer lowers to var<storage, …> array<T>.
+                return (
+                    f"i32(arrayLength(&{self.generate_expression(function.object_expr)}))"
+                )
+        return None
 
     def specialize_generic_function_call(self, node):
         specializer = self._generic_function_specializer

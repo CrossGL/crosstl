@@ -1831,11 +1831,13 @@ def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
             int items[];
         };
         StructuredBuffer<float> values;
+        RWStructuredBuffer<float> outp;
         Block block @glsl_buffer_block(std430) @set(0) @binding(1) @readonly;
         compute {
             void main() {
                 uint count = buffer_dimensions(values);
                 int items = block.items.length();
+                outp[0] = float(values.length()) + float(outp.length());
                 return;
             }
         }
@@ -1846,6 +1848,8 @@ def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
 
     assert "arrayLength(&values)" in generated
     assert "i32(arrayLength(&block.items))" in generated
+    assert "i32(arrayLength(&outp))" in generated
+    assert "f32(i32(arrayLength(&values)))" in generated or "i32(arrayLength(&values))" in generated
     assert "buffer_dimensions" not in generated
     assert ".length()" not in generated
 
