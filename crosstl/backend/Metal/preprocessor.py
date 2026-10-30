@@ -116,7 +116,7 @@ METAL_ANGLE_OPERATOR_RE = re.compile(
     r"(?:<<=|>>=|<=>|<<|>>|<=|>=|<|>)"
 )
 METAL_STATEMENT_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
-METAL_TEMPLATE_DELIMITER_RE = re.compile(r"[()\[\]<>{}\"'/]")
+METAL_TEMPLATE_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
 METAL_COMMENT_LITERAL_RE = re.compile(r"[\"'/]")
 METAL_SCOPE_DELIMITER_RE = re.compile(r"[{}\"'/]")
 METAL_NAMESPACE_DELIMITER_RE = re.compile(r"namespace|[{}\"'/]")
@@ -29414,6 +29414,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         nested in parentheses/brackets/braces cannot close an outer template-id.
         Any unmatched ``<`` opened inside a closing value-expression delimiter is
         a comparison and is discarded; a valid nested template-id closes first.
+
+        A template argument list is balanced, so a closing delimiter that has no
+        opener after ``start``, or a ``;`` outside braces, ends the search: the
+        ``<`` at ``start`` is a comparison, and scanning on would cost the rest
+        of the module for every comparison a caller probes.
         """
         if start < 0 or start >= len(code) or code[start] != "<":
             return None
@@ -29453,23 +29458,31 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if character == "(":
                 paren_depth += 1
             elif character == ")":
+                if paren_depth == 0:
+                    return None
                 while len(angle_contexts) > 1 and angle_contexts[-1][0] >= paren_depth:
                     angle_contexts.pop()
-                paren_depth = max(0, paren_depth - 1)
+                paren_depth -= 1
             elif character == "[":
                 bracket_depth += 1
             elif character == "]":
+                if bracket_depth == 0:
+                    return None
                 while (
                     len(angle_contexts) > 1 and angle_contexts[-1][1] >= bracket_depth
                 ):
                     angle_contexts.pop()
-                bracket_depth = max(0, bracket_depth - 1)
+                bracket_depth -= 1
             elif character == "{":
                 brace_depth += 1
             elif character == "}":
+                if brace_depth == 0:
+                    return None
                 while len(angle_contexts) > 1 and angle_contexts[-1][2] >= brace_depth:
                     angle_contexts.pop()
-                brace_depth = max(0, brace_depth - 1)
+                brace_depth -= 1
+            elif character == ";" and brace_depth == 0:
+                return None
             elif character == "<":
                 angle_contexts.append(context)
             elif character == ">" and angle_contexts[-1] == context:

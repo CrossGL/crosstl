@@ -170,6 +170,34 @@ def test_template_delimiter_preserves_expression_contexts(argument):
     assert MetalPreprocessor()._find_matching_angle(source, 4) == len(source) - 8
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "if (a < b) { c = d > e; }",
+        "x[a < b] = c > d;",
+        "{ x = a < b; } y = c > d;",
+        "for (uint i = 0; i < n; ++i) { m = p > q; }",
+        "x = a < b; y = c > d;",
+    ],
+)
+def test_comparison_angle_does_not_close_at_a_later_greater_than(source):
+    assert MetalPreprocessor()._find_matching_angle(source, source.index("<")) is None
+
+
+@pytest.mark.parametrize("argument", ["[]{ return 1; }()", "int{3}", "S{ {1}, 2 }"])
+def test_template_delimiter_keeps_braced_semicolons_and_initializers(argument):
+    source = "type<" + argument + "> suffix"
+    assert MetalPreprocessor()._find_matching_angle(source, 4) == len(source) - 8
+
+
+@pytest.mark.parametrize("closer", [")", "]", "}", ";"])
+def test_comparison_angle_stops_at_its_enclosing_delimiter(closer):
+    tail = "ordinary_identifier > other " * 4096
+    source = _IndexedSource("a < b" + closer + tail)
+    assert MetalPreprocessor()._find_matching_angle(source, 2) is None
+    assert source.accesses < 20
+
+
 class _IndexedSource(str):
     accesses = 0
 
