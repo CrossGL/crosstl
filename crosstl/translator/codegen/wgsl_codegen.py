@@ -77,6 +77,11 @@ from .wgsl_boolean_xor import (
     wgsl_boolean_xor_assignment_statement,
 )
 from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
+from .wgsl_cube_texture_offsets import (
+    OFFSET_TEXTURE_LOOKUPS,
+    WGSLCubeTextureOffsetUnsupportedError,
+    is_cube_array_texture_type,
+)
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
     entry_output_parameters,
@@ -4262,6 +4267,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
         args = list(node.arguments)
         if normalized_name in FILTERED_TEXTURE_LOOKUPS and args:
             self.refuse_integer_texture_sample(args[0], function_name)
+        if normalized_name in OFFSET_TEXTURE_LOOKUPS and args:
+            self.refuse_cube_array_texture_offset(args[0], function_name)
         if normalized_name == "texture":
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturelod":
@@ -4304,20 +4311,43 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 function_name, self.generate_expression(texture_expr)
             )
 
+    def refuse_cube_array_texture_offset(self, texture_expr, function_name):
+        texture_type = self.sampled_texture_type(self.expression_type(texture_expr))
+        if is_cube_array_texture_type(texture_type):
+            raise WGSLCubeTextureOffsetUnsupportedError(
+                function_name, self.generate_expression(texture_expr)
+            )
+
     def generate_texture_call_args(self, args, *, function_name, implicit, explicit):
+        # The coordinate follows the texture, or the texture and sampler. On
+        # an array texture it becomes ``coordinate, layer``.
         if len(args) == implicit:
             texture = args[0]
             return [
                 self.generate_expression(texture),
                 self.texture_sampler_expression(texture),
-                *(self.generate_expression(arg) for arg in args[1:]),
+                *self.texture_lookup_args(texture, args[1:], function_name),
             ]
         if len(args) == explicit:
-            return [self.generate_expression(arg) for arg in args]
+            texture, sampler = args[:2]
+            return [
+                self.generate_expression(texture),
+                self.generate_expression(sampler),
+                *self.texture_lookup_args(texture, args[2:], function_name),
+            ]
         raise ValueError(
             f"WGSL target supports {function_name}() calls with {implicit} or "
             f"{explicit} argument(s); got {len(args)}"
         )
+
+    def texture_lookup_args(self, texture, args, function_name):
+        if not args:
+            return []
+        coords, *rest = args
+        return [
+            self.sampled_texture_coordinates(texture, coords, function_name),
+            *(self.generate_expression(arg) for arg in rest),
+        ]
 
     def generate_texture_builtin_call(
         self, builtin_name, function_name, args, *, implicit, explicit
@@ -4443,13 +4473,13 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
                 return self.generate_texture_builtin_call(
                     "textureSample", function_name, args, implicit=3, explicit=4
                 )
-            texture, coords, offset, bias = (
-                self.generate_expression(arg) for arg in args
-            )
+            texture, coords, offset, bias = args
             return (
                 "textureSampleBias("
-                f"{texture}, {self.texture_sampler_expression(args[0])}, "
-                f"{coords}, {bias}, {offset})"
+                f"{self.generate_expression(texture)}, "
+                f"{self.texture_sampler_expression(texture)}, "
+                f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
+                f"{self.generate_expression(bias)}, {self.generate_expression(offset)})"
             )
         if len(args) == 5:
             call_args = self.generate_texture_call_args(
@@ -4675,6 +4705,8 @@ class WGSLCodeGen(WGSLValueSideEffectsMixin, WGSLParameterLoweringMixin):
     ARRAY_TEXTURE_COORDINATE_SIZES = {
         "texture_2d_array": 2,
         "texture_cube_array": 3,
+        "texture_depth_2d_array": 2,
+        "texture_depth_cube_array": 3,
     }
 
     def array_texture_coordinate_size(self, texture_expr):

@@ -9,6 +9,9 @@ import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
+from crosstl.translator.codegen.wgsl_cube_texture_offsets import (
+    WGSLCubeTextureOffsetUnsupportedError,
+)
 from crosstl.translator.codegen.wgsl_integer_textures import (
     WGSLIntegerTextureSampleUnsupportedError,
 )
@@ -2891,6 +2894,144 @@ def test_wgsl_codegen_splits_array_texture_layer_out_of_texel_fetch(
     assert "textureLoad(tex, c.xy, c.z, 0)" in code
     assert "textureLoad(tex, (c.xy + vec2<i32>(1, 0)), c.z, 0)" in code
     validate_wgsl_with_naga(tmp_path, code)
+
+
+def test_wgsl_codegen_passes_array_texture_layer_to_offset_and_gradient_lookups(
+    tmp_path,
+):
+    shader = """
+    shader WGSLArrayTextureOffsetGrad {
+        uniform sampler2DArray tex;
+        fragment {
+            vec4 main(vec3 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGrad(tex, uv, vec2(0.1), vec2(0.1))
+                    + textureOffset(tex, uv, ivec2(1, 0))
+                    + textureOffset(tex, uv, ivec2(1, 0), 0.5)
+                    + textureLodOffset(tex, uv, 1.0, ivec2(1, 0))
+                    + textureGradOffset(tex, uv, vec2(0.1), vec2(0.1), ivec2(1, 0));
+            }
+        }
+    }
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    coordinate = "uv.xy, i32(floor(uv.z + 0.5))"
+    assert (
+        f"textureSampleGrad(tex, tex_sampler, {coordinate}, "
+        "vec2<f32>(0.1), vec2<f32>(0.1))"
+    ) in code
+    assert f"textureSample(tex, tex_sampler, {coordinate}, vec2<i32>(1, 0))" in code
+    assert (
+        f"textureSampleBias(tex, tex_sampler, {coordinate}, 0.5, vec2<i32>(1, 0))"
+        in code
+    )
+    assert (
+        f"textureSampleLevel(tex, tex_sampler, {coordinate}, 1.0, vec2<i32>(1, 0))"
+        in code
+    )
+    assert (
+        f"textureSampleGrad(tex, tex_sampler, {coordinate}, "
+        "vec2<f32>(0.1), vec2<f32>(0.1), vec2<i32>(1, 0))"
+    ) in code
+    validate_wgsl_with_naga(tmp_path, code)
+
+
+@pytest.mark.parametrize(
+    ("sampler_type", "coord_type", "coord", "layer"),
+    [
+        ("sampler2DArrayShadow", "vec3", "uv.xy", "uv.z"),
+        ("samplerCubeArrayShadow", "vec4", "uv.xyz", "uv.w"),
+    ],
+)
+def test_wgsl_codegen_passes_shadow_array_texture_layer_as_its_own_argument(
+    tmp_path, sampler_type, coord_type, coord, layer
+):
+    shader = f"""
+    shader WGSLShadowArrayTextureLayer {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0) @ gl_FragColor {{
+                float d = textureCompare(tex, uv, 0.5)
+                    + textureCompareLod(tex, uv, 0.5, 0.0);
+                return vec4(d);
+            }}
+        }}
+    }}
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    rounded = f"i32(floor({layer} + 0.5))"
+    assert f"textureSampleCompare(tex, tex_sampler, {coord}, {rounded}, 0.5)" in code
+    assert (
+        f"textureSampleCompareLevel(tex, tex_sampler, {coord}, {rounded}, 0.5)" in code
+    )
+    validate_wgsl_with_naga(tmp_path, code)
+
+
+def test_wgsl_codegen_passes_cube_array_texture_layer_to_gradient_lookup(tmp_path):
+    shader = """
+    shader WGSLCubeArrayTextureGrad {
+        uniform samplerCubeArray tex;
+        fragment {
+            vec4 main(vec4 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGrad(tex, uv, vec3(0.1), vec3(0.2));
+            }
+        }
+    }
+    """
+
+    code = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "textureSampleGrad(tex, tex_sampler, uv.xyz, i32(floor(uv.w + 0.5)), "
+        "vec3<f32>(0.1), vec3<f32>(0.2))"
+    ) in code
+    validate_wgsl_with_naga(tmp_path, code)
+
+
+@pytest.mark.parametrize(
+    ("sampler_type", "lookup"),
+    [
+        ("samplerCubeArray", "textureOffset(tex, uv, ivec2(1, 0))"),
+        ("samplerCubeArray", "textureOffset(tex, uv, ivec2(1, 0), 0.5)"),
+        ("samplerCubeArray", "textureLodOffset(tex, uv, 1.0, ivec2(1, 0))"),
+        (
+            "samplerCubeArray",
+            "textureGradOffset(tex, uv, vec3(0.1), vec3(0.2), ivec2(1, 0))",
+        ),
+        (
+            "samplerCubeArrayShadow",
+            "vec4(textureCompareOffset(tex, uv, 0.5, ivec2(1, 0)))",
+        ),
+        (
+            "samplerCubeArrayShadow",
+            "vec4(textureCompareLodOffset(tex, uv, 0.5, 0, ivec2(1, 0)))",
+        ),
+    ],
+)
+def test_wgsl_codegen_refuses_offset_lookups_on_cube_array_textures(
+    sampler_type, lookup
+):
+    shader = f"""
+    shader WGSLCubeArrayTextureOffset {{
+        uniform {sampler_type} tex;
+        fragment {{
+            vec4 main(vec4 uv @ TEXCOORD0) @ gl_FragColor {{
+                return {lookup};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        WGSLCubeTextureOffsetUnsupportedError,
+        match=r"cannot lower \w+\(\) on a cube array texture \(tex\)",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-cube-texture-offset-unsupported"
 
 
 def test_wgsl_codegen_refuses_array_texture_coordinate_from_a_user_function():
