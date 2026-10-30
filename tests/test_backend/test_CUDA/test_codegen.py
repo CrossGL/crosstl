@@ -621,6 +621,24 @@ class TestCudaCodeGen:
         assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
         assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
 
+    def test_braced_and_default_dim3_fill_missing_components_with_one(self):
+        # CUDA sets every dim3 component that is not given to 1 (#3562).
+        code = """
+        __global__ void k(unsigned int* out) {
+            const dim3 block = {16, 16};
+            const dim3 unit;
+            dim3 full = {2, 3, 4};
+            out[0] = block.z + unit.x + full.z;
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var block: vec3<u32> = vec3<u32>(16, 16, 1);" in result
+        assert "var unit: vec3<u32> = vec3<u32>(1, 1, 1);" in result
+        assert "var full: vec3<u32> = vec3<u32>(2, 3, 4);" in result
+        assert "{16, 16}" not in result
+
     def test_namespace_scope_constants_import_as_crossgl_constants(self, tmp_path):
         # A kernel reads namespace-scope constexpr and const constants directly,
         # so they import as CrossGL constants rather than mutable globals (#3328).
