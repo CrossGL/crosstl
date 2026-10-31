@@ -113,7 +113,7 @@ from .buffer_block_diagnostics import (
     BufferBlockUnsupportedError,
     record_unsupported_layout_failures,
 )
-from .buffer_length import BufferLengthUnsupportedError
+from .buffer_length import COUNTED_BUFFERS, BufferLengthUnsupportedError
 from .buffer_member_layout import member_is_packed
 from .builtin_result_types import (
     C_FAMILY,
@@ -23136,10 +23136,21 @@ class MetalCodeGen(
         )
         if isinstance(object_expr, (IdentifierNode, VariableNode)):
             name = getattr(object_expr, "name", None)
+            # A Metal buffer argument is a pointer and carries no size, so
+            # length() is refused whether the source spells it as a pointer
+            # (buffer float*) or as a typed buffer resource (StructuredBuffer,
+            # RWStructuredBuffer, Buffer, ...), which Metal also lowers to a
+            # device pointer. Without the resource spelling, the call was
+            # copied unchanged onto the pointer, which the Metal compiler
+            # rejects.
+            local_type = str(self.local_variable_types.get(name, ""))
             if self.current_address_space_variables.get(name) in {
                 "device",
                 "constant",
-            } and str(self.local_variable_types.get(name, "")).endswith("*"):
+            } and (
+                local_type.endswith("*")
+                or local_type.split("<", 1)[0] in COUNTED_BUFFERS
+            ):
                 raise BufferLengthUnsupportedError(
                     "metal",
                     f"length() of buffer view '{name}' needs the bound buffer's "

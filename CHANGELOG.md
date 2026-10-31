@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- Metal output refuses the `length()` of a `StructuredBuffer<T>` or `RWStructuredBuffer<T>`, such as `values.length()` for `StructuredBuffer<float> values`, in an entry point or a helper, with `BufferLengthUnsupportedError` (`project.translate.metal-buffer-length-unsupported`), as it already does for a `buffer float*` view: a Metal buffer argument is a pointer and carries no size. It used to copy `values.length()` unchanged onto the device pointer, which the Metal compiler rejects as not a structure or union.
 - WGSL output writes the `length()` of an HLSL-style `StructuredBuffer<T>` or `RWStructuredBuffer<T>`, such as `values.length()` for `StructuredBuffer<float> values`, as `i32(arrayLength(&values))`. It used to copy `values.length()` unchanged, which naga rejects (#3582).
 - WGSL output converts the `length()` of a `buffer T*` storage buffer or a `StructuredBuffer<T>` to `u32` where a `uint` is expected, as a variable's value, an argument or a return value, so `uint n = values.length();` becomes `var n: u32 = u32(i32(arrayLength(&values)));`. It used to write `var n: u32 = i32(arrayLength(&values));`, which naga rejects (#3617).
 - WGSL output writes a declared array whose initializer gives fewer elements than the array has, such as `float a[3] = float[3](0.0);` or `{x, 1.0}`, as `array<f32, 3>(0.0, f32(), f32())`, with the elements left out set to zero as GLSL output does. It used to write `array(0.0)`, a one-element array that naga rejects.
