@@ -50,8 +50,13 @@
     <InternalsVisibleTo Include="ComputeSharp.Tests.Internals, PublicKey=$(UpstreamAssemblySignPublicKey)" />
   </ItemGroup>
 
+  <!-- ComputeSharpRoot only locates the upstream checkout. The test projects reference
+       ComputeSharp.Core without it, so it is removed here too: otherwise MSBuild builds a
+       second ComputeSharp.Core instance in parallel, and both write the same
+       bin/Release/net10.0/ComputeSharp.Core.deps.json. -->
   <ItemGroup>
-    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core/ComputeSharp.Core.csproj" />
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core/ComputeSharp.Core.csproj"
+                      GlobalPropertiesToRemove="ComputeSharpRoot" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
   </ItemGroup>
 
