@@ -3,6 +3,7 @@
 import re
 from typing import List
 
+from ..CUDA.local_memory_spaces import refuse_local_memory_space
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -2785,17 +2786,8 @@ class HipParser:
         return base_type
 
     def reject_disallowed_local_memory_space(self, qualifiers, name):
-        disallowed = [
-            qualifier
-            for qualifier in ("__constant__", "__device__", "__managed__")
-            if qualifier in qualifiers
-        ]
-        if disallowed and "static" not in qualifiers:
-            raise SyntaxError(
-                "__constant__, __device__, and __managed__ are not allowed on "
-                f"non-static local variables: '{name}' is declared with "
-                f"{', '.join(disallowed)}"
-            )
+        """Refuse a function-body variable that HIP allows in its memory space only with static storage."""
+        refuse_local_memory_space(qualifiers, name)
 
     def parse_variable_declarator(
         self, base_type, qualifiers, allow_prefix, attributes=None

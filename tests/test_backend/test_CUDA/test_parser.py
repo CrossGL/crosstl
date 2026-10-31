@@ -36,6 +36,7 @@ from crosstl.backend.CUDA.CudaAst import (
 )
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from crosstl.backend.CUDA.local_memory_spaces import LocalMemorySpaceError
 
 
 class TestCudaParser:
@@ -4732,8 +4733,41 @@ class TestCudaParser:
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
         parser = CudaParser(tokens)
-        with pytest.raises(SyntaxError, match="non-static local"):
+        with pytest.raises(LocalMemorySpaceError, match="'local_table'") as error:
             parser.parse()
+        assert error.value.code == "project.translate.local-memory-space-invalid"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "__device__ float scratch;",
+            "__managed__ float scratch;",
+            "if (out) { __constant__ float scratch = 1.0f; }",
+            "__constant__ float low = 0.0f, scratch = 1.0f;",
+        ],
+    )
+    def test_static_storage_memory_space_locals_are_rejected(self, body):
+        code = f"""
+        __device__ float helper(float* out) {{
+            {body}
+            return out[0];
+        }}
+        """
+        parser = CudaParser(CudaLexer(code).tokenize())
+        with pytest.raises(LocalMemorySpaceError, match="non-static local"):
+            parser.parse()
+
+    def test_extern_constant_local_declaration_is_allowed(self):
+        code = """
+        __constant__ float table[4];
+
+        __global__ void first(float* out) {
+            extern __constant__ float table[4];
+            out[0] = table[0];
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+        assert isinstance(ast, ShaderNode)
 
     def test_global_constant_memory_still_parses(self):
         code = """
