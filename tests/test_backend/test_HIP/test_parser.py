@@ -1,5 +1,6 @@
 import pytest
 
+from crosstl.backend.CUDA.local_memory_spaces import LocalMemorySpaceError
 from crosstl.backend.HIP.HipAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -32,7 +33,6 @@ from crosstl.backend.HIP.HipAst import (
     VariableNode,
     WhileNode,
 )
-from crosstl.backend.CUDA.local_memory_spaces import LocalMemorySpaceError
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser, HipProgramNode
 
