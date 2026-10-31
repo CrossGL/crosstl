@@ -581,6 +581,67 @@ def test_opencv_anonymous_enum_and_constant_array_codegen_reparse():
     assert "sector_data: array<array<i32, 3>>" in crossgl
 
 
+CONSTANT_TABLE_KERNEL_SOURCE = """
+    __constant float coeffs_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+    __kernel void first(__global float* out) {
+        size_t i = get_global_id(0);
+        out[i] = coeffs_table[i % 4];
+    }
+    """
+
+
+def test_opencl_program_constant_binds_before_kernel_buffers(tmp_path):
+    crossgl = generate_crossgl(CONSTANT_TABLE_KERNEL_SOURCE)
+
+    assert "@group(0) @binding(0) var<uniform> coeffs_table: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+
+    opencl_path = tmp_path / "constant_table.cl"
+    opencl_path.write_text(CONSTANT_TABLE_KERNEL_SOURCE, encoding="utf-8")
+    metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+
+    assert "constant float* coeffs_table [[buffer(0)]]" in metal
+    assert "device float* out [[buffer(1)]]" in metal
+
+
+def test_opencl_program_constant_after_kernel_counts_before_parameters():
+    crossgl = generate_crossgl("""
+        __constant float scale[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+        __kernel void first(__global float* values) {
+            size_t i = get_global_id(0);
+            values[i] = values[i] * scale[i % 4];
+        }
+        __constant float bias[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+        __kernel void second(__global float* values) {
+            size_t i = get_global_id(0);
+            values[i] = values[i] + bias[i % 4] + scale[0];
+        }
+        """)
+
+    assert "@group(0) @binding(0) var<uniform> scale: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<uniform> bias: array<f32, 4>" in crossgl
+    assert crossgl.count("@group(0) @binding(2) var<storage, read_write> values") == 2
+    assert crossgl.count("@group(0) @binding(1)") == 1
+
+
+def test_opencl_constant_pointer_local_is_not_a_resource():
+    crossgl = generate_crossgl("""
+        __constant float coeffs_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void first(__global float* out) {
+            __constant float *coeffs = coeffs_table;
+            size_t i = get_global_id(0);
+            out[i] = coeffs[i % 4];
+        }
+        """)
+
+    assert "var coeffs: ptr<f32> = coeffs_table;" in crossgl
+    assert "var<uniform> coeffs:" not in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert crossgl.count("@group(0) @binding(") == 2
+
+
 def test_darktable_unsigned_char_pointer_to_array_kernel_param_codegen_reparse():
     crossgl = generate_crossgl("""
         static inline int FCxtrans(const int row,

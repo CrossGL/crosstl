@@ -610,7 +610,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         self.push_identifier_name_scope()
         sampler_states = dict(self.opencl_sampler_states)
         try:
-            resource_binding = 0
+            # Program-scope __constant variables take the first bindings, so
+            # the kernel's buffers start after them, as in HIP input.
+            resource_binding = self.global_resource_binding_count
             for index, param in enumerate(getattr(kernel, "params", []) or []):
                 if isinstance(param, dict):
                     raw_type = param.get("type", "int")
@@ -796,7 +798,25 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 self.opencl_sampler_states[name] = state
             self.emit(f"const sampler {output_name} = {state};")
             return
+        if self.is_opencl_constant_pointer_local(node):
+            # In `__constant float *p = table;` __constant is the address space
+            # p points into. p itself is a private local, like a `__global
+            # float *` local, not a resource with a binding of its own.
+            qualifiers = node.qualifiers
+            node.qualifiers = [q for q in qualifiers if q != "__constant__"]
+            try:
+                super().visit_VariableNode(node)
+            finally:
+                node.qualifiers = qualifiers
+            return
         super().visit_VariableNode(node)
+
+    def is_opencl_constant_pointer_local(self, node):
+        return (
+            self.indent_level > 0
+            and "__constant__" in (getattr(node, "qualifiers", None) or [])
+            and "*" in str(getattr(node, "vtype", ""))
+        )
 
     def visit_FunctionNode(self, node):
         previous_function_name = self.opencl_current_function_name
