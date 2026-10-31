@@ -468,7 +468,8 @@ def test_external_opencv_multiline_constant_address_space_array_codegen_reparse(
 
     assert ast.statements[0].vtype == "__constant__ float[5]"
     assert "var c_YUV2RGBCoeffs_420: array<f32, 5>" in crossgl
-    assert "var<uniform> coeffs: ptr<f32> = c_YUV2RGBCoeffs_420;" in crossgl
+    assert "var coeffs: ptr<f32> = c_YUV2RGBCoeffs_420;" in crossgl
+    assert "var<uniform> coeffs:" not in crossgl
 
 
 def test_external_opencv_fft_leading_attribute_type_macro_constructor_codegen_reparse():
@@ -1601,7 +1602,8 @@ def test_external_llvm_libclc_constant_pointer_local_codegen_reparse():
     local = ast.statements[0].body[1]
     assert local.qualifiers == ["__constant__"]
     assert local.vtype == "amdhsa_implicit_kernarg_v5 *"
-    assert "var<uniform> args: ptr<amdhsa_implicit_kernarg_v5>" in crossgl
+    assert "var args: ptr<amdhsa_implicit_kernarg_v5>" in crossgl
+    assert "var<uniform> args:" not in crossgl
 
 
 def test_external_llvm_clang_opencl_c_base_half_literal_codegen_reparse():
