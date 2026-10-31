@@ -38,6 +38,11 @@ def test_non_zero_scalar_builds_a_diagonal_matrix_element(tmp_path):
     assert "float2x2 a[3] = {float2x2(1.0)};" in output
 
 
+def test_non_square_matrix_keeps_its_columns_and_rows(tmp_path):
+    output = translate(tmp_path, "mat2x3 a[2] = mat2x3[2](1.0);")
+    assert "float2x3 a[2] = {float2x3(1.0)};" in output
+
+
 def test_scalar_array_constructor_is_unchanged(tmp_path):
     output = translate(tmp_path, "float a[3] = float[3](0.0); float b = a[1];")
     assert "float a[3] = {0.0};" in output
