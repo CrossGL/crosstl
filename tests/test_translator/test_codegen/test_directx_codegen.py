@@ -16158,6 +16158,69 @@ def test_directx_byte_address_interlocked_add_rejects_signed_value():
         generate_code(parse_code(tokenize_code(shader)))
 
 
+@pytest.mark.parametrize("method_name", ["InterlockedMax", "InterlockedMin"])
+def test_directx_byte_address_interlocked_min_max_literal_value_stays_unsigned(
+    method_name,
+):
+    """DXC reads ``InterlockedMax(0, 5)`` as the unsigned UMax, so ``5`` is a uint
+    value: the call is written as before and an ``int`` original is refused."""
+    shader = f"""
+    shader ByteAddressLiteralInterlockedHLSL {{
+        RWByteAddressBuffer rawBytes @register(u0);
+        RWStructuredBuffer<int> signedValues @register(u1);
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main() {{
+                int original = 0;
+                rawBytes.{method_name}(0u, 5);
+                rawBytes.{method_name}(4u, -1);
+                rawBytes.{method_name}(8u, 5, original);
+                signedValues[0] = original;
+            }}
+        }}
+    }}
+    """
+
+    match = (
+        f"DirectX ByteAddressBuffer interlocked member '{method_name}' "
+        "original argument must be scalar uint, got int"
+    )
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+    accepted = shader.replace(f"rawBytes.{method_name}(8u, 5, original);", "")
+    generated_code = generate_code(parse_code(tokenize_code(accepted)))
+
+    assert f"rawBytes.{method_name}(0u, 5);" in generated_code
+    assert f"rawBytes.{method_name}(4u, -1);" in generated_code
+
+
+def test_directx_byte_address_interlocked_signed_max_names_int_original():
+    shader = """
+    shader ByteAddressSignedInterlockedOriginalHLSL {
+        RWByteAddressBuffer rawBytes @register(u0);
+        RWStructuredBuffer<int> signedValues @register(u1);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                int value = signedValues[tid.x];
+                float original = 0.0;
+                rawBytes.InterlockedMax(0u, value, original);
+            }
+        }
+    }
+    """
+
+    match = (
+        "DirectX ByteAddressBuffer interlocked member 'InterlockedMax' "
+        "original argument must be scalar int or uint, got float"
+    )
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 @pytest.mark.parametrize(
     ("declaration", "call", "match"),
     [

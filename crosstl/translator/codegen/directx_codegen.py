@@ -32169,6 +32169,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self, method_name, original_arg, signed=False
     ):
         original_kind = self.scalar_expression_kind(original_arg)
+        expected = "int or uint" if signed else "uint"
         if original_kind != "uint" and not (signed and original_kind == "int"):
             original_type = (
                 self.type_name_string(self.expression_result_type(original_arg))
@@ -32177,12 +32178,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             raise ValueError(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
-                f"original argument must be scalar uint, got {original_type}"
+                f"original argument must be scalar {expected}, got {original_type}"
             )
         if not self.hlsl_typed_buffer_atomic_original_is_lvalue(original_arg):
             raise ValueError(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
-                "original argument must be an assignable scalar uint target"
+                f"original argument must be an assignable scalar {expected} target"
             )
 
     def generate_hlsl_byteaddress_interlocked_member_call(self, func_expr, args):
@@ -32236,10 +32237,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_hlsl_byteaddress_interlocked_uint_input(
             method_name, args, 0, "address"
         )
-        # An int value selects the signed IMin/IMax operation.
+        # An int value selects the signed IMin/IMax operation.  A non-negative
+        # int literal still passes as uint: DXC reads InterlockedMax(0, 5) as
+        # the unsigned UMax, so it cannot take an int original value.
         signed = (
             method_name in {"InterlockedMin", "InterlockedMax"}
             and self.scalar_expression_kind(args[1]) == "int"
+            and not self.hlsl_byteaddress_interlocked_uint_input_matches(args[1])
         )
         if not signed:
             for index, role in value_roles:
