@@ -3964,6 +3964,87 @@ def test_wgsl_codegen_lowers_matrix_scalar_arithmetic_by_column(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+WGSL_MATRIX_COMPOUND_SHADER = """
+shader WGSLMatrixCompound {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            mat2 m = mat2(fin[i], 2.0, 3.0, 4.0);
+            mat2 n = mat2(1.0, 2.0, 3.0, fin[i]);
+            mat3x2 k = mat3x2(fin[i], 2.0, 3.0, 4.0, 5.0, 6.0);
+            m += 1.0;
+            m -= 1.0;
+            m /= 2.0;
+            k -= 2.0;
+            m += n;
+            outp[i] = m[1].x + k[2].y;
+        }
+    }
+}
+"""
+
+
+def test_wgsl_codegen_lowers_matrix_scalar_compound_assignment_by_column(tmp_path):
+    generated = WGSLCodeGen().generate(parse_shader(WGSL_MATRIX_COMPOUND_SHADER))
+
+    assert "m = mat2x2<f32>(m[0] + 1.0, m[1] + 1.0);" in generated
+    assert "m = mat2x2<f32>(m[0] - 1.0, m[1] - 1.0);" in generated
+    assert "m = mat2x2<f32>(m[0] / 2.0, m[1] / 2.0);" in generated
+    assert "k = mat3x2<f32>(k[0] - 2.0, k[1] - 2.0, k[2] - 2.0);" in generated
+    # WGSL applies `+=` to two matrices component by component, so it stays as written.
+    assert "m += n;" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_rejects_matrix_compound_assignment_it_cannot_lower():
+    shader = """
+    shader WGSLMatrixCompoundUnsupported {
+        compute {
+            buffer float* outp;
+            void main() {
+                mat2 m = mat2(1.0);
+                mat2 n = mat2(2.0);
+                m /= n;
+                outp[0] = m[1].x;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target lowers matrix /= only with a scalar operand",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_matrix_compound_assignment_with_side_effects():
+    shader = """
+    shader WGSLMatrixCompoundSideEffects {
+        float next_scalar() {
+            return 1.0;
+        }
+        compute {
+            buffer float* outp;
+            void main() {
+                mat2 m = mat2(1.0);
+                m += next_scalar();
+                outp[0] = m[1].x;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target lowers matrix-scalar \+= one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 def test_wgsl_codegen_lowers_matrix_comp_mult_and_outer_product_by_column(tmp_path):
     generated = WGSLCodeGen().generate(parse_shader(WGSL_MATRIX_COLUMN_SHADER))
 
