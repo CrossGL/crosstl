@@ -119,6 +119,41 @@ def test_one_argument_constructor_in_declaration_zero_fills(tmp_path):
     assert "array(0.0)" not in output
 
 
+def test_short_matrix_array_initializer_converts_scalars_to_diagonal_matrices(
+    tmp_path,
+):
+    output = translate(
+        tmp_path,
+        "mat3 m[2] = mat3[2](0.0);\n"
+        " mat4 n[3] = mat4[3](1.0);\n"
+        " values[i] = m[1][2][0] + n[0][0][0];",
+    )
+    assert (
+        "array<mat3x3<f32>, 2>("
+        "mat3x3<f32>(vec3<f32>(0.0, 0.0, 0.0), "
+        "vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 0.0)), "
+        "mat3x3<f32>())"
+    ) in output
+    assert (
+        "array<mat4x4<f32>, 3>("
+        "mat4x4<f32>(vec4<f32>(1.0, 0.0, 0.0, 0.0), "
+        "vec4<f32>(0.0, 1.0, 0.0, 0.0), vec4<f32>(0.0, 0.0, 1.0, 0.0), "
+        "vec4<f32>(0.0, 0.0, 0.0, 1.0)), mat4x4<f32>(), mat4x4<f32>())"
+    ) in output
+
+
+def test_matrix_array_value_converts_scalar_elements(tmp_path):
+    output = translate(
+        tmp_path,
+        "mat2 m = mat2[2](0.0, 1.0)[1];\n values[i] = m[0][0];",
+    )
+    assert (
+        "array<mat2x2<f32>, 2>("
+        "mat2x2<f32>(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0)), "
+        "mat2x2<f32>(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0)))"
+    ) in output
+
+
 def test_short_braced_initializer_zero_fills_the_rest(tmp_path):
     # The elements a braced initializer leaves out are zero, as in GLSL output.
     output = translate(

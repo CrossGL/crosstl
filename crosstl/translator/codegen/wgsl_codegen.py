@@ -3178,6 +3178,9 @@ class WGSLCodeGen(
                     source_type = getattr(resolved_function, "return_type", None)
         finally:
             self._current_expression_expected_type = previous_expected_type
+        matrix_scalar = self.generate_scalar_matrix_constructor(target_type, expr)
+        if matrix_scalar is not None:
+            return matrix_scalar
         narrowed = self.vector_narrowing_expression(rendered, target_type, source_type)
         if narrowed is not None:
             return narrowed

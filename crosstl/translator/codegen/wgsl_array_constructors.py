@@ -110,5 +110,8 @@ def wgsl_array_constructor(codegen, node):
     else:
         size = codegen.identifier_name(size)
     element = codegen.type_name_string(element_type)
-    values = ", ".join(codegen.generate_expression(argument) for argument in arguments)
+    values = ", ".join(
+        codegen.generate_expression_for_target(argument, element_type)
+        for argument in arguments
+    )
     return f"array<{element}, {size}>({values})"
