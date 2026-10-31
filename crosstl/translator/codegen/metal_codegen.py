@@ -23173,6 +23173,19 @@ class MetalCodeGen(
                     f"length() of buffer view '{name}' needs the bound buffer's "
                     "size, which a Metal buffer argument does not carry",
                 )
+        # AppendStructuredBuffer and ConsumeStructuredBuffer are device
+        # pointers too, and so is an element of a structured buffer array:
+        # the name of bufs[1] is "bufs", recorded with the element's
+        # StructuredBuffer<T> type.
+        object_name = self.expression_name(object_expr)
+        if self.is_structured_buffer_type(
+            self.local_variable_types.get(object_name, "")
+        ):
+            raise BufferLengthUnsupportedError(
+                "metal",
+                f"length() of buffer view '{object_name}' needs the bound buffer's "
+                "size, which a Metal buffer argument does not carry",
+            )
         access = self.glsl_buffer_block_member_access(object_expr)
         if access is None or not access.get("is_array"):
             return None
