@@ -2784,6 +2784,19 @@ class HipParser:
         qualifiers.extend(self.parse_declaration_qualifiers())
         return base_type
 
+    def reject_disallowed_local_memory_space(self, qualifiers, name):
+        disallowed = [
+            qualifier
+            for qualifier in ("__constant__", "__device__", "__managed__")
+            if qualifier in qualifiers
+        ]
+        if disallowed and "static" not in qualifiers:
+            raise SyntaxError(
+                "__constant__, __device__, and __managed__ are not allowed on "
+                f"non-static local variables: '{name}' is declared with "
+                f"{', '.join(disallowed)}"
+            )
+
     def parse_variable_declarator(
         self, base_type, qualifiers, allow_prefix, attributes=None
     ):
@@ -2815,6 +2828,9 @@ class HipParser:
         self.skip_newlines()
         bitfield_width = self.parse_bitfield_width()
         value = self.parse_variable_initializer(var_type)
+
+        if self.block_depth > 0:
+            self.reject_disallowed_local_memory_space(qualifiers, name)
 
         declaration = VariableNode(
             var_type,

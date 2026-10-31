@@ -372,6 +372,7 @@ class CudaParser:
         self.namespace_aliases = {}
         self.struct_names = self.collect_struct_names()
         self.user_function_names = self.collect_user_function_names()
+        self.block_depth = 0
 
     def collect_struct_names(self):
         names = set()
@@ -3152,6 +3153,19 @@ class CudaParser:
         else:
             target.append(variable)
 
+    def reject_disallowed_local_memory_space(self, qualifiers, name):
+        disallowed = [
+            qualifier
+            for qualifier in ("__constant__", "__device__", "__managed__")
+            if qualifier in qualifiers
+        ]
+        if disallowed and "static" not in qualifiers:
+            raise SyntaxError(
+                "__constant__, __device__, and __managed__ are not allowed on "
+                f"non-static local variables: '{name}' is declared with "
+                f"{', '.join(disallowed)}"
+            )
+
     def parse_variable_declaration(self):
         qualifiers = self.parse_declaration_prefixes()
         self.parse_alignment_attributes()
@@ -3177,6 +3191,8 @@ class CudaParser:
 
         var = VariableNode(vtype, name, value, qualifiers)
 
+        if self.block_depth > 0:
+            self.reject_disallowed_local_memory_space(qualifiers, name)
         if "__shared__" in qualifiers:
             return self.create_shared_memory_node(vtype, name, qualifiers)
         elif "__constant__" in qualifiers:
@@ -3245,6 +3261,8 @@ class CudaParser:
         self.skip_bitfield_width()
         value = self.parse_variable_initializer(vtype)
 
+        if self.block_depth > 0:
+            self.reject_disallowed_local_memory_space(declarator_qualifiers, name)
         if "__shared__" in declarator_qualifiers:
             return self.create_shared_memory_node(vtype, name, declarator_qualifiers)
         if "__constant__" in declarator_qualifiers:
@@ -3400,13 +3418,17 @@ class CudaParser:
         self.eat("LBRACE")
         statements = []
 
-        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            stmt = self.parse_scoped_statement()
-            if stmt:
-                if isinstance(stmt, list):
-                    statements.extend(stmt)
-                else:
-                    statements.append(stmt)
+        self.block_depth += 1
+        try:
+            while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                stmt = self.parse_scoped_statement()
+                if stmt:
+                    if isinstance(stmt, list):
+                        statements.extend(stmt)
+                    else:
+                        statements.append(stmt)
+        finally:
+            self.block_depth -= 1
 
         self.eat("RBRACE")
         return statements

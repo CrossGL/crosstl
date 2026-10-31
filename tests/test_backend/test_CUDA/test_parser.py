@@ -4721,3 +4721,56 @@ class TestCudaParser:
         assert "template <> struct SharedMemory<t>" in ast.includes[0].content
         assert ast.structs[0].name == "SharedMemory"
         assert ast.kernels[0].name == "use_shared"
+
+    def test_constant_local_variable_is_rejected(self):
+        code = """
+        __global__ void first(float* out) {
+            __constant__ float local_table[4];
+            out[0] = local_table[0];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        with pytest.raises(SyntaxError, match="non-static local"):
+            parser.parse()
+
+    def test_global_constant_memory_still_parses(self):
+        code = """
+        __constant__ float global_table[4];
+
+        __global__ void first(float* out) {
+            out[0] = global_table[0];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+        assert isinstance(ast, ShaderNode)
+
+    def test_shared_local_variable_still_parses(self):
+        code = """
+        __global__ void first(float* out) {
+            __shared__ float tile[4];
+            out[0] = tile[0];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+        assert isinstance(ast, ShaderNode)
+
+    def test_static_constant_local_variable_is_allowed(self):
+        code = """
+        __global__ void first(float* out) {
+            static __constant__ float local_table[4];
+            out[0] = local_table[0];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+        assert isinstance(ast, ShaderNode)
