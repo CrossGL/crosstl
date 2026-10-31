@@ -9589,21 +9589,35 @@ class SlangCodeGen(LoweringRefusalMixin):
             return f"mul({left}, {right})"
         return f"{left} {node.op} {right}"
 
+    def slang_helper_invocation_expression(self):
+        """A read of ``gl_HelperInvocation`` as Slang's ``IsHelperLane()``, unless a variable of that name is in scope.
+
+        Slang declares no ``gl_HelperInvocation``; ``IsHelperLane()`` is available in fragment stages only, so it is
+        refused in another stage's entry point. A helper function is left to slangc, which checks the stages that
+        call it.
+        """
+        if "gl_HelperInvocation" in self.variable_types:
+            return "gl_HelperInvocation"
+        shader_type = self.current_shader_type
+        if (
+            shader_type is not None
+            and self.slang_shader_stage_name(shader_type) != "fragment"
+        ):
+            self.refuse_lowering(
+                "Slang gl_HelperInvocation: lowered to IsHelperLane() only in a "
+                f"fragment stage, not in a {shader_type} entry point"
+            )
+        return "IsHelperLane()"
+
     def generate_expression(self, node):
         """Render a CrossGL expression as Slang expression syntax."""
         if isinstance(node, VariableNode):
             if node.name == "gl_HelperInvocation":
-                for table in ("local_variable_types", "global_variable_types"):
-                    if "gl_HelperInvocation" in (getattr(self, table, None) or {}):
-                        return "gl_HelperInvocation"
-                return "IsHelperLane()"
+                return self.slang_helper_invocation_expression()
             return node.name
         elif isinstance(node, IdentifierNode):
             if node.name == "gl_HelperInvocation":
-                for table in ("local_variable_types", "global_variable_types"):
-                    if "gl_HelperInvocation" in (getattr(self, table, None) or {}):
-                        return "gl_HelperInvocation"
-                return "IsHelperLane()"
+                return self.slang_helper_invocation_expression()
             if isinstance(node.name, str) and "::" in node.name:
                 enum_value = enum_value_expression(self, node.name)
                 if enum_value != node.name:

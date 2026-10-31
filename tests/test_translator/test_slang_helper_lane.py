@@ -47,6 +47,61 @@ def test_slang_local_named_gl_helper_invocation_is_left_alone():
     assert "IsHelperLane" not in slang
 
 
+def test_slang_local_gl_helper_invocation_does_not_shadow_other_functions():
+    slang = generate("""
+        shader HelperShadow {
+            fragment {
+                bool flag() {
+                    bool gl_HelperInvocation = true;
+                    return gl_HelperInvocation;
+                }
+                vec4 main(vec4 color @ COLOR0) @ gl_FragColor {
+                    bool helper = gl_HelperInvocation;
+                    return (helper || flag()) ? vec4(0.0) : color;
+                }
+            }
+        }
+    """)
+
+    assert "return gl_HelperInvocation;" in slang
+    assert "bool helper = IsHelperLane();" in slang
+
+
+VERTEX_HELPER_READ = """
+shader Probe {
+    vertex {
+        vec4 main(vec3 position @ POSITION) @ gl_Position {
+            return vec4(position, gl_HelperInvocation ? 0.0 : 1.0);
+        }
+    }
+}
+"""
+
+COMPUTE_HELPER_READ = """
+shader Probe {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* o;
+        void main(uvec3 gid @ gl_GlobalInvocationID) {
+            o[gid.x] = gl_HelperInvocation ? 1u : 0u;
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "stage, code",
+    [("vertex", VERTEX_HELPER_READ), ("compute", COMPUTE_HELPER_READ)],
+)
+def test_slang_refuses_gl_helper_invocation_outside_fragment_stages(stage, code):
+    with pytest.raises(
+        SlangLoweringRefused,
+        match=f"IsHelperLane\\(\\) only in a fragment stage, not in a {stage} entry",
+    ):
+        generate(code)
+
+
 def test_slang_refuses_unmapped_builtin_semantic():
     with pytest.raises(
         SlangLoweringRefused,
