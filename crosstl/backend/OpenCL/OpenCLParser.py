@@ -230,6 +230,9 @@ class OpenCLParser(HipParser):
         super().__init__(tokens)
         self.opencl_type_alias_targets = {}
 
+    def reject_disallowed_local_memory_space(self, qualifiers, name):
+        """Keep OpenCL ``__constant`` locals: it names an address space, so ``__constant float *p`` is a valid local."""
+
     def parse(self):
         previous_recursion_limit = sys.getrecursionlimit()
         if len(self.tokens) > previous_recursion_limit:

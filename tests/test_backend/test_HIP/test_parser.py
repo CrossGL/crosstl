@@ -1,5 +1,6 @@
 import pytest
 
+from crosstl.backend.CUDA.local_memory_spaces import LocalMemorySpaceError
 from crosstl.backend.HIP.HipAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -4825,3 +4826,84 @@ class TestHipParser:
         )
         assert arrow.name == "operator->"
         assert arrow.return_type == "Payload *"
+
+    def test_constant_local_variable_is_rejected(self):
+        code = """
+        __global__ void first(float* out) {
+            __constant__ float local_table[4];
+            out[0] = local_table[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        with pytest.raises(LocalMemorySpaceError, match="'local_table'") as error:
+            parser.parse()
+        assert error.value.code == "project.translate.local-memory-space-invalid"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "__device__ float scratch;",
+            "__managed__ float scratch;",
+            "if (out) { __constant__ float scratch = 1.0f; }",
+            "__constant__ float low = 0.0f, scratch = 1.0f;",
+        ],
+    )
+    def test_static_storage_memory_space_locals_are_rejected(self, body):
+        code = f"""
+        __device__ float helper(float* out) {{
+            {body}
+            return out[0];
+        }}
+        """
+        with pytest.raises(LocalMemorySpaceError, match="non-static local"):
+            self.parse_code(code)
+
+    def test_extern_constant_local_declaration_is_allowed(self):
+        code = """
+        __constant__ float table[4];
+
+        __global__ void first(float* out) {
+            extern __constant__ float table[4];
+            out[0] = table[0];
+        }
+        """
+        assert isinstance(self.parse_code(code), HipProgramNode)
+
+    def test_global_constant_memory_still_parses(self):
+        code = """
+        __constant__ float global_table[4];
+
+        __global__ void first(float* out) {
+            out[0] = global_table[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        parser.parse()
+
+    def test_shared_local_variable_still_parses(self):
+        code = """
+        __global__ void first(float* out) {
+            __shared__ float tile[4];
+            out[0] = tile[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        parser.parse()
+
+    def test_static_constant_local_variable_is_allowed(self):
+        code = """
+        __global__ void first(float* out) {
+            static __constant__ float local_table[4];
+            out[0] = local_table[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        parser.parse()
