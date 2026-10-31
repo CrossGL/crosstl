@@ -154,6 +154,29 @@ def test_matrix_array_value_converts_scalar_elements(tmp_path):
     ) in output
 
 
+def test_full_matrix_array_initializer_converts_scalar_elements(tmp_path):
+    output = translate(
+        tmp_path,
+        "mat2 m[2] = mat2[2](x, 1.0);\n"
+        " mat2 n[] = mat2[](2.0, mat2(x));\n"
+        " mat2 p[2] = {x, 0.0};\n"
+        " values[i] = m[0][1][1] + n[1][0][0] + p[0][1][1];",
+    )
+    diagonal_x = "mat2x2<f32>(vec2<f32>(x, 0.0), vec2<f32>(0.0, x))"
+    assert (
+        f"var m: array<mat2x2<f32>, 2> = array({diagonal_x}, "
+        "mat2x2<f32>(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0)));"
+    ) in output
+    assert (
+        "array(mat2x2<f32>(vec2<f32>(2.0, 0.0), vec2<f32>(0.0, 2.0)), "
+        f"{diagonal_x});"
+    ) in output
+    assert (
+        f"var p: array<mat2x2<f32>, 2> = array({diagonal_x}, "
+        "mat2x2<f32>(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0)));"
+    ) in output
+
+
 def test_scalar_matrix_operand_outside_an_array_is_kept(tmp_path):
     # Only an array element reads a scalar as mat3(s); m *= s scales every component and stays as written.
     output = translate(
