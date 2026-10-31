@@ -120,4 +120,3 @@ def test_metal_refuses_structured_buffer_lengths(expression, name):
     )
     with pytest.raises(BufferLengthUnsupportedError, match=name):
         MetalCodeGen().generate(parse(source))
-
