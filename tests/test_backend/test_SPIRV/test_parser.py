@@ -2470,7 +2470,8 @@ def test_spirv_assembly_uniform_constant_resources_parse():
 
     assert ast.spirv_assembly is True
     assert ast.spirv_types["%img"]["kind"] == "image"
-    assert ast.spirv_types["%img"]["name"] == "sampler2D"
+    # A bare OpTypeImage is Vulkan GLSL's separate texture2D; only the OpTypeSampledImage is a sampler2D.
+    assert ast.spirv_types["%img"]["name"] == "texture2D"
     assert ast.spirv_types["%sampled"]["kind"] == "sampled_image"
     assert ast.spirv_types["%sampled"]["name"] == "sampler2D"
     assert ast.spirv_types["%sampler"]["name"] == "sampler"
