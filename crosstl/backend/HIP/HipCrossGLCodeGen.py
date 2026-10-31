@@ -537,6 +537,7 @@ class HipToCrossGLConverter:
         self.namespace_aliases = {}
         self.source_identifier_names = frozenset()
         self.anonymous_enum_count = 0
+        self.global_resource_bindings = {}
         self.global_resource_binding_count = 0
         self.function_local_record_definitions = {}
         self.function_local_record_node_ids = set()
@@ -593,11 +594,30 @@ class HipToCrossGLConverter:
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
+        self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
         return "\n".join(self.output)
+
+    def prepare_global_resource_bindings(self, ast_node):
+        self.global_resource_bindings = {}
+        for statement in getattr(ast_node, "statements", []) or []:
+            if isinstance(statement, VariableNode) and "__constant__" in set(
+                getattr(statement, "qualifiers", []) or []
+            ):
+                self.global_resource_bindings[id(statement)] = len(
+                    self.global_resource_bindings
+                )
+        self.global_resource_binding_count = len(self.global_resource_bindings)
+
+    def global_resource_binding_for(self, node):
+        binding = self.global_resource_bindings.get(id(node))
+        if binding is None:
+            binding = self.global_resource_binding_count
+            self.global_resource_binding_count += 1
+        return binding
 
     def reset_function_local_record_materializations(self):
         self.function_local_record_definitions = {}
@@ -5984,7 +6004,7 @@ class HipToCrossGLConverter:
             return
 
         if "__constant__" in qualifiers:
-            binding = self.allocate_global_resource_binding()
+            binding = self.global_resource_binding_for(node)
             if hasattr(node, "value") and node.value:
                 value = self.format_variable_initializer_value(node.value)
                 self.emit(
@@ -6107,7 +6127,7 @@ class HipToCrossGLConverter:
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
         output_name = self.register_identifier_name(node.name)
         self.register_variable_type(node.name, var_type)
-        binding = self.allocate_global_resource_binding()
+        binding = self.global_resource_binding_for(node)
         if node.value is not None:
             value = self.visit(node.value)
             self.emit(
@@ -6118,11 +6138,6 @@ class HipToCrossGLConverter:
             self.emit(
                 f"@group(0) @binding({binding}) var<uniform> {output_name}: {var_type};"
             )
-
-    def allocate_global_resource_binding(self):
-        binding = self.global_resource_binding_count
-        self.global_resource_binding_count += 1
-        return binding
 
     def visit_HipErrorHandlingNode(self, node):
         error_type = self.visit(node.error_type)

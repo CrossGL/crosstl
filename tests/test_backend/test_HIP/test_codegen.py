@@ -421,6 +421,35 @@ class TestHipCodeGen:
         assert "__constant__" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_constant_memory_declared_after_kernel_counts_before_parameters(self):
+        code = """
+        #include <hip/hip_runtime.h>
+        __constant__ float scale[4];
+        extern "C" __global__ void first(float* values) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            values[i] = values[i] * scale[i % 4];
+        }
+        __constant__ float bias[4];
+        extern "C" __global__ void second(float* values) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            values[i] = values[i] + bias[i % 4] + scale[0];
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "@group(0) @binding(0) var<uniform> scale: array<f32, 4>;" in result
+        assert "@group(0) @binding(1) var<uniform> bias: array<f32, 4>;" in result
+        assert (
+            result.count(
+                "@group(0) @binding(2) var<storage, read_write> values: array<f32>"
+            )
+            == 2
+        )
+        assert result.count("@group(0) @binding(1)") == 1
+        assert "__constant__" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_official_amd_aligned_struct_attribute_conversion(self):
         code = """
         struct __align__(16) MyStruct {

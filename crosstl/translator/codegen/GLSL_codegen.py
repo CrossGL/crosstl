@@ -36719,6 +36719,39 @@ complex64_t crossgl_complex64_mod_assign(
             return mapped_type
         return f"{base_type}[{extent}]{match.group(1)}"
 
+    def glsl_padded_array_constructor_arguments(self, func_name, call_args, expr):
+        """Pad a short GLSL array constructor to one argument per element.
+
+        GLSL 4.60 section 5.4.4 requires one argument per array element, so
+        ``float[3](0.0)`` is invalid. A declaration's initializer is rewritten
+        to an initializer list before codegen and zero-filled there, but an
+        assignment or a call argument keeps the call spelling, and glslang
+        rejects it. Pad the same way here: the given elements first, then the
+        element type's value initializer for each missing element. A
+        constructor that already has enough arguments, an unsized extent, or
+        a nested element type is left exactly as it was.
+        """
+        if not isinstance(func_name, str):
+            return call_args
+        array_type = self.glsl_outer_array_type(func_name)
+        if array_type is None:
+            return call_args
+        extent_text, element_type = array_type
+        if "[" in element_type:
+            return call_args
+        try:
+            extent = int(extent_text)
+        except ValueError:
+            return call_args
+        if extent <= 0 or len(call_args) >= extent:
+            return call_args
+        padded = list(call_args)
+        padded.extend(
+            self.glsl_value_initialized_expression(expr, element_type)
+            for _ in range(extent - len(padded))
+        )
+        return padded
+
     def glsl_indexed_aggregate_literal_shape(self, expr, access_depth):
         dimensions = []
         frontier = [expr]
@@ -41136,6 +41169,9 @@ complex64_t crossgl_complex64_mod_assign(
                 call_args = self.filter_sampler_arguments(
                     argument_func_name, resource_call_args
                 )
+            call_args = self.glsl_padded_array_constructor_arguments(
+                original_func_name, call_args, expr
+            )
             args = ", ".join(
                 self.generate_function_call_arguments(
                     argument_func_name,
