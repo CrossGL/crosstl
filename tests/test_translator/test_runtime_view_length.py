@@ -86,20 +86,7 @@ def test_metal_refuses_view_lengths(expression, name):
         MetalCodeGen().generate(parse(source))
 
 
-def test_glsl_import_binds_anonymous_member_lengths(tmp_path):
-    path = tmp_path / "anon.comp"
-    path.write_text(ANONYMOUS_GLSL, encoding="utf-8")
-
-    crossgl = crosstl.translate(str(path), backend="cgl", format_output=False)
-
-    assert "data_2.data.length()" in crossgl
-    assert ".outp.length()" in crossgl
-    assert "float(data.length())" not in crossgl
-    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
-    assert len(re.findall(r"OpArrayLength %\w+ %\w+ [01]\b", spirv)) == 2
-
-
-STRUCTURED_PROBE = """shader StructuredProbe {
+STRUCTURED_VIEWS = """shader StructuredViews {
     StructuredBuffer<float> values;
     RWStructuredBuffer<float> outp;
     compute {
@@ -112,12 +99,77 @@ STRUCTURED_PROBE = """shader StructuredProbe {
 
 
 @pytest.mark.parametrize(
-    "expression, name",
+    ("expression", "name"),
     [("float(values.length())", "'values'"), ("float(outp.length())", "'outp'")],
 )
 def test_metal_refuses_structured_buffer_lengths(expression, name):
-    source = STRUCTURED_PROBE.replace(
+    """A Metal buffer argument is a pointer and carries no size, so length()
+    of a StructuredBuffer is refused like length() of a buffer float* view.
+
+    The typed resource spelling used to slip past the pointer check, and the
+    call was copied unchanged onto the device pointer, which the Metal
+    compiler rejects as not a structure or union.
+    """
+    source = STRUCTURED_VIEWS.replace(
         "float(values.length()) + float(outp.length())", expression
     )
     with pytest.raises(BufferLengthUnsupportedError, match=name):
         MetalCodeGen().generate(parse(source))
+
+
+@pytest.mark.parametrize(
+    ("helper", "call", "name"),
+    [
+        ("int count() { return values.length(); }", "float(count())", "'values'"),
+        (
+            "int count(StructuredBuffer<float> v) { return v.length(); }",
+            "float(count(values))",
+            "'v'",
+        ),
+    ],
+)
+def test_metal_refuses_structured_buffer_lengths_in_helpers(helper, call, name):
+    """A helper that reads a module-scope buffer gets it as a pointer argument,
+    as does a helper with a StructuredBuffer parameter, so both are refused."""
+    source = STRUCTURED_VIEWS.replace(
+        "    compute {", f"    {helper}\n    compute {{", 1
+    ).replace("float(values.length()) + float(outp.length())", call)
+    with pytest.raises(BufferLengthUnsupportedError, match=name):
+        MetalCodeGen().generate(parse(source))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expression"),
+    [
+        ("AppendStructuredBuffer<float> values;", "float(values.length())"),
+        ("ConsumeStructuredBuffer<float> values;", "float(values.length())"),
+        ("StructuredBuffer<float> values[2];", "float(values[1].length())"),
+    ],
+)
+def test_metal_refuses_append_consume_and_array_element_lengths(
+    declaration, expression
+):
+    """Append and consume buffers, and an element of a structured buffer
+    array, are device pointers on Metal as well, so their length() is refused.
+
+    Their length() used to be copied unchanged onto the pointer, which the
+    Metal compiler rejects as not a structure or union.
+    """
+    source = STRUCTURED_VIEWS.replace(
+        "StructuredBuffer<float> values;", declaration
+    ).replace("float(values.length()) + float(outp.length())", expression)
+    with pytest.raises(BufferLengthUnsupportedError, match="'values'"):
+        MetalCodeGen().generate(parse(source))
+
+
+def test_glsl_import_binds_anonymous_member_lengths(tmp_path):
+    path = tmp_path / "anon.comp"
+    path.write_text(ANONYMOUS_GLSL, encoding="utf-8")
+
+    crossgl = crosstl.translate(str(path), backend="cgl", format_output=False)
+
+    assert "data_2.data.length()" in crossgl
+    assert ".outp.length()" in crossgl
+    assert "float(data.length())" not in crossgl
+    spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
+    assert len(re.findall(r"OpArrayLength %\w+ %\w+ [01]\b", spirv)) == 2

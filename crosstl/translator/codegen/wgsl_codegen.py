@@ -3507,6 +3507,16 @@ class WGSLCodeGen(
             # pointer to the array and is passed to arrayLength unchanged.
             pointer = self.pointer_argument_expression(function.object_expr)
             return f"i32(arrayLength({pointer}))"
+        if isinstance(array_type, NamedType):
+            # HLSL StructuredBuffer / RWStructuredBuffer globals are emitted as
+            # runtime-sized storage arrays, so their length is arrayLength, the
+            # same as an unsized ArrayType. They used to be copied as `.length()`,
+            # which naga rejects (#3582).
+            if str(array_type.name).lower() in self.STRUCTURED_BUFFER_TYPE_NAMES:
+                return (
+                    "i32(arrayLength(&"
+                    f"{self.generate_expression(function.object_expr)}))"
+                )
         if not isinstance(array_type, ArrayType):
             return None
         if array_type.size is None:
@@ -6761,11 +6771,15 @@ class WGSLCodeGen(
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"
                 and not expr.arguments
-                and isinstance(
-                    self.expression_type(expr.function.object_expr), ArrayType
-                )
             ):
-                return "int"
+                obj_type = self.expression_type(expr.function.object_expr)
+                if isinstance(obj_type, (ArrayType, PointerType)):
+                    return "int"
+                if (
+                    isinstance(obj_type, NamedType)
+                    and str(obj_type.name).lower() in self.STRUCTURED_BUFFER_TYPE_NAMES
+                ):
+                    return "int"
             if function_name in self.COLUMNWISE_MATRIX_BUILTINS and not (
                 self.is_user_function_name(function_name)
             ):

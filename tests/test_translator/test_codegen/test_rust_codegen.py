@@ -27126,3 +27126,54 @@ def test_rust_generic_call_keeps_turbofish():
 
     assert "subgroup_broadcast_const::<_, 0>(a0)" in generated_code
     assert "subgroup_broadcast_const<_, 0>(a0)" not in generated_code
+
+
+def test_rust_turbofish_spells_type_arguments_as_rust_types():
+    """Explicit type arguments are written as Rust types, ``pick::<f32>`` (#3585).
+
+    Rust has no type ``float``, so ``pick::<float>(2.0)`` does not compile.
+    """
+    code = """
+    shader P {
+        T pick<T>(T x) { return x; }
+        compute {
+            buffer float* outp;
+            void main() {
+                outp[0] = pick<float>(2.0);
+                vec3 v = pick<vec3>(vec3(1.0));
+                outp[1] = v.x;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pick::<f32>(2.0)" in generated_code
+    assert "pick::<Vec3<f32>>(" in generated_code
+    assert "pick::<float>" not in generated_code
+    assert "pick::<vec3>" not in generated_code
+
+
+def test_rust_turbofish_spells_nested_and_several_type_arguments():
+    """Each of several type arguments, nested ones included, is a Rust type (#3585).
+
+    ``vec2<int>`` is ``Vec2<i32>``, as in the declarations; it used to be
+    written with its CrossGL name ``ivec2``, which Rust does not have.
+    """
+    code = """
+    shader P {
+        U second<T, U>(T a, U b) { return b; }
+        ivec2 f(vec2 x, ivec2 m) { return second<vec2<float>, vec2<int>>(x, m); }
+        int g(float x, int i) { return second<float, int>(x, i); }
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "second::<Vec2<f32>, Vec2<i32>>(x, m)" in generated_code
+    assert "second::<f32, i32>(x, i)" in generated_code
+    assert "ivec2>" not in generated_code

@@ -113,7 +113,7 @@ from .buffer_block_diagnostics import (
     BufferBlockUnsupportedError,
     record_unsupported_layout_failures,
 )
-from .buffer_length import BufferLengthUnsupportedError
+from .buffer_length import COUNTED_BUFFERS, BufferLengthUnsupportedError
 from .buffer_member_layout import member_is_packed
 from .builtin_result_types import (
     C_FAMILY,
@@ -23134,33 +23134,41 @@ class MetalCodeGen(
         object_expr = getattr(
             func_expr, "object_expr", getattr(func_expr, "object", None)
         )
-        object_name = self.expression_name(object_expr)
-        if self.is_structured_buffer_type(self.expression_result_type(object_expr)) or (
-            object_name
-            and (
-                self.is_structured_buffer_type(
-                    self.local_variable_types.get(object_name, "")
-                )
-                or object_name in self.global_structured_buffer_names()
-            )
-        ):
-            display_name = object_name or self.generate_expression(object_expr)
-            raise BufferLengthUnsupportedError(
-                "metal",
-                f"length() of structured buffer '{display_name}' needs the bound buffer's "
-                "size, which a Metal buffer argument does not carry",
-            )
         if isinstance(object_expr, (IdentifierNode, VariableNode)):
             name = getattr(object_expr, "name", None)
+            # A Metal buffer argument is a pointer and carries no size, so
+            # length() is refused whether the source spells it as a pointer
+            # (buffer float*) or as a typed buffer resource (StructuredBuffer,
+            # RWStructuredBuffer, Buffer, ...), which Metal also lowers to a
+            # device pointer. Without the resource spelling, the call was
+            # copied unchanged onto the pointer, which the Metal compiler
+            # rejects.
+            local_type = str(self.local_variable_types.get(name, ""))
             if self.current_address_space_variables.get(name) in {
                 "device",
                 "constant",
-            } and str(self.local_variable_types.get(name, "")).endswith("*"):
+            } and (
+                local_type.endswith("*")
+                or local_type.split("<", 1)[0] in COUNTED_BUFFERS
+            ):
                 raise BufferLengthUnsupportedError(
                     "metal",
                     f"length() of buffer view '{name}' needs the bound buffer's "
                     "size, which a Metal buffer argument does not carry",
                 )
+        # AppendStructuredBuffer and ConsumeStructuredBuffer are device
+        # pointers too, and so is an element of a structured buffer array:
+        # the name of bufs[1] is "bufs", recorded with the element's
+        # StructuredBuffer<T> type.
+        object_name = self.expression_name(object_expr)
+        if self.is_structured_buffer_type(
+            self.local_variable_types.get(object_name, "")
+        ):
+            raise BufferLengthUnsupportedError(
+                "metal",
+                f"length() of buffer view '{object_name}' needs the bound buffer's "
+                "size, which a Metal buffer argument does not carry",
+            )
         access = self.glsl_buffer_block_member_access(object_expr)
         if access is None or not access.get("is_array"):
             return None
