@@ -794,10 +794,12 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 self.opencl_sampler_states[name] = state
             self.emit(f"const sampler {output_name} = {state};")
             return
-        if self.is_opencl_constant_pointer_local(node):
+        if self.is_opencl_function_scope_constant(node):
             # In `__constant float *p = table;` __constant is the address space
             # p points into. p itself is a private local, like a `__global
-            # float *` local, not a resource with a binding of its own.
+            # float *` local. A kernel's `__constant float t[4] = {...};` is a
+            # table fixed in source. Neither is a resource the host binds, so
+            # neither takes a binding of its own.
             qualifiers = node.qualifiers
             node.qualifiers = [q for q in qualifiers if q != "__constant__"]
             try:
@@ -821,11 +823,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             statement
         ) and not self.is_opencl_fixed_sampler_declaration(statement)
 
-    def is_opencl_constant_pointer_local(self, node):
-        return (
-            self.indent_level > 0
-            and "__constant__" in (getattr(node, "qualifiers", None) or [])
-            and "*" in str(getattr(node, "vtype", ""))
+    def is_opencl_function_scope_constant(self, node):
+        return self.indent_level > 0 and "__constant__" in (
+            getattr(node, "qualifiers", None) or []
         )
 
     def visit_FunctionNode(self, node):

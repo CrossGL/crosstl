@@ -642,6 +642,30 @@ def test_opencl_constant_pointer_local_is_not_a_resource():
     assert crossgl.count("@group(0) @binding(") == 2
 
 
+def test_opencl_kernel_scope_constant_array_is_a_local():
+    crossgl = generate_crossgl("""
+        __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void first(__global float* out) {
+            __constant float local_table[2] = {5.0f, 6.0f};
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4] + local_table[i % 2];
+        }
+
+        __kernel void second(__global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = table[0];
+        }
+        """)
+
+    assert "var local_table: array<f32, 2> = {5.0f, 6.0f};" in crossgl
+    assert "var<uniform> local_table:" not in crossgl
+    # The kernel-scope table takes no binding, so the next kernel's buffer
+    # still follows the program-scope constant.
+    assert crossgl.count("@group(0) @binding(1) var<storage, read_write> out") == 2
+    assert crossgl.count("@group(0) @binding(") == 3
+
+
 def test_opencl_program_sampler_constant_takes_no_binding():
     crossgl = generate_crossgl("""
         __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
