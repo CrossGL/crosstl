@@ -51,6 +51,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.builtin_names import is_crossgl_gl_builtin
 from ..semantics.builtin_values import glsl_builtin_name
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
@@ -4018,7 +4019,15 @@ class SlangCodeGen(LoweringRefusalMixin):
         frag_data = re.fullmatch(r"gl_FragData\[(\d+)\]", semantic_name)
         if frag_data:
             return f"SV_Target{frag_data.group(1)}"
-        return self.semantic_map.get(semantic_name, semantic_name)
+        mapped = self.semantic_map.get(semantic_name, semantic_name)
+        if str(mapped).startswith("gl_") and is_crossgl_gl_builtin(semantic_name):
+            if not semantic_name.lower().startswith(("gl_fragcolor", "gl_fragdata")):
+                return self.refuse_lowering(
+                    f"Slang has no system value for the built-in @{semantic_name}; "
+                    "it would become a user semantic no stage writes",
+                    mapped,
+                )
+        return mapped
 
     def slang_semantic_output_kind(self, semantic):
         if semantic is None:
@@ -9576,8 +9585,18 @@ class SlangCodeGen(LoweringRefusalMixin):
     def generate_expression(self, node):
         """Render a CrossGL expression as Slang expression syntax."""
         if isinstance(node, VariableNode):
+            if node.name == "gl_HelperInvocation":
+                for table in ("local_variable_types", "global_variable_types"):
+                    if "gl_HelperInvocation" in (getattr(self, table, None) or {}):
+                        return "gl_HelperInvocation"
+                return "IsHelperLane()"
             return node.name
         elif isinstance(node, IdentifierNode):
+            if node.name == "gl_HelperInvocation":
+                for table in ("local_variable_types", "global_variable_types"):
+                    if "gl_HelperInvocation" in (getattr(self, table, None) or {}):
+                        return "gl_HelperInvocation"
+                return "IsHelperLane()"
             if isinstance(node.name, str) and "::" in node.name:
                 enum_value = enum_value_expression(self, node.name)
                 if enum_value != node.name:
