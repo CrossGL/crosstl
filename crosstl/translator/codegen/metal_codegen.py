@@ -4263,9 +4263,8 @@ class MetalCodeGen(
                 # const member accepts every receiver the source's did.
                 qualifiers = {
                     str(item).lower()
-                    for item in list(
-                        getattr(parameters[0], "qualifiers", []) or []
-                    ) + list(getattr(parameters[0].param_type, "qualifiers", []) or [])
+                    for item in list(getattr(parameters[0], "qualifiers", []) or [])
+                    + list(getattr(parameters[0].param_type, "qualifiers", []) or [])
                 }
                 receiver = ["const"] + (
                     [
@@ -4706,9 +4705,8 @@ class MetalCodeGen(
         return (
             struct_name in getattr(self, "metal_vertex_entry_output_struct_names", ())
             or struct_name in getattr(self, "metal_mesh_primitive_struct_names", ())
-            or struct_name in getattr(
-                self, "metal_fragment_entry_input_struct_names", ()
-            )
+            or struct_name
+            in getattr(self, "metal_fragment_entry_input_struct_names", ())
         )
 
     def metal_varying_member_attribute(
@@ -6267,7 +6265,8 @@ class MetalCodeGen(
         self.current_image_format_parameters = image_format_parameters
         self.register_metal_buffer_resource_parameter_scope(
             self.current_function_name,
-            include_all=shader_type in {
+            include_all=shader_type
+            in {
                 "vertex",
                 "fragment",
                 "geometry",
@@ -12660,7 +12659,8 @@ class MetalCodeGen(
                     str(func_name),
                 )
                 is not None
-                or func_name in [
+                or func_name
+                in [
                     "float",
                     "half",
                     "float16",
@@ -22134,9 +22134,8 @@ class MetalCodeGen(
         return bool(
             func_name
             and name
-            and name in self.function_structured_buffer_length_dependencies.get(
-                func_name, set()
-            )
+            and name
+            in self.function_structured_buffer_length_dependencies.get(func_name, set())
         )
 
     def global_structured_buffer_requires_counter(self, name):
@@ -23135,16 +23134,13 @@ class MetalCodeGen(
             func_expr, "object_expr", getattr(func_expr, "object", None)
         )
         object_name = self.expression_name(object_expr)
-        if (
-            self.is_structured_buffer_type(self.expression_result_type(object_expr))
-            or (
-                object_name
-                and (
-                    self.is_structured_buffer_type(
-                        self.local_variable_types.get(object_name, "")
-                    )
-                    or object_name in self.global_structured_buffer_names()
+        if self.is_structured_buffer_type(self.expression_result_type(object_expr)) or (
+            object_name
+            and (
+                self.is_structured_buffer_type(
+                    self.local_variable_types.get(object_name, "")
                 )
+                or object_name in self.global_structured_buffer_names()
             )
         ):
             display_name = object_name or self.generate_expression(object_expr)
@@ -23662,7 +23658,8 @@ class MetalCodeGen(
     def buffer_atomic_supports_scalar_type(operation, component_type):
         return component_type in {"int", "uint"} or (
             component_type == "float"
-            and operation in {
+            and operation
+            in {
                 "load",
                 "store",
                 "fetch_add",
@@ -28040,7 +28037,8 @@ class MetalCodeGen(
             fragment_label(fragment_provenance),
         )
         if (
-            fragment_metadata != (
+            fragment_metadata
+            != (
                 "unspecified",
                 "unspecified",
                 "unspecified",

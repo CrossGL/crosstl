@@ -98,6 +98,7 @@ def test_glsl_import_binds_anonymous_member_lengths(tmp_path):
     spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
     assert len(re.findall(r"OpArrayLength %\w+ %\w+ [01]\b", spirv)) == 2
 
+
 STRUCTURED_PROBE = """shader StructuredProbe {
     StructuredBuffer<float> values;
     RWStructuredBuffer<float> outp;
