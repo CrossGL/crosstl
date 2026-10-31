@@ -154,6 +154,20 @@ def test_matrix_array_value_converts_scalar_elements(tmp_path):
     ) in output
 
 
+def test_scalar_matrix_operand_outside_an_array_is_kept(tmp_path):
+    # Only an array element reads a scalar as mat3(s); m *= s scales every component and stays as written.
+    output = translate(
+        tmp_path,
+        "mat3 m = mat3(x);\n m *= 2.0;\n m *= twice(x);\n values[i] = m[0][0];",
+        functions="""
+    float twice(float v) {
+        return v * 2.0;
+    }""",
+    )
+    assert "m *= 2.0;" in output
+    assert "m *= twice(x);" in output
+
+
 def test_short_braced_initializer_zero_fills_the_rest(tmp_path):
     # The elements a braced initializer leaves out are zero, as in GLSL output.
     output = translate(

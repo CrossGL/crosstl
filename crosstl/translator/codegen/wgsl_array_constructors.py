@@ -25,7 +25,11 @@ from ..ast import (
     VectorType,
 )
 
-__all__ = ["wgsl_array_constructor", "wgsl_array_constructor_type"]
+__all__ = [
+    "wgsl_array_constructor",
+    "wgsl_array_constructor_type",
+    "wgsl_array_element",
+]
 
 _ARRAY_CONSTRUCTOR = re.compile(r"\s*([A-Za-z_]\w*)\s*\[\s*(\w*)\s*\]\s*")
 
@@ -111,7 +115,20 @@ def wgsl_array_constructor(codegen, node):
         size = codegen.identifier_name(size)
     element = codegen.type_name_string(element_type)
     values = ", ".join(
-        codegen.generate_expression_for_target(argument, element_type)
-        for argument in arguments
+        wgsl_array_element(codegen, argument, element_type) for argument in arguments
     )
     return f"array<{element}, {size}>({values})"
+
+
+def wgsl_array_element(codegen, value, element_type):
+    """WGSL for ``value`` as one element of an array constructor or initializer of ``element_type`` elements.
+
+    A scalar element of a matrix array, as in ``mat3[2](0.0)``, stands for the matrix ``mat3(0.0)``, with the
+    scalar on the diagonal and zero elsewhere (GLSL 4.60 section 5.4.2), as Metal output writes it. WGSL has no
+    conversion from a scalar to a matrix, so the matrix is written out. Only array elements are read this way: a
+    scalar stored to a matrix, as in ``m += 1.0`` or HLSL's ``float3x3 m = 1.0;``, applies to every component.
+    """
+    diagonal = codegen.generate_scalar_matrix_constructor(element_type, value)
+    if diagonal is not None:
+        return diagonal
+    return codegen.generate_expression_for_target(value, element_type)

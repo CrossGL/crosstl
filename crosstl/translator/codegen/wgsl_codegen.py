@@ -74,6 +74,7 @@ from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_array_constructors import (
     wgsl_array_constructor,
     wgsl_array_constructor_type,
+    wgsl_array_element,
 )
 from .wgsl_boolean_xor import (
     wgsl_boolean_xor,
@@ -3178,9 +3179,6 @@ class WGSLCodeGen(
                     source_type = getattr(resolved_function, "return_type", None)
         finally:
             self._current_expression_expected_type = previous_expected_type
-        matrix_scalar = self.generate_scalar_matrix_constructor(target_type, expr)
-        if matrix_scalar is not None:
-            return matrix_scalar
         narrowed = self.vector_narrowing_expression(rendered, target_type, source_type)
         if narrowed is not None:
             return narrowed
@@ -3216,8 +3214,7 @@ class WGSLCodeGen(
         element_type = target_type.element_type
         element = self.type_name_string(element_type)
         values = [
-            self.generate_expression_for_target(value, element_type)
-            for value in expr.elements
+            wgsl_array_element(self, value, element_type) for value in expr.elements
         ]
         values += [f"{element}()"] * (size - len(values))
         return f"array<{element}, {size}>({', '.join(values)})"
