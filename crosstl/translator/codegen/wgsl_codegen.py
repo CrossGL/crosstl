@@ -74,6 +74,7 @@ from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .wgsl_array_constructors import (
     wgsl_array_constructor,
     wgsl_array_constructor_type,
+    wgsl_array_element,
 )
 from .wgsl_boolean_xor import (
     wgsl_boolean_xor,
@@ -3159,6 +3160,9 @@ class WGSLCodeGen(
         padded_array = self.generate_padded_array_literal(expr, target_type)
         if padded_array is not None:
             return padded_array
+        matrix_array = self.generate_matrix_array_literal(expr, target_type)
+        if matrix_array is not None:
+            return matrix_array
         previous_expected_type = self._current_expression_expected_type
         self._current_expression_expected_type = target_type
         try:
@@ -3213,11 +3217,28 @@ class WGSLCodeGen(
         element_type = target_type.element_type
         element = self.type_name_string(element_type)
         values = [
-            self.generate_expression_for_target(value, element_type)
-            for value in expr.elements
+            wgsl_array_element(self, value, element_type) for value in expr.elements
         ]
         values += [f"{element}()"] * (size - len(values))
         return f"array<{element}, {size}>({', '.join(values)})"
+
+    def generate_matrix_array_literal(self, expr, target_type):
+        """``array(...)`` for an array literal of matrices that gives every element, else ``None``.
+
+        A scalar element, as in ``mat2 m[2] = mat2[2](x, 1.0);`` or ``{x, 1.0}``, is the diagonal
+        matrix it stands for (wgsl_array_element), as in a short initializer.
+        """
+        if not isinstance(expr, ArrayLiteralNode) or not isinstance(
+            target_type, ArrayType
+        ):
+            return None
+        element_type = target_type.element_type
+        if self.matrix_shape(element_type) is None:
+            return None
+        values = ", ".join(
+            wgsl_array_element(self, value, element_type) for value in expr.elements
+        )
+        return f"array({values})"
 
     def local_variable_declaration_type(self, node):
         declared_type = getattr(node, "var_type", None)
