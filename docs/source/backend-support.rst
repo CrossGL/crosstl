@@ -15,9 +15,9 @@ the language's reference compiler or validator checks the result. Compute
 probes also run, on the GPU or on Mesa's software drivers, where the
 translation must compute what the native probe computes: Metal, GLSL and
 SPIR-V directly, and HLSL, Slang and WGSL as the SPIR-V their reference
-compilers produce. A graphics probe's translation must keep the built-ins and
-decorations, such as ``flat``, that the feature needs in the SPIR-V its
-compiler produces, or in the AIR for Metal.
+compilers produce. A translation must also keep the built-ins and
+decorations, such as ``flat`` or the subgroup size, that the feature needs
+in the SPIR-V its compiler produces, or in the AIR for Metal.
 `COVERAGE.md <https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md>`_
 lists the score and every gap for each language and direction, and each row
 with gaps has an open issue labelled ``coverage``.
