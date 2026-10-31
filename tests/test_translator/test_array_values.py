@@ -168,6 +168,37 @@ def test_glsl_keeps_array_constructors_as_values():
     assert len(_constructors(program)) == 4
 
 
+SHORT_ARRAY_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    float total(float v[3]) { return v[0] + v[1] + v[2]; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            float a[3];
+            a = float[3](0.0);
+            outp[0] = a[2] + total(float[3](0.0));
+        }
+    }
+}
+"""
+
+
+def test_glsl_pads_short_array_constructors_outside_declarations(tmp_path):
+    """GLSL needs one constructor argument per element (GLSL 4.60 section 5.4.4).
+
+    A declaration's initializer is rewritten to an initializer list and
+    zero-filled, but an assignment or a call argument kept the short call,
+    which glslang rejects. Pad it the same way: given elements first, then
+    the element type's value initializer for each missing element.
+    """
+    code = _translate(tmp_path, SHORT_ARRAY_CONSTRUCTOR_CGL, ".cgl", "opengl")
+
+    assert "a = float[3](0.0, 0.0, 0.0);" in code
+    assert "total(float[3](0.0, 0.0, 0.0))" in code
+    assert "float[3](0.0)" not in code
+
+
 @pytest.mark.parametrize(
     ("statement", "reason"),
     [
