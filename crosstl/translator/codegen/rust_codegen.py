@@ -12316,7 +12316,34 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         segments = head.split("::")
         if not all(segment.isidentifier() for segment in segments):
             return name
-        return f"{head}::<{type_arguments}"
+        return f"{head}::<{self.rust_explicit_type_arguments(type_arguments)}"
+
+    def rust_explicit_type_arguments(self, type_arguments):
+        """Spell the CrossGL type arguments ``float, vec3>`` of a call as Rust types.
+
+        ``type_arguments`` is the text after the call's ``<``, closing ``>``
+        included.  Each top-level argument goes through ``map_type``, so
+        ``pick<float>`` becomes ``pick::<f32>`` rather than naming ``float``,
+        which Rust does not have.  Text that is not a closed argument list is
+        returned unchanged.
+        """
+        if not type_arguments.endswith(">"):
+            return type_arguments
+        arguments, depth, start = [], 0, 0
+        body = type_arguments[:-1]
+        for index, character in enumerate(body):
+            if character in "<[(":
+                depth += 1
+            elif character in ">])":
+                depth -= 1
+            elif character == "," and depth == 0:
+                arguments.append(body[start:index])
+                start = index + 1
+        if depth != 0:
+            return type_arguments
+        arguments.append(body[start:])
+        mapped = [self.map_type(argument.strip()) for argument in arguments]
+        return ", ".join(mapped) + ">"
 
     def rust_reserved_identifiers(self):
         return {
