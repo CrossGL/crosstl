@@ -537,6 +537,7 @@ class HipToCrossGLConverter:
         self.namespace_aliases = {}
         self.source_identifier_names = frozenset()
         self.anonymous_enum_count = 0
+        self.global_resource_bindings = {}
         self.global_resource_binding_count = 0
         self.function_local_record_definitions = {}
         self.function_local_record_node_ids = set()
