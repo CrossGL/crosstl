@@ -1926,6 +1926,89 @@ def test_wgsl_codegen_maps_struct_buffer_pointer_length_to_element_count(tmp_pat
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_converts_buffer_length_to_expected_uint_type(tmp_path):
+    # `.length()` of a storage buffer or StructuredBuffer resolves as an integer
+    # expression, so assigning it to a uint converts the i32 to u32 (#3617).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer float* outp;
+        StructuredBuffer<float> items;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint n = values.length();
+                uint m = items.length();
+                outp[0] = float(n) + float(m);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var<storage, read_write> values: array<f32>;" in generated
+    assert "var<storage, read_write> outp: array<f32>;" in generated
+    assert "var<storage, read> items: array<f32>;" in generated
+    assert "var n: u32 = u32(i32(arrayLength(&values)));" in generated
+    assert "var m: u32 = u32(i32(arrayLength(&items)));" in generated
+    assert "outp[0] = (f32(n) + f32(m));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_buffer_length_to_uint_argument_and_return(tmp_path):
+    # A uint parameter and a uint return type expect a u32 as well (#3617).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer float* outp;
+        float scale(uint n) {
+            return float(n);
+        }
+        uint count() {
+            return values.length();
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = scale(values.length()) + float(count());
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "return u32(i32(arrayLength(&values)));" in generated
+    assert "scale(u32(i32(arrayLength(&values))))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_buffer_pointer_parameter_length_to_uint():
+    # A `buffer float*` helper parameter is passed to arrayLength as it is, and
+    # its length still converts to u32 for a uint local (#3617). naga 30 refuses
+    # storage pointer parameters, so only the text is pinned.
+    shader = """
+    shader Probe {
+        buffer float* outp;
+        uint count(buffer float* data) {
+            uint n = data.length();
+            return n;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(count(outp));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var n: u32 = u32(i32(arrayLength(data)));" in generated
+
+
 def test_wgsl_codegen_passes_buffer_pointer_parameter_to_array_length():
     # A `buffer float*` helper parameter is already a pointer to the storage
     # array, so arrayLength takes it as it is; `&values` is not a reference.

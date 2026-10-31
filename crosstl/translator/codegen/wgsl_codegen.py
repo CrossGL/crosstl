@@ -6792,11 +6792,15 @@ class WGSLCodeGen(
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"
                 and not expr.arguments
-                and isinstance(
-                    self.expression_type(expr.function.object_expr), ArrayType
-                )
             ):
-                return "int"
+                obj_type = self.expression_type(expr.function.object_expr)
+                if isinstance(obj_type, (ArrayType, PointerType)):
+                    return "int"
+                if (
+                    isinstance(obj_type, NamedType)
+                    and str(obj_type.name).lower() in self.STRUCTURED_BUFFER_TYPE_NAMES
+                ):
+                    return "int"
             if function_name in self.COLUMNWISE_MATRIX_BUILTINS and not (
                 self.is_user_function_name(function_name)
             ):
