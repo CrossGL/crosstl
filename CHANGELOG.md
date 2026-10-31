@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- HLSL output accepts an `int` value for `RWByteAddressBuffer.InterlockedMax` and `InterlockedMin`, and an `int` original value beside it, and writes the call unchanged, so DXC selects the signed operation. It used to refuse the call with an untyped `ValueError` (`value argument must be scalar uint, got int`).
 - WGSL output writes a declared array whose initializer gives fewer elements than the array has, such as `float a[3] = float[3](0.0);` or `{x, 1.0}`, as `array<f32, 3>(0.0, f32(), f32())`, with the elements left out set to zero as GLSL output does. It used to write `array(0.0)`, a one-element array that naga rejects.
 - CUDA input fills the `dim3` components a braced or default-constructed declaration leaves out with 1, as CUDA does: `dim3 block = {16, 16};` imports as `vec3<u32>(16, 16, 1)` and `dim3 unit;` as `vec3<u32>(1, 1, 1)`. They used to import as `{16, 16}`, which Metal output read with `z` = 0, and as an uninitialized `vec3<u32>`.
 - HIP input numbers `__constant__` bindings in declaration order and starts the kernel's buffer and uniform parameters after them, as CUDA input does. Every `__constant__` variable used to be bound at `@binding(0)`, beside the kernel's first buffer, so Metal output refused the program with a conflicting resource binding.

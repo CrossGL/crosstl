@@ -16109,6 +16109,55 @@ def test_directx_byte_address_interlocked_member_calls_are_preserved():
     )
 
 
+@pytest.mark.parametrize("method_name", ["InterlockedMax", "InterlockedMin"])
+def test_directx_byte_address_interlocked_min_max_accept_signed_value(method_name):
+    shader = f"""
+    shader ByteAddressSignedInterlockedHLSL {{
+        RWByteAddressBuffer rawBytes @register(u0);
+        RWStructuredBuffer<int> signedValues @register(u1);
+
+        compute {{
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {{
+                int value = signedValues[tid.x];
+                int original = 0;
+                rawBytes.{method_name}(0u, value);
+                rawBytes.{method_name}(4u, value, original);
+                signedValues[0] = original;
+            }}
+        }}
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert f"rawBytes.{method_name}(0u, value);" in generated_code
+    assert f"rawBytes.{method_name}(4u, value, original);" in generated_code
+
+
+def test_directx_byte_address_interlocked_add_rejects_signed_value():
+    shader = """
+    shader ByteAddressSignedInterlockedAddHLSL {
+        RWByteAddressBuffer rawBytes @register(u0);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main() {
+                int value = -1;
+                rawBytes.InterlockedAdd(0u, value);
+            }
+        }
+    }
+    """
+
+    match = (
+        "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
+        "value argument must be scalar uint, got int"
+    )
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 @pytest.mark.parametrize(
     ("declaration", "call", "match"),
     [
