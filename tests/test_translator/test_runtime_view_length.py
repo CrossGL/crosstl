@@ -117,6 +117,27 @@ def test_metal_refuses_structured_buffer_lengths(expression, name):
         MetalCodeGen().generate(parse(source))
 
 
+@pytest.mark.parametrize(
+    ("helper", "call", "name"),
+    [
+        ("int count() { return values.length(); }", "float(count())", "'values'"),
+        (
+            "int count(StructuredBuffer<float> v) { return v.length(); }",
+            "float(count(values))",
+            "'v'",
+        ),
+    ],
+)
+def test_metal_refuses_structured_buffer_lengths_in_helpers(helper, call, name):
+    """A helper that reads a module-scope buffer gets it as a pointer argument,
+    as does a helper with a StructuredBuffer parameter, so both are refused."""
+    source = STRUCTURED_VIEWS.replace(
+        "    compute {", f"    {helper}\n    compute {{", 1
+    ).replace("float(values.length()) + float(outp.length())", call)
+    with pytest.raises(BufferLengthUnsupportedError, match=name):
+        MetalCodeGen().generate(parse(source))
+
+
 def test_glsl_import_binds_anonymous_member_lengths(tmp_path):
     path = tmp_path / "anon.comp"
     path.write_text(ANONYMOUS_GLSL, encoding="utf-8")
