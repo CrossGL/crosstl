@@ -2989,6 +2989,9 @@ class WGSLCodeGen(
         boolean_xor = wgsl_boolean_xor_assignment(self, node)
         if boolean_xor is not None:
             return boolean_xor
+        matrix_scalar = self.generate_matrix_scalar_compound_assignment(node)
+        if matrix_scalar is not None:
+            return matrix_scalar
         target_type = self.expression_type(node.target)
         if node.operator[:-1] in SHIFT_OPERATORS:
             value = wgsl_shift_amount(self, node.value, target_type)
@@ -3015,6 +3018,45 @@ class WGSLCodeGen(
             return boolean_xor
         pad = "    " * indent
         return f"{pad}{self.generate_assignment(node)};"
+
+    def generate_matrix_scalar_compound_assignment(self, node):
+        """``m = matCxR<T>(m[0] + s, ...)`` for ``m += s``, ``-=`` or ``/=``, else ``None``.
+
+        generate_assignment calls it after the target's write checks, so a statement
+        and a for-loop update are lowered alike.
+        """
+        operator = node.operator
+        if operator not in {"+=", "-=", "/="}:
+            return None
+        binary_operator = operator[:-1]
+        matrix_shape = self.matrix_shape(self.expression_type(node.target))
+        if matrix_shape is None:
+            return None
+        element, columns, rows = matrix_shape
+        if self.matrix_shape(self.expression_type(node.value)) is not None:
+            # WGSL applies `+=` and `-=` to two matrices component by component,
+            # but has no `/` on matrices at all.
+            if binary_operator == "/":
+                self.refuse_matrix_scalar_binary(node)
+            return None
+        if not self.is_matrix_scalar_operand(node.value, element):
+            # WGSL has no `/` on matrices, and a scalar of another type does not
+            # convert to the matrix element type.
+            if binary_operator == "/" or self.scalar_type_name(
+                self.expression_type(node.value)
+            ):
+                self.refuse_matrix_scalar_binary(node)
+            return None
+        self.require_repeatable_matrix_operands(
+            f"matrix-scalar {operator}", (node.target, node.value)
+        )
+        target = self.generate_expression(node.target)
+        scalar = self.generate_expression(node.value)
+        parts = [
+            f"{self.matrix_column_expression(target, index)} {binary_operator} {scalar}"
+            for index in range(columns)
+        ]
+        return f"{target} = mat{columns}x{rows}<{element}>({', '.join(parts)})"
 
     def generate_stage_interface_array_assignment_statement(self, node, indent):
         target = getattr(node, "target", None)
