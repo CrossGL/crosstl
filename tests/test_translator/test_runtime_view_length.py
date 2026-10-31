@@ -97,3 +97,27 @@ def test_glsl_import_binds_anonymous_member_lengths(tmp_path):
     assert "float(data.length())" not in crossgl
     spirv = crosstl.translate(str(path), backend="vulkan", format_output=False)
     assert len(re.findall(r"OpArrayLength %\w+ %\w+ [01]\b", spirv)) == 2
+
+STRUCTURED_PROBE = """shader StructuredProbe {
+    StructuredBuffer<float> values;
+    RWStructuredBuffer<float> outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            outp[0] = float(values.length()) + float(outp.length());
+        }
+    }
+}"""
+
+
+@pytest.mark.parametrize(
+    "expression, name",
+    [("float(values.length())", "'values'"), ("float(outp.length())", "'outp'")],
+)
+def test_metal_refuses_structured_buffer_lengths(expression, name):
+    source = STRUCTURED_PROBE.replace(
+        "float(values.length()) + float(outp.length())", expression
+    )
+    with pytest.raises(BufferLengthUnsupportedError, match=name):
+        MetalCodeGen().generate(parse(source))
+

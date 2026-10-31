@@ -23134,6 +23134,25 @@ class MetalCodeGen(
         object_expr = getattr(
             func_expr, "object_expr", getattr(func_expr, "object", None)
         )
+        object_name = self.expression_name(object_expr)
+        if (
+            self.is_structured_buffer_type(self.expression_result_type(object_expr))
+            or (
+                object_name
+                and (
+                    self.is_structured_buffer_type(
+                        self.local_variable_types.get(object_name, "")
+                    )
+                    or object_name in self.global_structured_buffer_names()
+                )
+            )
+        ):
+            display_name = object_name or self.generate_expression(object_expr)
+            raise BufferLengthUnsupportedError(
+                "metal",
+                f"length() of structured buffer '{display_name}' needs the bound buffer's "
+                "size, which a Metal buffer argument does not carry",
+            )
         if isinstance(object_expr, (IdentifierNode, VariableNode)):
             name = getattr(object_expr, "name", None)
             if self.current_address_space_variables.get(name) in {
