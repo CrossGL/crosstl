@@ -4019,15 +4019,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         frag_data = re.fullmatch(r"gl_FragData\[(\d+)\]", semantic_name)
         if frag_data:
             return f"SV_Target{frag_data.group(1)}"
-        mapped = self.semantic_map.get(semantic_name, semantic_name)
-        if str(mapped).startswith("gl_") and is_crossgl_gl_builtin(semantic_name):
-            if not semantic_name.lower().startswith(("gl_fragcolor", "gl_fragdata")):
-                return self.refuse_lowering(
-                    f"Slang has no system value for the built-in @{semantic_name}; "
-                    "it would become a user semantic no stage writes",
-                    mapped,
-                )
-        return mapped
+        return self.semantic_map.get(semantic_name, semantic_name)
 
     def slang_semantic_output_kind(self, semantic):
         if semantic is None:
@@ -4350,7 +4342,22 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
 
     def semantic_suffix(self, semantic, shader_type=None):
+        """The ``: semantic`` a declaration takes; a built-in with no Slang system value is refused.
+
+        ``map_semantic`` returns such a ``gl_`` name unchanged, and slangc would read it as a user semantic, an
+        ordinary varying, so the declaration would not carry the built-in.
+        """
         mapped_semantic = self.map_semantic(semantic, shader_type)
+        name = str(mapped_semantic or "")
+        if (
+            name.startswith("gl_")
+            and is_crossgl_gl_builtin(name)
+            and not name.lower().startswith(("gl_fragcolor", "gl_fragdata"))
+        ):
+            self.refuse_lowering(
+                f"Slang has no system value for the built-in @{name}; "
+                "it would become a user varying, not the built-in"
+            )
         return f" : {mapped_semantic}" if mapped_semantic else ""
 
     def generate_stage(self, stage_type, stage):

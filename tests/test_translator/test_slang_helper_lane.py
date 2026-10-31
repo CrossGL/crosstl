@@ -48,7 +48,10 @@ def test_slang_local_named_gl_helper_invocation_is_left_alone():
 
 
 def test_slang_refuses_unmapped_builtin_semantic():
-    with pytest.raises(SlangLoweringRefused, match="Slang has no system value for the built-in @gl_HelperInvocation"):
+    with pytest.raises(
+        SlangLoweringRefused,
+        match="Slang has no system value for the built-in @gl_HelperInvocation",
+    ):
         generate("""
             shader Probe {
                 struct FragmentInput {
@@ -60,3 +63,37 @@ def test_slang_refuses_unmapped_builtin_semantic():
                 }
             }
         """)
+
+
+def test_slang_refuses_unmapped_builtin_entry_parameter():
+    with pytest.raises(
+        SlangLoweringRefused,
+        match="Slang has no system value for the built-in @gl_VertexIndex",
+    ):
+        generate("""
+            shader Probe {
+                vertex {
+                    vec4 main(vec3 position @ POSITION, int index @ gl_VertexIndex)
+                        @ gl_Position {
+                        return vec4(position, float(index));
+                    }
+                }
+            }
+        """)
+
+
+def test_slang_keeps_workgroup_count_entry_parameter():
+    slang = generate("""
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* o;
+                void main(uvec3 gid @ gl_GlobalInvocationID, uvec3 groups @ gl_NumWorkGroups) {
+                    o[gid.x] = groups.x;
+                }
+            }
+        }
+    """)
+
+    assert "uint3 groups = WorkgroupCount();" in slang
+    assert "gl_NumWorkGroups" not in slang
