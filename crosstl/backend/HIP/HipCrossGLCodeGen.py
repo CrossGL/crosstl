@@ -604,13 +604,17 @@ class HipToCrossGLConverter:
     def prepare_global_resource_bindings(self, ast_node):
         self.global_resource_bindings = {}
         for statement in getattr(ast_node, "statements", []) or []:
-            if isinstance(statement, VariableNode) and "__constant__" in set(
-                getattr(statement, "qualifiers", []) or []
-            ):
+            if self.is_global_resource_declaration(statement):
                 self.global_resource_bindings[id(statement)] = len(
                     self.global_resource_bindings
                 )
         self.global_resource_binding_count = len(self.global_resource_bindings)
+
+    def is_global_resource_declaration(self, statement):
+        """Whether a top-level declaration imports as a resource with a binding."""
+        return isinstance(statement, VariableNode) and "__constant__" in set(
+            getattr(statement, "qualifiers", []) or []
+        )
 
     def global_resource_binding_for(self, node):
         binding = self.global_resource_bindings.get(id(node))

@@ -642,6 +642,25 @@ def test_opencl_constant_pointer_local_is_not_a_resource():
     assert crossgl.count("@group(0) @binding(") == 2
 
 
+def test_opencl_program_sampler_constant_takes_no_binding():
+    crossgl = generate_crossgl("""
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void k(__global const float *fin, __global float *outp,
+                        __read_only image2d_t tex) {
+            int i = get_global_id(0);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x * table[i % 4];
+        }
+        """)
+
+    assert "const sampler smp = sampler(" in crossgl
+    assert "@group(0) @binding(0) var<uniform> table: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<storage, read> fin: array<f32>" in crossgl
+    assert "@group(0) @binding(2) var<storage, read_write> outp: array<f32>" in crossgl
+
+
 def test_darktable_unsigned_char_pointer_to_array_kernel_param_codegen_reparse():
     crossgl = generate_crossgl("""
         static inline int FCxtrans(const int row,

@@ -784,11 +784,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             self.emit(f"// skipped host OpenCL source string: {node.name}")
             return
         self.register_opencl_sizeof_symbol(node)
-        if (
-            getattr(node, "value", None) is not None
-            and self.convert_hip_type_to_crossgl(getattr(node, "vtype", ""))
-            == "sampler"
-        ):
+        if self.is_opencl_fixed_sampler_declaration(node):
             # A sampler_t constant fixes its state in source with CLK_* flags,
             # as a CrossGL sampler(...) constructor does.
             state = self.format_opencl_sampler_state(node.value)
@@ -810,6 +806,20 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 node.qualifiers = qualifiers
             return
         super().visit_VariableNode(node)
+
+    def is_opencl_fixed_sampler_declaration(self, node):
+        return (
+            getattr(node, "value", None) is not None
+            and self.convert_hip_type_to_crossgl(getattr(node, "vtype", ""))
+            == "sampler"
+        )
+
+    def is_global_resource_declaration(self, statement):
+        # A __constant sampler_t imports as a `const sampler`, not as a
+        # resource, so it takes no binding.
+        return super().is_global_resource_declaration(
+            statement
+        ) and not self.is_opencl_fixed_sampler_declaration(statement)
 
     def is_opencl_constant_pointer_local(self, node):
         return (
