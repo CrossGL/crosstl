@@ -378,17 +378,19 @@ def synthetic_evidence(target):
                 guard = np.asarray(guard, dtype="uint32").view("float32").tolist()
             elif case["dtype"] == "bool_" and target != "metal":
                 guard = [int(v) for v in guard]
-            trace[-1].update(
-                target=target,
-                threads=result.size,
-                workgroupCount=[result.size, 1, 1],
-                workgroupSize=[1, 1, 1],
-                dispatchVersion=runtime.DISPATCH_VERSION,
-                selectionValues=[
-                    runtime.wire_value(v) for v in result.reshape(-1).tolist()
-                ],
-                selectionGuardValues=guard,
-            )
+            flat = result.reshape(-1)
+            chunks = -(-flat.size // workloads.CHUNK)
+            for index in range(chunks):
+                part = flat[index * workloads.CHUNK : (index + 1) * workloads.CHUNK]
+                trace[len(trace) - chunks + index].update(
+                    target=target,
+                    threads=part.size,
+                    workgroupCount=[part.size, 1, 1],
+                    workgroupSize=[1, 1, 1],
+                    dispatchVersion=runtime.DISPATCH_VERSION,
+                    selectionValues=[runtime.wire_value(v) for v in part.tolist()],
+                    selectionGuardValues=guard,
+                )
     return records, trace
 
 
@@ -437,7 +439,10 @@ def test_selection_requires_exact_evidence(target, fault):
             workloads.validate(records, trace, native=True)
     else:
         workloads.validate(records, trace, native=True)
-        assert len(records) == 45
+        assert len(records) == 46
+        # The chunked case runs as three consecutive v_Select launches.
+        chunked = next(item for item in records if item["layout"] == "chunked")
+        assert chunked["dispatchCount"] == 3
         for record in records:
             record["dispatchCount"] = 0
         workloads.validate(records, [], native=False)
@@ -749,7 +754,7 @@ def test_parent_requires_complete_worker_evidence(tmp_path, monkeypatch, fault):
         assert not (args.output_dir / "evidence.json").exists()
     else:
         evidence = proof.verify(args)
-        assert evidence["casesPerPath"] == 45 and evidence["absoluteCasesPerPath"] == 24
+        assert evidence["casesPerPath"] == 46 and evidence["absoluteCasesPerPath"] == 24
         assert (
             evidence["fullTranslatedBackend"] is False
             and evidence["fullUpstreamSuite"] is False

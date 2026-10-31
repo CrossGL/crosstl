@@ -19,6 +19,7 @@ from demos.integrations.mlx.portable_host import (
     random_packages,
     random_workloads,
     runtime,
+    trace_records,
     verify_random,
 )
 
@@ -588,8 +589,8 @@ def test_random_workloads_cover_large_outputs_and_key_layouts():
     assert max(case["count"] for case in large) == 131072
 
 
-def event(target, entry):
-    case = random_audit.byte_workload(entry, 3, 3)
+def event(target, entry, byte_count=3):
+    case = random_audit.byte_workload(entry, 3, byte_count)
     desc = descriptor(target, entry)
     desc["target"] = target
     inputs, outputs = random_audit.dispatch_values(desc, case)
@@ -614,13 +615,13 @@ def event(target, entry):
             "keyCount": 3,
             "keyShape": [3, 2],
             "keyStrides": [2, 1] if entry == "rbitsc" else [1, 3],
-            "logicalBytesPerKey": 3,
-            "nativeBytesPerKey": 4,
-            "wordCount": 1,
+            "logicalBytesPerKey": byte_count,
+            "nativeBytesPerKey": case["bytesPerKey"],
+            "wordCount": case["wordCount"],
         },
         "randomValues": case["expected"],
         "randomGuardValues": [91] * 17,
-        "threads": 9,
+        "threads": 3 * byte_count,
         "outputHash": hashlib.sha256(bytes(case["logicalExpected"])).hexdigest(),
         "dispatchVersion": 3,
         **case["execution"],
@@ -698,6 +699,124 @@ def test_random_audit_checks_padding_metadata_and_native_identity(
         logical = random_evidence.audit_event(np, record)
         assert len(logical) == 9
         assert calls == ["bindings", "native"]
+
+
+@pytest.mark.parametrize("chunk", [3, 1 << 20])
+def test_random_word_arrays_match_the_scalar_reference(monkeypatch, chunk):
+    monkeypatch.setattr(random_workloads, "WORD_PAIR_CHUNK", chunk)
+    keys = [*random_workloads.KEYS, (0xFFFFFFFF, 0xFFFFFFFF), (1, 0)]
+    for count in (0, 1, 2, 3, 5, 8, 17, 64, 65):
+        words = random_workloads.words_array(np, keys, count)
+        assert words.dtype == np.uint32 and words.shape == (len(keys), count)
+        assert words.tolist() == [random_workloads.words(key, count) for key in keys]
+
+
+def compacted(values):
+    return trace_records.compact_trace_values(values)
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+@pytest.mark.parametrize("entry", random_packages.ENTRIES)
+@pytest.mark.parametrize(
+    "fault", [None, "value", "length", "guard-init", "short", "keys", "extra"]
+)
+def test_random_audit_accepts_digests_of_long_native_storage(
+    monkeypatch, target, entry, fault
+):
+    monkeypatch.setattr(random_evidence, "audit_input_bindings", lambda event: None)
+    monkeypatch.setattr(random_evidence, "audit_native_execution", lambda event: None)
+    record = event(target, entry, 100)
+    full = copy.deepcopy(record)
+    native = record["randomValues"]
+    assert len(native) == 300 > trace_records.COMPACT_TRACE_LIMIT
+    if fault == "value":
+        native[7] ^= 1
+    elif fault == "length":
+        native = [*native, 0]
+    elif fault == "guard-init":
+        record["inputs"]["out"]["values"][0] = 0
+    elif fault == "extra":
+        record["randomValues"] = {**compacted(native), "values": native}
+    record["inputs"]["out"]["values"] = compacted(record["inputs"]["out"]["values"])
+    if fault != "extra":
+        record["randomValues"] = compacted(native)
+    if fault == "short":
+        # A digest of a list no longer than the compact limit is never written.
+        record = event(target, entry)
+        native = record["randomValues"]
+        record["randomValues"] = {
+            "compactedValues": {
+                "length": len(native),
+                "sha256": trace_records.value_digest(native),
+            }
+        }
+    elif fault == "keys":
+        record["inputs"]["keys"]["values"] = compacted(
+            record["inputs"]["keys"]["values"] * 100
+        )
+    if fault:
+        with pytest.raises(ValueError):
+            random_evidence.audit_event(np, record)
+    else:
+        assert random_evidence.audit_event(np, record) == random_evidence.audit_event(
+            np, full
+        )
+        assert len(random_evidence.audit_event(np, record)) == 300
+
+
+def test_random_dispatch_digests_native_storage_unless_the_host_keeps_values(
+    tmp_path, monkeypatch
+):
+    target, entry = "metal", "rbits"
+    supplied, memory, launch = buffers()
+    desc = descriptor(target, entry)
+    native = [3] * 12
+
+    def execute(host, request):
+        output = dict(request.outputs["out"], values=native + random_dispatch.GUARD)
+        return SimpleNamespace(status="ok", outputs={"out": output}, details={})
+
+    monkeypatch.setattr(
+        random_dispatch,
+        "build_native_loader_dispatch_request",
+        lambda descriptor, directory, inputs, outputs, execution, **kwargs: (
+            SimpleNamespace(inputs=inputs, outputs=outputs)
+        ),
+    )
+    monkeypatch.setattr(random_dispatch, "execute", execute)
+    monkeypatch.setattr(trace_records, "COMPACT_TRACE_LIMIT", 4)
+    records = {}
+    for retain in (True, ()):
+        host = SimpleNamespace(
+            target=target,
+            randoms=SimpleNamespace(
+                get=lambda *args: ({entry: desc}, tmp_path / "package")
+            ),
+            descriptors={entry: desc},
+            dispatch_count=0,
+            trace=tmp_path / f"trace-{bool(retain)}.jsonl",
+            trace_values=retain,
+        )
+        table = (runtime.Buffer * len(supplied))(*supplied.values())
+        random_dispatch.dispatch(
+            host, entry, table, len(table), len(memory["out"]), launch
+        )
+        records[bool(retain)] = json.loads(host.trace.read_text())
+    kept, digested = records[True], records[False]
+    assert kept["randomValues"] == native
+    assert digested["randomValues"] == compacted(native)
+    assert digested["randomGuardValues"] == kept["randomGuardValues"]
+    for name, value in kept["inputs"].items():
+        if name == "out":
+            assert value["values"] == [91] * 29
+            assert digested["inputs"][name] == {**value, "values": compacted([91] * 29)}
+        else:
+            assert digested["inputs"][name] == value
+    assert {
+        key: kept[key] for key in kept if key not in {"inputs", "randomValues"}
+    } == {
+        key: digested[key] for key in digested if key not in {"inputs", "randomValues"}
+    }
 
 
 @pytest.mark.parametrize("native", [True, False])

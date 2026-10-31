@@ -90,6 +90,10 @@ def buffers(case, *, normalize_scalar=False):
     if normalize_scalar and indices[0].ndim == 0:
         indices = [index.reshape(1) for index in indices]
         updates = np.expand_dims(updates, 0)
+    return launch_buffers(case, source, indices, updates, expected)
+
+
+def launch_buffers(case, source, indices, updates, expected):
     indices = [
         (
             np.ascontiguousarray(index)
@@ -181,6 +185,59 @@ def test_scatter_validates_workload_allocations_and_launch(case):
     )
     if case["layout"].startswith("work"):
         assert result["workPerThread"] == int(case["layout"][4:])
+
+
+def test_scatter_storage_exceeds_one_launch_axis():
+    # gather_mm_sorted_vjp's b[rhs] gradient: one 100 x 100 slice per row.
+    case = {"dtype": "float32", "index_dtype": "uint32", "operation": "sum"}
+    source = np.zeros((8, 100, 100), dtype="float32")
+    indices = [np.array([0, 3, 3, 7], dtype="uint32")]
+    updates = np.arange(4 * 100 * 100, dtype="float32").reshape(4, 100, 100)
+    entry, supplied, arrays, expected, execution = launch_buffers(
+        case, source, indices, updates, source
+    )
+    assert execution["workgroupCount"] == [10000, 4, 1]
+    result = layout.validate(entry, supplied, source.size, execution)
+    assert result["outputCount"] == 80000 and result["updateCount"] == 40000
+    assert result["maximumIndex"] == 79999 > layout.MAX_ELEMENTS
+    assert layout.MAX_STORAGE_ELEMENTS == 2**28 - 33
+
+
+def test_scatter_rejects_rows_beyond_one_launch_axis():
+    case = {"dtype": "int32", "index_dtype": "int32", "operation": "sum"}
+    source = np.zeros(65536, dtype="int32")
+    indices = [np.arange(65536, dtype="int32")]
+    updates = np.ones(65536, dtype="int32")
+    entry, supplied, arrays, expected, execution = launch_buffers(
+        case, source, indices, updates, source
+    )
+    assert execution["workgroupCount"] == [1, 65536, 1]
+    with pytest.raises(ValueError, match="per-axis workgroup limits"):
+        layout.validate(entry, supplied, source.size, execution)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    # A slab of whole trailing rows, and a run along the last index axis.
+    ((slice(1, 3), slice(None)), (slice(2, 3), slice(1, 3))),
+)
+def test_scatter_validates_rebased_index_tiles(rows):
+    """The host's launch tiles rebase index and update views onto their rows."""
+    case = {"dtype": "float32", "index_dtype": "int64", "operation": "sum"}
+    source = np.zeros((5, 6), dtype="float32")
+    index = np.arange(12, dtype="int64").reshape(4, 3) % 5
+    updates = np.arange(4 * 3 * 6, dtype="float32").reshape(4, 3, 6)
+    entry, supplied, arrays, expected, execution = launch_buffers(
+        case, source, [index[rows]], updates[rows], source
+    )
+    rows_in_tile = index[rows].size
+    assert execution["workgroupCount"] == [6, rows_in_tile, 1]
+    assert supplied["idx0"].count == (
+        3 * (index[rows].shape[0] - 1) + index[rows].shape[1]
+    )
+    result = layout.validate(entry, supplied, source.size, execution)
+    assert result["indexShape"] == list(index[rows].shape)
+    assert result["updateCount"] == rows_in_tile * 6
 
 
 @pytest.mark.parametrize(

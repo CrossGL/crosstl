@@ -14,7 +14,11 @@ from demos.integrations.mlx.portable_host.random_layout import (
     MAX_WORKGROUP_COUNT,
     RandomOutputLayout,
 )
-from demos.integrations.mlx.portable_host.random_workloads import words
+from demos.integrations.mlx.portable_host.random_workloads import words_array
+from demos.integrations.mlx.portable_host.trace_records import (
+    matches_integers,
+    recorded_length,
+)
 
 
 def verify_packages(events, root, directory, target):
@@ -56,7 +60,7 @@ def audit_event(np, event):
         require(member not in inputs, "Duplicate random upload")
         require(
             binding["dtype"] == value["dtype"] == layout["elementType"]
-            and binding["shape"] == value["shape"] == [len(value["values"])]
+            and binding["shape"] == value["shape"] == [recorded_length(value["values"])]
             and layout["elementStrideBytes"] == np.dtype(value["dtype"]).itemsize
             and value.get("encoding") is None,
             "Random upload layout differs",
@@ -140,21 +144,23 @@ def audit_event(np, event):
         and inputs["odd"]["values"] == [word_count % 2],
         "Random source counters differ",
     )
-    expected, logical = [], b""
-    for key in keys:
-        raw = np.array(words(key, word_count), dtype="<u4").tobytes()
-        expected.extend(
-            value if value < 128 else value - 256 for value in raw[:native_size]
-        )
-        logical += raw[:per_key]
+    raw = (
+        words_array(np, keys, word_count)
+        .astype("<u4", copy=False)
+        .view(np.uint8)
+        .reshape(count, word_count * 4)
+    )
+    expected = np.ascontiguousarray(raw[:, :native_size]).reshape(-1).view(np.int8)
+    logical = raw[:, :per_key].tobytes()
     require(
-        event["randomValues"] == expected
-        and all(type(value) is int for value in event["randomValues"]),
+        matches_integers(np, event["randomValues"], expected),
         "Random native values differ from the reference",
     )
     require(
         event["randomGuardValues"] == [91] * 17
-        and inputs["out"]["values"] == [91] * (len(expected) + 17),
+        and matches_integers(
+            np, inputs["out"]["values"], np.full(expected.size + 17, 91, np.int8)
+        ),
         "Random guard or output initialization differs",
     )
     require(

@@ -146,7 +146,12 @@ def test_concatenate_requires_exact_evidence(target, fault):
         proof.validate(records, trace, native=True)
         records, trace = evidence(target, native=False)
         proof.validate(records, trace, native=False)
-        assert len(records) == 72
+        assert len(records) == 76
+        wide = [case for case in proof.cases() if case["layout"] == "wide"]
+        assert len(wide) == 4 and all(
+            proof.inputs(np, case)[0].size > 65535 for case in wide
+        )
+        assert proof.NEGATIVE_CHECKS == {"missing": "No translated package for"}
 
 
 def test_concatenate_retains_input_output_abi_layout():

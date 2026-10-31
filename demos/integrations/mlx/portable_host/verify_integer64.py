@@ -19,10 +19,11 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 UPSTREAM_TESTS = ("test_ops.TestOps.test_clip", "test_ops.TestOps.test_meshgrid")
 NEGATIVE_CHECKS = {
     "missing": "No translated package for v_Absint64int64",
-    "int16": "unary dispatch requires float32 arrays",
+    # Without the pinned source no package serves 16-bit absolute values.
+    "int16": "No translated package for v_Absint16int16",
     "large-allocation": "exceeds its allocation",
     "reduction": "matching float32/int32/uint32 numeric arrays",
-    "bitwise": "supported dtype",
+    "bitwise": "No translated package for vv_BitwiseAndint64",
 }
 
 

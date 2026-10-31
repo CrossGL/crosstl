@@ -3,8 +3,16 @@
 import ctypes
 import math
 
-from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
-from demos.integrations.mlx.portable_host.small_row_packages import SMALL_ROW_ENTRIES
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    ALL_ROW_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    ROW_MAX_ELEMENTS as MAX_ELEMENTS,
+)
+from demos.integrations.mlx.portable_host.small_row_packages import (
+    ALL_SMALL_ROW_ENTRIES,
+    SMALL_ROW_OUTPUTS,
+)
 
 SIMPLE = {"in": None, "out": None, "reduction_size": "uint64", "out_size": "int64"}
 LOOPED = {
@@ -25,6 +33,10 @@ METADATA_TYPES = {
     "uint64": ctypes.c_uint64,
 }
 ARRAY_METADATA = frozenset({"shape", "strides", "reduce_shape", "reduce_strides"})
+# Inputs, outputs and logical sizes hold at most MAX_ELEMENTS elements; every
+# shape axis stays below 65,536, every stride inside MAX_ELEMENTS and every
+# launch axis at most MAX_GROUPS workgroups.
+MAX_GROUPS = 65535
 
 
 def signature(entry):
@@ -32,8 +44,13 @@ def signature(entry):
 
 
 def width(row_size):
-    if type(row_size) is not int or not 65 <= row_size <= 65535:
-        raise ValueError("Row kernels require 65 to 65535 elements per row")
+    """The threadgroup width reduce.cpp picks for a row of ``row_size``.
+
+    Looped and simple kernels stride through any row, so a row may span every
+    element a source view holds.
+    """
+    if type(row_size) is not int or not 65 <= row_size <= MAX_ELEMENTS:
+        raise ValueError("Row kernels require 65 to 2**28 - 1 elements per row")
     if row_size <= 512:
         return 32
     if row_size <= 1024:
@@ -43,15 +60,19 @@ def width(row_size):
 
 def validate(entry, buffers, logical_size, execution):
     spec = signature(entry)
-    entries = {**ROW_ENTRIES, **SMALL_ROW_ENTRIES}
+    entries = {**ALL_ROW_ENTRIES, **ALL_SMALL_ROW_ENTRIES}
     if set(buffers) != set(spec) or entry not in entries:
         raise ValueError("Native row reduction metadata does not match")
     for name, buffer in buffers.items():
-        expected_type = spec[name] or entries[entry]
+        expected_type = spec[name] or (
+            SMALL_ROW_OUTPUTS.get(entry, entries[entry])
+            if name == "out"
+            else entries[entry]
+        )
         if buffer.dtype.decode("ascii") != expected_type:
             raise ValueError("Native row reduction dtype does not match")
         maximum = (
-            65535
+            MAX_ELEMENTS
             if name in {"in", "out"}
             else (
                 64
@@ -100,16 +121,16 @@ def validate_metadata(
     entry, metadata, logical_size, input_count, output_count, execution
 ):
     """Validate a detached row layout before cache lookup or source translation."""
-    entries = {**ROW_ENTRIES, **SMALL_ROW_ENTRIES}
+    entries = {**ALL_ROW_ENTRIES, **ALL_SMALL_ROW_ENTRIES}
     if not isinstance(entry, str) or entry not in entries:
         raise ValueError("Unknown row reduction entry")
     spec = signature(entry)
-    small = entry in SMALL_ROW_ENTRIES
+    small = entry in ALL_SMALL_ROW_ENTRIES
     if (
         not isinstance(metadata, dict)
         or set(metadata) != {name for name, dtype in spec.items() if dtype is not None}
         or any(
-            type(value) is not int or not 1 <= value <= 65535
+            type(value) is not int or not 1 <= value <= MAX_ELEMENTS
             for value in (logical_size, input_count, output_count)
         )
         or not isinstance(execution, dict)
@@ -151,8 +172,9 @@ def validate_metadata(
         ):
             raise ValueError("Simple row reduction does not match the upstream plan")
         grid = [1, (rows + 3) // 4, 1]
-        # Source pointer construction may include inactive lanes beyond the last row.
-        if input_count + group_width * 4 > 131071:
+        # Source pointer construction may include inactive lanes beyond the
+        # last row; static GLSL packages assert these indexes inside the bound.
+        if input_count + group_width * 4 > MAX_ELEMENTS:
             raise ValueError("Simple row reduction exceeds its index contract")
     else:
         ndim, reduce_ndim = metadata["ndim"][0], metadata["reduce_ndim"][0]
@@ -168,7 +190,7 @@ def validate_metadata(
                 if shape != [0] or strides != [0]:
                     raise ValueError("Native row reduction empty metadata must be zero")
             elif any(not 1 <= size <= 65535 for size in shape) or any(
-                not 0 <= stride <= 65535 for stride in strides
+                not 0 <= stride <= MAX_ELEMENTS for stride in strides
             ):
                 raise ValueError(
                     "Native row reduction shape or stride exceeds its bounds"
@@ -206,6 +228,8 @@ def validate_metadata(
                 exact_grid = [rows, 1, 1]
             else:
                 exact_grid = [32, rows, 1]
+    if any(groups > MAX_GROUPS for groups in grid):
+        raise ValueError("Native row reduction launch exceeds 65535 workgroups")
     expected = {"workgroupCount": grid, "workgroupSize": [group_width, 1, 1]}
     if exact_grid is not None:
         expected["threadGridSize"] = exact_grid

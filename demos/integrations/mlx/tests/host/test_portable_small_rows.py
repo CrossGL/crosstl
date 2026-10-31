@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from demos.integrations.mlx.portable_host import (
+    region_dispatch,
     row_reduction_layout,
     runtime,
     small_row_packages,
@@ -318,7 +319,7 @@ def test_small_row_host_dispatch_checks_before_writeback(
         runtime, "build_native_loader_dispatch_request", prepare_request
     )
     monkeypatch.setattr(
-        runtime, "prepare_native_loader_dispatch_regions", prepare_regions
+        region_dispatch, "prepare_native_loader_dispatch_regions", prepare_regions
     )
     if fault == "metadata":
         memory["row_size"][0] = 65
@@ -680,7 +681,6 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
         600,
         600,
         2200,
-        1680,
     ]
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60
     triggers = workflow.get("on", workflow.get(True))

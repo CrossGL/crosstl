@@ -19,12 +19,13 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 UPSTREAM_TEST = "test_ops.TestOps.test_where"
 NEGATIVE_CHECKS = {
     "missing": "No translated package for v_Selectint32",
-    "int64": "matching float32/int32/uint32/bool values",
-    "uint8": "matching float32/int32/uint32/bool values",
-    "float16": "matching float32/int32/uint32/bool values",
-    "over-limit": "at most 65535 elements",
+    # Without the pinned source no package serves the other dtypes' selection.
+    "int64": "No translated package for v_Selectint64",
+    "uint8": "No translated package for v_Selectuint8",
+    "float16": "No translated package for v_Selectfloat16",
     "absolute-missing": "No translated package for v_Absint32int32",
-    "absolute-int16": "unary dispatch requires float32 arrays",
+    # Without the pinned source no package serves 16-bit absolute values.
+    "absolute-int16": "No translated package for v_Absint16int16",
     "absolute-large-allocation": "exceeds its allocation",
 }
 
@@ -60,7 +61,7 @@ def worker(args):
     if args.worker in NEGATIVE_CHECKS:
         check = args.worker.removeprefix("absolute-")
         dtype = check if check in {"int64", "int16", "uint8", "float16"} else "int32"
-        count = 65536 if check == "over-limit" else 3
+        count = 3
         values = mx.array(np.arange(count).astype(dtype))
         if args.worker == "absolute-large-allocation":
             values = mx.as_strided(values, (65536,), (1,))

@@ -11,8 +11,44 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
     view,
 )
 from demos.integrations.mlx.portable_host.gather_workloads import words
-from demos.integrations.mlx.portable_host.runtime import COPY_GUARD
-from demos.integrations.mlx.portable_host.scatter_axis_layout import METADATA, signature
+from demos.integrations.mlx.portable_host.runtime import COPY_GUARD, FLOAT32_BITS
+from demos.integrations.mlx.portable_host.scatter_axis_layout import (
+    METADATA,
+    launch_plan,
+    signature,
+)
+from demos.integrations.mlx.portable_host.scatter_layout import (
+    ATOMIC_TYPES,
+    atomic_storage_dtype,
+)
+
+
+def exact_float_sums(np, initial, indices, updates, axis, axis_size):
+    """Whether every float32 destination sums exactly in any update order.
+
+    Native atomic additions land in an unspecified order and round after each
+    one, so a float32 sum is reconstructed only when no ordering can round.
+    Every finite float32 is an integer multiple of 2^-149; when a destination's
+    terms share a coarser power-of-two step and their magnitudes sum to fewer
+    than 2^24 steps, every partial sum in every order is exact. A zero sum is
+    negative only when every term is -0.0, in any order.
+    """
+    terms = {index: [initial[index]] for index in np.ndindex(initial.shape)}
+    for coordinate in np.ndindex(indices.shape):
+        destination = list(coordinate)
+        destination[axis] = int(indices[coordinate]) % axis_size
+        terms[tuple(destination)].append(updates[coordinate])
+    for values in terms.values():
+        if not all(np.isfinite(value) for value in values):
+            return False
+        scaled = [int(abs(float(value)) * 2.0**149) for value in values]
+        nonzero = [value for value in scaled if value]
+        if not nonzero:
+            continue
+        step = min((value & -value).bit_length() - 1 for value in nonzero)
+        if sum(nonzero) >> step >= 2**24:
+            return False
+    return True
 
 
 def audit_event(np, event):
@@ -34,8 +70,10 @@ def audit_event(np, event):
         require(
             binding["dtype"] == value["dtype"] == layout["elementType"]
             and binding["shape"] == value["shape"]
-            and binding.get("encoding") is None
-            and "encoding" not in value,
+            and binding.get("encoding")
+            == (FLOAT32_BITS if value["dtype"] == "float32" else None)
+            and value.get("encoding")
+            == (FLOAT32_BITS if value["dtype"] == "float32" else None),
             "Axis-scatter binding layout changed",
         )
         require(
@@ -54,20 +92,37 @@ def audit_event(np, event):
                     {
                         "name": "val",
                         "offsetBytes": 0,
-                        "physicalType": "int" if dtype == "int32" else "uint",
+                        "physicalType": ATOMIC_TYPES[
+                            atomic_storage_dtype(dtype, event["target"])
+                        ],
                     }
                 ],
                 "Axis-scatter atomic layout changed",
             )
         inputs[member] = value
-    dtypes = {**METADATA, "upd": dtype, "indices": index_dtype, "out": dtype}
+    dtypes = {
+        **METADATA,
+        "upd": dtype,
+        "indices": index_dtype,
+        "out": atomic_storage_dtype(dtype, event["target"]),
+    }
     require(set(inputs) == set(dtypes), "Axis-scatter bindings are incomplete")
     for name, kind in dtypes.items():
         require(inputs[name]["dtype"] == kind, "Axis-scatter storage type changed")
-    arrays = {
-        name: np.array(value["values"], dtype=value["dtype"])
-        for name, value in inputs.items()
-    }
+    arrays = {}
+    for name, value in inputs.items():
+        if dtype == "float32" and name in {"out", "upd"}:
+            require(
+                isinstance(value["values"], list)
+                and all(
+                    type(word) is int and 0 <= word <= 0xFFFFFFFF
+                    for word in value["values"]
+                ),
+                "Axis-scatter float upload is not raw binary32 storage",
+            )
+            arrays[name] = np.array(value["values"], dtype=np.uint32).view(np.float32)
+        else:
+            arrays[name] = np.array(value["values"], dtype=value["dtype"])
     scalars = ("ndim", "axis", "out_axis_size", "upd_ax_stride", "idx_ax_stride")
     require(
         all(arrays[name].size == 1 for name in scalars),
@@ -121,6 +176,12 @@ def audit_event(np, event):
     )
     initial = arrays["out"][:size].reshape(output_shape).copy()
     expected = initial.copy()
+    require(
+        dtype != "float32"
+        or operation != "sum"
+        or exact_float_sums(np, initial, indices, updates, axis, axis_size),
+        "Axis-scatter float32 sum depends on its update order",
+    )
     for coordinate in np.ndindex(indices.shape):
         index = int(indices[coordinate])
         require(
@@ -135,7 +196,8 @@ def audit_event(np, event):
         else:
             expected[destination] += updates[coordinate]
     readback = event["scatterValues"]
-    limits = np.iinfo(dtype)
+    storage = "uint32" if dtype == "float32" else dtype
+    limits = np.iinfo(storage)
     require(
         isinstance(readback, list)
         and len(readback) == size
@@ -145,14 +207,14 @@ def audit_event(np, event):
         ),
         "Axis-scatter readback is outside its storage type",
     )
-    raw = np.array(readback, dtype=dtype)
+    raw = np.array(readback, dtype=storage)
     actual = words(np, raw)
     require(
         actual == words(np, expected),
         "Axis-scatter native readback disagrees with uploads",
     )
     require(
-        event["scatterGuardValues"] == arrays["out"][size:].tolist() == COPY_GUARD,
+        event["scatterGuardValues"] == words(np, arrays["out"][size:]) == COPY_GUARD,
         "Axis-scatter output guards changed",
     )
     metadata = {
@@ -227,10 +289,6 @@ def validate(np, records, trace):
             for item in trace[cursor:end]
             if item["entry"].startswith("scatter_axis")
         ]
-        require(
-            len(events) == (0 if case["layout"] == "empty" else 1),
-            "Axis-scatter dispatch count changed",
-        )
         source, expected_indices, expected_updates, expected = workloads.reference(
             np, case
         )
@@ -239,14 +297,20 @@ def validate(np, records, trace):
             and record["shape"] == list(expected.shape),
             "Axis-scatter workload result changed",
         )
-        for event in events:
+        axis = 0 if case["axis"] is None else case["axis"] % source.ndim
+        plan = (
+            []
+            if case["layout"] == "empty"
+            else launch_plan(list(expected_indices.shape), axis)
+        )
+        require(len(events) == len(plan), "Axis-scatter dispatch count changed")
+        # Each launch updates its slab of the result the earlier launches left.
+        state = source.copy() if case["operation"] == "none" else np.zeros_like(source)
+        for event, (slab, rows) in zip(events, plan):
             initial, indices, updates, actual = audit_event(np, event)
-            initial_expected = (
-                source if case["operation"] == "none" else np.zeros_like(source)
-            )
             require(
-                initial.shape == initial_expected.shape
-                and words(np, initial) == words(np, initial_expected),
+                initial.shape == state[slab].shape
+                and words(np, initial) == words(np, state[slab]),
                 "Axis-scatter initialization does not belong to its workload",
             )
             for name, actual_array, expected_array in (
@@ -254,8 +318,9 @@ def validate(np, records, trace):
                 ("update", updates, expected_updates),
             ):
                 require(
-                    actual_array.shape == expected_array.shape
-                    and words(np, actual_array) == words(np, expected_array),
+                    actual_array.shape == expected_array[slab + (rows,)].shape
+                    and words(np, actual_array)
+                    == words(np, expected_array[slab + (rows,)]),
                     "Axis-scatter uploads do not belong to their workload",
                 )
                 physical = (
@@ -268,11 +333,16 @@ def validate(np, records, trace):
                     == [step // physical.itemsize for step in physical.strides],
                     "Axis-scatter workload strides changed",
                 )
-            require(
-                actual == record["actual"] == words(np, expected),
-                "Axis-scatter readback and MLX result disagree",
+            state[slab] = (
+                np.array(actual, dtype=np.uint32)
+                .view(state.dtype)
+                .reshape(state[slab].shape)
             )
             count += 1
+        require(
+            words(np, state) == record["actual"],
+            "Axis-scatter readback and MLX result disagree",
+        )
         targets.update(event["target"] for event in trace[cursor:end])
         cursor = end
     require(

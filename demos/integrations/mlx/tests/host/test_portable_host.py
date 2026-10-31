@@ -28,6 +28,18 @@ from demos.integrations.mlx.portable_host import (
 from tests.ci_helpers import assert_paths_covered
 
 
+def declaration_macro(name):
+    """The no_gpu/primitives.cpp macro that declares ``name``."""
+    if name in prepare.FALLBACK_PRIMITIVES:
+        return "NO_GPU_USE_FALLBACK"
+    multi = {"Compiled", "DivMod", "Quantize", *prepare.FAST_PRIMITIVES}
+    return (
+        "NO_GPU_MULTI"
+        if name in prepare.MULTI_OUTPUT_VIEWS or name in multi
+        else "NO_GPU"
+    )
+
+
 def checkout(root, monkeypatch, newline=b"\n"):
     backend = root / "mlx/backend/no_gpu"
     backend.mkdir(parents=True)
@@ -35,14 +47,27 @@ def checkout(root, monkeypatch, newline=b"\n"):
         "CMakeLists.txt": b"target_sources(mlx PRIVATE primitives.cpp)\n",
         "primitives.cpp": (
             "\n".join(
-                f"{'NO_GPU_MULTI' if name in prepare.MULTI_OUTPUT_VIEWS or name in {'DivMod', 'Quantize'} else 'NO_GPU'}({name})"
+                f"{declaration_macro(name)}({name})"
                 for name in (
                     "Arange",
+                    "ArgReduce",
+                    "LogSumExp",
+                    "Softmax",
+                    "ArgPartition",
+                    "ArgSort",
+                    "Partition",
+                    "Sort",
+                    "SearchSorted",
+                    *prepare.FAST_PRIMITIVES,
                     "RandomBits",
                     "Scan",
                     "Quantize",
                     "QuantizedMatmul",
                     "Matmul",
+                    "AddMM",
+                    "GatherMM",
+                    "SegmentedMM",
+                    "BlockMaskedMM",
                     "Reduce",
                     "BitwiseBinary",
                     "BitwiseInvert",
@@ -52,13 +77,22 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "GatherAxis",
                     "ScatterAxis",
                     "Scatter",
+                    "MaskedScatter",
                     "DivMod",
+                    "Compiled",
                     "Power",
+                    "ArcTan2",
+                    "Convolution",
+                    "FFT",
+                    "Hadamard",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
+                    *prepare.HOST_EVAL_PRIMITIVES,
                     *prepare.COPY_PRIMITIVES,
+                    *prepare.DYNAMIC_SLICE_PRIMITIVES,
                     *packages.BINARY_OPERATIONS,
                     *prepare.CAST_PRIMITIVES,
+                    *prepare.COMPLEX_PRIMITIVES,
                     *packages.COMPARISON_OPERATIONS,
                     *packages.LOGICAL_OPERATIONS,
                     "LogicalNot",
@@ -66,6 +100,8 @@ def checkout(root, monkeypatch, newline=b"\n"):
                 if name not in {"Log2", "Log10", "Rsqrt"}
             ).encode()
             + b"\n"
+            # no_gpu defines these attention members outright.
+            + "".join(prepare.ATTENTION_DEFINITIONS).encode()
         ),
         "event.cpp": (
             b"void Event::wait(Stream stream) {\n  cpu_wait();\n}\n"
@@ -95,8 +131,56 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
 ):
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
-    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 5
+    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 15
+    for name in prepare.FAST_PRIMITIVES:
+        declared = f"{declaration_macro(name)}({name})"
+        assert declared not in (backend / "crosstl_primitives.cpp").read_text()
+        assert declared in (backend / "primitives.cpp").read_text()
+    assert (backend / "crosstl_normalization.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("normalization.inc").read_bytes()
+    )
+    assert (backend / "crosstl_compiled.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("compiled.inc").read_bytes()
+    )
+    assert (backend / "crosstl_gather_mm.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("gather_mm.inc").read_bytes()
+    )
+    assert (backend / "crosstl_segmented_mm.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("segmented_mm.inc").read_bytes()
+    )
+    assert (backend / "crosstl_block_masked_mm.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("block_masked_mm.inc").read_bytes()
+    )
+    assert (backend / "crosstl_scatter.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("scatter.inc").read_bytes()
+    )
+    assert (backend / "crosstl_conv.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("conv.inc").read_bytes()
+    )
+    assert (backend / "crosstl_fft.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("fft.inc").read_bytes()
+    )
+    assert (backend / "crosstl_sdpa.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("sdpa.inc").read_bytes()
+    )
+    assert "NO_GPU(FFT)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert (
+        "NO_GPU_MULTI(Compiled)" not in (backend / "crosstl_primitives.cpp").read_text()
+    )
     assert "NO_GPU(Arange)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(ArgReduce)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(ArgReduce)" in (backend / "primitives.cpp").read_text()
+    for name in (
+        "LogSumExp",
+        "Softmax",
+        "ArgPartition",
+        "ArgSort",
+        "Partition",
+        "Sort",
+        "SearchSorted",
+    ):
+        assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
+        assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(RandomBits)" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Scan)" not in (backend / "crosstl_primitives.cpp").read_text()
@@ -124,7 +208,15 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
             f"{macro}({name})" not in (backend / "crosstl_primitives.cpp").read_text()
         )
         assert f"{macro}({name})" in (backend / "primitives.cpp").read_text()
-    assert "NO_GPU(Power)" in (backend / "crosstl_primitives.cpp").read_text()
+    for name in (*prepare.HOST_EVAL_PRIMITIVES, *prepare.DYNAMIC_SLICE_PRIMITIVES):
+        assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
+        assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
+    for name in ("Power", "ArcTan2"):
+        assert f"NO_GPU({name})" not in (backend / "crosstl_primitives.cpp").read_text()
+        assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
+    assert "NO_GPU(Convolution)" not in (backend / "crosstl_primitives.cpp").read_text()
+    # A primitive without a host port keeps MLX's explicit GPU error.
+    assert "NO_GPU(Hadamard)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2
@@ -1296,8 +1388,15 @@ def test_root_cpu_counterexamples_are_not_generated_references(monkeypatch, prof
 def test_unary_adapter_definitions_match_packages():
     source = (prepare.HERE / "backend.cpp").read_text()
     for operation in packages.UNARY_OPERATIONS:
-        if operation not in {"Log2", "Log10", "Rsqrt"}:
+        if operation not in {"Log2", "Log10", "Rsqrt", "Round"}:
             assert f"CROSSTL_UNARY_GPU({operation})" in source
+    # As upstream's unary.cpp, Round dispatches only inexact arrays and shares
+    # an integer or Boolean input's buffer.
+    round_gpu = source.split("void Round::eval_gpu(", 1)[1].split("\n}\n", 1)[0]
+    assert "issubdtype(inputs[0].dtype(), mlx::core::inexact)" in round_gpu
+    assert round_gpu.index("dispatch_unary(inputs, out, name())") < round_gpu.index(
+        "out.copy_shared_buffer(inputs[0])"
+    )
     assert "set_unary_output_data(in, out)" in source
     unary = source.split("void dispatch_unary(", 1)[1].split(
         "void dispatch_copy_into(", 1
@@ -1364,6 +1463,8 @@ def test_view_adapter_preserves_upstream_shared_buffer_operations():
                 else "CROSSTL_SHARED_VIEW_GPU"
             )
             assert f"{macro}({name})" in source
+    for name in prepare.HOST_EVAL_PRIMITIVES:
+        assert f"CROSSTL_SHARED_VIEW_GPU({name})" in source
     assert "prepare_reshape(in, out)" in source
     assert "shared_buffer_reshape(in, strides, out)" in source
     assert "slice(inputs[0], out, start_indices_, strides_)" in source
@@ -1660,8 +1761,9 @@ def test_registration_retains_callback_and_uses_platform_library(
     host = runtime.HostRuntime.__new__(runtime.HostRuntime)
     host.callback = runtime.CALLBACK(lambda *args: 0)
     host.entry_available = runtime.ENTRY_AVAILABLE(lambda entry: 0)
+    host.target = "opengl"
     module = SimpleNamespace(__file__=str(tmp_path / "core.pyd"), gpu="gpu")
-    selected, loaded, registered = [], [], []
+    selected, loaded, registered, architectures = [], [], [], []
     module.set_default_device = selected.append
     monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=module))
     monkeypatch.setitem(sys.modules, "mlx.core", module)
@@ -1672,9 +1774,16 @@ def test_registration_retains_callback_and_uses_platform_library(
         registered.append((version, callback, available))
         return 0
 
+    def architecture(name):
+        architectures.append(name)
+        return 0
+
     def load(path):
         loaded.append(path)
-        return SimpleNamespace(crosstl_mlx_register_runtime=register)
+        return SimpleNamespace(
+            crosstl_mlx_register_runtime=register,
+            crosstl_mlx_set_device_architecture=architecture,
+        )
 
     monkeypatch.setattr(runtime.ctypes, "CDLL", load)
     host.install()
@@ -1682,6 +1791,9 @@ def test_registration_retains_callback_and_uses_platform_library(
     assert registered == [
         (runtime.DISPATCH_VERSION, host.callback, host.entry_available)
     ] and selected == ["gpu"]
+    # mx.device_info names the native target as the GPU architecture, set
+    # before the callback registers.
+    assert architectures == [b"opengl"]
     assert loaded == [
         str(tmp_path / ("mlx.dll" if platform == "win32" else "core.pyd"))
     ]
@@ -1689,51 +1801,58 @@ def test_registration_retains_callback_and_uses_platform_library(
         host.install()
 
 
-def test_unary_dtype_rejection_uses_unsupported_width(tmp_path, monkeypatch):
+def test_unary_dtype_rejection_uses_float64_storage(tmp_path, monkeypatch):
     installed = []
     arrays = []
+    message = verify.FLOAT64_REFUSAL
+
+    def negative(values, *, stream):
+        # MLX's array constructor refuses float64 on a GPU stream.
+        assert arrays == [([-3, 2], "float64")] and stream == "gpu"
+        raise ValueError(message)
+
     module = SimpleNamespace(
         gpu="gpu",
-        int16="int16",
+        float64="float64",
         metal=SimpleNamespace(is_available=lambda: False),
         is_available=lambda device: bool(installed),
         default_device=lambda: "gpu",
         array=lambda values, *, dtype: arrays.append((values, dtype)) or values,
-        abs=lambda values, *, stream: values,
+        negative=negative,
+        eval=lambda value: pytest.fail("refused work evaluated"),
     )
-
-    def evaluate(value):
-        assert arrays == [([-3, 2], "int16")]
-        raise ValueError("CrossTL unary dispatch requires float32 arrays")
-
-    module.eval = evaluate
     monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=module))
     monkeypatch.setitem(sys.modules, "mlx.core", module)
     monkeypatch.setattr(
         verify,
         "HostRuntime",
-        lambda *args, **kwargs: SimpleNamespace(install=lambda: installed.append(True)),
+        lambda *args, **kwargs: SimpleNamespace(
+            install=lambda: installed.append(True), dispatch_count=0
+        ),
     )
     monkeypatch.setenv("DEVICE", "cpu")
     args = SimpleNamespace(
         worker="unary-dtype", output_dir=tmp_path / "proof", packages=tmp_path
     )
     verify.worker(args)
-    assert json.loads((args.output_dir / "result.json").read_text())["rejected"] is True
+    assert json.loads((args.output_dir / "result.json").read_text()) == {
+        "rejected": True,
+        "message": message,
+        "dispatchCount": 0,
+    }
 
 
-@pytest.mark.parametrize("mode", ("copy-dtype", "cast-dtype", "full-dtype"))
-@pytest.mark.parametrize("fault", (None, "message", "accepted"))
-def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fault):
+@pytest.mark.parametrize(
+    "mode", ("copy-dtype", "binary-dtype", "cast-dtype", "full-dtype")
+)
+@pytest.mark.parametrize("fault", (None, "message", "accepted", "dispatched"))
+def test_dtype_rejection_is_the_float64_gpu_refusal(tmp_path, monkeypatch, mode, fault):
     import numpy as np
 
     installed, arrays = [], []
-    message = (
-        "CrossTL casts require float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays."
-        if mode == "cast-dtype"
-        else "CrossTL copying layouts require matching float16, bfloat16, float32, int32, uint32, int64, uint64 or bool arrays."
-    )
-    assert message in Path(verify.__file__).with_name("backend.cpp").read_text()
+    message = verify.FLOAT64_REFUSAL
+    assert verify.NEGATIVE_CHECKS[mode] == message
+    assert mode in verify.UNDISPATCHED_CHECKS
 
     def array(values, dtype=None):
         result = np.array(values, dtype=dtype)
@@ -1741,7 +1860,7 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
         return result
 
     def evaluate(value):
-        assert arrays[0].dtype == np.int16
+        assert arrays[0].dtype == np.float64
         if fault == "message":
             raise ValueError("Unrelated runtime failure")
         if fault != "accepted":
@@ -1749,12 +1868,13 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
 
     module = SimpleNamespace(
         gpu="gpu",
-        int16=np.int16,
+        float64=np.float64,
         float32=np.float32,
         metal=SimpleNamespace(is_available=lambda: False),
         is_available=lambda device: bool(installed),
         default_device=lambda: "gpu",
         array=array,
+        add=np.add,
         transpose=np.transpose,
         reshape=lambda values, shape, *, stream: values.reshape(shape),
         full=np.full,
@@ -1765,7 +1885,10 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
     monkeypatch.setattr(
         verify,
         "HostRuntime",
-        lambda *args, **kwargs: SimpleNamespace(install=lambda: installed.append(True)),
+        lambda *args, **kwargs: SimpleNamespace(
+            install=lambda: installed.append(True),
+            dispatch_count=1 if fault == "dispatched" else 0,
+        ),
     )
     monkeypatch.setenv("DEVICE", "cpu")
     args = SimpleNamespace(
@@ -1778,9 +1901,16 @@ def test_dtype_rejection_matches_current_backend(tmp_path, monkeypatch, mode, fa
     elif fault == "accepted":
         with pytest.raises(RuntimeError, match="unexpectedly executed"):
             verify.worker(args)
+    elif fault == "dispatched":
+        with pytest.raises(RuntimeError, match="dispatched native work"):
+            verify.worker(args)
     else:
         verify.worker(args)
-        assert json.loads(result.read_text()) == {"rejected": True, "message": message}
+        assert json.loads(result.read_text()) == {
+            "rejected": True,
+            "message": message,
+            "dispatchCount": 0,
+        }
     if fault:
         assert not result.exists()
 
@@ -1833,6 +1963,8 @@ def test_full_references_require_exact_storage_and_broadcasts(fault):
         "skipped",
         "negative",
         "negative-message",
+        "negative-dispatch",
+        "unlisted-entry",
         "threads",
         "duplicate",
         "launch-version",
@@ -1888,6 +2020,9 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
     )
     calls = []
     identities = []
+    lazy_entry = "sv_Multiplyfloat32"
+    assert lazy_entry in verify.LAZY_ELEMENTWISE_ENTRIES
+    assert lazy_entry not in verify.ENTRIES
 
     def prepared(root):
         identities.append(root)
@@ -2021,6 +2156,14 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 trace[0]["dispatchVersion"] = 2.0
             if fault == "launch-size-boolean":
                 trace[0]["workgroupSize"] = [True, 1, 1]
+            # Upstream tests may translate unary and binary vectors on use;
+            # any other entry outside the base family is refused.
+            trace.append(
+                {
+                    **trace[-1],
+                    "entry": "sortfloat32" if fault == "unlisted-entry" else lazy_entry,
+                }
+            )
             (output / "dispatch.jsonl").write_text("\n".join(map(json.dumps, trace)))
         verify.save(
             output / "result.json",
@@ -2033,6 +2176,11 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                         "unexpected"
                         if fault == "negative-message"
                         else verify.NEGATIVE_CHECKS[mode]
+                    ),
+                    **(
+                        {"dispatchCount": int(fault == "negative-dispatch")}
+                        if mode in verify.UNDISPATCHED_CHECKS
+                        else {}
                     ),
                 }
             ),
@@ -2111,9 +2259,11 @@ def test_verifier_keeps_selected_scope_and_rejects_incomplete_evidence(
                 assert command_result["returncode"] == (124 if mode == "native" else 0)
     else:
         evidence = verify.verify(args)
-        assert len(calls) == 19 and evidence["dispatchCount"] == 532 + len(
+        assert len(calls) == 19 and evidence["dispatchCount"] == 533 + len(
             boolean_workloads.dispatches()
         )
+        assert evidence["lazyEntries"] == [lazy_entry]
+        assert lazy_entry in evidence["entries"]
         assert len(identities) == 2
         assert evidence["schemaVersion"] == 2
         assert evidence["adaptation"]["files"] == {"adapter": "unchanged"}
@@ -2525,12 +2675,44 @@ def test_boolean_host_rejects_invalid_storage(
     assert len(calls) == (0 if fault.startswith("input") else 1)
 
 
+def test_column_contiguous_comparisons_run_without_copies(monkeypatch):
+    # Two transposed operands are both column contiguous, so MLX runs them as
+    # one vector-vector dispatch; a broadcast or reversed pair is copied first.
+    checked = set()
+    for definition in list(boolean_workloads.definitions()):
+        entry, _, source, _, layout = definition
+        if entry not in packages.COMPARISON_ENTRIES or layout not in {
+            "matrix",
+            "transpose",
+            "broadcast",
+            "reverse",
+        }:
+            continue
+        monkeypatch.setattr(
+            boolean_workloads, "definitions", lambda item=definition: iter([item])
+        )
+        size = boolean_workloads.operand(source, layout).size
+        copy = packages.BOOLEAN_COPY_ENTRY if source == "bool_" else packages.COPY_ENTRY
+        copies = 0 if layout in {"matrix", "transpose"} else 2
+        assert boolean_workloads.dispatches() == [(copy, size)] * copies + [
+            (entry, size)
+        ]
+        checked.add((source, layout))
+    assert {layout for _, layout in checked} == {
+        "matrix",
+        "transpose",
+        "broadcast",
+        "reverse",
+    }
+    assert {source for source, _ in checked} >= {"float32", "bool_"}
+
+
 @pytest.mark.parametrize(
     "fault", [None, "missing", "dtype", "shape", "input", "output", "byte-type"]
 )
 def test_boolean_workload_records_are_exact(fault):
     records = boolean_workloads.expected_records()
-    assert len(records) > 250 and len(boolean_workloads.dispatches()) > 400
+    assert len(records) > 250 and len(boolean_workloads.dispatches()) == 362
     if fault == "missing":
         records.pop()
     elif fault == "dtype":
