@@ -25,6 +25,13 @@ float first(float v[2]) { v[0] = 3.0; return v[0] + v[1]; }
 [numthreads(1,1,1)] void main() { float a[2] = { 1.0, 2.0 }; results[1] = first(a); results[2] = a[0]; }
 """
 
+ISSUE_GLSL = """#version 450
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer B { float results[]; };
+float first(float v[2]) { v[0] = 3.0; return v[0] + v[1]; }
+void main() { float a[2] = float[2](1.0, 2.0); results[0] = first(a); results[1] = a[0]; }
+"""
+
 PROBE = """
 shader main {
     buffer float* results;
@@ -115,6 +122,16 @@ def test_hlsl_array_written_by_the_callee_is_copied(tmp_path, backend):
         r"\{\s*v\[crosstl_v_i0\] = v_crosstl_input\[crosstl_v_i0\];\s*\}",
         code,
     )
+
+
+@pytest.mark.parametrize("backend", sorted(GENERATORS))
+def test_glsl_array_written_by_the_callee_is_copied(tmp_path, backend):
+    # GLSL passes the array by value as well; the importer marks it ``in`` (#3162).
+    path = tmp_path / "probe.comp"
+    path.write_text(ISSUE_GLSL, encoding="utf-8")
+    code = crosstl.translate(str(path), backend=backend)
+    assert _signature(code, "first") == "float v_crosstl_input[2]"
+    assert "float v[2];" in code
 
 
 @pytest.mark.parametrize("backend", sorted(GENERATORS))

@@ -3262,11 +3262,30 @@ class GLSLToCrossGLConverter:
                 array_before_attributes=True,
                 memory_qualifier_prefix=False,
             )
+            if self.is_implicit_value_array_parameter(param):
+                declaration = f"in {declaration}"
             default_value = getattr(param, "default_value", None)
             if default_value is not None:
                 declaration += f" = {self.generate_expression(default_value)}"
             return declaration
         return None
+
+    def is_implicit_value_array_parameter(self, param):
+        """Return whether an array parameter is passed by value without saying so.
+
+        GLSL copies every parameter without ``out`` or ``inout`` into the
+        callee, so a write to such an array changes only the callee's copy.
+        CrossGL leaves an unqualified array parameter's mutation mode open, so
+        the importer states the GLSL contract with an explicit ``in``, as the
+        HLSL importer does. Arrays of samplers, images and other opaque types
+        cannot be written and keep their declaration.
+        """
+        if not getattr(param, "array_sizes", None):
+            return False
+        if self._is_resource_type(self.variable_declaration_type(param)):
+            return False
+        qualifiers = self._qualifier_set(param)
+        return not qualifiers & {"in", "out", "inout"}
 
     def generate_function(self, node):
         """Render one GLSL function node as a CrossGL function block."""

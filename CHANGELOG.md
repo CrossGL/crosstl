@@ -33,6 +33,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 - Slang output reads and writes a matrix in a storage buffer column by column. A loaded `mat3` was the transpose of the stored matrix, a non-square matrix such as `mat2x3` did not compile, and a store wrote rows into the buffer's columns; loads now build `transpose(float2x3(column0, column1))` and stores select each column, as the HLSL output does.
 - Slang output declares a function prototype without a body, which slangc had rejected as a second definition, and reads a structured buffer's element count with `GetDimensions(count, stride)`, the only overload slangc provides. SPIR-V output inlines the definition of a helper that takes a storage buffer instead of also counting its prototype as an overload.
 - HLSL and Slang output of `buffer_dimensions(b, count)` on a structured buffer assign the element count (`count = cgl_buffer_count(b);`) instead of calling `b.GetDimensions(count)`, which has no overload for a structured buffer and was rejected by DXC and slangc; output lists no `GetDimensions` overload takes, such as a stride for a byte-address buffer, are refused with a diagnostic.
+- GLSL input marks an array parameter without `out` or `inout` as `in`, as HLSL input does, because GLSL passes it by value. CUDA and HIP output therefore copy such an array when the function writes it: `float first(float v[2]) { v[0] = 3.0; ... }` used to change the caller's array through the decayed pointer. (#3162)
 
 ---
 

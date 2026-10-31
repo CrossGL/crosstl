@@ -1534,7 +1534,8 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
     assert builtin["valueProvenance"]["kind"] == "source-default"
     assert "static const int gl_MaxImageUnits = 8;" in generated
     assert (
-        "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
+        "void foo(in float4 p[arraySize], VertexInput input, "
+        "inout VertexOutput output)"
     ) in generated
     assert "foo(input.ucol, input, output);" in generated
     # The project gives the specialization constants their default values, which size the input members.
