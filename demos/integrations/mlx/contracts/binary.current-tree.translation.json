@@ -4231,16 +4231,16 @@
         "sizeBytes": 7872
       },
       "sv_Powercomplex64": {
-        "sha256": "4d1e72f15e63f1dfaf37ef2a44b83d94293d4b323bf567bc7475067fa02bae0d",
-        "sizeBytes": 8101
+        "sha256": "c40e048ee69cfbb2a01fa8efc30dbdaea8edcab75ba4ae55e2cc4f9c45837600",
+        "sizeBytes": 8150
       },
       "vs_Powercomplex64": {
-        "sha256": "b7e7ffa27392e1ee2b2c6928bafb0fd208db313c6c7a88d80af100a03ec9fc40",
-        "sizeBytes": 8101
+        "sha256": "feeb367fa01922b264a31769f77115d313eea226e068834fd9a77f28d22f83a1",
+        "sizeBytes": 8150
       },
       "vv_Powercomplex64": {
-        "sha256": "92f0c6530faf6ad63ba3cbf211e9350bf115f615e2247db05b086e835270a1bf",
-        "sizeBytes": 8117
+        "sha256": "4326175f4f0d23085852d35e8ec0843706de5878b3da1ba9ecb295a5475612aa",
+        "sizeBytes": 8171
       },
       "sv2_Powercomplex64": {
         "sha256": "e7a10c399b9fbf30c8be34c0b53ff62993e9713fd65f5df466dc18a71e047298",

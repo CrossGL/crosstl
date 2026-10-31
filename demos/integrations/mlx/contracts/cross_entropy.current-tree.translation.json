@@ -25,80 +25,80 @@
   "artifacts": {
     "directx": {
       "cross_entropy_float32": {
-        "sha256": "fc205c173613bf02b751d0524eb47e9df36d444f91f43ee04b170b1dd530e012",
-        "sizeBytes": 6535
+        "sha256": "ee64bf9a17225eb510ba9bb6514541db82bd9b41b7910da51966d5258d1be9d2",
+        "sizeBytes": 6534
       },
       "cross_entropy_vjp_float32": {
-        "sha256": "9597c9313976eb9f0dc10b4b6514b34bf2ef74f2b36e441c5dbed8a41240deab",
-        "sizeBytes": 3184
+        "sha256": "68462b3eb8012cfd632cc9f4b6b5c5688942cabf650628ce1f3b970ad76a1088",
+        "sizeBytes": 3183
       },
       "cross_entropy_float16": {
-        "sha256": "261c4a77f7dc78b061fe8751d7f3e0d4cd310e469dabf30247db14d070a8405c",
-        "sizeBytes": 8095
+        "sha256": "470232fcb9b771ff2d0ed9ef9986cd1c5a7d340d3ab61bd24214c3e5b6690274",
+        "sizeBytes": 8094
       },
       "cross_entropy_vjp_float16": {
-        "sha256": "55f10b1da0e018552f75a59da2a9a5138b83a58cc7eb23022a64fe52e936879e",
-        "sizeBytes": 5950
+        "sha256": "5c3109bd9c304c2ba1d3bbb6fc6370add7dfed6b65acb213cce3979a30d8cf62",
+        "sizeBytes": 5949
       },
       "cross_entropy_bfloat16": {
-        "sha256": "4ff9b8599fbb929756b11778117e58fd04102136d4cf0ce56275d82908a2e6a6",
-        "sizeBytes": 6883
+        "sha256": "31eb8d0a31144e0ea829bdf0e1999fa8564e2536afc98577c77f5576732c0790",
+        "sizeBytes": 6882
       },
       "cross_entropy_vjp_bfloat16": {
-        "sha256": "a8d11f4e4b04a570b4c2f3e0401ce151b7f23b9d13dcb2b9cdaaf615b9667d4b",
-        "sizeBytes": 3968
+        "sha256": "7992c8bbce71a6cdf4c588b91b1dbb90ae07032097d838c194881799b3e66427",
+        "sizeBytes": 3967
       }
     },
     "opengl": {
       "cross_entropy_float32": {
-        "sha256": "44363c9a65a828fd117ef49dee982d856714f42c21ba3e1e689aa38f8502eb7a",
-        "sizeBytes": 6459
+        "sha256": "d893ff82339572aea350cc83091cda46be65c4f4b749157234d8a35183450210",
+        "sizeBytes": 6458
       },
       "cross_entropy_vjp_float32": {
-        "sha256": "66eba93a6add81cb338325d5f7b3d4d03c815c471ee88f1bb71438a91201fb11",
-        "sizeBytes": 3328
+        "sha256": "c22176e81655973e56624f5250775437686ff2ec7d05974faa561c79e2633f4d",
+        "sizeBytes": 3327
       },
       "cross_entropy_float16": {
-        "sha256": "c130a4a4397a2526f0cfdbc8f629baddca59c19ed0e0ee3587b732ee09bb5a1f",
-        "sizeBytes": 6459
+        "sha256": "3490dd832c3a587525f5128175ac0bc6ca53d655a9049d38eef7431e9dd85447",
+        "sizeBytes": 6458
       },
       "cross_entropy_vjp_float16": {
-        "sha256": "77e95203366eb1bce659b014669c2e7f7224d1fc1de9408ddda544a6b763d9e0",
-        "sizeBytes": 4699
+        "sha256": "9e63a6cd715ce8a3cd43bcfbea9096e9f59b72325df90cdcb6012b58821a6f25",
+        "sizeBytes": 4698
       },
       "cross_entropy_bfloat16": {
-        "sha256": "5de3fcccee2a8be2c07cce63e66fa87cac9d6295829e7a161a278dcebc077905",
-        "sizeBytes": 6466
+        "sha256": "75ce006aedd3453149fda97db6c13cf883a2c5b1616d83becbea925206b169e4",
+        "sizeBytes": 6465
       },
       "cross_entropy_vjp_bfloat16": {
-        "sha256": "a3f79d2636764b07e5a3bd7cbff4afe46044dbceab956a1bf3d2788be14d5698",
-        "sizeBytes": 3686
+        "sha256": "d58c2d48eb4cf8bf4c8b4f6ba90bab83b748ea92a4d43be07713982f49473f83",
+        "sizeBytes": 3685
       }
     },
     "metal": {
       "cross_entropy_float32": {
-        "sha256": "1ed8a2b1b2c7fcc84df4d84c0ce9f68d360b930475421c528ed25ae38fb40577",
-        "sizeBytes": 3060
+        "sha256": "76e8e34017a91a858175a55990dccd64dbfa709e722346090b9bd8c58e2c1999",
+        "sizeBytes": 3035
       },
       "cross_entropy_vjp_float32": {
-        "sha256": "85f2c36ab628a0a0fa1fa1809938bc0f0559aa2852558749d12e702cda1d4694",
-        "sizeBytes": 1898
+        "sha256": "5619a159bdfa12eec5e680260d5084bf961ee048497036c57d4f2dd2146dbf75",
+        "sizeBytes": 1873
       },
       "cross_entropy_float16": {
-        "sha256": "91569e4f79bdc79e0a020ae1d228a72e905b167ff6a0df68c782d642ff5f3fdf",
-        "sizeBytes": 3059
+        "sha256": "7f0b7e4588967d5ccbdca5770e850473454c475aad756f74c8fd8e7c3f5b07ee",
+        "sizeBytes": 3034
       },
       "cross_entropy_vjp_float16": {
-        "sha256": "91e8bd5e138d51b839b244e21f21d11006f73e7d707598aafb2e2996a70dc547",
-        "sizeBytes": 1894
+        "sha256": "54a6d03843561630b12f8e12b7161363609d3b986b695a76f45cd03e24137a72",
+        "sizeBytes": 1869
       },
       "cross_entropy_bfloat16": {
-        "sha256": "212846540589530d9076dc032d0e1f641dfb8425ccffd81920115db584d728d8",
-        "sizeBytes": 3062
+        "sha256": "2a831465ac921b885502bf9e3c74cd6ec1ff62dd1abc38c064da71dfd268d7e9",
+        "sizeBytes": 3037
       },
       "cross_entropy_vjp_bfloat16": {
-        "sha256": "b6b34468ffb3ee4df63624c3a2cd7bab2b87b2b4da405ff5264cef6d6bcd4413",
-        "sizeBytes": 1903
+        "sha256": "0bcb6a933f707032de0d4cf6273d00848085b96f5315617dff724389b20f6bde",
+        "sizeBytes": 1878
       }
     }
   },
