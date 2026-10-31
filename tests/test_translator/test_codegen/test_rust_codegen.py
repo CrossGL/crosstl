@@ -27153,3 +27153,27 @@ def test_rust_turbofish_spells_type_arguments_as_rust_types():
     assert "pick::<Vec3<f32>>(" in generated_code
     assert "pick::<float>" not in generated_code
     assert "pick::<vec3>" not in generated_code
+
+
+def test_rust_turbofish_spells_nested_and_several_type_arguments():
+    """Each of several type arguments, nested ones included, is a Rust type (#3585).
+
+    ``vec2<int>`` is ``Vec2<i32>``, as in the declarations; it used to be
+    written with its CrossGL name ``ivec2``, which Rust does not have.
+    """
+    code = """
+    shader P {
+        U second<T, U>(T a, U b) { return b; }
+        ivec2 f(vec2 x, ivec2 m) { return second<vec2<float>, vec2<int>>(x, m); }
+        int g(float x, int i) { return second<float, int>(x, i); }
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "second::<Vec2<f32>, Vec2<i32>>(x, m)" in generated_code
+    assert "second::<f32, i32>(x, i)" in generated_code
+    assert "ivec2>" not in generated_code
