@@ -138,6 +138,30 @@ def test_metal_refuses_structured_buffer_lengths_in_helpers(helper, call, name):
         MetalCodeGen().generate(parse(source))
 
 
+@pytest.mark.parametrize(
+    ("declaration", "expression"),
+    [
+        ("AppendStructuredBuffer<float> values;", "float(values.length())"),
+        ("ConsumeStructuredBuffer<float> values;", "float(values.length())"),
+        ("StructuredBuffer<float> values[2];", "float(values[1].length())"),
+    ],
+)
+def test_metal_refuses_append_consume_and_array_element_lengths(
+    declaration, expression
+):
+    """Append and consume buffers, and an element of a structured buffer
+    array, are device pointers on Metal as well, so their length() is refused.
+
+    Their length() used to be copied unchanged onto the pointer, which the
+    Metal compiler rejects as not a structure or union.
+    """
+    source = STRUCTURED_VIEWS.replace(
+        "StructuredBuffer<float> values;", declaration
+    ).replace("float(values.length()) + float(outp.length())", expression)
+    with pytest.raises(BufferLengthUnsupportedError, match="'values'"):
+        MetalCodeGen().generate(parse(source))
+
+
 def test_glsl_import_binds_anonymous_member_lengths(tmp_path):
     path = tmp_path / "anon.comp"
     path.write_text(ANONYMOUS_GLSL, encoding="utf-8")

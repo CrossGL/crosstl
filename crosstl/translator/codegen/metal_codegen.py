@@ -12061,10 +12061,27 @@ class MetalCodeGen(
                 expr, self.generate_expression, self.generate_discarded_expression
             )
         elif isinstance(expr, ArrayLiteralNode):
-            elements = ", ".join(
-                self.generate_expression_with_expected(element, None)
-                for element in expr.elements
+            element_type, array_suffix = split_array_type_suffix(
+                self.current_expression_expected_type or ""
             )
+            matrix_element_type = (
+                element_type
+                if array_suffix.count("[") == 1
+                and self.is_matrix_value_type(element_type)
+                else None
+            )
+            rendered_elements = []
+            for element in expr.elements:
+                rendered = self.generate_expression_with_expected(element, None)
+                # A scalar cannot initialize a matrix element of a brace list, so
+                # write the matrix constructor, as GLSL output's mat3(0.0) does.
+                if (
+                    matrix_element_type is not None
+                    and self.expression_component_count(element) == 1
+                ):
+                    rendered = f"{self.map_type(matrix_element_type)}({rendered})"
+                rendered_elements.append(rendered)
+            elements = ", ".join(rendered_elements)
             return f"{{{elements}}}"
         elif isinstance(expr, PointerReinterpretNode):
             return self.generate_metal_storage_pointer_reinterpret(expr)
@@ -23156,6 +23173,19 @@ class MetalCodeGen(
                     f"length() of buffer view '{name}' needs the bound buffer's "
                     "size, which a Metal buffer argument does not carry",
                 )
+        # AppendStructuredBuffer and ConsumeStructuredBuffer are device
+        # pointers too, and so is an element of a structured buffer array:
+        # the name of bufs[1] is "bufs", recorded with the element's
+        # StructuredBuffer<T> type.
+        object_name = self.expression_name(object_expr)
+        if self.is_structured_buffer_type(
+            self.local_variable_types.get(object_name, "")
+        ):
+            raise BufferLengthUnsupportedError(
+                "metal",
+                f"length() of buffer view '{object_name}' needs the bound buffer's "
+                "size, which a Metal buffer argument does not carry",
+            )
         access = self.glsl_buffer_block_member_access(object_expr)
         if access is None or not access.get("is_array"):
             return None
