@@ -34,6 +34,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    NamedType,
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
@@ -9028,6 +9029,14 @@ class MetalCodeGen(
         fixed local array passed to a ``thread T*`` helper must retain the helper's
         ``char``/``uchar``/``short``/``ushort`` pointee width.
         """
+        pointee = self.local_variable_crossgl_pointer_pointee(node)
+        if pointee is not None:
+            # A CrossGL `ptr<T>` local is a pointer into the address space
+            # the qualifier prefix supplies, not a `ptr<T>` value: Metal has
+            # no such type, so it is declared as a C-style pointer.
+            return (
+                f"{self.map_type(self.convert_type_node_to_string(pointee))}*"
+            )
         mapped_type = self.map_type(declared_type)
         aggregate_type, array_suffix = split_array_type_suffix(mapped_type)
         if aggregate_type in self.structs_by_name and (
@@ -9064,11 +9073,44 @@ class MetalCodeGen(
             else None
         )
 
+    def local_variable_crossgl_pointer_pointee(self, node):
+        """The pointee type node of a CrossGL ``ptr<T>`` local, else ``None``.
+
+        The CrossGL parser represents ``ptr<T>`` as a ``NamedType``, not a
+        ``PointerType``, so without this the address-space alias machinery
+        below misses it and Metal output copies ``ptr<T>`` unchanged, which
+        the Metal compiler rejects as an undeclared identifier.
+        """
+        raw_type = self.local_variable_type_node(node)
+        if (
+            isinstance(raw_type, NamedType)
+            and raw_type.name == "ptr"
+            and len(raw_type.generic_args) == 1
+        ):
+            return raw_type.generic_args[0]
+        return None
+
     def local_variable_is_address_space_alias(self, node):
         raw_type = self.local_variable_type_node(node)
-        return isinstance(raw_type, (PointerType, ReferenceType)) or (
-            self.array_indirect_element_type_node(raw_type) is not None
+        return (
+            isinstance(raw_type, (PointerType, ReferenceType))
+            or self.local_variable_crossgl_pointer_pointee(node) is not None
+            or (self.array_indirect_element_type_node(raw_type) is not None)
         )
+
+    def local_variable_inherits_readonly_initializer(self, node):
+        """Whether a pointer local aliases a read-only parameter.
+
+        A CrossGL pointer local carries no qualifiers of its own, so a local
+        such as ``var src: ptr<f32> = in_;`` must inherit the constness of
+        the read-only storage parameter it aliases; otherwise Metal output
+        would drop ``const`` from the pointee and reject the initialization.
+        """
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return False
+        root = self.assignment_target_root_name(initial_value)
+        return root in getattr(self, "current_readonly_metal_parameters", set())
 
     def local_variable_is_array_alias(self, node):
         raw_type = self.local_variable_type_node(node)
@@ -9465,6 +9507,7 @@ class MetalCodeGen(
                     "const" in qualifiers
                     or "readonly" in qualifiers
                     or self.local_variable_inherits_readonly_mesh_payload(node)
+                    or self.local_variable_inherits_readonly_initializer(node)
                     or self.local_variable_address_space_mismatch_diagnostic(node)
                     is not None
                 ):
@@ -9564,7 +9607,10 @@ class MetalCodeGen(
 
     def local_variable_address_space_conflict_diagnostic(self, node):
         raw_type = self.local_variable_type_node(node)
-        if not isinstance(raw_type, (PointerType, ReferenceType)):
+        if (
+            not isinstance(raw_type, (PointerType, ReferenceType))
+            and self.local_variable_crossgl_pointer_pointee(node) is None
+        ):
             return None
         conflict = self.argument_address_space_conflict(
             getattr(node, "initial_value", None)

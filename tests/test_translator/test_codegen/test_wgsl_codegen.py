@@ -15,6 +15,9 @@ from crosstl.translator.codegen.wgsl_cube_texture_offsets import (
 from crosstl.translator.codegen.wgsl_integer_textures import (
     WGSLIntegerTextureSampleUnsupportedError,
 )
+from crosstl.translator.codegen.wgsl_pointer_types import (
+    WGSLPointerTypeUnsupportedError,
+)
 from crosstl.translator.codegen.wgsl_texture_bias import (
     WGSLTextureBiasUnsupportedError,
 )
@@ -4019,6 +4022,26 @@ def test_wgsl_codegen_rejects_matrix_compound_assignment_it_cannot_lower():
         match=r"WGSL target lowers matrix /= only with a scalar operand",
     ):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_refuses_crossgl_pointer_local_with_typed_diagnostic():
+    shader = """
+    shader WGSLPointerLocal {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* in_;
+            buffer float* outp;
+            void main() {
+                var src: ptr<f32> = in_;
+                outp[0] = src[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WGSLPointerTypeUnsupportedError) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+    assert raised.value.code == "project.translate.wgsl-pointer-type-unsupported"
 
 
 @pytest.mark.parametrize(

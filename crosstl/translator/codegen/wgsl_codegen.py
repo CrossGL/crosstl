@@ -120,6 +120,7 @@ from .wgsl_parameter_lowering import (
     WGSLParameterLoweringMixin,
     reference_parameter_qualifier,
 )
+from .wgsl_pointer_types import WGSLPointerTypeUnsupportedError
 from .wgsl_primitive_index import (
     PRIMITIVE_INDEX_ENABLE_DIRECTIVE,
     binds_primitive_index,
@@ -5333,6 +5334,10 @@ class WGSLCodeGen(
             if vtype.generic_args:
                 if vtype.name in self._generic_struct_definitions:
                     return self.generic_struct_specialized_type_name(vtype)
+                if vtype.name == "ptr":
+                    raise WGSLPointerTypeUnsupportedError(
+                        self.generic_type_key(vtype)
+                    )
                 raise ValueError(
                     "WGSL target does not support generic named type "
                     f"{self.generic_type_key(vtype)}; only concrete generic "

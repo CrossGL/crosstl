@@ -34763,5 +34763,54 @@ def test_scalar_geometric_builtins_lower_to_scalar_expressions(tmp_path):
     assert "results[3]=length(v)+dot(v,v)+distance(v,v)+normalize(v).x;" in compact
 
 
+def test_metal_crossgl_pointer_local_declares_device_pointer(tmp_path):
+    source_path = tmp_path / "k.cl"
+    source_path.write_text(
+        """
+        __kernel void first(__global float* out, __global const float* in) {
+            __global const float *src = in;
+            size_t i = get_global_id(0);
+            out[i] = src[i];
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    # The local aliases a read-only device buffer, so it keeps its constness.
+    assert "const device float* src = in_;" in generated
+    assert "ptr<" not in generated
+
+
+def test_metal_crossgl_pointer_local_to_mutable_buffer_has_no_const(tmp_path):
+    source_path = tmp_path / "k.cl"
+    source_path.write_text(
+        """
+        __kernel void second(__global float* out, __global float* in) {
+            __global float *dst = out;
+            size_t i = get_global_id(0);
+            dst[i] = in[i];
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    assert "device float* dst = out;" in generated
+    assert "ptr<" not in generated
+
+
 if __name__ == "__main__":
     pytest.main()
