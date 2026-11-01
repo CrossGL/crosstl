@@ -34,6 +34,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    NamedType,
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
@@ -9028,6 +9029,12 @@ class MetalCodeGen(
         fixed local array passed to a ``thread T*`` helper must retain the helper's
         ``char``/``uchar``/``short``/``ushort`` pointee width.
         """
+        pointee = self.local_variable_crossgl_pointer_pointee(node)
+        if pointee is not None:
+            # A CrossGL `ptr<T>` local is a pointer into the address space
+            # the qualifier prefix supplies, not a `ptr<T>` value: Metal has
+            # no such type, so it is declared as a C-style pointer.
+            return self.metal_crossgl_pointer_local_type(node, pointee)
         mapped_type = self.map_type(declared_type)
         aggregate_type, array_suffix = split_array_type_suffix(mapped_type)
         if aggregate_type in self.structs_by_name and (
@@ -9064,11 +9071,110 @@ class MetalCodeGen(
             else None
         )
 
+    def local_variable_crossgl_pointer_pointee(self, node):
+        """The pointee type node of a CrossGL ``ptr<T>`` local, else ``None``.
+
+        The CrossGL parser represents ``ptr<T>`` as a ``NamedType``, not a
+        ``PointerType``, so without this the address-space alias machinery
+        below misses it and Metal output copies ``ptr<T>`` unchanged, which
+        the Metal compiler rejects as an undeclared identifier.
+        """
+        raw_type = self.local_variable_type_node(node)
+        if (
+            isinstance(raw_type, NamedType)
+            and raw_type.name == "ptr"
+            and len(raw_type.generic_args) == 1
+        ):
+            return raw_type.generic_args[0]
+        return None
+
+    def is_crossgl_pointer_type(self, vtype):
+        """Whether ``vtype`` is a CrossGL ``ptr<T>``, as a ``NamedType`` or spelled."""
+        if isinstance(vtype, NamedType):
+            return vtype.name == "ptr" and len(vtype.generic_args) == 1
+        type_name = str(self.type_name_string(vtype) or "").replace(" ", "")
+        return (
+            type_name.startswith("ptr<")
+            and type_name.endswith(">")
+            and "," not in type_name
+        )
+
+    def metal_crossgl_pointer_local_type(self, node, pointee):
+        """The C-style Metal pointer type of a CrossGL ``ptr<T>`` local.
+
+        The CrossGL spelling carries no address space, so the local takes the
+        one its initializer points into. Without an initializer, as for
+        ``var p: ptr<f32>;``, or with one whose address space is unknown, the
+        local is refused instead of being declared a ``thread`` pointer. A
+        pointer into device, constant or threadgroup memory keeps the native
+        width of a ``char`` or ``short`` pointee, as the buffers and
+        threadgroup arrays it points into do.
+        """
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return self.refuse_lowering(
+                f"pointer local: '{node.name}' has no initializer, so the address "
+                "space it points into is unknown",
+                "float*",
+            )
+        if (
+            self.local_variable_initializer_address_space(node) is None
+            # Branches in different address spaces are refused on their own.
+            and self.argument_address_space_conflict(initial_value) is None
+        ):
+            return self.refuse_lowering(
+                f"pointer local: the address space the initializer of '{node.name}' "
+                "points into is unknown",
+                "float*",
+            )
+        pointee_type = self.map_type(self.convert_type_node_to_string(pointee))
+        if self.local_variable_address_space(node) != "thread":
+            pointee_type = (
+                self.metal_native_narrow_bitcast_storage_type(pointee) or pointee_type
+            )
+        return f"{pointee_type}*"
+
     def local_variable_is_address_space_alias(self, node):
         raw_type = self.local_variable_type_node(node)
-        return isinstance(raw_type, (PointerType, ReferenceType)) or (
-            self.array_indirect_element_type_node(raw_type) is not None
+        return (
+            isinstance(raw_type, (PointerType, ReferenceType))
+            or self.local_variable_crossgl_pointer_pointee(node) is not None
+            or (self.array_indirect_element_type_node(raw_type) is not None)
         )
+
+    def local_variable_inherits_readonly_initializer(self, node):
+        """Whether a pointer local aliases a read-only parameter.
+
+        A CrossGL pointer local carries no qualifiers of its own, so a local
+        such as ``var src: ptr<f32> = in_;`` must inherit the constness of
+        the read-only storage parameter it aliases; otherwise Metal output
+        would drop ``const`` from the pointee and reject the initialization.
+        """
+        if self.local_variable_crossgl_pointer_pointee(node) is None:
+            return False
+        return self.points_into_readonly_metal_storage(
+            getattr(node, "initial_value", None)
+        )
+
+    def points_into_readonly_metal_storage(self, expr):
+        """Whether a pointer value may point into read-only storage.
+
+        Either branch of ``c ? in_ : out`` counts, as the C conditional
+        operator gives the result the union of both pointees' qualifiers. A
+        CrossGL pointer local that aliases read-only storage is recorded as
+        read-only itself (record_readonly_metal_local_alias), so a pointer
+        initialized from it, such as ``b = a + 1``, keeps ``const`` too.
+        """
+        if expr is None:
+            return False
+        if isinstance(expr, TernaryOpNode):
+            return self.points_into_readonly_metal_storage(
+                getattr(expr, "true_expr", None)
+            ) or self.points_into_readonly_metal_storage(
+                getattr(expr, "false_expr", None)
+            )
+        root = self.assignment_target_root_name(expr)
+        return root in getattr(self, "current_readonly_metal_parameters", set())
 
     def local_variable_is_array_alias(self, node):
         raw_type = self.local_variable_type_node(node)
@@ -9177,7 +9283,12 @@ class MetalCodeGen(
 
     def address_space_assignment_diagnostic(self, target, value, operator="="):
         target_type = self.expression_result_type(target)
-        if self.pointer_pointee_type_name(target_type) is None:
+        # A CrossGL `ptr<T>` local is a pointer too; `*p` and `p[i]` are not
+        # reassignments of it, so only the bare name is checked.
+        if self.pointer_pointee_type_name(target_type) is None and not (
+            isinstance(target, IdentifierNode)
+            and self.is_crossgl_pointer_type(target_type)
+        ):
             return None
         if operator in {"+=", "-="}:
             value_type = self.expression_result_type(value)
@@ -9465,6 +9576,7 @@ class MetalCodeGen(
                     "const" in qualifiers
                     or "readonly" in qualifiers
                     or self.local_variable_inherits_readonly_mesh_payload(node)
+                    or self.local_variable_inherits_readonly_initializer(node)
                     or self.local_variable_address_space_mismatch_diagnostic(node)
                     is not None
                 ):
@@ -9564,7 +9676,10 @@ class MetalCodeGen(
 
     def local_variable_address_space_conflict_diagnostic(self, node):
         raw_type = self.local_variable_type_node(node)
-        if not isinstance(raw_type, (PointerType, ReferenceType)):
+        if (
+            not isinstance(raw_type, (PointerType, ReferenceType))
+            and self.local_variable_crossgl_pointer_pointee(node) is None
+        ):
             return None
         conflict = self.argument_address_space_conflict(
             getattr(node, "initial_value", None)
@@ -9648,6 +9763,8 @@ class MetalCodeGen(
             return "constant address-space local alias"
         if "readonly" in qualifiers:
             return "readonly local alias"
+        if self.local_variable_inherits_readonly_initializer(node):
+            return "const-qualified local alias"
         return None
 
     def record_readonly_metal_local_alias(self, node):
@@ -18634,7 +18751,9 @@ class MetalCodeGen(
         if not root_name or target_name != root_name:
             return False
         local_type = self.type_name_string(self.local_variable_types.get(root_name))
-        return isinstance(local_type, str) and "*" in local_type
+        return isinstance(local_type, str) and (
+            "*" in local_type or self.is_crossgl_pointer_type(local_type)
+        )
 
     def readonly_metal_parameter_assignment_diagnostic(self, target):
         root_name = self.assignment_target_root_name(target)
