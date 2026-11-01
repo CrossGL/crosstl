@@ -3335,9 +3335,32 @@ class WGSLCodeGen(
         if target_scalar == "i32" and source_scalar == "u32":
             return f"i32({rendered})"
         if target_scalar == "u32" and source_scalar == "i32":
-            return f"u32({rendered})"
+            return f"u32({self.concrete_negative_integer_literal(expr, rendered)})"
         if target_scalar == "f32" and source_scalar in {"i32", "u32"}:
             return f"f32({rendered})"
+        return rendered
+
+    def concrete_negative_integer_literal(self, expr, rendered):
+        """``-1i`` for a negative integer literal ``expr`` rendered as ``-1``, else ``rendered``.
+
+        WGSL reads ``-1`` as an abstract integer, and ``u32(-1)`` converts its value, which ``u32`` cannot
+        represent, so naga rejects it. ``u32(-1i)`` converts an ``i32`` and keeps its bits, 4294967295, as GLSL's
+        ``uint(-1)`` does.
+        """
+        operand = expr
+        if isinstance(expr, UnaryOpNode) and expr.operator == "-":
+            operand = expr.operand
+        elif not isinstance(expr, LiteralNode):
+            return rendered
+        value = getattr(operand, "value", None)
+        if (
+            isinstance(operand, LiteralNode)
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and (operand is not expr or value < 0)
+            and re.fullmatch(r"\(?-\d+\)?", rendered)
+        ):
+            return f"{rendered.strip('()')}i"
         return rendered
 
     def generate_padded_array_literal(self, expr, target_type):
@@ -5379,6 +5402,10 @@ class WGSLCodeGen(
     def generate_type_constructor_call_arguments(self, function_name, arguments):
         vector_shape = self.vector_shape(function_name)
         if vector_shape is None:
+            if self.map_type_name(function_name) == "u32" and len(arguments) == 1:
+                return self.concrete_negative_integer_literal(
+                    arguments[0], self.generate_expression(arguments[0])
+                )
             return self.generate_call_arguments(function_name, arguments)
         element_type, _size = vector_shape
         convert_vectors = len(arguments) > 1
