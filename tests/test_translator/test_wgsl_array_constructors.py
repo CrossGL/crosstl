@@ -322,3 +322,22 @@ def test_struct_braced_initializer_of_an_unconstructible_struct_is_refused(
             tmp_path, "A s = {x};\n values[i] = s.w;", functions=f"\n    {struct}"
         )
     assert raised.value.code == "project.translate.wgsl-struct-initializer-unsupported"
+
+
+@pytest.mark.parametrize(
+    "initializer", ["{x, 1.0}", "float[1](x, 1.0)", "float[](x, 1.0)"]
+)
+def test_initializer_longer_than_its_array_is_refused(tmp_path, initializer):
+    # array(x, 1.0) is a two-element array, which a declared array<f32, 1> rejects (#3685).
+    from crosstl.translator.codegen.wgsl_codegen import WGSLAggregateInitializerError
+
+    with pytest.raises(
+        WGSLAggregateInitializerError,
+        match=r"'array<f32, 1>' expects at most 1 elements, got 2",
+    ):
+        translate(tmp_path, f"float a[1] = {initializer};\n values[i] = a[0];")
+
+
+def test_initializer_as_long_as_its_array_is_unchanged(tmp_path):
+    output = translate(tmp_path, "float a[2] = {x, 1.0};\n values[i] = a[0];")
+    assert "var a: array<f32, 2> = array(x, 1.0);" in output

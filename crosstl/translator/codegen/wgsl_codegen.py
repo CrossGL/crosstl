@@ -149,6 +149,26 @@ from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 
 
+class WGSLAggregateInitializerError(ValueError):
+    """Raised when an aggregate initializer has no faithful WGSL lowering."""
+
+    project_diagnostic_code = "project.translate.wgsl-aggregate-initializer-invalid"
+    missing_capabilities = ("wgsl.aggregate-initializer-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        expected_type=None,
+        element_count=None,
+        expected_element_count=None,
+    ):
+        super().__init__(message)
+        self.expected_type = expected_type
+        self.element_count = element_count
+        self.expected_element_count = expected_element_count
+
+
 class WGSLCodeGen(
     WGSLValueSideEffectsMixin,
     WGSLCompositeConditionalMixin,
@@ -3353,6 +3373,15 @@ class WGSLCodeGen(
         ):
             return None
         size = self.literal_integer_value(target_type.size)
+        if size is not None and len(expr.elements) > size:
+            array_type = self.type_name_string(target_type)
+            raise WGSLAggregateInitializerError(
+                f"WGSL aggregate initializer for '{array_type}' expects at most "
+                f"{size} elements, got {len(expr.elements)}",
+                expected_type=array_type,
+                element_count=len(expr.elements),
+                expected_element_count=size,
+            )
         if size is None or not 0 < len(expr.elements) < size:
             return None
         element_type = target_type.element_type
