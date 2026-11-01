@@ -4056,9 +4056,7 @@ def test_wgsl_codegen_lowers_stage_interface_matrix_compound_assignment(
     multiplied = WGSLCodeGen().generate(
         parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m *= n;")
     )
-    temp = _stage_matrix_compound_temp(
-        multiplied, "mat2x2<f32>(o.m_0, o.m_1) * n;"
-    )
+    temp = _stage_matrix_compound_temp(multiplied, "mat2x2<f32>(o.m_0, o.m_1) * n;")
     assert f"o.m_0 = {temp}[0];" in multiplied
     assert f"o.m_1 = {temp}[1];" in multiplied
     # The product is computed once, not once per column.
