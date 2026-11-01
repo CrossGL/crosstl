@@ -10,6 +10,7 @@ import textwrap
 import pytest
 
 import crosstl
+from tests.spirv_friendly_names import translate_spirv
 
 PROGRAM = textwrap.dedent("""
     shader Probe {
@@ -110,8 +111,9 @@ def test_unsized_constant_array_takes_its_element_count(
     """``const vec2 U[] = vec2[](...)`` is sized from its list, as a local declaration is."""
     path = tmp_path / "unsized.cgl"
     path.write_text(UNSIZED_PROGRAM % initializer)
-    # SPIR-V output names its ids only when formatted.
-    output = crosstl.translate(
-        str(path), backend=backend, format_output=backend == "vulkan"
-    )
+    if backend == "vulkan":
+        # Friendly SPIR-V ids whether or not SPIRV-Tools is installed.
+        output = translate_spirv(path)
+    else:
+        output = crosstl.translate(str(path), backend=backend, format_output=False)
     assert declaration in output
