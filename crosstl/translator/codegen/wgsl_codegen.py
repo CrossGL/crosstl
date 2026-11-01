@@ -5335,9 +5335,7 @@ class WGSLCodeGen(
                 if vtype.name in self._generic_struct_definitions:
                     return self.generic_struct_specialized_type_name(vtype)
                 if vtype.name == "ptr":
-                    raise WGSLPointerTypeUnsupportedError(
-                        self.generic_type_key(vtype)
-                    )
+                    raise WGSLPointerTypeUnsupportedError(self.generic_type_key(vtype))
                 raise ValueError(
                     "WGSL target does not support generic named type "
                     f"{self.generic_type_key(vtype)}; only concrete generic "

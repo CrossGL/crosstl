@@ -9034,9 +9034,7 @@ class MetalCodeGen(
             # A CrossGL `ptr<T>` local is a pointer into the address space
             # the qualifier prefix supplies, not a `ptr<T>` value: Metal has
             # no such type, so it is declared as a C-style pointer.
-            return (
-                f"{self.map_type(self.convert_type_node_to_string(pointee))}*"
-            )
+            return f"{self.map_type(self.convert_type_node_to_string(pointee))}*"
         mapped_type = self.map_type(declared_type)
         aggregate_type, array_suffix = split_array_type_suffix(mapped_type)
         if aggregate_type in self.structs_by_name and (
