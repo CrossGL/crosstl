@@ -160,6 +160,26 @@ def _is_bound_parameter(function, parameter):
     )
 
 
+def _array_initializer(array_type, value):
+    """``(value, array_type)`` for an array declaration: a GLSL array constructor becomes the equivalent
+    initializer list, and an unsized array takes the element count of its list, as C and GLSL 4.60 section 4.1.9
+    do."""
+    if isinstance(value, A.FunctionCallNode) and _ARRAY_CONSTRUCTOR.fullmatch(
+        call_name(value)
+    ):
+        value = A.ArrayLiteralNode(list(value.arguments or []))
+    if (
+        isinstance(value, A.ArrayLiteralNode)
+        and array_type.size is None
+        and value.elements
+    ):
+        array_type = A.ArrayType(
+            array_type.element_type,
+            A.LiteralNode(len(value.elements), A.PrimitiveType("int")),
+        )
+    return value, array_type
+
+
 def _type_names(type_node):
     """Every type name a type mentions, its generic arguments and elements included."""
     if isinstance(type_node, A.NamedType):
@@ -420,16 +440,16 @@ class _Legalizer:
     # Every other unsized array of values.
 
     def constant_array_initializers(self):
-        """A shader-scope ``const T a[N] = T[N](...)`` gets the initializer list a local declaration gets."""
+        """A shader-scope ``const T a[N] = T[N](...)`` or ``const T a[] = ...`` gets the initializer list and the
+        element count a local declaration gets (:meth:`size_from_initializer`)."""
         for constant in getattr(self.program, "constants", None) or []:
-            value = getattr(constant, "value", None)
-            if (
-                isinstance(constant, A.ConstantNode)
-                and isinstance(getattr(constant, "const_type", None), A.ArrayType)
-                and isinstance(value, A.FunctionCallNode)
-                and _ARRAY_CONSTRUCTOR.fullmatch(call_name(value))
+            const_type = getattr(constant, "const_type", None)
+            if isinstance(constant, A.ConstantNode) and isinstance(
+                const_type, A.ArrayType
             ):
-                constant.value = A.ArrayLiteralNode(list(value.arguments or []))
+                constant.value, constant.const_type = _array_initializer(
+                    const_type, constant.value
+                )
 
     def refuse_unsized_values(self):
         for owner, field in self.scopes():
@@ -477,19 +497,10 @@ class _Legalizer:
         var_type = getattr(variable, "var_type", None)
         if not isinstance(var_type, A.ArrayType) or isinstance(variable, A.ArrayNode):
             return
-        value = variable.initial_value
-        if isinstance(value, A.FunctionCallNode) and _ARRAY_CONSTRUCTOR.fullmatch(
-            call_name(value)
-        ):
-            value = A.ArrayLiteralNode(list(value.arguments or []))
-            variable.initial_value = value
-        if not isinstance(value, A.ArrayLiteralNode) or var_type.size is not None:
-            return
-        count = len(value.elements or [])
-        if count:
-            sized = A.ArrayType(
-                var_type.element_type, A.LiteralNode(count, A.PrimitiveType("int"))
-            )
+        variable.initial_value, sized = _array_initializer(
+            var_type, variable.initial_value
+        )
+        if sized is not var_type:
             variable.var_type = variable.vtype = sized
 
     def check_type(self, node, type_node, where):
