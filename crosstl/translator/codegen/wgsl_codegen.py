@@ -147,6 +147,11 @@ from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
 from .wgsl_texture_bias import WGSLTextureBiasUnsupportedError, has_texture_sample_bias
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
+from .wgsl_vector_initializers import (
+    is_vector_braced_initializer,
+    wgsl_vector_array_initializer,
+    wgsl_vector_initializer,
+)
 
 
 class WGSLCodeGen(
@@ -2487,7 +2492,9 @@ class WGSLCodeGen(
         return "\n".join(lines)
 
     def generate_module_scope_value(self, value, target_type):
-        if is_struct_braced_initializer(self, value, target_type):
+        if is_struct_braced_initializer(
+            self, value, target_type
+        ) or is_vector_braced_initializer(self, value, target_type):
             return self.generate_expression_for_target(value, target_type)
         return self.generate_expression(value)
 
@@ -3295,6 +3302,9 @@ class WGSLCodeGen(
         struct_value = wgsl_struct_initializer(self, expr, target_type)
         if struct_value is not None:
             return struct_value
+        vector_value = wgsl_vector_initializer(self, expr, target_type)
+        if vector_value is not None:
+            return vector_value
         padded_array = self.generate_padded_array_literal(expr, target_type)
         if padded_array is not None:
             return padded_array
@@ -3304,6 +3314,9 @@ class WGSLCodeGen(
         struct_array = wgsl_struct_array_initializer(self, expr, target_type)
         if struct_array is not None:
             return struct_array
+        vector_array = wgsl_vector_array_initializer(self, expr, target_type)
+        if vector_array is not None:
+            return vector_array
         previous_expected_type = self._current_expression_expected_type
         self._current_expression_expected_type = target_type
         try:
