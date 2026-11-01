@@ -93,6 +93,7 @@ from .wgsl_entry_outputs import (
     entry_output_parameters,
     lower_entry_output_parameters,
 )
+from .wgsl_enums import enum_variant_constants, generate_enum_constants, split_enums
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
@@ -832,6 +833,8 @@ class WGSLCodeGen(
         self._generic_function_specializer = None
         self._uses_primitive_index = False
         self._primitive_index_int_members = set()
+        self._enum_type_names = set()
+        self._enum_variant_constants = {}
 
     def generate(self, ast):
         return self.generate_program(ast)
@@ -913,6 +916,9 @@ class WGSLCodeGen(
             source_structs
         )
         structs = self.monomorphized_structs(ast, target_stage, source_structs)
+        structs, enums = split_enums(structs)
+        self._enum_type_names = {enum.name for enum in enums}
+        self._enum_variant_constants = enum_variant_constants(enums)
         constants = list(getattr(ast, "constants", []) or [])
         self._constant_values = self.constant_literal_values(constants)
         self._stage_output_lowerings = self.stage_output_lowerings(
@@ -1063,6 +1069,9 @@ class WGSLCodeGen(
         builtin_option_declarations = self.generate_builtin_option_declarations()
         if builtin_option_declarations:
             emitted_sections.append(builtin_option_declarations)
+
+        if enums:
+            emitted_sections.append(generate_enum_constants(self, enums))
 
         if structs:
             emitted_sections.append(
@@ -3464,6 +3473,9 @@ class WGSLCodeGen(
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
         if isinstance(expr, IdentifierNode):
+            enum_constant = self._enum_variant_constants.get(expr.name)
+            if enum_constant is not None:
+                return enum_constant
             if self.is_builtin_option_none_expression(expr):
                 none_value = self.generate_builtin_option_none_value()
                 if none_value is not None:
@@ -5415,6 +5427,8 @@ class WGSLCodeGen(
             )
             return f"array<{element}, {size}>"
         if isinstance(vtype, NamedType):
+            if not vtype.generic_args and vtype.name in self._enum_type_names:
+                return "i32"
             option_type = self.builtin_option_specialized_type_name(vtype)
             if option_type is not None:
                 return option_type
