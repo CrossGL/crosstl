@@ -23,6 +23,11 @@ The initial WGSL target surface covers common portable shader output:
 
 * vertex, fragment, and compute entry point generation
 * scalar, vector, matrix, array, struct, function, and local variable syntax
+* brace initializers of structures, such as ``Pair p = {x, 2.0};``, written as
+  the structure's value constructor ``Pair(x, 2.0)``, with each value converted
+  to its member's type and omitted members set to zero; an initializer with
+  more values than members, or one for a structure WGSL cannot construct, is
+  refused with ``project.translate.wgsl-struct-initializer-unsupported``
 * generic functions, monomorphized into one concrete WGSL function per
   instantiation the module calls; calls whose type arguments cannot be
   deduced, ambiguous generic overloads and generic resource parameters are

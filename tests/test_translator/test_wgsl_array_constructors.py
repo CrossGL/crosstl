@@ -6,6 +6,9 @@ import subprocess
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.wgsl_struct_initializers import (
+    WGSLStructInitializerError,
+)
 
 PROGRAM = """shader Probe {{
     const int COUNT = 3;
@@ -197,3 +200,110 @@ def test_short_braced_initializer_zero_fills_the_rest(tmp_path):
         tmp_path, "float a[3] = {x, 1.0};\n values[i] = a[0] + a[1] + a[2];"
     )
     assert "var a: array<f32, 3> = array<f32, 3>(x, 1.0, f32());" in output
+
+
+def test_struct_braced_initializer_is_the_struct_constructor(tmp_path):
+    output = translate(tmp_path, "Pair p = {x, 2.0};\n values[i] = p.a + p.b;")
+    assert "var p: Pair = Pair(x, 2.0);" in output
+    assert "array(x, 2.0)" not in output
+
+
+def test_struct_braced_initializer_with_an_array_member(tmp_path):
+    output = translate(
+        tmp_path,
+        "Frame f = {mat3[2](1.0, x), 2.0};\n values[i] = f.w;",
+        functions="""
+    struct Frame { mat3 m[2]; float w; };""",
+    )
+    assert "var f: Frame = Frame(array<mat3x3<f32>, 2>(" in output
+    assert "), 2.0);" in output
+    assert "= array(array" not in output
+
+
+def test_struct_braced_initializer_converts_values_to_member_types(tmp_path):
+    # WGSL has no implicit conversions, so each value is converted as it would be in Pair(x, k).
+    output = translate(
+        tmp_path,
+        "ivec3 n = ivec3(1);\n Q q = {1, x, 2, n};\n values[i] = q.f + q.v.x;",
+        functions="""
+    struct Q { uint u; int s; float f; vec3 v; };""",
+    )
+    assert "var q: Q = Q(u32(1), i32(x), f32(2), vec3<f32>(n));" in output
+
+
+def test_short_struct_braced_initializer_zero_fills_the_rest(tmp_path):
+    # The members a braced initializer leaves out are zero, as in GLSL output.
+    output = translate(
+        tmp_path, "Pair p = {x};\n Pair z = {};\n values[i] = p.a + z.b;"
+    )
+    assert "var p: Pair = Pair(x, f32());" in output
+    assert "var z: Pair = Pair(f32(), f32());" in output
+
+
+def test_nested_and_assigned_struct_braced_initializers(tmp_path):
+    output = translate(
+        tmp_path,
+        "Outer o = {{x}, 3};\n Pair p;\n p = {x, 2.0};\n values[i] = o.p.a + p.b;",
+        functions="""
+    struct Outer { Pair p; int n; };""",
+    )
+    assert "var o: Outer = Outer(Pair(x, f32()), 3);" in output
+    assert "p = Pair(x, 2.0);" in output
+
+
+def test_array_of_structs_braced_initializer(tmp_path):
+    output = translate(
+        tmp_path,
+        "Pair ps[2] = {{x, 1}, {2.0, x}};\n"
+        " Pair qs[COUNT] = {{x, 1.0}};\n"
+        " values[i] = ps[1].a + qs[0].b;",
+    )
+    assert (
+        "var ps: array<Pair, 2> = array<Pair, 2>(Pair(x, f32(1)), Pair(2.0, x));"
+        in output
+    )
+    assert (
+        "var qs: array<Pair, COUNT> = array<Pair, 3>(Pair(x, 1.0), Pair(), Pair());"
+        in output
+    )
+
+
+def test_struct_braced_initializer_with_too_many_values_is_refused(tmp_path):
+    with pytest.raises(WGSLStructInitializerError, match="gives 3 values") as raised:
+        translate(tmp_path, "Pair p = {x, 1.0, 2.0};\n values[i] = p.a;")
+    assert raised.value.code == "project.translate.wgsl-struct-initializer-unsupported"
+
+
+def test_module_scope_struct_braced_initializers(tmp_path):
+    output = translate(
+        tmp_path,
+        "values[i] = G.a + GS[2].b + g.a + x;",
+        functions="""
+    const Pair G = {1.0, 2};
+    const Pair GS[3] = {{1.0, 2.0}};
+    Pair g = {x0, 2.0};
+    const float x0 = 1.0;""",
+    )
+    assert "const G: Pair = Pair(1.0, f32(2));" in output
+    assert (
+        "const GS: array<Pair, 3> = array<Pair, 3>(Pair(1.0, 2.0), Pair(), Pair());"
+        in output
+    )
+    assert "var<private> g: Pair = Pair(x0, 2.0);" in output
+
+
+@pytest.mark.parametrize(
+    "struct, reason",
+    [
+        ("struct A { atomic_uint c; float w; };", "holds an atomic"),
+        ("struct A { float w; texture2D t; };", "holds a resource"),
+    ],
+)
+def test_struct_braced_initializer_of_an_unconstructible_struct_is_refused(
+    tmp_path, struct, reason
+):
+    with pytest.raises(WGSLStructInitializerError, match=reason) as raised:
+        translate(
+            tmp_path, "A s = {x};\n values[i] = s.w;", functions=f"\n    {struct}"
+        )
+    assert raised.value.code == "project.translate.wgsl-struct-initializer-unsupported"
