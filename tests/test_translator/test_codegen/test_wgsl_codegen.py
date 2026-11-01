@@ -4021,6 +4021,88 @@ def test_wgsl_codegen_rejects_matrix_compound_assignment_it_cannot_lower():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+WGSL_STAGE_MATRIX_COMPOUND_SHADER = """
+shader WGSLStageMatrixCompound {
+    struct VSOut {
+        vec4 position @ gl_Position;
+        mat2 m @ TEXCOORD0;
+    }
+    vertex {
+        VSOut main(vec2 p @ POSITION) {
+            VSOut o;
+            o.position = vec4(p, 0.0, 1.0);
+            mat2 n = mat2(p.x, 1.0, 2.0, p.y);
+            o.m = mat2(p.x);
+            %s
+            return o;
+        }
+    }
+}
+"""
+
+
+def _stage_matrix_compound_temp(generated, declaration):
+    line = next(
+        line.strip()
+        for line in generated.splitlines()
+        if line.strip().endswith(declaration)
+    )
+    return line.removeprefix("let ").split(":")[0].strip()
+
+
+def test_wgsl_codegen_lowers_stage_interface_matrix_compound_assignment(
+    tmp_path,
+):
+    multiplied = WGSLCodeGen().generate(
+        parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m *= n;")
+    )
+    temp = _stage_matrix_compound_temp(
+        multiplied, "mat2x2<f32>(o.m_0, o.m_1) * n;"
+    )
+    assert f"o.m_0 = {temp}[0];" in multiplied
+    assert f"o.m_1 = {temp}[1];" in multiplied
+    # The product is computed once, not once per column.
+    assert multiplied.count(" * n;") == 1
+    validate_wgsl_with_naga(tmp_path, multiplied)
+
+    added = WGSLCodeGen().generate(
+        parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m += 1.0;")
+    )
+    temp = _stage_matrix_compound_temp(added, "f32 = 1.0;")
+    assert f"o.m_0 += {temp};" in added
+    assert f"o.m_1 += {temp};" in added
+    # A scalar is never declared as a matrix temporary.
+    assert "mat2x2<f32> = 1.0;" not in added
+    validate_wgsl_with_naga(tmp_path, added)
+
+    divided = WGSLCodeGen().generate(
+        parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m /= 2.0;")
+    )
+    temp = _stage_matrix_compound_temp(divided, "f32 = 2.0;")
+    assert f"o.m_0 /= {temp};" in divided
+    assert f"o.m_1 /= {temp};" in divided
+    validate_wgsl_with_naga(tmp_path, divided)
+
+    # `+=` with a matrix stays column by column, as WGSL defines it.
+    matrix_added = WGSLCodeGen().generate(
+        parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m += n;")
+    )
+    temp = _stage_matrix_compound_temp(matrix_added, "mat2x2<f32> = n;")
+    assert f"o.m_0 += {temp}[0];" in matrix_added
+    assert f"o.m_1 += {temp}[1];" in matrix_added
+    validate_wgsl_with_naga(tmp_path, matrix_added)
+
+
+def test_wgsl_codegen_refuses_stage_interface_matrix_division_by_matrix():
+    shader = WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m /= n;"
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target lowers matrix /= only with a scalar operand",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
 @pytest.mark.parametrize(
     "statement, operator",
     [("m += next_scalar();", r"\+="), ("ms[next_index()] -= 1.0;", "-=")],

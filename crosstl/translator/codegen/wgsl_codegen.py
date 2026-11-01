@@ -3099,8 +3099,14 @@ class WGSLCodeGen(
             return None
 
         target_type = self.expression_type(target)
-        value = self.generate_expression_for_target(node.value, target_type)
         pad = "    " * indent
+        if node.operator != "=":
+            compound = self.generate_stage_interface_matrix_compound_assignment(
+                node, access, target_type, pad
+            )
+            if compound is not None:
+                return compound
+        value = self.generate_expression_for_target(node.value, target_type)
         temp_name = self.declare_synthetic_local_identifier(
             self.swizzle_base_name(access["member_name"])
         )
@@ -3110,6 +3116,69 @@ class WGSLCodeGen(
         for index in range(access["columns"]):
             field = self.stage_interface_matrix_access_field(access, index)
             lines.append(f"{pad}{field} {node.operator} {temp_name}[{index}];")
+        return "\n".join(lines)
+
+    def generate_stage_interface_matrix_compound_assignment(
+        self, node, access, target_type, pad
+    ):
+        """Column lowering for ``o.m op= v`` on a split stage-output matrix.
+
+        Returns None when the existing column-wise lowering stays correct:
+        ``+=``/``-=`` with a matrix value, an operator other than the four
+        arithmetic compound assignments, or a value that is neither a matrix
+        nor a scalar. The column-wise lowering is wrong for the other cases:
+        a scalar value must not be declared as a matrix temporary (naga
+        rejects it), ``*=`` with a matrix is the matrix product rather than
+        a component-wise product, and WGSL has no division on matrices.
+        """
+        operator = node.operator
+        if operator not in {"+=", "-=", "*=", "/="}:
+            return None
+        target_shape = self.matrix_shape(target_type)
+        if target_shape is None:
+            return None
+        element = target_shape[0]
+        value_type = self.expression_type(node.value)
+        if self.matrix_shape(value_type) is not None:
+            if operator == "/=":
+                # WGSL has no division on matrices, as for other targets.
+                self.refuse_matrix_scalar_binary(node)
+            if operator != "*=":
+                # WGSL applies `+=` and `-=` to two matrices component by
+                # component, so the column-wise lowering stays correct.
+                return None
+            value = self.generate_expression_for_target(node.value, target_type)
+            matrix_type = access["matrix_type_name"]
+            columns = ", ".join(
+                self.stage_interface_matrix_access_field(access, index)
+                for index in range(access["columns"])
+            )
+            temp_name = self.declare_synthetic_local_identifier(
+                self.swizzle_base_name(access["member_name"])
+            )
+            lines = [
+                f"{pad}let {temp_name}: {matrix_type} = "
+                f"{matrix_type}({columns}) * {value};"
+            ]
+            for index in range(access["columns"]):
+                field = self.stage_interface_matrix_access_field(access, index)
+                lines.append(f"{pad}{field} = {temp_name}[{index}];")
+            return "\n".join(lines)
+        if self.scalar_type_name(value_type) is None:
+            return None
+        if not self.is_matrix_scalar_operand(node.value, element):
+            self.refuse_matrix_scalar_binary(node)
+        # Apply the scalar to each column directly: WGSL has vector-scalar
+        # forms of all four operators, and the value is evaluated once into
+        # a scalar temporary instead of a matrix temporary.
+        scalar = self.generate_expression(node.value)
+        temp_name = self.declare_synthetic_local_identifier(
+            self.swizzle_base_name(access["member_name"])
+        )
+        lines = [f"{pad}let {temp_name}: {element} = {scalar};"]
+        for index in range(access["columns"]):
+            field = self.stage_interface_matrix_access_field(access, index)
+            lines.append(f"{pad}{field} {operator} {temp_name};")
         return "\n".join(lines)
 
     def generate_swizzle_assignment_statement(self, node, indent):
