@@ -29,36 +29,36 @@
         "sizeBytes": 3922
       },
       "winograd_conv_2d_input_transform_float32_bc32": {
-        "sha256": "69fedd5bff9652f855d4f8cef12e9fdf70c034a3e68bda10ed57560e99a0ddb1",
-        "sizeBytes": 4819
+        "sha256": "c7c1adbd8e111c089f57817cad82d4892764e45f1df41d54af84f2225ec9a0ff",
+        "sizeBytes": 4807
       },
       "winograd_conv_2d_output_transform_float32_bo32": {
-        "sha256": "0f8c65c03bd09484e55f5dee2a4c7b09da4c0f81515e4012ada98f2bb13e0262",
-        "sizeBytes": 5028
+        "sha256": "4421c39cf71b9303a263252b728d817665f0d9d92389446637ce2b9b55e9302f",
+        "sizeBytes": 5016
       },
       "winograd_conv_2d_weight_transform_bfloat16_bc32": {
         "sha256": "ec14329cd267a9d399120b482dc2cf3331014a985cd2749500418cc1daca5d83",
         "sizeBytes": 3948
       },
       "winograd_conv_2d_input_transform_bfloat16_bc32": {
-        "sha256": "785765e821573329a752df783440378f0dca2c9d2d29400d41043d4e521f4511",
-        "sizeBytes": 4842
+        "sha256": "7013a35647989635a57311faff7981f7d2325c581ac9e0bfec99b0f1d4cfb06a",
+        "sizeBytes": 4830
       },
       "winograd_conv_2d_output_transform_bfloat16_bo32": {
-        "sha256": "11cacf72227e778d58eb5da696c6bb2ea1b2aaeeba89ac640c915b71dc49a26a",
-        "sizeBytes": 5051
+        "sha256": "520a34b70f5adaa0852793bfb28122639d93b0cbc596f54008a637d4212e65dc",
+        "sizeBytes": 5039
       },
       "winograd_conv_2d_weight_transform_float16_bc32": {
         "sha256": "9396077e7425deafc326cae3262600dcbe7914ba054fb6791a8a19c3e16ac7bf",
         "sizeBytes": 3913
       },
       "winograd_conv_2d_input_transform_float16_bc32": {
-        "sha256": "29a71ed031e85cbb3fc9a2624aa94dcd48770359e043f5589bc105d538c13460",
-        "sizeBytes": 4811
+        "sha256": "14a0656e3d31f3fa226a3c09c5161490be854ddae187e3c2459a0790ce8c8346",
+        "sizeBytes": 4799
       },
       "winograd_conv_2d_output_transform_float16_bo32": {
-        "sha256": "2c2619dd31f4aac528e2df4c38befe3f56fc6dcf6ec24c4ea52a9de5773235ba",
-        "sizeBytes": 5020
+        "sha256": "9b120f8ef6ae21a4e0306b4e181090fa2e4c9cd75a0033cd065fbb6f57966195",
+        "sizeBytes": 5008
       }
     },
     "opengl": {
@@ -67,36 +67,36 @@
         "sizeBytes": 29010
       },
       "winograd_conv_2d_input_transform_float32_bc32": {
-        "sha256": "567d6421d09949dca528a7b5d7565de976b25176b738a776793ff5b98191e248",
-        "sizeBytes": 29499
+        "sha256": "37b7292687f3a7608341be998946dd2da143cb2bb4f79cb3e8fb08eb82967eda",
+        "sizeBytes": 29481
       },
       "winograd_conv_2d_output_transform_float32_bo32": {
-        "sha256": "b04424fa0ea49362d83421aab77396c634f7ff14474703c8590b1c3497533900",
-        "sizeBytes": 29804
+        "sha256": "2cca36b52e044670760fd5d3343b60ea103a988c603c2a5e71f413a59b00022b",
+        "sizeBytes": 29786
       },
       "winograd_conv_2d_weight_transform_bfloat16_bc32": {
         "sha256": "c34d4e070288d75a4c852ca49759fbfdf63c370fdae3ae1859022579f0b1a02e",
         "sizeBytes": 29370
       },
       "winograd_conv_2d_input_transform_bfloat16_bc32": {
-        "sha256": "2430273e55decf19b8ecaf6a1aa3cf7d498021364a94a670761eb106406d38c4",
-        "sizeBytes": 29864
+        "sha256": "269d11e71ef3517eb8dc8b136be9581025f6125291d514fda01ab600b76d1609",
+        "sizeBytes": 29846
       },
       "winograd_conv_2d_output_transform_bfloat16_bo32": {
-        "sha256": "93487d6888109c4dae355c3b7dfe265a649b8d56d513c0c17c4a4bf89b327683",
-        "sizeBytes": 30169
+        "sha256": "9363fbbbdce118568d8b8d9f087b75393d534f3b802f79c0d224ea035fd0d393",
+        "sizeBytes": 30151
       },
       "winograd_conv_2d_weight_transform_float16_bc32": {
         "sha256": "7865f32c03354060e8fd3725f0d5262173355ce3bc48929f358b4aeeec07a95e",
         "sizeBytes": 30371
       },
       "winograd_conv_2d_input_transform_float16_bc32": {
-        "sha256": "cbbe228923df08e863a69b4bebeac34f465d2bbaf7d99839e82240d9eb07eeeb",
-        "sizeBytes": 30870
+        "sha256": "26e250ce2aa51c6ae7b10e0b3191a22376f7f44c0ca4fdc83b7828215ff1bbce",
+        "sizeBytes": 30852
       },
       "winograd_conv_2d_output_transform_float16_bo32": {
-        "sha256": "dc1b5a73d760a35a5f323b72ccd70047636cad4cce08ff34ccc29bc4d7ca95ca",
-        "sizeBytes": 31175
+        "sha256": "93ee719068572d9ed7cee8e0ace9596f2e42dc7ddd61ddd7684da60115efbd14",
+        "sizeBytes": 31157
       }
     },
     "directx": {
@@ -105,36 +105,36 @@
         "sizeBytes": 20525
       },
       "winograd_conv_2d_input_transform_float32_bc32": {
-        "sha256": "714f3319a08de14f8dd276e27f377136caa8ade083263dfe28037dc2acb7a88c",
-        "sizeBytes": 20250
+        "sha256": "b04ca912966171e6bdbf56c00d7408c32b9cd85cf5f3a4e6953366e42ea0b5ea",
+        "sizeBytes": 20232
       },
       "winograd_conv_2d_output_transform_float32_bo32": {
-        "sha256": "57f1b92225aa6d7074d8256b9e019a596dd0b0f6342f6318f4546e46e20c3ffa",
-        "sizeBytes": 20667
+        "sha256": "1caef4cdbb6ca8b9c2e8373230ca3383718df7a9515ab7cda6f2f83db6ddfddf",
+        "sizeBytes": 20649
       },
       "winograd_conv_2d_weight_transform_bfloat16_bc32": {
         "sha256": "7efab2fbcf165f1bfbb36b64fd3c45b979866a3dc052a6e1f491cf2ffba8d53a",
         "sizeBytes": 22103
       },
       "winograd_conv_2d_input_transform_bfloat16_bc32": {
-        "sha256": "6fb928e380b9a0c14ddedc88b4a01890ff3b11e9017b1aa134396df95538c404",
-        "sizeBytes": 21034
+        "sha256": "8ce01bc483792bdcfb783bb441f2cd853c60b43cc2a9c1f8c63b42a82fe94832",
+        "sizeBytes": 21016
       },
       "winograd_conv_2d_output_transform_bfloat16_bo32": {
-        "sha256": "4df144f085b351cc8198e5b33e17e5239f3d7f9fb4305deefc78d24a6d9d74a4",
-        "sizeBytes": 21451
+        "sha256": "e32d8352175f3484470f5879a6b2ee7828eb388ade6e569edfab374e33fcde29",
+        "sizeBytes": 21433
       },
       "winograd_conv_2d_weight_transform_float16_bc32": {
         "sha256": "8df09ca93ae756b1a0ca56bf658765c6589df1dd6f4eff0ef1d510f0b94726f5",
         "sizeBytes": 23271
       },
       "winograd_conv_2d_input_transform_float16_bc32": {
-        "sha256": "01418067ffcac67850d1dd7c64eeb79e3a848a2d4973fbf1e6fbda7bad007341",
-        "sizeBytes": 22995
+        "sha256": "cc1a10aae2f1324626e690d1a48690ceb3e295c14b1f724d97234eefe00fcc7e",
+        "sizeBytes": 22977
       },
       "winograd_conv_2d_output_transform_float16_bo32": {
-        "sha256": "fb0de98394fd6f397a795d12bc1de47ae137f94769fb8276ea6c5d898aee9841",
-        "sizeBytes": 23413
+        "sha256": "811073e76bfecd02cf0d343b34cdc5788a850ba7ce24b4570f4427a0fea732f8",
+        "sizeBytes": 23395
       }
     }
   },
