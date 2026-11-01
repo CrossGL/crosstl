@@ -3431,7 +3431,12 @@ class MetalCodeGen(
 
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
-            value_code = self.generate_constant_expression(value)
+            value_code = self.generate_constant_expression(
+                value,
+                expected_type=(
+                    const_type if isinstance(value, ArrayLiteralNode) else None
+                ),
+            )
             mapped_type = self.map_type(const_type)
             specialization_id = self.metal_specialization_constant_id(node)
             if specialization_id is not None:
@@ -4008,8 +4013,12 @@ class MetalCodeGen(
             return f"array<{resource_type}, {array_size}> {name}"
         return f"array<{resource_type}> {name}"
 
-    def generate_constant_expression(self, expr):
-        value_code = self.generate_expression(expr)
+    def generate_constant_expression(self, expr, expected_type=None):
+        if expected_type is None:
+            value_code = self.generate_expression(expr)
+        else:
+            # An initializer list gets its declared array type, as a local's does.
+            value_code = self.generate_expression_with_expected(expr, expected_type)
         if value_code == "True":
             return "true"
         if value_code == "False":

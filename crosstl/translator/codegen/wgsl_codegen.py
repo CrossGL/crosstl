@@ -2482,7 +2482,11 @@ class WGSLCodeGen(
         return "\n".join(lines)
 
     def generate_constant(self, node):
-        value = self.generate_expression(node.value)
+        if isinstance(node.value, ArrayLiteralNode):
+            # A short initializer list is zero-filled, as in a local declaration.
+            value = self.generate_expression_for_target(node.value, node.const_type)
+        else:
+            value = self.generate_expression(node.value)
         return (
             f"const {self.module_identifier_name(node.name)}: "
             f"{self.type_name_string(node.const_type)} = {value};"
