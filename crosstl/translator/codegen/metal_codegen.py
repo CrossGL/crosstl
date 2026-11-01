@@ -12070,9 +12070,22 @@ class MetalCodeGen(
                 and self.is_matrix_value_type(element_type)
                 else None
             )
+            # A structure's brace list gives each nested list its member's type,
+            # so a matrix array member is written as the array above is.
+            struct_fields = (
+                list(self.struct_member_types[element_type].values())
+                if not array_suffix and element_type in self.struct_member_types
+                else []
+            )
             rendered_elements = []
-            for element in expr.elements:
-                rendered = self.generate_expression_with_expected(element, None)
+            for index, element in enumerate(expr.elements):
+                nested_type = (
+                    struct_fields[index]
+                    if isinstance(element, ArrayLiteralNode)
+                    and index < len(struct_fields)
+                    else None
+                )
+                rendered = self.generate_expression_with_expected(element, nested_type)
                 # A scalar cannot initialize a matrix element of a brace list, so
                 # write the matrix constructor, as GLSL output's mat3(0.0) does.
                 if (

@@ -46,3 +46,30 @@ def test_non_square_matrix_keeps_its_columns_and_rows(tmp_path):
 def test_scalar_array_constructor_is_unchanged(tmp_path):
     output = translate(tmp_path, "float a[3] = float[3](0.0); float b = a[1];")
     assert "float a[3] = {0.0};" in output
+
+
+STRUCT_PROGRAM = textwrap.dedent("""
+    shader P {
+        buffer float* outp;
+        struct W { mat3 m[2]; float s; };
+        struct V { W w; float t; };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                W w = {mat3[2](1.0), 2.0};
+                V v = {{mat3[2](0.0), 3.0}, 4.0};
+                outp[i] = w.m[0][0][0] + w.s + v.w.s + v.t;
+            }
+        }
+    }
+""")
+
+
+def test_struct_brace_initializer_builds_matrix_array_member(tmp_path):
+    """A matrix array member of a structure's brace list gets matrices (#3634)."""
+    path = tmp_path / "struct.cgl"
+    path.write_text(STRUCT_PROGRAM)
+    output = crosstl.translate(str(path), backend="metal", format_output=False)
+    assert "W w = {{float3x3(1.0)}, 2.0};" in output
+    assert "V v = {{{float3x3(0.0)}, 3.0}, 4.0};" in output
