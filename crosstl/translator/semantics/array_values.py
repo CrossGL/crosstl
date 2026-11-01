@@ -65,6 +65,8 @@ def hoist_array_constructors(program, target) -> int:
     if not isinstance(program, A.ShaderNode) or target not in _DECLARATION_ONLY_TARGETS:
         return 0
     hoister = _Hoister(program, target)
+    for constant in getattr(program, "constants", None) or []:
+        hoister.constant(constant)
     for function in iter_functions(program):
         body = getattr(function, "body", None)
         if isinstance(body, A.BlockNode):
@@ -175,6 +177,21 @@ class _Hoister:
             # A bare expression statement, such as a for-loop initializer.
             self._walk(node, hoisted, once, effects)
         return hoisted
+
+    def constant(self, node):
+        """Turn the array constructors that are members of a shader-scope constant's aggregate into lists."""
+        value = getattr(node, "value", None)
+        if not isinstance(node, A.ConstantNode) or not self._is_aggregate(value):
+            return
+        hoisted = []
+        self._walk(value, hoisted, _Slot(), [False])
+        if hoisted:
+            self._refuse(
+                f"an array constructor in the initializer of shader-scope constant '{node.name}' is not a member "
+                "of its aggregate",
+                "array-constructor-at-shader-scope",
+                getattr(node, "source_location", None),
+            )
 
     # Expressions ---------------------------------------------------------------------------------------------
     def expression(self, owner, field, hoisted, slot, effects):
