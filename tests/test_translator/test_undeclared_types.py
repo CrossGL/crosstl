@@ -401,3 +401,21 @@ def test_translation_refuses_an_undeclared_call_type_argument(tmp_path, target):
     path = _write(tmp_path, "call.cgl", CALL_TYPE_ARGUMENT)
     with pytest.raises(UndeclaredTypeError, match="'foo'"):
         crosstl.translate(path, backend=target)
+
+
+CONSTANT_CALL_ARGUMENT = """
+shader P {
+    const int K = 4;
+    T scaled<T, N>(T x) { return x * T(N); }
+    compute {
+        buffer float* outp;
+        void main() { outp[0] = scaled<float, K>(outp[1]); }
+    }
+}
+"""
+
+
+def test_a_declared_constant_as_a_call_argument_is_not_an_undeclared_type(tmp_path):
+    assert undeclared_type_uses(_program(CONSTANT_CALL_ARGUMENT)) == []
+    path = _write(tmp_path, "constant.cgl", CONSTANT_CALL_ARGUMENT)
+    assert "(x * f32(K))" in crosstl.translate(path, backend="wgsl")

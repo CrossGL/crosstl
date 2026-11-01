@@ -243,6 +243,21 @@ def _generic_function_names(program):
     }
 
 
+def _declared_value_names(program):
+    """The names ``program`` declares as values: constants, variables and parameters.
+
+    A generic call may pass one as an explicit argument, as in ``scaled<float, K>(x)`` for ``const int K``, which WGSL
+    output substitutes into the specialization. Such a name is declared, so it is not an undeclared type.
+    """
+    return frozenset(
+        node.name
+        for node in _nodes(program)
+        if isinstance(node, (A.ConstantNode, A.VariableNode, A.ParameterNode))
+        and isinstance(node.name, str)
+        and not getattr(node, "is_type_alias", False)
+    )
+
+
 def _call_type_argument_names(call, generic_functions):
     """The plain names among the explicit type arguments of ``call``, such as ``foo`` in ``pick<foo>(x)``.
 
@@ -299,12 +314,15 @@ def undeclared_type_uses(program, target=None):
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     generic_functions = _generic_function_names(program)
+    value_names = _declared_value_names(program) if generic_functions else frozenset()
     for node in _nodes(program, skip):
         if isinstance(node, A.FunctionCallNode):
             uses.extend(
                 (name, node)
                 for name in _call_type_argument_names(node, generic_functions)
-                if name not in declared and name not in BUILTIN_TYPE_NAMES
+                if name not in declared
+                and name not in BUILTIN_TYPE_NAMES
+                and name not in value_names
             )
             continue
         if not isinstance(node, A.NamedType) or node.generic_args:
