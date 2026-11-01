@@ -241,6 +241,7 @@ class _Legalizer:
             self.taken = self.declared_names()
             for owner, field, variable in buffers:
                 self.legalize_buffer(owner, field, variable)
+        self.constant_array_initializers()
         self.refuse_unsized_values()
 
     # Storage buffers declared as ``buffer T name[]``.
@@ -417,6 +418,18 @@ class _Legalizer:
         )
 
     # Every other unsized array of values.
+
+    def constant_array_initializers(self):
+        """A shader-scope ``const T a[N] = T[N](...)`` gets the initializer list a local declaration gets."""
+        for constant in getattr(self.program, "constants", None) or []:
+            value = getattr(constant, "value", None)
+            if (
+                isinstance(constant, A.ConstantNode)
+                and isinstance(getattr(constant, "const_type", None), A.ArrayType)
+                and isinstance(value, A.FunctionCallNode)
+                and _ARRAY_CONSTRUCTOR.fullmatch(call_name(value))
+            ):
+                constant.value = A.ArrayLiteralNode(list(value.arguments or []))
 
     def refuse_unsized_values(self):
         for owner, field in self.scopes():
