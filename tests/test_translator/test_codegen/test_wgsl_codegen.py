@@ -4024,26 +4024,6 @@ def test_wgsl_codegen_rejects_matrix_compound_assignment_it_cannot_lower():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
-def test_wgsl_codegen_refuses_crossgl_pointer_local_with_typed_diagnostic():
-    shader = """
-    shader WGSLPointerLocal {
-        compute {
-            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-            buffer float* in_;
-            buffer float* outp;
-            void main() {
-                var src: ptr<f32> = in_;
-                outp[0] = src[0];
-            }
-        }
-    }
-    """
-
-    with pytest.raises(WGSLPointerTypeUnsupportedError) as raised:
-        WGSLCodeGen().generate(parse_shader(shader))
-    assert raised.value.code == "project.translate.wgsl-pointer-type-unsupported"
-
-
 @pytest.mark.parametrize(
     "statement, operator",
     [("m += next_scalar();", r"\+="), ("ms[next_index()] -= 1.0;", "-=")],
@@ -4751,3 +4731,23 @@ def test_wgsl_codegen_refuses_one_scalar_matrix_constructor_with_side_effects():
 
     with pytest.raises(ValueError, match="one-scalar matrix constructor"):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_refuses_crossgl_pointer_local_with_typed_diagnostic():
+    shader = """
+    shader WGSLPointerLocal {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* in_;
+            buffer float* outp;
+            void main() {
+                var src: ptr<f32> = in_;
+                outp[0] = src[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WGSLPointerTypeUnsupportedError) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+    assert raised.value.code == "project.translate.wgsl-pointer-type-unsupported"
