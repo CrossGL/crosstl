@@ -20,6 +20,8 @@ values than the structure has members, raise :class:`WGSLStructInitializerError`
 
 from __future__ import annotations
 
+import re
+
 from ..ast import ArrayLiteralNode, ArrayType, NamedType
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .wgsl_array_constructors import wgsl_array_element
@@ -63,10 +65,12 @@ def _unconstructible_reason(codegen, vtype, seen=()):
         if vtype.size is None:
             return "it holds a runtime-sized array"
         return _unconstructible_reason(codegen, vtype.element_type, seen)
-    if "atomic" in str(codegen.type_name_string(vtype)):
-        return "it holds an atomic"
     struct_name = codegen.struct_type_name(vtype)
-    if struct_name not in codegen._structs_by_name or struct_name in seen:
+    if struct_name not in codegen._structs_by_name:
+        if re.match(r"atomic(_|<|$)", str(codegen.type_name_string(vtype))):
+            return "it holds an atomic"
+        return None
+    if struct_name in seen:
         return None
     if codegen._struct_resource_paths.get(struct_name):
         return "it holds a resource"
@@ -120,8 +124,9 @@ def wgsl_struct_array_initializer(codegen, expr, target_type):
     """Return WGSL ``array<S, N>(S(...), ...)`` for a brace-initialized array of structures; otherwise, ``None``.
 
     The size may be a constant, as in ``Pair ps[COUNT]``. As with a short array initializer, elements after the
-    final supplied value are zero-initialized as ``S()``. An initializer longer than the array, or one targeting an
-    array of unknown size, is left to the array literal path.
+    final supplied value are zero-initialized as ``S()``, so ``{}`` gives every element its zero value. An
+    initializer longer than the array, or one targeting an array of unknown size, is left to the array literal
+    path.
     """
     if not isinstance(expr, ArrayLiteralNode) or not isinstance(target_type, ArrayType):
         return None
@@ -129,7 +134,7 @@ def wgsl_struct_array_initializer(codegen, expr, target_type):
     if codegen.struct_type_name(element_type) not in codegen._structs_by_name:
         return None
     size = codegen.resolve_integer_expression(target_type.size)
-    if size is None or not 0 < len(expr.elements) <= size:
+    if size is None or len(expr.elements) > size:
         return None
     element = codegen.type_name_string(element_type)
     values = [

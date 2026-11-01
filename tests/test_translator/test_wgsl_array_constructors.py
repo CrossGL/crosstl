@@ -268,6 +268,21 @@ def test_array_of_structs_braced_initializer(tmp_path):
     )
 
 
+def test_empty_array_of_structs_braced_initializer_is_zero(tmp_path):
+    output = translate(tmp_path, "Pair ps[2] = {};\n values[i] = ps[1].a + x;")
+    assert "var ps: array<Pair, 2> = array<Pair, 2>(Pair(), Pair());" in output
+
+
+def test_struct_named_like_an_atomic_is_constructed(tmp_path):
+    output = translate(
+        tmp_path,
+        "atomic_stats s = {x};\n values[i] = s.w;",
+        functions="""
+    struct atomic_stats { float w; };""",
+    )
+    assert "var s: atomic_stats = atomic_stats(x);" in output
+
+
 def test_struct_braced_initializer_with_too_many_values_is_refused(tmp_path):
     with pytest.raises(WGSLStructInitializerError, match="gives 3 values") as raised:
         translate(tmp_path, "Pair p = {x, 1.0, 2.0};\n values[i] = p.a;")
