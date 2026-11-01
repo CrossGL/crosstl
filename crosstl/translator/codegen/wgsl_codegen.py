@@ -272,6 +272,18 @@ class WGSLCodeGen(
     }
     FUNCTION_NAME_MAP = {
         "atan2": "atan2",
+        "bitfieldReverse": "reverseBits",
+        "faceforward": "faceForward",
+        "packHalf2x16": "pack2x16float",
+        "packSnorm2x16": "pack2x16snorm",
+        "packUnorm2x16": "pack2x16unorm",
+        "packSnorm4x8": "pack4x8snorm",
+        "packUnorm4x8": "pack4x8unorm",
+        "unpackHalf2x16": "unpack2x16float",
+        "unpackSnorm2x16": "unpack2x16snorm",
+        "unpackUnorm2x16": "unpack2x16unorm",
+        "unpackSnorm4x8": "unpack4x8snorm",
+        "unpackUnorm4x8": "unpack4x8unorm",
         "fract": "fract",
         "inversesqrt": "inverseSqrt",
         "inverseSqrt": "inverseSqrt",
@@ -3663,6 +3675,9 @@ class WGSLCodeGen(
         packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
         if packed_8bit is not None and not self.is_user_function_name(function_name):
             return self.generate_packed_8bit_call(node, function_name, packed_8bit)
+        bit_function = self.BIT_FUNCTION_NAME_MAP.get(function_name)
+        if bit_function is not None and not self.is_user_function_name(function_name):
+            return self.generate_bit_function_call(node, function_name, bit_function)
         if (
             function_name == "mix"
             and len(node.arguments) == 3
@@ -3779,6 +3794,37 @@ class WGSLCodeGen(
         elif component != argument_type[len("vec4<") : -1]:
             argument_expr = f"{argument_type}({argument_expr})"
         return f"{mapped_name}({argument_expr})"
+
+    # GLSL bit built-ins whose WGSL forms differ in more than the name:
+    # bitCount, findLSB and findMSB return int in GLSL but the argument type in
+    # WGSL, and extractBits and insertBits take a u32 offset and count.
+    BIT_FUNCTION_NAME_MAP = {
+        "bitCount": "countOneBits",
+        "findLSB": "firstTrailingBit",
+        "findMSB": "firstLeadingBit",
+        "bitfieldExtract": "extractBits",
+        "bitfieldInsert": "insertBits",
+    }
+
+    def generate_bit_function_call(self, node, function_name, mapped_name):
+        """GLSL bit built-ins as WGSL ones, with GLSL's argument and result types."""
+        args = [self.generate_expression(argument) for argument in node.arguments]
+        if mapped_name in {"extractBits", "insertBits"}:
+            for index in range(max(len(args) - 2, 0), len(args)):
+                offset_type = self.expression_type(node.arguments[index])
+                if self.integer_scalar_type(offset_type) != "u32":
+                    args[index] = f"u32({args[index]})"
+            return f"{mapped_name}({', '.join(args)})"
+        call = f"{mapped_name}({', '.join(args)})"
+        if len(node.arguments) != 1:
+            return call
+        argument_type = self.expression_type(node.arguments[0])
+        if self.integer_scalar_type(argument_type) == "u32":
+            return f"i32({call})"
+        vector = self.vector_shape(argument_type)
+        if vector is not None and vector[0] == "u32":
+            return f"vec{vector[1]}<i32>({call})"
+        return call
 
     def generate_workgroup_uniform_load_call(self, node):
         """Emit ``workgroupUniformLoad(&x)`` for a workgroup variable ``x``."""
@@ -6830,6 +6876,11 @@ class WGSLCodeGen(
                 function_name
             ):
                 return packed_8bit[2]
+            if function_name in {"bitCount", "findLSB", "findMSB"} and not (
+                self.is_user_function_name(function_name)
+            ):
+                vector = self.vector_shape(self.expression_type(expr.arguments[0]))
+                return "int" if vector is None else f"vec{vector[1]}<i32>"
             if (
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"
