@@ -3137,6 +3137,12 @@ class WGSLCodeGen(
         target_shape = self.matrix_shape(target_type)
         if target_shape is None:
             return None
+        # Each column reads and writes the target's object again, so, as for
+        # other matrix compound assignments, it must have no side effects.
+        self.require_repeatable_matrix_operands(
+            f"matrix {operator} on a split stage-interface member",
+            (access["object_expr"],),
+        )
         element = target_shape[0]
         value_type = self.expression_type(node.value)
         if self.matrix_shape(value_type) is not None:

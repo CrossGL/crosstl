@@ -4103,6 +4103,49 @@ def test_wgsl_codegen_refuses_stage_interface_matrix_division_by_matrix():
 
 @pytest.mark.parametrize(
     "statement, operator",
+    [
+        ("outs[next_index()].m *= n;", r"\*="),
+        ("outs[next_index()].m += 1.0;", r"\+="),
+        ("outs[next_index()].m -= n;", "-="),
+    ],
+    ids=["product", "scalar", "matrix"],
+)
+def test_wgsl_codegen_refuses_stage_interface_matrix_compound_with_side_effects(
+    statement, operator
+):
+    shader = f"""
+    shader WGSLStageMatrixCompoundSideEffects {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+            mat2 m @ TEXCOORD0;
+        }}
+        int next_index() {{
+            return 1;
+        }}
+        vertex {{
+            VSOut main(vec2 p @ POSITION) {{
+                VSOut outs[2];
+                mat2 n = mat2(p.x);
+                outs[1].position = vec4(p, 0.0, 1.0);
+                outs[1].m = n;
+                {statement}
+                return outs[1];
+            }}
+        }}
+    }}
+    """
+
+    # Each column would call next_index() again.
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target lowers matrix {operator} on a split stage-interface "
+        "member one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    "statement, operator",
     [("m += next_scalar();", r"\+="), ("ms[next_index()] -= 1.0;", "-=")],
     ids=["value", "target"],
 )
