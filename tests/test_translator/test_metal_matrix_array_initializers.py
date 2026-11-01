@@ -73,3 +73,33 @@ def test_struct_brace_initializer_builds_matrix_array_member(tmp_path):
     output = crosstl.translate(str(path), backend="metal", format_output=False)
     assert "W w = {{float3x3(1.0)}, 2.0};" in output
     assert "V v = {{{float3x3(0.0)}, 3.0}, 4.0};" in output
+
+
+STRUCT_ARRAY_PROGRAM = textwrap.dedent("""
+    shader P {
+        buffer float* outp;
+        struct W { mat3 m[2]; float s; };
+        struct U { W ws[2]; float t; };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                W ws[2] = {{mat3[2](1.0), 2.0}, {mat3[2](mat3(2.0), mat3(3.0)), 4.0}};
+                U u = {{{mat3[2](1.0), 2.0}, {mat3[2](0.0), 3.0}}, 5.0};
+                outp[i] = ws[1].m[1][0][0] + u.ws[0].m[0][0][0] + u.t;
+            }
+        }
+    }
+""")
+
+
+def test_array_of_structs_brace_initializer_builds_matrix_array_member(tmp_path):
+    """Each structure of an array of structures' brace list gets its matrices too."""
+    path = tmp_path / "structs.cgl"
+    path.write_text(STRUCT_ARRAY_PROGRAM)
+    output = crosstl.translate(str(path), backend="metal", format_output=False)
+    assert (
+        "W ws[2] = {{{float3x3(1.0)}, 2.0}, {{float3x3(2.0), float3x3(3.0)}, 4.0}};"
+        in output
+    )
+    assert "U u = {{{{float3x3(1.0)}, 2.0}, {{float3x3(0.0)}, 3.0}}, 5.0};" in output
