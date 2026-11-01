@@ -20,8 +20,18 @@ __all__ = (
 )
 
 
-def _constructor_fields(codegen, expr):
-    """Return ``(fields, arguments)`` for a positional struct constructor, or ``None``."""
+def _constructor_fields(codegen, expr, expected_type=None):
+    """Return ``(fields, arguments)`` for a positional struct constructor, or ``None``.
+
+    A brace list ``{a, b}`` initializing a struct of ``expected_type`` counts as its constructor.
+    """
+    if isinstance(expr, ArrayLiteralNode) and expected_type is not None:
+        type_name = codegen.type_name_string(expected_type)
+        expr_arguments = list(expr.elements or [])
+        fields = codegen.hlsl_struct_constructor_fields(type_name)
+        if fields and len(fields) == len(expr_arguments):
+            return fields, expr_arguments
+        return None
     if isinstance(expr, ConstructorNode):
         type_name = codegen.type_name_string(getattr(expr, "constructor_type", None))
     elif isinstance(expr, FunctionCallNode):
@@ -39,9 +49,9 @@ def _constructor_fields(codegen, expr):
     return fields, arguments
 
 
-def hlsl_array_literal_constructor_argument(codegen, expr):
+def hlsl_array_literal_constructor_argument(codegen, expr, expected_type=None):
     """Whether a struct constructor (or one nested in it) takes an array literal field."""
-    parts = _constructor_fields(codegen, expr)
+    parts = _constructor_fields(codegen, expr, expected_type)
     if parts is None:
         return False
     for (_name, field_type), argument in zip(*parts):
@@ -49,13 +59,13 @@ def hlsl_array_literal_constructor_argument(codegen, expr):
             field_type
         ):
             return True
-        if hlsl_array_literal_constructor_argument(codegen, argument):
+        if hlsl_array_literal_constructor_argument(codegen, argument, field_type):
             return True
     return False
 
 
 def _render(codegen, expr, expected_type):
-    parts = _constructor_fields(codegen, expr)
+    parts = _constructor_fields(codegen, expr, expected_type)
     if parts is None:
         if isinstance(expr, ArrayLiteralNode) and codegen.hlsl_outer_array_type(
             expected_type
@@ -76,6 +86,6 @@ def hlsl_brace_struct_initializer(codegen, expr, expected_type):
     Returns ``None`` when *expr* is not such a constructor, so the ordinary
     expression rendering applies.
     """
-    if not hlsl_array_literal_constructor_argument(codegen, expr):
+    if not hlsl_array_literal_constructor_argument(codegen, expr, expected_type):
         return None
     return _render(codegen, expr, expected_type)
