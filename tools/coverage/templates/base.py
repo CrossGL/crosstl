@@ -14,6 +14,8 @@ class Template:
     program: str = ""
     entry: str = ""
     output: str = ""
+    # The compiler target the probe is checked for when it is not the language's usual one (Feature.target).
+    target: str = ""
 
 
 ABSENT = Template(entry="<absent>")
