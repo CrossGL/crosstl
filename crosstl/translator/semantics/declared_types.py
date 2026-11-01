@@ -231,6 +231,44 @@ def _uninstantiated_templates(program, skip):
     return every - live
 
 
+def _generic_function_names(program):
+    """The names of the program's generic functions, whose explicit type arguments are types."""
+    return {
+        function.name
+        for functions in _function_lists(program)
+        for function in functions
+        if isinstance(function, A.FunctionNode)
+        and isinstance(function.name, str)
+        and getattr(function, "generic_params", None)
+    }
+
+
+def _call_type_argument_names(call, generic_functions):
+    """The plain names among the explicit type arguments of ``call``, such as ``foo`` in ``pick<foo>(x)``.
+
+    The parser keeps a call's type arguments in the callee name. Only calls of the program's own generic functions
+    are read: the arguments of built-in calls, such as ``subgroup_broadcast_const<_, 0>``, may be values.
+    """
+    callee = call.function
+    name = callee.name if isinstance(callee, A.IdentifierNode) else callee
+    if not isinstance(name, str) or "<" not in name or not name.endswith(">"):
+        return []
+    base, arguments = name[:-1].split("<", 1)
+    if base.strip() not in generic_functions:
+        return []
+    names, depth, start = [], 0, 0
+    for index, character in enumerate(arguments):
+        if character in "<[(":
+            depth += 1
+        elif character in ">])":
+            depth -= 1
+        elif character == "," and depth == 0:
+            names.append(arguments[start:index].strip())
+            start = index + 1
+    names.append(arguments[start:].strip())
+    return [name for name in names if _PLAIN_NAME.fullmatch(name)]
+
+
 def undeclared_type_uses(program, target=None):
     """``(name, node)`` for each plain type name in ``program`` that is neither declared nor built in.
 
@@ -260,7 +298,15 @@ def undeclared_type_uses(program, target=None):
     skip = _dead_functions(program) | bounds | values
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
+    generic_functions = _generic_function_names(program)
     for node in _nodes(program, skip):
+        if isinstance(node, A.FunctionCallNode):
+            uses.extend(
+                (name, node)
+                for name in _call_type_argument_names(node, generic_functions)
+                if name not in declared and name not in BUILTIN_TYPE_NAMES
+            )
+            continue
         if not isinstance(node, A.NamedType) or node.generic_args:
             continue
         name = node.name
