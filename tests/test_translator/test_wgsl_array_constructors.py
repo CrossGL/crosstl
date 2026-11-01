@@ -9,6 +9,9 @@ import crosstl
 from crosstl.translator.codegen.wgsl_struct_initializers import (
     WGSLStructInitializerError,
 )
+from crosstl.translator.codegen.wgsl_vector_initializers import (
+    WGSLVectorInitializerError,
+)
 
 PROGRAM = """shader Probe {{
     const int COUNT = 3;
@@ -322,3 +325,141 @@ def test_struct_braced_initializer_of_an_unconstructible_struct_is_refused(
             tmp_path, "A s = {x};\n values[i] = s.w;", functions=f"\n    {struct}"
         )
     assert raised.value.code == "project.translate.wgsl-struct-initializer-unsupported"
+
+
+def test_vector_and_matrix_braced_initializers_are_their_constructors(tmp_path):
+    output = translate(
+        tmp_path,
+        "vec3 v = {x, 1.0, 2.0};\n"
+        " mat2 m = {vec2(1.0, 0.0), vec2(0.0, x)};\n"
+        " values[i] = v.z + m[1][1];",
+    )
+    assert "var v: vec3<f32> = vec3<f32>(x, 1.0, 2.0);" in output
+    assert (
+        "var m: mat2x2<f32> = mat2x2<f32>(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, x));"
+        in output
+    )
+    assert "array(" not in output
+
+
+def test_matrix_braced_initializer_of_columns_or_components(tmp_path):
+    output = translate(
+        tmp_path,
+        "mat2 a = {{1.0, 0.0}, {0.0, x}};\n"
+        " mat2 b = {1.0, 0.0, 0.0, x};\n"
+        " values[i] = a[1][1] + b[1][1];",
+    )
+    assert (
+        "var a: mat2x2<f32> = mat2x2<f32>(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, x));"
+        in output
+    )
+    assert "var b: mat2x2<f32> = mat2x2<f32>(1.0, 0.0, 0.0, x);" in output
+
+
+def test_vector_braced_initializer_converts_values_to_the_component_type(tmp_path):
+    # WGSL has no implicit conversions, so each component is converted as a structure member is.
+    output = translate(
+        tmp_path,
+        "int k = int(i);\n"
+        " vec3 v = {k, 1, 2.0};\n"
+        " mat2 m = {ivec2(k), vec2(x)};\n"
+        " values[i] = v.x + m[0][0];",
+    )
+    assert "var v: vec3<f32> = vec3<f32>(f32(k), f32(1), 2.0);" in output
+    assert (
+        "var m: mat2x2<f32> = mat2x2<f32>(vec2<f32>(vec2<i32>(k)), vec2<f32>(x));"
+        in output
+    )
+
+
+def test_short_vector_braced_initializer_zero_fills_the_rest(tmp_path):
+    # The components a braced initializer leaves out are zero, as in GLSL output.
+    output = translate(
+        tmp_path,
+        "vec3 v = {x};\n vec2 z = {};\n mat3 n = {};\n values[i] = v.y + z.x + n[0][0];",
+    )
+    assert "var v: vec3<f32> = vec3<f32>(x, f32(), f32());" in output
+    assert "var z: vec2<f32> = vec2<f32>();" in output
+    assert "var n: mat3x3<f32> = mat3x3<f32>();" in output
+
+
+def test_vector_braced_initializers_in_members_assignments_and_calls(tmp_path):
+    output = translate(
+        tmp_path,
+        "V s = {{x, 1.0, 2.0}, {{1.0, 0.0}, {0.0, x}}};\n"
+        " s.v = {1.0, x, 1.0};\n"
+        " vec3 v = make(x);\n"
+        " v = {x, 2.0, 3.0};\n"
+        " values[i] = sum({x, 1.0, 2.0}) + s.v.y + s.m[1][1] + v.x;",
+        functions="""
+    struct V { vec3 v; mat2 m; };
+    vec3 make(float x) {
+        return {x, 1.0, 2.0};
+    }
+    float sum(vec3 a) {
+        return a.x + a.y + a.z;
+    }""",
+    )
+    assert (
+        "var s: V = V(vec3<f32>(x, 1.0, 2.0), "
+        "mat2x2<f32>(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, x)));" in output
+    )
+    assert "s.v = vec3<f32>(1.0, x, 1.0);" in output
+    assert "return vec3<f32>(x, 1.0, 2.0);" in output
+    assert "v = vec3<f32>(x, 2.0, 3.0);" in output
+    assert "sum(vec3<f32>(x, 1.0, 2.0))" in output
+
+
+def test_arrays_of_vector_and_matrix_braced_initializers(tmp_path):
+    output = translate(
+        tmp_path,
+        "vec3 vs[2] = {{x, 1.0, 2.0}, {3.0, 4.0, 5.0}};\n"
+        " vec2 us[] = {{x, 1.0}, vec2(2.0)};\n"
+        " mat2 ms[2] = {{{1.0, 0.0}, {0.0, x}}, {vec2(x), vec2(1.0)}};\n"
+        " values[i] = vs[1].z + us[1].x + ms[1][0][0];",
+    )
+    assert (
+        "var vs: array<vec3<f32>, 2> = "
+        "array<vec3<f32>, 2>(vec3<f32>(x, 1.0, 2.0), vec3<f32>(3.0, 4.0, 5.0));"
+        in output
+    )
+    assert (
+        "var us: array<vec2<f32>, 2> = "
+        "array<vec2<f32>, 2>(vec2<f32>(x, 1.0), vec2<f32>(2.0));" in output
+    )
+    assert "mat2x2<f32>(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, x))" in output
+    assert "array(array" not in output
+
+
+def test_module_scope_vector_braced_initializers(tmp_path):
+    output = translate(
+        tmp_path,
+        "values[i] = G.x + H[0][0] + g.y + x;",
+        functions="""
+    const vec3 G = {1.0, 2.0, 3.0};
+    const mat2 H = {{1.0, 0.0}, {0.0, 1.0}};
+    vec2 g = {1.0, 2.0};""",
+    )
+    assert "const G: vec3<f32> = vec3<f32>(1.0, 2.0, 3.0);" in output
+    assert (
+        "const H: mat2x2<f32> = mat2x2<f32>(vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0));"
+        in output
+    )
+    assert "var<private> g: vec2<f32> = vec2<f32>(1.0, 2.0);" in output
+
+
+@pytest.mark.parametrize(
+    "body, reason",
+    [
+        ("vec3 v = {x, 1.0, 2.0, 3.0};", "gives 4 values"),
+        ("vec3 v = {vec2(x), 1.0};", "must be a scalar"),
+        ("mat2 v = {vec2(x)};", "gives 1 value;"),
+        ("mat2 v = {vec3(x), vec3(1.0)};", "gives 2 values"),
+    ],
+)
+def test_vector_braced_initializer_wgsl_cannot_construct_is_refused(
+    tmp_path, body, reason
+):
+    with pytest.raises(WGSLVectorInitializerError, match=reason) as raised:
+        translate(tmp_path, f"{body}\n values[i] = x;")
+    assert raised.value.code == "project.translate.wgsl-vector-initializer-unsupported"

@@ -28,6 +28,12 @@ The initial WGSL target surface covers common portable shader output:
   to its member's type and omitted members set to zero; an initializer with
   more values than members, or one for a structure WGSL cannot construct, is
   refused with ``project.translate.wgsl-struct-initializer-unsupported``
+* brace initializers of vectors and matrices, such as ``vec3 v = {x, 1.0, 2.0};``
+  or ``mat2 m = {{1.0, 0.0}, {0.0, x}};``, written as the type's value
+  constructor ``vec3<f32>(x, 1.0, 2.0)``, with one vector per matrix column or
+  one scalar per component, each value converted to the component or column
+  type and omitted vector components set to zero; any other list is refused
+  with ``project.translate.wgsl-vector-initializer-unsupported``
 * generic functions, monomorphized into one concrete WGSL function per
   instantiation the module calls; calls whose type arguments cannot be
   deduced, ambiguous generic overloads and generic resource parameters are
