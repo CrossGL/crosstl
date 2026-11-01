@@ -138,6 +138,11 @@ from .wgsl_stage_io import (
     vertex_output_interpolation,
     with_interpolation,
 )
+from .wgsl_struct_initializers import (
+    is_struct_braced_initializer,
+    wgsl_struct_array_initializer,
+    wgsl_struct_initializer,
+)
 from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
 from .wgsl_texture_bias import WGSLTextureBiasUnsupportedError, has_texture_sample_bias
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
@@ -2481,12 +2486,19 @@ class WGSLCodeGen(
         )
         return "\n".join(lines)
 
+    def generate_module_scope_value(self, value, target_type):
+        if is_struct_braced_initializer(self, value, target_type):
+            return self.generate_expression_for_target(value, target_type)
+        return self.generate_expression(value)
+
     def generate_constant(self, node):
         if isinstance(node.value, ArrayLiteralNode):
-            # A short initializer list is zero-filled, as in a local declaration.
+            # A brace list takes the declared type, as in a local declaration: a
+            # short array list is zero-filled and a structure's list becomes
+            # its constructor.
             value = self.generate_expression_for_target(node.value, node.const_type)
         else:
-            value = self.generate_expression(node.value)
+            value = self.generate_module_scope_value(node.value, node.const_type)
         return (
             f"const {self.module_identifier_name(node.name)}: "
             f"{self.type_name_string(node.const_type)} = {value};"
@@ -2558,7 +2570,8 @@ class WGSLCodeGen(
 
         initializer = ""
         if node.initial_value is not None and address_space == "private":
-            initializer = f" = {self.generate_expression(node.initial_value)}"
+            value = self.generate_module_scope_value(node.initial_value, node.var_type)
+            initializer = f" = {value}"
         prefix = f"{attributes}\n" if attributes else ""
         variable_name = self.module_identifier_name(node.name)
         declaration = (
@@ -3279,12 +3292,18 @@ class WGSLCodeGen(
         return emitted_name
 
     def generate_expression_for_target(self, expr, target_type, splat_scalars=True):
+        struct_value = wgsl_struct_initializer(self, expr, target_type)
+        if struct_value is not None:
+            return struct_value
         padded_array = self.generate_padded_array_literal(expr, target_type)
         if padded_array is not None:
             return padded_array
         matrix_array = self.generate_matrix_array_literal(expr, target_type)
         if matrix_array is not None:
             return matrix_array
+        struct_array = wgsl_struct_array_initializer(self, expr, target_type)
+        if struct_array is not None:
+            return struct_array
         previous_expected_type = self._current_expression_expected_type
         self._current_expression_expected_type = target_type
         try:
