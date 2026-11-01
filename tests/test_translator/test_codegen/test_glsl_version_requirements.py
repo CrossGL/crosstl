@@ -263,6 +263,56 @@ def test_es_refuses_builtins_it_does_not_have():
     )
 
 
+ATOMIC_COUNTER_OPS_SHADER = """
+{version}
+shader AtomicCounterOps {{
+    compute {{
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* outp;
+        uniform atomic_uint u0;
+        void main() {{
+            outp[0] = {call};
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "atomicCounterAdd(u0, 2u)",
+        "atomicCounterSubtract(u0, 2u)",
+        "atomicCounterMin(u0, 2u)",
+        "atomicCounterMax(u0, 2u)",
+        "atomicCounterAnd(u0, 2u)",
+        "atomicCounterOr(u0, 2u)",
+        "atomicCounterXor(u0, 2u)",
+        "atomicCounterExchange(u0, 2u)",
+        "atomicCounterCompSwap(u0, 1u, 2u)",
+    ],
+)
+def test_atomic_counter_operations_raise_version(tmp_path, call):
+    # The atomic counter operations beyond increment and decrement arrived in
+    # GLSL 4.60 (section 8.10); GLSL ES has none of them.
+    code = generate(ATOMIC_COUNTER_OPS_SHADER.format(version="", call=call), "compute")
+
+    assert code.startswith("#version 460 core\n")
+    assert f"outp[0] = {call};" in code
+    compile_with_glslang(tmp_path, code, "comp")
+
+    with pytest.raises(OpenGLLoweringRefused) as raised:
+        generate(
+            ATOMIC_COUNTER_OPS_SHADER.format(version="#version 310 es", call=call),
+            "compute",
+        )
+    name = call.split("(")[0]
+    assert (
+        f"GLSL version requirement: built-in function '{name}' does not exist "
+        "in GLSL ES" in str(raised.value)
+    )
+
+
 FIND_MSB_SHADER = """
 shader FindMsb {
     isampler2D itex;
