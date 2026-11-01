@@ -29,8 +29,11 @@ def _reject_constant(value: str) -> NoReturn:
 
 
 def _validated_resources(value: Any) -> dict[str, dict[str, str]]:
-    if not isinstance(value, Mapping) or not 1 <= len(value) <= 256:
-        raise ValueError("Resource storage requires between 1 and 256 resources.")
+    # The header byte limit bounds the record count: one record takes at least 66
+    # bytes, so no separate count limit is needed. A module with many entry points,
+    # such as a library of template instantiations, can declare hundreds of records.
+    if not isinstance(value, Mapping) or not value:
+        raise ValueError("Resource storage requires at least one resource.")
     result = {}
     for name, encoding in value.items():
         if (
