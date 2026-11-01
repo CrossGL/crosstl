@@ -25,12 +25,9 @@ from demos.integrations.mlx.portable_host.verify_bitwise import (
 from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
 UPSTREAM_TEST = "test_ops.TestOps.test_concatenate"
-NEGATIVE_CHECKS = {
-    "missing": "No translated package for",
-    "int64": "requires matching float32/int32/uint32/bool",
-    "uint8": "requires matching float32/int32/uint32/bool",
-    "over-limit": "at most 65535 elements per input",
-}
+# Every GPU dtype concatenates, and dispatch_copy_into bounds each input's
+# spans, so only a missing copy package still rejects before dispatch.
+NEGATIVE_CHECKS = {"missing": "No translated package for"}
 
 
 def cases():
@@ -52,7 +49,7 @@ def cases():
                     "layout": layout,
                     "axis": axis,
                 }
-        for layout, axis in (("flatten", None), ("large", 2)):
+        for layout, axis in (("flatten", None), ("large", 2), ("wide", 0)):
             yield {
                 "id": f"{dtype}-{layout}",
                 "dtype": dtype,
@@ -64,13 +61,19 @@ def cases():
 def inputs(np, case):
     words = np.asarray(
         [0, 0x80000000, 1, 0xFFFFFFFF, 0x7FC12345, 0x7F800000, 0x3F800000, 0x55555555]
-        * 8192,
+        * 16384,
         dtype="uint32",
     )
     dtype = case["dtype"]
     data = (words % 2).astype("bool") if dtype == "bool_" else words.view(dtype)
     if case["layout"] == "large":
-        return [data[:32768].reshape(32, 32, 32), data[32768:].reshape(32, 32, 32)]
+        return [
+            data[:32768].reshape(32, 32, 32),
+            data[32768:65536].reshape(32, 32, 32),
+        ]
+    if case["layout"] == "wide":
+        # One input exceeds a single 65535-element launch axis.
+        return [data[:69632].reshape(68, 1024), data[69632:70656].reshape(1, 1024)]
     base = data[:36].reshape(6, 6)
     left = np.ascontiguousarray(base[:3, :4])
     right = np.ascontiguousarray(base[2:5, 1:5])
@@ -218,9 +221,7 @@ def worker(args):
     else:
         mx.set_default_device(mx.cpu)
     if args.worker in NEGATIVE_CHECKS:
-        dtype = args.worker if args.worker in {"int64", "uint8"} else "int32"
-        size = 65536 if args.worker == "over-limit" else 3
-        a = mx.array(np.ones(size, dtype=dtype))
+        a = mx.array(np.ones(3, dtype="int32"))
         try:
             mx.eval(mx.concatenate([a, a]))
         except (ValueError, RuntimeError) as error:

@@ -7,6 +7,17 @@ from demos.integrations.mlx.portable_host.reduction_packages import ROW_ENTRIES
 from demos.integrations.mlx.portable_host.reduction_workloads import matches, wire
 from demos.integrations.mlx.portable_host.row_reduction_layout import width
 
+# Row plans over more than 65,535 elements for these entries: a simple plan,
+# a looped plan with a non-row reduction axis, and a sliced view whose source
+# span exceeds 65,535 elements (2,048-element rows, width 512).
+WIDE_OPERATIONS = ("sumfloat32", "maxuint32")
+WIDE_ROW_SIZE = 2048
+WIDE_SHAPES = {
+    "simple": ((40, WIDE_ROW_SIZE), (1,), "dense"),
+    "looped": ((2, 40, WIDE_ROW_SIZE), (0, 2), "dense"),
+    "slice": ((80, WIDE_ROW_SIZE), (1,), "slice"),
+}
+
 
 def cases(widths):
     for entry, dtype in ROW_ENTRIES.items():
@@ -71,6 +82,25 @@ def cases(widths):
                     "shape": shape,
                     "axes": (len(shape) - 1,),
                     "width": 32,
+                    "layout": layout,
+                }
+        wide_width = width(WIDE_ROW_SIZE)
+        if entry.endswith(WIDE_OPERATIONS) and wide_width in widths:
+            modes = (
+                ("simple",)
+                if "simple" in entry
+                else ("looped", "slice") if "looped_1_" in entry else ()
+            )
+            for mode in modes:
+                shape, axes, layout = WIDE_SHAPES[mode]
+                yield {
+                    "id": f"{entry}-wide-{mode}",
+                    "entry": entry,
+                    "dtype": dtype,
+                    "operation": operation,
+                    "shape": shape,
+                    "axes": axes,
+                    "width": wide_width,
                     "layout": layout,
                 }
         if "looped_1_" in entry and 1024 in widths:

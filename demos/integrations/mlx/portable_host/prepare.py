@@ -34,8 +34,67 @@ VIEW_PRIMITIVES = (
     "Unflatten",
 )
 MULTI_OUTPUT_VIEWS = {"CustomTransforms", "Depends", "Split"}
+# Primitives that MLX's GPU backend (mlx/backend/gpu/primitives.cpp) evaluates
+# with the shared host eval instead of a kernel, such as NumberOfElements,
+# which shapeless compiled graphs use to count reduced elements.
+HOST_EVAL_PRIMITIVES = ("NumberOfElements",)
 COPY_PRIMITIVES = ("Contiguous", "Flatten", "Full", "Pad", "SliceUpdate", "View")
+# Slices whose start indices are arrays: a translated offset kernel computes
+# the start, and the dynamic copy kernels move the elements.
+DYNAMIC_SLICE_PRIMITIVES = ("DynamicSlice", "DynamicSliceUpdate")
 CAST_PRIMITIVES = ("AsType",)
+# Unary primitives MLX instantiates only for complex64 operands.
+COMPLEX_PRIMITIVES = ("Conjugate", "Real", "Imag")
+# Fast primitives normalization.inc and cross_entropy.inc port; the forward
+# ones keep MLX's CPU fallback, and every one of them is a multi-output
+# primitive.
+FALLBACK_PRIMITIVES = ("LayerNorm", "RMSNorm", "CrossEntropy")
+NORMALIZATION_PRIMITIVES = ("LayerNorm", "RMSNorm", "LayerNormVJP", "RMSNormVJP")
+CROSS_ENTROPY_PRIMITIVES = ("CrossEntropy", "CrossEntropyVJP")
+# fast::ConvertFP8 launches the unary ToFP8 and FromFP8 vectors; sdpa.inc
+# ports the forward attention and its fused VJP, whose use_fallback and
+# supports_bool_mask no_gpu defines outright (ATTENTION_DEFINITIONS).
+FAST_PRIMITIVES = (
+    *NORMALIZATION_PRIMITIVES,
+    *CROSS_ENTROPY_PRIMITIVES,
+    "ConvertFP8",
+    "ScaledDotProductAttention",
+    "ScaledDotProductAttentionVJP",
+)
+# no_gpu's attention definitions that sdpa.inc replaces with
+# scaled_dot_product_attention.cpp's.
+ATTENTION_DEFINITIONS = (
+    """bool fast::ScaledDotProductAttention::use_fallback(
+    const array& q,
+    const array& k,
+    const array& v,
+    bool has_mask,
+    bool has_arr_mask,
+    bool do_causal,
+    bool has_sinks,
+    bool is_training,
+    bool output_logsumexp,
+    bool force_fused,
+    Stream s) {
+  if (force_fused) {
+    throw std::invalid_argument(
+        "[scaled_dot_product_attention] force_fused=True but no fused "
+        "kernel is available in CPU backend.");
+  }
+  return true;
+}
+""",
+    """bool fast::ScaledDotProductAttention::supports_bool_mask() {
+  return false;
+}
+""",
+    """bool fast::ScaledDotProductAttentionVJP::use_fallback(
+    const array& q,
+    Stream s) {
+  return true;
+}
+""",
+)
 
 
 def replace_once(text, before, after):
@@ -48,11 +107,26 @@ def adapted_sources(original, primitives, events):
     """Render the complete adaptation without changing the source tree."""
     for primitive in (
         "Arange",
+        "ArgReduce",
+        "LogSumExp",
+        "Softmax",
+        "ArgPartition",
+        "ArgSort",
+        "Partition",
+        "Sort",
+        "SearchSorted",
+        *FAST_PRIMITIVES,
         "RandomBits",
         "Scan",
         "Quantize",
         "QuantizedMatmul",
         "Matmul",
+        "AddMM",
+        "GatherMM",
+        "SegmentedMM",
+        "BlockMaskedMM",
+        "Convolution",
+        "FFT",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",
@@ -62,12 +136,19 @@ def adapted_sources(original, primitives, events):
         "GatherAxis",
         "ScatterAxis",
         "Scatter",
+        "MaskedScatter",
         "DivMod",
+        "Compiled",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
+        *HOST_EVAL_PRIMITIVES,
         *COPY_PRIMITIVES,
+        *DYNAMIC_SLICE_PRIMITIVES,
         *BINARY_OPERATIONS,
+        "Power",
+        "ArcTan2",
         *CAST_PRIMITIVES,
+        *COMPLEX_PRIMITIVES,
         *COMPARISON_OPERATIONS,
         *LOGICAL_OPERATIONS,
         "LogicalNot",
@@ -75,14 +156,25 @@ def adapted_sources(original, primitives, events):
         if primitive in {"Log2", "Log10", "Rsqrt"}:
             continue
         macro = (
-            "NO_GPU_MULTI"
-            if primitive in MULTI_OUTPUT_VIEWS or primitive in {"DivMod", "Quantize"}
-            else "NO_GPU"
+            "NO_GPU_USE_FALLBACK"
+            if primitive in FALLBACK_PRIMITIVES
+            else (
+                "NO_GPU_MULTI"
+                if primitive in MULTI_OUTPUT_VIEWS
+                or primitive in {"Compiled", "DivMod", "Quantize", *FAST_PRIMITIVES}
+                else "NO_GPU"
+            )
         )
         primitives = replace_once(
             primitives,
             f"{macro}({primitive})",
             f"// {primitive} is implemented by the registered native dispatch backend.",
+        )
+    for definition in ATTENTION_DEFINITIONS:
+        primitives = replace_once(
+            primitives,
+            definition,
+            "// sdpa.inc ports this ScaledDotProductAttention member.\n",
         )
     events = replace_once(
         events,
@@ -123,6 +215,16 @@ else()
         "crosstl_event.cpp": events.encode("utf-8"),
         "crosstl_backend.cpp": (HERE / "backend.cpp").read_bytes(),
         "crosstl_dispatch.h": (HERE / "dispatch.h").read_bytes(),
+        "crosstl_normalization.inc": (HERE / "normalization.inc").read_bytes(),
+        "crosstl_compiled.inc": (HERE / "compiled.inc").read_bytes(),
+        "crosstl_gather_mm.inc": (HERE / "gather_mm.inc").read_bytes(),
+        "crosstl_segmented_mm.inc": (HERE / "segmented_mm.inc").read_bytes(),
+        "crosstl_block_masked_mm.inc": (HERE / "block_masked_mm.inc").read_bytes(),
+        "crosstl_scatter.inc": (HERE / "scatter.inc").read_bytes(),
+        "crosstl_conv.inc": (HERE / "conv.inc").read_bytes(),
+        "crosstl_cross_entropy.inc": (HERE / "cross_entropy.inc").read_bytes(),
+        "crosstl_fft.inc": (HERE / "fft.inc").read_bytes(),
+        "crosstl_sdpa.inc": (HERE / "sdpa.inc").read_bytes(),
     }
 
 

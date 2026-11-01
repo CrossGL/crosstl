@@ -6,7 +6,7 @@ import struct
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.translator.resource_storage import encoded_storage_dtype
-from demos.integrations.mlx.portable_host import matmul_layout
+from demos.integrations.mlx.portable_host import element_storage, matmul_layout
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.quantization_dispatch import (
     GUARDS,
@@ -29,6 +29,12 @@ STRIDES.update(bfloat16=2, float32=4, int32=4, int64=8)
 
 def encode_binding(dtype, words, host_target, layout, kind):
     """The runtime value of one reflected binding holding ``dtype`` words."""
+    if dtype == element_storage.COMPLEX:
+        # complex64_t is a packed {real, imag} float32 struct on every target.
+        value = element_storage.packet(dtype, host_target, words)
+        if not element_storage.reflected_layout_matches(layout, value, dtype):
+            raise ValueError("Matrix-vector reflected complex layout differs")
+        return value
     physical = layout["elementType"]
     if dtype in ("float32", "float16", "bfloat16"):
         storage = "float16" if dtype == "float16" and physical == "uint16" else physical

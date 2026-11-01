@@ -909,7 +909,32 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         for item in job["steps"]
         for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
     ]
-    assert deadlines == [1800, 3600, 1800, 900, 900, 1800, 1200, 1200, 2400, 1800, 1200]
+    assert deadlines == [
+        1800,
+        2400,
+        1800,
+        900,
+        900,
+        1200,
+        1200,
+        1200,
+        600,
+        # On-demand reduction packages only record their configuration.
+        120,
+        # Steel GEMM translation; its slowest observed run took 212 s.
+        1200,
+        1800,
+        1200,
+        # AddMM and GatherMM verification.
+        600,
+        600,
+        # SegmentedMM translation and verification.
+        600,
+        600,
+        # BlockMaskedMM translation and verification.
+        1200,
+        600,
+    ]
     # Split-K products sum their partitions with translated column kernels.
     sums = steps["Translate split-K partition sums"]
     assert "if" not in sums and "set -euo pipefail" in sums["run"]

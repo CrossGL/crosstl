@@ -9,8 +9,9 @@ upstream tests are not replaced.
 
 ## Scope
 
-The current adapter implements `Arange` for `float32`, `int32`, `uint32`, `int64`
-and `uint64`, plus 30 float32 unary operations from the pinned `unary.metal`:
+The current adapter implements `Arange` for every dtype the pinned
+`arange.metal` instantiates (see "Aranges of every GPU dtype"), plus 30 float32
+unary operations from the pinned `unary.metal`:
 absolute value, negation, sign, square, square root, reciprocal square root,
 floor, ceil, round, exponential, expm1, logarithms, log1p, sigmoid, erf, inverse
 erf, trigonometric functions and their hyperbolic and inverse forms. The exact
@@ -86,9 +87,10 @@ independent batches of at most 65,535 elements. Both source pointers and the
 destination pointer advance by their own storage widths, including Boolean
 comparison outputs. Shift counts are checked across the complete input before
 the first binary dispatch. Input materialization still inherits the copy limits.
-Concatenate supports float32, int32, uint32 and bool inputs through destination-strided copies.
+Concatenate supports every GPU dtype through destination-strided copies.
 Optional selection packages support `where` with Boolean conditions and
-float32, int32, uint32 or bool values. Optional absolute-value packages extend
+float32, int32, uint32 or bool values; with the pinned source, the other GPU
+dtypes' selections translate on first use. Optional absolute-value packages extend
 `abs` to int32, uint32 and bool. Other primitives retain MLX's explicit
 unsupported-GPU errors. Other unary inputs except Abs, LogicalNot and BitwiseInvert
 must be float32. Stored-contiguous broadcasts and column-major views retain
@@ -152,18 +154,48 @@ This route remains bounded to 65,535 logical and stored elements. It uses the
 pinned source planner with an explicit 1,024-thread source pipeline limit;
 larger native widths require their own qualification. Empty arrays do not
 dispatch. Stored-contiguous layouts and eligible donation are retained;
-other layouts require the existing translated-copy path. Unsupported complex
-and narrow-integer host storage is rejected explicitly.
+other layouts require the existing translated-copy path. A size-one axis may
+carry any stride while its array stays contiguous; its scan is elementwise, so
+it runs as one-element contiguous rows. complex64 scans carry each element as
+its packed `{real, imag}` float32 pair, checked against the reflected
+two-member layout of every target. Narrow-integer host storage is rejected
+explicitly.
 
-This is not complete cumulative-operation coverage. Reverse scans currently
-encounter unproved wide pointer offsets on OpenGL. Forward strided entries use
-checked scalar and dispatch bounds for the software-subgroup path; their
-qualification is limited to the cases above.
-Product, log-add-exp, additional scalar types and full unchanged upstream scan
-tests require separate numerical qualification. The independently captured
+The unchanged upstream `test_scans`, `test_logcumsumexp`,
+`test_scans_complex_exclusive` and `test_scan_size_one_axis` run natively in
+the upstream-op host verification. They cover sums, products, extrema and
+log-add-exp of float32, int32, int64 and complex64, forward and reverse,
+inclusive and exclusive, along every axis of contiguous and strided views.
+OpenGL does not run `test_scans` or `test_scans_complex_exclusive` yet: reverse
+scans read through wrapped unsigned pointer offsets that its index proofs cannot
+bound ([#2905](https://github.com/CrossGL/crosstl/issues/2905)). Forward
+strided entries use checked scalar and dispatch bounds for the software-subgroup
+path. The independently captured
 original bfloat16 scan-versus-reduction failure in
 [`METAL_HOST.md`](../METAL_HOST.md#captured-scan-replay) remains unresolved; this
 host proof does not change its input, assertion or required outcome.
+
+## Binary Searches
+
+`SearchSorted::eval_gpu` reaches the translated-package callback for every
+dtype `searchsorted.metal` instantiates, left and right. Each pass launches at
+most 65,535 one-thread groups, so its thread grid is exactly its value count,
+the grid upstream's `get_2d_grid_dims` gives the row-contiguous output; the
+values and output advance between passes. Values that are not row-contiguous
+are searched in a translated dense copy, as upstream's `contiguous_copy_gpu`
+does, and so is a sequence read through a negative stride. An empty sequence
+fills the output with zeros through the translated copy, as `fill_gpu` does.
+
+Packages are translated on first use for one entry and pass size
+(`searchsorted_packages`). Direct3D and OpenGL packages carry an
+artifact-owned dispatch region for the pass, which defines the kernel's
+`threads_per_grid`. OpenGL is translated with the host precondition that every
+sequence index `mid * a_stride` is below 2^28 - 1; the host checks the
+sequence span against it and against the allocation before dispatch. The
+audit (`searchsorted_evidence`) derives each package again, checks the
+uploads, guard and native modules, and recomputes every retained pass with
+`searchsorted_impl`'s binary search under MLX's `LessThan`, NaN after every
+ordered value and complex values by real then imaginary part.
 
 ## Batched Casts
 
@@ -233,6 +265,98 @@ exactly representable; the existing nonfinite and small-array tests remain in
 place. Half and 64-bit batch execution are not covered by these cases.
 
 These checks establish the batched operations, not full upstream-suite parity.
+
+## Casts and copies of every GPU dtype
+
+`AsType` and the copies behind reshapes, transposes and other layout changes
+accept every dtype MLX instantiates on the GPU: Booleans, the 8-, 16-, 32- and
+64-bit integers, float16, bfloat16, float32 and complex64 (float64 has no
+Metal type). A cast runs the unchanged `v_copy<source><destination>` entry of `copy.metal`,
+and a general copy runs `ggn2_dynamic_copy` on unsigned storage words of the
+element width (Booleans and the 16-bit floats keep their own kernels, and a
+complex64 element is one 64-bit word), so NaN payloads, subnormals and signed
+zeros survive. When an installed package family
+already provides the entry, it is used. Otherwise `copy_packages` translates
+the entry from the pinned source on first use and caches it under an identity
+that covers the translator, the recipe, the shared `lazy_kernel_cache` module
+and the source hash; DivMod uses the same cache. OpenGL general copies assert
+the same offset bounds as the prebuilt copy family.
+
+`element_storage` carries each logical type in the reflected physical storage:
+Direct3D and OpenGL keep Booleans and the narrow integers they lack in 32-bit
+words, OpenGL keeps 16-bit floats in float32 carriers and Direct3D keeps
+bfloat16 bits in uint16 words. A complex64 element is one 64-bit word with the
+real bits low and the imaginary bits high; every target must reflect it as the
+packed `{real, imag}` float32 pair. Uploads are exact. A readback that does not hold
+a value of its logical type, such as a widened int8 word outside the int8
+range or a Boolean other than zero or one, is refused instead of wrapped. Every
+destination carries a trailing guard; a fresh destination is filled with guard
+words and a preserved one with its current words, and elements a copy does not
+write must come back unchanged.
+
+`copy_evidence` recomputes each dispatch from its retained words. General
+copies must move exactly the words their strides select. Casts follow `cast_to`
+in the pinned `utils.h`: Booleans test for nonzero storage (subnormals and NaNs
+are true, and a complex value is true when either part is), complex64 converts
+to and from its real part as a float32 with a +0 imaginary part
+(`complex.h`), floating results round to nearest even with gradual underflow, and
+integers wrap modulo their width. Floating values truncate toward zero into
+integers. The audit refuses what no target defines or what the pinned profiles
+leave open: NaN, infinite or out-of-range values converted to integers,
+binary32 subnormals cast to or from bfloat16, and integers that would need two
+roundings to reach a 16-bit float. Each audited dispatch must also name the
+package its cache derives again, and its retained native modules are checked.
+
+## Unary, binary and selection vectors of every GPU dtype
+
+Unary operations, binary arithmetic, comparisons, logical and bitwise
+operations, `Power`, `ArcTan2` and `where` accept every dtype MLX instantiates
+for them: Booleans, the 8-, 16-, 32- and 64-bit integers, float16, bfloat16,
+float32 and, where the pinned sources instantiate it, complex64 (including
+`Conjugate`, `Real` and `Imag`). Each launch runs the unchanged
+`v_<op><type><type>` entry of `unary.metal`, `vv_<op><type>` entry of
+`binary.metal` or `v_Select<type>` entry of `ternary.metal` with one element
+per invocation. When an installed family provides the entry it is used;
+otherwise `elementwise_packages` translates it from the pinned source on first
+use through `lazy_kernel_cache`. Its tables are exactly the 421 `v_` and `vv_`
+instantiations of the pinned sources, including the six `ToFP8` and `FromFP8`
+conversions `fast::ConvertFP8` launches between the real floats and E4M3
+bytes, and the nine `v_Select` vectors the selection family does not install,
+430 entries in all, and each floating entry pins
+the Metal profiles the complete binary and unary kernel proofs use: rne-flush
+additive, multiplicative and division results, flushed comparison and
+remainder operands for binary32 and bfloat16, the binary32 quotient for
+binary16 remainders, flushed `Power` operands with portable-finite binary32
+accuracy, and flushed `ArcTan2` and `Log` operands; the complex logarithms and
+inverse sines and cosines also pin the flushed `atan2` profile.
+
+The host refuses operands no target defines before dispatch: shift counts
+outside [0, 31] (or [0, 63] for the 64-bit integers, since narrower operands
+promote to 32 bits), and integer or Boolean divisions and remainders by zero or
+of the signed minimum by -1. An output must have its own allocation or be
+exactly a donated input. `elementwise_evidence` recomputes every integer and
+Boolean dispatch from its retained operands: C++ promotes narrow operands to
+`int`, so results wrap modulo their width and Booleans keep whether the
+promoted result is nonzero; an integer or Boolean selection must return the
+second operand where the condition is true and the third elsewhere. Floating,
+complex and FP8 conversion dispatches are checked by package and native identity like the
+prebuilt float families, and their values by the upstream tests' own
+comparisons with the CPU.
+
+## Aranges of every GPU dtype
+
+`Arange` runs the unchanged `arange<type>` entry of `arange.metal` for every
+dtype it instantiates: the 8-, 16-, 32- and 64-bit integers, float16, bfloat16
+and float32. The base family installs float32 and the 32- and 64-bit
+integers; `arange_packages` translates the six others from the pinned source
+on first use through `lazy_kernel_cache`, with the base family's float
+profiles. The host converts `start` and `start + step` to the output type as
+upstream does, so integer parameters wrap modulo the storage width, and passes
+both as one-element constants with one output element per invocation, at most
+65,535 in all. `arange_evidence` recomputes every integer dispatch exactly:
+`start + index * step` promotes narrow operands to 32 bits and wraps modulo the
+width. float16 and bfloat16 dispatches are checked by package and native
+identity, and their values by the upstream tests' comparisons with the CPU.
 
 ## DivMod
 
@@ -524,11 +648,12 @@ output row or column to the translated `gemv` and `gemv_t` kernels of the
 unchanged `gemv.metal`, as matmul.cpp selects them: `check_transpose` on both
 operands, `collapse_batches`, the fold of a contiguous batch into `M`, then
 `gemv_axbpy`'s kernel and tile shape. The host reports no Apple GPU generation,
-so it never selects `gemv_wide`, and `Matmul` never computes `axpby`. The host
+so it never selects `gemv_wide`, and `Matmul` never computes `axpby` (AddMM
+below does). The host
 copies the operands MLX would copy and, in addition, views with negative
 strides. Empty inputs produce zeros through the translated copy. Single dot
-products, which MLX sends to `dot_product` and an all-reduce, fail with an
-explicit error. Matrix-matrix products take the steel GEMM route below.
+products take the dot-product route below; matrix-matrix products take the
+steel GEMM route.
 
 `gemv_layout.py` rejects a launch unless its entry, grid and workgroup are the
 ones MLX's routing would choose for the bound sizes, leading dimension and batch
@@ -541,9 +666,26 @@ entry with `python -m demos.integrations.mlx.portable_host.gemv_packages
 cases reach ten of the twelve instantiated tiles in all three element types,
 both batch variants, transposed and strided operands, broadcast and
 `as_strided` batches, and the batch fold. Each output must match an exact
-float64 reference bit for bit, float32 outputs must also match MLX's CPU
-backend, and a single dot product must fail with the host's error without
-dispatching.
+float64 reference bit for bit, and float32 outputs must also match MLX's CPU
+backend.
+
+## Floating-Point Dot Products
+
+A product with one output element, no batch and row-contiguous operands takes
+matmul.cpp's `dot_product` route: the translated `dot_product` entry of the
+unchanged `dot.metal` runs 512-thread groups of 32 items, each writing one
+float32 partial sum; the installed whole-array float32 sum reduces the
+partials in one pass, or two beyond 4,096 of them, as `all_reduce_dispatch`
+does; and a translated copy converts the total to the output type.
+`dot_layout.py` rejects a launch unless its entry, grid and partial count are
+the ones MLX's routing would choose for the bound length, and both vectors
+hold at least that many of their at most 2^28 - 1 elements. The `MLX quantized
+host` jobs translate the three entries with `python -m
+demos.integrations.mlx.portable_host.dot_packages --verification --jobs 3`,
+and `verify_matmul.py` runs four dot products through `mx.matmul`: every
+element type, whole and partial vector loads, three threadgroups' partials and
+a copied operand. Each sum must reach the whole-array float32 sum next in the
+trace, and each output must match the exact rounded reference bit for bit.
 
 ## Floating-Point Matrix-Matrix Products
 
@@ -555,7 +697,8 @@ against the split-K case with its 1,024-tile threshold and otherwise selects
 with 2x2 simdgroups. The host names each entry by matmul.cpp's hash name, so
 the translation freezes the kernel's `has_batch` and `align_M`/`N`/`K`
 function constants; `Matmul` never reads `C`, so `use_out_source` and
-`do_axpby` stay false. Split-K products take the route in the next section.
+`do_axpby` stay false for it. Split-K products take the route in the next
+section.
 
 `gemm_layout.py` rejects a launch unless its entry, constants, `GEMMParams`,
 grid and workgroup are what matmul.cpp would bind for the sizes and strides,
@@ -584,6 +727,268 @@ cases of `verify_matmul.py` cover every transposition, element type and tile,
 aligned and unaligned `M x N` and `K`, 4 to 32 partitions, partitions without
 a whole `K` tile, a batch folded into `M` and a copied operand; the trace must
 show each accumulation reading exactly the partitions its product wrote.
+
+## Floating-Point AddMM
+
+`AddMM::eval_gpu` computes `alpha * (A @ B) + beta * C`, as `mx.addmm` and
+`nn.Linear` with a bias call it, through the same routes as matmul.cpp's
+`CHECK_AB` variants. An empty output is only allocated. With `K == 0` the host
+copies `C` when `beta == 1` and otherwise multiplies it by a broadcast `beta`
+through the translated elementwise kernel. Every other product collapses the
+batch axes of all three operands, folds a contiguous batch into `M` only when
+`C`'s batches follow it, and then takes one of three routes:
+
+- `gemv_axbpy` for one output row or column, with the `_axpby1` entry and the
+  bias, `alpha`, `beta` and bias strides unless `alpha == 1` and `beta == 0`;
+- `steel_gemm_fused` with `use_out_source` (unless `alpha == 0` and
+  `beta == 1`), `do_axpby` (unless both are 1), `C`, `GEMMAddMMParams` and
+  `C`'s batch strides after `A`'s and `B`'s;
+- split-K, ending with the `_axbpy` accumulation and `C`'s row and column
+  strides unless `alpha == 1` and `beta == 0`.
+
+`C` binds as MLX passes it, broadcast or transposed; the host copies it only
+when a stride is negative. `addmm_layout.py` mirrors the routing, and the gemv,
+steel GEMM and split-K layouts check the epilogue bindings and `C`'s extent
+for every batch. The `MLX quantized host` jobs translate the AddMM entries with
+the matmul ones (`--verification` includes them), then run `verify_addmm.py`
+through `mx.addmm`. Its 23 cases cover both gemv kernels with and without
+`axpby`, both batch variants, fused entries that add or scale `C` with and
+without `has_batch` and every alignment, the plain and `_axbpy` accumulations
+in every element type, broadcast, transposed and copied addends, the batch
+fold, `K == 0` and an empty output. Inputs lie on dyadic grids and `alpha` and
+`beta` are powers of two, so every output must match the exact float64
+reference bit for bit, and float32 outputs must also match MLX's CPU backend.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_addmm \
+  --mlx-root mlx-upstream --packages host-packages --output-dir addmm
+```
+
+## Floating-Point GatherMM
+
+`GatherMM::eval_gpu`, which `mx.gather_mm` and mixture-of-experts layers
+reach, lives in `gather_mm.inc` and follows matmul.cpp on a device without NAX
+and without `gemv_wide`, so `gather_mm_wide` never dispatches:
+
+- one output row with sorted right indices (`sorted_indices=True` without left
+  indices): `gather_mm_rhs`, which broadcasts `A` to the index batch, finds
+  each group's first row with `gather_mm_offsets` and then runs
+  `steel_gather_mm_rhs` over every row;
+- one output row or column otherwise: `gather_mv` with `gemv_gather` or
+  `gemv_t_gather`, its tile shape and the matrix transposition flipped for
+  vector-matrix products;
+- every other product: `gather_mm` with the medium-device 64x64x16 tile,
+  `has_batch` for index batches of two or more axes and the alignment
+  constants in its hash name.
+
+An empty contraction fills the output with zeros. Indices bind as uint32
+views; the host copies only views with negative strides, and binds one unread
+element for scalar indices where MLX passes empty vectors.
+`gather_mv_layout.py` and `gather_mm_layout.py` read every index, or every
+group offset, the kernel will read and require each gathered operand to lie
+inside its buffer; the dispatcher checks the translated group offsets against
+the same binary search before MLX sees them. Entries translate on first use
+into the `gather-mv`, `gather-mm` and `gather-mm-offsets` caches with the
+options of their kernel gates.
+
+The `MLX quantized host` jobs run `verify_gather_mm.py` through
+`mx.gather_mm`. Its 10 cases cover both gathered gemv kernels, `gather_mm`
+in every element type with index batches of zero, one and two axes, broadcast
+right indices, transposed and copied operands, MLX's default left indices,
+both sorted-route transpositions with an empty group and a broadcast `A`, and
+an empty contraction. Inputs lie on dyadic grids, so every output must match
+the exact float64 reference bit for bit, and float32 outputs must also match
+MLX's CPU backend. DirectX and OpenGL do not yet translate the sorted route's
+software-subgroup tile scheduler (CrossGL/crosstl#2546); on those targets the
+sorted cases must fail with that diagnostic after the group offsets and before
+the product launches.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_gather_mm \
+  --mlx-root mlx-upstream --packages host-packages --output-dir gather-mm
+```
+
+## Floating-Point SegmentedMM
+
+`SegmentedMM::eval_gpu`, which `mx.segmented_mm` and the sorted GatherMM
+gradient reach, lives in `segmented_mm.inc` and follows matmul.cpp's
+`segmented_mm` on a device without NAX: every nonempty product runs
+`steel_segmented_mm` with the medium-device 64x64x16 tile, the operands
+transposed or copied as `check_transpose` decides, and `segments_contiguous`
+and the alignment constants in its hash name. Output batch `z` multiplies
+`A[:, s:e]` by `B[s:e]` over the inner range the segments give it. Dense
+segments bind one `(s, e)` pair per batch; a view whose two trailing strides
+are both one binds batch boundaries, which batch `z` reads at words `z` and
+`z + 1`. MLX accepts such a view after comparing each batch stride with the
+next stride times the axis's own extent; the host also requires the strides
+a boundary walk takes and copies every other view, so it never binds segments
+whose batches the kernel would misread. An empty contraction fills the output
+with zeros once every segment is empty, and an empty output launches nothing.
+
+`segmented_mm_layout.py` reads every segment word the kernel will read,
+replays the kernel's uint32 K loop and 16-bit tail for each batch, and
+requires every word and every inner index read to stay inside the
+contraction. Entries translate into the `segmented-mm` cache with the options
+of `test_current_gemm_segmented`, including the immutable segments that let
+the subgroup proofs treat the K loop as uniform.
+
+The `MLX quantized host` jobs translate the verification entries three at a
+time and then run `verify_segmented_mm.py` through `mx.segmented_mm`. Its 8
+cases cover every element type and transposition, both segment layouts, a
+two-axis segment batch, copied operands and segments, aligned and unaligned
+tiles, whole K tiles with and without a tail, a tail alone, empty and
+inverted segments, an empty contraction and an empty output. Every output
+must match the exact float64 reference bit for bit, and float32 outputs must
+also match MLX's CPU backend.
+
+```sh
+python -m demos.integrations.mlx.portable_host.segmented_mm_packages \
+  --mlx-root mlx-upstream --target metal --packages host-packages --verification
+python -m demos.integrations.mlx.portable_host.verify_segmented_mm \
+  --mlx-root mlx-upstream --packages host-packages --output-dir segmented-mm
+```
+
+## Floating-Point BlockMaskedMM
+
+`BlockMaskedMM::eval_gpu`, which `mx.block_masked_mm` and its gradients
+reach, lives in `block_masked_mm.inc` and follows matmul.cpp: a product with
+one output row or column runs `gemv_masked` or `gemv_t_masked` from
+gemv_masked.metal, every other one the steel `block_masked_gemm` of
+steel_gemm_masked.metal with square `block_size` tiles, 16-element K steps
+and 2x2 simdgroups. Kernel names carry the mask types (`bool_`, the element
+type or `nomask`) as matmul.cpp builds them, so a mask of the element type
+also scales its blocks. matmul.cpp binds no buffer for an absent mask, and
+the dispatcher fills that binding with words the kernel never reads. Two
+layout choices differ from matmul.cpp without changing a value: operands and
+masks with negative strides are copied first, and the batch strides come
+from the arrays the launch binds. matmul.cpp takes them from the inputs
+before `check_transpose` copies an operand, which misreads a copied operand
+broadcast over an inner batch axis.
+
+gemv_masked.metal instantiates no `gemv_t` tile for fewer than four outputs
+at the two simdgroup columns matmul.cpp asks for, so MLX cannot run such a
+product; the host refuses it before any launch, naming the missing kernel.
+
+`block_masked_mm_layout.py` checks each launch against matmul.cpp's routing
+and proves that every operand element and every mask value the kernel can
+index lies inside its buffer, including `gemv_t_masked`'s output mask, which
+it reads by block index without the strides matmul.cpp binds. Entries
+translate into the `masked-mv` and `masked-mm` caches with the options of
+`test_current_gemv_masked` and `test_current_gemm_masked`.
+
+The `MLX quantized host` jobs translate the verification entries three at a
+time and then run `verify_block_masked_mm.py` through `mx.block_masked_mm`.
+Its 16 cases cover every element type, both block sizes, every steel
+transposition, alignment and mask pairing, `gemv` and `gemv_t` with and
+without a broadcast batch grid, copied operands, the uninstantiated `gemv_t`
+tile, an empty contraction and an empty output. Every output must match the
+exact float64 reference bit for bit, and float32 outputs must also equal
+MLX's CPU backend.
+
+```sh
+python -m demos.integrations.mlx.portable_host.block_masked_mm_packages \
+  --mlx-root mlx-upstream --target metal --packages host-packages --verification
+python -m demos.integrations.mlx.portable_host.verify_block_masked_mm \
+  --mlx-root mlx-upstream --packages host-packages --output-dir block-masked-mm
+```
+
+## Convolutions
+
+`Convolution::eval_gpu`, which `mx.conv1d`, `mx.conv2d`, `mx.conv3d`,
+`mx.conv_general` and the transposed convolutions reach, lives in `conv.inc`
+and routes every convolution as conv.cpp does. The host runs the explicit
+GEMM routes and the separable 1-D one: `explicit_gemm_conv_ND_gpu` unfolds the
+input with `naive_unfold_nd` in row tiles and multiplies each tile with the
+steel GEMM (or its split-K kernels, as `steel_matmul` chooses), the grouped
+`explicit_gemm_conv_group_ND_gpu` copies the weights into per-group rows,
+unfolds with `naive_unfold_transpose_nd` and multiplies all groups in one
+batched `steel_matmul_regular` launch, `depthwise_conv_1D_gpu` runs
+`depthwise_conv_1d`, `depthwise_conv_2D_gpu` runs one `depthwise_conv_2d`
+launch of conv.cpp's `(8, 8, 4)` threadgroups (also for the 1-D depthwise
+convolutions conv_1D_gpu sends there), and `implicit_gemm_conv_2D_gpu` and
+`implicit_gemm_conv_3D_gpu` run one steel_conv `implicit_gemm_conv_2d` or
+`implicit_gemm_conv_3d` launch with conv.cpp's tiles, loaders and helper
+parameters, including the 2-D implicit GEMM that conv_1D_gpu reaches.
+`pad_in_channels_conv_2D_gpu` zero-pads the input and weight channels to a
+multiple of 16 through the host's `Pad` and runs that implicit GEMM on
+`MLXConvParams::with_padded_channels`; the plan accepts those padded
+parameters only when the dense parameters of a narrower channel count route
+there. `implicit_gemm_conv_2D_general_gpu`, which ungrouped input-dilated
+convolutions (the strided transposed ones) and large ones with unaligned
+channels take, runs one steel_conv_general `implicit_gemm_conv_2d_general`
+launch whose grid `z` enumerates the output row and column residues that share
+filter taps, with conv.cpp's `Conv2DGeneralJumpParams` and per-residue
+`base_h` and `base_w` tables. The winograd and 3-D special routes are refused
+by name before any launch, and an empty output launches nothing.
+
+Two launch choices differ from conv.cpp without changing a value. The unfold
+and depthwise kernels read only `thread_position_in_grid` and
+`threads_per_grid`, so they run as one-thread workgroups over conv.cpp's exact
+thread grid: Direct3D and OpenGL cannot clip the partial workgroups of
+conv.cpp's `dispatch_threads`. The host has no `maxBufferLength`, so an unfold
+tile holds at most the elements every translated launch is bounded by and at
+most 65535 rows; `MLX_CONV_UNFOLD_TILE_ROWS` still caps it as in conv.cpp.
+The host also reports no working-set size, so it refuses every product
+conv.cpp would send to winograd once `winograd_batch_step` allowed it.
+steel_conv's weight loaders read whole tiles of `BN` rows of each group, so
+when the output channels per group do not fill the last tile the last group
+reads rows past the weights; on Metal those reads land past the buffer. They
+feed only output columns the kernel never stores, and the host binds them as
+poisoned storage after the weights, so the translated reads stay inside
+their binding and no poison can reach a stored output.
+conv.cpp binds the strides of its row-contiguous operands as they are, and
+MLX leaves the stride of a size-one axis arbitrary: `mx.expand_dims` gives the
+new width axis of a 1-D input stride one. Only coordinate zero of such an axis
+is read, so the port binds the dense strides of the same buffer, and every
+route's checks see conv.cpp's contiguous layout.
+
+`implicit_gemm_conv_2d_general` reads `align_C` (id 200) from a function
+constant. The host names that pipeline by conv.cpp's hash name as well
+(`implicit_gemm_conv_2d_general_float32_bm32_bn32_bk16_wm2_wn2_alC_0`) and
+translates it with the constant frozen, with the options of
+`test_current_steel_conv_general`; `conv_general_layout.py` recomputes its
+parameters and residue tables. Its weight loader skips the rows from `O` on
+and ends each row at `C`, so no read leaves the bound weights.
+
+`depthwise_conv_2d` reads its kernel extent, strides, tile and flip from
+Metal function constants. The host names each pipeline by conv.cpp's hash
+name (`depthwise_conv_2d_float32_ker_h_3_ker_w_3_str_h_1_str_w_1_tgp_h_4_tgp_w_8_do_flip_n`)
+and translates it with those constants frozen, so every target compiles the
+specialization conv.cpp builds. The kernel indexes its threadgroup tile with
+`simd_gid * 32 + simd_lid`, so DirectX and OpenGL translate it with a 32-lane
+software subgroup, and its `MLXConvParams<2>` constant reference binds as a
+std140 uniform block on OpenGL and a constant buffer on DirectX.
+
+`conv_layout.py` mirrors conv.cpp's routing, checks each unfold, depthwise and
+implicit GEMM launch against it, recomputes the entry, function constants,
+threadgroups and `ImplicitGemmConv{2,3}DParams` conv.cpp chooses, and proves every read and
+write in bounds; `gemm_layout` accepts the grouped product's batch strides
+and row pitch exactly as conv.cpp passes them. Entries translate into the
+`conv` cache with the options of `test_current_conv` and, for steel_conv,
+`test_current_steel_conv`.
+
+The `MLX quantized host` jobs translate the verification entries and the GEMM
+entries they reach, then run `verify_conv.py` through `mx.conv_general`. Its
+35 cases cover every element type, every unfold rank, both explicit routes
+with input and kernel dilation, flips, uneven padding, row tiles with a
+partial last tile, a split-K product, copied inputs, the separable kernel,
+the 1-D, 2-D and 3-D implicit GEMM routes with the general, small-filter,
+large-filter and one- and three-channel loaders, 64 x 64 tiles, partial 2-D
+grouped and 3-D tiles that read past the weights, depthwise 2-D kernels from
+1 x 1 to 7 x 7 with strides, flips, partial tiles and the 1-D view, the
+general implicit GEMM with both `align_C` values, input dilation, residues
+without taps and a copied input, three refused routes and an empty output. Every output must match the exact float64 reference bit for
+bit, and float32 outputs must also equal MLX's CPU
+backend.
+
+```sh
+python -m demos.integrations.mlx.portable_host.conv_packages \
+  --mlx-root mlx-upstream --target metal --packages host-packages --verification
+python -m demos.integrations.mlx.portable_host.conv_packages products \
+  --mlx-root mlx-upstream --target metal --packages host-packages --verification
+python -m demos.integrations.mlx.portable_host.verify_conv \
+  --mlx-root mlx-upstream --packages host-packages --output-dir conv
+```
 
 ## Block Quantization
 
@@ -744,17 +1149,28 @@ check after building MLX with its original GPU backends disabled.
 `indexing/gather_axis.h` specialization. Its source and index contiguity flags,
 removed-axis shape and strides, axis extent and three-dimensional grid follow
 the pinned upstream host implementation. It uses the same six source storage
-types and four index types as general Gather, but retains its 65,535-element
-allocation bound. Negative
+types and four index types as general Gather, and shares its storage bound of
+2^28 - 33 elements. Each launch keeps the portable limit of 65,535 workgroups
+per axis: the host splits MLX's [trailing, index rows, leading] grid like
+`ScatterAxis`, into leading slabs and index-row ranges, and runs a trailing
+extent past one launch axis per leading position and index row, as slabs of
+the trailing axes through the strided specializations. Each launch's views
+start at its first element and are checked against their allocations, and
+`gather_axis_layout.launch_plan` mirrors the planner for the evidence audit.
+Negative
 source or index storage strides are materialized through translated copies;
 positive and zero strides retain their views. Index values, allocation spans
 and contiguity claims are checked before native submission.
 
-Replace `--capacity` with `--axis` to run 60 axis-gather workloads and unchanged
+Replace `--capacity` with `--axis` to run 72 axis-gather workloads and unchanged
 upstream `test_take_along_axis` in separate CPU and native processes. Coverage
 includes each axis, flattened input, noncontiguous source/index combinations,
-broadcasts, negative indices, reversed views, exact floating-point payloads and
-64-bit values beyond binary64's exact integer range. The required three-OS gate
+broadcasts, negative indices, reversed views, exact floating-point payloads,
+64-bit values beyond binary64's exact integer range, and twelve float32 and
+int64 workloads whose launches split: 70,001 trailing elements, a 257 x 257
+trailing slab, 70,001 index rows, 131,073 leading positions, a 300 x 300
+leading slab and a split of both. The audit replays the planner, checking each
+launch's uploads and its region of the output. The required three-OS gate
 retains the same compiled-module, upload, readback and guard evidence as general
 Gather. No extra OpenGL index-range assertion is needed for this kernel.
 
@@ -786,7 +1202,16 @@ The source is copied by a translated GPU kernel before updates, preserving
 source views and updates that alias them. Index arrays may use signed or unsigned
 32-bit or 64-bit storage. One through ten index arrays, scalar indices,
 noncontiguous and broadcast updates, negative indices and repeated destinations
-are supported within the existing 65,535-element storage and rank-64 bounds.
+are supported within the general gather's storage bound of 2^28 - 33 elements
+and rank 64. The update slice runs along the launch's x axis and keeps the
+65,535-workgroup limit. Index rows beyond one launch split into rectangular
+slabs that rebase the index and update views, each with MLX's work-per-thread
+choice for its own rows. Native atomics apply contending updates in an
+unspecified order, so a float32 sum that some order would round, which the host
+checks with the same power-of-two step test as the axis-scatter audit, launches
+runs of rows that never share a destination. Every destination then receives its
+updates in index order, as the audit's replay applies them.
+`scatter.inc` holds this port.
 Negative storage strides are materialized by translated copies. Output slice
 bounds, index values, buffer spans and contiguity are checked before translation
 or native submission. The host supplies the unchanged fifteen metadata/data
@@ -948,10 +1373,37 @@ floating-point atomics and floating-point product updates; passing the list-inde
 test does not establish that broader coverage. No output is computed or corrected
 on the CPU by this adapter.
 
+### Masked Scatter
+
+`MaskedScatter`, which boolean-mask assignment (`a[mask] = values`) and its
+`vmap` produce, ports the pinned `indexing.cpp`. The output starts as a copy of
+the destination; a translated exclusive Sum scan of the mask, flattened to one
+row per batch, numbers its set elements in uint32; and the `masked_assign`
+kernel MLX generates writes source element `batch * src_batch_size + offset`
+to each set element, or keeps the destination where the offset passes its
+batch's source. `masked_scatter_packages.py` builds each kernel as
+`indexing.cpp` does: the unchanged `utils.h` and `indexing/masked_scatter.h`
+headers followed by the `masked_assign_kernel` template of the unchanged
+`jit/indexing.h`, formatted exactly as `fmt::format` does, one entry per dtype
+and source row contiguity (26 in all). OpenGL lowers the contiguous read's
+int64 index to a signed int; the host bounds the source span by `INT32_MAX`,
+so that read carries a host-enforced index range assertion. The kernel reads
+only its grid position, so it runs as one-thread workgroups over one thread
+per mask element, at most 65,535 of them, which the scan also bounds.
+
+The upstream op audit derives each package again from the pinned template,
+checks the native module hashes, requires the scan offsets to be the
+exclusive per-batch counts of the mask and recomputes the output from the
+destination copy, the mask and the source, reading strided sources through
+`elem_to_loc<uint>`.
+
 ## Axis Scatter
 
 `ScatterAxis::eval_gpu` dispatches the unchanged pinned
-`indexing/scatter_axis.h` for int32 and uint32 replacement and addition. Public
+`indexing/scatter_axis.h` for int32, uint32 and float32 replacement and
+addition, the 32-bit types whose atomics every target provides. Float32
+outputs travel as raw binary32 words; OpenGL keeps them in uint32 atomics, as
+the general scatter does. Public
 `put_along_axis` operations use replacement; vector-Jacobian products of
 `take_along_axis` exercise additive scatter through MLX's own differentiation
 rules. Indices may be int32, uint32, int64 or uint64. Other output types and
@@ -962,10 +1414,18 @@ the source even when updates alias it. Positive and zero strides retain their
 views; negative update or index strides are materialized by translated copies.
 The removed-axis shape, strides, contiguity flags and three-dimensional launch
 follow upstream MLX. Update and output element counts are checked separately:
-the number of updates need not equal the destination size. Each input storage
-span, update count and output count is bounded to 65,535 elements; rank is at
-most 64. Every reachable index and allocation span is validated before dispatch.
-Empty updates retain the copied source and do not submit a scatter kernel.
+the number of updates need not equal the destination size. Storage spans,
+update counts and output counts share the general gather's storage bound of
+2^28 - 33 elements; rank is at most 64. Each launch keeps the portable limit of
+65,535 workgroups per axis. MLX's grid is [trailing extent, index rows, leading
+extent]; the kernel strides its output by the trailing extent, which must fit
+one launch axis. The host splits index rows and leading extents into
+rectangular slabs, and a launch that splits index rows covers one leading
+position, because the contiguous specializations stride leading positions by
+the row count. Each launch's views start at its first element and are checked
+against their allocations. Every reachable index and allocation span is
+validated before dispatch. Empty updates retain the copied source and do not
+submit a scatter kernel.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
@@ -973,10 +1433,14 @@ python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
   --integer64 integer64-packages --output-dir scatter-axis-evidence
 ```
 
-The required three-OS CI step runs 84 workloads in separate CPU and native
+The required three-OS CI step runs 132 workloads in separate CPU and native
 processes. They cover both operations and storage types, all four index types,
 dense and transposed sources, strided and broadcast views, reversed views,
-negative indices, flattened inputs, aliasing updates and empty updates. Duplicate
+negative indices, flattened inputs, aliasing updates and empty updates. Twenty
+of them split their launches: the fused cross-entropy gradient reference's
+(4, 7, 4096) output, 70,001 index rows, 131,073 leading positions, a 300 x 300
+leading slab and a split of both. The audit replays the host's launch plan
+and checks each launch's uploads and slab of the result. Duplicate
 replacement indices carry identical values so the expected result does not
 depend on thread ordering. Additive cases retain duplicate destinations to
 exercise atomic accumulation.
@@ -988,15 +1452,22 @@ numeric values; the verifier checks their declared storage range before deriving
 bit patterns for comparison. Unsigned substitutions, floating-point values,
 Booleans and incomplete readbacks are rejected.
 
+The last 28 workloads repeat both operations and every layout in float32 with
+negative and fractional quarter-step values. Native atomic additions land in
+an unspecified order and round after each one, so the verifier reconstructs a
+float32 sum only when no order can round: every destination's terms share a
+power-of-two step and their magnitudes sum to fewer than 2^24 of it. Any other
+float32 sum, and any non-finite term, fails verification instead of being
+compared approximately.
+
 The verifier reconstructs each result from retained uploads and checks the
 native readback against the final MLX result. It also checks source preservation,
 exact atomic storage layout, compiled modules, artifact identity, dispatch
 accounting and 32 trailing output guards. Missing execution or corrupt evidence
 fails verification; output values are never computed or corrected on the CPU.
-This command does not claim the complete upstream `test_put_along_axis`:
-that test includes floating-point scatter, still tracked by
-[#1986](https://github.com/CrossGL/crosstl/issues/1986). Its evidence explicitly
-records no upstream test-suite run and no complete-backend parity.
+This command does not claim the complete upstream `test_put_along_axis`, which
+runs in the upstream op job. Its evidence explicitly records no upstream
+test-suite run and no complete-backend parity.
 
 Five additional native controls check concrete function-object member forwarding,
 nested call operators, receiver state and single argument evaluation. They are
@@ -1031,6 +1502,8 @@ no-GPU backend build definition and adds four explicitly named backend files:
 
 - `crosstl_backend.cpp` registers a versioned synchronous dispatch callback,
   implements device/stream hooks, `Arange::eval_gpu` and 29 unary primitive hooks,
+  reports the native target (`metal`, `directx` or `opengl`), which `runtime.py`
+  names before it registers, as the GPU `architecture` of `mx.device_info`,
   and stages output storage. MLX's Log and Sqrt primitives select their log-base
   and reciprocal variants, yielding 30 float32 entries plus Boolean LogicalNot. View hooks reuse
   upstream shared implementations and perform no CPU elementwise computation.
@@ -1143,9 +1616,9 @@ rows followed by a 32-thread final reduction; larger inputs use 4,096 partial
 rows followed by a 1,024-thread final reduction. The threshold uses MLX's logical
 item size, including one byte for Boolean values, independently of widened target
 storage. Whole-array inputs must fit their backing allocation and the signed
-32-bit buffer-index range; native device buffer limits also apply. Row
-reductions retain their 65,535-element bound; column reductions are bounded as
-described under Column Reductions. Intermediate values are staged synchronously, not
+32-bit buffer-index range; native device buffer limits also apply. Row and
+column reductions are bounded as described under Row Reductions and Column
+Reductions. Intermediate values are staged synchronously, not
 kept in persistent GPU allocations. Unsupported column plans still produce
 explicit errors. No reduction arithmetic is
 performed on the CPU by the adapter.
@@ -1247,13 +1720,21 @@ retain output strides, non-row reduction strides and source allocation offsets.
 General plans use translated copies only when upstream's planner requires them.
 
 The source width is 32 for rows through 512 elements, 128 through 1,024, and
-then a multiple of 32 capped at 1,024. The default row build includes all 26
+then a multiple of 32 capped at 1,024, which every row from 4,096 elements up
+to the element bound uses; the kernels stride through rows of any length. The
+default row build includes all 26
 reachable widths and all 56 entries, producing 1,456 packages per target.
 Runtime checks reject invalid ranks, mismatched metadata arrays, out-of-range
-source spans and incorrect launch dimensions before device execution. The GLSL
-simple-row index assertion covers 0 through 131,071; every dispatch checks the
-source span plus four values per lane against that bound. This assertion does
-not enlarge an allocation or permit an out-of-bounds memory access.
+source spans and incorrect launch dimensions before device execution. Source
+spans, logical sizes and outputs hold at most 2^28 - 1 elements, the column
+passes' bound; every shape axis stays below 65,536, every stride inside that
+bound and every launch axis at most 65,535 workgroups (four rows per simple
+workgroup). The GLSL simple-row index assertion covers 0 through 2^28 - 1;
+every dispatch checks the source span plus four values per lane against that
+bound. This assertion does not enlarge an allocation or permit an
+out-of-bounds memory access. Wide workloads run simple, looped and sliced plans
+of 2,048-element rows over 81,920 to 163,840 elements, the sliced view
+spanning 161,792 elements.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family row --jobs 2 --output-dir row-packages
@@ -1314,8 +1795,8 @@ slices, transposes, early/late NaNs, infinities and signed zeros. CPU and
 generated-native results are compared with NumPy references. The verifier
 requires the exact source entry, launch geometry,
 one native reduction per case and intact output guards. Not every packaged
-entry/width pair is executable within the current 65,535-element host limit.
-The maintained 1,870 standalone cases execute 896 distinct entry/width pairs;
+entry/width pair is executable within the workloads' 65,535-element shapes.
+The maintained 1,876 standalone cases execute 896 distinct entry/width pairs;
 the other 560 receive compilation coverage, not numerical coverage. The retained
 case list identifies precisely which combinations execute. `--require-all-widths`
 rejects diagnostic subsets in CI; single-directory packages remain supported
@@ -1368,8 +1849,10 @@ NumPy, checks unchanged host inputs and output guards, and retains package ident
 and DirectX/OpenGL region module evidence. These are additional integration
 workloads, not 34 additional upstream unit tests. The existing upstream-test
 gate remains required. Every operation has distinguishable row results to reject
-constant-output and wrong-row errors. Negative-stride row views, additional storage types,
-the 65,535-element bound and full upstream-suite parity remain open work;
+constant-output and wrong-row errors. A reduction of a view with a negative
+stride reduces a dense translated copy, so its passes bind storage from the
+first element they read. Additional storage types and full upstream-suite
+parity remain open work;
 partial-workgroup coverage is tracked in
 [#2011](https://github.com/CrossGL/crosstl/issues/2011).
 
@@ -1379,8 +1862,16 @@ The column family connects upstream looped and two-pass column plans to generate
 kernels. The default build includes all 84 entries: fourteen operation/type
 combinations, three template ranks, and two dispatch modes, each at 256 threads.
 Selection follows upstream's reduction count and contiguous output span. Small
-columns take `col_reduce_small`; the separate long-column algorithm still reports
-an explicit error.
+columns take `col_reduce_small`. Long columns, a reduction stride below 32 over
+1,024 or more reduced elements, take `col_reduce_longcolumn` as
+`strided_reduce_longcolumn` launches it: one thread per column and 32 rows per
+threadgroup, with 32 partial blocks (128 from 32,768 reduced elements) along the
+grid's third axis, followed by a looped pass over the partials. The kernel reads
+its threadgroup size, so `column_long_packages` translates each entry at each
+column count on first use (`column_long_layout` checks the plan, metadata and
+launch first); the column CI job translates the verification's 44 variants
+ahead of execution. The long-column entries cover the 32-bit, Boolean and
+16-bit float operations of the looped and two-pass family.
 
 The adapter preserves reduction strides, broadcast strides, allocation offsets
 and output geometry. Ranks, metadata array lengths, source spans and logical
@@ -1389,8 +1880,10 @@ the second native dispatch consumes those actual results without host reduction
 arithmetic. Inputs, outputs and source spans hold at most 2^28 - 1 elements, far
 below the `INT32_MAX` at which MLX selects 64-bit index kernels; every shape axis
 and stride stays below 65,536 and every launch axis at most 65,535 workgroups.
-Row plans, unlike column plans, retain the 65,535-element bound. The workloads
-include small, looped and two-pass plans over 76,800 to 131,072 elements.
+Row plans share this element bound. The workloads
+include small, looped and two-pass plans over 76,800 to 131,072 elements, and
+long-column plans of every 32-bit and Boolean entry, whose partial blocks are
+checked against an independent model of the kernel's row assignment.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family column --jobs 2 --output-dir column-packages
@@ -1404,8 +1897,8 @@ views, NaNs, infinities and signed zero. Independent references check every
 intermediate and final native readback; retained traces include launch geometry,
 artifact hashes and output guards. These are bounded integration workloads, not
 evidence that the complete upstream reduction suite or MLX backend is supported.
-Separate native processes also verify that invalid allocation spans, small and
-long column plans, and oversized inputs fail before any shader dispatch.
+Separate native processes also verify that invalid allocation spans and
+oversized inputs fail before any shader dispatch.
 
 Small-column integration also requires a native-barrier convergence check,
 tracked in [#2021](https://github.com/CrossGL/crosstl/issues/2021). For example,
@@ -1587,6 +2080,62 @@ Non-Metal subnormal bfloat reductions remain rejected under
 [#2000](https://github.com/CrossGL/crosstl/issues/2000). These checks do not establish
 all narrow reduction operations or a complete upstream test-suite pass.
 
+### Wide Whole-Array, Small-Row and Small-Column Reductions
+
+Sums and products of int64, uint64, float16, bfloat16 and complex64, and
+minima and maxima of int64, uint64 and complex64, run the unchanged
+`reduce.metal` `all_reduce` entries. As `remap_reduce_types` in the pinned
+`reduce.cpp` does, each accumulates in its element type, so 16-bit float and
+complex sums round every addition in that type and are never promoted to
+float32. `wide_reduction_packages` translates each entry on first use for its
+exact launch with `reduction_cache`'s checked `in_size` and `row_size`
+metadata; the host keeps upstream's one- or two-pass plan, chosen from logical
+bytes, and moves MLX's exact storage words through `element_storage`.
+`wide_reduction_evidence` recomputes every 64-bit integer pass exactly, with
+sums and products wrapping modulo 2^64 and rows past the input keeping the
+operation's identity. float16, bfloat16 and complex64 passes are checked by
+package and native identity, and their values by the upstream tests'
+comparisons with the CPU. Off Metal, subnormal bfloat16 inputs stay refused
+under [#2000](https://github.com/CrossGL/crosstl/issues/2000).
+
+The 8- and 16-bit integers run the same lazy families. Their minima and maxima
+keep the element type; their sums and products write the accumulator that
+`instantiate_sum_prod` gives them, int32 for int8, int16 and uint8 and uint32
+for uint16, and the result MLX types uint32 for uint8 holds the same bits.
+Boolean sums and products read their bytes through the int8 entries, as
+`remap_reduce_types` does. A two-pass whole-array reduction's second pass
+reduces the 32-bit partials with the installed int32 or uint32 entry. The
+audits recompute every pass, row and column exactly, wrapping sums and
+products in the accumulator type.
+
+`all` and `any` of a non-Boolean array run the same families through
+`instantiate_and_or`'s entries and write Booleans. As in `remap_reduce_types`,
+float16, bfloat16 and float32 are tested by value, so -0.0 is false, and the
+2-, 4- and 8-byte integers and complex64 by their bits, through the int16,
+int32 and int64 entries; a two-pass reduction's second pass is the installed
+Boolean entry. The audits recompute these passes for every type, a float word
+being true when any bit but its sign is set. Upstream reads the 1-byte
+integers as Booleans, which the canonical Boolean storage cannot carry, so
+their `all` and `any` stay refused.
+
+Row plans of these types whose rows hold at most 64 elements run the same
+types' `row_reduce_small` entries, which `small_row_packages` translates on
+first use for each launch's exact thread grid. On Direct3D and OpenGL each
+launch runs as its dispatch regions, as for the other small rows.
+`wide_row_dispatch` moves exact storage words with a guarded output, and
+`wide_row_evidence` checks every dispatch against its cached packages and
+recomputes 64-bit and narrow integer rows from their inputs.
+
+Column plans of these types that reduce fewer than 32 elements per output run
+the same types' `col_reduce_small` entries; float16 and bfloat16 sums over one
+axis keep their existing partition-sum packages. `column_small_layout` checks
+each launch's metadata, source span and thread grid against upstream's
+`strided_reduce_small` plan before translation, and every target runs the launch
+as one dispatch. `wide_column_dispatch` moves exact storage words with a guarded
+output, and `wide_column_evidence` derives each dispatch's package again and
+recomputes 64-bit and narrow integer columns from their inputs. Longer rows and
+columns of these types remain explicit unsupported operations.
+
 ## Random Generation
 
 The optional random package family connects `RandomBits::eval_gpu` to the
@@ -1678,34 +2227,212 @@ and reduction allocations. Tests that inspect
 only lazy array metadata do not establish native execution. These failures are
 not skipped or reclassified by the required five-test profile above.
 
-The same job then runs 22 more unchanged `test_ops` tests on the families it
-has already translated:
+A dedicated job then runs 126 more unchanged `test_ops`, `test_reduce`,
+`test_bf16` and `test_fast` tests on all three platforms (121 on OpenGL; see
+below). They run in five groups, each in its own job per platform with its
+own deadlines: `operations` (the `test_ops` and `test_bf16` tests, which also
+run the rejection check and must reach a gather or scatter), `normalization`
+(the nine `test_fast` tests, whose gradients move tens of millions of elements
+through the host), `reductions` (eight `test_reduce` tests), and
+`reduction-dtypes` and `reduction-permutations` (`test_dtypes` and
+`test_axis_permutation_sums`, which each translate a package for every new
+reduction launch of their sweeps). `--group` selects one; without it, one
+verification runs every test:
 
 ```bash
 python -m demos.integrations.mlx.portable_host.verify_upstream_ops \
   --mlx-root mlx-upstream --packages host-packages --random random-packages \
   --bitwise bitwise-packages --selection selection-packages \
-  --absolute absolute-packages --reductions init-packages \
-  --reductions random-reductions --output-dir upstream-op-evidence
+  --absolute absolute-packages --integer64 integer64-packages \
+  --reductions init-packages --reductions all-reductions \
+  --reductions row-reductions --reductions column-reductions \
+  --group operations --output-dir upstream-op-evidence
 ```
 
-They are `test_trunc`, `test_erfinv`, `test_logical_and`, `test_logical_or`,
-`test_full_ones_zeros`, `test_atleast_1d`/`2d`/`3d`, `test_tile`,
-`test_repeat`, `test_roll`, `test_roll_errors`, `test_tri`, `test_tril`,
-`test_triu`, `test_as_strided`, `test_view`, `test_depends`, `test_eye`,
-`test_diag`, `test_diagonal` and `test_divmod`. Each runs once on the MLX CPU and once
-through the translated host, in separate processes, and every native run must
-dispatch. Every dispatch must belong to exactly one of the base, random,
-bitwise, selection, absolute-value or reduction indexes and pass that
-family's artifact and native-identity checks, or be a gather, scatter or
-DivMod kernel specialized from the pinned sources, whose result is recomputed
-from its retained inputs and whose native modules are checked. A test that
-reaches scans or the 64-bit and 16-bit package families therefore fails
-instead of running an unchecked package. A separate process
-checks that a missing comparison package is refused before dispatch. On Metal
-the native run dispatches 1,818 translated kernels, 12 of them indexing
-kernels and 37 DivMod kernels (25 kernel and dtype pairs, translated on first
-use; the cold native run takes about four minutes).
+`all-reductions` and `row-reductions` are on-demand whole-array and row
+reduction indexes (`reduction_packages --family all --on-demand` and
+`--family row --on-demand`), so only the variants the tests reach are
+translated; `column-reductions` holds the column reductions
+(`--family column`) that softmax over a leading axis composes. The tests are `test_trunc`, `test_erfinv`,
+`test_logical_and`, `test_logical_or`, `test_full_ones_zeros`,
+`test_atleast_1d`/`2d`/`3d`, `test_tile`, `test_repeat`, `test_roll`,
+`test_roll_errors`, `test_tri`, `test_tril`, `test_triu`, `test_as_strided`,
+`test_view`, `test_depends`, `test_eye`, `test_diag`, `test_diagonal`,
+`test_divmod`, `test_all`, `test_cummax_cummin_nan`, `test_empty_matmuls`,
+`test_irregular_alignments`, `test_scan_invalid_axis`,
+`test_scan_strided_bool`, `test_slice_with_negative_stride`,
+`test_take_along_axis`, `test_unary_ops_from_non_array`, `test_add`,
+`test_any`, `test_bitwise_grad`, `test_count_nonzero`,
+`test_irregular_binary_ops`, `test_linspace`, `test_linspace_endpoint`,
+`test_mean`, `test_min_and_max`, `test_prod`, `test_subnormal_bool_cast`,
+`test_binary_ops`, `test_bitwise_ops`, `test_divide`, `test_floor_divide`,
+`test_integer_power`, `test_remainder`, `test_scalar_inputs`,
+`test_sigmoid`, `test_tensordot`, `test_unary_ops`,
+`test_zeros_ones_empty_like_dtype`, and the complex64 tests `test_array_equal`,
+`test_complex_ops`, `test_complex_power`, `test_conjugate`,
+`test_diag_zero_size`, `test_isfinite`, `test_isinf`, `test_isnan`,
+`test_isneginf`, `test_isposinf`, `test_log`, `test_log10`, `test_log1p`,
+`test_log2`, `test_logaddexp`, `test_maximum`, `test_minimum`, `test_outer`,
+`test_real_imag`, `test_sign` and `test_trig_ops`; `test_clip`,
+`test_concatenate`, `test_meshgrid`, `test_nan_to_num`, `test_pad`,
+`test_pad_reflect_symmetric`, `test_slice_update_reversed` and `test_take`,
+which reach lazy selections of every GPU dtype; `test_put_along_axis`, which
+reaches int32 and float32 replacement axis-scatters; `test_round`, which also
+reaches lazy aranges; `test_std`, `test_trace`, `test_var` and `test_vecdot`,
+which reach wide whole-array, small-row and small-column reductions; and
+`test_sum`, which also reaches looped float32 rows; and `test_argmin_argmax`,
+`test_reduce.test_arg_reduce` and `test_bf16.test_arg_reduction_ops`, which
+reach `arg_reduce.metal` for every real dtype, one package per threadgroup
+width. Every arg reduction index is recomputed from its retained input.
+`test_axis_permutation_sums`, `test_expand_sums`,
+`test_row_reduce_negative_stride`, `test_dtypes`, `test_sum_bool` and
+`test_edge_case` reach whole-array, row and column sums, products and extrema
+of every integer, float and Boolean dtype over permuted, expanded and
+negative-stride views; a negative-stride view is reduced from a dense copy.
+`test_nan_propagation_complex64` reaches complex64 extrema with NaN in either
+part and `test_long_column` a column sum over 8,192 rows. `test_zero_size`
+reduces only into empty results and rejects empty axes.
+OpenGL runs simdgroups as 32-lane software subgroups and cannot yet run an
+arg reduction wider than one simdgroup, because the kernel returns every
+simdgroup but the first before its final shuffles (CrossGL/crosstl#2207);
+its host refuses those launches and the job excludes the three tests there.
+`test_softmax`, `test_logsumexp` and `test_logsumexp_shape` reach the block
+and looped rows of `softmax.metal` and `logsumexp.metal`, one package per
+threadgroup width. `test_sort`, `test_partition`, `test_argpartition`,
+`test_sort_nan` and `test_argsort_nan` reach every `sort.metal` stage the
+`Sort`, `ArgSort`, `Partition` and `ArgPartition` primitives launch: contiguous
+and strided single-block sorts and argsorts, and the multi-block tile sort,
+partition and merge passes up to a 2^22-element row. Every sort stage that
+sorts at most 65,536 values is recomputed exactly from its retained inputs
+(MLX sorts stably, with NaN after every ordered value); larger stages keep
+their extents and digests, and the tests compare their sorted results. A view
+with a negative stride is sorted from a dense copy.
+`test_scans`, `test_logcumsumexp`, `test_scans_complex_exclusive` and
+`test_scan_size_one_axis` reach contiguous and strided, forward and reverse,
+inclusive and exclusive `scan.metal` entries of float32, int32, int64 and
+complex64 (see "Cumulative Operations"); OpenGL excludes the first and third,
+whose reverse scans it cannot bound yet (CrossGL/crosstl#2905).
+`test_to_from_fp8` reaches the `ToFP8` and `FromFP8` vectors.
+`test_searchsorted` reaches every searchsorted pass shape above: contiguous,
+strided, reversed and empty sequences, and transposed, sliced and broadcast
+values. `test_unstack` concatenates int64 arrays through lazy copies.
+`test_fast`'s `test_rms_norm`, `test_rms_norm_grad`, `test_layer_norm`,
+`test_layer_norm_dim_check`, `test_slice_into_layer_norm` and the four
+`test_layer_norm_grad*` tests reach `rms_norm.metal` and `layer_norm.metal`:
+the single-row and looped forward kernels of every float dtype, and the
+gradient kernels with (`_w`) and without (`_now`) a weight, which freeze the
+`has_w` function constant normalization.cpp specializes. The ports live in
+`normalization.inc`, which the prepared `crosstl_backend.cpp` includes; the
+forward primitives keep MLX's composed fallback on the CPU, as the Metal
+backend does. Weight and bias gradients sum the kernels' per-row (or, for
+RMS rows, per-threadgroup) partials through the translated column reductions,
+as `strided_reduce_general_dispatch` does. Every dispatch must name its cached
+package, upload its retained operands and keep its output guards, and a
+gradient without a weight must leave its `gw` placeholder unwritten; launches
+over more than 65,536 row elements keep their extents and digests. The tests
+compare the values with MLX's composed normalization.
+The `modules` group runs whole-module tests beyond the core operations
+(`MODULE_TESTS`): fourteen `test_losses` tests, nine `test_einsum` tests,
+`test_init`'s `test_orthogonal`, `test_sparse_zeros_per_row` and
+`test_uniform`, fifteen `test_linalg` tests (Cholesky, LU, QR, SVD, inverses,
+determinants, solves, cross products and the real and complex norms),
+`test_tree`'s `test_merge` and `test_supported_trees`, `test_fft`'s
+`test_fftfreq`, `test_fftshift`, `test_fftshift_errors`, `test_ifftshift` and
+`test_rfftfreq`, and `test_fast`'s `test_cross_entropy` and
+`test_cross_entropy_grad`. The gradient test compares the fused gradient rows
+with a reference gradient composed from axis scatters of (4, 7, 4096) outputs,
+which the host splits into launches. The linear-algebra factorizations run on
+the MLX CPU stream, as upstream directs; their operands, products and checks
+run through the host. The other tests of these modules are not part of the
+group: `test_fft`'s transform tests run in the `fft` group, `test_init`'s
+identity and sparse initializers need scatters of more element types, and the
+einsum test sweep needs long-column reductions.
+The `fft` group runs `test_fft`'s transform tests through `fft.inc`, a port of
+`fft.cpp`: `FFT::eval_gpu` plans every 1-D transform as `plan_fft` does and
+names each launch by fft.cpp's pipeline hash name, whose translated entry has
+the function constants that name implies frozen (`fft_layout`). Stockham,
+Rader and fused Bluestein plans up to 4,096 points run one threadgroup per
+batch of transforms through the translated `fft`, `rader_fft` and
+`bluestein_fft` kernels, with the Rader and Bluestein tables
+`compute_raders_constants` and `compute_bluestein_constants` build on the CPU;
+the host checks each table against its double-precision value. Powers of two
+past 4,096 points run fft.cpp's two `four_step_fft` passes through a complex64
+temporary, and other sizes past one threadgroup run `multi_upload_bluestein_fft`
+from those transforms and the copy, unary, binary, padding and concatenation
+primitives. Threadgroups with more than 64 threads per transform launch at the
+linearized workgroup size the translated entry declares on Direct3D and OpenGL.
+Bluestein's twiddle-table plans (batches of 1,024 or more complex Bluestein
+transforms of 1,025 to 2,048 points) first run the translated
+`generate_bluestein_twiddles` kernel into the table past `w_q`'s spectrum,
+which the host checks with the other Bluestein tables. `test_fft_grads`
+compares against PyTorch, which the host environment does not install, and
+`test_batched_bluestein_twiddle_table` and `test_fft_too_large` run only where
+`mx.metal.is_available()`, which the portable host is not. The
+Metal runtime binds up to 1 GiB per dispatch, for the 128 MiB operands of a
+2**24-point pass.
+`nn.losses.cross_entropy` with class indices on the GPU, `test_losses`'
+`test_cross_entropy` and `test_fast`'s `test_cross_entropy` reach
+`cross_entropy.metal`:
+`cross_entropy_<type>` and `cross_entropy_vjp_<type>` for every float dtype,
+one package per threadgroup width (`ceil(ceil(n / 4) / 32) * 32` threads,
+clamped to 32..1024, as `cross_entropy_dims` launches them). The ports of
+`CrossEntropy` and `CrossEntropyVJP::eval_gpu` live in `cross_entropy.inc`;
+the forward primitive keeps MLX's composed fallback on the CPU only, as the
+Metal backend does. The composed fallback subtracts the target logit from a
+float32 logsumexp and loses the loss of equal logits of magnitude 1e20, which
+the fused kernel keeps by subtracting the logit gap first. MLX does not bound
+the class indices; the host refuses a launch with an index outside
+`[-n, n)` rather than read past its row. Every dispatch must name its cached
+package, upload its retained operands and keep its output guard; launches over
+more than 65,536 logits keep their extents and digests.
+The `conv` group runs seven unchanged `test_conv` tests (`CONV_TESTS`):
+`test_conv2d_large_filter_small_channels`, `test_conv_1d_groups_flipped`,
+`test_conv_1d_with_2d`, `test_conv_general_flip_grad`, `test_conv_groups_grad`,
+`test_numpy_conv` and `test_repeated_conv`. They reach the unfold and steel
+GEMM, depthwise, padded-channel and implicit GEMM routes of the convolution
+port (see "Convolution") and its gradients, and translate their kernels on
+demand. The other `test_conv` and `test_conv_transpose` tests need PyTorch or
+the general implicit GEMM and small-depth 3-D routes.
+The `array`, `autograd` and `compile` groups run the `test_array` (41),
+`test_autograd` (45) and `test_compile` (51) methods that reach the GPU. Five
+more groups run the GPU methods of whole modules (`upstream_module_groups`):
+`nn` (39 `test_nn` methods: module state, weight files and the layers),
+`transforms` (24 `test_vmap` and 11 `test_eval` methods), `serialization` (16
+`test_export_import` and 14 `test_load` methods, with the NumPy, safetensors
+and GGUF formats), `training` (19 `test_optimizers` methods, six `test_random`
+samplers, four `test_bf16` sweeps and the device, stream, memory and constant
+tests) and `rope` (the seven rotary embedding and fused transform methods of
+`test_fast` and the two antialiased `test_upsample` sweeps). A module's other
+methods dispatch nothing or need a kernel family the host does not port yet.
+Each runs once on the MLX
+CPU and once through the translated host, in separate processes, and every
+native run must dispatch, except `test_layer_norm_dim_check`, which rejects its
+arguments before building a graph, and `test_zero_size`, which must dispatch
+nothing. The CPU worker must skip the tests that need a GPU, such as
+`test_multistream_deadlock`, which the native worker runs. Every dispatch must
+belong to exactly one of the
+base, random, bitwise, selection, absolute-value, 64-bit integer or reduction
+indexes and pass that family's artifact and native-identity checks, or be a
+lazily translated kernel. Gather, scatter and DivMod kernels specialized from
+the pinned sources are recomputed from their retained inputs and their native
+modules are checked, and so are the casts, copies, integer or Boolean
+unary, binary and selection vectors and integer aranges that no installed family
+covers (see "Casts and copies of every GPU dtype", "Unary, binary and selection
+vectors of every GPU dtype" and "Aranges of every GPU dtype"). Lazy floating and
+complex vectors and 16-bit float aranges must name the package their cache derives
+again and pass the native-identity checks. Scans, small row and column
+reductions, GEMV, steel GEMM and split-K GEMM kernels, and the affine and
+floating-point quantized products a quantized layer reaches, must name the
+package their cache derives again from the recorded entry, launch and metadata (and,
+for scans, matrix kernels and Direct3D or OpenGL dispatch regions, the
+package's entry point and retained native modules). A test that reaches the 16-bit package families, or row and
+column reductions with a static index, therefore fails instead of running an
+unchecked package. Only the recomputed dispatches keep their long values in
+the trace; the others keep a length and SHA-256. A separate process checks
+that a missing comparison package is refused before dispatch. On Metal the
+native run dispatches 10,074 translated kernels, 29 of them indexing kernels,
+192 arg reductions and 6 steel GEMM kernels; the whole verification takes about
+17 minutes.
 
 `View` follows `mlx/backend/gpu/primitives.cpp`: views that keep the element
 size, narrow a contiguous last axis or start from a row-contiguous array share
@@ -2113,16 +2840,27 @@ comparison inputs on DirectX and OpenGL before dispatch until source parity is
 established. This check does not reject Boolean casts or ordinary comparison
 inputs, and does not claim to fix the underlying translator contract.
 
-Native traces must start with the exact 919 nonempty workload dispatches, cover
-all 93 entries, and retain artifact identities and runtime/device details.
-Separate negative processes reject an unsupported primitive, oversized arange,
-a missing artifact, unary inputs with unsupported dtype, contiguous and
+Native traces must start with the exact 894 nonempty workload dispatches, cover
+all 97 entries, and retain artifact identities and runtime/device details. Two
+transposed comparison operands are both column contiguous, so like MLX the host
+compares them in one vector-vector dispatch without copies. Any
+other traced entry must be a unary or binary vector that the native run
+translated from the pinned sources on first use, as the upstream tests do for
+scalar-vector binaries; the evidence lists these as `lazyEntries`.
+Separate negative processes reject an unsupported primitive (Hadamard), an
+oversized floating-point arange, a missing artifact, unary inputs with
+unsupported dtype, contiguous and
 strided unary inputs that exceed their allocations (including a large view), and
 copies with unsupported dtype, excessive size or an invalid source allocation.
 Binary inputs with unsupported dtype or insufficient backing storage are also rejected, as
 are casts with unsupported types or invalid source spans, including a view
 larger than one dispatch whose backing allocation is too short.
-Full also rejects unsupported int16 storage, excessive output size and a source
+The host serves every MLX dtype except float64, and MLX's array constructor
+refuses float64 on a GPU stream before a primitive reaches the host. The unary,
+copy, binary, cast and full dtype processes therefore require that refusal, and
+like the unsupported-primitive and arange processes they fail if any native
+dispatch ran.
+Full also rejects complex64 storage, excessive output size and a source
 view extending before its allocation.
 The native worker has a hard 900-second process-tree deadline; the CPU reference
 and eighteen negative processes each retain a 180-second deadline. All are
@@ -2204,10 +2942,11 @@ and its base have different dtypes; it does not perform arithmetic on the CPU.
 ## Concatenation
 
 Concatenation reuses the unchanged word-copy and Boolean-copy entries in the
-93-entry base package. Source inputs retain the 65,535-element logical and physical
-span bounds. Destinations use checked signed 32-bit indices and can exceed that
-input bound. The maintained large cases and unchanged upstream test each produce
-65,536-element outputs. This does not establish arbitrary-size backend support.
+93-entry base package. Sources and destinations use the copy path's checked
+signed 32-bit indices, which split each copy into launch regions within the
+per-axis workgroup limit. The maintained large cases and unchanged upstream test
+each produce 65,536-element outputs, and the wide cases copy a 69,632-element
+input. This does not establish arbitrary-size backend support.
 
 Destination offsets, strides, allocation bounds and nonoverlapping element
 addresses are checked before submission. Overlapping source/destination spans are
@@ -2215,15 +2954,16 @@ rejected. After execution, every untouched destination element and the trailing
 guard must match the uploaded values before any host output is modified.
 Both the destination contents and copy metadata are retained in the trace.
 
-The proof runs 72 raw-payload cases across float32, int32, uint32 and bool.
+The proof runs 76 raw-payload cases across float32, int32, uint32 and bool.
 It covers both matrix axes, flattening, transposes, negative strides, broadcasts,
 empty inputs, three-input sequences and larger outputs. Float32 inputs include
 signed zero, subnormal values, infinities and NaN payloads; these are copied as
 storage words, not recomputed as floating-point values. Each native run requires
-128 workload dispatches plus the unchanged upstream
+136 workload dispatches plus the unchanged upstream
 `test_ops.TestOps.test_concatenate`, which exercises all axes and permutations.
-Four rejection controls cover missing packages, unsupported int64/uint8 storage
-and an input exceeding the per-copy bound.
+A rejection control covers a missing copy package. Every other GPU dtype,
+int64 and uint8 among them, concatenates through the lazy copies that the
+upstream op tests exercise.
 
 The upstream test's array-equality assertion requires one Boolean reduction:
 
@@ -2248,7 +2988,9 @@ The optional `selection` family contains four unchanged `v_Select` entries from
 `ternary.metal`. MLX performs its normal dtype promotion and broadcasting, then
 the adapter materializes strided operands through translated copies and dispatches
 the selected kernel. Values may be float32, int32, uint32 or bool; the condition
-must reach the adapter as bool. Outputs are limited to 65,535 elements. Empty
+must reach the adapter as bool. Given the pinned source, the other GPU dtypes'
+`v_Select` vectors translate on first use (see "Unary, binary and selection
+vectors of every GPU dtype"). Outputs are limited to 65,535 elements. Empty
 results do not dispatch.
 
 The optional `absolute` family contains three unchanged `v_Abs` entries from
@@ -2287,8 +3029,8 @@ and native outputs include checked guard values and launch geometry.
 The same workers run `test_ops.TestOps.test_where` from the pinned checkout
 without changing its assertions. The native proof requires all workload
 dispatches, upstream execution, compiler/dispatch identity and artifact hashes.
-Eight separate processes check missing packages, unsupported types and oversized
-inputs without dispatch. Before/after source checks require byte-identical
+Eight separate processes check missing packages, types that have no package
+without the pinned source and oversized inputs without dispatch. Before/after source checks require byte-identical
 upstream tests and unchanged prepared sources. These 69 workloads and one
 upstream test extend coverage; they do not establish full-suite parity.
 
@@ -2351,18 +3093,20 @@ destination bounds, preserved regions and nonoverlapping writes are checked
 before native submission. Aliased base/update views remain alive while a distinct
 output allocation is populated.
 
-These hooks support float32, int32, uint32, bool, int64 and uint64. Padding retains
-its 65,535-output-element limit; slice updates use the separate allocation and
-dispatch bounds described below. The wider types require the optional `integer64` packages.
+These hooks support float32, int32, uint32, bool, int64 and uint64, and padding
+float16 and bfloat16 through the optional half-type copy packages. Padding and slice
+updates accept outputs within the storage capacity described below, and padding's
+copies split outputs wider than the portable launch limits into exact regions. The
+wider types require the optional `integer64` packages.
 MLX's unchanged edge, reflect and symmetric padding implementations compose these
 hooks with shared-buffer slices. Slice-update reductions require the optional
 packages described below; replacement support does not imply scatter or general
 indexing support.
 
-`verify_padding` runs 102 workloads on CPU and generated GPU paths, checking exact
+`verify_padding` runs 108 workloads on CPU and generated GPU paths, checking exact
 storage bytes, intermediate copy readbacks, output guards, signed strides,
-broadcast inputs, aliased updates, empty regions and the maximum supported output
-size. Float copies include NaN payloads, subnormals and signed zero. Seven isolated
+broadcast inputs, aliased updates, empty regions and outputs on both sides of
+65,535 elements. Float copies include NaN payloads, subnormals and signed zero. Seven isolated
 negative workers reject missing packages, unsupported types, oversized outputs
 and reductions without the optional slice-update packages. The unchanged upstream `test_pad`,
 `test_pad_reflect_symmetric` and `test_slice_update_reversed` methods must also pass
@@ -2383,6 +3127,27 @@ The three-OS integer64 CI job requires this additional proof using its existing
 host build and packages. It retains source hashes, compiler and dispatch identity,
 raw readbacks and failed worker logs. The three additional upstream methods do
 not establish full MLX test-suite or backend parity.
+
+### Dynamic Slices
+
+`DynamicSlice` and `DynamicSliceUpdate` take their start indices from arrays.
+As in the pinned `slicing.cpp`, a one-thread kernel formatted from
+`compute_dynamic_offset`'s template sums each start index times its axis stride
+into one int64 element offset. `dynamic_offset_packages.py` formats that
+template from the unchanged pinned file exactly as `fmt::format` does and
+translates one kernel per index dtype (int32, uint32, int64, uint64) into a
+cache keyed by the translator, the recipe, the template hash and the formatted
+source. The host reads the offset back and moves the elements with the
+translated strided copy, which checks the source and destination spans against
+their allocations before submission. NumberOfElements, which shapeless graphs
+use to count reduced elements, runs MLX's shared evaluation, as
+`gpu/primitives.cpp` does.
+
+The upstream op audit derives each offset package again from the pinned
+template, checks the native module hashes and recomputes the offset from the
+recorded start indices modulo 2^64. The unchanged `test_dynamic_slicing` and
+`test_jvp_with_partly_traced_inputs` methods run in the operations and autograd
+groups of `verify_upstream_ops`.
 
 ### Slice Reductions
 

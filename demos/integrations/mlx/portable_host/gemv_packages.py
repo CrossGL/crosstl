@@ -109,10 +109,14 @@ def build_entries(root, packages, target, entries, jobs):
 
 
 def verification_entries():
-    from demos.integrations.mlx.portable_host import verify_matmul
+    """The entries verify_matmul's and then verify_addmm's cases dispatch."""
+    from demos.integrations.mlx.portable_host import verify_addmm, verify_matmul
 
-    records = (verify_matmul.case_record(case) for case in verify_matmul.CASES)
-    return [record["entry"] for record in records if record["family"] == "gemv"]
+    records = [verify_matmul.case_record(case) for case in verify_matmul.CASES] + [
+        verify_addmm.case_record(case) for case in verify_addmm.CASES
+    ]
+    entries = [record["entry"] for record in records if record["family"] == "gemv"]
+    return list(dict.fromkeys(entries))
 
 
 def main(argv=None):

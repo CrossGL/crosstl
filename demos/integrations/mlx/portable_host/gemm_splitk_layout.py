@@ -4,7 +4,9 @@
 count and a long ``K`` to ``steel_gemm_splitk_axpby``: ``gemm_splitk`` writes
 one float32 partial product per ``K`` partition into a temporary ``C_split``
 and ``gemm_splitk_accum`` sums the partitions into the output. ``Matmul``
-never reads ``C``, so the accumulation takes no ``axpby`` epilogue.
+never reads ``C``, so its accumulation takes no ``axpby`` epilogue. ``AddMM``
+takes the ``_axbpy`` accumulation unless ``alpha == 1`` and ``beta == 0``; it
+also binds ``C`` with its row and column strides, ``alpha`` and ``beta``.
 
 matmul.cpp launches the accumulation with ``dispatch_threads`` over exactly
 ``N x M`` threads; the kernel reads only ``thread_position_in_grid`` and has no
@@ -33,15 +35,28 @@ PATTERN = re.compile(
     r"_bm(16|32)_bn(16|32)_bk16_wm2_wn2_MN_([tn])aligned_K_([tn])aligned"
 )
 ACCUM_PATTERN = re.compile(
-    r"steel_gemm_splitk_accum_(float32|float16|bfloat16)_float32"
+    r"steel_gemm_splitk_accum_(float32|float16|bfloat16)_float32(_axbpy)?"
 )
 ENTRY_PREFIXES = ("steel_gemm_splitk_",)
 # [[buffer(i)]] parameters of each kernel in index order; the host binds all.
 PARAMETERS = {
     "splitk": ("A", "B", "C", "params"),
     "accum": ("C_split", "D", "k_partitions", "partition_stride", "ldd"),
+    "axbpy": (
+        "C_split",
+        "D",
+        "k_partitions",
+        "partition_stride",
+        "ldd",
+        "C",
+        "ldc",
+        "fdc",
+        "alpha",
+        "beta",
+    ),
 }
-OUTPUTS = {"splitk": "C", "accum": "D"}
+OUTPUTS = {"splitk": "C", "accum": "D", "axbpy": "D"}
+ACCUM_KINDS = ("accum", "axbpy")
 # GEMMSpiltKParams in params.h order; every field is a 32-bit int.
 PARAMS_FIELDS = (
     "M",
@@ -59,6 +74,8 @@ PARAMS_FIELDS = (
     "gemm_k_iterations_aligned",
 )
 SCALARS = ("k_partitions", "partition_stride", "ldd")
+AXBPY_SCALARS = ("ldc", "fdc", "alpha", "beta")
+FLOAT_SCALARS = ("alpha", "beta")
 # (indexed storage, GLSL offset) of the accumulation kernels' 64-bit offsets,
 # shared with their axpby variants; pointer rebases name no storage.
 ACCUM_INDEX_EXPRESSIONS = (
@@ -82,9 +99,13 @@ def signature(entry):
     match = ACCUM_PATTERN.fullmatch(entry)
     if match is not None:
         model_entry = model.ACCUM_BY_NAME.get(entry)
-        if model_entry is None or model_entry.axpby:
+        if model_entry is None or model_entry.axpby != bool(match.group(2)):
             raise ValueError("Unsupported split-K accumulation entry")
-        return {"kind": "accum", "model": model_entry, "dtype": match.group(1)}
+        return {
+            "kind": "axbpy" if model_entry.axpby else "accum",
+            "model": model_entry,
+            "dtype": match.group(1),
+        }
     match = PATTERN.fullmatch(entry)
     model_entry = model.BY_NAME.get(entry) if match is not None else None
     if model_entry is None:
@@ -108,7 +129,7 @@ def signature(entry):
 
 def workgroup_size(entry):
     info = signature(entry)
-    if info["kind"] == "accum":
+    if info["kind"] in ACCUM_KINDS:
         return ACCUM_WORKGROUP
     return (SIMD_SIZE, info["wn"], info["wm"])
 
@@ -123,7 +144,7 @@ def partition_plan(m, n, k):
     return model.partition_plan(m, n, k, BK)
 
 
-def select(dtype, transpose_a, transpose_b, m, n, k):
+def select(dtype, transpose_a, transpose_b, m, n, k, axbpy=False):
     """The ``gemm_splitk`` and accumulation names matmul.cpp builds."""
     if dtype not in DTYPES:
         raise ValueError("Split-K products support float32, float16 and bfloat16")
@@ -135,7 +156,8 @@ def select(dtype, transpose_a, transpose_b, m, n, k):
         f"_bm{bm}_bn{bn}_bk{BK}_wm{WM}_wn{WN}"
         f"_MN_{_flag(mn_aligned)}aligned_K_{_flag(k % BK == 0)}aligned"
     )
-    return entry, f"steel_gemm_splitk_accum_{dtype}_{ACCUMULATOR}"
+    suffix = "_axbpy" if axbpy else ""
+    return entry, f"steel_gemm_splitk_accum_{dtype}_{ACCUMULATOR}{suffix}"
 
 
 def splitk_params(m, n, k, lda, ldb):
@@ -192,10 +214,13 @@ def route(dtype, a_shape, a_strides, b_shape, b_strides):
 
 def parameter_type(entry, name):
     info = signature(entry)
-    if name in ("C", "C_split"):
+    # The accumulation's C is AddMM's addend; gemm_splitk's C is C_split.
+    if name == "C_split" or (name == "C" and info["kind"] == "splitk"):
         return ACCUMULATOR
-    if name in ("A", "B", "D"):
+    if name in ("A", "B", "C", "D"):
         return info["dtype"]
+    if name in FLOAT_SCALARS:
+        return "float32"
     return "int32"
 
 
@@ -203,7 +228,7 @@ def read_storage(entry, buffers):
     """Check native buffer identity and read the integer parameters.
 
     Returns ``(counts, parameters)``: element counts of the array buffers and
-    the integer values of the others, ``params`` as a field map.
+    the values of the others, ``params`` as a field map.
     """
     info = signature(entry)
     names = PARAMETERS[info["kind"]]
@@ -214,11 +239,10 @@ def read_storage(entry, buffers):
     counts, parameters, spans = {}, {}, {}
     for name in names:
         buffer, dtype = buffers[name], parameter_type(entry, name)
-        itemsize = ITEM_SIZES.get(dtype) or ctypes.sizeof(ctypes.c_int32)
+        scalar = name in SCALARS + AXBPY_SCALARS
+        itemsize = 4 if scalar else ITEM_SIZES.get(dtype) or 4
         count = buffer.count
-        limit = {"params": len(PARAMS_FIELDS)}.get(
-            name, 1 if name in SCALARS else MAX_ELEMENTS
-        )
+        limit = {"params": len(PARAMS_FIELDS)}.get(name, 1 if scalar else MAX_ELEMENTS)
         if (
             not buffer.data
             or buffer.data % itemsize
@@ -230,13 +254,12 @@ def read_storage(entry, buffers):
         ):
             raise ValueError("Split-K GEMM buffer storage or direction does not match")
         spans[name] = (buffer.data, buffer.data + count * itemsize)
-        if dtype != "int32":
+        if not scalar and name != "params":
             counts[name] = count
             continue
-        values = list(
-            ctypes.cast(buffer.data, ctypes.POINTER(ctypes.c_int32 * count)).contents
-        )
-        parameters[name] = values[0] if name in SCALARS else values
+        item = ctypes.c_float if dtype == "float32" else ctypes.c_int32
+        values = list(ctypes.cast(buffer.data, ctypes.POINTER(item * count)).contents)
+        parameters[name] = values[0] if scalar else values
     if "params" in parameters:
         if len(parameters["params"]) != len(PARAMS_FIELDS):
             raise ValueError("Split-K GEMM parameters do not match GEMMSpiltKParams")
@@ -274,12 +297,11 @@ def _plan_splitk(entry, info, counts, parameters, threads, execution):
     lda, ldb = params["lda"], params["ldb"]
     if not 1 <= min(m, n, k) <= max(m, n, k) <= MAX_ELEMENTS:
         raise ValueError("Split-K GEMM dimensions are invalid")
-    minor_a = m if info["transposeA"] else k
-    minor_b = k if info["transposeB"] else n
+    ta, tb = info["transposeA"], info["transposeB"]
     if (
         params != splitk_params(m, n, k, lda, ldb)
-        or not minor_a <= lda <= MAX_ELEMENTS
-        or not minor_b <= ldb <= MAX_ELEMENTS
+        or not gemm_layout.leading_dimension(lda, m if ta else k, k if ta else m)
+        or not gemm_layout.leading_dimension(ldb, k if tb else n, n if tb else k)
     ):
         raise ValueError("Split-K GEMM parameters differ from matmul.cpp's")
     if not gemm_layout.split_k(m, n, k, 1):
@@ -313,9 +335,12 @@ def _plan_splitk(entry, info, counts, parameters, threads, execution):
     }
 
 
-def _plan_accum(entry, counts, parameters, threads, execution):
-    if set(parameters) != set(SCALARS) or any(
-        type(value) is not int for value in parameters.values()
+def _plan_accum(entry, info, counts, parameters, threads, execution):
+    axbpy = info["kind"] == "axbpy"
+    names = SCALARS + (AXBPY_SCALARS if axbpy else ())
+    if set(parameters) != set(names) or any(
+        type(parameters[name]) is not (float if name in FLOAT_SCALARS else int)
+        for name in names
     ):
         raise ValueError("Split-K accumulation parameters are missing")
     count = execution.get("workgroupCount") if isinstance(execution, dict) else None
@@ -333,21 +358,34 @@ def _plan_accum(entry, counts, parameters, threads, execution):
         or counts["C_split"] != partitions * m * n
     ):
         raise ValueError("Split-K accumulation differs from matmul.cpp's")
-    return {"kind": "accum", "M": m, "N": n, "partitions": partitions}
+    metadata = {"kind": info["kind"], "M": m, "N": n, "partitions": partitions}
+    if not axbpy:
+        return metadata
+    alpha, beta, ldc, fdc = (
+        parameters[name] for name in ("alpha", "beta", "ldc", "fdc")
+    )
+    if (
+        (alpha == 1.0 and beta == 0.0)
+        or not 0 <= ldc <= MAX_ELEMENTS
+        or not 0 <= fdc <= MAX_ELEMENTS
+        or (m - 1) * ldc + (n - 1) * fdc + 1 > counts["C"]
+    ):
+        raise ValueError("Split-K accumulation epilogue differs from matmul.cpp's")
+    return {**metadata, "axpby": {"alpha": alpha, "beta": beta, "ldc": ldc, "fdc": fdc}}
 
 
 def plan(entry, counts, parameters, threads, execution):
     """Validate one launch against MLX's routing and return its metadata."""
     info = signature(entry)
-    if info["kind"] == "accum":
-        return _plan_accum(entry, counts, parameters, threads, execution)
+    if info["kind"] in ACCUM_KINDS:
+        return _plan_accum(entry, info, counts, parameters, threads, execution)
     return _plan_splitk(entry, info, counts, parameters, threads, execution)
 
 
 def loader_access_assertions(entry):
     """The threadgroup slots each ``BlockLoader::load_unsafe`` writes."""
     info = signature(entry)
-    if info["kind"] == "accum":
+    if info["kind"] in ACCUM_KINDS:
         return ()
     return gemm_layout.model_loader_assertions(info["model"], SOURCE)
 
@@ -362,7 +400,7 @@ def index_assertions(entry):
     ``C_split``.
     """
     info = signature(entry)
-    if info["kind"] == "accum":
+    if info["kind"] in ACCUM_KINDS:
         return tuple(
             {
                 "source": SOURCE,

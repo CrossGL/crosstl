@@ -62,16 +62,16 @@ def worker(args):
             host.descriptors.pop(f"ggn2_dynamic_copy{dtype}{dtype}")
         host.install()
     if args.worker in NEGATIVE_CHECKS:
-        count = 65536 if args.worker.endswith("-limit") else 3
+        count = 3
         dtype = (
             "int16"
             if args.worker.endswith("-int16")
             else ("int64" if args.worker == "missing-wide" else "int32")
         )
         operand = mx.array(np.arange(count, dtype=dtype))
-        if args.worker == "update-limit":
-            # Slice updates accept larger storage than padding; exceed it with
-            # a broadcast view rather than a dense allocation.
+        if args.worker.endswith("-limit"):
+            # Padding and slice updates share the storage capacity; exceed it
+            # with a broadcast view rather than a dense allocation.
             operand = mx.broadcast_to(operand[:1], (MAX_STORAGE_ELEMENTS + 1,))
         value = mx.array(np.asarray(1, dtype=dtype))
         try:

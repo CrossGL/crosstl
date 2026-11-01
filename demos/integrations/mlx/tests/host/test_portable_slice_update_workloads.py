@@ -40,7 +40,7 @@ def test_complete_slice_update_evidence(target, native):
     records, trace = evidence(target, native=native)
     assert len(records) == 304
     assert {case["layout"] for case in records} == set(workloads.LAYOUTS)
-    assert {case["dtype"] for case in records} == set(workloads.copies.DTYPES)
+    assert {case["dtype"] for case in records} == set(workloads.copies.STORAGE_DTYPES)
     workloads.validate(records, trace, native=native)
 
 
