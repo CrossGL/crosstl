@@ -50,6 +50,7 @@ from ..host_workgroup_size import (
     function_entry_execution_config,
     require_static_workgroup_size,
 )
+from ..semantics.enum_values import enum_values
 from ..semantics.implicit_lod import ImplicitLodStageUnsupportedError
 from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
@@ -1065,7 +1066,9 @@ class WGSLCodeGen(
             emitted_sections.append(builtin_option_declarations)
 
         if enums:
-            emitted_sections.append(generate_enum_constants(self, enums))
+            emitted_sections.append(
+                generate_enum_constants(self, enums, enum_values(ast))
+            )
 
         if structs:
             emitted_sections.append(

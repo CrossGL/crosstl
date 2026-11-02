@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..ast import EnumNode
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
-from .enum_utils import enum_constant_name, enum_variant_has_payload, literal_int_value
+from .enum_utils import enum_constant_name, enum_variant_has_payload
 
 
 class WGSLEnumUnsupportedError(TranslationDiagnostic):
@@ -54,19 +54,26 @@ def enum_variant_constants(enums):
     }
 
 
-def generate_enum_constants(generator, enums):
-    """``const Mode_First: i32 = 0;`` for each variant; a variant without a value follows the previous one."""
+def generate_enum_constants(generator, enums, values):
+    """``const Mode_First: i32 = 0;`` for each variant of ``enums``.
+
+    A variant without a value is one more than the previous one, as in C. ``values`` holds the integer of each
+    variant whose value CrossTL can compute, ``{"Mode::First": 0, ...}``
+    (:func:`~crosstl.translator.semantics.enum_values.enum_values`); a variant after a value it cannot compute, such
+    as a shader constant, is written as the previous constant plus one.
+    """
     lines = []
     for enum in enums:
-        next_value = 0
+        previous = None
         for variant in enum.variants or []:
-            if getattr(variant, "value", None) is None:
-                value = str(next_value)
-                next_value += 1
-            else:
-                value = generator.generate_expression(variant.value)
-                literal_value = literal_int_value(variant.value)
-                next_value = literal_value + 1 if literal_value is not None else 0
             name = enum_constant_name(enum.name, variant.name)
+            path = f"{enum.name}::{variant.name}"
+            if getattr(variant, "value", None) is not None:
+                value = generator.generate_expression(variant.value)
+            elif path in values:
+                value = str(values[path])
+            else:
+                value = "0" if previous is None else f"{previous} + 1"
             lines.append(f"const {name}: i32 = {value};")
+            previous = name
     return "\n".join(lines)

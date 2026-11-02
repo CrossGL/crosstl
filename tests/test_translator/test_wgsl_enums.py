@@ -4,6 +4,8 @@ WGSL has no enumerations. Every program with a shader-scope enumeration used to 
 translation with ``AttributeError: 'EnumNode' object has no attribute 'members'``.
 """
 
+import shutil
+import subprocess
 import textwrap
 
 import pytest
@@ -31,10 +33,22 @@ PROGRAM = textwrap.dedent("""
 """)
 
 
-def translate(tmp_path, enum):
+def wgsl(tmp_path, source):
+    """WGSL output for ``source``, checked with naga when it is installed."""
     path = tmp_path / "probe.cgl"
-    path.write_text(PROGRAM % enum)
-    return crosstl.translate(str(path), backend="wgsl", format_output=False)
+    path.write_text(source)
+    output = crosstl.translate(str(path), backend="wgsl", format_output=False)
+    if shutil.which("naga"):
+        (tmp_path / "out.wgsl").write_text(output)
+        checked = subprocess.run(
+            ["naga", "out.wgsl"], cwd=tmp_path, capture_output=True, text=True
+        )
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+    return output
+
+
+def translate(tmp_path, enum):
+    return wgsl(tmp_path, PROGRAM % enum)
 
 
 @pytest.mark.parametrize(
@@ -54,6 +68,20 @@ def test_plain_enum_becomes_i32_constants(tmp_path, enum):
     assert "return Mode_Third;" in output
     assert "e.m = pick(Mode_Second);" in output
     assert "Mode::" not in output
+
+
+def test_variant_without_value_is_one_more_than_the_previous_one(tmp_path):
+    output = translate(
+        tmp_path,
+        "const int BASE = 4;\n"
+        "enum Mode { First = -5, Second, Third = 1 << 3, Fourth, "
+        "Fifth = Mode::First + 20, Sixth, Seventh = BASE, Eighth }",
+    )
+    assert "const Mode_Second: i32 = -4;" in output
+    assert "const Mode_Fourth: i32 = 9;" in output
+    assert "const Mode_Sixth: i32 = 16;" in output
+    assert "const Mode_Seventh: i32 = BASE;" in output
+    assert "const Mode_Eighth: i32 = Mode_Seventh + 1;" in output
 
 
 def test_enum_with_payload_is_refused(tmp_path):
