@@ -4206,6 +4206,11 @@ class WGSLCodeGen(
                 "++",
                 "--",
             } and self.is_repeatable_matrix_operand(expr.operand)
+        if isinstance(expr, TernaryOpNode):
+            return all(
+                self.is_repeatable_matrix_operand(part)
+                for part in (expr.condition, expr.true_expr, expr.false_expr)
+            )
         if isinstance(expr, CastNode):
             return self.is_repeatable_matrix_operand(expr.expression)
         if isinstance(expr, MemberAccessNode):

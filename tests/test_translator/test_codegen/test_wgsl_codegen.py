@@ -4236,6 +4236,9 @@ def test_wgsl_codegen_lowers_stage_interface_matrix_with_repeatable_object(tmp_p
                 outs[1].m = n;
                 mat2 r = outs[1].m;
                 outs[0].m = r;
+                int k = 0;
+                outs[k + 1].m = n;
+                outs[k > 0 ? 0 : 1].m = r;
                 return outs[1];
             }
         }
@@ -4245,6 +4248,8 @@ def test_wgsl_codegen_lowers_stage_interface_matrix_with_repeatable_object(tmp_p
     assert "outs[1].m_0 = m[0];" in generated
     assert "outs[1].m_1 = m[1];" in generated
     assert "mat2x2<f32>(outs[1].m_0, outs[1].m_1)" in generated
+    assert "outs[(k + 1)].m_1 = " in generated
+    assert "outs[select(1, 0, (k > 0))].m_1 = " in generated
     validate_wgsl_with_naga(tmp_path, generated)
 
 
