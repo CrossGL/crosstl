@@ -338,6 +338,29 @@ def test_initializer_longer_than_its_array_is_refused(tmp_path, initializer):
         translate(tmp_path, f"float a[1] = {initializer};\n values[i] = a[0];")
 
 
+@pytest.mark.parametrize(
+    "body, array_type",
+    [
+        ("float a[COUNT] = {x, 1.0, 2.0, 3.0};\n values[i] = a[0];", "array<f32, COUNT>"),
+        (
+            "Pair a[COUNT] = {{x, 1.0}, {x, 1.0}, {x, 1.0}, {x, 1.0}};\n values[i] = a[0].a;",
+            "array<Pair, COUNT>",
+        ),
+    ],
+)
+def test_initializer_longer_than_its_constant_sized_array_is_refused(
+    tmp_path, body, array_type
+):
+    # COUNT is 3, so the initializer gives one element too many.
+    from crosstl.translator.codegen.wgsl_codegen import WGSLAggregateInitializerError
+
+    with pytest.raises(
+        WGSLAggregateInitializerError,
+        match=f"'{array_type}' expects at most 3 elements, got 4",
+    ):
+        translate(tmp_path, body)
+
+
 def test_initializer_as_long_as_its_array_is_unchanged(tmp_path):
     output = translate(tmp_path, "float a[2] = {x, 1.0};\n values[i] = a[0];")
     assert "var a: array<f32, 2> = array(x, 1.0);" in output

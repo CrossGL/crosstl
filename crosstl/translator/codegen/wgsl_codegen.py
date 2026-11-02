@@ -3372,16 +3372,18 @@ class WGSLCodeGen(
             target_type, ArrayType
         ):
             return None
-        size = self.literal_integer_value(target_type.size)
-        if size is not None and len(expr.elements) > size:
+        # The size may be a named constant, as in float a[COUNT].
+        declared_size = self.resolve_integer_expression(target_type.size)
+        if declared_size is not None and len(expr.elements) > declared_size:
             array_type = self.type_name_string(target_type)
             raise WGSLAggregateInitializerError(
                 f"WGSL aggregate initializer for '{array_type}' expects at most "
-                f"{size} elements, got {len(expr.elements)}",
+                f"{declared_size} elements, got {len(expr.elements)}",
                 expected_type=array_type,
                 element_count=len(expr.elements),
-                expected_element_count=size,
+                expected_element_count=declared_size,
             )
+        size = self.literal_integer_value(target_type.size)
         if size is None or not 0 < len(expr.elements) < size:
             return None
         element_type = target_type.element_type
