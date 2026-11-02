@@ -4148,6 +4148,107 @@ def test_wgsl_codegen_refuses_stage_interface_matrix_compound_with_side_effects(
 
 
 @pytest.mark.parametrize(
+    "statement, operation",
+    [
+        ("outs[next_index()].m = n;", "assignment to"),
+        ("mat2 r = outs[next_index()].m;", "read of"),
+    ],
+    ids=["write", "read"],
+)
+def test_wgsl_codegen_refuses_stage_interface_matrix_with_side_effect_object(
+    statement, operation
+):
+    shader = f"""
+    shader WGSLStageMatrixSideEffectObject {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+            mat2 m @ TEXCOORD0;
+        }}
+        int next_index() {{
+            return 1;
+        }}
+        vertex {{
+            VSOut main(vec2 p @ POSITION) {{
+                VSOut outs[2];
+                mat2 n = mat2(p.x);
+                outs[1].position = vec4(p, 0.0, 1.0);
+                {statement}
+                return outs[1];
+            }}
+        }}
+    }}
+    """
+
+    # Each column would call next_index() again.
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target lowers {operation} a split stage-interface "
+        "member one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_refuses_stage_interface_matrix_for_update_with_side_effect_object():
+    shader = """
+    shader WGSLStageMatrixForUpdateSideEffects {
+        struct VSOut {
+            vec4 position @ gl_Position;
+            mat2 m @ TEXCOORD0;
+        }
+        int next_index() {
+            return 1;
+        }
+        vertex {
+            VSOut main(vec2 p @ POSITION) {
+                VSOut outs[2];
+                mat2 n = mat2(p.x);
+                outs[1].position = vec4(p, 0.0, 1.0);
+                int t = 0;
+                for (t = 0; t < 1; outs[next_index()].m = n) {
+                }
+                return outs[1];
+            }
+        }
+    }
+    """
+
+    # A for-loop update bypasses the statement path, so it needs its own check.
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target lowers assignment to a split stage-interface "
+        "member one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_lowers_stage_interface_matrix_with_repeatable_object(tmp_path):
+    generated = WGSLCodeGen().generate(parse_shader("""
+    shader WGSLStageMatrixRepeatableObject {
+        struct VSOut {
+            vec4 position @ gl_Position;
+            mat2 m @ TEXCOORD0;
+        }
+        vertex {
+            VSOut main(vec2 p @ POSITION) {
+                VSOut outs[2];
+                mat2 n = mat2(p.x);
+                outs[1].position = vec4(p, 0.0, 1.0);
+                outs[1].m = n;
+                mat2 r = outs[1].m;
+                outs[0].m = r;
+                return outs[1];
+            }
+        }
+    }
+    """))
+
+    assert "outs[1].m_0 = m[0];" in generated
+    assert "outs[1].m_1 = m[1];" in generated
+    assert "mat2x2<f32>(outs[1].m_0, outs[1].m_1)" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
     "statement, operator",
     [("m += next_scalar();", r"\+="), ("ms[next_index()] -= 1.0;", "-=")],
     ids=["value", "target"],

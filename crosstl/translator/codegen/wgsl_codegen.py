@@ -3011,6 +3011,14 @@ class WGSLCodeGen(
         if matrix_scalar is not None:
             return matrix_scalar
         target_type = self.expression_type(node.target)
+        stage_matrix = self.stage_interface_matrix_access(node.target)
+        if stage_matrix is not None:
+            # A for-loop update or statement expression reaches here instead
+            # of the statement path, so it needs the same repeatability check.
+            self.require_repeatable_matrix_operands(
+                "assignment to a split stage-interface member",
+                (stage_matrix["object_expr"],),
+            )
         if node.operator[:-1] in SHIFT_OPERATORS:
             value = wgsl_shift_amount(self, node.value, target_type)
         else:
@@ -3124,6 +3132,13 @@ class WGSLCodeGen(
             )
             if compound is not None:
                 return compound
+        # A plain assignment still writes one column at a time, so its
+        # object must be repeatable too; the compound operators are refused
+        # above when their object is not.
+        self.require_repeatable_matrix_operands(
+            "assignment to a split stage-interface member",
+            (access["object_expr"],),
+        )
         value = self.generate_expression_for_target(node.value, target_type)
         temp_name = self.declare_synthetic_local_identifier(
             self.swizzle_base_name(access["member_name"])
@@ -6448,6 +6463,12 @@ class WGSLCodeGen(
         access = self.stage_interface_matrix_access(expr)
         if access is None:
             return None
+        # Each column reads the object again, so a read whose object has
+        # side effects would mix columns from different elements.
+        self.require_repeatable_matrix_operands(
+            "read of a split stage-interface member",
+            (access["object_expr"],),
+        )
         columns = ", ".join(
             self.stage_interface_matrix_access_field(access, index)
             for index in range(access["columns"])
