@@ -84,6 +84,39 @@ def test_variant_without_value_is_one_more_than_the_previous_one(tmp_path):
     assert "const Mode_Eighth: i32 = Mode_Seventh + 1;" in output
 
 
+def test_variant_is_an_i32_value(tmp_path):
+    output = wgsl(
+        tmp_path,
+        textwrap.dedent("""
+            shader Probe {
+                enum Mode { First, Second }
+                buffer uint counts[];
+                uint first() { return Mode::First; }
+                compute {
+                    layout(local_size_x = 1) in;
+                    void main() {
+                        uint i = gl_GlobalInvocationID.x;
+                        uint u = Mode::Second;
+                        float f = Mode::Second;
+                        switch (int(i)) {
+                            case Mode::First:
+                                u = first();
+                                break;
+                            default:
+                                break;
+                        }
+                        counts[i] = u + uint(f);
+                    }
+                }
+            }
+        """),
+    )
+    assert "return u32(Mode_First);" in output
+    assert "var u: u32 = u32(Mode_Second);" in output
+    assert "var f: f32 = f32(Mode_Second);" in output
+    assert "case Mode_First: {" in output
+
+
 def test_enum_with_payload_is_refused(tmp_path):
     with pytest.raises(WGSLEnumUnsupportedError, match="Mode"):
         translate(tmp_path, "enum Mode { First(float), Second, Third }")

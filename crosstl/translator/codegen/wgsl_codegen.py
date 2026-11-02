@@ -6775,6 +6775,8 @@ class WGSLCodeGen(
 
     def expression_type(self, expr):
         if isinstance(expr, IdentifierNode):
+            if expr.name in self._enum_variant_constants:
+                return "i32"
             if expr.name in self.WORKGROUP_SIZE_IDENTIFIER_ALIASES:
                 return "vec3<u32>"
             mapped_builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name)
