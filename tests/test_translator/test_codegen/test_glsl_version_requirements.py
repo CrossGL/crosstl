@@ -299,7 +299,6 @@ def test_atomic_counter_operations_raise_version(tmp_path, call):
 
     assert code.startswith("#version 460 core\n")
     assert f"outp[0] = {call};" in code
-    compile_with_glslang(tmp_path, code, "comp")
 
     with pytest.raises(OpenGLLoweringRefused) as raised:
         generate(
@@ -311,6 +310,9 @@ def test_atomic_counter_operations_raise_version(tmp_path, call):
         f"GLSL version requirement: built-in function '{name}' does not exist "
         "in GLSL ES" in str(raised.value)
     )
+
+    # Last: it skips the rest of the test when glslangValidator is missing.
+    compile_with_glslang(tmp_path, code, "comp")
 
 
 FIND_MSB_SHADER = """
