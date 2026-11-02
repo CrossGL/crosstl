@@ -115,6 +115,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "write_only",
         "read_write",
     }
+    OPENCL_LOCAL_QUALIFIERS = {"__shared__", "__local", "__local__", "local"}
     OPENCL_SCALAR_TYPE_MAPPING = {
         "signed char": "i8",
         "unsigned char": "u8",
@@ -807,6 +808,16 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             finally:
                 node.qualifiers = qualifiers
             return
+        if self.is_opencl_function_scope_local_pointer(node):
+            qualifiers = node.qualifiers
+            node.qualifiers = [
+                q for q in qualifiers if q not in self.OPENCL_LOCAL_QUALIFIERS
+            ]
+            try:
+                super().visit_VariableNode(node)
+            finally:
+                node.qualifiers = qualifiers
+            return
         super().visit_VariableNode(node)
 
     def is_opencl_fixed_sampler_declaration(self, node):
@@ -827,6 +838,14 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         return self.indent_level > 0 and "__constant__" in (
             getattr(node, "qualifiers", None) or []
         )
+
+    def is_opencl_function_scope_local_pointer(self, node):
+        if self.indent_level <= 0:
+            return False
+        qualifiers = set(getattr(node, "qualifiers", None) or [])
+        if not qualifiers & self.OPENCL_LOCAL_QUALIFIERS:
+            return False
+        return "*" in str(getattr(node, "vtype", ""))
 
     def visit_FunctionNode(self, node):
         previous_function_name = self.opencl_current_function_name

@@ -642,6 +642,23 @@ def test_opencl_constant_pointer_local_is_not_a_resource():
     assert crossgl.count("@group(0) @binding(") == 2
 
 
+def test_opencl_local_pointer_local_keeps_its_initializer():
+    crossgl = generate_crossgl("""
+        __kernel void k(__global float* out, __global const float* in) {
+            __local float tile[64];
+            size_t l = get_local_id(0);
+            tile[l] = in[get_global_id(0)];
+            barrier(CLK_LOCAL_MEM_FENCE);
+            __local float *t = tile;
+            out[get_global_id(0)] = t[63 - l];
+        }
+        """)
+
+    assert "var<workgroup> tile: array<f32, 64>;" in crossgl
+    assert "var t: ptr<f32> = tile;" in crossgl
+    assert "var<workgroup> t:" not in crossgl
+
+
 def test_opencl_kernel_scope_constant_array_is_a_local():
     crossgl = generate_crossgl("""
         __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
