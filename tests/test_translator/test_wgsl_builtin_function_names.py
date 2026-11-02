@@ -3,6 +3,8 @@
 import shutil
 import subprocess
 
+import pytest
+
 import crosstl
 
 SHADER = """shader Probe {
@@ -67,3 +69,45 @@ def test_glsl_builtins_use_wgsl_names(tmp_path):
         "unpack4x8unorm(x)",
     ):
         assert name in wgsl
+
+
+REFUSAL_SHADER = """shader Probe {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* uin;
+        buffer int* iout;
+        void main() {
+            uint x = uin[0];
+            STATEMENT
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "if (findMSB(x >> 1u) < 0) {\n                iout[0] = 1;\n            }",
+        "iout[0] = findLSB(bitfieldReverse(x));",
+        "iout[0] = bitCount(max(x, 1u)) - 1;",
+    ],
+    ids=["shift", "builtin-result", "bitcount"],
+)
+def test_bit_count_and_scan_refuse_an_argument_of_unknown_type(tmp_path, statement):
+    # Left as u32, the result is still valid WGSL, but findMSB(0u) < 0 is false.
+    path = tmp_path / "probe.cgl"
+    path.write_text(REFUSAL_SHADER.replace("STATEMENT", statement))
+    with pytest.raises(ValueError, match="cannot tell the type of"):
+        crosstl.translate(str(path), backend="wgsl")
+
+
+@pytest.mark.parametrize(
+    "call, expected",
+    [("bitCount()", "exactly 1 argument; got 0"), ("bitfieldExtract(x, 1)", "got 2")],
+)
+def test_bit_functions_refuse_the_wrong_argument_count(tmp_path, call, expected):
+    path = tmp_path / "probe.cgl"
+    path.write_text(REFUSAL_SHADER.replace("STATEMENT", f"iout[0] = int({call});"))
+    with pytest.raises(ValueError, match=expected):
+        crosstl.translate(str(path), backend="wgsl")

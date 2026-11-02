@@ -3808,23 +3808,36 @@ class WGSLCodeGen(
 
     def generate_bit_function_call(self, node, function_name, mapped_name):
         """GLSL bit built-ins as WGSL ones, with GLSL's argument and result types."""
+        arity = {"extractBits": 3, "insertBits": 4}.get(mapped_name, 1)
+        if len(node.arguments) != arity:
+            noun = "argument" if arity == 1 else "arguments"
+            raise ValueError(
+                f"WGSL target supports {function_name}() with exactly {arity} "
+                f"{noun}; got {len(node.arguments)}"
+            )
         args = [self.generate_expression(argument) for argument in node.arguments]
-        if mapped_name in {"extractBits", "insertBits"}:
-            for index in range(max(len(args) - 2, 0), len(args)):
+        if arity > 1:
+            # The offset and count are the last two arguments.
+            for index in (arity - 2, arity - 1):
                 offset_type = self.expression_type(node.arguments[index])
                 if self.integer_scalar_type(offset_type) != "u32":
                     args[index] = f"u32({args[index]})"
             return f"{mapped_name}({', '.join(args)})"
-        call = f"{mapped_name}({', '.join(args)})"
-        if len(node.arguments) != 1:
-            return call
+        call = f"{mapped_name}({args[0]})"
         argument_type = self.expression_type(node.arguments[0])
-        if self.integer_scalar_type(argument_type) == "u32":
-            return f"i32({call})"
+        scalar = self.integer_scalar_type(argument_type)
+        if scalar is not None:
+            return f"i32({call})" if scalar == "u32" else call
         vector = self.vector_shape(argument_type)
-        if vector is not None and vector[0] == "u32":
-            return f"vec{vector[1]}<i32>({call})"
-        return call
+        if vector is not None and vector[0] in {"i32", "u32"}:
+            return f"vec{vector[1]}<i32>({call})" if vector[0] == "u32" else call
+        # A u32 result left unconverted is still valid WGSL, but findMSB(x) < 0
+        # would never hold and float(findMSB(x)) would give 4294967295.0.
+        raise ValueError(
+            f"WGSL target writes {function_name}() as {mapped_name}(), which returns "
+            "its argument's type where CrossGL returns int, and cannot tell the type "
+            f"of {args[0]}; assign the argument to a local variable first"
+        )
 
     def generate_workgroup_uniform_load_call(self, node):
         """Emit ``workgroupUniformLoad(&x)`` for a workgroup variable ``x``."""
@@ -6876,8 +6889,10 @@ class WGSLCodeGen(
                 function_name
             ):
                 return packed_8bit[2]
-            if function_name in {"bitCount", "findLSB", "findMSB"} and not (
-                self.is_user_function_name(function_name)
+            if (
+                function_name in {"bitCount", "findLSB", "findMSB"}
+                and len(expr.arguments) == 1
+                and not self.is_user_function_name(function_name)
             ):
                 vector = self.vector_shape(self.expression_type(expr.arguments[0]))
                 return "int" if vector is None else f"vec{vector[1]}<i32>"
