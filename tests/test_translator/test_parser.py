@@ -6483,8 +6483,7 @@ def test_format_type_argument_keeps_the_order_of_array_sizes():
         """)).parse()
     function = next(func for func in ast.functions if func.name == "f")
     calls = [
-        statement.initial_value.function.name
-        for statement in function.body.statements
+        statement.initial_value.function.name for statement in function.body.statements
     ]
     assert calls == ["pick<float[2][3]>", "pick<mat3[4]>"]
 

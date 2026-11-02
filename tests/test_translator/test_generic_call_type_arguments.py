@@ -27,9 +27,12 @@ PROGRAM = textwrap.dedent("""
 """)
 
 MATRIX = "mat4 m = mat4(x); mat4 r = pick<mat4>(m); outp[i] = r[1][1];"
-ARRAY = "float a[2]; a[0] = x; a[1] = x; float c[2] = pick<float[2]>(a); outp[i] = c[1];"
+ARRAY = (
+    "float a[2]; a[0] = x; a[1] = x; float c[2] = pick<float[2]>(a); outp[i] = c[1];"
+)
 NESTED_ARRAY = (
-    "float a[2][3]; a[1][2] = x; float c[2][3] = pick<float[2][3]>(a); outp[i] = c[1][2];"
+    "float a[2][3]; a[1][2] = x; "
+    "float c[2][3] = pick<float[2][3]>(a); outp[i] = c[1][2];"
 )
 
 

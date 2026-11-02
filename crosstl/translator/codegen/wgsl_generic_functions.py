@@ -387,8 +387,8 @@ def _crossgl_type(spelling):
 
     try:
         return Parser(Lexer(f"{spelling} x;").tokens).parse_type()
-    except Exception:  # noqa: BLE001 - not a type spelling, so no specialization matches
-        return None
+    except Exception:
+        return None  # not a type spelling, so no specialization matches
 
 
 def _is_numeric_literal(node):
