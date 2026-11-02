@@ -16269,6 +16269,18 @@ def test_directx_byte_address_interlocked_signed_max_names_int_original():
         ),
         (
             "RWByteAddressBuffer rawBytes @register(u3);",
+            "int64_t wide = int64_t(5); rawBytes.InterlockedMax(0u, wide);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedMax' "
+            "value argument must be scalar uint, got int64_t",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
+            "bool flag = true; rawBytes.InterlockedMax(0u, flag);",
+            "DirectX ByteAddressBuffer interlocked member 'InterlockedMax' "
+            "value argument must be scalar uint, got bool",
+        ),
+        (
+            "RWByteAddressBuffer rawBytes @register(u3);",
             "uint oldValue = 0u; rawBytes.InterlockedAdd(0u, 1u, oldValue + 1u);",
             "DirectX ByteAddressBuffer interlocked member 'InterlockedAdd' "
             "original argument must be an assignable scalar uint target",
