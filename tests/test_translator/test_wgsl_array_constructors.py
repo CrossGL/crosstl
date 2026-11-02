@@ -434,11 +434,12 @@ def test_arrays_of_vector_and_matrix_braced_initializers(tmp_path):
 def test_module_scope_vector_braced_initializers(tmp_path):
     output = translate(
         tmp_path,
-        "values[i] = G.x + H[0][0] + g.y + x;",
+        "values[i] = G.x + H[0][0] + g.y + gs[1].y + x;",
         functions="""
     const vec3 G = {1.0, 2.0, 3.0};
     const mat2 H = {{1.0, 0.0}, {0.0, 1.0}};
-    vec2 g = {1.0, 2.0};""",
+    vec2 g = {1.0, 2.0};
+    vec2 gs[2] = {{1.0, 2.0}, {3.0, 4.0}};""",
     )
     assert "const G: vec3<f32> = vec3<f32>(1.0, 2.0, 3.0);" in output
     assert (
@@ -446,6 +447,10 @@ def test_module_scope_vector_braced_initializers(tmp_path):
         in output
     )
     assert "var<private> g: vec2<f32> = vec2<f32>(1.0, 2.0);" in output
+    assert (
+        "var<private> gs: array<vec2<f32>, 2> = "
+        "array<vec2<f32>, 2>(vec2<f32>(1.0, 2.0), vec2<f32>(3.0, 4.0));" in output
+    )
 
 
 @pytest.mark.parametrize(

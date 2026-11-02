@@ -75,8 +75,12 @@ def wgsl_vector_array_initializer(codegen, expr, target_type):
 
 
 def is_vector_braced_initializer(codegen, expr, target_type):
-    """Whether ``expr`` is a brace initializer for a vector or a matrix."""
-    return isinstance(expr, ArrayLiteralNode) and (
+    """Whether ``expr`` is a brace initializer for a vector, a matrix, or an array of either."""
+    if not isinstance(expr, ArrayLiteralNode):
+        return False
+    if isinstance(target_type, ArrayType):
+        target_type = target_type.element_type
+    return (
         codegen.vector_shape(target_type) is not None
         or codegen.matrix_shape(target_type) is not None
     )
