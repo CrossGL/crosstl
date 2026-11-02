@@ -14,6 +14,9 @@ anywhere else generators emitted the GLSL spelling or refused it.
   with the constructor's elements as its initializer list just before the statement that uses it, and the
   constructor is replaced with the local.
 
+The aggregate initializer of a shader-scope constant gets the first rewrite too. It has no statement to declare a
+local before, so any other array constructor in it is refused.
+
 The local is evaluated where its statement starts, so it is introduced only when nothing the statement evaluates
 before the constructor has effects, and only when the constructor's own elements are pure if the constructor sits
 in an operand that may not be evaluated (a branch of ``?:``, the right side of ``&&`` or ``||``, a later ``else
