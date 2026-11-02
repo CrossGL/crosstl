@@ -6442,6 +6442,26 @@ def test_cooperative_matrix_type_round_trips_coordinate_mapping_contract():
     assert parser.format_type_argument(round_trip_type) == serialized_type
 
 
+def test_format_type_argument_renders_matrix_and_array_types():
+    # A generic call's matrix or array type argument keeps its CrossGL spelling
+    # instead of the parsed node's Python repr (#3643).
+    parser = Parser(tokenize_code("shader P { compute { void main() {} } }"))
+
+    square = MatrixType(PrimitiveType("float"), rows=4, cols=4)
+    assert parser.format_type_argument(square) == "mat4"
+
+    rectangular = MatrixType(PrimitiveType("float"), rows=3, cols=2)
+    assert parser.format_type_argument(rectangular) == "mat2x3"
+
+    sized_array = ArrayType(
+        PrimitiveType("float"), LiteralNode(2, PrimitiveType("int"))
+    )
+    assert parser.format_type_argument(sized_array) == "float[2]"
+
+    dynamic_array = ArrayType(PrimitiveType("float"), None)
+    assert parser.format_type_argument(dynamic_array) == "float[]"
+
+
 def test_cooperative_matrix_type_preserves_unregistered_mapping_as_opaque():
     code = """
     shader CooperativeMatrixOpaqueCoordinateMapping {

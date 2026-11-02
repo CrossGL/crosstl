@@ -4169,6 +4169,25 @@ class Parser:
                     f"{result} = {self.format_type_argument(type_node.default_type)}"
                 )
             return result
+        if isinstance(type_node, MatrixType):
+            element_type = self.format_type_argument(type_node.element_type)
+            dims = (
+                str(type_node.cols)
+                if type_node.rows == type_node.cols
+                else f"{type_node.cols}x{type_node.rows}"
+            )
+            prefix = {"double": "d"}.get(element_type, "")
+            return f"{prefix}mat{dims}"
+        if isinstance(type_node, ArrayType):
+            element_type = self.format_type_argument(type_node.element_type)
+            if type_node.size is None:
+                return f"{element_type}[]"
+            size = (
+                str(type_node.size)
+                if isinstance(type_node.size, int)
+                else self.format_type_argument(type_node.size)
+            )
+            return f"{element_type}[{size}]"
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
