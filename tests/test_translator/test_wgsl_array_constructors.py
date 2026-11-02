@@ -341,7 +341,10 @@ def test_initializer_longer_than_its_array_is_refused(tmp_path, initializer):
 @pytest.mark.parametrize(
     "body, array_type",
     [
-        ("float a[COUNT] = {x, 1.0, 2.0, 3.0};\n values[i] = a[0];", "array<f32, COUNT>"),
+        (
+            "float a[COUNT] = {x, 1.0, 2.0, 3.0};\n values[i] = a[0];",
+            "array<f32, COUNT>",
+        ),
         (
             "Pair a[COUNT] = {{x, 1.0}, {x, 1.0}, {x, 1.0}, {x, 1.0}};\n values[i] = a[0].a;",
             "array<Pair, COUNT>",
