@@ -45,15 +45,6 @@ def split_enums(nodes):
     return structs, enums
 
 
-def enum_variant_constants(enums):
-    """``{"Mode::First": "Mode_First", ...}`` for the variants of ``enums``."""
-    return {
-        f"{enum.name}::{variant.name}": enum_constant_name(enum.name, variant.name)
-        for enum in enums
-        for variant in enum.variants or []
-    }
-
-
 def generate_enum_constants(generator, enums, values):
     """``const Mode_First: i32 = 0;`` for each variant of ``enums``.
 

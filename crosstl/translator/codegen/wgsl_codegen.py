@@ -58,6 +58,8 @@ from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
 from .comma_expressions import is_comma_expression
 from .enum_utils import (
+    collect_enum_type_names,
+    collect_enum_variant_constants,
     generic_enum_specialization_name,
     generic_type_parts,
     sanitize_type_name,
@@ -94,7 +96,7 @@ from .wgsl_entry_outputs import (
     entry_output_parameters,
     lower_entry_output_parameters,
 )
-from .wgsl_enums import enum_variant_constants, generate_enum_constants, split_enums
+from .wgsl_enums import generate_enum_constants, split_enums
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
@@ -912,8 +914,8 @@ class WGSLCodeGen(
         )
         structs = self.monomorphized_structs(ast, target_stage, source_structs)
         structs, enums = split_enums(structs)
-        self._enum_type_names = {enum.name for enum in enums}
-        self._enum_variant_constants = enum_variant_constants(enums)
+        self._enum_type_names = collect_enum_type_names(enums)
+        self._enum_variant_constants = collect_enum_variant_constants(enums)
         constants = list(getattr(ast, "constants", []) or [])
         self._constant_values = self.constant_literal_values(constants)
         self._stage_output_lowerings = self.stage_output_lowerings(
