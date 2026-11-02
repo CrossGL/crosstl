@@ -9236,9 +9236,7 @@ class MetalCodeGen(
         for callee, call, enclosing in call_sites:
             if callee != getattr(func, "name", None):
                 continue
-            args = list(
-                getattr(call, "args", getattr(call, "arguments", [])) or []
-            )
+            args = list(getattr(call, "args", getattr(call, "arguments", [])) or [])
             if index >= len(args):
                 continue
             if not self.metal_user_function_accepts_argument_count(func, len(args)):
@@ -9331,9 +9329,7 @@ class MetalCodeGen(
                 visiting,
             )
         if isinstance(expr, (MemberAccessNode, PointerAccessNode)):
-            object_expr = getattr(
-                expr, "object", getattr(expr, "object_expr", None)
-            )
+            object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
             if object_expr is None:
                 object_expr = getattr(expr, "pointer_expr", None)
             return self.metal_call_site_argument_address_space(
@@ -9428,8 +9424,7 @@ class MetalCodeGen(
                 if space is not None:
                     return space
                 if any(
-                    str(getattr(attribute, "name", "")).lower()
-                    in {"group", "binding"}
+                    str(getattr(attribute, "name", "")).lower() in {"group", "binding"}
                     for attribute in getattr(param, "attributes", []) or []
                 ):
                     return "device"
@@ -9455,9 +9450,7 @@ class MetalCodeGen(
                     space = None
                 if space is not None:
                     return space
-                if isinstance(
-                    var_type, (PointerType, ReferenceType, ArrayType)
-                ):
+                if isinstance(var_type, (PointerType, ReferenceType, ArrayType)):
                     return "thread"
                 return None
         # Stage entry parameters are hoisted into program-scope resource
@@ -9544,8 +9537,7 @@ class MetalCodeGen(
             pointee_type = self.map_resource_type_with_format(pointee, node)
         if space != "thread":
             pointee_type = (
-                self.metal_native_narrow_bitcast_storage_type(pointee)
-                or pointee_type
+                self.metal_native_narrow_bitcast_storage_type(pointee) or pointee_type
             )
         return f"{space} {pointee_type}* {name}"
 
