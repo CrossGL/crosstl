@@ -3679,6 +3679,17 @@ class WGSLCodeGen(
         if bit_function is not None and not self.is_user_function_name(function_name):
             return self.generate_bit_function_call(node, function_name, bit_function)
         if (
+            function_name == "faceforward"
+            and node.arguments
+            and not self.is_user_function_name(function_name)
+            and self.scalar_type_name(self.expression_type(node.arguments[0]))
+        ):
+            # GLSL's faceforward also takes floats; WGSL's faceForward takes vectors only.
+            raise ValueError(
+                "WGSL target supports faceforward() on vectors only, as WGSL's "
+                "faceForward; write a scalar one as i * nref < 0.0 ? n : -n"
+            )
+        if (
             function_name == "mix"
             and len(node.arguments) == 3
             and not self.is_user_function_name(function_name)

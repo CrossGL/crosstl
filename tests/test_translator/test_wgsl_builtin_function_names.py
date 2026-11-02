@@ -111,3 +111,15 @@ def test_bit_functions_refuse_the_wrong_argument_count(tmp_path, call, expected)
     path.write_text(REFUSAL_SHADER.replace("STATEMENT", f"iout[0] = int({call});"))
     with pytest.raises(ValueError, match=expected):
         crosstl.translate(str(path), backend="wgsl")
+
+
+def test_scalar_faceforward_is_refused(tmp_path):
+    # WGSL's faceForward takes vectors only; naga rejects faceForward(1.0, ...).
+    path = tmp_path / "probe.cgl"
+    path.write_text(
+        REFUSAL_SHADER.replace(
+            "STATEMENT", "iout[0] = int(faceforward(1.0, float(x), 3.0));"
+        )
+    )
+    with pytest.raises(ValueError, match=r"faceforward\(\) on vectors only"):
+        crosstl.translate(str(path), backend="wgsl")
