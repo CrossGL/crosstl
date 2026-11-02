@@ -659,6 +659,52 @@ def test_opencl_local_pointer_local_keeps_its_initializer():
     assert "var<workgroup> t:" not in crossgl
 
 
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        ("__local float *t = tile + 4;", "var t: ptr<f32> = (tile + 4);"),
+        ("__local float *t = &tile[l];", "var t: ptr<f32> = (&tile[l]);"),
+        ("local float *t = tile;", "var t: ptr<f32> = tile;"),
+        ("__local const float *t = tile;", "var t: ptr<f32> = tile;"),
+    ],
+    ids=["offset", "address-of-element", "unprefixed", "const"],
+)
+def test_opencl_local_pointer_local_initializer_forms(declaration, expected):
+    crossgl = generate_crossgl(f"""
+        __kernel void k(__global float* out) {{
+            __local float tile[64];
+            size_t l = get_local_id(0);
+            tile[l] = 1.0f;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            {declaration}
+            out[get_global_id(0)] = t[0];
+        }}
+        """)
+
+    assert expected in crossgl
+    assert "var<workgroup> t:" not in crossgl
+
+
+def test_opencl_pointer_declared_in_local_memory_stays_a_workgroup_variable():
+    # The trailing __local puts t itself in local memory: one pointer shared
+    # by the work-group, set by one work-item and read by all of them.
+    crossgl = generate_crossgl("""
+        __kernel void k(__global float* out) {
+            __local float tile[64];
+            __local float * __local t;
+            size_t l = get_local_id(0);
+            tile[l] = 1.0f;
+            if (l == 0) {
+                t = tile;
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[get_global_id(0)] = t[63 - l];
+        }
+        """)
+
+    assert "var<workgroup> t: ptr<f32>;" in crossgl
+
+
 def test_opencl_kernel_scope_constant_array_is_a_local():
     crossgl = generate_crossgl("""
         __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};

@@ -702,7 +702,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
 
     def is_opencl_local_pointer_type(self, raw_type):
         qualifiers = set(str(raw_type).split())
-        return bool(qualifiers & {"__shared__", "__local", "__local__", "local"})
+        return bool(qualifiers & self.OPENCL_LOCAL_QUALIFIERS)
 
     def opencl_kernel_pointer_access(self, raw_type):
         qualifiers = set(str(raw_type).split())
@@ -809,6 +809,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 node.qualifiers = qualifiers
             return
         if self.is_opencl_function_scope_local_pointer(node):
+            # In `__local float *t = tile;` __local is the address space t
+            # points into, as __constant is above; t itself is a private
+            # local that keeps its initializer, not a workgroup variable.
             qualifiers = node.qualifiers
             node.qualifiers = [
                 q for q in qualifiers if q not in self.OPENCL_LOCAL_QUALIFIERS
@@ -845,7 +848,13 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         qualifiers = set(getattr(node, "qualifiers", None) or [])
         if not qualifiers & self.OPENCL_LOCAL_QUALIFIERS:
             return False
-        return "*" in str(getattr(node, "vtype", ""))
+        vtype = str(getattr(node, "vtype", ""))
+        if "*" not in vtype:
+            return False
+        # `__local float * __local t;` declares the pointer itself in local
+        # memory, shared by the work-group, so it stays a workgroup variable.
+        outermost = set(vtype.rsplit("*", 1)[1].split())
+        return not outermost & self.OPENCL_LOCAL_QUALIFIERS
 
     def visit_FunctionNode(self, node):
         previous_function_name = self.opencl_current_function_name
