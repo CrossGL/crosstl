@@ -14,6 +14,9 @@ anywhere else generators emitted the GLSL spelling or refused it.
   with the constructor's elements as its initializer list just before the statement that uses it, and the
   constructor is replaced with the local.
 
+The aggregate initializer of a shader-scope constant gets the first rewrite too. It has no statement to declare a
+local before, so any other array constructor in it is refused.
+
 The local is evaluated where its statement starts, so it is introduced only when nothing the statement evaluates
 before the constructor has effects, and only when the constructor's own elements are pure if the constructor sits
 in an operand that may not be evaluated (a branch of ``?:``, the right side of ``&&`` or ``||``, a later ``else
@@ -65,6 +68,8 @@ def hoist_array_constructors(program, target) -> int:
     if not isinstance(program, A.ShaderNode) or target not in _DECLARATION_ONLY_TARGETS:
         return 0
     hoister = _Hoister(program, target)
+    for constant in getattr(program, "constants", None) or []:
+        hoister.constant(constant)
     for function in iter_functions(program):
         body = getattr(function, "body", None)
         if isinstance(body, A.BlockNode):
@@ -175,6 +180,21 @@ class _Hoister:
             # A bare expression statement, such as a for-loop initializer.
             self._walk(node, hoisted, once, effects)
         return hoisted
+
+    def constant(self, node):
+        """Turn the array constructors that are members of a shader-scope constant's aggregate into lists."""
+        value = getattr(node, "value", None)
+        if not isinstance(node, A.ConstantNode) or not self._is_aggregate(value):
+            return
+        hoisted = []
+        self._walk(value, hoisted, _Slot(), [False])
+        if hoisted:
+            self._refuse(
+                f"an array constructor in the initializer of shader-scope constant '{node.name}' is not a member "
+                "of its aggregate",
+                "array-constructor-at-shader-scope",
+                getattr(node, "source_location", None),
+            )
 
     # Expressions ---------------------------------------------------------------------------------------------
     def expression(self, owner, field, hoisted, slot, effects):
