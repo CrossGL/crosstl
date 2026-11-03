@@ -722,8 +722,9 @@ def _generic_function_candidate_call_match(
         "function": func,
         "key": key,
         "substitutions": substitutions,
-        "leading_type_arguments": explicit_types is None
-        and value_args is not call_args,
+        "leading_type_arguments": (
+            explicit_types is None and value_args is not call_args
+        ),
         "rank": (
             matched_params,
             exact_matches,
