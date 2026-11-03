@@ -36731,7 +36731,9 @@ complex64_t crossgl_complex64_mod_assign(
         constructor that already has enough arguments, an unsized extent, or
         a nested element type is left exactly as it was.
         """
-        if not isinstance(func_name, str):
+        # An array constructor's name ends with its extent; a generic call with an
+        # array type argument, such as ``pick<float[2]>``, is not one.
+        if not isinstance(func_name, str) or not func_name.rstrip().endswith("]"):
             return call_args
         array_type = self.glsl_outer_array_type(func_name)
         if array_type is None:

@@ -36,6 +36,8 @@ __all__ = [
 ]
 
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# The sizes of an array type argument, ``[2]`` in ``pick<foo[2]>``.
+_ARRAY_SUFFIXES = re.compile(r"(?:\s*\[[^\[\]]*\])+\Z")
 # Built-in types whose template arguments are values rather than types.
 VALUE_TEMPLATE_TYPES = frozenset({"RayQuery"})
 # Targets whose generators emit a generic structure only through the instantiations the program names.
@@ -259,7 +261,8 @@ def _declared_value_names(program):
 
 
 def _call_type_argument_names(call, generic_functions):
-    """The plain names among the explicit type arguments of ``call``, such as ``foo`` in ``pick<foo>(x)``.
+    """The plain names among the explicit type arguments of ``call``, such as ``foo`` in ``pick<foo>(x)`` or
+    ``pick<foo[2]>(a)``.
 
     The parser keeps a call's type arguments in the callee name. Only calls of the program's own generic functions
     are read: the arguments of built-in calls, such as ``subgroup_broadcast_const<_, 0>``, may be values.
@@ -281,6 +284,8 @@ def _call_type_argument_names(call, generic_functions):
             names.append(arguments[start:index].strip())
             start = index + 1
     names.append(arguments[start:].strip())
+    # An array type argument, such as ``foo[2]``, uses its element type.
+    names = [_ARRAY_SUFFIXES.sub("", name) for name in names]
     return [name for name in names if _PLAIN_NAME.fullmatch(name)]
 
 
