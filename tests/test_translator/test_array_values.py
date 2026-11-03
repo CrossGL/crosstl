@@ -236,6 +236,33 @@ def test_glsl_short_array_constructors_zero_fill_after_the_given_elements(tmp_pa
     _validate_glsl(tmp_path, code, "comp")
 
 
+SHORT_ARRAY_OF_ARRAYS_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float a[2][2] = float[2][2](float[2](1.0, 2.0));
+            float b[2][3];
+            b = float[2][3](float[3](3.0, 4.0, 5.0));
+            outp[i] = a[1][1] + b[1][2];
+        }
+    }
+}
+"""
+
+
+def test_glsl_pads_short_array_of_arrays_constructors(tmp_path):
+    # A missing element of an array of arrays is the zero inner array (#3637);
+    # float[2][3] has two float[3] elements, so the split is outer-first.
+    code = _translate(tmp_path, SHORT_ARRAY_OF_ARRAYS_CONSTRUCTOR_CGL, ".cgl", "opengl")
+
+    assert "float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))" in code
+    assert "b = float[2][3](float[3](3.0, 4.0, 5.0), float[3](0.0, 0.0, 0.0));" in code
+    _validate_glsl(tmp_path, code, "comp")
+
+
 @pytest.mark.parametrize(
     ("statement", "reason"),
     [

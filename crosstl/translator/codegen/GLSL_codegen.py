@@ -36727,9 +36727,11 @@ complex64_t crossgl_complex64_mod_assign(
         to an initializer list before codegen and zero-filled there, but an
         assignment or a call argument keeps the call spelling, and glslang
         rejects it. Pad the same way here: the given elements first, then the
-        element type's value initializer for each missing element. A
-        constructor that already has enough arguments, an unsized extent, or
-        a nested element type is left exactly as it was.
+        element type's value initializer for each missing element; a missing
+        element of an array of arrays is the zero inner array, as in
+        ``float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))``. A constructor
+        that already has enough arguments, or an unsized extent at any level,
+        is left exactly as it was.
         """
         # An array constructor's name ends with its extent; a generic call with an
         # array type argument, such as ``pick<float[2]>``, is not one.
@@ -36739,7 +36741,7 @@ complex64_t crossgl_complex64_mod_assign(
         if array_type is None:
             return call_args
         extent_text, element_type = array_type
-        if "[" in element_type:
+        if "[]" in element_type.replace(" ", ""):
             return call_args
         try:
             extent = int(extent_text)
