@@ -28,7 +28,6 @@ from .wgsl_array_constructors import wgsl_array_element
 
 __all__ = [
     "WGSLStructInitializerError",
-    "is_struct_braced_initializer",
     "wgsl_converted_value",
     "wgsl_struct_array_initializer",
     "wgsl_struct_initializer",
@@ -82,15 +81,6 @@ def _unconstructible_reason(codegen, vtype, seen=()):
         if reason is not None:
             return reason
     return None
-
-
-def is_struct_braced_initializer(codegen, expr, target_type):
-    """Whether ``expr`` is a brace initializer for a structure or an array of structures."""
-    if not isinstance(expr, ArrayLiteralNode):
-        return False
-    if isinstance(target_type, ArrayType):
-        target_type = target_type.element_type
-    return codegen.struct_type_name(target_type) in codegen._structs_by_name
 
 
 def wgsl_struct_initializer(codegen, expr, target_type):

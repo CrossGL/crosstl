@@ -143,7 +143,6 @@ from .wgsl_stage_io import (
     with_interpolation,
 )
 from .wgsl_struct_initializers import (
-    is_struct_braced_initializer,
     wgsl_struct_array_initializer,
     wgsl_struct_initializer,
 )
@@ -152,7 +151,6 @@ from .wgsl_texture_bias import WGSLTextureBiasUnsupportedError, has_texture_samp
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 from .wgsl_vector_initializers import (
-    is_vector_braced_initializer,
     wgsl_vector_array_initializer,
     wgsl_vector_initializer,
 )
@@ -2538,20 +2536,15 @@ class WGSLCodeGen(
         return "\n".join(lines)
 
     def generate_module_scope_value(self, value, target_type):
-        if is_struct_braced_initializer(
-            self, value, target_type
-        ) or is_vector_braced_initializer(self, value, target_type):
+        # A brace list takes the declared type, as in a local declaration: a
+        # short array list is zero-filled and a structure's, vector's or
+        # matrix's list becomes its constructor.
+        if isinstance(value, ArrayLiteralNode):
             return self.generate_expression_for_target(value, target_type)
         return self.generate_expression(value)
 
     def generate_constant(self, node):
-        if isinstance(node.value, ArrayLiteralNode):
-            # A brace list takes the declared type, as in a local declaration: a
-            # short array list is zero-filled and a structure's list becomes
-            # its constructor.
-            value = self.generate_expression_for_target(node.value, node.const_type)
-        else:
-            value = self.generate_module_scope_value(node.value, node.const_type)
+        value = self.generate_module_scope_value(node.value, node.const_type)
         return (
             f"const {self.module_identifier_name(node.name)}: "
             f"{self.type_name_string(node.const_type)} = {value};"
