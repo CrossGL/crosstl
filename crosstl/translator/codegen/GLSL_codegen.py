@@ -58840,9 +58840,10 @@ complex64_t crossgl_complex64_mod_assign(
             return type_name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
+            prefix = "d" if element_type == "double" else ""
             if type_node.rows == type_node.cols:
-                return f"mat{type_node.rows}"
-            return f"mat{type_node.cols}x{type_node.rows}"
+                return f"{prefix}mat{type_node.rows}"
+            return f"{prefix}mat{type_node.cols}x{type_node.rows}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             if str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
