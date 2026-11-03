@@ -34954,5 +34954,136 @@ def test_metal_refuses_crossgl_pointer_local_of_unknown_address_space(
         _translate_pointer_local_kernel(tmp_path, source, suffix)
 
 
+def test_metal_cuda_device_helper_pointer_parameter_declares_device_pointer(
+    tmp_path,
+):
+    source_path = tmp_path / "k.cu"
+    source_path.write_text(
+        """
+        __device__ float first(const float* p, int i) {
+            const float* q = p + i;
+            return *q;
+        }
+        __global__ void k(float* out, const float* in) {
+            int i = threadIdx.x;
+            out[i] = first(in, i);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+    )
+
+    # The parameter points into the device buffer its call site passes, and
+    # the local derived from it follows it into device space.
+    assert "float first(device float* p, int i)" in generated
+    assert "device float* q = p + i;" in generated
+    assert "ptr<" not in generated
+
+
+def _translate_crossgl_to_metal(tmp_path, source):
+    source_path = tmp_path / "shader.cgl"
+    source_path.write_text(source, encoding="utf-8")
+    return crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+    )
+
+
+def test_metal_crossgl_pointer_parameter_from_thread_local_declares_thread_pointer(
+    tmp_path,
+):
+    generated = _translate_crossgl_to_metal(
+        tmp_path,
+        """
+        f32 first(ptr<f32> p, i32 i) {
+            var q: ptr<f32> = (p + i);
+            return (*q);
+        }
+        f32 caller() {
+            var x: f32 = 1.0;
+            return first(&x, 0);
+        }
+        """,
+    )
+
+    assert "float first(thread float* p, int i)" in generated
+    assert "thread float* q = p + i;" in generated
+    assert "ptr<" not in generated
+
+
+def test_metal_crossgl_pointer_parameter_forwarded_through_helper_keeps_space(
+    tmp_path,
+):
+    generated = _translate_crossgl_to_metal(
+        tmp_path,
+        """
+        var<storage, read_write> buf: array<f32, 8>;
+        f32 inner(ptr<f32> p, i32 i) {
+            return (*p);
+        }
+        f32 outer(ptr<f32> q, i32 i) {
+            return inner(q, i);
+        }
+        f32 caller() {
+            return outer(buf, 0);
+        }
+        """,
+    )
+
+    assert "float inner(device float* p, int i)" in generated
+    assert "float outer(device float* q, int i)" in generated
+    assert "ptr<" not in generated
+
+
+def test_metal_refuses_crossgl_pointer_parameter_with_conflicting_call_sites(
+    tmp_path,
+):
+    message = refused_metal(
+        _translate_crossgl_to_metal,
+        tmp_path,
+        """
+        var<storage, read_write> buf: array<f32, 8>;
+        f32 first(ptr<f32> p, i32 i) {
+            return (*p);
+        }
+        f32 from_buf() {
+            return first(buf, 0);
+        }
+        f32 from_thread() {
+            var x: f32 = 1.0;
+            return first(&x, 0);
+        }
+        """,
+    )
+
+    assert (
+        "pointer parameter: 'p' is passed pointers from different address spaces"
+        in message
+    )
+
+
+def test_metal_refuses_crossgl_pointer_parameter_without_call_site(tmp_path):
+    message = refused_metal(
+        _translate_crossgl_to_metal,
+        tmp_path,
+        """
+        f32 first(ptr<f32> p, i32 i) {
+            return (*p);
+        }
+        f32 caller() {
+            return 1.0;
+        }
+        """,
+    )
+
+    assert "pointer parameter: 'p' has no call site passing a pointer" in message
+
+
 if __name__ == "__main__":
     pytest.main()

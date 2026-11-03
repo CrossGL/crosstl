@@ -3214,6 +3214,13 @@ class MetalCodeGen(
             ast, target_stage
         )
 
+        # Computed here, after the globals loop has hoisted stage entry
+        # parameters into metal_buffer_resource_variables, so a call site
+        # passing a kernel buffer resolves to its address space.
+        self.metal_crossgl_pointer_parameter_spaces = (
+            self.collect_metal_crossgl_pointer_parameter_spaces(all_functions, ast)
+        )
+
         functions = order_functions_by_dependencies(
             getattr(ast, "functions", []),
             self.iter_ast_nodes,
@@ -5404,6 +5411,14 @@ class MetalCodeGen(
             address_space = self.parameter_variable_address_space(
                 raw_param_type, p, shader_type
             )
+            if address_space is None and self.is_crossgl_pointer_type(raw_param_type):
+                # A CrossGL `ptr<T>` parameter points into the address space
+                # its call sites pass, so locals derived from it follow it.
+                resolved_space = (
+                    getattr(self, "metal_crossgl_pointer_parameter_spaces", None) or {}
+                ).get((self.current_function_name, p.name))
+                if resolved_space is not None and resolved_space != "conflict":
+                    address_space = resolved_space
             if address_space is not None:
                 self.current_address_space_variables[p.name] = address_space
             value_array_dimensions = None
@@ -9142,6 +9157,389 @@ class MetalCodeGen(
                 self.metal_native_narrow_bitcast_storage_type(pointee) or pointee_type
             )
         return f"{pointee_type}*"
+
+    def crossgl_pointer_parameter_pointee(self, raw_param_type):
+        """The pointee of a CrossGL ``ptr<T>`` parameter type, else ``None``.
+
+        The pointee is a type node for a ``NamedType`` spelling and the inner
+        type text for a spelled ``"ptr<T>"`` string, as the parameter loop
+        passes generic parameter types as strings.
+        """
+        if isinstance(raw_param_type, NamedType):
+            if raw_param_type.name == "ptr" and len(raw_param_type.generic_args) == 1:
+                return raw_param_type.generic_args[0]
+            return None
+        type_name = str(self.type_name_string(raw_param_type) or "").replace(" ", "")
+        if (
+            type_name.startswith("ptr<")
+            and type_name.endswith(">")
+            and "," not in type_name
+        ):
+            return type_name[4:-1]
+        return None
+
+    def collect_metal_crossgl_pointer_parameter_spaces(self, functions, ast):
+        """The Metal address space of each CrossGL ``ptr<T>`` parameter.
+
+        The CrossGL spelling carries no address space, so a parameter takes
+        the one its call sites pass: a storage buffer argument gives
+        ``device``, a thread local gives ``thread``. The result maps
+        ``(function name, parameter name)`` to that space, to ``"conflict"``
+        when call sites disagree, and to ``None`` when no call site passes a
+        pointer with a known space. Same-name overloads share a key, so a
+        disagreement between them refuses rather than picking one space.
+        """
+        functions = list(functions or [])
+        call_sites = []
+        for func in functions:
+            for node in self.iter_ast_nodes(getattr(func, "body", [])):
+                if isinstance(node, FunctionCallNode):
+                    call_sites.append((self.function_call_name(node), node, func))
+        for node in self.iter_ast_nodes(getattr(ast, "global_variables", []) or []):
+            if isinstance(node, FunctionCallNode):
+                call_sites.append((self.function_call_name(node), node, None))
+        spaces = {}
+        for func in functions:
+            params = list(
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            )
+            for index, param in enumerate(params):
+                param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+                if self.crossgl_pointer_parameter_pointee(param_type) is None:
+                    continue
+                spaces[(getattr(func, "name", None), getattr(param, "name", None))] = (
+                    self.metal_crossgl_pointer_parameter_space_from_call_sites(
+                        func, index, call_sites, functions, ast, frozenset()
+                    )
+                )
+        return spaces
+
+    def metal_crossgl_pointer_parameter_space_from_call_sites(
+        self, func, index, call_sites, functions, ast, visiting
+    ):
+        """The call-site address space of one ``ptr<T>`` parameter.
+
+        Returns the single space every call site agrees on, ``"conflict"``
+        when they disagree, or ``None`` when no call site passes a pointer
+        with a known space. ``visiting`` guards parameter forwarding cycles.
+        """
+        params = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
+        if index >= len(params):
+            return None
+        param = params[index]
+        key = (getattr(func, "name", None), getattr(param, "name", None))
+        if key in visiting:
+            return None
+        visiting = visiting | {key}
+        seen = set()
+        unknown = False
+        for callee, call, enclosing in call_sites:
+            if callee != getattr(func, "name", None):
+                continue
+            args = list(getattr(call, "args", getattr(call, "arguments", [])) or [])
+            if index >= len(args):
+                continue
+            if not self.metal_user_function_accepts_argument_count(func, len(args)):
+                continue
+            space = self.metal_call_site_argument_address_space(
+                args[index], enclosing, call_sites, functions, ast, visiting
+            )
+            if space == "conflict":
+                return "conflict"
+            if space is None:
+                unknown = True
+            else:
+                seen.add(space)
+        if len(seen) > 1:
+            return "conflict"
+        if unknown or not seen:
+            return None
+        return next(iter(seen))
+
+    def metal_call_site_argument_address_space(
+        self, expr, enclosing_func, call_sites, functions, ast, visiting
+    ):
+        """The Metal address space a call argument points into, if known.
+
+        Returns a space, ``"conflict"`` when branches disagree, or ``None``
+        when the space cannot be determined. Pointer arithmetic keeps the
+        pointer operand's space; a non-pointer operand contributes nothing.
+        """
+        if expr is None:
+            return None
+        if isinstance(expr, BinaryOpNode) and getattr(expr, "operator", None) in {
+            "+",
+            "-",
+        }:
+            left = self.metal_call_site_argument_address_space(
+                getattr(expr, "left", None),
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+            right = self.metal_call_site_argument_address_space(
+                getattr(expr, "right", None),
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+            if left == "conflict" or right == "conflict":
+                return "conflict"
+            if left is not None and right is not None:
+                return left if left == right else "conflict"
+            return left or right
+        if isinstance(expr, UnaryOpNode) and getattr(expr, "operator", None) in {
+            "&",
+            "*",
+        }:
+            space = self.metal_call_site_argument_address_space(
+                getattr(expr, "operand", None),
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+            if space is not None:
+                return space
+            if getattr(expr, "operator", None) == "&":
+                # Address-of a thread local value is a thread pointer, even
+                # though the value itself is not a pointer.
+                root = self.assignment_target_root_name(expr)
+                if root is not None and enclosing_func is not None:
+                    for node in self.iter_ast_nodes(
+                        getattr(enclosing_func, "body", [])
+                    ):
+                        if isinstance(node, VariableNode) and (
+                            getattr(node, "name", None) == root
+                        ):
+                            return "thread"
+            return None
+        if isinstance(expr, ArrayAccessNode):
+            return self.metal_call_site_argument_address_space(
+                getattr(expr, "array", getattr(expr, "array_expr", None)),
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+        if isinstance(expr, (MemberAccessNode, PointerAccessNode)):
+            object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+            if object_expr is None:
+                object_expr = getattr(expr, "pointer_expr", None)
+            return self.metal_call_site_argument_address_space(
+                object_expr,
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+        if isinstance(expr, TernaryOpNode):
+            true_space = self.metal_call_site_argument_address_space(
+                getattr(expr, "true_expr", None),
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+            false_space = self.metal_call_site_argument_address_space(
+                getattr(expr, "false_expr", None),
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+            if true_space == "conflict" or false_space == "conflict":
+                return "conflict"
+            if true_space is not None and false_space is not None:
+                return true_space if true_space == false_space else "conflict"
+            return None
+        if isinstance(expr, CastNode):
+            return self.metal_call_site_argument_address_space(
+                getattr(expr, "expression", None),
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+        if isinstance(expr, ConstructorNode):
+            args = list(getattr(expr, "arguments", []) or [])
+            if len(args) == 1:
+                return self.metal_call_site_argument_address_space(
+                    args[0],
+                    enclosing_func,
+                    call_sites,
+                    functions,
+                    ast,
+                    visiting,
+                )
+            return None
+        if isinstance(expr, IdentifierNode):
+            return self.metal_call_site_identifier_address_space(
+                getattr(expr, "name", None),
+                enclosing_func,
+                call_sites,
+                functions,
+                ast,
+                visiting,
+            )
+        return None
+
+    def metal_call_site_identifier_address_space(
+        self, name, enclosing_func, call_sites, functions, ast, visiting
+    ):
+        """The Metal address space an identifier points into, if known."""
+        if not name:
+            return None
+        if enclosing_func is not None:
+            params = list(
+                getattr(
+                    enclosing_func,
+                    "parameters",
+                    getattr(enclosing_func, "params", []),
+                )
+                or []
+            )
+            for index, param in enumerate(params):
+                if getattr(param, "name", None) != name:
+                    continue
+                param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+                if self.crossgl_pointer_parameter_pointee(param_type) is not None:
+                    return self.metal_crossgl_pointer_parameter_space_from_call_sites(
+                        enclosing_func, index, call_sites, functions, ast, visiting
+                    )
+                try:
+                    space = self.parameter_address_space(param)
+                except ValueError:
+                    space = None
+                if space is not None:
+                    return space
+                if any(
+                    str(getattr(attribute, "name", "")).lower() in {"group", "binding"}
+                    for attribute in getattr(param, "attributes", []) or []
+                ):
+                    return "device"
+                return None
+            for node in self.iter_ast_nodes(getattr(enclosing_func, "body", [])):
+                if not isinstance(node, VariableNode):
+                    continue
+                if getattr(node, "name", None) != name:
+                    continue
+                var_type = getattr(node, "vtype", getattr(node, "var_type", None))
+                if self.crossgl_pointer_parameter_pointee(var_type) is not None:
+                    return self.metal_call_site_argument_address_space(
+                        getattr(node, "initial_value", None),
+                        enclosing_func,
+                        call_sites,
+                        functions,
+                        ast,
+                        visiting,
+                    )
+                try:
+                    space = self.parameter_address_space(node)
+                except ValueError:
+                    space = None
+                if space is not None:
+                    return space
+                if isinstance(var_type, (PointerType, ReferenceType, ArrayType)):
+                    return "thread"
+                return None
+        # Stage entry parameters are hoisted into program-scope resource
+        # variables by the globals loop, so they are not parameters of the
+        # entry function anymore; their recorded space is the call-site space.
+        for node, _binding, _vtype, _size, space in (
+            getattr(self, "metal_buffer_resource_variables", None) or []
+        ):
+            if getattr(node, "name", None) == name:
+                return space
+        for node, _binding, _vtype, _size in (
+            getattr(self, "structured_buffer_variables", None) or []
+        ):
+            if getattr(node, "name", None) == name:
+                return "device"
+        for node, _binding, _block, _size in (
+            getattr(self, "glsl_buffer_block_variables", None) or []
+        ):
+            if getattr(node, "name", None) == name:
+                return "device"
+        for node in getattr(ast, "global_variables", []) or []:
+            if not isinstance(node, VariableNode):
+                continue
+            if getattr(node, "name", None) != name:
+                continue
+            try:
+                return self.parameter_address_space(node)
+            except ValueError:
+                return None
+        return None
+
+    def format_metal_crossgl_pointer_parameter_declaration(
+        self, raw_param_type, mapped_type, name, node=None
+    ):
+        """The Metal declaration of a CrossGL ``ptr<T>`` parameter, else ``None``.
+
+        The parameter is declared as a C-style pointer into the address
+        space its call sites pass. When the call sites disagree or the
+        address space is unknown, the parameter is refused instead of being
+        copied unchanged, which the Metal compiler rejects.
+        """
+        pointee = self.crossgl_pointer_parameter_pointee(raw_param_type)
+        if pointee is None and self.is_crossgl_pointer_type(mapped_type):
+            pointee = self.crossgl_pointer_parameter_pointee(mapped_type)
+        if pointee is None:
+            return None
+        spaces = getattr(self, "metal_crossgl_pointer_parameter_spaces", None)
+        space = None
+        if spaces is not None:
+            key = (self.current_function_name, name)
+            if key in spaces:
+                space = spaces[key]
+            else:
+                return self.refuse_lowering(
+                    f"pointer parameter: '{name}' has no call-site address "
+                    "space recorded, so the address space it points into is "
+                    "unknown",
+                    "float*",
+                )
+        else:
+            return self.refuse_lowering(
+                f"pointer parameter: '{name}' has no call-site address "
+                "space recorded, so the address space it points into is "
+                "unknown",
+                "float*",
+            )
+        if space == "conflict":
+            return self.refuse_lowering(
+                f"pointer parameter: '{name}' is passed pointers from "
+                "different address spaces, so no single Metal address space "
+                "fits it",
+                "float*",
+            )
+        if space is None:
+            return self.refuse_lowering(
+                f"pointer parameter: '{name}' has no call site passing a "
+                "pointer with a known address space, so the address space "
+                "it points into is unknown",
+                "float*",
+            )
+        if isinstance(pointee, str):
+            pointee_type = self.map_type(pointee)
+        else:
+            pointee_type = self.map_resource_type_with_format(pointee, node)
+        if space != "thread":
+            pointee_type = (
+                self.metal_native_narrow_bitcast_storage_type(pointee) or pointee_type
+            )
+        return f"{space} {pointee_type}* {name}"
 
     def local_variable_is_address_space_alias(self, node):
         raw_type = self.local_variable_type_node(node)
@@ -17675,6 +18073,13 @@ class MetalCodeGen(
             )
         if self.is_bound_scalar_value_parameter(raw_param_type, node, shader_type):
             return f"constant {mapped_type}& {name}"
+        crossgl_pointer_declaration = (
+            self.format_metal_crossgl_pointer_parameter_declaration(
+                raw_param_type, mapped_type, name, node
+            )
+        )
+        if crossgl_pointer_declaration is not None:
+            return crossgl_pointer_declaration
         address_space_declaration = self.format_address_space_parameter_declaration(
             raw_param_type, mapped_type, name, node, shader_type
         )
