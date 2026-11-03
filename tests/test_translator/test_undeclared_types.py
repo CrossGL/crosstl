@@ -476,7 +476,7 @@ shader P {
             vec3<f32> b = vec3(outp[2]);
             vec4<int> c = vec4<int>(1);
             vec2<u32> e = vec2<u32>(2u);
-            outp[0] = a.x + b.y + float(c.z) + float(e.x) + twice<float>(outp[3]);
+            outp[0] = a.x + b.y + float(c.z) + float(e.x) + twice(outp[3]);
         }
     }
 }
@@ -494,6 +494,13 @@ def test_an_undeclared_vector_element_type_is_reported(width):
 
 def test_built_in_and_generic_vector_element_types_are_known():
     assert undeclared_type_uses(_program(BUILTIN_VECTOR_ELEMENT_TYPES)) == []
+
+
+def test_an_undeclared_vector_element_type_in_a_generic_function_is_reported():
+    # ``twice`` is reachable from ``main``, so its body is read: ``U`` is not one of its type parameters.
+    source = BUILTIN_VECTOR_ELEMENT_TYPES.replace("vec2<T> pair", "vec2<U> pair")
+    uses = undeclared_type_uses(_program(source))
+    assert [name for name, _ in uses] == ["U"]
 
 
 @pytest.mark.parametrize("target", TARGETS + ["rust", "wgsl"])
