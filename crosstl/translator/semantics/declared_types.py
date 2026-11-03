@@ -6,6 +6,8 @@ the generators would copy it into the target verbatim, where it is at best a com
 type of the same spelling. :func:`refuse_undeclared_types` raises :class:`UndeclaredTypeError` for the first such
 name, so the translation fails with a typed diagnostic instead.
 
+The element type of a vector (``foo`` in ``vec2<foo>``) is checked the same way.
+
 Only plain names in code a stage entry can reach are checked (every function of a program without entries), and
 trait bounds of generic parameters are not types. Neither is ``SAMPLER_FEEDBACK_MIN_MIP`` or
 ``SAMPLER_FEEDBACK_MIP_REGION_USED`` as the argument of a sampler feedback texture (``FeedbackTexture2D<KIND>``): any
@@ -329,6 +331,19 @@ def undeclared_type_uses(program, target=None):
                 and name not in BUILTIN_TYPE_NAMES
                 and name not in value_names
             )
+            continue
+        if isinstance(node, A.VectorType) and isinstance(
+            node.element_type, A.PrimitiveType
+        ):
+            # ``vec2<foo>``: the parser keeps an element type it does not know as a primitive of that name.
+            name = node.element_type.name
+            if (
+                isinstance(name, str)
+                and _PLAIN_NAME.fullmatch(name)
+                and name not in declared
+                and name not in BUILTIN_TYPE_NAMES
+            ):
+                uses.append((name, node))
             continue
         if not isinstance(node, A.NamedType) or node.generic_args:
             continue

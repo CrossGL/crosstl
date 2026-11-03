@@ -452,3 +452,52 @@ def test_translation_refuses_an_undeclared_array_call_type_argument(tmp_path, ta
     path = _write(tmp_path, "array_call.cgl", ARRAY_CALL_TYPE_ARGUMENT)
     with pytest.raises(UndeclaredTypeError, match="'foo'"):
         crosstl.translate(path, backend=target)
+
+
+VECTOR_ELEMENT_TYPE = """
+shader P {
+    compute {
+        buffer float* outp;
+        void main() {
+            vec2<foo> d = vec2(outp[3]);
+            outp[0] = d.y;
+        }
+    }
+}
+"""
+
+BUILTIN_VECTOR_ELEMENT_TYPES = """
+shader P {
+    T twice<T>(T x) { vec2<T> pair = vec2<T>(x, x); return pair.x + pair.y; }
+    compute {
+        buffer float* outp;
+        void main() {
+            vec2<float> a = vec2(outp[1]);
+            vec3<f32> b = vec3(outp[2]);
+            vec4<int> c = vec4<int>(1);
+            vec2<u32> e = vec2<u32>(2u);
+            outp[0] = a.x + b.y + float(c.z) + float(e.x) + twice<float>(outp[3]);
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("width", [2, 3, 4])
+def test_an_undeclared_vector_element_type_is_reported(width):
+    source = VECTOR_ELEMENT_TYPE.replace(
+        "vec2<foo> d = vec2(", f"vec{width}<foo> d = vec{width}("
+    )
+    uses = undeclared_type_uses(_program(source))
+    assert [name for name, _ in uses] == ["foo"]
+
+
+def test_built_in_and_generic_vector_element_types_are_known():
+    assert undeclared_type_uses(_program(BUILTIN_VECTOR_ELEMENT_TYPES)) == []
+
+
+@pytest.mark.parametrize("target", TARGETS + ["rust", "wgsl"])
+def test_translation_refuses_an_undeclared_vector_element_type(tmp_path, target):
+    path = _write(tmp_path, "vector_element.cgl", VECTOR_ELEMENT_TYPE)
+    with pytest.raises(UndeclaredTypeError, match="'foo'"):
+        crosstl.translate(path, backend=target)
