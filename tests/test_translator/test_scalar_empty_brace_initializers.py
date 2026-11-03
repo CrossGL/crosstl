@@ -64,6 +64,32 @@ def test_empty_brace_initializer_of_a_scalar_alias_is_zero(tmp_path, backend):
     assert output.count(zero) == 2
 
 
+STAGE_SCOPE = textwrap.dedent("""
+    shader P {
+        compute {
+            buffer float* outp;
+            float g = {};
+            void main() { outp[0] = g; }
+        }
+    }
+""")
+
+STAGE_SCOPE_EXPECTED = {
+    "directx": "static float g = 0.0;",
+    "opengl": "float g = 0.0;",
+    "wgsl": "var<private> g: f32 = 0.0;",
+    "metal": "float g = 0.0;",
+}
+
+
+@pytest.mark.parametrize("backend", sorted(STAGE_SCOPE_EXPECTED))
+def test_empty_brace_initializer_of_a_stage_scope_scalar_is_zero(tmp_path, backend):
+    # The GLSL generator follows parent links when it orders a stage's globals, so a zero linked back to ``g`` read as
+    # ``g`` depending on itself.
+    output = translate(tmp_path, STAGE_SCOPE, backend, ".cgl")
+    assert STAGE_SCOPE_EXPECTED[backend] in output
+
+
 def test_crossgl_output_keeps_the_braces(tmp_path):
     output = translate(tmp_path, KERNEL, "cgl")
     assert "var one: f32 = {};" in output

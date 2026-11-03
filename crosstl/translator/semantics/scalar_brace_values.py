@@ -70,7 +70,6 @@ def zero_empty_scalar_initializers(program, target) -> int:
         if scalar is None:
             continue
         zero = A.LiteralNode(_ZERO_LITERALS[scalar], A.PrimitiveType(scalar))
-        zero.parent = node
         setattr(node, value_field, zero)
         count += 1
     return count
