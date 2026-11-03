@@ -32145,11 +32145,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_byteaddress_interlocked_uint_input_matches(self, expr):
         kind = self.scalar_expression_kind(expr)
-        if kind is None or kind == "uint":
+        if kind == "uint":
             return True
         if kind == "int":
             value = self.literal_int_value(expr, self.literal_int_constants)
             return value is not None and value >= 0
+        if kind is None:
+            # A value whose numeric kind is unknown passes only when its type
+            # cannot be resolved at all. A resolvable non-uint scalar such as
+            # bool or int64_t is refused like float: DXC would otherwise
+            # silently convert the bool or narrow the 64-bit value to uint.
+            return self.type_name_string(self.expression_result_type(expr)) is None
         return False
 
     def validate_hlsl_byteaddress_interlocked_uint_input(
@@ -32159,7 +32165,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         if self.hlsl_byteaddress_interlocked_uint_input_matches(args[index]):
             return
-        kind = self.scalar_expression_kind(args[index]) or "unknown"
+        kind = (
+            self.scalar_expression_kind(args[index])
+            or self.type_name_string(self.expression_result_type(args[index]))
+            or "unknown"
+        )
         raise ValueError(
             f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
             f"{role} argument must be scalar uint, got {kind}"
