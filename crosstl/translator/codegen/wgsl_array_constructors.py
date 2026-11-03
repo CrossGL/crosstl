@@ -8,8 +8,10 @@ constructor is written in place rather than hoisted into a declaration.
 The element type and count are always spelled out. An inferred ``array(a, b, c)`` would take its element type from
 the arguments, so ``uint[2](1, 2)`` would become an ``array<i32, 2>``. An unsized constructor, ``float[](...)``,
 has as many elements as arguments (GLSL 4.60 section 4.1.9). A sized constructor whose size is an integer literal
-must have exactly that many arguments, as in GLSL and WGSL, and a constructor of an array of arrays, which the
-CrossGL call spelling does not describe, is refused rather than written verbatim.
+may give fewer arguments than that size: the elements it leaves out are the zero value ``T()`` (WGSL, "Zero Value
+Expressions"), as GLSL output writes them and as a short declared initializer is filled. One with more arguments than
+its size and an empty one are refused with :class:`WGSLAggregateInitializerError`, and a constructor of an array of
+arrays, which the CrossGL call spelling does not describe, is refused rather than written verbatim.
 """
 
 from __future__ import annotations
@@ -85,6 +87,14 @@ def wgsl_array_constructor_type(codegen, node):
     return ArrayType(element_type, IdentifierNode(size))
 
 
+def _aggregate_error(message, **details):
+    """The typed refusal, with a project diagnostic code, for an array constructor WGSL cannot write."""
+    # Imported here because wgsl_codegen imports this module.
+    from .wgsl_codegen import WGSLAggregateInitializerError
+
+    return WGSLAggregateInitializerError(message, **details)
+
+
 def wgsl_array_constructor(codegen, node):
     """WGSL ``array<T, N>(...)`` for a CrossGL array constructor call, or ``None`` for any other call."""
     callee = _array_constructor_callee(codegen, node)
@@ -99,25 +109,32 @@ def wgsl_array_constructor(codegen, node):
     size = match.group(2)
     arguments = list(node.arguments or [])
     if not arguments:
-        raise ValueError(
+        raise _aggregate_error(
             f"WGSL target does not support the empty array constructor {function_name}"
         )
+    element = codegen.type_name_string(element_type)
+    padding = 0
     if not size:
         size = str(len(arguments))
     elif size.isdigit():
-        if int(size) != len(arguments):
-            raise ValueError(
-                f"WGSL array constructor {function_name} has {len(arguments)} "
-                f"arguments; it needs exactly {int(size)}"
+        expected = int(size)
+        if len(arguments) > expected:
+            raise _aggregate_error(
+                f"WGSL array constructor {function_name} for 'array<{element}, {expected}>' "
+                f"expects at most {expected} elements, got {len(arguments)}",
+                expected_type=ArrayType(element_type, expected),
+                element_count=len(arguments),
+                expected_element_count=expected,
             )
-        size = str(int(size))
+        padding = expected - len(arguments)
+        size = str(expected)
     else:
         size = codegen.identifier_name(size)
-    element = codegen.type_name_string(element_type)
-    values = ", ".join(
+    values = [
         wgsl_array_element(codegen, argument, element_type) for argument in arguments
-    )
-    return f"array<{element}, {size}>({values})"
+    ]
+    values += [f"{element}()"] * padding
+    return f"array<{element}, {size}>({', '.join(values)})"
 
 
 def wgsl_array_element(codegen, value, element_type):
