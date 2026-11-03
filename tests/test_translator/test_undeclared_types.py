@@ -419,3 +419,36 @@ def test_a_declared_constant_as_a_call_argument_is_not_an_undeclared_type(tmp_pa
     assert undeclared_type_uses(_program(CONSTANT_CALL_ARGUMENT)) == []
     path = _write(tmp_path, "constant.cgl", CONSTANT_CALL_ARGUMENT)
     assert "(x * f32(K))" in crosstl.translate(path, backend="wgsl")
+
+
+ARRAY_CALL_TYPE_ARGUMENT = """
+shader P {
+    struct Pair { float a; float b; };
+    T pick<T>(T x) { return x; }
+    compute {
+        buffer float* outp;
+        void main() {
+            float a[2];
+            a[0] = outp[1];
+            a[1] = outp[2];
+            Pair p[2];
+            p[0].a = a[0];
+            p = pick<Pair[2]>(p);
+            float c[2] = pick<foo[2]>(a);
+            outp[0] = c[0] + p[0].a;
+        }
+    }
+}
+"""
+
+
+def test_an_undeclared_element_of_an_array_call_type_argument_is_reported():
+    uses = undeclared_type_uses(_program(ARRAY_CALL_TYPE_ARGUMENT))
+    assert [name for name, _ in uses] == ["foo"]
+
+
+@pytest.mark.parametrize("target", TARGETS + ["rust", "wgsl"])
+def test_translation_refuses_an_undeclared_array_call_type_argument(tmp_path, target):
+    path = _write(tmp_path, "array_call.cgl", ARRAY_CALL_TYPE_ARGUMENT)
+    with pytest.raises(UndeclaredTypeError, match="'foo'"):
+        crosstl.translate(path, backend=target)

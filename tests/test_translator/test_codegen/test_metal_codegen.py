@@ -34903,20 +34903,6 @@ def test_metal_crossgl_pointer_local_to_private_value_is_thread_pointer(tmp_path
             r"pointer local: 'p' has no initializer",
         ),
         (
-            # OpenCL input drops this initializer and imports the pointer as
-            # a workgroup variable, so it must not become an unset pointer.
-            """
-            __kernel void k(__global float* out, __local float* scratch) {
-                __local float *t = scratch;
-                t[get_local_id(0)] = 1.0f;
-                barrier(CLK_LOCAL_MEM_FENCE);
-                out[get_global_id(0)] = t[0];
-            }
-            """,
-            ".cl",
-            r"pointer local: 't' has no initializer",
-        ),
-        (
             """
             __global__ void k(float* out, const float* in) {
                 __shared__ float tile[64];
@@ -34945,13 +34931,30 @@ def test_metal_crossgl_pointer_local_to_private_value_is_thread_pointer(tmp_path
             r"but target 'p' uses thread",
         ),
     ],
-    ids=["uninitialized", "local-initializer-dropped", "to-shared", "to-device"],
+    ids=["uninitialized", "to-shared", "to-device"],
 )
 def test_metal_refuses_crossgl_pointer_local_of_unknown_address_space(
     tmp_path, source, suffix, message
 ):
     with pytest.raises(MetalLoweringRefused, match=message):
         _translate_pointer_local_kernel(tmp_path, source, suffix)
+
+
+def test_metal_crossgl_local_pointer_local_keeps_threadgroup_initializer(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __kernel void k(__global float* out, __local float* scratch) {
+            __local float *t = scratch;
+            t[get_local_id(0)] = 1.0f;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[get_global_id(0)] = t[0];
+        }
+        """,
+    )
+
+    assert "threadgroup float* t = scratch;" in generated
+    compile_with_metal_if_available(generated)
 
 
 if __name__ == "__main__":
