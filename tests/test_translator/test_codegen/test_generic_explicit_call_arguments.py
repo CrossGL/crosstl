@@ -82,6 +82,31 @@ def test_deduced_parameter_keeps_the_argument_type_in_hlsl(tmp_path):
     assert "int widen_int_float(int value)" in code
 
 
+VARIABLE_ARGUMENT_OVERLOADS = """
+shader main {
+    buffer float* results;
+    void inc<T>(inout T value) { value = value + T(1.0); }
+    void inc<T>(inout T value, T step) { value = value + step; }
+    compute {
+    @ numthreads(1, 1, 1)
+    void main() {
+        vec2 w = vec2(1.0);
+        inc(w, w);
+        results[0] = w.x;
+    }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["opengl", "metal", "cuda", "hip"])
+def test_variable_argument_is_not_read_as_a_type_argument(tmp_path, backend):
+    # inc(w, w) matches the two-parameter overload; the one-parameter overload must not be specialized for ``w``.
+    code = translate(tmp_path, VARIABLE_ARGUMENT_OVERLOADS, backend)
+    assert "_overload1(w, w)" in code
+    assert "inc_w" not in code
+
+
 UNRESOLVABLE = """
 shader main {
     generic<T, U> T make_value(T seed) {
