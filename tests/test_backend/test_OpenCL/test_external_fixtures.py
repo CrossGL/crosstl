@@ -466,8 +466,13 @@ def test_external_opencv_multiline_constant_address_space_array_codegen_reparse(
 
     ast, crossgl = assert_crossgl_reparses(source)
 
-    assert ast.statements[0].vtype == "__constant__ float[5]"
-    assert "var c_YUV2RGBCoeffs_420: array<f32, 5>" in crossgl
+    assert ast.statements[0].vtype == "float[5]"
+    assert ast.statements[0].qualifiers == ["static", "__constant__"]
+    assert (
+        "@group(0) @binding(0) var<uniform> c_YUV2RGBCoeffs_420: array<f32, 5>"
+        in crossgl
+    )
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
     assert "var coeffs: ptr<f32> = c_YUV2RGBCoeffs_420;" in crossgl
     assert "var<uniform> coeffs:" not in crossgl
 
