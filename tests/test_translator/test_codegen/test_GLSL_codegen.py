@@ -7401,6 +7401,32 @@ def test_glsl_buffer_pointer_helper_parameters_specialize_per_buffer():
     assert "PointerType" not in generated
 
 
+@pytest.mark.parametrize("buffer_type", ["StructuredBuffer", "RWStructuredBuffer"])
+def test_glsl_structured_buffer_helper_parameter_length_reads_buffer_length(
+    buffer_type,
+):
+    code = f"""
+    shader Probe {{
+        {buffer_type}<float> values;
+        RWStructuredBuffer<float> outp;
+        int count({buffer_type}<float> v) {{
+            return v.length();
+        }}
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                outp[0] = float(count(values));
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "return (values.length() - int(v_offset));" in generated
+    assert "values[v_offset].length()" not in generated
+
+
 def test_glsl_private_pointer_helper_uses_fixed_local_array_extent():
     code = """
     shader PrivatePointerHelper {

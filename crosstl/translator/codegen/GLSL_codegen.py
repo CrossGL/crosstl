@@ -40749,6 +40749,23 @@ complex64_t crossgl_complex64_mod_assign(
             if ray_query_member_call is not None:
                 return ray_query_member_call
 
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and func_expr.member == "length"
+                and not expr.args
+            ):
+                # A buffer parameter is rewritten as an offset into the buffer it
+                # reads, so its length is that buffer's, not one element's.
+                storage_binding = self.glsl_storage_pointer_binding(
+                    func_expr.object, self.glsl_storage_pointer_aliases()
+                )
+                if (
+                    storage_binding is not None
+                    and "pointer_reinterpretation" not in storage_binding
+                    and "byte_offset" not in storage_binding
+                ):
+                    return self.structured_buffer_length_expression(func_expr.object)
+
             synchronization_call = self.synchronization_function_call(
                 original_func_name,
                 expr.args,
