@@ -27,6 +27,7 @@ from .CudaAst import (
     VariableNode,
 )
 from .keyword_renames import source_identifier_names, unused_identifier_name
+from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
 
 
@@ -273,6 +274,7 @@ class CudaToCrossGLConverter:
         self.source_identifier_names = frozenset()
         self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
+        self.function_body_depth = 0
         self.anonymous_enum_count = 0
         self.namespace_scope_variable = False
         self.namespace_constant_names = set()
@@ -304,6 +306,7 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
+        self.function_body_depth = 0
         self.anonymous_enum_count = 0
         self.namespace_constant_names = set()
         self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
@@ -4221,9 +4224,11 @@ class CudaToCrossGLConverter:
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
+                self.function_body_depth += 1
                 for stmt in node.body:
                     self.emit_statement(stmt)
             finally:
+                self.function_body_depth -= 1
                 self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
@@ -4323,9 +4328,11 @@ class CudaToCrossGLConverter:
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
+                self.function_body_depth += 1
                 for stmt in kernel.body:
                     self.emit_statement(stmt)
             finally:
+                self.function_body_depth -= 1
                 self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
@@ -4758,6 +4765,21 @@ class CudaToCrossGLConverter:
         # Convert to uniform buffer in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         self.register_vector1_name(node.name, node.vtype)
+        if (
+            node.value is None
+            and self.function_body_depth > 0
+            and "static" in node.qualifiers
+        ):
+            # A function-scope static __constant__ local has static storage,
+            # so without an initializer every element is zero, and device
+            # code cannot write constant memory. Emit it as a function-scope
+            # constant of zeros: it must neither take a resource binding
+            # (which would also collide with the kernel parameters) nor be
+            # read uninitialized by a later backend. A block-scope extern
+            # declaration names a namespace-scope variable the host may have
+            # written, so it is not one.
+            self.emit(f"let {node.name}: {var_type} = {crossgl_zero_value(var_type)};")
+            return
         binding = self.allocate_global_resource_binding()
         if node.value:
             value = self.visit(node.value)

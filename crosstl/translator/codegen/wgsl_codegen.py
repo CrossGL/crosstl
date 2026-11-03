@@ -50,6 +50,7 @@ from ..host_workgroup_size import (
     function_entry_execution_config,
     require_static_workgroup_size,
 )
+from ..semantics.enum_values import enum_values
 from ..semantics.implicit_lod import ImplicitLodStageUnsupportedError
 from ..semantics.rewrite import is_pure
 from .array_utils import prepend_array_dimension
@@ -57,6 +58,8 @@ from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
 from .comma_expressions import is_comma_expression
 from .enum_utils import (
+    collect_enum_type_names,
+    collect_enum_variant_constants,
     generic_enum_specialization_name,
     generic_type_parts,
     sanitize_type_name,
@@ -93,6 +96,7 @@ from .wgsl_entry_outputs import (
     entry_output_parameters,
     lower_entry_output_parameters,
 )
+from .wgsl_enums import generate_enum_constants, split_enums
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
@@ -147,6 +151,31 @@ from .wgsl_switch_clauses import is_discard_statement, wgsl_switch_clauses
 from .wgsl_texture_bias import WGSLTextureBiasUnsupportedError, has_texture_sample_bias
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
+from .wgsl_vector_initializers import (
+    is_vector_braced_initializer,
+    wgsl_vector_array_initializer,
+    wgsl_vector_initializer,
+)
+
+
+class WGSLAggregateInitializerError(ValueError):
+    """Raised when an aggregate initializer has no faithful WGSL lowering."""
+
+    project_diagnostic_code = "project.translate.wgsl-aggregate-initializer-invalid"
+    missing_capabilities = ("wgsl.aggregate-initializer-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        expected_type=None,
+        element_count=None,
+        expected_element_count=None,
+    ):
+        super().__init__(message)
+        self.expected_type = expected_type
+        self.element_count = element_count
+        self.expected_element_count = expected_element_count
 
 
 class WGSLCodeGen(
@@ -278,6 +307,18 @@ class WGSLCodeGen(
     }
     FUNCTION_NAME_MAP = {
         "atan2": "atan2",
+        "bitfieldReverse": "reverseBits",
+        "faceforward": "faceForward",
+        "packHalf2x16": "pack2x16float",
+        "packSnorm2x16": "pack2x16snorm",
+        "packUnorm2x16": "pack2x16unorm",
+        "packSnorm4x8": "pack4x8snorm",
+        "packUnorm4x8": "pack4x8unorm",
+        "unpackHalf2x16": "unpack2x16float",
+        "unpackSnorm2x16": "unpack2x16snorm",
+        "unpackUnorm2x16": "unpack2x16unorm",
+        "unpackSnorm4x8": "unpack4x8snorm",
+        "unpackUnorm4x8": "unpack4x8unorm",
         "fract": "fract",
         "inversesqrt": "inverseSqrt",
         "inverseSqrt": "inverseSqrt",
@@ -832,6 +873,8 @@ class WGSLCodeGen(
         self._generic_function_specializer = None
         self._uses_primitive_index = False
         self._primitive_index_int_members = set()
+        self._enum_type_names = set()
+        self._enum_variant_constants = {}
 
     def generate(self, ast):
         return self.generate_program(ast)
@@ -913,6 +956,9 @@ class WGSLCodeGen(
             source_structs
         )
         structs = self.monomorphized_structs(ast, target_stage, source_structs)
+        structs, enums = split_enums(structs)
+        self._enum_type_names = collect_enum_type_names(enums)
+        self._enum_variant_constants = collect_enum_variant_constants(enums)
         constants = list(getattr(ast, "constants", []) or [])
         self._constant_values = self.constant_literal_values(constants)
         self._stage_output_lowerings = self.stage_output_lowerings(
@@ -1063,6 +1109,11 @@ class WGSLCodeGen(
         builtin_option_declarations = self.generate_builtin_option_declarations()
         if builtin_option_declarations:
             emitted_sections.append(builtin_option_declarations)
+
+        if enums:
+            emitted_sections.append(
+                generate_enum_constants(self, enums, enum_values(ast))
+            )
 
         if structs:
             emitted_sections.append(
@@ -2487,7 +2538,9 @@ class WGSLCodeGen(
         return "\n".join(lines)
 
     def generate_module_scope_value(self, value, target_type):
-        if is_struct_braced_initializer(self, value, target_type):
+        if is_struct_braced_initializer(
+            self, value, target_type
+        ) or is_vector_braced_initializer(self, value, target_type):
             return self.generate_expression_for_target(value, target_type)
         return self.generate_expression(value)
 
@@ -3011,6 +3064,14 @@ class WGSLCodeGen(
         if matrix_scalar is not None:
             return matrix_scalar
         target_type = self.expression_type(node.target)
+        stage_matrix = self.stage_interface_matrix_access(node.target)
+        if stage_matrix is not None:
+            # A for-loop update or statement expression reaches here instead
+            # of the statement path, so it needs the same repeatability check.
+            self.require_repeatable_matrix_operands(
+                "assignment to a split stage-interface member",
+                (stage_matrix["object_expr"],),
+            )
         if node.operator[:-1] in SHIFT_OPERATORS:
             value = wgsl_shift_amount(self, node.value, target_type)
         else:
@@ -3124,6 +3185,13 @@ class WGSLCodeGen(
             )
             if compound is not None:
                 return compound
+        # A plain assignment still writes one column at a time, so its
+        # object must be repeatable too; the compound operators are refused
+        # above when their object is not.
+        self.require_repeatable_matrix_operands(
+            "assignment to a split stage-interface member",
+            (access["object_expr"],),
+        )
         value = self.generate_expression_for_target(node.value, target_type)
         temp_name = self.declare_synthetic_local_identifier(
             self.swizzle_base_name(access["member_name"])
@@ -3295,6 +3363,9 @@ class WGSLCodeGen(
         struct_value = wgsl_struct_initializer(self, expr, target_type)
         if struct_value is not None:
             return struct_value
+        vector_value = wgsl_vector_initializer(self, expr, target_type)
+        if vector_value is not None:
+            return vector_value
         padded_array = self.generate_padded_array_literal(expr, target_type)
         if padded_array is not None:
             return padded_array
@@ -3304,6 +3375,9 @@ class WGSLCodeGen(
         struct_array = wgsl_struct_array_initializer(self, expr, target_type)
         if struct_array is not None:
             return struct_array
+        vector_array = wgsl_vector_array_initializer(self, expr, target_type)
+        if vector_array is not None:
+            return vector_array
         previous_expected_type = self._current_expression_expected_type
         self._current_expression_expected_type = target_type
         try:
@@ -3335,9 +3409,32 @@ class WGSLCodeGen(
         if target_scalar == "i32" and source_scalar == "u32":
             return f"i32({rendered})"
         if target_scalar == "u32" and source_scalar == "i32":
-            return f"u32({rendered})"
+            return f"u32({self.concrete_negative_integer_literal(expr, rendered)})"
         if target_scalar == "f32" and source_scalar in {"i32", "u32"}:
             return f"f32({rendered})"
+        return rendered
+
+    def concrete_negative_integer_literal(self, expr, rendered):
+        """``-1i`` for a negative integer literal ``expr`` rendered as ``-1``, else ``rendered``.
+
+        WGSL reads ``-1`` as an abstract integer, and ``u32(-1)`` converts its value, which ``u32`` cannot
+        represent, so naga rejects it. ``u32(-1i)`` converts an ``i32`` and keeps its bits, 4294967295, as GLSL's
+        ``uint(-1)`` does.
+        """
+        operand = expr
+        if isinstance(expr, UnaryOpNode) and expr.operator == "-":
+            operand = expr.operand
+        elif not isinstance(expr, LiteralNode):
+            return rendered
+        value = getattr(operand, "value", None)
+        if (
+            isinstance(operand, LiteralNode)
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and (operand is not expr or value < 0)
+            and re.fullmatch(r"\(?-\d+\)?", rendered)
+        ):
+            return f"{rendered.strip('()')}i"
         return rendered
 
     def generate_padded_array_literal(self, expr, target_type):
@@ -3352,6 +3449,17 @@ class WGSLCodeGen(
             target_type, ArrayType
         ):
             return None
+        # The size may be a named constant, as in float a[COUNT].
+        declared_size = self.resolve_integer_expression(target_type.size)
+        if declared_size is not None and len(expr.elements) > declared_size:
+            array_type = self.type_name_string(target_type)
+            raise WGSLAggregateInitializerError(
+                f"WGSL aggregate initializer for '{array_type}' expects at most "
+                f"{declared_size} elements, got {len(expr.elements)}",
+                expected_type=array_type,
+                element_count=len(expr.elements),
+                expected_element_count=declared_size,
+            )
         size = self.literal_integer_value(target_type.size)
         if size is None or not 0 < len(expr.elements) < size:
             return None
@@ -3464,6 +3572,9 @@ class WGSLCodeGen(
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
         if isinstance(expr, IdentifierNode):
+            enum_constant = self._enum_variant_constants.get(expr.name)
+            if enum_constant is not None:
+                return enum_constant
             if self.is_builtin_option_none_expression(expr):
                 none_value = self.generate_builtin_option_none_value()
                 if none_value is not None:
@@ -3762,6 +3873,20 @@ class WGSLCodeGen(
         packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
         if packed_8bit is not None and not self.is_user_function_name(function_name):
             return self.generate_packed_8bit_call(node, function_name, packed_8bit)
+        bit_function = self.BIT_FUNCTION_NAME_MAP.get(function_name)
+        if bit_function is not None and not self.is_user_function_name(function_name):
+            return self.generate_bit_function_call(node, function_name, bit_function)
+        if (
+            function_name == "faceforward"
+            and node.arguments
+            and not self.is_user_function_name(function_name)
+            and self.scalar_type_name(self.expression_type(node.arguments[0]))
+        ):
+            # GLSL's faceforward also takes floats; WGSL's faceForward takes vectors only.
+            raise ValueError(
+                "WGSL target supports faceforward() on vectors only, as WGSL's "
+                "faceForward; write a scalar one as i * nref < 0.0 ? n : -n"
+            )
         if (
             function_name == "mix"
             and len(node.arguments) == 3
@@ -3878,6 +4003,50 @@ class WGSLCodeGen(
         elif component != argument_type[len("vec4<") : -1]:
             argument_expr = f"{argument_type}({argument_expr})"
         return f"{mapped_name}({argument_expr})"
+
+    # GLSL bit built-ins whose WGSL forms differ in more than the name:
+    # bitCount, findLSB and findMSB return int in GLSL but the argument type in
+    # WGSL, and extractBits and insertBits take a u32 offset and count.
+    BIT_FUNCTION_NAME_MAP = {
+        "bitCount": "countOneBits",
+        "findLSB": "firstTrailingBit",
+        "findMSB": "firstLeadingBit",
+        "bitfieldExtract": "extractBits",
+        "bitfieldInsert": "insertBits",
+    }
+
+    def generate_bit_function_call(self, node, function_name, mapped_name):
+        """GLSL bit built-ins as WGSL ones, with GLSL's argument and result types."""
+        arity = {"extractBits": 3, "insertBits": 4}.get(mapped_name, 1)
+        if len(node.arguments) != arity:
+            noun = "argument" if arity == 1 else "arguments"
+            raise ValueError(
+                f"WGSL target supports {function_name}() with exactly {arity} "
+                f"{noun}; got {len(node.arguments)}"
+            )
+        args = [self.generate_expression(argument) for argument in node.arguments]
+        if arity > 1:
+            # The offset and count are the last two arguments.
+            for index in (arity - 2, arity - 1):
+                offset_type = self.expression_type(node.arguments[index])
+                if self.integer_scalar_type(offset_type) != "u32":
+                    args[index] = f"u32({args[index]})"
+            return f"{mapped_name}({', '.join(args)})"
+        call = f"{mapped_name}({args[0]})"
+        argument_type = self.expression_type(node.arguments[0])
+        scalar = self.integer_scalar_type(argument_type)
+        if scalar is not None:
+            return f"i32({call})" if scalar == "u32" else call
+        vector = self.vector_shape(argument_type)
+        if vector is not None and vector[0] in {"i32", "u32"}:
+            return f"vec{vector[1]}<i32>({call})" if vector[0] == "u32" else call
+        # A u32 result left unconverted is still valid WGSL, but findMSB(x) < 0
+        # would never hold and float(findMSB(x)) would give 4294967295.0.
+        raise ValueError(
+            f"WGSL target writes {function_name}() as {mapped_name}(), which returns "
+            "its argument's type where CrossGL returns int, and cannot tell the type "
+            f"of {args[0]}; assign the argument to a local variable first"
+        )
 
     def generate_workgroup_uniform_load_call(self, node):
         """Emit ``workgroupUniformLoad(&x)`` for a workgroup variable ``x``."""
@@ -4191,6 +4360,11 @@ class WGSLCodeGen(
                 "++",
                 "--",
             } and self.is_repeatable_matrix_operand(expr.operand)
+        if isinstance(expr, TernaryOpNode):
+            return all(
+                self.is_repeatable_matrix_operand(part)
+                for part in (expr.condition, expr.true_expr, expr.false_expr)
+            )
         if isinstance(expr, CastNode):
             return self.is_repeatable_matrix_operand(expr.expression)
         if isinstance(expr, MemberAccessNode):
@@ -4715,14 +4889,40 @@ class WGSLCodeGen(
             return self.generate_texture_sample_bias_call(
                 function_name, texture, second, third
             )
+        if len(args) == 4:
+            texture, sampler, coords, bias = args
+            if self.is_sampler_type(self.expression_type(sampler)):
+                # HLSL SampleBias, Metal sample(s, uv, bias) and the CrossGL
+                # form texture(t, s, coords, bias): the explicit sampler
+                # goes to textureSampleBias (issue #3584).
+                return self.generate_texture_sample_bias_call(
+                    function_name, texture, coords, bias, sampler=sampler
+                )
+            raise WGSLTextureBiasUnsupportedError(
+                function_name,
+                self.generate_expression(texture),
+                "texture() with four arguments takes "
+                "texture/sampler/coords/bias, but the second argument is "
+                "not a sampler: "
+                f"{self.raw_type_name_string(self.expression_type(sampler)) or 'an unknown type'}",
+            )
         raise ValueError(
-            "WGSL target supports texture() calls with texture/coords or "
-            "texture/sampler/coords arguments; got "
+            "WGSL target supports texture() calls with texture/coords, "
+            "texture/sampler/coords, texture/coords/bias or "
+            "texture/sampler/coords/bias arguments; got "
             f"{len(args)} argument(s) for {function_name}"
         )
 
-    def generate_texture_sample_bias_call(self, function_name, texture, coords, bias):
-        """``texture(sampler, coords, bias)`` as ``textureSampleBias`` (see :mod:`.wgsl_texture_bias`)."""
+    def generate_texture_sample_bias_call(
+        self, function_name, texture, coords, bias, sampler=None
+    ):
+        """A biased ``texture()`` as ``textureSampleBias`` (see :mod:`.wgsl_texture_bias`).
+
+        With an explicit ``sampler`` (the four-argument form of issue
+        #3584) that sampler is used; otherwise the split sampler the
+        declaration provides is used (the three-argument form of issue
+        #2462).
+        """
         if self._current_stage_name == "compute":
             raise ImplicitLodStageUnsupportedError(
                 "wgsl",
@@ -4754,21 +4954,32 @@ class WGSLCodeGen(
                 f"{texture_type or 'a texture of unknown type'}; it takes 2D, "
                 "2D array, 3D, cube and cube array textures",
             )
+        if sampler is None:
+            sampler_name = self.texture_sampler_expression(texture)
+        else:
+            sampler_name = self.generate_expression(sampler)
+            if self.is_comparison_sampler_type(self.expression_type(sampler)):
+                raise WGSLTextureBiasUnsupportedError(
+                    function_name,
+                    texture_name,
+                    f"textureSampleBias takes a sampler, but {sampler_name} is "
+                    "a comparison sampler",
+                )
         bias_type = self.expression_type(bias)
         if bias_type is not None and self.scalar_type_name(bias_type) not in {
             "f32",
             "i32",
             "u32",
         }:
+            bias_position = "third" if sampler is None else "fourth"
             raise WGSLTextureBiasUnsupportedError(
                 function_name,
                 texture_name,
-                "the bias is a float scalar, but the third argument is "
+                f"the bias is a float scalar, but the {bias_position} argument is "
                 f"{self.raw_type_name_string(bias_type)}",
             )
         return (
-            f"textureSampleBias({texture_name}, "
-            f"{self.texture_sampler_expression(texture)}, "
+            f"textureSampleBias({texture_name}, {sampler_name}, "
             f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
             f"{self.generate_expression_for_target(bias, 'float')})"
         )
@@ -5379,6 +5590,10 @@ class WGSLCodeGen(
     def generate_type_constructor_call_arguments(self, function_name, arguments):
         vector_shape = self.vector_shape(function_name)
         if vector_shape is None:
+            if self.map_type_name(function_name) == "u32" and len(arguments) == 1:
+                return self.concrete_negative_integer_literal(
+                    arguments[0], self.generate_expression(arguments[0])
+                )
             return self.generate_call_arguments(function_name, arguments)
         element_type, _size = vector_shape
         convert_vectors = len(arguments) > 1
@@ -5415,6 +5630,8 @@ class WGSLCodeGen(
             )
             return f"array<{element}, {size}>"
         if isinstance(vtype, NamedType):
+            if not vtype.generic_args and vtype.name in self._enum_type_names:
+                return "i32"
             option_type = self.builtin_option_specialized_type_name(vtype)
             if option_type is not None:
                 return option_type
@@ -6448,6 +6665,12 @@ class WGSLCodeGen(
         access = self.stage_interface_matrix_access(expr)
         if access is None:
             return None
+        # Each column reads the object again, so a read whose object has
+        # side effects would mix columns from different elements.
+        self.require_repeatable_matrix_operands(
+            "read of a split stage-interface member",
+            (access["object_expr"],),
+        )
         columns = ", ".join(
             self.stage_interface_matrix_access_field(access, index)
             for index in range(access["columns"])
@@ -6859,6 +7082,8 @@ class WGSLCodeGen(
 
     def expression_type(self, expr):
         if isinstance(expr, IdentifierNode):
+            if expr.name in self._enum_variant_constants:
+                return "i32"
             if expr.name in self.WORKGROUP_SIZE_IDENTIFIER_ALIASES:
                 return "vec3<u32>"
             mapped_builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name)
@@ -6931,6 +7156,13 @@ class WGSLCodeGen(
                 function_name
             ):
                 return packed_8bit[2]
+            if (
+                function_name in {"bitCount", "findLSB", "findMSB"}
+                and len(expr.arguments) == 1
+                and not self.is_user_function_name(function_name)
+            ):
+                vector = self.vector_shape(self.expression_type(expr.arguments[0]))
+                return "int" if vector is None else f"vec{vector[1]}<i32>"
             if (
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"

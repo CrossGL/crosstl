@@ -645,26 +645,54 @@ class OpenCLParser(HipParser):
             return index
         return None
 
+    def parse_declaration_qualifiers(self):
+        qualifiers = []
+
+        while True:
+            if self.match(*self.DECLARATION_QUALIFIER_TOKENS):
+                qualifiers.append(self.current_token.value)
+                self.advance()
+                continue
+            next_index = self.skip_newlines_at_pos(self.pos)
+            if (
+                next_index != self.pos
+                and next_index < len(self.tokens)
+                and self.tokens[next_index].type in self.DECLARATION_QUALIFIER_TOKENS
+            ):
+                self.skip_newlines()
+                continue
+            break
+
+        return qualifiers
+
     def parse_variable_declaration_type(self, qualifiers, attributes=None):
         attributes = attributes if attributes is not None else []
         saved_pos = self.pos
         saved_token = self.current_token
         type_prefixes = []
+        interleaved_qualifiers = []
         saw_integral_sign = False
 
         self.skip_newlines()
         self.skip_cpp_attributes()
         parsed_attributes = self.parse_type_attribute_prefixes()
 
-        while self.match(*self.TYPE_QUALIFIER_TOKENS):
-            if self.current_token.type in {"SIGNED", "UNSIGNED"}:
-                saw_integral_sign = True
-            type_prefixes.append(self.current_token.value)
+        while self.match(
+            *self.TYPE_QUALIFIER_TOKENS,
+            *self.DECLARATION_QUALIFIER_TOKENS,
+        ):
+            if self.match(*self.DECLARATION_QUALIFIER_TOKENS):
+                interleaved_qualifiers.append(self.current_token.value)
+            else:
+                if self.current_token.type in {"SIGNED", "UNSIGNED"}:
+                    saw_integral_sign = True
+                type_prefixes.append(self.current_token.value)
             self.advance()
             self.skip_newlines()
+            self.skip_cpp_attributes()
+            parsed_attributes.extend(self.parse_type_attribute_prefixes())
 
-        self.skip_cpp_attributes()
-        interleaved_qualifiers = self.parse_declaration_qualifiers()
+        interleaved_qualifiers.extend(self.parse_declaration_qualifiers())
         if type_prefixes or interleaved_qualifiers:
             qualifiers.extend(interleaved_qualifiers)
             self.skip_newlines()
