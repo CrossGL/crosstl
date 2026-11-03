@@ -2538,20 +2538,19 @@ class WGSLCodeGen(
         return "\n".join(lines)
 
     def generate_module_scope_value(self, value, target_type):
-        if is_struct_braced_initializer(
-            self, value, target_type
-        ) or is_vector_braced_initializer(self, value, target_type):
+        # A brace list takes the declared type, as in a local declaration: a
+        # short array list is zero-filled and a structure's list becomes its
+        # constructor.
+        if (
+            isinstance(value, ArrayLiteralNode)
+            or is_struct_braced_initializer(self, value, target_type)
+            or is_vector_braced_initializer(self, value, target_type)
+        ):
             return self.generate_expression_for_target(value, target_type)
         return self.generate_expression(value)
 
     def generate_constant(self, node):
-        if isinstance(node.value, ArrayLiteralNode):
-            # A brace list takes the declared type, as in a local declaration: a
-            # short array list is zero-filled and a structure's list becomes
-            # its constructor.
-            value = self.generate_expression_for_target(node.value, node.const_type)
-        else:
-            value = self.generate_module_scope_value(node.value, node.const_type)
+        value = self.generate_module_scope_value(node.value, node.const_type)
         return (
             f"const {self.module_identifier_name(node.name)}: "
             f"{self.type_name_string(node.const_type)} = {value};"
