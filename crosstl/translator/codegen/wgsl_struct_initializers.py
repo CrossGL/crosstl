@@ -159,5 +159,11 @@ def _member_value(codegen, value, member_type):
         if lanes is not None and lanes == _lanes(codegen, source_type):
             member = codegen.type_name_string(member_type)
             if codegen.type_name_string(source_type) != member:
-                return f"{member}({codegen.generate_expression(value)})"
+                rendered = codegen.generate_expression(value)
+                if member == "u32":
+                    # u32(-1) converts the abstract value -1, which naga rejects; u32(-1i) keeps the bits.
+                    rendered = codegen.concrete_negative_integer_literal(
+                        value, rendered
+                    )
+                return f"{member}({rendered})"
     return codegen.generate_expression_for_target(value, member_type)
