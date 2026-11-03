@@ -685,6 +685,35 @@ def test_opencl_program_sampler_constant_takes_no_binding():
     assert "@group(0) @binding(2) var<storage, read_write> outp: array<f32>" in crossgl
 
 
+@pytest.mark.parametrize("leading_qualifier", ["static", "const"])
+def test_opencl_multiline_constant_qualifier_after_static_or_const(
+    tmp_path, leading_qualifier
+):
+    source = f"""
+        {leading_qualifier}
+        __constant float table[4] = {{1.0f, 2.0f, 3.0f, 4.0f}};
+
+        __kernel void first(__global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4];
+        }}
+        """
+    crossgl = generate_crossgl(source)
+
+    assert (
+        "@group(0) @binding(0) var<uniform> table: array<f32, 4> = {1.0f, 2.0f, 3.0f, 4.0f};"
+        in crossgl
+    )
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+
+    opencl_path = tmp_path / f"multiline_{leading_qualifier}_constant.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+
+    assert "constant float* table [[buffer(0)]]" in metal
+    assert "device float* out [[buffer(1)]]" in metal
+
+
 def test_darktable_unsigned_char_pointer_to_array_kernel_param_codegen_reparse():
     crossgl = generate_crossgl("""
         static inline int FCxtrans(const int row,
