@@ -2810,6 +2810,77 @@ def test_wgsl_codegen_refuses_texture_bias_in_compute():
     )
 
 
+def test_wgsl_codegen_lowers_explicit_sampler_texture_bias_to_texture_sample_bias(
+    tmp_path,
+):
+    # A four-argument texture() with an explicit sampler is the form HLSL
+    # SampleBias and Metal sample(s, uv, bias) import as; it goes to
+    # textureSampleBias with that sampler, not the split one (issue #3584).
+    shader = """
+    shader WGSLExplicitSamplerBias {
+        sampler2D colorTex;
+        sampler linearSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorTex, linearSampler, uv, 0.5);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureSampleBias(colorTex, linearSampler, uv, 0.5)" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_without_a_sampler():
+    shader = """
+    shader WGSLExplicitSamplerBias {
+        sampler2D colorTex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorTex, uv, vec2(0.5, 0.0), 0.5);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLTextureBiasUnsupportedError,
+        match=r"texture\(\) with four arguments takes texture/sampler/coords/bias",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_in_compute():
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec4* outp;
+            uniform sampler2D u0;
+            uniform sampler linearSampler;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outp[i] = texture(u0, linearSampler, vec2(0.5), fin[0]);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ImplicitLodStageUnsupportedError,
+        match=r"operation 'texture' is reached from the compute stage",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(code))
+
+    assert raised.value.code == (
+        "project.translate.wgsl-implicit-lod-stage-unsupported"
+    )
+
+
 def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings():
     shader = """
     shader WGSLTextureResourceArray {

@@ -4715,14 +4715,40 @@ class WGSLCodeGen(
             return self.generate_texture_sample_bias_call(
                 function_name, texture, second, third
             )
+        if len(args) == 4:
+            texture, sampler, coords, bias = args
+            if self.is_sampler_type(self.expression_type(sampler)):
+                # HLSL SampleBias, Metal sample(s, uv, bias) and the CrossGL
+                # form texture(t, s, coords, bias): the explicit sampler
+                # goes to textureSampleBias (issue #3584).
+                return self.generate_texture_sample_bias_call(
+                    function_name, texture, coords, bias, sampler=sampler
+                )
+            raise WGSLTextureBiasUnsupportedError(
+                function_name,
+                self.generate_expression(texture),
+                "texture() with four arguments takes "
+                "texture/sampler/coords/bias, but the second argument is "
+                "not a sampler: "
+                f"{self.raw_type_name_string(self.expression_type(sampler)) or 'an unknown type'}",
+            )
         raise ValueError(
-            "WGSL target supports texture() calls with texture/coords or "
-            "texture/sampler/coords arguments; got "
+            "WGSL target supports texture() calls with texture/coords, "
+            "texture/sampler/coords, texture/coords/bias or "
+            "texture/sampler/coords/bias arguments; got "
             f"{len(args)} argument(s) for {function_name}"
         )
 
-    def generate_texture_sample_bias_call(self, function_name, texture, coords, bias):
-        """``texture(sampler, coords, bias)`` as ``textureSampleBias`` (see :mod:`.wgsl_texture_bias`)."""
+    def generate_texture_sample_bias_call(
+        self, function_name, texture, coords, bias, sampler=None
+    ):
+        """``texture(sampler, coords, bias)`` as ``textureSampleBias`` (see :mod:`.wgsl_texture_bias`).
+
+        With an explicit ``sampler`` (the four-argument form of issue
+        #3584) that sampler is used; otherwise the split sampler the
+        declaration provides is used (the three-argument form of issue
+        #2462).
+        """
         if self._current_stage_name == "compute":
             raise ImplicitLodStageUnsupportedError(
                 "wgsl",
@@ -4768,7 +4794,7 @@ class WGSLCodeGen(
             )
         return (
             f"textureSampleBias({texture_name}, "
-            f"{self.texture_sampler_expression(texture)}, "
+            f"{self.generate_expression(sampler) if sampler is not None else self.texture_sampler_expression(texture)}, "
             f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
             f"{self.generate_expression_for_target(bias, 'float')})"
         )

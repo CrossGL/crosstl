@@ -54,7 +54,8 @@ The initial WGSL target surface covers common portable shader output:
   64-bit floating-point, 64-bit integer and bfloat16 types, which WGSL cannot
   represent; they are never narrowed to ``f32`` or ``i32``
 * ``texture(sampler, coords, bias)`` lowered to ``textureSampleBias`` with the
-  texture's split sampler; a bias on a 1D texture, which has no
+  texture's split sampler, and ``texture(texture, sampler, coords, bias)``
+  with an explicit sampler to ``textureSampleBias`` with that sampler; a bias on a 1D texture, which has no
   ``textureSampleBias`` overload, or on an element of a sampled texture array
   selected at run time is refused with
   ``project.translate.wgsl-texture-bias-unsupported``, and a bias in a compute
