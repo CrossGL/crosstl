@@ -4742,7 +4742,7 @@ class WGSLCodeGen(
     def generate_texture_sample_bias_call(
         self, function_name, texture, coords, bias, sampler=None
     ):
-        """``texture(sampler, coords, bias)`` as ``textureSampleBias`` (see :mod:`.wgsl_texture_bias`).
+        """A biased ``texture()`` as ``textureSampleBias`` (see :mod:`.wgsl_texture_bias`).
 
         With an explicit ``sampler`` (the four-argument form of issue
         #3584) that sampler is used; otherwise the split sampler the
@@ -4780,21 +4780,32 @@ class WGSLCodeGen(
                 f"{texture_type or 'a texture of unknown type'}; it takes 2D, "
                 "2D array, 3D, cube and cube array textures",
             )
+        if sampler is None:
+            sampler_name = self.texture_sampler_expression(texture)
+        else:
+            sampler_name = self.generate_expression(sampler)
+            if self.is_comparison_sampler_type(self.expression_type(sampler)):
+                raise WGSLTextureBiasUnsupportedError(
+                    function_name,
+                    texture_name,
+                    f"textureSampleBias takes a sampler, but {sampler_name} is "
+                    "a comparison sampler",
+                )
         bias_type = self.expression_type(bias)
         if bias_type is not None and self.scalar_type_name(bias_type) not in {
             "f32",
             "i32",
             "u32",
         }:
+            bias_position = "third" if sampler is None else "fourth"
             raise WGSLTextureBiasUnsupportedError(
                 function_name,
                 texture_name,
-                "the bias is a float scalar, but the third argument is "
+                f"the bias is a float scalar, but the {bias_position} argument is "
                 f"{self.raw_type_name_string(bias_type)}",
             )
         return (
-            f"textureSampleBias({texture_name}, "
-            f"{self.generate_expression(sampler) if sampler is not None else self.texture_sampler_expression(texture)}, "
+            f"textureSampleBias({texture_name}, {sampler_name}, "
             f"{self.sampled_texture_coordinates(texture, coords, function_name)}, "
             f"{self.generate_expression_for_target(bias, 'float')})"
         )

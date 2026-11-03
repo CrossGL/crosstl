@@ -2833,6 +2833,137 @@ def test_wgsl_codegen_lowers_explicit_sampler_texture_bias_to_texture_sample_bia
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+@pytest.mark.parametrize(
+    ("sampler_type", "coord_type", "bias", "expected"),
+    [
+        ("sampler3D", "vec3", "0.5", "textureSampleBias(tex, s, uv, 0.5)"),
+        ("samplerCube", "vec3", "0.5", "textureSampleBias(tex, s, uv, 0.5)"),
+        (
+            "sampler2DArray",
+            "vec3",
+            "0.5",
+            "textureSampleBias(tex, s, uv.xy, i32(floor(uv.z + 0.5)), 0.5)",
+        ),
+        (
+            "samplerCubeArray",
+            "vec4",
+            "0.5",
+            "textureSampleBias(tex, s, uv.xyz, i32(floor(uv.w + 0.5)), 0.5)",
+        ),
+        ("sampler2D", "vec2", "level", "textureSampleBias(tex, s, uv, f32(level))"),
+    ],
+)
+def test_wgsl_codegen_lowers_explicit_sampler_texture_bias_on_every_biased_texture_type(
+    tmp_path, sampler_type, coord_type, bias, expected
+):
+    # The explicit sampler form passes the layer of an array texture as its
+    # own argument and converts an integer bias, as the split-sampler form does.
+    shader = f"""
+    shader WGSLExplicitSamplerBias {{
+        uniform {sampler_type} tex;
+        uniform sampler s;
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0, int level @ TEXCOORD1)
+                @ gl_FragColor {{
+                return texture(tex, s, uv, {bias});
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"return {expected};" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "coord_type", "call", "message"),
+    [
+        (
+            "uniform sampler1D tex; uniform sampler s;",
+            "float",
+            "texture(tex, s, uv, 0.5)",
+            r"bias on tex: textureSampleBias has no overload for texture_1d<f32>",
+        ),
+        (
+            "uniform sampler2DShadow tex; uniform sampler s;",
+            "vec3",
+            "vec4(texture(tex, s, uv, 0.5))",
+            r"bias on tex: textureSampleBias has no overload for texture_depth_2d",
+        ),
+        (
+            "uniform sampler2D tex[2]; uniform sampler s;",
+            "vec2",
+            "texture(tex[layer], s, uv, 0.5)",
+            r"bias on tex\[layer\]: an element of a sampled texture array selected "
+            r"at run time",
+        ),
+        (
+            "uniform sampler2D tex; uniform comparison_sampler s;",
+            "vec2",
+            "texture(tex, s, uv, 0.5)",
+            r"bias on tex: textureSampleBias takes a sampler, but s is a comparison "
+            r"sampler",
+        ),
+        (
+            "uniform sampler2D tex; uniform sampler s;",
+            "vec2",
+            "texture(tex, s, uv, uv)",
+            r"bias on tex: the bias is a float scalar, but the fourth argument is "
+            r"vec2",
+        ),
+    ],
+)
+def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_without_a_wgsl_overload(
+    declaration, coord_type, call, message
+):
+    shader = f"""
+    shader WGSLExplicitSamplerBias {{
+        {declaration}
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0, int layer @ TEXCOORD1)
+                @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(WGSLTextureBiasUnsupportedError, match=message) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_translate_hlsl_sample_bias_to_wgsl_texture_sample_bias(tmp_path):
+    # HLSL SampleBias imports as texture(t, s, coords, bias) (issue #3584).
+    source_path = tmp_path / "sample_bias.hlsl"
+    source_path.write_text(
+        """
+        Texture2D colorMap : register(t0);
+        Texture2DArray layers : register(t1);
+        SamplerState samp : register(s0);
+
+        float4 main(float3 uvw : TEXCOORD0) : SV_Target {
+            return colorMap.SampleBias(samp, uvw.xy, 1)
+                + layers.SampleBias(samp, uvw, 0.5);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="wgsl")
+
+    assert "textureSampleBias(colorMap, samp, uvw.xy, f32(1))" in generated
+    assert (
+        "textureSampleBias(layers, samp, uvw.xy, i32(floor(uvw.z + 0.5)), 0.5)"
+        in generated
+    )
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_without_a_sampler():
     shader = """
     shader WGSLExplicitSamplerBias {
