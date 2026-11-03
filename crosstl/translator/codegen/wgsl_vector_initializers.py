@@ -27,7 +27,6 @@ from .wgsl_struct_initializers import wgsl_converted_value
 
 __all__ = [
     "WGSLVectorInitializerError",
-    "is_vector_braced_initializer",
     "wgsl_vector_array_initializer",
     "wgsl_vector_initializer",
 ]
@@ -72,18 +71,6 @@ def wgsl_vector_array_initializer(codegen, expr, target_type):
     element = codegen.type_name_string(element_type)
     rendered = [wgsl_array_element(codegen, value, element_type) for value in values]
     return f"array<{element}, {size}>({', '.join(rendered)})"
-
-
-def is_vector_braced_initializer(codegen, expr, target_type):
-    """Whether ``expr`` is a brace initializer for a vector, a matrix, or an array of either."""
-    if not isinstance(expr, ArrayLiteralNode):
-        return False
-    if isinstance(target_type, ArrayType):
-        target_type = target_type.element_type
-    return (
-        codegen.vector_shape(target_type) is not None
-        or codegen.matrix_shape(target_type) is not None
-    )
 
 
 def wgsl_vector_initializer(codegen, expr, target_type):

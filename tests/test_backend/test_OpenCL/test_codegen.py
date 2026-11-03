@@ -1554,3 +1554,100 @@ def test_opencl_fences_refuse_scopes_no_crossgl_fence_orders(call):
                 outp[get_global_id(0)] = 0u;
             }}
             """)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "second_line", "expected"),
+    [
+        (
+            "const",
+            "__global float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global",
+            "const float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "const __global",
+            "float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global const",
+            "float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+    ],
+)
+def test_opencl_kernel_parameter_qualifiers_split_across_lines(
+    first_line, second_line, expected
+):
+    split_source = f"""
+        __kernel void first({first_line}
+            {second_line}, __global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = in[i];
+        }}
+        """
+    one_line_source = split_source.replace(f"{first_line}\n", f"{first_line} ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert expected in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_constant_kernel_parameter_split_from_const():
+    split_source = """
+        __kernel void first(const
+            __constant float* table, __global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4];
+        }
+        """
+    one_line_source = split_source.replace("const\n", "const ")
+
+    assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "second_line"),
+    [("unsigned", "n"), ("unsigned", "int n"), ("const", "unsigned n")],
+)
+def test_opencl_unsigned_kernel_parameter_split_across_lines(first_line, second_line):
+    # `unsigned` / `n` is an `unsigned int` named `n`, as on one line.
+    split_source = f"""
+        __kernel void first(__global float* out, {first_line}
+            {second_line}) {{
+            out[get_global_id(0)] = (float)n;
+        }}
+        """
+    one_line_source = split_source.replace(f"{first_line}\n", f"{first_line} ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert "u32 n" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_function_parameter_qualifier_split_across_lines():
+    split_source = """
+        float twice(const
+            float v) {
+            return v * 2.0f;
+        }
+
+        __kernel void first(__global const float* in, __global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = twice(in[i]);
+        }
+        """
+    one_line_source = split_source.replace("const\n", "const ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert "f32 twice(f32 v)" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)

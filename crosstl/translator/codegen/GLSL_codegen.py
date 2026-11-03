@@ -40751,6 +40751,23 @@ complex64_t crossgl_complex64_mod_assign(
             if ray_query_member_call is not None:
                 return ray_query_member_call
 
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and func_expr.member == "length"
+                and not expr.args
+            ):
+                # A buffer parameter is rewritten as an offset into the buffer it
+                # reads, so its length is that buffer's, not one element's.
+                storage_binding = self.glsl_storage_pointer_binding(
+                    func_expr.object, self.glsl_storage_pointer_aliases()
+                )
+                if (
+                    storage_binding is not None
+                    and "pointer_reinterpretation" not in storage_binding
+                    and "byte_offset" not in storage_binding
+                ):
+                    return self.structured_buffer_length_expression(func_expr.object)
+
             synchronization_call = self.synchronization_function_call(
                 original_func_name,
                 expr.args,
@@ -58840,9 +58857,10 @@ complex64_t crossgl_complex64_mod_assign(
             return type_name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
+            prefix = "d" if element_type == "double" else ""
             if type_node.rows == type_node.cols:
-                return f"mat{type_node.rows}"
-            return f"mat{type_node.cols}x{type_node.rows}"
+                return f"{prefix}mat{type_node.rows}"
+            return f"{prefix}mat{type_node.cols}x{type_node.rows}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             if str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)
