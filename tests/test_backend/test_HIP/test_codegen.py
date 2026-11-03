@@ -466,10 +466,7 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert (
-            "let local_table: array<f32, 4> = {0.0, 0.0, 0.0, 0.0};"
-            in result
-        )
+        assert "let local_table: array<f32, 4> = {0.0, 0.0, 0.0, 0.0};" in result
         assert "var<uniform> local_table" not in result
         assert result.count("@group(0) @binding(0)") == 1
         assert "__constant__" not in result
