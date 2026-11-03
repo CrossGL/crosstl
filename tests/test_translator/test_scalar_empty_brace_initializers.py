@@ -98,7 +98,9 @@ NARROW = textwrap.dedent("""
         out[i] = (float)s + (float)c;
     }
 """)
-WIDE = NARROW.replace("short", "long long").replace("unsigned char", "unsigned long long")
+WIDE = NARROW.replace("short", "long long").replace(
+    "unsigned char", "unsigned long long"
+)
 
 
 def _sized(template, braces):
