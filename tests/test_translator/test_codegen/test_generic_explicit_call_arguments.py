@@ -129,7 +129,9 @@ shader main {
 """
 
 
-@pytest.mark.parametrize("backend", ["directx", "opengl", "metal", "cuda", "hip", "slang"])
+@pytest.mark.parametrize(
+    "backend", ["directx", "opengl", "metal", "cuda", "hip", "slang"]
+)
 def test_expression_argument_is_not_read_as_a_type_argument(tmp_path, backend):
     # sel(q.v, q.v), sel(vec2(1.0), q.v), sel(2.0, x) and sel(x + 1.0, x) all match sel(T a, T b); none of the
     # leading arguments is a type, so no specialization is named after one.
