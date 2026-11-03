@@ -29,6 +29,7 @@ from .wgsl_array_constructors import wgsl_array_element
 __all__ = [
     "WGSLStructInitializerError",
     "is_struct_braced_initializer",
+    "wgsl_converted_value",
     "wgsl_struct_array_initializer",
     "wgsl_struct_initializer",
 ]
@@ -110,7 +111,7 @@ def wgsl_struct_initializer(codegen, expr, target_type):
             f"it has {len(members)} members and the initializer gives {len(values)} values",
         )
     rendered = [
-        _member_value(codegen, value, member_type)
+        wgsl_converted_value(codegen, value, member_type)
         for value, (_name, member_type) in zip(values, members)
     ]
     rendered += [
@@ -151,8 +152,8 @@ def _lanes(codegen, vtype):
     return 1 if codegen.scalar_type_name(vtype) is not None else None
 
 
-def _member_value(codegen, value, member_type):
-    """Return WGSL for ``value`` converted to the ``member_type`` member it initializes."""
+def wgsl_converted_value(codegen, value, member_type):
+    """Return WGSL for ``value`` converted to ``member_type``, the member, component or column it initializes."""
     if not isinstance(value, ArrayLiteralNode):
         lanes = _lanes(codegen, member_type)
         source_type = codegen.expression_type(value)
