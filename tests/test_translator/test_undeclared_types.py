@@ -357,3 +357,65 @@ def test_a_named_generic_structure_with_an_undeclared_member_is_refused(
     path = _write(tmp_path, "template.cgl", NAMED_TEMPLATE)
     with pytest.raises(UndeclaredTypeError, match="Alias"):
         crosstl.translate(path, backend=target)
+
+
+CALL_TYPE_ARGUMENT = """
+shader P {
+    T pick<T>(T x) { return x; }
+    compute {
+        buffer float* outp;
+        void main() { outp[0] = pick<foo>(outp[1]); }
+    }
+}
+"""
+
+DECLARED_CALL_TYPE_ARGUMENTS = """
+shader P {
+    struct Pair { float a; float b; };
+    T pick<T>(T x) { return x; }
+    U second<T, U>(T x, U y) { return pick<U>(y); }
+    compute {
+        buffer float* outp;
+        void main() {
+            Pair p;
+            p.a = pick<float>(outp[1]);
+            p.b = second<Pair, float>(pick<Pair>(p), 2.0);
+            outp[0] = p.a + p.b;
+        }
+    }
+}
+"""
+
+
+def test_an_undeclared_call_type_argument_is_reported_by_name():
+    uses = undeclared_type_uses(_program(CALL_TYPE_ARGUMENT))
+    assert [name for name, _ in uses] == ["foo"]
+
+
+def test_declared_call_type_arguments_are_known():
+    assert undeclared_type_uses(_program(DECLARED_CALL_TYPE_ARGUMENTS)) == []
+
+
+@pytest.mark.parametrize("target", TARGETS + ["rust"])
+def test_translation_refuses_an_undeclared_call_type_argument(tmp_path, target):
+    path = _write(tmp_path, "call.cgl", CALL_TYPE_ARGUMENT)
+    with pytest.raises(UndeclaredTypeError, match="'foo'"):
+        crosstl.translate(path, backend=target)
+
+
+CONSTANT_CALL_ARGUMENT = """
+shader P {
+    const int K = 4;
+    T scaled<T, N>(T x) { return x * T(N); }
+    compute {
+        buffer float* outp;
+        void main() { outp[0] = scaled<float, K>(outp[1]); }
+    }
+}
+"""
+
+
+def test_a_declared_constant_as_a_call_argument_is_not_an_undeclared_type(tmp_path):
+    assert undeclared_type_uses(_program(CONSTANT_CALL_ARGUMENT)) == []
+    path = _write(tmp_path, "constant.cgl", CONSTANT_CALL_ARGUMENT)
+    assert "(x * f32(K))" in crosstl.translate(path, backend="wgsl")
