@@ -61,6 +61,48 @@ def test_hlsl_counts_structured_and_byte_address_views(tmp_path):
         )
 
 
+HELPER_VIEW = """shader HelperView {
+    buffer float* data;
+    RWStructuredBuffer<float> outp;
+    int count(buffer float* v) {
+        return v.length();
+    }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            outp[0] = float(count(data));
+        }
+    }
+}"""
+
+
+def test_hlsl_counts_a_helper_view_parameter_from_its_offset(tmp_path):
+    """A helper's ``buffer T*`` parameter is passed as its buffer and an element
+    offset, so its length() is the buffer's element count less the offset."""
+    hlsl = HLSLCodeGen().generate(parse(HELPER_VIEW))
+
+    assert "(int(cgl_buffer_count(v)) - int(v_offset))" in hlsl
+    assert ".length()" not in hlsl
+    dxc = shutil.which("dxc")
+    if dxc:
+        (tmp_path / "helper_view.hlsl").write_text(hlsl, encoding="utf-8")
+        _check(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-HV",
+                "2021",
+                "-E",
+                "CSMain",
+                "helper_view.hlsl",
+                "-Fo",
+                "helper_view.o",
+            ],
+            tmp_path,
+        )
+
+
 def test_spirv_reads_the_runtime_array_length(tmp_path):
     spirv = VulkanSPIRVCodeGen().generate(parse(VIEWS))
 
