@@ -5,6 +5,8 @@ array that naga rejects. A short list is zero-filled, as it is for a local decla
 and a list longer than its array is refused.
 """
 
+import shutil
+import subprocess
 import textwrap
 
 import pytest
@@ -30,7 +32,14 @@ PROGRAM = textwrap.dedent("""
 def translate(tmp_path, declaration):
     path = tmp_path / "probe.cgl"
     path.write_text(PROGRAM % declaration)
-    return crosstl.translate(str(path), backend="wgsl", format_output=False)
+    output = crosstl.translate(str(path), backend="wgsl", format_output=False)
+    if shutil.which("naga"):
+        (tmp_path / "out.wgsl").write_text(output)
+        checked = subprocess.run(
+            ["naga", "out.wgsl"], cwd=tmp_path, capture_output=True, text=True
+        )
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+    return output
 
 
 @pytest.mark.parametrize("initializer", ["float[3](1.0)", "{1.0}"])
@@ -44,11 +53,24 @@ def test_full_shader_scope_array_initializer_is_unchanged(tmp_path):
     assert "var<private> g: array<f32, 3> = array(1.0, 2.0, 3.0);" in output
 
 
-def test_long_shader_scope_array_initializer_is_refused(tmp_path):
+@pytest.mark.parametrize(
+    "declaration, array_type",
+    [
+        ("float g[3] = {1.0, 2.0, 3.0, 4.0};", "array<f32, 3>"),
+        (
+            "const int COUNT = 3;\n    float g[COUNT] = {1.0, 2.0, 3.0, 4.0};",
+            "array<f32, COUNT>",
+        ),
+    ],
+)
+def test_long_shader_scope_array_initializer_is_refused(
+    tmp_path, declaration, array_type
+):
     with pytest.raises(
-        WGSLAggregateInitializerError, match="at most 3 elements, got 4"
+        WGSLAggregateInitializerError,
+        match=f"'{array_type}' expects at most 3 elements, got 4",
     ):
-        translate(tmp_path, "float g[3] = {1.0, 2.0, 3.0, 4.0};")
+        translate(tmp_path, declaration)
 
 
 def test_short_shader_scope_constant_array_is_still_zero_filled(tmp_path):
