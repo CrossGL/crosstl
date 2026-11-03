@@ -7,6 +7,10 @@ HLSL copied it, which DXC rejects, WGSL wrote ``array()``, and GLSL refused it a
 in variable and constant declarations whose type is ``float``, ``double``, ``half``, ``int``, ``uint``, ``bool``, an
 8-, 16- or 64-bit integer (``i16 s = {};`` becomes ``i16 s = 0;``, as written by hand), or an alias of one
 (``typedef float real_t; real_t one = {};``).
+
+An enumeration is value-initialized to zero as well, and every generator writes an enumeration-typed variable as its
+underlying integer type, so ``Mode m = {};`` becomes ``Mode m = 0;``, the zero of that type (``int`` unless the
+enumeration names one, as in ``enum Mode : uint``).
 """
 
 from __future__ import annotations
@@ -61,6 +65,9 @@ def zero_empty_scalar_initializers(program, target) -> int:
         and getattr(node, "is_type_alias", False)
         and isinstance(node.name, str)
     }
+    for node in nodes:
+        if isinstance(node, A.EnumNode) and isinstance(node.name, str):
+            aliases.setdefault(node.name, node.underlying_type or "int")
     count = 0
     for node in nodes:
         if isinstance(node, A.VariableNode) and not getattr(
