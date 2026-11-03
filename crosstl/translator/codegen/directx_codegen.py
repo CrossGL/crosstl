@@ -31983,9 +31983,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         object_expr = getattr(
             func_expr, "object_expr", getattr(func_expr, "object", None)
         )
-        if isinstance(object_expr, (IdentifierNode, VariableNode)):
+        if isinstance(object_expr, (IdentifierNode, VariableNode, ArrayAccessNode)):
             # 'buffer T* name' is a runtime-sized element view of a structured
-            # buffer: its length() is GetDimensions' element count.
+            # buffer, and 'bufs[i]' an element of a resource array: their
+            # length() is GetDimensions' element count.
             resource_type = self.hlsl_buffer_helper_resource_type(object_expr)
             if resource_type is not None:
                 return f"int({self.hlsl_buffer_element_count(object_expr)})"
