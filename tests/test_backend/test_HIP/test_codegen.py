@@ -450,6 +450,30 @@ class TestHipCodeGen:
         assert "__constant__" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_hip_static_constant_local_without_initializer_is_zero_initialized(self):
+        code = """
+        extern "C" __global__ void first(float* out) {
+            static __constant__ float local_table[4];
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            out[i] = local_table[i % 4];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "let local_table: array<f32, 4> = {0.0, 0.0, 0.0, 0.0};"
+            in result
+        )
+        assert "var<uniform> local_table" not in result
+        assert result.count("@group(0) @binding(0)") == 1
+        assert "__constant__" not in result
+
     def test_official_amd_aligned_struct_attribute_conversion(self):
         code = """
         struct __align__(16) MyStruct {

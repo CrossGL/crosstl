@@ -591,6 +591,7 @@ class HipToCrossGLConverter:
         self.anonymous_enum_count = 0
         self.global_resource_binding_count = 0
         self.namespace_constant_names = set()
+        self.function_body_depth = 0
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
@@ -5224,12 +5225,14 @@ class HipToCrossGLConverter:
                     self.register_cooperative_group_parameter(param)
             if hasattr(node, "body") and node.body:
                 try:
+                    self.function_body_depth += 1
                     if isinstance(node.body, list):
                         for stmt in node.body:
                             self.emit_statement(stmt)
                     else:
                         self.emit_statement(node.body)
                 finally:
+                    self.function_body_depth -= 1
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -5365,12 +5368,14 @@ class HipToCrossGLConverter:
                         self.register_unique_ptr_parameter(param)
                         self.register_cooperative_group_parameter(param)
                 try:
+                    self.function_body_depth += 1
                     if isinstance(kernel.body, list):
                         for stmt in kernel.body:
                             self.emit_statement(stmt)
                     else:
                         self.emit_statement(kernel.body)
                 finally:
+                    self.function_body_depth -= 1
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -6008,6 +6013,21 @@ class HipToCrossGLConverter:
             return
 
         if "__constant__" in qualifiers:
+            if (
+                not (hasattr(node, "value") and node.value)
+                and getattr(self, "function_body_depth", 0) > 0
+            ):
+                # A function-scope __constant__ local has static storage,
+                # so without an initializer every element is zero, and
+                # device code cannot write constant memory. Emit it as a
+                # function-scope constant of zeros: it must neither take a
+                # resource binding nor be read uninitialized by a later
+                # backend.
+                self.emit(
+                    f"let {output_name}: {var_type} = "
+                    f"{self.crossgl_zero_value(var_type)};"
+                )
+                return
             binding = self.global_resource_binding_for(node)
             if hasattr(node, "value") and node.value:
                 value = self.format_variable_initializer_value(node.value)
@@ -6127,10 +6147,70 @@ class HipToCrossGLConverter:
         else:
             self.emit(f"var<workgroup> {output_name}: {var_type};")
 
+    def crossgl_zero_value(self, var_type):
+        """Zero value for a CrossGL type, for zero-initialized constants.
+
+        Scalars map to their literal zero, vectors and matrices to a
+        constructor of scalar zeros, and fixed-size arrays with a literal
+        extent to a brace list of element zeros. Anything else (a
+        non-literal extent, a struct) falls back to ``{}``, which still
+        value-initializes instead of leaving the storage uninitialized.
+        """
+        var_type = var_type.strip()
+        if var_type in {"f16", "f32", "f64"}:
+            return "0.0"
+        if var_type.startswith(("i", "u")) and var_type[1:].isdigit():
+            return "0"
+        if var_type == "bool":
+            return "false"
+        match = re.fullmatch(r"vec(\d+)<(.+)>", var_type)
+        if match is not None:
+            count = int(match.group(1))
+            element_zero = self.crossgl_zero_value(match.group(2))
+            return f"{var_type}({', '.join([element_zero] * count)})"
+        match = re.fullmatch(r"mat(\d+)x(\d+)<(.+)>", var_type)
+        if match is not None:
+            columns = int(match.group(1))
+            rows = int(match.group(2))
+            element_zero = self.crossgl_zero_value(match.group(3))
+            column = f"vec{rows}<{match.group(3)}>({', '.join([element_zero] * rows)})"
+            return f"{var_type}({', '.join([column] * columns)})"
+        if var_type.startswith("array<") and var_type.endswith(">"):
+            inner = var_type[len("array<") : -1]
+            element_type, extent = self._split_crossgl_array_inner(inner)
+            if element_type is not None and extent.isdigit():
+                element_zero = self.crossgl_zero_value(element_type)
+                return "{" + ", ".join([element_zero] * int(extent)) + "}"
+        return "{}"
+
+    @staticmethod
+    def _split_crossgl_array_inner(inner):
+        """Split ``array<...>`` inner text into (element type, extent)."""
+        depth = 0
+        for index, char in enumerate(inner):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                return inner[:index].strip(), inner[index + 1 :].strip()
+        return None, None
+
     def visit_ConstantMemoryNode(self, node):
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
         output_name = self.register_identifier_name(node.name)
         self.register_variable_type(node.name, var_type)
+        if node.value is None and getattr(self, "function_body_depth", 0) > 0:
+            # A function-scope __constant__ local has static storage, so
+            # without an initializer every element is zero, and device code
+            # cannot write constant memory. Emit it as a function-scope
+            # constant of zeros: it must neither take a resource binding
+            # nor be read uninitialized by a later backend.
+            self.emit(
+                f"let {output_name}: {var_type} = "
+                f"{self.crossgl_zero_value(var_type)};"
+            )
+            return
         binding = self.global_resource_binding_for(node)
         if node.value is not None:
             value = self.visit(node.value)

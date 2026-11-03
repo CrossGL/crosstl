@@ -273,6 +273,7 @@ class CudaToCrossGLConverter:
         self.source_identifier_names = frozenset()
         self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
+        self.function_body_depth = 0
         self.anonymous_enum_count = 0
         self.namespace_scope_variable = False
         self.namespace_constant_names = set()
@@ -304,6 +305,7 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
+        self.function_body_depth = 0
         self.anonymous_enum_count = 0
         self.namespace_constant_names = set()
         self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
@@ -4221,9 +4223,11 @@ class CudaToCrossGLConverter:
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
+                self.function_body_depth += 1
                 for stmt in node.body:
                     self.emit_statement(stmt)
             finally:
+                self.function_body_depth -= 1
                 self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
@@ -4323,9 +4327,11 @@ class CudaToCrossGLConverter:
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
+                self.function_body_depth += 1
                 for stmt in kernel.body:
                     self.emit_statement(stmt)
             finally:
+                self.function_body_depth -= 1
                 self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
@@ -4758,6 +4764,18 @@ class CudaToCrossGLConverter:
         # Convert to uniform buffer in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         self.register_vector1_name(node.name, node.vtype)
+        if node.value is None and getattr(self, "function_body_depth", 0) > 0:
+            # A function-scope __constant__ local has static storage, so
+            # without an initializer every element is zero, and device code
+            # cannot write constant memory. Emit it as a function-scope
+            # constant of zeros: it must neither take a resource binding
+            # (which would also collide with the kernel parameters) nor be
+            # read uninitialized by a later backend.
+            self.emit(
+                f"let {node.name}: {var_type} = "
+                f"{self.crossgl_zero_value(var_type)};"
+            )
+            return
         binding = self.allocate_global_resource_binding()
         if node.value:
             value = self.visit(node.value)
@@ -4773,6 +4791,55 @@ class CudaToCrossGLConverter:
         binding = self.global_resource_binding_count
         self.global_resource_binding_count += 1
         return binding
+
+    def crossgl_zero_value(self, var_type):
+        """Zero value for a CrossGL type, for zero-initialized constants.
+
+        Scalars map to their literal zero, vectors and matrices to a
+        constructor of scalar zeros, and fixed-size arrays with a literal
+        extent to a brace list of element zeros. Anything else (a
+        non-literal extent, a struct) falls back to ``{}``, which still
+        value-initializes instead of leaving the storage uninitialized.
+        """
+        var_type = var_type.strip()
+        if var_type in {"f16", "f32", "f64"}:
+            return "0.0"
+        if var_type.startswith(("i", "u")) and var_type[1:].isdigit():
+            return "0"
+        if var_type == "bool":
+            return "false"
+        match = re.fullmatch(r"vec(\d+)<(.+)>", var_type)
+        if match is not None:
+            count = int(match.group(1))
+            element_zero = self.crossgl_zero_value(match.group(2))
+            return f"{var_type}({', '.join([element_zero] * count)})"
+        match = re.fullmatch(r"mat(\d+)x(\d+)<(.+)>", var_type)
+        if match is not None:
+            columns = int(match.group(1))
+            rows = int(match.group(2))
+            element_zero = self.crossgl_zero_value(match.group(3))
+            column = f"vec{rows}<{match.group(3)}>({', '.join([element_zero] * rows)})"
+            return f"{var_type}({', '.join([column] * columns)})"
+        if var_type.startswith("array<") and var_type.endswith(">"):
+            inner = var_type[len("array<") : -1]
+            element_type, extent = self._split_crossgl_array_inner(inner)
+            if element_type is not None and extent.isdigit():
+                element_zero = self.crossgl_zero_value(element_type)
+                return "{" + ", ".join([element_zero] * int(extent)) + "}"
+        return "{}"
+
+    @staticmethod
+    def _split_crossgl_array_inner(inner):
+        """Split ``array<...>`` inner text into (element type, extent)."""
+        depth = 0
+        for index, char in enumerate(inner):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                return inner[:index].strip(), inner[index + 1 :].strip()
+        return None, None
 
     def visit_AssignmentNode(self, node):
         left = self.visit(node.left)
