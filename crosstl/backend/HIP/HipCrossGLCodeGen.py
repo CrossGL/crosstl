@@ -7,6 +7,7 @@ from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
+from ..CUDA.local_memory_spaces import crossgl_zero_value
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
@@ -6029,7 +6030,7 @@ class HipToCrossGLConverter:
                 # is not one.
                 self.emit(
                     f"let {output_name}: {var_type} = "
-                    f"{self.crossgl_zero_value(var_type)};"
+                    f"{crossgl_zero_value(var_type)};"
                 )
                 return
             binding = self.global_resource_binding_for(node)
@@ -6150,55 +6151,6 @@ class HipToCrossGLConverter:
             self.emit(f"var<workgroup> {output_name}: array<{var_type}, {size}>;")
         else:
             self.emit(f"var<workgroup> {output_name}: {var_type};")
-
-    def crossgl_zero_value(self, var_type):
-        """Zero value for a CrossGL type, for zero-initialized constants.
-
-        Scalars map to their literal zero, vectors and matrices to a
-        constructor of scalar zeros, and fixed-size arrays with a literal
-        extent to a brace list of element zeros. Anything else (a
-        non-literal extent, a struct) falls back to ``{}``, which still
-        value-initializes instead of leaving the storage uninitialized.
-        """
-        var_type = var_type.strip()
-        if var_type in {"f16", "f32", "f64"}:
-            return "0.0"
-        if var_type.startswith(("i", "u")) and var_type[1:].isdigit():
-            return "0"
-        if var_type == "bool":
-            return "false"
-        match = re.fullmatch(r"vec(\d+)<(.+)>", var_type)
-        if match is not None:
-            count = int(match.group(1))
-            element_zero = self.crossgl_zero_value(match.group(2))
-            return f"{var_type}({', '.join([element_zero] * count)})"
-        match = re.fullmatch(r"mat(\d+)x(\d+)<(.+)>", var_type)
-        if match is not None:
-            columns = int(match.group(1))
-            rows = int(match.group(2))
-            element_zero = self.crossgl_zero_value(match.group(3))
-            column = f"vec{rows}<{match.group(3)}>({', '.join([element_zero] * rows)})"
-            return f"{var_type}({', '.join([column] * columns)})"
-        if var_type.startswith("array<") and var_type.endswith(">"):
-            inner = var_type[len("array<") : -1]
-            element_type, extent = self._split_crossgl_array_inner(inner)
-            if element_type is not None and extent.isdigit():
-                element_zero = self.crossgl_zero_value(element_type)
-                return "{" + ", ".join([element_zero] * int(extent)) + "}"
-        return "{}"
-
-    @staticmethod
-    def _split_crossgl_array_inner(inner):
-        """Split ``array<...>`` inner text into (element type, extent)."""
-        depth = 0
-        for index, char in enumerate(inner):
-            if char == "<":
-                depth += 1
-            elif char == ">":
-                depth -= 1
-            elif char == "," and depth == 0:
-                return inner[:index].strip(), inner[index + 1 :].strip()
-        return None, None
 
     def visit_ConstantMemoryNode(self, node):
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)

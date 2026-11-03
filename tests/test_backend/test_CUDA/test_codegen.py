@@ -2,6 +2,7 @@ from crosstl import translate
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from crosstl.backend.CUDA.local_memory_spaces import crossgl_zero_value
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -353,6 +354,18 @@ class TestCudaCodeGen:
 
         assert "let table" not in result
         assert "{0.0, 0.0, 0.0, 0.0}" not in result
+
+    def test_crossgl_zero_value_spells_each_type_family(self):
+        assert crossgl_zero_value("u64") == "0"
+        assert crossgl_zero_value("bool") == "false"
+        assert crossgl_zero_value("vec2<i32>") == "vec2<i32>(0, 0)"
+        assert crossgl_zero_value("mat2x2<f32>") == (
+            "mat2x2<f32>(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0))"
+        )
+        assert crossgl_zero_value("array<array<f32, 3>, 2>") == (
+            "{{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}}"
+        )
+        assert crossgl_zero_value("array<Pair, 2>") == "{{}, {}}"
 
     def test_fixed_width_pointer_declaration_list_conversion(self):
         code = """
