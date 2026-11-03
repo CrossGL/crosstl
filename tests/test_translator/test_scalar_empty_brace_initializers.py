@@ -90,6 +90,41 @@ def test_empty_brace_initializer_of_a_stage_scope_scalar_is_zero(tmp_path, backe
     assert STAGE_SCOPE_EXPECTED[backend] in output
 
 
+NARROW = textwrap.dedent("""
+    extern "C" __global__ void first(float* out) {
+        short s = SIGNED;
+        unsigned char c = UNSIGNED;
+        unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+        out[i] = (float)s + (float)c;
+    }
+""")
+WIDE = NARROW.replace("short", "long long").replace("unsigned char", "unsigned long long")
+
+
+def _sized(template, braces):
+    signed, unsigned = ("{}", "{}") if braces else ("0", "0u")
+    return template.replace("UNSIGNED", unsigned).replace("SIGNED", signed)
+
+
+@pytest.mark.parametrize(
+    "template, backend",
+    [
+        pytest.param(NARROW, backend, id=f"narrow-{backend}")
+        for backend in ("directx", "opengl", "metal", "wgsl")
+    ]
+    # WGSL has no 64-bit integers.
+    + [
+        pytest.param(WIDE, backend, id=f"wide-{backend}")
+        for backend in ("directx", "opengl", "metal")
+    ],
+)
+def test_empty_brace_initializer_of_a_sized_integer_is_its_zero(
+    tmp_path, template, backend
+):
+    zero = translate(tmp_path, _sized(template, braces=False), backend)
+    assert translate(tmp_path, _sized(template, braces=True), backend) == zero
+
+
 def test_crossgl_output_keeps_the_braces(tmp_path):
     output = translate(tmp_path, KERNEL, "cgl")
     assert "var one: f32 = {};" in output

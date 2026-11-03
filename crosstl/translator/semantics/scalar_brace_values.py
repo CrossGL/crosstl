@@ -4,8 +4,9 @@ C and C++ value-initialize a scalar from an empty brace list, so ``float one = {
 CUDA and HIP input import them as ``var one: f32 = {};``. Only Metal reads an empty brace list as a scalar's zero:
 HLSL copied it, which DXC rejects, WGSL wrote ``array()``, and GLSL refused it as an aggregate.
 :func:`zero_empty_scalar_initializers` writes the scalar's zero literal in place of the empty list, for every target,
-in variable and constant declarations whose type is ``float``, ``double``, ``half``, ``int``, ``uint`` or ``bool``,
-or an alias of one (``typedef float real_t; real_t one = {};``).
+in variable and constant declarations whose type is ``float``, ``double``, ``half``, ``int``, ``uint``, ``bool``, an
+8-, 16- or 64-bit integer (``i16 s = {};`` becomes ``i16 s = 0;``, as written by hand), or an alias of one
+(``typedef float real_t; real_t one = {};``).
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ __all__ = ["zero_empty_scalar_initializers"]
 _SKIPPED_FIELDS = frozenset({"parent", "annotations", "source_location"})
 # CrossGL output keeps the program as written.
 _CARRYING = frozenset({"cgl", "crossgl", ""})
-# Scalar spellings, CrossGL and WGSL, by the CrossGL name of their type.
+# Scalar spellings, CrossGL and WGSL, by the CrossGL name of their zero's type. An 8-, 16- or 64-bit integer's zero is
+# the 32-bit literal of its signedness, as in ``i64 a = 0;`` and ``u8 c = 0u;``.
 _SCALAR_NAMES = {
     "float": "float",
     "f32": "float",
@@ -27,8 +29,14 @@ _SCALAR_NAMES = {
     "f16": "half",
     "int": "int",
     "i32": "int",
+    "i8": "int",
+    "i16": "int",
+    "i64": "int",
     "uint": "uint",
     "u32": "uint",
+    "u8": "uint",
+    "u16": "uint",
+    "u64": "uint",
     "bool": "bool",
 }
 _ZERO_LITERALS = {
