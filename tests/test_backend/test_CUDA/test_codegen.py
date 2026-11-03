@@ -336,6 +336,24 @@ class TestCudaCodeGen:
         assert "__constant__" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_cuda_block_scope_extern_constant_is_not_zero_initialized(self):
+        # The extern declaration names the namespace-scope table, which the host
+        # writes with cudaMemcpyToSymbol, so its values are not zeros.
+        code = """
+        __constant__ float table[4];
+
+        __global__ void first(float* out) {
+            extern __constant__ float table[4];
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            out[i] = table[i % 4];
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "let table" not in result
+        assert "{0.0, 0.0, 0.0, 0.0}" not in result
+
     def test_fixed_width_pointer_declaration_list_conversion(self):
         code = """
         __global__ void bit_extract_kernel(

@@ -555,6 +555,7 @@ class HipToCrossGLConverter:
         self.union_indirect_object_scopes = [set()]
         self.namespace_scope_variable = False
         self.namespace_constant_names = set()
+        self.function_body_depth = 0
 
     def generate(self, ast_node):
         self.output = []
@@ -6015,14 +6016,17 @@ class HipToCrossGLConverter:
         if "__constant__" in qualifiers:
             if (
                 not (hasattr(node, "value") and node.value)
-                and getattr(self, "function_body_depth", 0) > 0
+                and self.function_body_depth > 0
+                and "static" in qualifiers
             ):
-                # A function-scope __constant__ local has static storage,
-                # so without an initializer every element is zero, and
-                # device code cannot write constant memory. Emit it as a
+                # A function-scope static __constant__ local has static
+                # storage, so without an initializer every element is zero,
+                # and device code cannot write constant memory. Emit it as a
                 # function-scope constant of zeros: it must neither take a
                 # resource binding nor be read uninitialized by a later
-                # backend.
+                # backend. A block-scope extern declaration names a
+                # namespace-scope variable the host may have written, so it
+                # is not one.
                 self.emit(
                     f"let {output_name}: {var_type} = "
                     f"{self.crossgl_zero_value(var_type)};"
@@ -6200,17 +6204,6 @@ class HipToCrossGLConverter:
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
         output_name = self.register_identifier_name(node.name)
         self.register_variable_type(node.name, var_type)
-        if node.value is None and getattr(self, "function_body_depth", 0) > 0:
-            # A function-scope __constant__ local has static storage, so
-            # without an initializer every element is zero, and device code
-            # cannot write constant memory. Emit it as a function-scope
-            # constant of zeros: it must neither take a resource binding
-            # nor be read uninitialized by a later backend.
-            self.emit(
-                f"let {output_name}: {var_type} = "
-                f"{self.crossgl_zero_value(var_type)};"
-            )
-            return
         binding = self.global_resource_binding_for(node)
         if node.value is not None:
             value = self.visit(node.value)

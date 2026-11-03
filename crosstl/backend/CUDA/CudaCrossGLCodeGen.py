@@ -4764,13 +4764,19 @@ class CudaToCrossGLConverter:
         # Convert to uniform buffer in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         self.register_vector1_name(node.name, node.vtype)
-        if node.value is None and getattr(self, "function_body_depth", 0) > 0:
-            # A function-scope __constant__ local has static storage, so
-            # without an initializer every element is zero, and device code
-            # cannot write constant memory. Emit it as a function-scope
+        if (
+            node.value is None
+            and self.function_body_depth > 0
+            and "static" in node.qualifiers
+        ):
+            # A function-scope static __constant__ local has static storage,
+            # so without an initializer every element is zero, and device
+            # code cannot write constant memory. Emit it as a function-scope
             # constant of zeros: it must neither take a resource binding
             # (which would also collide with the kernel parameters) nor be
-            # read uninitialized by a later backend.
+            # read uninitialized by a later backend. A block-scope extern
+            # declaration names a namespace-scope variable the host may have
+            # written, so it is not one.
             self.emit(
                 f"let {node.name}: {var_type} = "
                 f"{self.crossgl_zero_value(var_type)};"

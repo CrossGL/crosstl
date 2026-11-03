@@ -471,6 +471,24 @@ class TestHipCodeGen:
         assert result.count("@group(0) @binding(0)") == 1
         assert "__constant__" not in result
 
+    def test_hip_block_scope_extern_constant_is_not_zero_initialized(self):
+        # The extern declaration names the namespace-scope table, which the host
+        # writes with hipMemcpyToSymbol, so its values are not zeros.
+        code = """
+        __constant__ float table[4];
+
+        __global__ void first(float* out) {
+            extern __constant__ float table[4];
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            out[i] = table[i % 4];
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "let table" not in result
+        assert "{0.0, 0.0, 0.0, 0.0}" not in result
+
     def test_official_amd_aligned_struct_attribute_conversion(self):
         code = """
         struct __align__(16) MyStruct {
