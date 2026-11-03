@@ -568,24 +568,44 @@ class OpenCLParser(HipParser):
     def parse_line_split_type_qualifiers(self):
         """Read qualifiers that a line break separates from the rest of a type.
 
-        In `const` / `__global float* in`, the base parser stops at the line
-        break after `const`; read such qualifiers here and leave the rest of
-        the type, and qualifiers on one line with it, to the base parser.
+        In `const` / `__global float* in` or `const __global` / `float* in`,
+        the base parser stops at the line break; read the qualifiers up to the
+        last break here and leave the rest of the type, and qualifiers on one
+        line with it, to the base parser.
         """
+        end = self.line_split_type_qualifiers_end(self.pos)
         qualifiers = []
-        while self.match(*self.TYPE_QUALIFIER_TOKENS):
-            next_index = self.skip_newlines_at_pos(self.pos + 1)
-            if next_index == self.pos + 1:
-                break
-            qualifiers.append(self.current_token.value)
+        while self.pos < end:
+            if not self.match("NEWLINE"):
+                qualifiers.append(self.current_token.value)
             self.advance()
-            self.skip_newlines()
         return qualifiers
+
+    def line_split_type_qualifiers_end(self, index):
+        """Index after the last line break that follows a type qualifier at ``index``, or ``index`` if none does.
+
+        A sign word whose next line starts the declarator, as in `unsigned` /
+        `n`, stays with the base parser, which reads it as `unsigned int`.
+        """
+        end = index
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS
+        ):
+            next_index = self.skip_newlines_at_pos(index + 1)
+            implicit_int = self.tokens[index].type in {
+                "SIGNED",
+                "UNSIGNED",
+            } and self.is_implicit_int_type_at_pos(next_index, True)
+            if next_index != index + 1 and not implicit_int:
+                end = next_index
+            index = next_index
+        return end
 
     def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
         original_index = index
         index = super().skip_type_at_pos(
-            index,
+            self.line_split_type_qualifiers_end(index),
             allow_unknown_identifier_pointers=allow_unknown_identifier_pointers,
         )
         if index is None:
