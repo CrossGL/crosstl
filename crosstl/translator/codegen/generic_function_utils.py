@@ -7,6 +7,7 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     ConstructorNode,
+    ExpressionNode,
     ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
@@ -1442,6 +1443,9 @@ def _type_argument_name(generator, expr):
         if _fallback_expression_result_type(generator, expr):
             return None
         return expr.name
+    if isinstance(expr, ExpressionNode):
+        # A call, member, element, literal or operator is a value too, as ``sel(w, w)`` in ``sel(sel(w, w), w)``.
+        return None
     return generator.type_name_string(expr)
 
 
