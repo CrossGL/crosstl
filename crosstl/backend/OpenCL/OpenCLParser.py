@@ -554,13 +554,33 @@ class OpenCLParser(HipParser):
 
     def parse_type(self):
         self.parse_type_attribute_prefixes()
+        split_qualifiers = self.parse_line_split_type_qualifiers()
         type_name = super().parse_type()
+        if split_qualifiers:
+            type_name = " ".join([*split_qualifiers, type_name])
 
         if "pipe" in str(type_name).split() and self.is_current_token_type_start():
             element_type = super().parse_type()
             type_name = f"{type_name} {element_type}".strip()
 
         return type_name
+
+    def parse_line_split_type_qualifiers(self):
+        """Read qualifiers that a line break separates from the rest of a type.
+
+        In `const` / `__global float* in`, the base parser stops at the line
+        break after `const`; read such qualifiers here and leave the rest of
+        the type, and qualifiers on one line with it, to the base parser.
+        """
+        qualifiers = []
+        while self.match(*self.TYPE_QUALIFIER_TOKENS):
+            next_index = self.skip_newlines_at_pos(self.pos + 1)
+            if next_index == self.pos + 1:
+                break
+            qualifiers.append(self.current_token.value)
+            self.advance()
+            self.skip_newlines()
+        return qualifiers
 
     def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
         original_index = index
