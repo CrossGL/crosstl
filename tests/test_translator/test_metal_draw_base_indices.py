@@ -75,7 +75,8 @@ def _translate(tmp_path, source, suffix, backend):
 
 
 def _signature(code, keyword):
-    match = re.search(rf"{keyword} \w+ \w+\((.*?)\)\s*\{{", code, flags=re.S)
+    # Formatting differs with and without clang-format: any whitespace may separate the tokens.
+    match = re.search(rf"{keyword}\s+\w+\s+\w+\((.*?)\)\s*\{{", code, flags=re.S)
     assert match is not None, code
     return " ".join(match.group(1).split())
 
@@ -221,11 +222,11 @@ def test_metal_import_reads_instance_id_as_instance_index(tmp_path):
 def test_slang_spells_vulkan_indices_through_system_values(tmp_path):
     slang = _translate(tmp_path, VULKAN_GLSL, ".vert", "slang")
     assert not re.search(r"\bgl_(InstanceIndex|VertexIndex)\b", slang)
-    assert re.search(r"\w+ : SV_InstanceID", slang)
-    assert re.search(r"\w+ : SV_StartInstanceLocation", slang)
-    assert re.search(r"\w+ : SV_VertexID", slang)
+    assert re.search(r"\w+\s*:\s*SV_InstanceID\b", slang)
+    assert re.search(r"\w+\s*:\s*SV_StartInstanceLocation\b", slang)
+    assert re.search(r"\w+\s*:\s*SV_VertexID\b", slang)
     # The helper reads the index through the parameters it is passed.
-    assert re.search(r"float shift\(int \w+, int \w+\)", slang)
+    assert re.search(r"float shift\(int \w+,\s*int \w+\)", slang)
     spirv = _compile_slang(tmp_path, slang, "main")
     if spirv is not None:
         assert "BuiltIn InstanceIndex" in spirv
