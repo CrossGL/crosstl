@@ -91,3 +91,36 @@ def test_alias_as_vector_element_type_translates_to_spirv(tmp_path, source):
 def test_alias_of_a_vector_as_vector_element_type_is_refused(tmp_path, backend):
     with pytest.raises(TypeAliasUnsupportedError, match="'pair' is used as a vector"):
         translate(tmp_path, NOT_A_SCALAR, backend)
+
+
+SIZED_ALIASES = textwrap.dedent("""
+    shader P {
+        typedef i64 long_t;
+        typedef u16 short_t;
+        compute {
+            buffer float* outp;
+            void main() {
+                vec2<long_t> a = vec2<long_t>(1);
+                vec3<short_t> b;
+                b.x = 1u;
+                outp[0] = float(a.x) + float(b.x);
+            }
+        }
+    }
+""")
+
+
+@pytest.mark.parametrize("backend", ["directx", "metal", "opengl", "spirv"])
+def test_alias_of_a_sized_integer_as_vector_element_type_is_resolved(
+    tmp_path, backend
+):
+    # ``vec2<long_t>`` for ``typedef i64 long_t;`` is ``vec2<i64>``, as written by hand.
+    by_hand = (
+        SIZED_ALIASES.replace("    typedef i64 long_t;\n", "")
+        .replace("    typedef u16 short_t;\n", "")
+        .replace("long_t", "i64")
+        .replace("short_t", "u16")
+    )
+    assert translate(tmp_path, SIZED_ALIASES, backend) == translate(
+        tmp_path, by_hand, backend
+    )

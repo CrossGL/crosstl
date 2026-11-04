@@ -5,7 +5,8 @@ CrossGL reads ``typedef float real;`` as a declaration (a :class:`~crosstl.trans
 its own: a value of type ``real`` is a ``float``. :func:`resolve_type_aliases` therefore writes the aliased type in
 place of the alias wherever it names a type (declarations, parameters, return types, structure members, generic
 arguments, the element type of a vector such as ``vec2<real>``), turns a constructor or cast through the alias
-(``real(x)``, ``(real)x``, ``vec2<real>(x)``) into one through the aliased type, and drops the alias declarations. An alias of an alias resolves to the type at the end of the chain.
+(``real(x)``, ``(real)x``, ``vec2<real>(x)``) into one through the aliased type, and drops the alias declarations. An
+alias of an alias resolves to the type at the end of the chain.
 
 The MSL, HLSL and GLSL generators declare a program-scope alias themselves, so for those targets the program's
 aliases are kept and only those of stages and blocks are resolved; every other generator then reads no alias at all.
@@ -79,8 +80,14 @@ _ELEMENT_SCALARS = frozenset(
         "f16",
         "f32",
         "f64",
+        "i8",
+        "i16",
         "i32",
+        "i64",
+        "u8",
+        "u16",
         "u32",
+        "u64",
     }
 )
 
