@@ -307,7 +307,8 @@ def _mesh(body, layouts=None, declarations=""):
             "output-builtin",
         ),
         (
-            _mesh("gl_MeshPrimitivesEXT[0].gl_CullPrimitiveEXT = true;"),
+            # gl_CullPrimitiveEXT is carried (test_mesh_cull_primitive.py); the shading rate is not yet.
+            _mesh("gl_MeshPrimitivesEXT[0].gl_PrimitiveShadingRateEXT = 0;"),
             "shader.mesh",
             "output-builtin",
         ),

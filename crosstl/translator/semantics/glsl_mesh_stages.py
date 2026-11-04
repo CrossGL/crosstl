@@ -36,9 +36,10 @@ parameters instead::
   ``meshVertices[i].member``. A plain output keeps its location; a block member takes the block's location plus the
   locations of the members before it, unless it carries its own (GLSL 4.60 section 4.4.2.1). Interpolation
   qualifiers are kept;
-* ``perprimitiveEXT`` outputs and ``gl_MeshPrimitivesEXT[i].gl_PrimitiveID``, ``gl_Layer`` and
-  ``gl_ViewportIndex`` become members of a ``MeshPrimitive`` structure. HLSL and MSL declare those three built-ins
-  ``uint`` and GLSL ``int``, so a write converts its value and a read converts back;
+* ``perprimitiveEXT`` outputs and ``gl_MeshPrimitivesEXT[i].gl_PrimitiveID``, ``gl_Layer``, ``gl_ViewportIndex``
+  and ``gl_CullPrimitiveEXT`` become members of a ``MeshPrimitive`` structure. HLSL and MSL declare the first three
+  built-ins ``uint`` and GLSL ``int``, so a write converts its value and a read converts back; the cull flag is
+  ``bool`` in all three;
 * ``gl_PrimitivePointIndicesEXT``, ``gl_PrimitiveLineIndicesEXT`` or ``gl_PrimitiveTriangleIndicesEXT`` becomes the
   ``@indices`` array of the topology's index type;
 * the ``taskPayloadSharedEXT`` variable becomes the ``@mesh_payload in`` parameter, read-only in both languages.
@@ -47,7 +48,7 @@ A task stage's ``taskPayloadSharedEXT`` variable becomes ``groupshared`` storage
 passes as its payload, which is how HLSL amplification shaders and the Metal emitter's object functions take it.
 
 Built-ins that the HLSL or Metal output does not carry yet (``gl_PointSize``, clip and cull distances,
-``gl_CullPrimitiveEXT``, ``gl_PrimitiveShadingRateEXT``), other uses of the output arrays, helpers that use the
+``gl_PrimitiveShadingRateEXT``), other uses of the output arrays, helpers that use the
 mesh interface, a payload shared by a task and a mesh stage, and layouts with no HLSL or Metal form are refused
 with :class:`GlslMeshStageUnsupportedError`.
 """
@@ -91,6 +92,8 @@ _PRIMITIVE_BUILTINS = {
     "gl_PrimitiveID": ("primitiveID", "uint", True),
     "gl_Layer": ("layer", "uint", True),
     "gl_ViewportIndex": ("viewportIndex", "uint", True),
+    # HLSL's SV_CullPrimitive and MSL's [[primitive_culled]] are bool, as GLSL's is.
+    "gl_CullPrimitiveEXT": ("culled", "bool", False),
 }
 _BUILTIN_BLOCKS = frozenset({"gl_MeshPerVertexEXT", "gl_MeshPerPrimitiveEXT"})
 _BUILTIN_ARRAYS = _INDEX_ARRAYS | {_VERTICES, _PRIMITIVES}

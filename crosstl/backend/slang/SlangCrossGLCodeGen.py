@@ -616,6 +616,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             "SV_VertexID": "gl_VertexID",
             "SV_InstanceID": "gl_InstanceID",
             "SV_PrimitiveID": "gl_PrimitiveID",
+            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             # Vertex outputs. The clip position is the built-in, as the HLSL
             # importer maps it; a fragment input is gl_FragCoord (map_semantic).
             "SV_Position": "gl_Position",

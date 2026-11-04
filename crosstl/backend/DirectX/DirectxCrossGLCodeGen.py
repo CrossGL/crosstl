@@ -487,6 +487,8 @@ class HLSLToCrossGLConverter(
             "SV_VertexID": "gl_VertexID",
             "SV_InstanceID": "gl_InstanceID",
             "SV_PrimitiveID": "gl_PrimitiveID",
+            # A mesh primitive's cull flag (GL_EXT_mesh_shader's built-in).
+            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             # System-value semantics - Vertex outputs
             "SV_POSITION": "gl_Position",
             "SV_Position": "gl_Position",
