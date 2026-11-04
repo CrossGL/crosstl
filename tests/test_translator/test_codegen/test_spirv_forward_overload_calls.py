@@ -24,15 +24,34 @@ def _generate(source, tmp_path):
     return translate(str(path), backend="vulkan")
 
 
+def _scalar_type_names(spirv):
+    """Map scalar type ids to ``int``/``float``.
+
+    Ids are numeric unless SPIRV-Tools is installed to give them friendly names, so
+    the declarations are read instead of the ids.
+    """
+    names = {tid: "int" for tid in re.findall(r"%(\w+) = OpTypeInt 32 1\b", spirv)}
+    names.update(
+        (tid, "float") for tid in re.findall(r"%(\w+) = OpTypeFloat 32\b", spirv)
+    )
+    return names
+
+
 def _functions_by_result_type(spirv):
     """Map each defined function's result id to its result type name."""
-    return dict(
-        re.findall(r"%(\w+) = OpFunction %(\w+) None", spirv),
-    )
+    names = _scalar_type_names(spirv)
+    return {
+        fid: names.get(rtype, rtype)
+        for fid, rtype in re.findall(r"%(\w+) = OpFunction %(\w+) None", spirv)
+    }
 
 
 def _call_targets(spirv):
-    return re.findall(r"= OpFunctionCall %(\w+) %(\w+)", spirv)
+    names = _scalar_type_names(spirv)
+    return [
+        (names.get(rtype, rtype), target)
+        for rtype, target in re.findall(r"= OpFunctionCall %(\w+) %(\w+)", spirv)
+    ]
 
 
 AFTER_CALLER = """
