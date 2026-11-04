@@ -8,6 +8,10 @@ from crosstl.translator.stage_utils import normalize_stage_name
 
 from ..import_refusals import SlangImportRefused
 from .slang_matrix_import import SlangMatrixImportMixin
+from .slang_specialization_import import (
+    specialization_ids,
+    specialized_workgroup_sizes,
+)
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -720,6 +724,17 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         self.generated_temp_index = 0
         self.register_global_identifier_renames(ast)
         self.variable_type_scopes = [self.collect_global_variable_types(ast)]
+        self.specialization_constant_ids = specialization_ids(
+            ast.global_vars,
+            exported=[
+                exp.item
+                for exp in getattr(ast, "exports", [])
+                if isinstance(
+                    getattr(exp, "item", None), (VariableNode, AssignmentNode)
+                )
+            ],
+        )
+        self.specialization_dependent_names = set()
         self.reset_matrix_import_state(
             ast, [*ast.structs, *local_structs, *exported_structs]
         )
@@ -1145,6 +1160,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         if not numthreads:
             return ""
 
+        specialized_workgroup_sizes(
+            numthreads, getattr(self, "specialization_dependent_names", ())
+        )
         x, y, z = numthreads
         return (
             "        "
@@ -1659,6 +1677,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
     def generate_global_variable(self, node):
         declaration = node.left if isinstance(node, AssignmentNode) else node
         layout = self.matrix_layout_attributes(declaration, 1)
+        self.track_specialization_dependence(node)
         if isinstance(node, AssignmentNode):
             left = self.generate_variable_declaration(
                 node.left, has_initializer=True, initializer=node.right
@@ -1821,6 +1840,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             elif name == "vk::push_constant":
                 append_metadata("push_constant", "@push_constant")
 
+        specialization = getattr(self, "specialization_constant_ids", {}).get(id(node))
+        if specialization is not None and specialization[0] is node:
+            append_metadata("constant_id", f"@constant_id({specialization[1]})")
+
         register_name = getattr(node, "register", None)
         if self.should_emit_register_metadata(register_name, node):
             register_arguments = self.format_register_metadata_arguments(register_name)
@@ -1829,6 +1852,23 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         if not metadata:
             return ""
         return " " + " ".join(metadata)
+
+    def track_specialization_dependence(self, node):
+        """Record a global that is, or is initialized from, a specialization constant."""
+        names = getattr(self, "specialization_dependent_names", None)
+        if names is None:
+            return
+        declaration = node.left if isinstance(node, AssignmentNode) else node
+        specialization = self.specialization_constant_ids.get(id(declaration))
+        dependent = specialization is not None and specialization[0] is declaration
+        if not dependent and isinstance(node, AssignmentNode) and names:
+            initializer = self.generate_expression(node.right, False)
+            dependent = any(
+                name in names for name in re.findall(r"[A-Za-z_]\w*", initializer)
+            )
+        if dependent:
+            names.add(declaration.name)
+            names.add(self.format_identifier(declaration.name))
 
     def glsl_buffer_block_layout(self, node):
         for qualifier in getattr(node, "qualifiers", []) or []:
