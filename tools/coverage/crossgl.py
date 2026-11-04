@@ -81,6 +81,7 @@ from .templates.portability import (
     constants,
     intrinsic_names,
 )
+from .templates.primitives import CROSSGL as PRIMITIVES
 from .templates.qualifiers import CROSSGL as QUALIFIERS
 from .templates.rasterization import CROSSGL as RASTERIZATION
 from .templates.records import CROSSGL as RECORDS_CROSSGL
@@ -641,6 +642,7 @@ CONSTRUCTS: dict[str, Template] = {
     **RASTERIZATION,
     **PIPELINE,
     **EXTENSIONS,
+    **PRIMITIVES,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,
