@@ -6542,6 +6542,7 @@ class VulkanParser:
             image_type.get("arrayed"),
             image_type.get("multisampled"),
             "1",
+            combined=True,
         )
 
     def spirv_image_query_name(
@@ -6558,7 +6559,7 @@ class VulkanParser:
         return sampled_name
 
     def spirv_image_type_name(
-        self, sampled_type, dim, depth, arrayed, multisampled, sampled
+        self, sampled_type, dim, depth, arrayed, multisampled, sampled, combined=False
     ):
         if dim == "SubpassData":
             return "subpassInputMS" if multisampled == "1" else "subpassInput"
@@ -6573,6 +6574,10 @@ class VulkanParser:
             return f"{prefix}image{base_name}"
 
         prefix = {"int": "i", "uint": "u"}.get(sampled_family, "")
+        if sampled == "1" and not combined:
+            # An OpTypeImage read through a separate sampler is Vulkan GLSL's texture2D: only an OpTypeSampledImage
+            # is a combined sampler2D. The depth flag belongs to the sampler type the shader samples it as.
+            return f"{prefix}texture{base_name}"
         suffix = "Shadow" if depth == "1" and not prefix else ""
         return f"{prefix}sampler{base_name}{suffix}"
 

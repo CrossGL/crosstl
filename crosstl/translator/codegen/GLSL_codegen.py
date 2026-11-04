@@ -36731,7 +36731,9 @@ complex64_t crossgl_complex64_mod_assign(
         constructor that already has enough arguments, an unsized extent, or
         a nested element type is left exactly as it was.
         """
-        if not isinstance(func_name, str):
+        # An array constructor's name ends with its extent; a generic call with an
+        # array type argument, such as ``pick<float[2]>``, is not one.
+        if not isinstance(func_name, str) or not func_name.rstrip().endswith("]"):
             return call_args
         array_type = self.glsl_outer_array_type(func_name)
         if array_type is None:
@@ -40760,6 +40762,23 @@ complex64_t crossgl_complex64_mod_assign(
                     # One buffer of an array of storage blocks holds its elements in a member.
                     buffer = self.generate_expression(func_expr.object)
                     return f"{buffer}.{instance_member}.length()"
+
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and func_expr.member == "length"
+                and not expr.args
+            ):
+                # A buffer parameter is rewritten as an offset into the buffer it
+                # reads, so its length is that buffer's, not one element's.
+                storage_binding = self.glsl_storage_pointer_binding(
+                    func_expr.object, self.glsl_storage_pointer_aliases()
+                )
+                if (
+                    storage_binding is not None
+                    and "pointer_reinterpretation" not in storage_binding
+                    and "byte_offset" not in storage_binding
+                ):
+                    return self.structured_buffer_length_expression(func_expr.object)
 
             synchronization_call = self.synchronization_function_call(
                 original_func_name,
@@ -58850,9 +58869,10 @@ complex64_t crossgl_complex64_mod_assign(
             return type_name
         elif hasattr(type_node, "rows") and hasattr(type_node, "cols"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
+            prefix = "d" if element_type == "double" else ""
             if type_node.rows == type_node.cols:
-                return f"mat{type_node.rows}"
-            return f"mat{type_node.cols}x{type_node.rows}"
+                return f"{prefix}mat{type_node.rows}"
+            return f"{prefix}mat{type_node.cols}x{type_node.rows}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             if str(type(type_node)).find("ArrayType") != -1:
                 element_type = self.convert_type_node_to_string(type_node.element_type)

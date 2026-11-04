@@ -4169,6 +4169,29 @@ class Parser:
                     f"{result} = {self.format_type_argument(type_node.default_type)}"
                 )
             return result
+        if isinstance(type_node, MatrixType):
+            element_type = self.format_type_argument(type_node.element_type)
+            dims = (
+                str(type_node.cols)
+                if type_node.rows == type_node.cols
+                else f"{type_node.cols}x{type_node.rows}"
+            )
+            prefix = {"double": "d"}.get(element_type, "")
+            return f"{prefix}mat{dims}"
+        if isinstance(type_node, ArrayType):
+            # The outermost size comes first, as it was written: ``float[2][3]`` is
+            # two arrays of three floats (see ``wrap_array_dimensions``).
+            suffixes = []
+            while isinstance(type_node, ArrayType):
+                size = type_node.size
+                if size is None:
+                    suffixes.append("[]")
+                elif isinstance(size, int):
+                    suffixes.append(f"[{size}]")
+                else:
+                    suffixes.append(f"[{self.format_type_argument(size)}]")
+                type_node = type_node.element_type
+            return self.format_type_argument(type_node) + "".join(suffixes)
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:

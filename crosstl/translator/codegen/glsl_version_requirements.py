@@ -204,6 +204,20 @@ _BUILTIN_FUNCTION_GROUPS = (
     ),
     (
         (
+            "atomicCounterAdd",
+            "atomicCounterSubtract",
+            "atomicCounterMin",
+            "atomicCounterMax",
+            "atomicCounterAnd",
+            "atomicCounterOr",
+            "atomicCounterXor",
+            "atomicCounterExchange",
+            "atomicCounterCompSwap",
+        ),
+        (460, None, (), ()),
+    ),
+    (
+        (
             "atomicAdd",
             "atomicMin",
             "atomicMax",

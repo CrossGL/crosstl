@@ -5736,7 +5736,7 @@ def test_resource_array_parameter_qualifiers_codegen():
     generated_code = generate_code(ast)
 
     assert (
-        "void sampleResources(in Texture2D textures[4], "
+        "void sampleResources(in sampler2D textures[4], "
         "inout RWTexture2D<uint> outputs[2])" in generated_code
     )
 
@@ -5752,7 +5752,7 @@ def test_function_parameter_array_suffixes_codegen():
     generated_code = generate_code(ast)
 
     assert (
-        "void sampleResources(Texture2D textures[4], RWTexture2D<uint> outputs[2])"
+        "void sampleResources(sampler2D textures[4], RWTexture2D<uint> outputs[2])"
         in generated_code
     )
 
@@ -6047,7 +6047,7 @@ def test_spirv_linked_vertex_fragment_main_roundtrip_keeps_stage_scoped_uv(tmp_p
     assert generated_code.count("void main()") == 2
     assert "float2 uv @output @location(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
-    assert "Texture2D albedo @set(0) @binding(1);" in generated_code
+    assert "sampler2D albedo @set(0) @binding(1);" in generated_code
 
     reparsed = parse_crossgl(generated_code)
     downstream_code = VulkanSPIRVCodeGen().generate(reparsed)
@@ -7252,7 +7252,7 @@ def test_spirv_assembly_uniform_constant_resources_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D combinedTex @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
     assert "%combined" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7445,13 +7445,13 @@ def test_spirv_descriptor_indexing_nonuniform_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D textures[4] @set(0) @binding(0);" in generated_code
+    assert "texture2D textures[4] @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
     assert "int materialIndex @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
         "outColor = textureLod("
-        "Texture2D(textures[nonuniformEXT(materialIndex)], linearSampler), "
+        "sampler2D(textures[nonuniformEXT(materialIndex)], linearSampler), "
         "uv, 0.0);"
     ) in generated_code
     assert "textures[materialIndex]" not in generated_code
@@ -7574,7 +7574,7 @@ def test_spirv_cross_image_query_size_lod_codegen():
     generated_code = generate_code(ast)
 
     assert "int2 Size @output @location(0);" in generated_code
-    assert "Texture2D uTexture @set(0) @binding(0);" in generated_code
+    assert "sampler2D uTexture @set(0) @binding(0);" in generated_code
     assert (
         "Size = (textureSize(uTexture, 0) + textureSize(uTexture, 1));"
         in generated_code
@@ -7590,7 +7590,7 @@ def test_spirv_tools_image_query_size_codegen():
 
     parse_crossgl(generated_code)
     assert "int2 Size @output @location(0);" in generated_code
-    assert "Texture2DMS uImage @set(0) @binding(0);" in generated_code
+    assert "texture2DMS uImage @set(0) @binding(0);" in generated_code
     assert "Size = textureSize(uImage);" in generated_code
     assert "Size = size;" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7604,7 +7604,7 @@ def test_spirv_tools_image_query_format_codegen_reparse():
     parse_crossgl(generated_code)
     assert "uint formatOut @output @location(0);" in generated_code
     assert "uint orderOut @output @location(1);" in generated_code
-    assert "Texture2D queryImage @set(0) @binding(0);" in generated_code
+    assert "texture2D queryImage @set(0) @binding(0);" in generated_code
     assert "formatOut = spirvImageQueryFormat(queryImage);" in generated_code
     assert "orderOut = spirvImageQueryOrder(queryImage);" in generated_code
     assert "formatOut = format;" not in generated_code
@@ -7622,8 +7622,8 @@ def test_spirv_image_query_lod_levels_samples_codegen_reparse():
     assert "float2 lodOut @output @location(0);" in generated_code
     assert "int levelsOut @output @location(1);" in generated_code
     assert "int samplesOut @output @location(2);" in generated_code
-    assert "Texture2D queryTex @set(0) @binding(0);" in generated_code
-    assert "Texture2DMS msTex @set(0) @binding(1);" in generated_code
+    assert "sampler2D queryTex @set(0) @binding(0);" in generated_code
+    assert "texture2DMS msTex @set(0) @binding(1);" in generated_code
     assert "lodOut = textureQueryLod(queryTex, uv);" in generated_code
     assert "levelsOut = textureQueryLevels(queryTex);" in generated_code
     assert "samplesOut = textureSamples(msTex);" in generated_code
@@ -7652,7 +7652,7 @@ def test_spirv_cross_sparse_texture_resident_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D uSamp @set(0) @binding(0);" in generated_code
+    assert "sampler2D uSamp @set(0) @binding(0);" in generated_code
     assert "float2 vUV @input @location(0);" in generated_code
     assert "float4 FragColor @output @location(0);" in generated_code
     assert (
@@ -7719,8 +7719,8 @@ def test_spirv_tools_sparse_image_fetch_gather_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D imageVar @set(0) @binding(0);" in generated_code
-    assert "Texture2D sampledVar @set(0) @binding(1);" in generated_code
+    assert "texture2D imageVar @set(0) @binding(0);" in generated_code
+    assert "sampler2D sampledVar @set(0) @binding(1);" in generated_code
     assert "float4 fetchOut @output @location(0);" in generated_code
     assert "float4 gatherOut @output @location(1);" in generated_code
     assert "bool residentOut @output @location(2);" in generated_code
@@ -7786,7 +7786,7 @@ def test_spirv_tools_implicit_lod_bias_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert "outColor = texture(colorTex, uv, 0.25);" in generated_code
@@ -7801,7 +7801,7 @@ def test_spirv_implicit_lod_min_lod_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
@@ -7818,7 +7818,7 @@ def test_glslang_texture_lod_offset_preserves_const_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
@@ -7834,7 +7834,7 @@ def test_glslang_texture_proj_offset_preserves_const_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float3 uvq @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert "outColor = textureProjOffset(colorTex, uvq, int2(1, 2));" in generated_code
@@ -7861,7 +7861,7 @@ def test_glslang_texel_fetch_offset_preserves_const_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "int2 pixel @input @location(0) @flat;" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
@@ -7877,7 +7877,7 @@ def test_glslang_texel_fetch_ms_preserves_sample_operand_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2DMS colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2DMS colorTex @set(0) @binding(0);" in generated_code
     assert "int2 pixel @input @location(0) @flat;" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert "outColor = texelFetch(colorTex, pixel, 2);" in generated_code
@@ -7891,7 +7891,7 @@ def test_glslang_texture_gather_offset_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "Texture2D colorTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D colorTex @set(0) @binding(0);" in generated_code
     assert "float2 uv @input @location(0);" in generated_code
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
@@ -8610,7 +8610,7 @@ def test_translate_api_accepts_spirv_assembly_uniform_constant_resources(tmp_pat
         str(shader_path), backend="cgl", format_output=False
     )
 
-    assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
+    assert "sampler2D combinedTex @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
 
 
@@ -9071,8 +9071,8 @@ def test_vulkan_resource_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "albedoTex"
     assert ast.global_variables[1].vtype == "samplerCube"
     assert ast.global_variables[1].name == "skybox"
-    assert "Texture2D albedoTex;" in generated_code
-    assert "TextureCube skybox;" in generated_code
+    assert "sampler2D albedoTex;" in generated_code
+    assert "samplerCube skybox;" in generated_code
 
 
 def test_vulkan_one_dimensional_sampler_uniforms_emit_crossgl_resources():
@@ -9089,8 +9089,8 @@ def test_vulkan_one_dimensional_sampler_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "ramp"
     assert ast.global_variables[1].vtype == "sampler1DArray"
     assert ast.global_variables[1].name == "ramps"
-    assert "Texture1D ramp;" in generated_code
-    assert "Texture1DArray ramps;" in generated_code
+    assert "sampler1D ramp;" in generated_code
+    assert "sampler1DArray ramps;" in generated_code
 
 
 def test_vulkan_integer_one_dimensional_sampler_uniforms_preserve_crossgl_resource_types():
@@ -9506,10 +9506,9 @@ def test_vulkan_multisample_sampler_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "msTex"
     assert ast.global_variables[1].data_type == "sampler2DMSArray"
     assert ast.global_variables[1].variable_name == "msTexArray"
-    assert "Texture2DMS msTex;" in generated_code
-    assert "Texture2DMSArray msTexArray;" in generated_code
-    assert "sampler2DMS msTex;" not in generated_code
-    assert "sampler2DMSArray msTexArray;" not in generated_code
+    # CrossGL spells the combined multisample samplers as GLSL does.
+    assert "sampler2DMS msTex;" in generated_code
+    assert "sampler2DMSArray msTexArray;" in generated_code
 
 
 def test_vulkan_multisample_image_uniforms_emit_crossgl_resources():
@@ -9709,7 +9708,7 @@ def test_vulkan_precision_declarations_do_not_emit_crossgl_resources():
 
     assert len(ast.global_variables) == 1
     assert ast.global_variables[0].data_type == "sampler2D"
-    assert "Texture2D albedoTex;" in generated_code
+    assert "sampler2D albedoTex;" in generated_code
     assert "precision" not in generated_code
 
 

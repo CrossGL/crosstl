@@ -51,7 +51,9 @@ class BufferLengthUnsupportedError(TranslationDiagnostic):
     def __init__(self, target, reason):
         self.missing_capabilities = (f"{target}.buffer-length",)
         super().__init__(
-            reason, target=target, code=f"{CODE_PREFIX}{target}-buffer-length-unsupported"
+            reason,
+            target=target,
+            code=f"{CODE_PREFIX}{target}-buffer-length-unsupported",
         )
 
 
@@ -67,7 +69,9 @@ class HlslBufferLength:
         if outputs is None or not hlsl_type:
             return None
         if outputs == 2:
-            body = "uint count; uint stride; b.GetDimensions(count, stride); return count;"
+            body = (
+                "uint count; uint stride; b.GetDimensions(count, stride); return count;"
+            )
         else:
             body = "uint count; b.GetDimensions(count); return count;"
         self.helpers[("cgl_buffer_count", hlsl_type)] = (

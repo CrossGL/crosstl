@@ -28,7 +28,7 @@ from .wgsl_array_constructors import wgsl_array_element
 
 __all__ = [
     "WGSLStructInitializerError",
-    "is_struct_braced_initializer",
+    "wgsl_converted_value",
     "wgsl_struct_array_initializer",
     "wgsl_struct_initializer",
 ]
@@ -83,15 +83,6 @@ def _unconstructible_reason(codegen, vtype, seen=()):
     return None
 
 
-def is_struct_braced_initializer(codegen, expr, target_type):
-    """Whether ``expr`` is a brace initializer for a structure or an array of structures."""
-    if not isinstance(expr, ArrayLiteralNode):
-        return False
-    if isinstance(target_type, ArrayType):
-        target_type = target_type.element_type
-    return codegen.struct_type_name(target_type) in codegen._structs_by_name
-
-
 def wgsl_struct_initializer(codegen, expr, target_type):
     """Return WGSL ``S(...)`` when the brace initializer targets structure ``S``; otherwise, return ``None``."""
     if not isinstance(expr, ArrayLiteralNode) or not isinstance(target_type, NamedType):
@@ -110,7 +101,7 @@ def wgsl_struct_initializer(codegen, expr, target_type):
             f"it has {len(members)} members and the initializer gives {len(values)} values",
         )
     rendered = [
-        _member_value(codegen, value, member_type)
+        wgsl_converted_value(codegen, value, member_type)
         for value, (_name, member_type) in zip(values, members)
     ]
     rendered += [
@@ -151,13 +142,19 @@ def _lanes(codegen, vtype):
     return 1 if codegen.scalar_type_name(vtype) is not None else None
 
 
-def _member_value(codegen, value, member_type):
-    """Return WGSL for ``value`` converted to the ``member_type`` member it initializes."""
+def wgsl_converted_value(codegen, value, member_type):
+    """Return WGSL for ``value`` converted to ``member_type``, the member, component or column it initializes."""
     if not isinstance(value, ArrayLiteralNode):
         lanes = _lanes(codegen, member_type)
         source_type = codegen.expression_type(value)
         if lanes is not None and lanes == _lanes(codegen, source_type):
             member = codegen.type_name_string(member_type)
             if codegen.type_name_string(source_type) != member:
-                return f"{member}({codegen.generate_expression(value)})"
+                rendered = codegen.generate_expression(value)
+                if member == "u32":
+                    # u32(-1) converts the abstract value -1, which naga rejects; u32(-1i) keeps the bits.
+                    rendered = codegen.concrete_negative_integer_literal(
+                        value, rendered
+                    )
+                return f"{member}({rendered})"
     return codegen.generate_expression_for_target(value, member_type)

@@ -7,6 +7,7 @@ from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
+from ..CUDA.local_memory_spaces import crossgl_zero_value
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
@@ -555,6 +556,7 @@ class HipToCrossGLConverter:
         self.union_indirect_object_scopes = [set()]
         self.namespace_scope_variable = False
         self.namespace_constant_names = set()
+        self.function_body_depth = 0
 
     def generate(self, ast_node):
         self.output = []
@@ -591,6 +593,7 @@ class HipToCrossGLConverter:
         self.anonymous_enum_count = 0
         self.global_resource_binding_count = 0
         self.namespace_constant_names = set()
+        self.function_body_depth = 0
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
@@ -5224,12 +5227,14 @@ class HipToCrossGLConverter:
                     self.register_cooperative_group_parameter(param)
             if hasattr(node, "body") and node.body:
                 try:
+                    self.function_body_depth += 1
                     if isinstance(node.body, list):
                         for stmt in node.body:
                             self.emit_statement(stmt)
                     else:
                         self.emit_statement(node.body)
                 finally:
+                    self.function_body_depth -= 1
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -5365,12 +5370,14 @@ class HipToCrossGLConverter:
                         self.register_unique_ptr_parameter(param)
                         self.register_cooperative_group_parameter(param)
                 try:
+                    self.function_body_depth += 1
                     if isinstance(kernel.body, list):
                         for stmt in kernel.body:
                             self.emit_statement(stmt)
                     else:
                         self.emit_statement(kernel.body)
                 finally:
+                    self.function_body_depth -= 1
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -6008,6 +6015,24 @@ class HipToCrossGLConverter:
             return
 
         if "__constant__" in qualifiers:
+            if (
+                not (hasattr(node, "value") and node.value)
+                and self.function_body_depth > 0
+                and "static" in qualifiers
+            ):
+                # A function-scope static __constant__ local has static
+                # storage, so without an initializer every element is zero,
+                # and device code cannot write constant memory. Emit it as a
+                # function-scope constant of zeros: it must neither take a
+                # resource binding nor be read uninitialized by a later
+                # backend. A block-scope extern declaration names a
+                # namespace-scope variable the host may have written, so it
+                # is not one.
+                self.emit(
+                    f"let {output_name}: {var_type} = "
+                    f"{crossgl_zero_value(var_type)};"
+                )
+                return
             binding = self.global_resource_binding_for(node)
             if hasattr(node, "value") and node.value:
                 value = self.format_variable_initializer_value(node.value)

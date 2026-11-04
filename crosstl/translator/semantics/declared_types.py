@@ -6,6 +6,8 @@ the generators would copy it into the target verbatim, where it is at best a com
 type of the same spelling. :func:`refuse_undeclared_types` raises :class:`UndeclaredTypeError` for the first such
 name, so the translation fails with a typed diagnostic instead.
 
+The element type of a vector (``foo`` in ``vec2<foo>``) is checked the same way.
+
 Only plain names in code a stage entry can reach are checked (every function of a program without entries), and
 trait bounds of generic parameters are not types. Neither is ``SAMPLER_FEEDBACK_MIN_MIP`` or
 ``SAMPLER_FEEDBACK_MIP_REGION_USED`` as the argument of a sampler feedback texture (``FeedbackTexture2D<KIND>``): any
@@ -36,6 +38,8 @@ __all__ = [
 ]
 
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# The sizes of an array type argument, ``[2]`` in ``pick<foo[2]>``.
+_ARRAY_SUFFIXES = re.compile(r"(?:\s*\[[^\[\]]*\])+\Z")
 # Built-in types whose template arguments are values rather than types.
 VALUE_TEMPLATE_TYPES = frozenset({"RayQuery"})
 # Targets whose generators emit a generic structure only through the instantiations the program names.
@@ -259,7 +263,8 @@ def _declared_value_names(program):
 
 
 def _call_type_argument_names(call, generic_functions):
-    """The plain names among the explicit type arguments of ``call``, such as ``foo`` in ``pick<foo>(x)``.
+    """The plain names among the explicit type arguments of ``call``, such as ``foo`` in ``pick<foo>(x)`` or
+    ``pick<foo[2]>(a)``.
 
     The parser keeps a call's type arguments in the callee name. Only calls of the program's own generic functions
     are read: the arguments of built-in calls, such as ``subgroup_broadcast_const<_, 0>``, may be values.
@@ -281,6 +286,8 @@ def _call_type_argument_names(call, generic_functions):
             names.append(arguments[start:index].strip())
             start = index + 1
     names.append(arguments[start:].strip())
+    # An array type argument, such as ``foo[2]``, uses its element type.
+    names = [_ARRAY_SUFFIXES.sub("", name) for name in names]
     return [name for name in names if _PLAIN_NAME.fullmatch(name)]
 
 
@@ -324,6 +331,19 @@ def undeclared_type_uses(program, target=None):
                 and name not in BUILTIN_TYPE_NAMES
                 and name not in value_names
             )
+            continue
+        if isinstance(node, A.VectorType) and isinstance(
+            node.element_type, A.PrimitiveType
+        ):
+            # ``vec2<foo>``: the parser keeps an element type it does not know as a primitive of that name.
+            name = node.element_type.name
+            if (
+                isinstance(name, str)
+                and _PLAIN_NAME.fullmatch(name)
+                and name not in declared
+                and name not in BUILTIN_TYPE_NAMES
+            ):
+                uses.append((name, node))
             continue
         if not isinstance(node, A.NamedType) or node.generic_args:
             continue

@@ -14369,8 +14369,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if matrix_alias != vtype_str:
             return self.map_type(matrix_alias)
 
-        if "[" in vtype_str and "]" in vtype_str:
-            base_type, sizes = self.c_array_type_parts(vtype_str)
+        base_type, sizes = self.c_array_type_parts(vtype_str)
+        # Brackets that do not end the name, as in the callee ``pick<float[2]>``,
+        # are not an array suffix; the generic mapping below spells its argument.
+        if sizes:
             base_mapped = self.map_type(base_type)
             rust_type = self.qualify_colliding_runtime_type(base_mapped)
             for size in reversed(sizes):
