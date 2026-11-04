@@ -93,11 +93,8 @@ def test_reads_of_the_opengl_vertex_ids_convert_to_glsl_int(
     tmp_path, backend, declaration
 ):
     code = _translate(tmp_path, GLSL, backend, ".vert")
-    attributes = (
-        ("VertexID", "InstanceID")
-        if backend == "directx"
-        else ("vertex_id", "instance_id")
-    )
+    # Metal's instance_id includes the base instance, which is subtracted first: see test_metal_draw_base_indices.
+    attributes = ("VertexID", "InstanceID") if backend == "directx" else ("vertex_id",)
     for attribute in attributes:
         raw = re.search(declaration.format(attribute), code)
         assert raw is not None, attribute
