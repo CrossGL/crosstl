@@ -1024,6 +1024,10 @@ class VulkanToCrossGLConverter:
                     else "RWStructuredBuffer"
                 )
                 attributes = self.uniform_block_attribute_suffix(node)
+                # The suffix carries the descriptor attributes; a buffer's
+                # Restrict is spelled @restrict, as on a storage image.
+                if "restrict" in getattr(node, "declaration_qualifiers", []):
+                    attributes += " @restrict"
                 if block_name not in self.emitted_storage_buffer_type_names:
                     code += f"    struct {block_name} {{\n"
                     for field_type, field_name in node.struct_fields:

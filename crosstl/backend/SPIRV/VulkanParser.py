@@ -6126,6 +6126,16 @@ class VulkanParser:
         declaration_qualifiers = self.spirv_declaration_qualifiers(
             struct_decorations + variable_decorations
         )
+        # A buffer's Restrict is also written on the block's members (glslang
+        # writes it both ways); CrossGL spells it on the block, so a member
+        # Restrict qualifies the block as the variable decoration does.
+        if "restrict" not in declaration_qualifiers and any(
+            decoration == "Restrict"
+            for _member, decoration, _operands in member_decorations.get(
+                struct_type_id, []
+            )
+        ):
+            declaration_qualifiers.append("restrict")
 
         node = LayoutNode(
             qualifiers,
