@@ -9,6 +9,7 @@ from .access_chains import chain_base_pointee, walk_indices
 from .barrier_import import spirv_barrier_statements
 from .block_arrays import SpirvBlockArrayUnsupportedError, block_array_element
 from .block_layout_import import spirv_block_layout
+from .buffer_memory_qualifiers import storage_block_memory_qualifiers
 from .function_structure import SpirvFunctionStructure
 from .integer_signedness_import import (
     spirv_integer_binary_expression,
@@ -6126,6 +6127,17 @@ class VulkanParser:
         declaration_qualifiers = self.spirv_declaration_qualifiers(
             struct_decorations + variable_decorations
         )
+        if layout_type == "BUFFER":
+            memory_qualifiers = storage_block_memory_qualifiers(
+                struct_decorations + variable_decorations,
+                member_decorations.get(struct_type_id, []),
+                len(struct_type.get("member_types", [])),
+            )
+            declaration_qualifiers = [
+                qualifier
+                for qualifier in declaration_qualifiers
+                if qualifier not in memory_qualifiers
+            ] + memory_qualifiers
 
         node = LayoutNode(
             qualifiers,
