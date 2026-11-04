@@ -124,6 +124,8 @@ class VulkanParser:
         "Location": "location",
         "Component": "component",
         "Index": "index",
+        # A geometry output's vertex stream (GLSL layout(stream = n)).
+        "Stream": "stream",
     }
     SPIRV_DECLARATION_DECORATION_QUALIFIERS = {
         "Centroid": "centroid",
