@@ -3079,6 +3079,7 @@ class GLSLCodeGen(
             "sv_instanceid": "gl_InstanceID",
             "gl_IsFrontFace": "gl_FrontFacing",
             "gl_PrimitiveID": "gl_PrimitiveID",
+            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             **{
                 semantic: f"layout(location = {location})"
                 for semantic, location in SEMANTIC_LOCATIONS.items()

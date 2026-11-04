@@ -330,6 +330,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             "gl_DrawID": "SV_DrawIndex",
             "gl_PrimitiveID": "SV_PrimitiveID",
             "gl_PrimitiveIDIn": "SV_PrimitiveID",
+            "gl_CullPrimitiveEXT": "SV_CullPrimitive",
             "gl_TessCoord": "SV_DomainLocation",
             "gl_TessLevelOuter": "SV_TessFactor",
             "gl_TessLevelInner": "SV_InsideTessFactor",
@@ -1925,6 +1926,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.validate_slang_tessellation_stage_shapes(stages)
         self.slang_mesh_payload_parameter_types = (
             self.collect_slang_mesh_payload_parameter_types(stages)
+        )
+        self.slang_program_has_mesh_stage = any(
+            str(getattr(stage_type, "value", stage_type)).lower() == "mesh"
+            for stage_type in stages
         )
         self.slang_ray_payload_parameter_types = (
             self.collect_slang_ray_payload_parameter_types(stages)
@@ -10493,6 +10498,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
 
         payload_types = sorted(self.slang_mesh_payload_parameter_types)
+        if not payload_types and not getattr(
+            self, "slang_program_has_mesh_stage", True
+        ):
+            # A task stage built alone: the mesh stage it launches is another program.
+            return
         if not payload_types:
             raise ValueError(
                 "Slang DispatchMesh payload argument requires a mesh stage "

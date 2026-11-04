@@ -9527,6 +9527,7 @@ class VulkanSPIRVCodeGen(
             "gl_Position": "gl_Position",
             "gl_PrimitiveID": "gl_PrimitiveID",
             "SV_PrimitiveID": "gl_PrimitiveID",
+            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             "gl_Layer": "gl_Layer",
             "gl_ViewportIndex": "gl_ViewportIndex",
             "gl_CullPrimitiveEXT": "gl_CullPrimitiveEXT",

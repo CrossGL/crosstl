@@ -1545,6 +1545,9 @@ class MetalCodeGen(
             "SV_PrimitiveId": "primitive_id",
             "sv_primitive_id": "primitive_id",
             "sv_primitiveid": "primitive_id",
+            # A mesh primitive's cull flag: a member of the mesh<> primitive structure.
+            "gl_CullPrimitiveEXT": "primitive_culled",
+            "SV_CullPrimitive": "primitive_culled",
             # The classic vertex semantics keep the location every target gives them.
             **{
                 semantic: f"attribute({location})"

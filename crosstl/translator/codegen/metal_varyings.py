@@ -52,6 +52,7 @@ METAL_VARYING_BUILTINS = frozenset(
         "point_coord",
         "point_size",
         "position",
+        "primitive_culled",
         "primitive_id",
         "render_target_array_index",
         "sample_id",
