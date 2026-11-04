@@ -159,6 +159,13 @@ class MetalWorkerServer:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # macOS refuses to signal a group whose leader has exited but
+                # is not yet reaped; signal the worker itself instead.
+                try:
+                    self.process.kill()
+                except (ProcessLookupError, PermissionError):
+                    pass
 
     def terminate(self):
         """Stop the worker; a worker started by another process is left alone."""
