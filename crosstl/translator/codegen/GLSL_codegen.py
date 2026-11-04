@@ -170,6 +170,10 @@ from .comma_expressions import (
 )
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
+from .cooperative_matrix_diagonal import (
+    generate_glsl_cooperative_matrix_diagonal,
+    generate_glsl_cooperative_matrix_diagonal_helper,
+)
 from .counter_loops import (
     any_start_counter_loop_terminates,
     any_start_counter_loops,
@@ -235,10 +239,15 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
-from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .glsl_buffer_layout import (
+    glsl_buffer_block_node_type,
+    std430_array_stride,
+    std430_value_type_info,
+)
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
+from .glsl_draw_parameters import DRAW_PARAMETERS, vertex_builtin_spelling
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
@@ -252,7 +261,7 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
-from .glsl_instance_index import INSTANCE_INDEX, instance_index_expression
+from .glsl_instance_index import INSTANCE_INDEX
 from .glsl_interface_block_io import (
     block_declared_stage_io,
     block_member_location_type,
@@ -4843,7 +4852,7 @@ class GLSLCodeGen(
             node
             for node in self.walk_ast(root)
             if isinstance(node, CooperativeMatrixOpNode)
-            and node.operation in {"fill", "load", "store"}
+            and node.operation in {"fill", "diagonal", "load", "store"}
         ]
 
     def glsl_software_subgroup_stage_entries(self, ast, target_stage=None):
@@ -24252,11 +24261,17 @@ class GLSLCodeGen(
             "gl_PrimitiveID",
             "gl_SampleID",
             "gl_SampleMaskIn",
+            INSTANCE_INDEX,
+            *DRAW_PARAMETERS,
         }
         if builtin in scalar_int_builtins:
             if mapped_type == "int":
                 return None
-            source = "gl_SampleMaskIn[0]" if builtin == "gl_SampleMaskIn" else builtin
+            source = (
+                "gl_SampleMaskIn[0]"
+                if builtin == "gl_SampleMaskIn"
+                else vertex_builtin_spelling(self, builtin)
+            )
             if mapped_type == "uint":
                 return f"uint({source})"
             return None
@@ -34042,6 +34057,8 @@ class GLSLCodeGen(
             return self.generate_glsl_cooperative_matrix_multiply_accumulate(node)
         if operation == "fill":
             return self.generate_glsl_cooperative_matrix_fill(node)
+        if operation == "diagonal":
+            return generate_glsl_cooperative_matrix_diagonal(self, node)
         if operation in {"load", "store"}:
             return self.generate_glsl_cooperative_matrix_transfer(node)
 
@@ -34766,6 +34783,13 @@ class GLSLCodeGen(
                 continue
 
             helper_name = contract["helpers"][operation]
+            if operation == "diagonal":
+                blocks.append(
+                    generate_glsl_cooperative_matrix_diagonal_helper(
+                        type_name, helper_name, contract
+                    )
+                )
+                continue
             if operation == "fill":
                 component = contract["mapped_component_type"]
                 lines = [
@@ -36727,10 +36751,16 @@ complex64_t crossgl_complex64_mod_assign(
         to an initializer list before codegen and zero-filled there, but an
         assignment or a call argument keeps the call spelling, and glslang
         rejects it. Pad the same way here: the given elements first, then the
-        element type's value initializer for each missing element. A
-        constructor that already has enough arguments, an unsized extent, or
-        a nested element type is left exactly as it was.
+        element type's value initializer for each missing element; a missing
+        element of an array of arrays is the zero inner array, as in
+        ``float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))``. A constructor
+        that already has enough arguments, or an unsized extent at any level,
+        is left exactly as it was.
         """
+        if func_name is None:
+            func_name = self.glsl_array_of_arrays_constructor_name(
+                getattr(expr, "function", None)
+            )
         # An array constructor's name ends with its extent; a generic call with an
         # array type argument, such as ``pick<float[2]>``, is not one.
         if not isinstance(func_name, str) or not func_name.rstrip().endswith("]"):
@@ -36739,7 +36769,7 @@ complex64_t crossgl_complex64_mod_assign(
         if array_type is None:
             return call_args
         extent_text, element_type = array_type
-        if "[" in element_type:
+        if "[]" in element_type.replace(" ", ""):
             return call_args
         try:
             extent = int(extent_text)
@@ -36753,6 +36783,29 @@ complex64_t crossgl_complex64_mod_assign(
             for _ in range(extent - len(padded))
         )
         return padded
+
+    @staticmethod
+    def glsl_array_of_arrays_constructor_name(callee):
+        """``float[2][3]`` for the callee of ``float[2][3](...)``, else ``None``.
+
+        The CrossGL parser keeps a one-dimensional constructor's extent in the
+        callee's name, ``float[3]``, but reads the callee of an array of arrays
+        as its base type subscripted once per extent, outermost first:
+        ``float[2][3]`` is ``float`` indexed by 2, then by 3. Only integer
+        literal extents are read.
+        """
+        extents = []
+        while isinstance(callee, ArrayAccessNode):
+            index = callee.index_expr
+            if not isinstance(index, LiteralNode) or type(index.value) is not int:
+                return None
+            extents.append(index.value)
+            callee = callee.array_expr
+        if not extents or not isinstance(callee, IdentifierNode):
+            return None
+        if not isinstance(callee.name, str) or "[" in callee.name:
+            return None
+        return callee.name + "".join(f"[{extent}]" for extent in reversed(extents))
 
     def glsl_indexed_aggregate_literal_shape(self, expr, access_depth):
         dimensions = []
@@ -37453,7 +37506,7 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_builtin_identifier_result_type(self, name):
         if not name:
             return None
-        if name == INSTANCE_INDEX:
+        if name == INSTANCE_INDEX or name in DRAW_PARAMETERS:
             return crossgl_builtin_variable_type(name)
         return crossgl_builtin_variable_type(self.glsl_target_builtin_identifier(name))
 
@@ -40105,8 +40158,8 @@ complex64_t crossgl_complex64_mod_assign(
                 return quadgroup_alias
         if stage_name == "vertex" and name == "gl_VertexIndex":
             return "gl_VertexID"
-        if stage_name == "vertex" and name == INSTANCE_INDEX:
-            return instance_index_expression(self)
+        if stage_name == "vertex":
+            return vertex_builtin_spelling(self, name)
         return name
 
     def glsl_identifier_is_resolved(self, name):
@@ -40750,6 +40803,18 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if ray_query_member_call is not None:
                 return ray_query_member_call
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and func_expr.member == "length"
+                and not expr.args
+            ):
+                instance_member = self.glsl_structured_buffer_array_element_member(
+                    func_expr.object
+                )
+                if instance_member is not None:
+                    # One buffer of an array of storage blocks holds its elements in a member.
+                    buffer = self.generate_expression(func_expr.object)
+                    return f"{buffer}.{instance_member}.length()"
 
             if (
                 isinstance(func_expr, MemberAccessNode)
@@ -40767,6 +40832,12 @@ complex64_t crossgl_complex64_mod_assign(
                     and "byte_offset" not in storage_binding
                 ):
                     return self.structured_buffer_length_expression(func_expr.object)
+
+            get_dimensions = self.glsl_structured_buffer_get_dimensions(
+                func_expr, expr.args
+            )
+            if get_dimensions is not None:
+                return get_dimensions
 
             synchronization_call = self.synchronization_function_call(
                 original_func_name,
@@ -40991,6 +41062,9 @@ complex64_t crossgl_complex64_mod_assign(
                 specialized_func_name is None
                 and original_func_name in getattr(
                     self, "generic_function_definitions", {}
+                )
+                and original_func_name not in (
+                    getattr(self, "concrete_function_names", None) or ()
                 )
                 and getattr(self, "enforce_concrete_glsl_types", False)
             ):
@@ -44700,6 +44774,54 @@ complex64_t crossgl_complex64_mod_assign(
             return f"{buffer}.{instance_member}[{element_index}]"
         return f"{buffer}[{element_index}]"
 
+    def glsl_structured_buffer_get_dimensions(self, func_expr, args):
+        """``b.GetDimensions(count, stride)`` on a structured buffer: its element count and std430 stride."""
+        if not (
+            isinstance(func_expr, MemberAccessNode)
+            and func_expr.member == "GetDimensions"
+            and len(args or ()) == 2
+        ):
+            return None
+        buffer_expr = func_expr.object
+        if not isinstance(buffer_expr, (IdentifierNode, VariableNode)):
+            return None
+        structured = {"StructuredBuffer", "RWStructuredBuffer"}
+        buffer_type = self.expression_result_type(buffer_expr)
+        if buffer_type is None or (
+            self.structured_buffer_type_name(buffer_type) not in structured
+        ):
+            # A helper's buffer parameter is an offset into the buffer the
+            # specialized helper reads, whose type its binding carries.
+            storage_binding = self.glsl_storage_pointer_binding(
+                buffer_expr, self.glsl_storage_pointer_aliases()
+            )
+            if (
+                storage_binding is None
+                or "pointer_reinterpretation" in storage_binding
+                or "byte_offset" in storage_binding
+            ):
+                return None
+            buffer_type = storage_binding.get("type")
+        if buffer_type is None or self.structured_buffer_type_name(buffer_type) not in (
+            structured
+        ):
+            return None
+        element = self.structured_buffer_element_type(buffer_type)
+        info = std430_value_type_info(element)
+        element_stride = None if info is None else std430_array_stride(info)
+        if element_stride is None:
+            return self.refuse_lowering(
+                "StructuredBuffer.GetDimensions: the std430 stride of element type "
+                f"'{element}' of '{self.expression_name(buffer_expr)}' is not known here",
+                "0",
+            )
+        count = self.generate_expression(args[0])
+        stride = self.generate_expression(args[1])
+        length = self.structured_buffer_length_expression(buffer_expr)
+        # A comma keeps the two writes one expression, so the call stays whole as the
+        # body of an unbraced if or for.
+        return f"{count} = uint({length}), {stride} = {element_stride}u"
+
     def structured_buffer_length_expression(self, buffer_arg):
         array_access = self.structured_buffer_array_parameter_access(buffer_arg)
         if array_access is not None:
@@ -47501,6 +47623,12 @@ complex64_t crossgl_complex64_mod_assign(
     def validate_function_image_parameter_contract_arguments(self, func_name, args):
         callee = self.function_definitions.get(func_name)
         if callee is None:
+            return
+        # A generic definition's parameters name type parameters, not concrete
+        # image types; its specializations are validated under their own names.
+        # This matters when a concrete overload of the same name takes the call
+        # and the generic definition shadows it in function_definitions.
+        if generic_function_parameters(callee):
             return
 
         params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
@@ -58791,6 +58919,8 @@ complex64_t crossgl_complex64_mod_assign(
 
     def stage_input_builtin_alias(self, semantic, stage_name=None):
         mapped = self.map_stage_input_semantic(semantic, stage_name)
+        if normalize_stage_name(stage_name) == "vertex":
+            mapped = vertex_builtin_spelling(self, mapped)
         if normalize_stage_name(stage_name) == "compute":
             quadgroup_alias = {
                 "gl_QuadGroupID": "(gl_LocalInvocationIndex / 4u)",

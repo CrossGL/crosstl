@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 
 from ..ast import ArrayType, MatrixType
+from .glsl_draw_parameters import vertex_builtin_spelling
 from .stage_io_semantic_locations import allocate_locations
 
 __all__ = (
@@ -43,10 +44,9 @@ def vertex_input_builtin(codegen, member) -> str | None:
     if not builtin.startswith("gl_"):
         return None
     mapped_type = str(codegen.member_type_name(member))
-    return (
-        codegen.stage_builtin_parameter_local_alias_expression(builtin, mapped_type)
-        or builtin
-    )
+    return codegen.stage_builtin_parameter_local_alias_expression(
+        builtin, mapped_type
+    ) or vertex_builtin_spelling(codegen, builtin)
 
 
 def vertex_input_layouts(codegen, members) -> dict:

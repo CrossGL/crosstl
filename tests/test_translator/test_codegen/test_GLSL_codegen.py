@@ -7459,6 +7459,122 @@ def test_glsl_buffer_view_helper_parameter_length_counts_from_its_offset(tmp_pat
     )
 
 
+@pytest.mark.parametrize(
+    ("element", "stride"),
+    # An unmarked buffer is laid out by std430, so a vec3 element takes 16 bytes,
+    # not the 12 of an HLSL structured buffer.
+    [("float", "4u"), ("vec2", "8u"), ("vec3", "16u"), ("vec4", "16u")],
+)
+def test_glsl_structured_buffer_get_dimensions_writes_count_and_std430_stride(
+    element, stride, tmp_path
+):
+    code = f"""
+    shader Probe {{
+        StructuredBuffer<{element}> values;
+        RWStructuredBuffer<float> outp;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                uint n;
+                uint s;
+                values.GetDimensions(n, s);
+                outp[0] = float(n) + float(s);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert f"n = uint(values.length()), s = {stride};" in generated
+    assert "GetDimensions" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, f"structured_buffer_get_dimensions_{element}"
+    )
+
+
+def test_glsl_structured_buffer_get_dimensions_refuses_an_unknown_stride():
+    code = """
+    shader Probe {
+        struct Pair { float a; float b; };
+        StructuredBuffer<Pair> values;
+        RWStructuredBuffer<float> outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint n;
+                uint s;
+                values.GetDimensions(n, s);
+                outp[0] = float(n) + float(s);
+            }
+        }
+    }
+    """
+
+    refusal = refused_glsl(generate_code, parse_code(tokenize_code(code)))
+    assert "StructuredBuffer.GetDimensions" in refusal
+
+
+@pytest.mark.parametrize("buffer_type", ["StructuredBuffer", "RWStructuredBuffer"])
+def test_glsl_structured_buffer_helper_get_dimensions_counts_from_its_offset(
+    buffer_type, tmp_path
+):
+    # The specialized helper reads values[v_offset + k], so its count is the
+    # buffer's length less the offset, as for v.length().
+    code = f"""
+    shader Probe {{
+        {buffer_type}<vec3> values;
+        RWStructuredBuffer<float> outp;
+        uint dims({buffer_type}<vec3> v) {{
+            uint c;
+            uint t;
+            v.GetDimensions(c, t);
+            return c * 100u + t;
+        }}
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                outp[0] = float(dims(values + 2));
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "c = uint((values.length() - int(v_offset))), t = 16u;" in generated
+    assert "dims_glsl_v_values_vec3(int(2))" in generated
+    assert "GetDimensions" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, f"helper_get_dimensions_{buffer_type}"
+    )
+
+
+def test_glsl_structured_buffer_helper_get_dimensions_refuses_an_unknown_stride():
+    code = """
+    shader Probe {
+        struct Pair { float a; float b; };
+        StructuredBuffer<Pair> values;
+        RWStructuredBuffer<float> outp;
+        uint dims(StructuredBuffer<Pair> v) {
+            uint c;
+            uint t;
+            v.GetDimensions(c, t);
+            return c + t;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(dims(values));
+            }
+        }
+    }
+    """
+
+    refusal = refused_glsl(generate_code, parse_code(tokenize_code(code)))
+    assert "element type 'Pair' of 'v'" in refusal
+
+
 def test_glsl_private_pointer_helper_uses_fixed_local_array_extent():
     code = """
     shader PrivatePointerHelper {

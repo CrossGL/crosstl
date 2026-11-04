@@ -1697,6 +1697,7 @@ class CooperativeMatrixOpNode(ExpressionNode):
         {
             "element",
             "fill",
+            "diagonal",
             "load",
             "store",
             "multiply",

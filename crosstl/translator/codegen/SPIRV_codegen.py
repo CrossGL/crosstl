@@ -32276,8 +32276,52 @@ class VulkanSPIRVCodeGen(
             self, functions
         ):
             candidates = (self.generic_function_definitions or {}).get(func_name) or []
-            if candidates:
-                raise self.unsupported_generic_function_error(candidates[0])
+            if not candidates:
+                continue
+            if self._unresolved_generic_calls_are_inlineable(func_name, functions):
+                continue
+            raise self.unsupported_generic_function_error(candidates[0])
+
+    def _unresolved_generic_calls_are_inlineable(self, func_name, functions):
+        """Whether storage-buffer inlining resolves every unresolved call of ``func_name``.
+
+        Such calls may carry extra arguments the inliner skips (generated scratch locals), so arity alone
+        does not leave them unresolved: the inliner's subsequence matcher aligns them with an overload. A
+        call it cannot align is still unresolved and must be refused.
+        """
+        candidates = (self.generic_function_definitions or {}).get(func_name) or []
+        if not candidates:
+            return False
+        resolved_call_ids = getattr(self, "generic_function_resolved_call_ids", set())
+        for func in functions:
+            if generic_function_parameters(func):
+                continue
+            for node in self.walk_ast_nodes(func):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                call_name = self.function_call_name(node)
+                if call_name is None:
+                    continue
+                if generic_function_definition_name(self, call_name) != func_name:
+                    continue
+                if id(node) in resolved_call_ids:
+                    continue
+                args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+                if generic_function_call_name(self, call_name, args) is not None:
+                    continue
+                if not any(
+                    self._storage_buffer_candidate_matches(candidate, args)
+                    for candidate in candidates
+                ):
+                    return False
+        return True
+
+    def _storage_buffer_candidate_matches(self, candidate, args):
+        try:
+            match, _reason = self.storage_buffer_candidate_call_match(candidate, args)
+        except Exception:
+            return False
+        return match is not None
 
     def has_concrete_function_overload(self, function_node, functions):
         function_name = getattr(function_node, "name", None)
