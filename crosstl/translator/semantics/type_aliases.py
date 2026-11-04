@@ -90,8 +90,15 @@ _ELEMENT_SCALARS = frozenset(
         "u64",
     }
 )
-# The element type the parser writes for these spellings in ``vec2<f32>`` (``vector_element_type_from_generic``).
-_PARSED_ELEMENT_NAMES = {"f32": "float", "f64": "double", "i32": "int", "u32": "uint"}
+# The element type the parser writes for each scalar spelling in ``vec2<...>`` (``vector_element_type_from_generic``):
+# ``f32``, ``f64``, ``i32`` and ``u32`` become ``float``, ``double``, ``int`` and ``uint``, and the others are kept.
+_PARSED_ELEMENT_NAMES = {
+    **{name: name for name in _ELEMENT_SCALARS},
+    "f32": "float",
+    "f64": "double",
+    "i32": "int",
+    "u32": "uint",
+}
 
 
 class TypeAliasUnsupportedError(TranslationDiagnostic):
@@ -289,9 +296,7 @@ class _Resolver:
             name = getattr(element, "name", None)
             if isinstance(element, (A.PrimitiveType, A.NamedType)) and name in aliases:
                 scalar = self.element_scalar(name, aliases)
-                node.element_type = A.PrimitiveType(
-                    _PARSED_ELEMENT_NAMES.get(scalar, scalar)
-                )
+                node.element_type = A.PrimitiveType(_PARSED_ELEMENT_NAMES[scalar])
         elif isinstance(node, A.FunctionCallNode) and isinstance(
             node.function, A.IdentifierNode
         ):
