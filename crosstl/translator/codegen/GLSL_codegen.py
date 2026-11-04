@@ -36751,10 +36751,16 @@ complex64_t crossgl_complex64_mod_assign(
         to an initializer list before codegen and zero-filled there, but an
         assignment or a call argument keeps the call spelling, and glslang
         rejects it. Pad the same way here: the given elements first, then the
-        element type's value initializer for each missing element. A
-        constructor that already has enough arguments, an unsized extent, or
-        a nested element type is left exactly as it was.
+        element type's value initializer for each missing element; a missing
+        element of an array of arrays is the zero inner array, as in
+        ``float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))``. A constructor
+        that already has enough arguments, or an unsized extent at any level,
+        is left exactly as it was.
         """
+        if func_name is None:
+            func_name = self.glsl_array_of_arrays_constructor_name(
+                getattr(expr, "function", None)
+            )
         # An array constructor's name ends with its extent; a generic call with an
         # array type argument, such as ``pick<float[2]>``, is not one.
         if not isinstance(func_name, str) or not func_name.rstrip().endswith("]"):
@@ -36763,7 +36769,7 @@ complex64_t crossgl_complex64_mod_assign(
         if array_type is None:
             return call_args
         extent_text, element_type = array_type
-        if "[" in element_type:
+        if "[]" in element_type.replace(" ", ""):
             return call_args
         try:
             extent = int(extent_text)
@@ -36777,6 +36783,29 @@ complex64_t crossgl_complex64_mod_assign(
             for _ in range(extent - len(padded))
         )
         return padded
+
+    @staticmethod
+    def glsl_array_of_arrays_constructor_name(callee):
+        """``float[2][3]`` for the callee of ``float[2][3](...)``, else ``None``.
+
+        The CrossGL parser keeps a one-dimensional constructor's extent in the
+        callee's name, ``float[3]``, but reads the callee of an array of arrays
+        as its base type subscripted once per extent, outermost first:
+        ``float[2][3]`` is ``float`` indexed by 2, then by 3. Only integer
+        literal extents are read.
+        """
+        extents = []
+        while isinstance(callee, ArrayAccessNode):
+            index = callee.index_expr
+            if not isinstance(index, LiteralNode) or type(index.value) is not int:
+                return None
+            extents.append(index.value)
+            callee = callee.array_expr
+        if not extents or not isinstance(callee, IdentifierNode):
+            return None
+        if not isinstance(callee.name, str) or "[" in callee.name:
+            return None
+        return callee.name + "".join(f"[{extent}]" for extent in reversed(extents))
 
     def glsl_indexed_aggregate_literal_shape(self, expr, access_depth):
         dimensions = []
