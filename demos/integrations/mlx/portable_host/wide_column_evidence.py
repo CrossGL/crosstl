@@ -133,7 +133,8 @@ def audit_event(event, cache):
     request = event["details"]["request"]
     require(
         request["target"] == target
-        and request["entryPoint"] == entry
+        and request["entryPoint"]
+        == {"opengl": "main", "directx": "CSMain"}.get(target, entry)
         and all(request["dispatch"][key] == event[key] for key in GEOMETRY),
         "Wide small-column native request changed",
     )

@@ -135,7 +135,8 @@ def audit_event(event, cache):
     request = event["details"]["request"]
     require(
         request["target"] == event["target"]
-        and request["entryPoint"] == entry
+        and request["entryPoint"]
+        == {"opengl": "main", "directx": "CSMain"}.get(event["target"], entry)
         and all(request["dispatch"][key] == event[key] for key in GEOMETRY),
         "Cross-entropy native request changed",
     )

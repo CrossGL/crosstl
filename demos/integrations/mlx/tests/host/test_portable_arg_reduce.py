@@ -245,7 +245,10 @@ def audit(monkeypatch, event, target):
         "details": {
             "request": {
                 "target": target,
-                "entryPoint": event["entry"],
+                # DirectX and OpenGL packages name their stage entry.
+                "entryPoint": (
+                    {"opengl": "main", "directx": "CSMain"}.get(target, event["entry"])
+                ),
                 "dispatch": {key: event[key] for key in arg_reduce_evidence.GEOMETRY},
             }
         },

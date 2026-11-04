@@ -149,7 +149,10 @@ def audit_event(event, cache):
     request = event["details"]["request"]
     require(
         request["target"] == target
-        and request["entryPoint"] == norm_layout.source_entry(entry)
+        and request["entryPoint"]
+        == {"opengl": "main", "directx": "CSMain"}.get(
+            target, norm_layout.source_entry(entry)
+        )
         and all(request["dispatch"][key] == event[key] for key in GEOMETRY),
         "Normalization native request changed",
     )
