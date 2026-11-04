@@ -31972,6 +31972,36 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         return rendered
 
+    def hlsl_resource_pointer_length(self, pointer_expr):
+        """``length()`` of a helper's ``buffer T*`` parameter: its buffer's elements from the offset on."""
+        # A buffer parameter is passed as its buffer plus an element offset, so its
+        # length is that buffer's element count less the offset, not a member call.
+        if not isinstance(pointer_expr, (IdentifierNode, VariableNode)):
+            # An element such as data[3] is a value, not a view, even though its
+            # binding is the view moved to that element.
+            return None
+        binding = self.hlsl_resource_pointer_binding(pointer_expr)
+        if (
+            binding is None
+            or binding.get("kind") == "workgroup-pointer"
+            or "pointer_reinterpretation" in binding
+            or "byte_offset" in binding
+            or not binding.get("root")
+        ):
+            return None
+        resource_type = binding.get("resource_type")
+        count = self.hlsl_buffer_length.element_count(
+            binding["root"],
+            self.hlsl_resource_type_name(resource_type),
+            self.map_type(resource_type) if resource_type else None,
+        )
+        if count is None:
+            return None
+        offset = binding.get("offset")
+        if offset is None or str(offset) in {"0", "0u"}:
+            return f"int({count})"
+        return f"(int({count}) - int({offset}))"
+
     def generate_glsl_buffer_block_length_call(self, func_expr, args):
         """``block.member.length()`` for a GLSL buffer block lowered to a byte-address buffer."""
         if not (
@@ -31989,6 +32019,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             resource_type = self.hlsl_buffer_helper_resource_type(object_expr)
             if resource_type is not None:
                 return f"int({self.hlsl_buffer_element_count(object_expr)})"
+            pointer_length = self.hlsl_resource_pointer_length(object_expr)
+            if pointer_length is not None:
+                return pointer_length
         access = self.glsl_buffer_block_member_access(
             getattr(func_expr, "object_expr", getattr(func_expr, "object", None))
         )
