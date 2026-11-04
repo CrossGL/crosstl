@@ -34,6 +34,38 @@ def _row_strides(shape):
     return strides
 
 
+def _contiguous(shape, strides):
+    """Whether a view covers its elements without holes or broadcasts.
+
+    MLX flags such a view, in row, column or any permuted order, contiguous.
+    """
+    axes = sorted(
+        ((stride, extent) for extent, stride in zip(shape, strides) if extent > 1),
+        reverse=True,
+    )
+    expected = 1
+    for stride, extent in reversed(axes):
+        if stride != expected:
+            return False
+        expected *= extent
+    return True
+
+
+def _scale_kernel(c_shape, c_strides):
+    """binary.cpp's kernel and copies for ``C * beta``, beta one broadcast element.
+
+    ``get_binary_op_type`` reads a ``C`` holding one element as ScalarScalar,
+    which the host serves with ``vv_``, and a contiguous ``C`` as VectorScalar
+    (``vs_``). Any other ``C`` is General: the host copies it and the
+    broadcast beta into dense row-major vectors and multiplies with ``vv_``.
+    """
+    if all(extent == 1 or stride == 0 for extent, stride in zip(c_shape, c_strides)):
+        return "vv_", {}
+    if _contiguous(c_shape, c_strides):
+        return "vs_", {}
+    return "vv_", {"beta": True, "c": True}
+
+
 def operands(a_shape, a_strides, b_shape, b_strides, c_shape, c_strides):
     """AddMM::eval_gpu's operand preparation, before it picks a kernel.
 
@@ -237,19 +269,17 @@ def route(dtype, a, b, c, alpha, beta):
     if math.prod(c_shape) == 0:
         return "empty", {"copies": {}}
     if a_shape[-1] == 0:
-        # matmul.cpp copies C as is or multiplies it by beta. The host's
-        # elementwise multiplication first copies each operand that is not
-        # row-contiguous: the broadcast beta unless C has one element, and C.
+        # matmul.cpp copies C as is or multiplies it by beta, one element
+        # broadcast to C's shape.
         if beta == 1.0:
             return "scale", {"beta": beta, "copy": True, "copies": {}}
-        dense = all(
-            extent == 1 or stride == expected
-            for extent, stride, expected in zip(
-                c_shape, c_strides, _row_strides(c_shape)
-            )
-        )
-        copies = {"beta": math.prod(c_shape) > 1, "c": not dense}
-        return "scale", {"beta": beta, "copy": False, "copies": copies}
+        kernel, copies = _scale_kernel(c_shape, c_strides)
+        return "scale", {
+            "beta": beta,
+            "copy": False,
+            "multiply": f"{kernel}Multiply{dtype}",
+            "copies": copies,
+        }
     prepared = operands(a_shape, a_strides, b_shape, b_strides, c_shape, c_strides)
     m, n, k = prepared["M"], prepared["N"], prepared["K"]
     if min(m, n) == 1:

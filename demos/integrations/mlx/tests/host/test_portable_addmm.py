@@ -157,8 +157,38 @@ def test_routes_mirror_addmm_eval_gpu():
     assert BY_NAME["splitk-transposed"]["route"]["accumParams"]["fdc"] == 32
     assert BY_NAME["empty-k-copy"]["route"]["copy"] is True
     assert BY_NAME["empty-k-scale"]["route"]["copy"] is False
-    # The multiplication copies the broadcast beta first.
-    assert BY_NAME["empty-k-scale"]["copies"] == 1
+    # A dense C and the one-element beta are VectorScalar operands: vs_
+    # multiplies them without copies.
+    assert BY_NAME["empty-k-scale"]["copies"] == 0
+    assert BY_NAME["empty-k-scale"]["route"]["multiply"] == "vs_Multiplyfloat16"
+
+
+@pytest.mark.parametrize(
+    "shape, strides, multiply, copies",
+    [
+        # Column-major and permuted dense views stay contiguous.
+        ((4, 3), (1, 4), "vs_Multiplyfloat32", {}),
+        ((2, 3, 4), (4, 8, 1), "vs_Multiplyfloat32", {}),
+        # One element, stored or broadcast, is ScalarScalar.
+        ((1, 1), (1, 1), "vv_Multiplyfloat32", {}),
+        ((3, 4), (0, 0), "vv_Multiplyfloat32", {}),
+        # Holes, partial broadcasts and reversed axes are General.
+        ((3, 4), (8, 1), "vv_Multiplyfloat32", {"beta": True, "c": True}),
+        ((3, 4), (0, 1), "vv_Multiplyfloat32", {"beta": True, "c": True}),
+        ((3, 4), (-4, 1), "vv_Multiplyfloat32", {"beta": True, "c": True}),
+    ],
+)
+def test_empty_k_scale_follows_binary_op_type(shape, strides, multiply, copies):
+    family, route = addmm_layout.route(
+        "float32",
+        ((*shape[:-1], 0), [0] * len(shape)),
+        ((*shape[:-2], 0, shape[-1]), [0] * len(shape)),
+        (shape, strides),
+        1.0,
+        2.0,
+    )
+    assert family == "scale"
+    assert route["multiply"] == multiply and route["copies"] == copies
 
 
 @pytest.mark.parametrize(
@@ -458,11 +488,7 @@ def trace_events(record, target):
             },
         ]
     if record["family"] == "scale":
-        last = (
-            "ggn1_dynamic_copyuint32uint32"
-            if route["copy"]
-            else f"vv_Multiply{record['dtype']}"
-        )
+        last = "ggn1_dynamic_copyuint32uint32" if route["copy"] else route["multiply"]
         copies = [{"entry": "v_copyuint16uint16", "target": target}] * record["copies"]
         return copies + [{"entry": last, "target": target}]
     return []

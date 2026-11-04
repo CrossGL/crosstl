@@ -483,7 +483,7 @@ def _scale_dispatches(trace, records):
             continue
         start = record["dispatchStart"]
         events = trace[start : start + record["dispatchCount"]]
-        last = "copy" if record["route"]["copy"] else f"vv_Multiply{record['dtype']}"
+        last = "copy" if record["route"]["copy"] else record["route"]["multiply"]
         entries = [event.get("entry", "") for event in events]
         if (
             len(entries) != KERNELS["scale"] + record["copies"]
