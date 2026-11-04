@@ -236,8 +236,8 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_buffer_layout import (
-    align_to,
     glsl_buffer_block_node_type,
+    std430_array_stride,
     std430_value_type_info,
 )
 from .glsl_builtin_extensions import require_builtin_extensions
@@ -44721,23 +44721,34 @@ complex64_t crossgl_complex64_mod_assign(
         buffer_expr = func_expr.object
         if not isinstance(buffer_expr, (IdentifierNode, VariableNode)):
             return None
+        structured = {"StructuredBuffer", "RWStructuredBuffer"}
         buffer_type = self.expression_result_type(buffer_expr)
-        if buffer_type is None or self.structured_buffer_type_name(buffer_type) not in {
-            "StructuredBuffer",
-            "RWStructuredBuffer",
-        }:
+        if buffer_type is None or (
+            self.structured_buffer_type_name(buffer_type) not in structured
+        ):
+            # A helper's buffer parameter is an offset into the buffer the
+            # specialized helper reads, whose type its binding carries.
+            storage_binding = self.glsl_storage_pointer_binding(
+                buffer_expr, self.glsl_storage_pointer_aliases()
+            )
+            if (
+                storage_binding is None
+                or "pointer_reinterpretation" in storage_binding
+                or "byte_offset" in storage_binding
+            ):
+                return None
+            buffer_type = storage_binding.get("type")
+        if buffer_type is None or self.structured_buffer_type_name(buffer_type) not in (
+            structured
+        ):
             return None
         element = self.structured_buffer_element_type(buffer_type)
         info = std430_value_type_info(element)
-        element_stride = None
-        if info is not None:
-            element_stride = info.get("array_stride")
-            if element_stride is None and "size" in info and "align" in info:
-                element_stride = align_to(info["size"], info["align"])
+        element_stride = None if info is None else std430_array_stride(info)
         if element_stride is None:
             return self.refuse_lowering(
                 "StructuredBuffer.GetDimensions: the std430 stride of element type "
-                f"'{element}' of '{self.generate_expression(buffer_expr)}' is not known here",
+                f"'{element}' of '{self.expression_name(buffer_expr)}' is not known here",
                 "0",
             )
         count = self.generate_expression(args[0])
