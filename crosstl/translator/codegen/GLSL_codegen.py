@@ -55705,9 +55705,7 @@ complex64_t crossgl_complex64_mod_assign(
             ):
                 raise OpenGLPrivatePointerParameterError(
                     "OpenGL cannot emit a side-effecting private array row index",
-                    function_name=self.glsl_private_pointer_display_name(
-                        function_name
-                    ),
+                    function_name=self.glsl_private_pointer_display_name(function_name),
                     reason="side-effecting-view-offset",
                     source_location=getattr(expression, "source_location", None),
                 )

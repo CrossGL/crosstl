@@ -103,9 +103,7 @@ def test_row_shape_lists_every_extent():
     row = ArrayAccessNode(
         ArrayAccessNode(IdentifierNode("x"), IdentifierNode("a")), IdentifierNode("b")
     )
-    root, extent, _element, indices = array_row_view(
-        row, {"x": (extents, element)}.get
-    )
+    root, extent, _element, indices = array_row_view(row, {"x": (extents, element)}.get)
     assert (root, extent, [index.name for index in indices]) == ("x", 4, ["a", "b"])
     # A plane of the cube decays to a pointer to rows, not to scalars.
     assert array_row_view(row.array, {"x": (extents, element)}.get) is None
@@ -115,7 +113,9 @@ def test_row_shape_lists_every_extent():
             ArrayAccessNode(IdentifierNode("x"), _literal(outer)), _literal(inner)
         )
         assert array_row_view(beyond, {"x": (extents, element)}.get) is None
-    inside = ArrayAccessNode(ArrayAccessNode(IdentifierNode("x"), _literal(1)), _literal(2))
+    inside = ArrayAccessNode(
+        ArrayAccessNode(IdentifierNode("x"), _literal(1)), _literal(2)
+    )
     assert array_row_view(inside, {"x": (extents, element)}.get)[1] == 4
     # One-dimensional and non-literal arrays have no rows.
     flat = ArrayType(PrimitiveType("float"), _literal(4))
@@ -146,9 +146,18 @@ def test_innermost_rows_of_higher_rank_arrays_pass_in_place(tmp_path, target):
 @pytest.mark.parametrize(
     "body, reason",
     (
-        ("float x[2][2]; bump_two(&x[gid % 2][1]); out[0] = x[0][0];", "view-out-of-bounds"),
-        ("float x[2][2]; pair(x[gid % 2], x[0]); out[0] = x[0][0];", "aliased-view-backing"),
-        ("float x[2][2]; pair(x[0], &x[0][1]); out[0] = x[0][0];", "aliased-view-backing"),
+        (
+            "float x[2][2]; bump_two(&x[gid % 2][1]); out[0] = x[0][0];",
+            "view-out-of-bounds",
+        ),
+        (
+            "float x[2][2]; pair(x[gid % 2], x[0]); out[0] = x[0][0];",
+            "aliased-view-backing",
+        ),
+        (
+            "float x[2][2]; pair(x[0], &x[0][1]); out[0] = x[0][0];",
+            "aliased-view-backing",
+        ),
         (
             "float x[4][2]; uint r = gid; mix_pair(x[r++ % 4]); out[0] = x[0][0];",
             "side-effecting-view-offset",

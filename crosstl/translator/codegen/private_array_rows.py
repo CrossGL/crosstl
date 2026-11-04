@@ -61,8 +61,14 @@ def array_row_view(expression, shape_of):
     if len(indices) != len(extents) - 1:
         return None
     for index, extent in zip(indices, extents):
-        value = getattr(index, "value", None) if isinstance(index, LiteralNode) else None
-        if isinstance(value, int) and not isinstance(value, bool) and not 0 <= value < extent:
+        value = (
+            getattr(index, "value", None) if isinstance(index, LiteralNode) else None
+        )
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and not 0 <= value < extent
+        ):
             return None
     return node.name, extents[-1], element_type, tuple(indices)
 

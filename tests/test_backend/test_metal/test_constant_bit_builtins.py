@@ -74,7 +74,10 @@ def test_bit_builtins_without_a_defined_constant_value_do_not_fold(name, operand
 
 @pytest.mark.parametrize(
     "log_r, specialization",
-    [("__builtin_ctz(R)", "scale_first_4"), ("__builtin_popcount(R - 1)", "scale_first_4")],
+    [
+        ("__builtin_ctz(R)", "scale_first_4"),
+        ("__builtin_popcount(R - 1)", "scale_first_4"),
+    ],
 )
 def test_template_arguments_derived_from_bit_builtins_materialize(
     log_r, specialization
@@ -114,7 +117,15 @@ def test_bit_builtin_template_arguments_translate(tmp_path, backend):
         assert completed.returncode == 0, completed.stdout[-2000:]
     if backend == "directx" and shutil.which("dxc"):
         completed = subprocess.run(
-            ["dxc", "-T", "cs_6_2", "-enable-16bit-types", "-E", "CSMain", str(artifact)],
+            [
+                "dxc",
+                "-T",
+                "cs_6_2",
+                "-enable-16bit-types",
+                "-E",
+                "CSMain",
+                str(artifact),
+            ],
             capture_output=True,
             text=True,
             timeout=180,
