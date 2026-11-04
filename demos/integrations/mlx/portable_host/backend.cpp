@@ -5034,3 +5034,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_sdpa.inc"
 // And the port of the gated-delta recurrence and its backward.
 #include "mlx/backend/no_gpu/crosstl_gated_delta.inc"
+// And the port of GatherQMM's gathered quantized products.
+#include "mlx/backend/no_gpu/crosstl_gather_qmm.inc"

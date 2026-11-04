@@ -58,6 +58,8 @@ from demos.integrations.mlx.portable_host import (
     gated_delta_packages,
     gather_dispatch,
     gather_mm_dispatch,
+    gather_qmm_layout,
+    gather_qmm_packages,
     gemm_dispatch,
     gemm_layout,
     gemm_splitk_dispatch,
@@ -711,6 +713,16 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # The gathered quantized products of GatherQMM, one per kernel name.
+        self.gathered_quantized = (
+            gather_qmm_packages.GatherQuantizedPackageCache(
+                mlx_root,
+                self.directory / gather_qmm_packages.CACHE_DIRECTORY,
+                self.target,
+            )
+            if mlx_root is not None
+            else None
+        )
         # The vector attention kernels, one per sdpa_vector pipeline hash name.
         self.sdpas = (
             sdpa_packages.SdpaPackageCache(
@@ -1006,6 +1018,9 @@ class HostRuntime:
                 return int(self.sdpas is not None)
             if gated_delta_dispatch.is_entry(name):
                 return int(self.gated_deltas is not None)
+            if name.startswith(gather_qmm_layout.ENTRY_PREFIXES):
+                gather_qmm_layout.signature(name)
+                return int(self.gathered_quantized is not None)
             if steel_attention_dispatch.is_entry(name):
                 return int(self.steel_attentions is not None)
             if sdpa_vjp_dispatch.is_entry(name):
@@ -1268,6 +1283,17 @@ class HostRuntime:
         if gated_delta_dispatch.is_entry(entry):
             return gated_delta_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
+            )
+        if entry.startswith(gather_qmm_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                gather_qmm_layout.layout_for(entry),
+                self.gathered_quantized,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
             )
         if steel_attention_dispatch.is_entry(entry):
             return steel_attention_dispatch.dispatch(

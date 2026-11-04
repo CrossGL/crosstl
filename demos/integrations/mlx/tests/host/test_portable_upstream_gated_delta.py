@@ -452,9 +452,10 @@ def test_backend_mirrors_gated_delta_update_cpp():
     for name in set(layout.BACKWARD) | set(layout.FORWARD) | {"state_cache"}:
         assert f'"{name}"' in port, name
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
-    assert backend.rstrip().endswith(
-        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"'
-    )
+    # It follows the other ports, which share the translation unit's helpers.
+    include = '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"'
+    assert backend.count(include) == 1
+    assert backend.index("crosstl_sdpa.inc") < backend.index(include)
     assert {"GatedDeltaUpdate", "GatedDeltaUpdateVJP"} <= set(prepare.FAST_PRIMITIVES)
     assert len(prepare.GATED_DELTA_DEFINITIONS) == 2
 

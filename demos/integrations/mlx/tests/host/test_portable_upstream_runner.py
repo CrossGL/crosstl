@@ -14,6 +14,7 @@ from demos.integrations.mlx.portable_host import (
     verify_upstream_fp_qmv_large_output,
     verify_upstream_fp_qvm,
     verify_upstream_gated_delta,
+    verify_upstream_gather_matmul_grad,
     verify_upstream_hadamard,
     verify_upstream_qmm,
     verify_upstream_qmm_shapes,
@@ -45,6 +46,7 @@ RUNNERS = {
     "qmm_vjp": verify_upstream_qmm_vjp,
     "hadamard": verify_upstream_hadamard,
     "gated_delta": verify_upstream_gated_delta,
+    "gather_matmul_grad": verify_upstream_gather_matmul_grad,
 }
 # The pinned suite of each runner whose tests are not test_quantized's.
 SUITES = {
