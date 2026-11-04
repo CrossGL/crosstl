@@ -41004,6 +41004,9 @@ complex64_t crossgl_complex64_mod_assign(
                 and original_func_name in getattr(
                     self, "generic_function_definitions", {}
                 )
+                and original_func_name not in (
+                    getattr(self, "concrete_function_names", None) or ()
+                )
                 and getattr(self, "enforce_concrete_glsl_types", False)
             ):
                 raise OpenGLTemplateTypeError(
@@ -47513,6 +47516,12 @@ complex64_t crossgl_complex64_mod_assign(
     def validate_function_image_parameter_contract_arguments(self, func_name, args):
         callee = self.function_definitions.get(func_name)
         if callee is None:
+            return
+        # A generic definition's parameters name type parameters, not concrete
+        # image types; its specializations are validated under their own names.
+        # This matters when a concrete overload of the same name takes the call
+        # and the generic definition shadows it in function_definitions.
+        if generic_function_parameters(callee):
             return
 
         params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
