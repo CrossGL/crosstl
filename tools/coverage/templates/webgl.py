@@ -37,6 +37,7 @@ from .interfaces import WEBGL as _INTERFACES
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
+from .meshes import WEBGL as _MESHES
 from .orientation import WEBGL as _ORIENTATION
 from .packing import WEBGL as _PACKING
 from .pipeline import WEBGL as _PIPELINE
@@ -133,6 +134,7 @@ WEBGL = {
     **_EXTENSIONS,
     **_PRIMITIVES,
     **_TESSELLATION,
+    **_MESHES,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

@@ -1,4 +1,5 @@
 import dataclasses
+import re
 
 import pytest
 
@@ -814,4 +815,129 @@ def test_glslang_lowers_tessellation_domains_spacing_and_patch_values():
     ).replace("    extra = position[0];\n", "")
     assert decorations.lost(output, "glsl", dropped) == (
         "the translation loses Decoration.Patch"
+    )
+
+
+def _mesh(language, name, group):
+    return Feature(language, "graphics", name, None, group=group, stage="mesh")
+
+
+def test_a_mesh_translation_must_keep_its_topology_and_per_primitive_values():
+    lines = _mesh(
+        "spirv",
+        "mesh-output-lines",
+        "ExecutionMode.OutputLinesEXT BuiltIn.PrimitiveLineIndicesEXT",
+    )
+    kept = (
+        "OpExecutionMode %main OutputLinesEXT\n"
+        "OpDecorate %gl_PrimitiveLineIndicesEXT BuiltIn PrimitiveLineIndicesEXT\n"
+    )
+    assert decorations.lost(lines, "spirv", kept) == ""
+    # A disassembler built from a grammar older than SPV_EXT_mesh_shader names the shared enumerants by their NV
+    # spelling.
+    assert (
+        decorations.lost(lines, "spirv", kept.replace("LinesEXT\n", "LinesNV\n")) == ""
+    )
+    triangles = (
+        "OpExecutionMode %main OutputTrianglesEXT\n"
+        "OpDecorate %gl_PrimitiveTriangleIndicesEXT BuiltIn PrimitiveTriangleIndicesEXT\n"
+    )
+    assert decorations.lost(lines, "spirv", triangles) == (
+        "the translation loses ExecutionMode.OutputLinesEXT, BuiltIn.PrimitiveLineIndicesEXT"
+    )
+    output = _mesh("spirv", "mesh-per-primitive-output", "Decoration.PerPrimitiveEXT")
+    for spelling in ("PerPrimitiveEXT", "PerPrimitiveNV"):
+        assert (
+            decorations.lost(output, "spirv", f"OpDecorate %color {spelling}\n") == ""
+        )
+    assert decorations.lost(output, "spirv", "OpDecorate %color Location 0\n") == (
+        "the translation loses Decoration.PerPrimitiveEXT"
+    )
+
+
+def test_a_mesh_translation_that_reads_the_payload_must_declare_task_payload_storage():
+    # A storage class is no decoration, so the payload is kept only by a variable in task-payload storage.
+    payload = _mesh(
+        "spirv", "mesh-task-payload", "StorageClass.TaskPayloadWorkgroupEXT"
+    )
+    pointer = "%_ptr_TaskPayloadWorkgroupEXT_Payload = OpTypePointer TaskPayloadWorkgroupEXT %Payload\n"
+    variable = "%payload = OpVariable %_ptr_TaskPayloadWorkgroupEXT_Payload TaskPayloadWorkgroupEXT\n"
+    assert decorations.lost(payload, "spirv", pointer + variable) == ""
+    assert decorations.lost(payload, "spirv", pointer) == (
+        "the translation loses StorageClass.TaskPayloadWorkgroupEXT"
+    )
+    private = variable.replace(" TaskPayloadWorkgroupEXT\n", " Private\n")
+    assert decorations.lost(payload, "spirv", pointer + private) == (
+        "the translation loses StorageClass.TaskPayloadWorkgroupEXT"
+    )
+
+
+def test_a_metal_mesh_translation_keeps_its_topology_primitive_data_and_payload_in_air():
+    points = _mesh(
+        "metal",
+        "mesh-output-points",
+        "ExecutionMode.OutputPoints BuiltIn.PrimitivePointIndicesEXT",
+    )
+    ((anchor, pattern),) = decorations._wanted(points, "metal")
+    assert anchor == "ExecutionMode.OutputPoints"
+    info = '!12 = !{!"air.mesh_type_info", !13, !14, i32 1, i32 1, !"air.point"}\n'
+    assert re.search(pattern, info, re.M)
+    assert not re.search(pattern, info.replace("air.point", "air.triangle"), re.M)
+    for name, group, attribute in (
+        (
+            "mesh-per-primitive-output",
+            "Decoration.PerPrimitiveEXT",
+            "mesh_primitive_data",
+        ),
+        ("mesh-cull-primitive", "BuiltIn.CullPrimitiveEXT", "primitive_culled"),
+        ("mesh-task-payload", "StorageClass.TaskPayloadWorkgroupEXT", "payload"),
+    ):
+        assert decorations._wanted(_mesh("metal", name, group), "metal") == [
+            (group, rf'!"air\.{attribute}"')
+        ]
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_mesh_topologies_per_primitive_outputs_and_payloads():
+    header = "#version 460\n#extension GL_EXT_mesh_shader : require\nlayout(local_size_x = 1) in;\n"
+    lines = _mesh(
+        "glsl",
+        "mesh-output-lines",
+        "ExecutionMode.OutputLinesEXT BuiltIn.PrimitiveLineIndicesEXT",
+    )
+    source = (
+        header + "layout(lines, max_vertices = 2, max_primitives = 1) out;\n"
+        "void main() {\n    SetMeshOutputsEXT(2, 1);\n"
+        "    gl_PrimitiveLineIndicesEXT[0] = uvec2(0, 1);\n}\n"
+    )
+    assert decorations.lost(lines, "glsl", source) == ""
+    triangles = (
+        header + "layout(triangles, max_vertices = 3, max_primitives = 1) out;\n"
+        "void main() {\n    SetMeshOutputsEXT(3, 1);\n"
+        "    gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0, 1, 2);\n}\n"
+    )
+    assert decorations.lost(lines, "glsl", triangles) == (
+        "the translation loses ExecutionMode.OutputLinesEXT, BuiltIn.PrimitiveLineIndicesEXT"
+    )
+    output = _mesh("glsl", "mesh-per-primitive-output", "Decoration.PerPrimitiveEXT")
+    located = triangles.replace(
+        "void main() {\n",
+        "layout(location = 0) perprimitiveEXT out vec4 color[];\nvoid main() {\n",
+    ).replace("}\n", "    color[0] = vec4(1.0);\n}\n")
+    assert decorations.lost(output, "glsl", located) == ""
+    assert decorations.lost(
+        output, "glsl", located.replace("perprimitiveEXT ", "")
+    ) == ("the translation loses Decoration.PerPrimitiveEXT")
+    payload = _mesh("glsl", "mesh-task-payload", "StorageClass.TaskPayloadWorkgroupEXT")
+    reads = triangles.replace(
+        "void main() {\n",
+        "struct Payload {\n    uint value;\n};\ntaskPayloadSharedEXT Payload payload;\n"
+        "void main() {\n",
+    ).replace(
+        "}\n",
+        "    gl_MeshVerticesEXT[0].gl_Position = vec4(float(payload.value));\n}\n",
+    )
+    assert decorations.lost(payload, "glsl", reads) == ""
+    assert decorations.lost(payload, "glsl", triangles) == (
+        "the translation loses StorageClass.TaskPayloadWorkgroupEXT"
     )

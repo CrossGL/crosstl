@@ -70,6 +70,7 @@ from .templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
 from .templates.lexical import FILL, SPREAD4, reserved
+from .templates.meshes import CROSSGL as MESHES
 from .templates.orientation import CROSSGL as ORIENTATION_CROSSGL
 from .templates.packing import CROSSGL as PACKING_CROSSGL
 from .templates.pipeline import CROSSGL as PIPELINE
@@ -645,6 +646,7 @@ CONSTRUCTS: dict[str, Template] = {
     **EXTENSIONS,
     **PRIMITIVES,
     **TESSELLATION,
+    **MESHES,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

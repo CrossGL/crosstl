@@ -19,6 +19,7 @@ from tools.coverage.templates import (
     extensions,
     fragments,
     interfaces,
+    meshes,
     pipeline,
     primitives,
     qualifiers,
@@ -204,6 +205,90 @@ def test_tessellation_probes_state_each_languages_domain_spacing_and_patch_value
         "slang": evaluation_layouts | {"tessellation-patch-vertices"},
         "metal": names - {"tessellation-domain-quads", "tessellation-patch-input"},
         "rust": {"tessellation-patch-input", "tessellation-patch-output"},
+        **dict.fromkeys(("wgsl", "webgl"), names),
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_mesh_probes_state_each_languages_topology_primitive_values_and_payload():
+    feature = _feature("glsl", "mesh-output-lines")
+    assert (feature.category, feature.stage) == ("graphics", "mesh")
+    assert feature.group == (
+        "ExecutionMode.OutputLinesEXT BuiltIn.PrimitiveLineIndicesEXT"
+    )
+    assert _feature("hlsl", "mesh-task-payload").group == (
+        "StorageClass.TaskPayloadWorkgroupEXT"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "mesh-output-points",
+            "layout(points, max_vertices = 1, max_primitives = 1) out;\n",
+        ),
+        ("glsl", "mesh-output-points", "    gl_PrimitivePointIndicesEXT[0] = 0u;\n"),
+        (
+            "glsl",
+            "mesh-per-primitive-output",
+            "layout(location = 0) perprimitiveEXT out vec4 color[];\n",
+        ),
+        (
+            "glsl",
+            "mesh-cull-primitive",
+            "    gl_MeshPrimitivesEXT[0].gl_CullPrimitiveEXT = true;\n",
+        ),
+        ("glsl", "mesh-task-payload", "taskPayloadSharedEXT Payload payload;\n"),
+        ("hlsl", "mesh-output-lines", '[outputtopology("line")]\n'),
+        ("hlsl", "mesh-output-lines", "out indices uint2 lines[1]) {\n"),
+        ("hlsl", "mesh-layer", "    uint layer : SV_RenderTargetArrayIndex;\n"),
+        ("hlsl", "mesh-cull-primitive", ", out primitives Primitive prims[1]) {\n"),
+        ("hlsl", "mesh-task-payload", ", in payload Payload payload) {\n"),
+        ("slang", "mesh-output-points", '[shader("mesh")]\n[numthreads(1, 1, 1)]\n'),
+        ("slang", "mesh-output-points", "out indices uint points[1]) {\n"),
+        ("metal", "mesh-output-lines", "mesh<Vertex, void, 2, 1, topology::line>"),
+        ("metal", "mesh-cull-primitive", "    bool culled [[primitive_culled]];\n"),
+        (
+            "metal",
+            "mesh-viewport-index",
+            "    uint viewport [[viewport_array_index]];\n",
+        ),
+        (
+            "metal",
+            "mesh-task-payload",
+            "const object_data Payload& payload [[payload]]",
+        ),
+        ("rust", "mesh-output-points", "output_primitives_ext = 1, output_points))]"),
+        (
+            "rust",
+            "mesh-primitive-id",
+            "#[spirv(primitive_id, per_primitive_ext)] id: &mut [i32; 1]",
+        ),
+        (
+            "rust",
+            "mesh-task-payload",
+            "#[spirv(task_payload_workgroup_ext)] payload: &Payload",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert probes.build(_feature("glsl", "mesh-layer"), "glsl").suffix == ".mesh"
+    crossgl = probes.build(_feature("glsl", "mesh-output-points"), "crossgl").source
+    assert "@ indices out uint points[1])\n" in crossgl
+    assert "            @outputtopology(point) {\n" in crossgl
+    crossgl = probes.build(_feature("hlsl", "mesh-task-payload"), "crossgl").source
+    assert ", @ mesh_payload in Payload payload)\n" in crossgl
+    crossgl = probes.build(_feature("hlsl", "mesh-primitive-id"), "crossgl").source
+    assert "        uint id @ gl_PrimitiveID;\n" in crossgl
+    # DXC accepts no point topology, and WGSL, GLSL ES 3.00 and the kernel languages have no mesh stage.
+    names = set(meshes.NAMES)
+    absent = {
+        "glsl": set(),
+        "hlsl": {"mesh-output-points"},
+        "slang": set(),
+        "metal": set(),
+        "rust": set(),
         **dict.fromkeys(("wgsl", "webgl"), names),
         **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
     }

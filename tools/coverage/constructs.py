@@ -794,6 +794,27 @@ def _curated() -> list[Construct]:
                 ("tessellation-patch-vertices", "BuiltIn.PatchVertices"),
             )
         ),
+        *(
+            c("graphics", name, *anchors, stage="mesh")
+            for name, *anchors in (
+                (
+                    "mesh-output-points",
+                    "ExecutionMode.OutputPoints",
+                    "BuiltIn.PrimitivePointIndicesEXT",
+                ),
+                (
+                    "mesh-output-lines",
+                    "ExecutionMode.OutputLinesEXT",
+                    "BuiltIn.PrimitiveLineIndicesEXT",
+                ),
+                ("mesh-per-primitive-output", "Decoration.PerPrimitiveEXT"),
+                ("mesh-cull-primitive", "BuiltIn.CullPrimitiveEXT"),
+                ("mesh-primitive-id", "BuiltIn.PrimitiveId"),
+                ("mesh-layer", "BuiltIn.Layer"),
+                ("mesh-viewport-index", "BuiltIn.ViewportIndex"),
+                ("mesh-task-payload", "StorageClass.TaskPayloadWorkgroupEXT"),
+            )
+        ),
         c(
             "resource",
             "uniform-struct",
