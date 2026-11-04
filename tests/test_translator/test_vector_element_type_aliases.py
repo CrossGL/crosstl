@@ -111,9 +111,7 @@ SIZED_ALIASES = textwrap.dedent("""
 
 
 @pytest.mark.parametrize("backend", ["directx", "metal", "opengl", "spirv"])
-def test_alias_of_a_sized_integer_as_vector_element_type_is_resolved(
-    tmp_path, backend
-):
+def test_alias_of_a_sized_integer_as_vector_element_type_is_resolved(tmp_path, backend):
     # ``vec2<long_t>`` for ``typedef i64 long_t;`` is ``vec2<i64>``, as written by hand.
     by_hand = (
         SIZED_ALIASES.replace("    typedef i64 long_t;\n", "")
