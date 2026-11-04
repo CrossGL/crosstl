@@ -40750,6 +40750,18 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if ray_query_member_call is not None:
                 return ray_query_member_call
+            if (
+                isinstance(func_expr, MemberAccessNode)
+                and func_expr.member == "length"
+                and not expr.args
+            ):
+                instance_member = self.glsl_structured_buffer_array_element_member(
+                    func_expr.object
+                )
+                if instance_member is not None:
+                    # One buffer of an array of storage blocks holds its elements in a member.
+                    buffer = self.generate_expression(func_expr.object)
+                    return f"{buffer}.{instance_member}.length()"
 
             if (
                 isinstance(func_expr, MemberAccessNode)
