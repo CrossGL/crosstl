@@ -51,10 +51,10 @@ def _coherent_blocks(spirv):
 def test_slang_import_keeps_globallycoherent(tmp_path):
     crossgl = _translate(tmp_path, SLANG, ".slang", "cgl")
     assert re.search(
-        r"RWStructuredBuffer<float> outp\b[^;\n]*@globallycoherent", crossgl
+        r"RWStructuredBuffer<float>\s+outp\b[^;]*@globallycoherent", crossgl
     )
     assert not re.search(
-        r"RWStructuredBuffer<float> fin\b[^;\n]*@globallycoherent", crossgl
+        r"RWStructuredBuffer<float>\s+fin\b[^;]*@globallycoherent", crossgl
     )
 
 
@@ -63,14 +63,14 @@ def test_slang_import_keeps_globallycoherent(tmp_path):
 )
 def test_globallycoherent_reaches_every_target(tmp_path, source, suffix):
     metal = _translate(tmp_path, source, suffix, "metal")
-    assert re.search(r"coherent\(device\) device float \*\s*outp\b", metal), metal
-    assert not re.search(r"coherent\(device\) device float \*\s*fin\b", metal)
+    assert re.search(r"coherent\(device\)\s+device\s+float\s*\*\s*outp\b", metal), metal
+    assert not re.search(r"coherent\(device\)\s+device\s+float\s*\*\s*fin\b", metal)
     glsl = _translate(tmp_path, source, suffix, "opengl")
-    assert re.search(r"\bcoherent buffer outpBuffer\b", glsl), glsl
+    assert re.search(r"\bcoherent\s+buffer\s+outpBuffer\b", glsl), glsl
     spirv = _translate(tmp_path, source, suffix, "vulkan")
     assert _coherent_blocks(spirv) == {"outpBuffer"}
     slang = _translate(tmp_path, source, suffix, "slang")
-    assert re.search(r"globallycoherent RWStructuredBuffer<float> outp\b", slang)
+    assert re.search(r"globallycoherent\s+RWStructuredBuffer<float>\s+outp\b", slang)
     _compile_metal(tmp_path, metal)
 
 
