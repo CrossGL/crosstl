@@ -144,6 +144,7 @@ from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
     evaluate_literal_int_expression,
+    fold_array_type_counts,
     format_c_style_array_declaration,
     get_array_size_from_node,
     parse_array_type,
@@ -36770,8 +36771,12 @@ complex64_t crossgl_complex64_mod_assign(
         rejects it. Pad the same way here: the given elements first, then the
         element type's value initializer for each missing element; a missing
         element of an array of arrays is the zero inner array, as in
-        ``float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))``. A constructor
-        that already has enough arguments, or an unsized extent at any level,
+        ``float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))``. An extent named
+        by a compile-time integer constant, ``float[N](x)``, is read as the
+        constant's value; a specialization constant is not one. A constructor
+        with more arguments than elements is refused, since that section allows
+        no extra argument. A constructor that has exactly enough arguments, or
+        an extent that is unsized or not a compile-time integer at any level,
         is left exactly as it was.
         """
         if func_name is None:
@@ -36782,7 +36787,9 @@ complex64_t crossgl_complex64_mod_assign(
         # array type argument, such as ``pick<float[2]>``, is not one.
         if not isinstance(func_name, str) or not func_name.rstrip().endswith("]"):
             return call_args
-        array_type = self.glsl_outer_array_type(func_name)
+        array_type = self.glsl_outer_array_type(
+            fold_array_type_counts(func_name, self.glsl_active_literal_int_constants())
+        )
         if array_type is None:
             return call_args
         extent_text, element_type = array_type
@@ -36792,6 +36799,17 @@ complex64_t crossgl_complex64_mod_assign(
             extent = int(extent_text)
         except ValueError:
             return call_args
+        if extent > 0 and len(call_args) > extent:
+            raise OpenGLAggregateInitializerError(
+                f"OpenGL array constructor '{func_name}' has {len(call_args)} "
+                f"arguments for {extent} elements; GLSL requires exactly one "
+                "argument per array element (GLSL 4.60 section 5.4.4)",
+                expected_type=func_name,
+                element_count=len(call_args),
+                expected_element_count=extent,
+                reason="element-count-mismatch",
+                source_location=getattr(expr, "source_location", None),
+            )
         if extent <= 0 or len(call_args) >= extent:
             return call_args
         padded = list(call_args)
@@ -36808,15 +36826,23 @@ complex64_t crossgl_complex64_mod_assign(
         The CrossGL parser keeps a one-dimensional constructor's extent in the
         callee's name, ``float[3]``, but reads the callee of an array of arrays
         as its base type subscripted once per extent, outermost first:
-        ``float[2][3]`` is ``float`` indexed by 2, then by 3. Only integer
-        literal extents are read.
+        ``float[2][3]`` is ``float`` indexed by 2, then by 3. Integer literal
+        extents and extents named by an identifier, ``float[N][2]``, are read;
+        the caller resolves a name against the compile-time constants.
         """
         extents = []
         while isinstance(callee, ArrayAccessNode):
             index = callee.index_expr
-            if not isinstance(index, LiteralNode) or type(index.value) is not int:
+            if isinstance(index, LiteralNode) and type(index.value) is int:
+                extents.append(index.value)
+            elif (
+                isinstance(index, IdentifierNode)
+                and isinstance(index.name, str)
+                and index.name.isidentifier()
+            ):
+                extents.append(index.name)
+            else:
                 return None
-            extents.append(index.value)
             callee = callee.array_expr
         if not extents or not isinstance(callee, IdentifierNode):
             return None
