@@ -70,12 +70,12 @@ MLX_ATTENTION_DISPATCH_CONTRACT = (
 )
 MLX_ATTENTION_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "b6c596dfce2e3695f0d5c28eaf7b837ee97bda579169885ff19cba52c0bbc553",
-        "sizeBytes": 9116,
+        "sha256": "20ad440c074a725738a97ca4d22eb01f9ed44df70e258ee7ce32c4dd7afe8096",
+        "sizeBytes": 7781,
     },
     "opengl": {
-        "sha256": "002b7dcfdcbd65057ded11ded56a348d6f067b63fbd29d3933d20420c9dc614b",
-        "sizeBytes": 13385,
+        "sha256": "388ebd0f2a92879641c7bfc818822fcf7a513e6d502b01462fa311de1e13956b",
+        "sizeBytes": 14530,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_ATTENTION_DIRECTX_NATIVE_LOADER"

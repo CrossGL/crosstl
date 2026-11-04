@@ -61,13 +61,13 @@ SCALAR_UNARY_METAL_CONTRACT_PATH = (
     / "unary.scalar-metal-roundtrip.json"
 )
 SCALAR_UNARY_METAL_CONTRACT_SHA256 = (
-    "3d7ed589bf65afc61579475582e201f94eb88b305c2849eff82264d386b99a58"
+    "7ac0379350cb91e6a82fc49c294900fca0f84ad89f6702c63b75fc0390ec9bcf"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "74660b6f293a3a78bf766fba044f2164c4c780e68dac5389f63e61a733a5ff9c"
+    "e9cc999693b81abc0a9ed6e06e79eb71f1632986889fc7086fc70cd16638042b"
 )
 ROOT_SOURCE_OPTIONS = {
     "binary32_sqrt_profile": "flush-subnormals",
@@ -120,9 +120,9 @@ SQUARE_WORKLOAD = UnaryWorkload(
         },
         "opengl": {
             "sha256": (
-                "2e7be60b5eced34c4801917287aa27f666e3203307d30af81085c22ffbcbf4ba"
+                "d3c86258eabf71b3c68f2a1271d7df7758e02595073fddacba0b480c1d1a816e"
             ),
-            "sizeBytes": 3611,
+            "sizeBytes": 3660,
         },
     },
     input_values=(-3.0, -1.5, 0.0, 2.0, 4.25),
@@ -158,9 +158,9 @@ ARCCOS_WORKLOAD = UnaryWorkload(
         },
         "opengl": {
             "sha256": (
-                "bc420d338b5c995e110dea0f98c9ffd3aa0ae8c77f1ea4bbe13df5acd4462b9e"
+                "e4398126d06061c56603b9a8c6630456b15cad50f90efe0850c40d43c157c5e0"
             ),
-            "sizeBytes": 6450,
+            "sizeBytes": 6499,
         },
     },
     input_values=(-1.0, -0.5, 0.0, 0.5, 1.0),
@@ -776,7 +776,7 @@ def test_current_mlx_unary_metal_contract_is_complete_and_classified():
         "intermediate": "crossgl",
         "hostInterfaceStatus": "ready",
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 2206358,
+        "generatedSizeBytesTotal": 2206058,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absfloat16float16", "sizeBytes": 1076},
             "maximum": {

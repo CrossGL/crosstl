@@ -74,8 +74,8 @@ MLX_LAYER_NORM_VJP_GENERATED_ARTIFACTS = {
         "sizeBytes": 10652,
     },
     "opengl": {
-        "sha256": "0437c2fe66173fd5b4b3c0f76d60fd3ed3dd5e45fc3704b971f3fc84e38989d0",
-        "sizeBytes": 10402,
+        "sha256": "48639d2c7f56d54094e7fda89428ffbfd41c91243e5037721f95d91f8bdebb9a",
+        "sizeBytes": 10567,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_LAYER_NORM_VJP_DIRECTX_NATIVE_LOADER"

@@ -10707,12 +10707,12 @@ def test_arg_reduce_native_runtime_evidence_records_bounded_cross_target_proof()
 
     directx = status["artifacts"]["directx"]
     assert directx["argmin_float32"] == {
-        "sha256": "9ad32989ed91db2add926046a2f58c8735ca23d459e394e0ae9c890f12edd086",
-        "size_bytes": 7129,
+        "sha256": "8cb0d5643d86ffb4abbf3ec55fe970b7eb1233c2b0d6cf573ce07e5b7fb48e25",
+        "size_bytes": 7135,
     }
     assert directx["argmax_float32"] == {
-        "sha256": "d7343928b87693f63464227baf181759adcda3a349835b11182a99bc8292d999",
-        "size_bytes": 7191,
+        "sha256": "7be9aaf1eb1b4e53fd577a889149e9d7b1d551f8ef28819539aac7dcd5f1753c",
+        "size_bytes": 7197,
     }
     assert directx["compiler"] == "dxc"
     assert directx["compiler_version"] == "1.9.2602.24"
@@ -10977,13 +10977,13 @@ def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():
         },
     }
     assert status["guarded_artifacts"]["directx"]["block-float32-axis-32-two-rows"] == {
-        "sha256": "2da9311be17e763b0c422fe07a677efeb4ae21e3a87f2fe54a08acf933b353f7",
-        "size_bytes": 4655,
+        "sha256": "be13f6dfb2952b8f25e09a1b34d1b41be90eb3396525bf4e5906d7df49890d00",
+        "size_bytes": 4654,
         "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
     }
     assert status["guarded_artifacts"]["directx"]["block-float32-axis-2049"] == {
-        "sha256": "f7d69880528cb189ccc81a3a4913230e84aef798b85d59f4aed482e2f442c14c",
-        "size_bytes": 5226,
+        "sha256": "9ddf84ddc3c09fe75f7749165f5913fb75fb8db871dc52a401450e67204004e7",
+        "size_bytes": 5225,
         "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
     }
     directx_artifacts = status["guarded_artifacts"]["directx"]
@@ -10993,13 +10993,13 @@ def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():
     assert directx_artifacts["compiler_validation_status"] == "passed"
     software = status["software_opengl_artifacts"]
     assert software["block-float32-axis-32-two-rows"]["sha256"] == (
-        "c77ddf1ad3c364b6e1898232f7d4ce99e2d5f859cc515089368044eb80667573"
+        "22bde8523e9531e3b71a9be804f7060d2315fb10a385fe7e14a02d97039ebd32"
     )
-    assert software["block-float32-axis-32-two-rows"]["size_bytes"] == 5755
+    assert software["block-float32-axis-32-two-rows"]["size_bytes"] == 5754
     assert software["block-float32-axis-2049"]["sha256"] == (
-        "1ea2c58cd8588b9a61ce3b1414b02cd578ec8b16fe77f9d0a2637c706a087174"
+        "cccbddbfb5b99abde9edd333fbac134785c8bd52eac1ad24a0bc68a8acffff61"
     )
-    assert software["block-float32-axis-2049"]["size_bytes"] == 7399
+    assert software["block-float32-axis-2049"]["size_bytes"] == 7398
     assert software["block-float32-axis-2049"]["logical_subgroup_count"] == 17
     assert software["block-float32-axis-2049"]["masked_collective_count"] == 2
     for workload_id in (
@@ -11109,16 +11109,16 @@ def test_rms_norm_native_runtime_evidence_records_bounded_cross_target_proof():
         "selected_parameters": {"N_READS": "RMS_N_READS", "T": "float"},
     }
     assert status["artifacts"]["directx"]["sha256"] == (
-        "4ef21ff639d0bdd21b7a5da5c51b13893198d6a2c972c8a96280607af8b45198"
+        "d7af2cee81cad5b7ef215b18ad122008af1adffd981a75a7510f988b4e1dc5de"
     )
-    assert status["artifacts"]["directx"]["size_bytes"] == 7053
+    assert status["artifacts"]["directx"]["size_bytes"] == 7052
     assert status["artifacts"]["directx"]["native_runtime"]["status"] == (
         "required-on-ci"
     )
     assert status["artifacts"]["opengl"]["sha256"] == (
-        "04b447795637318a75158fac8025e189a6374dc8a97311d49597dc9f04f76fad"
+        "11c5156634bcd8b5be52c9ab4d486164dd81edcc937b73b5c8124e8826165710"
     )
-    assert status["artifacts"]["opengl"]["size_bytes"] == 6882
+    assert status["artifacts"]["opengl"]["size_bytes"] == 6881
     assert status["artifacts"]["opengl"]["control_barrier_instruction_count"] == 6
     assert status["artifacts"]["opengl"]["group_non_uniform_instruction_count"] == 0
     assert status["artifacts"]["opengl"]["native_runtime"]["status"] == (
@@ -11269,16 +11269,16 @@ def test_rms_norm_vjp_native_runtime_evidence_records_deferred_cross_target_proo
 
     directx = status["artifacts"]["directx"]
     assert directx["sha256"] == (
-        "45e296590cddf7685c3d4f6daa4720db44fa664024c6bcef56238e2cdd1f047d"
+        "4ba74339ef10a7b19887ba883ff43ddf0ce63a4086d0df559a2094c0616dc5cd"
     )
     assert directx["size_bytes"] == 10398
     assert directx["wave_active_sum_call_count"] == 4
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "d9cc8f4bf9d1ebaa82d0f68b742cc5ac018d0c871f1e827b2fc9fb19e8cb32c9"
+        "bb95a57eabbe9fe4f4868bae5183995730011b22c22ae7642c037d1c9059fb4f"
     )
-    assert opengl["size_bytes"] == 10414
+    assert opengl["size_bytes"] == 10578
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )
@@ -11614,9 +11614,9 @@ def test_layer_norm_vjp_native_runtime_evidence_records_deferred_cross_target_pr
     assert directx["native_runtime"]["status"] == "required-on-ci"
     opengl = status["artifacts"]["opengl"]
     assert opengl["sha256"] == (
-        "0437c2fe66173fd5b4b3c0f76d60fd3ed3dd5e45fc3704b971f3fc84e38989d0"
+        "48639d2c7f56d54094e7fda89428ffbfd41c91243e5037721f95d91f8bdebb9a"
     )
-    assert opengl["size_bytes"] == 10402
+    assert opengl["size_bytes"] == 10567
     assert opengl["specialization_enforcement"] == (
         "deferred-opengl-spirv-specialization"
     )
@@ -12014,8 +12014,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert status["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "2e7be60b5eced34c4801917287aa27f666e3203307d30af81085c22ffbcbf4ba",
-        "size_bytes": 3611,
+        "sha256": "d3c86258eabf71b3c68f2a1271d7df7758e02595073fddacba0b480c1d1a816e",
+        "size_bytes": 3660,
         "native_runtime": {
             "platform": "ubuntu-latest",
             "runtime": "mesa-opengl-4.3",
@@ -12112,8 +12112,8 @@ def test_unary_native_runtime_evidence_records_selected_entry_proofs():
     }
     assert arccos["artifacts"]["opengl"] == {
         "target_entry_point": "main",
-        "sha256": "bc420d338b5c995e110dea0f98c9ffd3aa0ae8c77f1ea4bbe13df5acd4462b9e",
-        "size_bytes": 6450,
+        "sha256": "e4398126d06061c56603b9a8c6630456b15cad50f90efe0850c40d43c157c5e0",
+        "size_bytes": 6499,
         "native_runtime": {
             "platform": "ubuntu-latest",
             "runtime": "mesa-opengl-4.3",
@@ -12215,7 +12215,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "74660b6f293a3a78bf766fba044f2164c4c780e68dac5389f63e61a733a5ff9c",
+        "sha256": "e9cc999693b81abc0a9ed6e06e79eb71f1632986889fc7086fc70cd16638042b",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12417,7 +12417,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
         "schema_version": 2,
-        "sha256": "23c7515c9e0d4b86f88c8fce228947406843560a9bf03d02cc4c6c9d96344eed",
+        "sha256": "38659e9ada029734ec9498edd24a03e2cbc96f933eedbffafab06669698a6e6e",
         "size_bytes": 317694,
         "entry_identity_fields": [
             "entryPoint",
@@ -12525,9 +12525,9 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5317707,
+        "generated_size_bytes_total": 5336679,
         "generated_size_range": {
-            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3566},
+            "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3615},
             "maximum": {
                 "entryPoint": "gn4large_ArcTancomplex64complex64",
                 "sizeBytes": 21355,
@@ -12624,7 +12624,7 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "3c43ddb2bc5ea5749fad07201cc82c640b6dcf08c9ebb1e5af5396ab2e3a5977",
+        "sha256": "f68f080af409684d990f52cee8bf448a40535d8e3f844384018fa42eea406ba3",
         "size_bytes": 322988,
         "entry_identity_fields": [
             "entryPoint",
@@ -12741,7 +12741,7 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5340547,
+        "generated_size_bytes_total": 5340837,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
@@ -13820,8 +13820,8 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
         "pruned_candidate_count": 2120,
     }
     assert status["artifact"] == {
-        "sha256": "33c9aa89cee60ba565ea744ad3452ee4a2213d0a991098e64aa093c3b31b6b37",
-        "size_bytes": 175427,
+        "sha256": "4e153dfb10563e6530cf7660451317e0e500700a4531ad7d565e1bfbe31ea468",
+        "size_bytes": 175436,
         "native_execution_status": "required-on-ci",
         "promoted_native_16_shift_count": 20,
         "first_class_workgroup_pointer_residue": False,
@@ -13903,7 +13903,7 @@ def test_fft_current_corpus_evidence_records_native_runtime_proof():
     assert (
         "null pointer that can be observed or dereferenced still fails closed" in readme
     )
-    assert "175,427-byte HLSL artifact" in readme
+    assert "175,436-byte HLSL artifact" in readme
     assert "before merging a reference update" in readme
     assert "All 20 native-16 ``power`` shift counts" in readme
     assert "explicitly promoted to ``int``" in readme
@@ -14400,9 +14400,9 @@ def test_gemv_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "a78e20a5906b0112db43aa7b6a587f412c944f7e16a4fbda8e4dd3ca2a64df75"
+                "b9fbebd38d12c4253dc135ab790e42af7497afd43a85f82bf822d56336f2e187"
             ),
-            "size_bytes": 9395,
+            "size_bytes": 9459,
             "subgroup_id_lowering": "flattened-logical-software-subgroups",
             "relative_shuffle_out_of_range": "calling-invocation-value",
             "software_subgroup_width": 32,
@@ -17272,7 +17272,7 @@ def test_quantized_metal_roundtrip_evidence_records_complete_family():
         "generated_size_bytes_total": artifact["generatedSizeBytesTotal"],
         "generated_size_range": artifact["generatedSizeRange"],
     }
-    assert artifact["generatedSizeBytesTotal"] == 42976818
+    assert artifact["generatedSizeBytesTotal"] == 42955002
 
     assert status["terminal_proof"] == {
         "candidate_base_commit": contract["proof"]["candidateBaseCommit"],

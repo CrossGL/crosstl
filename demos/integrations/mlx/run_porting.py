@@ -410,73 +410,73 @@ MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
     "rms_norm": {
         "forward-bfloat16-axis-32": {
             "sha256": (
-                "b6e55802d55b72c93d74cbd030abc21b73f9c92b8af1ce21049164d51e8ac1f2"
+                "1802266ddc0aab4965b21285050ebd24124cb30fc2d734c5cd5d53e212d8bf18"
             ),
-            "sizeBytes": 7981,
+            "sizeBytes": 7980,
         },
         "forward-float16-axis-32": {
             "sha256": (
-                "4313c76e186a786814c0c44d8c716a34165f97adc33c848e96fd6d07383032f2"
+                "dc40e6eb2d40f7540842ef3a27cdf5afd495b6823a862e06ece6edbbd221fb4c"
             ),
-            "sizeBytes": 9790,
+            "sizeBytes": 9789,
         },
         "forward-float32-axis-256": {
             "sha256": (
-                "d127ac3459a0f4ff82403626f3ff40fc5ada59e1c2aed741e86edbd1881c395c"
+                "9765ef08208d94766fec014503dd61b901a6c4156157e83f206cf783eee52203"
             ),
-            "sizeBytes": 7551,
+            "sizeBytes": 7550,
         },
         "forward-float32-axis-32": {
             "sha256": (
-                "5124b67139d807e5951d726cec49dfd89d9f32c9ec17d7ee5caa24dd5b0ae33d"
+                "cfb21a07a74e9814d2971a5854b107f6626c85e83dcb7cc0081918c1c64b2d1c"
             ),
-            "sizeBytes": 6981,
+            "sizeBytes": 6980,
         },
         "forward-float32-axis-4099": {
             "sha256": (
-                "598b5b7fca445cc84c44317a4ea8d27c6d5a4c0ec004cc419e65119fcca5a8a5"
+                "2b824efdef3a03528fee1ef7b46ebdcd0b9a9e8e3d9dad4849e42bbe84c419fe"
             ),
-            "sizeBytes": 8119,
+            "sizeBytes": 8118,
         },
         "forward-float32-axis-512": {
             "sha256": (
-                "f812a2322c6eddd5f4a7afbc3bd4db8b82b3af635dfb32188a0014765302e586"
+                "31d7d71280badf7f116cb3aa07717acf167e41b21b00df1261a6b90ee5678f4d"
             ),
-            "sizeBytes": 7552,
+            "sizeBytes": 7551,
         },
         "vjp-float32-axis-256-has-w-false": {
             "sha256": (
-                "09749f981dc38a6357757579fa8d76c655d450b02f877f288715c67da68f92bf"
+                "1bad6529be41960e959314da3e25241991e744b3a653cf8b167f07fec3e35c3d"
             ),
-            "sizeBytes": 9441,
+            "sizeBytes": 9161,
         },
         "vjp-float32-axis-256-has-w-true": {
             "sha256": (
-                "2d0e8d63e577bcc04fa02a69d253c63c19baa0da2e6cfc37f7c09e242402dacb"
+                "a82bd81ead0835eb845145762f8b118476af6e837213a9fedffee1b2937977e7"
             ),
             "sizeBytes": 9440,
         },
         "vjp-float32-axis-32-has-w-false": {
             "sha256": (
-                "5df9d4e1a66cb33fb2cd7cad8001bc014bc33a001e7cb6336ac141e4f26e1b20"
+                "d17c48e76cb1ad5cfa79a08dd1808823e055b99f5889863f72396b49334e3836"
             ),
-            "sizeBytes": 8871,
+            "sizeBytes": 8591,
         },
         "vjp-float32-axis-32-has-w-true": {
             "sha256": (
-                "c24e692d31e0c7f0b907857ba3b78603b8c594ef71471b810de1f33273f5e26a"
+                "ace602f894458772e2136792ba06e2fdac17f7d5bbf6172d66d4d9e8b219ecd8"
             ),
             "sizeBytes": 8870,
         },
         "vjp-float32-axis-8192-has-w-false": {
             "sha256": (
-                "0fa603cded59584eb4d075ba08d75629a3c7fef4240292155f47d9ac8b0f2acf"
+                "b69a43015c3c7dc42a7138abf7400d56809e1c17d3de957d2a3e6d4819f8e045"
             ),
-            "sizeBytes": 10340,
+            "sizeBytes": 10060,
         },
         "vjp-float32-axis-8192-has-w-true": {
             "sha256": (
-                "9e02322187addd04ebbd08c17f2b11e0e35e8a26159a78bc8b6b61cbd2999c25"
+                "9c4f6e423b8e0529ece73a0396c5ebab5b51fd501136ee4c66e15ef06c1e65aa"
             ),
             "sizeBytes": 10339,
         },
@@ -1085,9 +1085,9 @@ FFT_DIRECTX_TRANSLATION_TIMEOUT_SECONDS = 300
 FFT_DIRECTX_EXPECTED_SPECIALIZATION_COUNT = 24
 FFT_DIRECTX_EXPECTED_FUNCTION_CONSTANT_COUNT = 21
 FFT_DIRECTX_GENERATED_SHA256 = (
-    "d611594837648c52f0fc0e7847c1ebdd660f158c830eccc0002aa3dd597bbab9"
+    "902aedcb55894f328185b9332f3ec8d5918ee1ef80201e61f15890eb2746c60f"
 )
-FFT_DIRECTX_GENERATED_SIZE_BYTES = 144151
+FFT_DIRECTX_GENERATED_SIZE_BYTES = 144160
 FFT_DIRECTX_SPECIALIZATION_CONSTANTS = {
     "0": False,
     "1": True,
@@ -1714,15 +1714,15 @@ MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "argmin_float32": {
                 "sha256": (
-                    "9ad32989ed91db2add926046a2f58c8735ca23d459e394e0ae9c890f12edd086"
+                    "8cb0d5643d86ffb4abbf3ec55fe970b7eb1233c2b0d6cf573ce07e5b7fb48e25"
                 ),
-                "size_bytes": 7129,
+                "size_bytes": 7135,
             },
             "argmax_float32": {
                 "sha256": (
-                    "d7343928b87693f63464227baf181759adcda3a349835b11182a99bc8292d999"
+                    "7be9aaf1eb1b4e53fd577a889149e9d7b1d551f8ef28819539aac7dcd5f1753c"
                 ),
-                "size_bytes": 7191,
+                "size_bytes": 7197,
             },
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -1734,15 +1734,15 @@ MLX_ARG_REDUCE_NATIVE_RUNTIME_EVIDENCE = {
         "opengl": {
             "argmin_float32": {
                 "sha256": (
-                    "587b409127a5cec9711856acbdac69fbc05fe25fc8004f048de15057e5a9f59f"
+                    "5a517235076f7fb636727a26f98787df8bab87eccd1fc623f7b7e6439f88383a"
                 ),
-                "size_bytes": 8024,
+                "size_bytes": 8030,
             },
             "argmax_float32": {
                 "sha256": (
-                    "009389698c327dde691ee87a4f34d5f80c7a33384e800d8d640f97a462ae1be6"
+                    "e39ef4311dee5d06fba17542fa53bb1d34d8c13a647dde2c5deac26f1d6f6d0b"
                 ),
-                "size_bytes": 8030,
+                "size_bytes": 8036,
             },
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
@@ -2155,16 +2155,16 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "block-float32-axis-32-two-rows": {
                 "sha256": (
-                    "2da9311be17e763b0c422fe07a677efeb4ae21e3a87f2fe54a08acf933b353f7"
+                    "be13f6dfb2952b8f25e09a1b34d1b41be90eb3396525bf4e5906d7df49890d00"
                 ),
-                "size_bytes": 4655,
+                "size_bytes": 4654,
                 "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
             },
             "block-float32-axis-2049": {
                 "sha256": (
-                    "f7d69880528cb189ccc81a3a4913230e84aef798b85d59f4aed482e2f442c14c"
+                    "9ddf84ddc3c09fe75f7749165f5913fb75fb8db871dc52a401450e67204004e7"
                 ),
-                "size_bytes": 5226,
+                "size_bytes": 5225,
                 "subgroup_id_lowering": (
                     "workgroup-synchronized-physical-wave-allocation"
                 ),
@@ -2197,9 +2197,9 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
     "software_opengl_artifacts": {
         "block-float32-axis-32-two-rows": {
             "sha256": (
-                "c77ddf1ad3c364b6e1898232f7d4ce99e2d5f859cc515089368044eb80667573"
+                "22bde8523e9531e3b71a9be804f7060d2315fb10a385fe7e14a02d97039ebd32"
             ),
-            "size_bytes": 5755,
+            "size_bytes": 5754,
             "workgroup_size": [32, 1, 1],
             "logical_subgroup_count": 1,
             "masked_collective_count": 0,
@@ -2208,9 +2208,9 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
         },
         "block-float32-axis-2049": {
             "sha256": (
-                "1ea2c58cd8588b9a61ce3b1414b02cd578ec8b16fe77f9d0a2637c706a087174"
+                "cccbddbfb5b99abde9edd333fbac134785c8bd52eac1ad24a0bc68a8acffff61"
             ),
-            "size_bytes": 7399,
+            "size_bytes": 7398,
             "workgroup_size": [544, 1, 1],
             "logical_subgroup_count": 17,
             "masked_collective_count": 2,
@@ -2385,9 +2385,9 @@ MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE = {
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "4ef21ff639d0bdd21b7a5da5c51b13893198d6a2c972c8a96280607af8b45198"
+                "d7af2cee81cad5b7ef215b18ad122008af1adffd981a75a7510f988b4e1dc5de"
             ),
-            "size_bytes": 7053,
+            "size_bytes": 7052,
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
             "compiler_profile": "cs_6_6",
@@ -2405,9 +2405,9 @@ MLX_RMS_NORM_NATIVE_RUNTIME_EVIDENCE = {
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "04b447795637318a75158fac8025e189a6374dc8a97311d49597dc9f04f76fad"
+                "11c5156634bcd8b5be52c9ab4d486164dd81edcc937b73b5c8124e8826165710"
             ),
-            "size_bytes": 6882,
+            "size_bytes": 6881,
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
             "validator": "spirv-val",
