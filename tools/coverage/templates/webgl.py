@@ -47,6 +47,7 @@ from .portability import WEBGL as _PORTABILITY_WEBGL
 from .primitives import WEBGL as _PRIMITIVES
 from .qualifiers import WEBGL as _QUALIFIERS
 from .rasterization import WEBGL as _RASTERIZATION
+from .rays import WEBGL as _RAYS
 from .records import WEBGL as _RECORDS
 from .relations import GLSL as _RELATIONS
 from .rows import WEBGL as _ROWS
@@ -137,6 +138,7 @@ WEBGL = {
     **_TESSELLATION,
     **_MESHES,
     **_TASKS,
+    **_RAYS,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

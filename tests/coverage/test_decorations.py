@@ -962,3 +962,99 @@ def test_glslang_lowers_the_ids_a_task_stage_reads():
     assert decorations.lost(
         feature, "glsl", source.replace("gl_WorkGroupID.x", "0u")
     ) == ("the translation loses BuiltIn.WorkgroupId")
+
+
+def _ray(name, group, stage="ray-generation"):
+    return Feature("spirv", "graphics", name, None, group=group, stage=stage)
+
+
+def test_a_ray_tracing_translation_keeps_the_storage_and_calls_that_hand_data_over():
+    # A storage class is no decoration, so a payload is kept only by a variable in ray-payload storage, and is
+    # handed over only by the trace that takes it.
+    payload = _ray("ray-payload", "StorageClass.RayPayloadKHR OpTraceRayKHR")
+    variable = "%payload = OpVariable %_ptr_RayPayloadKHR_Payload RayPayloadKHR\n"
+    trace = "OpTraceRayKHR %scene %uint_0 %uint_255 %uint_0 %uint_1 %uint_0 %o %t %d %m %payload\n"
+    assert decorations.lost(payload, "spirv", variable + trace) == ""
+    # SPV_NV_ray_tracing gave the storage classes their values first, so an older disassembler prints NV names.
+    nv = variable.replace("RayPayloadKHR", "RayPayloadNV")
+    assert decorations.lost(payload, "spirv", nv + trace) == ""
+    assert decorations.lost(payload, "spirv", variable) == (
+        "the translation loses OpTraceRayKHR"
+    )
+    private = variable.replace(" RayPayloadKHR\n", " Private\n")
+    assert decorations.lost(payload, "spirv", private + trace) == (
+        "the translation loses StorageClass.RayPayloadKHR"
+    )
+    record = _ray("ray-shader-record", "StorageClass.ShaderRecordBufferKHR", "miss")
+    assert (
+        decorations.lost(
+            record, "spirv", "%record = OpVariable %_ptr_Record ShaderRecordBufferNV\n"
+        )
+        == ""
+    )
+    assert decorations.lost(
+        record, "spirv", "%record = OpVariable %_ptr_Record StorageBuffer\n"
+    ) == ("the translation loses StorageClass.ShaderRecordBufferKHR")
+    reported = _ray(
+        "ray-reported-attributes",
+        "StorageClass.HitAttributeKHR OpReportIntersectionKHR",
+        "intersection",
+    )
+    attributes = (
+        "%Attributes = OpTypeStruct %v3float\n"
+        "%_ptr_HitAttributeKHR_Attributes = OpTypePointer HitAttributeKHR %Attributes\n"
+    )
+    report = "%hit = OpReportIntersectionNV %bool %float_1 %uint_0\n"
+    assert decorations.lost(reported, "spirv", attributes + report) == ""
+    # The barycentrics a triangle hit carries are a vector, not attributes of the stage's own.
+    barycentrics = (
+        "%_ptr_HitAttributeKHR_v2float = OpTypePointer HitAttributeKHR %v2float\n"
+    )
+    assert decorations.lost(reported, "spirv", barycentrics + report) == (
+        "the translation loses StorageClass.HitAttributeKHR"
+    )
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_the_data_ray_tracing_stages_hand_over():
+    callable_data = Feature(
+        "glsl",
+        "graphics",
+        "ray-callable-data",
+        None,
+        group="StorageClass.CallableDataKHR OpExecuteCallableKHR",
+        stage="ray-generation",
+    )
+    source = (
+        "#version 460\n#extension GL_EXT_ray_tracing : require\n"
+        "struct CallData {\n    vec4 color;\n};\nlayout(location = 0) callableDataEXT CallData data;\n"
+        "layout(std430, binding = 0) buffer Output {\n    float outp[];\n};\n"
+        "void main() {\n    data.color = vec4(0.0);\n    executeCallableEXT(0u, 0);\n"
+        "    outp[0] = data.color.x;\n}\n"
+    )
+    assert decorations.lost(callable_data, "glsl", source) == ""
+    assert decorations.lost(
+        callable_data, "glsl", source.replace("    executeCallableEXT(0u, 0);\n", "")
+    ) == ("the translation loses OpExecuteCallableKHR")
+    attributes = Feature(
+        "glsl",
+        "graphics",
+        "ray-custom-attributes",
+        None,
+        group="StorageClass.HitAttributeKHR OpTypeStruct",
+        stage="closest-hit",
+    )
+    source = (
+        "#version 460\n#extension GL_EXT_ray_tracing : require\n"
+        "struct Payload {\n    vec4 color;\n};\nlayout(location = 0) rayPayloadInEXT Payload payload;\n"
+        "struct Attributes {\n    vec3 normal;\n};\nhitAttributeEXT Attributes attributes;\n"
+        "void main() {\n    payload.color = vec4(attributes.normal, 1.0);\n}\n"
+    )
+    assert decorations.lost(attributes, "glsl", source) == ""
+    barycentrics = source.replace(
+        "hitAttributeEXT Attributes attributes;",
+        "hitAttributeEXT vec2 uv;\nAttributes attributes;",
+    )
+    assert decorations.lost(attributes, "glsl", barycentrics) == (
+        "the translation loses StorageClass.HitAttributeKHR"
+    )

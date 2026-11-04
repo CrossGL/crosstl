@@ -85,6 +85,7 @@ from .templates.portability import (
 from .templates.primitives import CROSSGL as PRIMITIVES
 from .templates.qualifiers import CROSSGL as QUALIFIERS
 from .templates.rasterization import CROSSGL as RASTERIZATION
+from .templates.rays import CROSSGL as RAYS
 from .templates.records import CROSSGL as RECORDS_CROSSGL
 from .templates.relations import CROSSGL as RELATIONS
 from .templates.rows import CROSSGL as ROWS_CROSSGL
@@ -649,6 +650,7 @@ CONSTRUCTS: dict[str, Template] = {
     **TESSELLATION,
     **MESHES,
     **TASKS,
+    **RAYS,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

@@ -7,7 +7,8 @@ place of a built-in such as the subgroup invocation index computes what the nati
 samples a 2D texture where its probe samples a cube or an array texture can still validate, since HLSL truncates the
 extra coordinate. Where the target language compiles to SPIR-V, the translation is lowered with the language's
 reference compiler and must keep every ``Decoration``, ``BuiltIn``, ``Capability`` and ``ExecutionMode`` anchor of its
-feature, and the task-payload storage a mesh stage reads, as each native probe does, except the anchors in
+feature, the task-payload storage a mesh stage reads, and the storage and calls through which a ray-tracing stage
+hands data to another, as each native probe does, except the anchors in
 :data:`FOLDED`. A resource feature keeps only its image's
 ``Dim`` anchor, arrayed when the feature's name ends in ``-array``, and the capability that shape needs. GLSL ES 3.00
 is lowered as GLSL ES 3.10, the first version glslang compiles for Vulkan. Metal compiles to AIR instead, where a
@@ -51,6 +52,23 @@ _OPERANDS = {
     "Decoration.Patch": (
         r"^\s*OpDecorate (%\w+) Patch\b[\s\S]*^\s*OpDecorate \1 Location\b"
         r"|^\s*OpDecorate (%\w+) Location\b[\s\S]*^\s*OpDecorate \2 Patch\b"
+    ),
+    # A ray-tracing stage that hands a payload or callable data to another stage, or reads its shader record,
+    # declares a variable in that storage class, and calls the instruction that hands the data over. SPIR-V gives
+    # these storage classes and OpReportIntersectionKHR the values of their SPV_NV_ray_tracing forerunners, whose
+    # names a disassembler built from an older grammar prints.
+    **{
+        f"StorageClass.{name}KHR": rf"^\s*%\w+ = OpVariable %\w+ {name}(?:KHR|NV)\b"
+        for name in ("RayPayload", "CallableData", "ShaderRecordBuffer")
+    },
+    "OpTraceRayKHR": r"^\s*OpTraceRayKHR\b",
+    "OpExecuteCallableKHR": r"^\s*OpExecuteCallableKHR\b",
+    "OpReportIntersectionKHR": r"^\s*%\w+ = OpReportIntersection(?:KHR|NV)\b",
+    # Attributes an intersection stage reports, or a hit stage reads in place of the triangle's barycentrics, are a
+    # structure in hit-attribute storage.
+    "StorageClass.HitAttributeKHR": (
+        r"^\s*(%\w+) = OpTypeStruct\b[\s\S]*"
+        r"^\s*%\w+ = OpTypePointer HitAttribute(?:KHR|NV) \1\s*$"
     ),
 }
 

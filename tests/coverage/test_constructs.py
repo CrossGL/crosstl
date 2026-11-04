@@ -24,6 +24,7 @@ from tools.coverage.templates import (
     primitives,
     qualifiers,
     rasterization,
+    rays,
     relations,
     specializations,
     subgroups,
@@ -370,6 +371,104 @@ def test_mesh_and_task_probes_read_their_workgroup_and_invocation_ids():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert names <= listed, language
     for language in ("wgsl", "webgl", "cuda", "hip", "opencl", "mojo"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not listed & names, language
+
+
+def test_ray_tracing_probes_hand_payloads_callable_data_attributes_and_records_over():
+    feature = _feature("glsl", "ray-payload")
+    assert (feature.category, feature.stage) == ("graphics", "ray-generation")
+    assert feature.group == "StorageClass.RayPayloadKHR OpTraceRayKHR"
+    assert _feature("hlsl", "ray-custom-attributes").stage == "closest-hit"
+    assert _feature("slang", "ray-reported-attributes").stage == "intersection"
+    assert _feature("rust", "ray-shader-record").group == (
+        "StorageClass.ShaderRecordBufferKHR"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "ray-payload",
+            "layout(location = 0) rayPayloadEXT Payload payload;\n",
+        ),
+        ("glsl", "ray-callable-data", "    executeCallableEXT(0u, 0);\n"),
+        ("glsl", "ray-reported-attributes", "hitAttributeEXT Attributes attributes;\n"),
+        (
+            "glsl",
+            "ray-custom-attributes",
+            "    payload.color = vec4(attributes.normal, 1.0);\n",
+        ),
+        (
+            "glsl",
+            "ray-shader-record",
+            "layout(shaderRecordEXT, std430) buffer Record {\n",
+        ),
+        (
+            "hlsl",
+            "ray-payload",
+            "    TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);\n",
+        ),
+        ("hlsl", "ray-payload", "write(caller, anyhit, closesthit, miss);\n"),
+        ("hlsl", "ray-callable-data", "    CallShader(0, data);\n"),
+        ("hlsl", "ray-reported-attributes", "    ReportHit(1.0, 0, attributes);\n"),
+        (
+            "hlsl",
+            "ray-custom-attributes",
+            "void main(inout Payload payload, in Attributes attributes) {\n",
+        ),
+        (
+            "hlsl",
+            "ray-shader-record",
+            "[[vk::shader_record_ext]] ConstantBuffer<Record> record;\n",
+        ),
+        (
+            "slang",
+            "ray-shader-record",
+            "[[vk::shader_record]] ConstantBuffer<Record> record;\n",
+        ),
+        ("rust", "ray-payload", "#[spirv(ray_payload)] payload: &mut Payload"),
+        (
+            "rust",
+            "ray-callable-data",
+            "spirv_std::arch::execute_callable::<_, 0>(data);\n",
+        ),
+        (
+            "rust",
+            "ray-reported-attributes",
+            "#[spirv(hit_attribute)] attributes: &mut Attributes",
+        ),
+        ("rust", "ray-shader-record", "#[spirv(shader_record_buffer)] record: &Record"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert (
+        probes.build(_feature("glsl", "ray-shader-record"), "glsl").suffix == ".rmiss"
+    )
+    assert (
+        probes.build(_feature("glsl", "ray-reported-attributes"), "glsl").suffix
+        == ".rint"
+    )
+    crossgl = probes.build(_feature("hlsl", "ray-custom-attributes"), "crossgl").source
+    assert (
+        "void main(Payload payload @ payload, Attributes attributes @ hit_attribute) {\n"
+        in crossgl
+    )
+    crossgl = probes.build(_feature("hlsl", "ray-shader-record"), "crossgl").source
+    assert (
+        "    Record record @glsl_buffer_block(shaderRecordEXT, std430);\n    ray_miss {\n"
+        in crossgl
+    )
+    crossgl = probes.build(_feature("glsl", "ray-payload"), "crossgl").source
+    assert "        uniform accelerationStructureEXT scene;\n" in crossgl
+    assert (
+        "TraceRay(scene, RAY_FLAG_NONE, 255u, 0u, 1u, 0u, ray, payload);\n" in crossgl
+    )
+    # Metal has no ray-generation, hit, miss or callable stage and no shader binding table; WGSL, GLSL ES 3.00 and
+    # the kernel languages have no ray-tracing stages.
+    names = set(rays.NAMES)
+    for language in ("glsl", "hlsl", "slang", "rust"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    for language in ("metal", "wgsl", "webgl", "cuda", "hip", "opencl", "mojo"):
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert not listed & names, language
 

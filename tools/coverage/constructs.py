@@ -833,6 +833,36 @@ def _curated() -> list[Construct]:
                 ),
             )
         ),
+        *(
+            c("graphics", name, *anchors, stage=stage)
+            for name, stage, *anchors in (
+                (
+                    "ray-payload",
+                    "ray-generation",
+                    "StorageClass.RayPayloadKHR",
+                    "OpTraceRayKHR",
+                ),
+                (
+                    "ray-callable-data",
+                    "ray-generation",
+                    "StorageClass.CallableDataKHR",
+                    "OpExecuteCallableKHR",
+                ),
+                (
+                    "ray-reported-attributes",
+                    "intersection",
+                    "StorageClass.HitAttributeKHR",
+                    "OpReportIntersectionKHR",
+                ),
+                (
+                    "ray-custom-attributes",
+                    "closest-hit",
+                    "StorageClass.HitAttributeKHR",
+                    "OpTypeStruct",
+                ),
+                ("ray-shader-record", "miss", "StorageClass.ShaderRecordBufferKHR"),
+            )
+        ),
         c(
             "resource",
             "uniform-struct",
