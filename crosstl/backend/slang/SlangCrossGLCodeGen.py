@@ -1814,6 +1814,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
                 append_metadata("stage_io", "@input")
             elif qualifier_name == "out":
                 append_metadata("stage_io", "@output")
+            elif qualifier_name == "globallycoherent":
+                # A UAV coherent across the device, as the HLSL importer writes it.
+                append_metadata("globallycoherent", "@globallycoherent")
 
             for name, value in self.layout_metadata_entries(qualifier):
                 if name in {"set", "group"} and value:
