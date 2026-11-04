@@ -150,6 +150,11 @@ from .spirv_extension_builtins import (
     unmapped_builtin_reason,
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
+from .spirv_geometry_streams import (
+    STREAM_FUNCTIONS,
+    geometry_output_streams,
+    stream_decorations,
+)
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
     SHADER_IMAGE_FORMATS,
@@ -582,6 +587,8 @@ class VulkanSPIRVCodeGen(
         self.glsl_buffer_block_type_names = set()
 
         self.required_capabilities = set()
+        self.geometry_streams_used = False
+        self.geometry_output_streams = {}
         self.global_variables = {}
         self.stage_global_variables = {}
         self.local_variables = {}
@@ -9267,6 +9274,23 @@ class VulkanSPIRVCodeGen(
             self.refuse_lowering(
                 f"SPIR-V geometry {function_name} is only valid in " "geometry stages"
             )
+            return None
+
+        if function_name in STREAM_FUNCTIONS:
+            # The stream operand must be a constant instruction (SPIR-V OpEmitStreamVertex).
+            stream = self.literal_int_argument(args[0]) if len(args) == 1 else None
+            if stream is None or stream < 0:
+                self.refuse_lowering(
+                    f"SPIR-V geometry {function_name} requires one constant, "
+                    "non-negative stream number"
+                )
+                return None
+            self.require_capability("GeometryStreams")
+            self.geometry_streams_used = True
+            stream_id = self.register_constant(
+                stream, self.register_primitive_type("int")
+            )
+            self.emit(f"{STREAM_FUNCTIONS[function_name]} %{stream_id.id}")
             return None
 
         if args:
@@ -30215,7 +30239,7 @@ class VulkanSPIRVCodeGen(
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
 
-            if callee_name in {"EmitVertex", "EndPrimitive"}:
+            if callee_name in {"EmitVertex", "EndPrimitive", *STREAM_FUNCTIONS}:
                 return self.process_geometry_stream_function_call(
                     callee_name, expr.args
                 )
@@ -32164,6 +32188,16 @@ class VulkanSPIRVCodeGen(
             )
 
         annotations.extend(self.decorations)
+        if getattr(self, "geometry_streams_used", False):
+            stream_annotations, unplaced = stream_decorations(
+                global_variables, debug_names, self.geometry_output_streams
+            )
+            annotations.extend(stream_annotations)
+            for name in unplaced:
+                self.refuse_lowering(
+                    f"SPIR-V geometry output '{name}' names a vertex stream, but no "
+                    "output variable of that name was declared"
+                )
 
         def unique(lines: List[str]) -> List[str]:
             seen = set()
@@ -32356,6 +32390,7 @@ class VulkanSPIRVCodeGen(
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
+        self.geometry_output_streams = geometry_output_streams(ast)
         ast = lower_constant_buffer_resources(
             ast,
             lambda name: self.refuse_lowering(
