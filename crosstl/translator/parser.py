@@ -3227,28 +3227,42 @@ class Parser:
         right,
         left_label,
         right_label,
+        *,
+        right_owned_fields=(),
     ):
-        """Unify two compatible matrix contracts into a distinct AST type."""
+        """Unify two compatible matrix contracts into a distinct AST type.
+
+        Fields in ``right_owned_fields`` are taken from ``right`` unchanged.
+        """
         left_values = self.cooperative_matrix_contract_values(left)
         right_values = self.cooperative_matrix_contract_values(right)
         values = {
-            field: self.merge_cooperative_matrix_field(
-                operation,
-                field,
-                left_values[field],
-                right_values[field],
-                left_label,
-                right_label,
+            field: (
+                deepcopy(right_values[field])
+                if field in right_owned_fields
+                else self.merge_cooperative_matrix_field(
+                    operation,
+                    field,
+                    left_values[field],
+                    right_values[field],
+                    left_label,
+                    right_label,
+                )
             )
             for field in left_values
         }
         return self.build_cooperative_matrix_contract(operation, values)
 
     def constrain_cooperative_matrix_accumulator(self, operation, product, accumulator):
-        """Validate a product shape while preserving accumulator representation."""
+        """Validate a product shape while preserving accumulator representation.
+
+        The accumulator keeps its own component type, which may differ from the
+        operands' (MSL simdgroup_multiply_accumulate, SPIR-V
+        OpCooperativeMatrixMulAddKHR).
+        """
         values = self.cooperative_matrix_contract_values(accumulator)
         product_values = self.cooperative_matrix_contract_values(product)
-        for field in ("element_type", "rows", "cols", "scope", "subgroup_size"):
+        for field in ("rows", "cols", "scope", "subgroup_size"):
             values[field] = self.merge_cooperative_matrix_field(
                 operation,
                 field,
@@ -3300,17 +3314,29 @@ class Parser:
         return result
 
     def infer_cooperative_matrix_multiply_contract(
-        self, operation, left, right, left_label="left", right_label="right"
+        self,
+        operation,
+        left,
+        right,
+        left_label="left",
+        right_label="right",
+        *,
+        same_component_type=True,
     ):
-        """Infer the source-neutral result contract for matrix multiplication."""
-        self.merge_cooperative_matrix_field(
-            operation,
-            "element_type",
-            left.element_type,
-            right.element_type,
-            left_label,
-            right_label,
-        )
+        """Infer the source-neutral result contract for matrix multiplication.
+
+        A plain product needs one component type. A multiply-accumulate takes
+        its A and B component types independently, as MSL and SPIR-V do.
+        """
+        if same_component_type:
+            self.merge_cooperative_matrix_field(
+                operation,
+                "element_type",
+                left.element_type,
+                right.element_type,
+                left_label,
+                right_label,
+            )
         self.merge_cooperative_matrix_field(
             operation,
             "scope",
@@ -3434,18 +3460,21 @@ class Parser:
                 arguments[2], operation, "accumulator"
             )
             product = self.infer_cooperative_matrix_multiply_contract(
-                operation, left, right
+                operation, left, right, same_component_type=False
             )
             result = self.constrain_cooperative_matrix_accumulator(
                 operation, product, accumulator
             )
             if destination is not None:
+                # The destination's component type is the result's; MSL lets it
+                # differ from the accumulator's.
                 result = self.merge_cooperative_matrix_contracts(
                     operation,
                     result,
                     destination,
                     "inferred result",
                     "destination operand",
+                    right_owned_fields=("element_type",),
                 )
 
         operation_node.set_result_contract(result)

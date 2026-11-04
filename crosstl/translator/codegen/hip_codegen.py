@@ -66,6 +66,7 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_library_functions import rename_cuda_library_functions
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -847,6 +848,7 @@ class HipCodeGen(
         A construct with no faithful HIP lowering is refused; no program is returned while a refusal is
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
+        refuse_cooperative_matrices(node, label="HIP", target="hip")
         return self.refusals.run(self.render_program, node)
 
     def render_program(self, node: ASTNode) -> str:
