@@ -236,6 +236,73 @@ def test_glsl_short_array_constructors_zero_fill_after_the_given_elements(tmp_pa
     _validate_glsl(tmp_path, code, "comp")
 
 
+SHORT_ARRAY_OF_ARRAYS_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float a[2][2] = float[2][2](float[2](1.0, 2.0));
+            float b[2][3];
+            b = float[2][3](float[3](3.0, 4.0, 5.0));
+            outp[i] = a[1][1] + b[1][2];
+        }
+    }
+}
+"""
+
+
+def test_glsl_pads_short_array_of_arrays_constructors(tmp_path):
+    # A missing element of an array of arrays is the zero inner array (#3637);
+    # float[2][3] has two float[3] elements, so the split is outer-first.
+    code = _translate(tmp_path, SHORT_ARRAY_OF_ARRAYS_CONSTRUCTOR_CGL, ".cgl", "opengl")
+
+    assert "float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))" in code
+    assert "b = float[2][3](float[3](3.0, 4.0, 5.0), float[3](0.0, 0.0, 0.0));" in code
+    _validate_glsl(tmp_path, code, "comp")
+
+
+SHORT_NESTED_CONSTRUCTOR_PLACES_CGL = """
+shader Probe {
+    struct S { float x; int k; };
+    buffer float* outp;
+    float total(float v[2][2]) { return v[0][0] + v[1][1]; }
+    float[2][2] make(float x) { return float[2][2](float[2](x, 1.0)); }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = outp[i];
+            float c[2][2][2];
+            c = float[2][2][2](float[2][2](float[2](x, 1.0)));
+            S s[2][2];
+            s = S[2][2](S[2](S(x, 1), S(2.0, 3)));
+            outp[i] = total(float[2][2](float[2](x))) + make(x)[1][1]
+                + c[1][1][1] + s[1][1].x;
+        }
+    }
+}
+"""
+
+
+def test_glsl_pads_short_array_of_arrays_constructors_wherever_they_stand(tmp_path):
+    # The CrossGL parser reads float[2][2] in float[2][2](...) as float
+    # subscripted twice, not as one name; each level is padded.
+    code = _translate(tmp_path, SHORT_NESTED_CONSTRUCTOR_PLACES_CGL, ".cgl", "opengl")
+    # The formatter wraps the longer constructors.
+    flat = " ".join(code.split())
+
+    assert "total(float[2][2](float[2](x, 0.0), float[2](0.0, 0.0)))" in flat
+    assert "return float[2][2](float[2](x, 1.0), float[2](0.0, 0.0));" in flat
+    assert (
+        "c = float[2][2][2](float[2][2](float[2](x, 1.0), float[2](0.0, 0.0)),"
+        " float[2][2](float[2](0.0, 0.0), float[2](0.0, 0.0)));" in flat
+    )
+    assert "s = S[2][2](S[2](S(x, 1), S(2.0, 3)), S[2](S(0.0, 0), S(0.0, 0)));" in flat
+    _validate_glsl(tmp_path, code, "comp")
+
+
 @pytest.mark.parametrize(
     ("statement", "reason"),
     [

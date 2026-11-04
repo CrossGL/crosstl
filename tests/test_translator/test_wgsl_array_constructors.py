@@ -104,9 +104,61 @@ def test_array_constructor_argument(tmp_path):
     assert "first(array<f32, 2>(x, 1.0))" in output
 
 
-def test_size_mismatch_is_refused(tmp_path):
-    with pytest.raises(Exception, match="needs exactly 3"):
-        translate(tmp_path, "values[i] = float[3](x, 1.0)[1];")
+def test_short_constructor_outside_a_declaration_zero_fills(tmp_path):
+    # The elements a short constructor leaves out are zero, as in a declaration (#3638).
+    output = translate(tmp_path, "values[i] = float[3](x, 1.0)[1];")
+    assert "values[i] = array<f32, 3>(x, 1.0, f32())[1];" in output
+
+
+def test_short_constructors_zero_fill_wherever_they_stand(tmp_path):
+    output = translate(
+        tmp_path,
+        "float a[3];\n"
+        " a = float[3](1.0);\n"
+        " vec3 v = vec3[2](vec3(x))[1];\n"
+        " Pair p = Pair[2](Pair(x, 2.0))[1];\n"
+        " values[i] = a[2] + total(float[3](1.0)) + float[3](1.0)[2] + make(x)[2]"
+        " + v.x + p.b;",
+        functions="""
+    float total(float v[3]) {
+        return v[0] + v[1] + v[2];
+    }
+    float[3] make(float x) {
+        return float[3](x);
+    }""",
+    )
+    assert "a = array<f32, 3>(1.0, f32(), f32());" in output
+    assert "total(array<f32, 3>(1.0, f32(), f32()))" in output
+    assert "array<f32, 3>(1.0, f32(), f32())[2]" in output
+    assert "return array<f32, 3>(x, f32(), f32());" in output
+    assert "array<vec3<f32>, 2>(vec3<f32>(x), vec3<f32>())[1]" in output
+    assert "array<Pair, 2>(Pair(x, 2.0), Pair())[1]" in output
+
+
+def test_constructor_longer_than_its_size_is_refused(tmp_path):
+    from crosstl.translator.codegen.wgsl_codegen import WGSLAggregateInitializerError
+
+    with pytest.raises(
+        WGSLAggregateInitializerError,
+        match=r"'array<f32, 2>' expects at most 2 elements, got 3",
+    ) as refused:
+        translate(tmp_path, "values[i] = float[2](x, 1.0, 2.0)[1];")
+    assert (
+        refused.value.project_diagnostic_code
+        == "project.translate.wgsl-aggregate-initializer-invalid"
+    )
+    # The same details as a declared initializer's refusal (#3689).
+    assert refused.value.expected_type == "array<f32, 2>"
+    assert refused.value.element_count == 3
+    assert refused.value.expected_element_count == 2
+
+
+def test_empty_constructor_is_refused(tmp_path):
+    # GLSL has no empty array constructor (GLSL 4.60 section 5.4.4).
+    from crosstl.translator.codegen.wgsl_codegen import WGSLAggregateInitializerError
+
+    with pytest.raises(WGSLAggregateInitializerError, match="empty array constructor"):
+        translate(tmp_path, "float a[3];\n a = float[3]();\n values[i] = a[0];")
 
 
 def test_one_argument_constructor_in_declaration_zero_fills(tmp_path):

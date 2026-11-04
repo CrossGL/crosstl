@@ -177,6 +177,10 @@ from .constant_guards import (
     guard_bool_value,
 )
 from .constant_ordering import partition_constants_by_struct_dependency
+from .cooperative_matrix_diagonal import (
+    generate_hlsl_cooperative_matrix_diagonal,
+    generate_hlsl_cooperative_matrix_diagonal_helpers,
+)
 from .counter_loops import (
     any_start_counter_loop_terminates,
     any_start_counter_loops,
@@ -2491,6 +2495,7 @@ class HLSLCodeGen(
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False
         self.required_hlsl_cooperative_matrix_fragment_offset = False
+        self.required_hlsl_cooperative_matrix_diagonals = {}
         self.texture_variables = set()
         self.sampler_variables = set()
         self.global_mixed_sampler_names = set()
@@ -3876,6 +3881,7 @@ class HLSLCodeGen(
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False
         self.required_hlsl_cooperative_matrix_fragment_offset = False
+        self.required_hlsl_cooperative_matrix_diagonals = {}
         self.hlsl_builtin_option_available = False
         ast = self.with_hlsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
@@ -5606,7 +5612,7 @@ class HLSLCodeGen(
             node
             for node in self.walk_ast(root)
             if isinstance(node, CooperativeMatrixOpNode)
-            and node.operation in {"fill", "load", "store"}
+            and node.operation in {"fill", "diagonal", "load", "store"}
         ]
 
     def hlsl_software_subgroup_bind_lane_local_matrix_functions(self, ast, nodes):
@@ -8741,6 +8747,7 @@ class HLSLCodeGen(
             self.required_hlsl_software_subgroup_helpers
             or self.required_hlsl_cooperative_matrix_mma
             or self.required_hlsl_cooperative_matrix_fragment_offset
+            or self.required_hlsl_cooperative_matrix_diagonals
             or self.hlsl_software_subgroup_invocation_variable is not None
         ):
             return ""
@@ -8848,6 +8855,7 @@ class HLSLCodeGen(
             code += self.generate_hlsl_cooperative_matrix_mma_helper()
         if self.required_hlsl_cooperative_matrix_fragment_offset:
             code += self.generate_hlsl_cooperative_matrix_fragment_offset_helper()
+        code += generate_hlsl_cooperative_matrix_diagonal_helpers(self)
         return code
 
     def prepare_hlsl_physical_subgroup_id_helper_names(self, functions):
@@ -27458,6 +27466,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_hlsl_cooperative_matrix_mma(expr)
         if operation == "fill":
             return self.generate_hlsl_cooperative_matrix_fill(expr)
+        if operation == "diagonal":
+            return generate_hlsl_cooperative_matrix_diagonal(self, expr)
         if operation in {"load", "store"} and self.software_subgroup_width == 32:
             return self.generate_hlsl_cooperative_matrix_transfer(expr)
         if operation in {"load", "store"}:
@@ -31972,6 +31982,36 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         return rendered
 
+    def hlsl_resource_pointer_length(self, pointer_expr):
+        """``length()`` of a helper's ``buffer T*`` parameter: its buffer's elements from the offset on."""
+        # A buffer parameter is passed as its buffer plus an element offset, so its
+        # length is that buffer's element count less the offset, not a member call.
+        if not isinstance(pointer_expr, (IdentifierNode, VariableNode)):
+            # An element such as data[3] is a value, not a view, even though its
+            # binding is the view moved to that element.
+            return None
+        binding = self.hlsl_resource_pointer_binding(pointer_expr)
+        if (
+            binding is None
+            or binding.get("kind") == "workgroup-pointer"
+            or "pointer_reinterpretation" in binding
+            or "byte_offset" in binding
+            or not binding.get("root")
+        ):
+            return None
+        resource_type = binding.get("resource_type")
+        count = self.hlsl_buffer_length.element_count(
+            binding["root"],
+            self.hlsl_resource_type_name(resource_type),
+            self.map_type(resource_type) if resource_type else None,
+        )
+        if count is None:
+            return None
+        offset = binding.get("offset")
+        if offset is None or str(offset) in {"0", "0u"}:
+            return f"int({count})"
+        return f"(int({count}) - int({offset}))"
+
     def generate_glsl_buffer_block_length_call(self, func_expr, args):
         """``block.member.length()`` for a GLSL buffer block lowered to a byte-address buffer."""
         if not (
@@ -31983,12 +32023,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         object_expr = getattr(
             func_expr, "object_expr", getattr(func_expr, "object", None)
         )
-        if isinstance(object_expr, (IdentifierNode, VariableNode)):
+        if isinstance(object_expr, (IdentifierNode, VariableNode, ArrayAccessNode)):
             # 'buffer T* name' is a runtime-sized element view of a structured
-            # buffer: its length() is GetDimensions' element count.
+            # buffer, and 'bufs[i]' an element of a resource array: their
+            # length() is GetDimensions' element count.
             resource_type = self.hlsl_buffer_helper_resource_type(object_expr)
             if resource_type is not None:
                 return f"int({self.hlsl_buffer_element_count(object_expr)})"
+            pointer_length = self.hlsl_resource_pointer_length(object_expr)
+            if pointer_length is not None:
+                return pointer_length
         access = self.glsl_buffer_block_member_access(
             getattr(func_expr, "object_expr", getattr(func_expr, "object", None))
         )

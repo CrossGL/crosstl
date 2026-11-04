@@ -57,6 +57,7 @@ from .array_utils import (
     get_array_size_from_node,
 )
 from .comma_expressions import is_comma_expression, refuse_comma_expression
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -82,6 +83,7 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .image_access_contracts import (
     explicit_image_format,
@@ -1543,6 +1545,7 @@ class MojoCodeGen:
 
     def generate(self, ast):
         """Generate complete Mojo-like shader source for a CrossGL AST."""
+        refuse_cooperative_matrices(ast, label="Mojo", target="mojo")
         # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
         ast = canonicalize_separate_textures(ast)
         self.struct_types = {}
@@ -9015,7 +9018,7 @@ class MojoCodeGen:
                 func_name = specialized_func_name
                 callee = specialized_func_name
             else:
-                raise_unresolved_generic_function_call(self, func_name, "Mojo")
+                reject_unresolved_generic_function_call(self, func_name, "Mojo")
 
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)

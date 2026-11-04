@@ -141,6 +141,7 @@ WAVE_INTRINSICS = {
 COOPERATIVE_MATRIX_INTRINSICS = {
     "cooperative_matrix_element": "element",
     "cooperative_matrix_fill": "fill",
+    "cooperative_matrix_diagonal": "diagonal",
     "cooperative_matrix_load": "load",
     "cooperative_matrix_store": "store",
     "cooperative_matrix_multiply": "multiply",
@@ -3227,28 +3228,42 @@ class Parser:
         right,
         left_label,
         right_label,
+        *,
+        right_owned_fields=(),
     ):
-        """Unify two compatible matrix contracts into a distinct AST type."""
+        """Unify two compatible matrix contracts into a distinct AST type.
+
+        Fields in ``right_owned_fields`` are taken from ``right`` unchanged.
+        """
         left_values = self.cooperative_matrix_contract_values(left)
         right_values = self.cooperative_matrix_contract_values(right)
         values = {
-            field: self.merge_cooperative_matrix_field(
-                operation,
-                field,
-                left_values[field],
-                right_values[field],
-                left_label,
-                right_label,
+            field: (
+                deepcopy(right_values[field])
+                if field in right_owned_fields
+                else self.merge_cooperative_matrix_field(
+                    operation,
+                    field,
+                    left_values[field],
+                    right_values[field],
+                    left_label,
+                    right_label,
+                )
             )
             for field in left_values
         }
         return self.build_cooperative_matrix_contract(operation, values)
 
     def constrain_cooperative_matrix_accumulator(self, operation, product, accumulator):
-        """Validate a product shape while preserving accumulator representation."""
+        """Validate a product shape while preserving accumulator representation.
+
+        The accumulator keeps its own component type, which may differ from the
+        operands' (MSL simdgroup_multiply_accumulate, SPIR-V
+        OpCooperativeMatrixMulAddKHR).
+        """
         values = self.cooperative_matrix_contract_values(accumulator)
         product_values = self.cooperative_matrix_contract_values(product)
-        for field in ("element_type", "rows", "cols", "scope", "subgroup_size"):
+        for field in ("rows", "cols", "scope", "subgroup_size"):
             values[field] = self.merge_cooperative_matrix_field(
                 operation,
                 field,
@@ -3300,17 +3315,29 @@ class Parser:
         return result
 
     def infer_cooperative_matrix_multiply_contract(
-        self, operation, left, right, left_label="left", right_label="right"
+        self,
+        operation,
+        left,
+        right,
+        left_label="left",
+        right_label="right",
+        *,
+        same_component_type=True,
     ):
-        """Infer the source-neutral result contract for matrix multiplication."""
-        self.merge_cooperative_matrix_field(
-            operation,
-            "element_type",
-            left.element_type,
-            right.element_type,
-            left_label,
-            right_label,
-        )
+        """Infer the source-neutral result contract for matrix multiplication.
+
+        A plain product needs one component type. A multiply-accumulate takes
+        its A and B component types independently, as MSL and SPIR-V do.
+        """
+        if same_component_type:
+            self.merge_cooperative_matrix_field(
+                operation,
+                "element_type",
+                left.element_type,
+                right.element_type,
+                left_label,
+                right_label,
+            )
         self.merge_cooperative_matrix_field(
             operation,
             "scope",
@@ -3359,12 +3386,12 @@ class Parser:
         arguments = operation_node.arguments
         if operation in {"load", "store"}:
             return operation_node
-        if operation == "fill":
-            # A fill names only its value; the declaration, assignment or
-            # return it initializes supplies the matrix contract.
+        if operation in {"fill", "diagonal"}:
+            # A fill or diagonal names only its value; the declaration,
+            # assignment or return it initializes supplies the matrix contract.
             if len(arguments) != 1:
                 raise SyntaxError(
-                    "Cooperative matrix fill expects 1 argument, got "
+                    f"Cooperative matrix {operation} expects 1 argument, got "
                     f"{len(arguments)}"
                 )
             return operation_node
@@ -3434,22 +3461,45 @@ class Parser:
                 arguments[2], operation, "accumulator"
             )
             product = self.infer_cooperative_matrix_multiply_contract(
-                operation, left, right
+                operation, left, right, same_component_type=False
             )
             result = self.constrain_cooperative_matrix_accumulator(
                 operation, product, accumulator
             )
             if destination is not None:
+                # The destination's component type is the result's; MSL lets it
+                # differ from the accumulator's.
                 result = self.merge_cooperative_matrix_contracts(
                     operation,
                     result,
                     destination,
                     "inferred result",
                     "destination operand",
+                    right_owned_fields=("element_type",),
                 )
 
         operation_node.set_result_contract(result)
         return operation_node
+
+    def parse_cooperative_matrix_constructor(self, generic_args):
+        """Parse ``CooperativeMatrix<...>(value)``, the diagonal constructor.
+
+        Like a GLSL ``matN(s)`` constructor, the one value fills the diagonal
+        and every other element is zero; it is the canonical
+        ``cooperative_matrix_diagonal`` with the written type as its result.
+        """
+        matrix_type = self.cooperative_matrix_type(generic_args)
+        self.eat("LPAREN")
+        arguments = self.parse_call_arguments()
+        self.eat("RPAREN")
+        if len(arguments) != 1:
+            raise SyntaxError(
+                "CooperativeMatrix constructor expects 1 diagonal value, got "
+                f"{len(arguments)}"
+            )
+        operation = CooperativeMatrixOpNode("diagonal", arguments)
+        operation.set_result_contract(matrix_type)
+        return operation
 
     def infer_cooperative_matrix_operation_or_preserve(self, operation_node):
         """Preserve operations for target diagnostics in permissive parse mode."""
@@ -3513,7 +3563,7 @@ class Parser:
                 f"{self.format_cooperative_matrix_contract_value(expected_type)}"
             )
         if expression.result_type is None:
-            if expression.operation == "fill":
+            if expression.operation in {"fill", "diagonal"}:
                 expression.set_result_contract(deepcopy(expected_contract))
             return
         result = self.merge_cooperative_matrix_contracts(
@@ -5333,6 +5383,12 @@ class Parser:
                 )
             ):
                 generic_args = self.parse_generic_arguments()
+                if (
+                    left.name.rsplit("::", 1)[-1] == "CooperativeMatrix"
+                    and self.current_token[0] == "LPAREN"
+                ):
+                    left = self.parse_cooperative_matrix_constructor(generic_args)
+                    continue
                 args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
                 left = IdentifierNode(f"{left.name}<{args}>")
             elif self.current_token[0] == "LPAREN":

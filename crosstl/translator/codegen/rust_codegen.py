@@ -56,6 +56,7 @@ from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .assignment_values import is_reevaluable_place
 from .c_reference_parameters import is_output_parameter
 from .comma_expressions import is_comma_expression, refuse_comma_expression
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_output_parameters import RustOutputParameterMixin
@@ -652,6 +653,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         then refused as a whole with every reason listed (:class:`RustLoweringRefused`).
         """
         # Rust GPU images are separate from their samplers: a separate CrossGL texture is the same image.
+        refuse_cooperative_matrices(ast, label="Rust", target="rust")
         ast = canonicalize_separate_textures(ast)
         return self.refusals.run(self.generate_program, ast)
 

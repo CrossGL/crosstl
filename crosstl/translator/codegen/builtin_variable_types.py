@@ -21,9 +21,6 @@ CROSSGL_BUILTIN_VARIABLE_TYPES = {
     "gl_DrawID": "int",
     "gl_BaseVertex": "int",
     "gl_BaseInstance": "int",
-    "gl_DrawIDARB": "int",
-    "gl_BaseVertexARB": "int",
-    "gl_BaseInstanceARB": "int",
     "gl_Position": "vec4",
     "gl_PointSize": "float",
     # Geometry and tessellation (sections 7.1.2 and 7.1.4).
