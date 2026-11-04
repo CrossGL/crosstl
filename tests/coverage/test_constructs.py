@@ -596,6 +596,38 @@ def test_image_probes_pass_sample_and_index_textures_and_update_an_image_in_plac
             "uint k = uint(fin[i]) & 1u;\n",
         ),
         ("rust", "array-of-textures-loop-index", "for k in 0..2 {\n"),
+        (
+            "glsl",
+            "unsized-array-of-textures",
+            "layout(binding = 3) uniform sampler2D tex[];\n",
+        ),
+        ("glsl", "unsized-array-of-textures", "int k = int(fin[0]) & 1;\n"),
+        (
+            "hlsl",
+            "unsized-array-of-textures",
+            "Texture2D<float4> tex[] : register(t1);\n",
+        ),
+        (
+            "metal",
+            "unsized-array-of-textures",
+            "device const Slot* slots [[buffer(2)]]",
+        ),
+        (
+            "rust",
+            "unsized-array-of-textures",
+            "tex: &RuntimeArray<Image!(2D, type=f32, sampled)>",
+        ),
+        (
+            "glsl",
+            "array-of-images",
+            "layout(r32f, binding = 4) uniform image2D img[2];\n",
+        ),
+        ("hlsl", "array-of-images", "RWTexture2D<float> img[2] : register(u3);\n"),
+        (
+            "metal",
+            "array-of-images",
+            "array<texture2d<float, access::read_write>, 2> img",
+        ),
     ):
         probe = probes.build(_feature(language, name), language)
         assert line in probe.source, (language, name)
@@ -622,13 +654,15 @@ def test_image_probes_pass_sample_and_index_textures_and_update_an_image_in_plac
     for language in ("glsl", "hlsl", "slang", "metal"):
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert names <= listed, language
-    arrays = {name for name in names if name.startswith("array-of-")}
+    arrays = {name for name in names if "array-of-" in name}
     absent = {
         "wgsl": arrays,
         "webgl": {
             "read-write-image",
             "array-of-textures-loop-index",
             "array-of-textures-nonuniform-index",
+            "unsized-array-of-textures",
+            "array-of-images",
         },
         "cuda": arrays,
         "hip": arrays,

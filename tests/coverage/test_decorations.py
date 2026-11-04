@@ -1203,3 +1203,30 @@ def test_an_array_of_textures_keeps_its_images_as_array_elements(monkeypatch):
     # A texture that is not an array keeps the plain shape.
     helper = dataclasses.replace(textures, name="texture-in-helper")
     assert decorations.lost(helper, "metal", single) == ""
+
+
+def test_an_unsized_array_of_textures_stays_unsized(monkeypatch):
+    unsized = Feature(
+        "spirv",
+        "resource",
+        "unsized-array-of-textures",
+        None,
+        group="Capability.RuntimeDescriptorArray OpTypeRuntimeArray Dim.2D",
+    )
+    image = "%img = OpTypeImage %float 2D 2 0 0 1 Unknown\n"
+    runtime = "OpCapability RuntimeDescriptorArray\n" + image
+    assert decorations.lost(unsized, "spirv", runtime) == ""
+    assert decorations.lost(unsized, "spirv", image) == (
+        "the translation loses Capability.RuntimeDescriptorArray"
+    )
+    # Metal reaches the array through an argument buffer, a structure that holds the texture; a sized array of
+    # textures wraps each texture too, but in no structure of its own.
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    texture = (
+        '%"struct.metal::texture2d" = type { %struct._texture_2d_t addrspace(1)* }\n'
+    )
+    slot = '%struct.Slot = type { %"struct.metal::texture2d" }\n'
+    assert decorations.lost(unsized, "metal", slot + texture) == ""
+    assert decorations.lost(unsized, "metal", texture) == (
+        "the translation loses Capability.RuntimeDescriptorArray"
+    )

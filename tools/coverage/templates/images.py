@@ -1,6 +1,8 @@
 """Texture-in-helper, texture-argument, array-of-textures and read-write-image probes: a texture that a helper function
 samples, an array of textures, and a storage image that a kernel reads and writes in place. Two more probes index the
 array at run time: by a loop counter, which is dynamically uniform, and by a value that can differ between invocations.
+The unsized-array-of-textures probe declares the array without a length, and the array-of-images probe reads one
+storage image of a two-element array and writes the other.
 
 Each texture probe samples a 2D texture at an explicit level of detail, as ``sampled-texture`` does. GLSL, HLSL, Slang,
 WGSL and CrossGL declare textures at program scope, so the texture-in-helper probe's helper samples the texture by
@@ -10,12 +12,14 @@ parameter there. The array-of-textures probe samples both textures of a two-elem
 the read-write-image probe adds its input to the texel at the origin of a one-channel float storage image. The
 non-uniform index is ``nonuniformEXT`` (GL_EXT_nonuniform_qualifier) in GLSL and CrossGL and
 ``NonUniformResourceIndex`` in HLSL and Slang; Metal indexes an array of textures with any value and has no qualifier.
+GLSL declares an array of unknown length with GL_EXT_nonuniform_qualifier, rust-gpu as a ``RuntimeArray``, and Metal
+as an argument buffer, a pointer to structures that each hold a texture.
 
 WGSL arrays hold plain types only, which textures are not (``binding_array`` is a wgpu extension). CUDA and HIP take
 texture objects as kernel parameters, which cannot be arrays, and OpenCL C declares no arrays of images. GLSL ES 3.00
-has no storage images and indexes an array of samplers with constant expressions only. rust-gpu cannot mark an index
-non-uniform: spirv-std has no function for it, and a ``NonUniform`` decoration written in inline SPIR-V does not reach
-the module. Mojo's kernels take no textures.
+has no storage images and indexes an array of samplers with constant expressions only, so it has no array of unknown
+length either. rust-gpu cannot mark an index non-uniform: spirv-std has no function for it, and a ``NonUniform``
+decoration written in inline SPIR-V does not reach the module. Mojo's kernels take no textures.
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ NAMES = (
     "read-write-image",
     "array-of-textures-loop-index",
     "array-of-textures-nonuniform-index",
+    "unsized-array-of-textures",
+    "array-of-images",
 )
 
 _CALL = "outp[i] = lookup({}fin[i]) * 2.0;"
@@ -36,6 +42,9 @@ _PAIR = "outp[i] = {0}.x + {1}.y;"
 # The loop counter is dynamically uniform; the non-uniform index differs between invocations.
 _LOOP = "float acc = 0.0;\nfor (int k = 0; k < 2; k++) {{\n    acc += {}.x;\n}}\noutp[i] = acc;"
 _NONUNIFORM = "{} k = {}(fin[i]) & 1{};\noutp[i] = {}.x;"
+# An array of unknown length is indexed at run time, by a value every invocation reads alike: GLSL sizes an unsized
+# array that only constant indices reach.
+_UNSIZED = _NONUNIFORM.replace("(fin[i]) & 1", "(fin[0]) & 1")
 
 
 def _glsl(precision: str = "", binding: str = "layout(binding = 3) ") -> dict:
@@ -76,6 +85,18 @@ def _glsl(precision: str = "", binding: str = "layout(binding = 3) ") -> dict:
                 "#extension GL_EXT_nonuniform_qualifier : require" if binding else ""
             ),
         ),
+        "unsized-array-of-textures": Template(
+            _UNSIZED.format("int", "int", "", sample.format("tex[k]", "fin[i]")),
+            f"{sampler}[];",
+            prelude=(
+                "#extension GL_EXT_nonuniform_qualifier : require" if binding else ""
+            ),
+        ),
+        "array-of-images": Template(
+            "imageStore(img[1], ivec2(0, 0), imageLoad(img[0], ivec2(0, 0)) + vec4(fin[i]));\n"
+            "outp[i] = 0.0;",
+            f"{image}uniform image2D img[2];",
+        ),
     }
 
 
@@ -86,6 +107,8 @@ WEBGL = {
     "read-write-image": ABSENT,
     "array-of-textures-loop-index": ABSENT,
     "array-of-textures-nonuniform-index": ABSENT,
+    "unsized-array-of-textures": ABSENT,
+    "array-of-images": ABSENT,
 }
 
 _HLSL_TEXTURE = (
@@ -131,6 +154,16 @@ HLSL = {
         ),
         _HLSL_TEXTURE.format("[2]"),
     ),
+    "unsized-array-of-textures": Template(
+        _UNSIZED.format(
+            "uint", "uint", "u", _HLSL_SAMPLE.format("tex[k]", "smp", "fin[i]")
+        ),
+        _HLSL_TEXTURE.format("[]"),
+    ),
+    "array-of-images": Template(
+        "img[1][uint2(0, 0)] = img[0][uint2(0, 0)] + fin[i];\noutp[i] = 0.0;",
+        "RWTexture2D<float> img[2] : register(u3);",
+    ),
 }
 
 _METAL_SAMPLE = "{}.sample(smp, float2({}, 0.5), level(0.0))"
@@ -167,6 +200,19 @@ METAL = {
         ),
         params=_METAL_PARAMS.format("array<texture2d<float>, 2>"),
     ),
+    # Metal reaches a texture array of unknown length through an argument buffer: a pointer to structures that each
+    # hold a texture.
+    "unsized-array-of-textures": Template(
+        _UNSIZED.format(
+            "uint", "uint", "u", _METAL_SAMPLE.format("slots[k].tex", "fin[i]")
+        ),
+        "struct Slot {\n    texture2d<float> tex;\n};",
+        params="device const Slot* slots [[buffer(2)]]\nsampler smp [[sampler(0)]]",
+    ),
+    "array-of-images": Template(
+        "img[1].write(img[0].read(uint2(0, 0)) + float4(fin[i]), uint2(0, 0));\noutp[i] = 0.0;",
+        params="array<texture2d<float, access::read_write>, 2> img [[texture(1)]]",
+    ),
 }
 
 _WGSL_TEXTURE = "@group(0) @binding(4) var tex: texture_2d<f32>;\n@group(0) @binding(5) var smp: sampler;"
@@ -186,6 +232,8 @@ WGSL = {
     "array-of-textures": ABSENT,
     "array-of-textures-loop-index": ABSENT,
     "array-of-textures-nonuniform-index": ABSENT,
+    "unsized-array-of-textures": ABSENT,
+    "array-of-images": ABSENT,
     "read-write-image": Template(
         "textureStore(img, vec2<i32>(0, 0), textureLoad(img, vec2<i32>(0, 0)) + vec4<f32>(fin[i]));\n"
         "outp[i] = 0.0;",
@@ -208,6 +256,8 @@ def _cuda(texture: str, surface: str) -> dict:
         "array-of-textures": ABSENT,
         "array-of-textures-loop-index": ABSENT,
         "array-of-textures-nonuniform-index": ABSENT,
+        "unsized-array-of-textures": ABSENT,
+        "array-of-images": ABSENT,
         "read-write-image": Template(
             "float v;\nsurf2Dread(&v, img, 0, 0);\nsurf2Dwrite(v + fin[i], img, 0, 0);\noutp[i] = 0.0f;",
             params=f"{surface} img",
@@ -234,6 +284,8 @@ OPENCL = {
     "array-of-textures": ABSENT,
     "array-of-textures-loop-index": ABSENT,
     "array-of-textures-nonuniform-index": ABSENT,
+    "unsized-array-of-textures": ABSENT,
+    "array-of-images": ABSENT,
     "read-write-image": Template(
         "write_imagef(img, (int2)(0, 0), read_imagef(img, (int2)(0, 0)) + (float4)(fin[i]));\n"
         "outp[i] = 0.0f;",
@@ -274,6 +326,19 @@ RUST = {
         params=_RUST_PARAMS.format(f"[{_RUST_SAMPLED}; 2]"),
     ),
     "array-of-textures-nonuniform-index": ABSENT,
+    "unsized-array-of-textures": Template(
+        "let k = (fin[0] as u32 & 1) as usize;\n"
+        "let color: Vec4 = unsafe { tex.index(k) }"
+        ".sample_by_lod(*sampler, Vec2::new(fin[i], 0.5), 0.0);\noutp[i] = color.x;",
+        prelude="use spirv_std::{Image, RuntimeArray, Sampler};",
+        params=_RUST_PARAMS.format(f"RuntimeArray<{_RUST_SAMPLED}>"),
+    ),
+    "array-of-images": Template(
+        "let v: f32 = img[0].read(UVec2::new(0, 0));\n"
+        "unsafe { img[1].write(UVec2::new(0, 0), v + fin[i]) };\noutp[i] = 0.0;",
+        prelude="use spirv_std::Image;",
+        params="#[spirv(descriptor_set = 0, binding = 3)] img: &[Image!(2D, format = r32f, sampled = false); 2]",
+    ),
     "read-write-image": Template(
         "let v: f32 = img.read(UVec2::new(0, 0));\n"
         "unsafe { img.write(UVec2::new(0, 0), v + fin[i]) };\noutp[i] = 0.0;",

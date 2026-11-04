@@ -140,7 +140,8 @@ AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
 # ``__restrict`` pointer is a ``noalias`` kernel argument, a ``volatile`` one is read and written with volatile loads
 # and stores, a ``coherent(device)`` one through the ``device_coherent`` intrinsics, a quad patch is named in the
 # ``!"air.patch"`` metadata of its post-tessellation vertex function, and a mesh function's topology in its
-# ``!"air.mesh_type_info"``.
+# ``!"air.mesh_type_info"``. An array of textures of unknown length is an argument buffer: a structure type with a
+# ``%"struct.metal::texture2d"`` member.
 AIR_PATTERNS = {
     "BuiltIn.HelperInvocation": r"@air\.simd_is_helper_thread\(",
     "Decoration.SpecId": r"^!air\.function_constants = ",
@@ -150,6 +151,9 @@ AIR_PATTERNS = {
     "ExecutionMode.Quads": r'!"air\.patch", !"quad"',
     "ExecutionMode.OutputPoints": r'!"air\.mesh_type_info",[^\n]*!"air\.point"\}',
     "ExecutionMode.OutputLinesEXT": r'!"air\.mesh_type_info",[^\n]*!"air\.line"\}',
+    "Capability.RuntimeDescriptorArray": (
+        r'^%struct\.\w+ = type \{[^\n]*%"struct\.metal::texture\w*"'
+    ),
 }
 # An array of textures keeps its images as the elements of one array: ``Texture2D tex[2]`` is an ``OpTypeArray`` of
 # images, ``sampler2D tex[2]`` one of sampled images, and Metal's ``array<texture2d<float>, 2>`` an AIR array of

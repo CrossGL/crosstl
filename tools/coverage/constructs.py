@@ -535,6 +535,21 @@ def _curated() -> list[Construct]:
         ),
         c(
             "resource",
+            "unsized-array-of-textures",
+            "Capability.RuntimeDescriptorArray",
+            "OpTypeRuntimeArray",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
+            "array-of-images",
+            "OpTypeArray",
+            "OpImageRead",
+            "OpImageWrite",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
             "buffer-in-helper",
             "OpFunctionCall",
             "StorageClass.StorageBuffer",
