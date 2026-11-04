@@ -528,6 +528,10 @@ from .pointer_reinterpret import (
 )
 from .private_array_rows import aliased_row_view, array_row_shape, array_row_view
 from .private_member_views import hlsl_aliased_scalar_view, hlsl_member_view_root
+from .private_pointer_alias_views import (
+    hlsl_aliased_writable_view,
+    hlsl_writable_pointer_parameters,
+)
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases, references_provably_disjoint
 from .relational_builtins import lower_relational_builtins
@@ -43665,6 +43669,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         aliased = hlsl_aliased_scalar_view(
             view_calls, scalar_parameters
         ) or aliased_row_view(view_calls)
+        if aliased is None:
+            aliased = hlsl_aliased_writable_view(
+                view_calls,
+                hlsl_writable_pointer_parameters(self, pointer_parameters),
+            )
         if aliased is not None:
             call, first, second, root = aliased
             raise DirectXPrivatePointerParameterError(
