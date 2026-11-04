@@ -2,6 +2,7 @@
 
 from ..common_ast import InitializerListNode
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
+from .tessellation_control_import import tessellation_control_mode_attributes
 from .VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -1557,10 +1558,18 @@ class VulkanToCrossGLConverter:
         return code
 
     def function_attribute_suffix(self, node):
-        """Return CrossGL attributes needed to preserve stage entry identity."""
-        if self.function_shader_stage(node) is not None and node.name != "main":
-            return " @stage_entry"
-        return ""
+        """Return CrossGL attributes needed to preserve stage entry identity and modes."""
+        stage = self.function_shader_stage(node)
+        attributes = []
+        if stage is not None and node.name != "main":
+            attributes.append("@stage_entry")
+        if stage == "tessellation_control":
+            attributes.extend(
+                tessellation_control_mode_attributes(
+                    getattr(node, "spirv_execution_modes", None)
+                )
+            )
+        return "".join(f" {attribute}" for attribute in attributes)
 
     def generate_function_parameter(self, node):
         type_name, ray_attributes = self.ray_storage_qualified_type_parts(
