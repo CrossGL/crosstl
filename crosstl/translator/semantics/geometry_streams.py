@@ -32,13 +32,24 @@ A user varying takes the location the neighbouring stage gives the same structur
 (:mod:`..codegen.stage_io_semantic_locations`): its explicit ``location``, else the fixed location of its semantic,
 else for SPIR-V the location its structure allocates it. A GLSL varying whose
 semantic has no location would link by name, and a geometry stage cannot declare an input and an output of the same
-name, so it is refused. Several output streams (``EmitStreamVertex``), clip and cull distances and other system
-values in the vertex structures are refused with :class:`GeometryStreamUnsupportedError` until they are lowered.
+name, so it is refused.
+
+An entry point with several ``PointStream`` parameters writes several vertex streams, numbered in parameter order
+(HLSL shader model 5 geometry shader objects; DXC numbers them the same way). GLSL 4.60 sections 4.4.2.2 and 8.16
+declare each output of stream ``k`` ``layout(stream = k)`` and emit it with ``EmitStreamVertex(k)`` and
+``EndStreamPrimitive(k)``; SPIR-V decorates the outputs ``Stream k`` and calls ``OpEmitStreamVertex``. Only stream 0
+is rasterized by default (GLSL 4.60 section 4.4.2.2, Vulkan ``rasterizationStream``), so stream 0 keeps the
+neighbouring stages' locations, the built-in outputs belong to it, and a member of a later stream keeps its semantic
+location only when no earlier stream uses it: GLSL refuses two outputs at one location even in different streams,
+and an unrasterized stream links to no stage. Several streams of another kind (D3D11 and GLSL require points),
+built-ins in a later stream, clip and cull distances and other system values in the vertex structures are refused
+with :class:`GeometryStreamUnsupportedError` until they are lowered.
 """
 
 from __future__ import annotations
 
 from .. import ast as A
+from ..codegen.stage_io_semantic_locations import semantic_location
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name
 from .stage_varyings import GLSL_TARGETS as _GLSL_TARGETS
@@ -46,10 +57,12 @@ from .stage_varyings import SPIRV_TARGETS as _SPIRV_TARGETS
 from .stage_varyings import FreshNames, allocated_locations
 from .stage_varyings import builtin as _builtin
 from .stage_varyings import call_statement as _call_statement
+from .stage_varyings import explicit_location as _explicit_location
 from .stage_varyings import indexed as _indexed
 from .stage_varyings import int_literal as _int
 from .stage_varyings import is_system_value as _is_system_value
 from .stage_varyings import literal_int as _literal_int
+from .stage_varyings import location_span as _location_span
 from .stage_varyings import member_type as _member_type
 from .stage_varyings import (
     neighbour_location,
@@ -78,6 +91,8 @@ _OUTPUT_TOPOLOGIES = {
     "LineStream": "line_strip",
     "TriangleStream": "triangle_strip",
 }
+# GLSL's gl_MaxVertexStreams minimum and D3D11's stream limit.
+_MAX_STREAMS = 4
 # Built-in members of the input vertex, read from gl_in[i].
 _INPUT_BUILTINS = frozenset({"gl_Position", "gl_PointSize"})
 # Built-in members of the output vertex, with the type GLSL declares them with.
@@ -134,6 +149,7 @@ class _GeometryLowering:
         self.entry = stage.entry_point
         self.target = target
         self.fresh = FreshNames(program)
+        self.multiple = False
         self.structs = {
             struct.name: struct
             for struct in list(getattr(program, "structs", None) or []) + list(
@@ -147,21 +163,22 @@ class _GeometryLowering:
 
     def run(self):
         entry = self.entry
-        primitive, stream, builtins = self.classify_parameters(entry)
+        primitive, streams, builtins = self.classify_parameters(entry)
+        self.multiple = len(streams) > 1
         if getattr(self.stage, "layout_qualifiers", None):
             self.refuse(
                 f"geometry entry point '{entry.name}' takes HLSL stream parameters and also declares GLSL stage layouts",
                 "mixed-geometry-interface",
             )
         input_topology, vertex_count = self.input_topology(primitive)
-        element_name = self.stream_element(stream)
+        elements = [self.stream_element(stream) for stream in streams]
         max_vertices = self.take_attribute(entry, "maxvertexcount", required=True)
         invocations = self.take_attribute(entry, "instance", required=False)
         in_entries = [A.AttributeNode(input_topology)]
         if invocations is not None:
             in_entries.append(A.AttributeNode("invocations", [_int(invocations)]))
         out_entries = [
-            A.AttributeNode(_OUTPUT_TOPOLOGIES[_type_name(stream.param_type)]),
+            A.AttributeNode(_OUTPUT_TOPOLOGIES[_type_name(streams[0].param_type)]),
             A.AttributeNode("max_vertices", [_int(max_vertices)]),
         ]
         self.stage.layout_qualifiers = [
@@ -171,7 +188,7 @@ class _GeometryLowering:
 
         declarations = []
         sources = self.input_sources(primitive, vertex_count, declarations)
-        outputs = self.output_targets(element_name, declarations)
+        outputs = self.output_targets(elements, declarations)
         self.stage.local_variables = declarations + list(
             getattr(self.stage, "local_variables", None) or []
         )
@@ -192,33 +209,28 @@ class _GeometryLowering:
         entry.parameters = []
         entry.body.statements[0:0] = prologue
 
-        helpers = self.stream_helpers(element_name)
-        self.rewrite_streams(entry, {stream.name}, element_name, outputs, helpers)
-        for helper, (index, parameter) in helpers.items():
+        helpers = self.stream_helpers(elements)
+        stream_names = {stream.name: k for k, stream in enumerate(streams)}
+        self.rewrite_streams(entry, stream_names, elements, outputs, helpers)
+        for helper, (index, parameter, k) in helpers.items():
             helper.parameters = [
                 p for i, p in enumerate(helper.parameters) if i != index
             ]
             self.rewrite_streams(
-                helper, {parameter.name}, element_name, outputs, helpers
+                helper, {parameter.name: k}, elements, outputs, helpers
             )
             self.move_into_stage(helper)
 
     # Parameters and stage layouts.
 
     def classify_parameters(self, entry):
-        primitive = stream = None
-        builtins = []
+        primitive = None
+        streams, builtins = [], []
         for parameter in entry.parameters:
             type_name = _type_name(parameter.param_type)
             qualifiers = {str(q).lower() for q in parameter.qualifiers or []}
             if type_name in _OUTPUT_TOPOLOGIES:
-                if stream is not None:
-                    self.refuse(
-                        f"geometry entry point '{entry.name}' writes several output streams; GLSL needs "
-                        "EmitStreamVertex() and layout(stream = N) outputs, which are not lowered yet",
-                        "multiple-streams",
-                    )
-                stream = parameter
+                streams.append(parameter)
             elif qualifiers & set(_INPUT_TOPOLOGIES):
                 if primitive is not None:
                     self.refuse(
@@ -240,13 +252,27 @@ class _GeometryLowering:
                         "parameter-type",
                     )
                 builtins.append((parameter, _PARAMETER_BUILTINS[builtin]))
-        if primitive is None or stream is None:
+        if primitive is None or not streams:
             self.refuse(
-                f"geometry entry point '{entry.name}' needs one topology-qualified input array and one "
+                f"geometry entry point '{entry.name}' needs one topology-qualified input array and a "
                 "PointStream, LineStream or TriangleStream parameter",
                 "entry-signature",
             )
-        return primitive, stream, builtins
+        if len(streams) > 1:
+            kinds = sorted({_type_name(stream.param_type) for stream in streams})
+            if kinds != ["PointStream"]:
+                self.refuse(
+                    f"geometry entry point '{entry.name}' writes several streams of {', '.join(kinds)}; "
+                    "several vertex streams must all be PointStream",
+                    "multiple-streams-topology",
+                )
+            if len(streams) > _MAX_STREAMS:
+                self.refuse(
+                    f"geometry entry point '{entry.name}' writes {len(streams)} streams; at most "
+                    f"{_MAX_STREAMS} are guaranteed",
+                    "stream-count",
+                )
+        return primitive, streams, builtins
 
     def input_topology(self, primitive):
         qualifiers = {str(q).lower() for q in primitive.qualifiers or []}
@@ -353,14 +379,27 @@ class _GeometryLowering:
                 sources[key] = _indexed(variable.name)
         return sources
 
-    def output_targets(self, element_name, declarations):
-        """``member name -> (target name, GLSL type or None)`` for each member of the emitted vertex."""
+    def output_targets(self, elements, declarations):
+        """Per stream, ``member name -> (target name, GLSL type or None)`` for each member of its emitted vertex."""
+        taken = set()
+        return [
+            self.stream_outputs(k, element_name, declarations, taken)
+            for k, element_name in enumerate(elements)
+        ]
+
+    def stream_outputs(self, k, element_name, declarations, taken):
         outputs = {}
         members = self.structs[element_name].members
         allocated = allocated_locations(members)
         for member in members:
             member_type = _member_type(member)
             builtin = _builtin(member)
+            if builtin in _OUTPUT_BUILTINS and k:
+                self.refuse(
+                    f"output vertex member '{element_name}.{member.name}' writes {builtin} to stream {k}; the "
+                    "built-in outputs belong to stream 0",
+                    "stream-builtin",
+                )
             if builtin in _OUTPUT_BUILTINS:
                 outputs[member.name] = (builtin, _OUTPUT_BUILTINS[builtin])
             elif builtin is not None or _is_system_value(member):
@@ -378,13 +417,42 @@ class _GeometryLowering:
                     "output-aggregate",
                 )
             else:
-                location = self.varying_location(
-                    element_name, member, allocated[member.name]
-                )
-                variable = self.varying("out", member, member_type, location, "out")
+                span = _location_span(member_type)
+                if k:
+                    location = self.later_stream_location(member, span, taken)
+                else:
+                    location = self.varying_location(
+                        element_name, member, allocated[member.name]
+                    )
+                taken.update(range(location, location + span))
+                prefix = f"out{k}" if k else "out"
+                variable = self.varying(prefix, member, member_type, location, "out")
+                if self.multiple and k:
+                    variable.attributes.append(A.AttributeNode("stream", [_int(k)]))
                 declarations.append(variable)
                 outputs[member.name] = (variable.name, None)
         return outputs
+
+    def later_stream_location(self, member, span, taken):
+        """The location of a user varying of an unrasterized stream: its own when free, else the first free one."""
+        explicit = _explicit_location(member)
+        preferred = explicit
+        if preferred is None:
+            preferred = semantic_location(_semantic(member))
+        if preferred is not None and taken.isdisjoint(
+            range(preferred, preferred + span)
+        ):
+            return preferred
+        if explicit is not None:
+            self.refuse(
+                f"output vertex member '{member.name}' is placed at location {explicit}, which an earlier stream "
+                "uses; GLSL refuses two outputs at one location",
+                "stream-location",
+            )
+        location = 0
+        while not taken.isdisjoint(range(location, location + span)):
+            location += 1
+        return location
 
     # Body rewrites.
 
@@ -399,8 +467,8 @@ class _GeometryLowering:
             self.refuse,
         )
 
-    def stream_helpers(self, element_name):
-        """Functions other than the entry point that take the stream: ``function -> (index, parameter)``."""
+    def stream_helpers(self, elements):
+        """Functions other than the entry point that take a stream: ``function -> (index, parameter, stream)``."""
         helpers = {}
         for function in self.candidate_functions():
             if function is self.entry:
@@ -413,12 +481,15 @@ class _GeometryLowering:
             if not found:
                 continue
             args = getattr(found[0][1].param_type, "generic_args", None) or []
-            if len(found) > 1 or len(args) != 1 or _type_name(args[0]) != element_name:
+            element = _type_name(args[0]) if len(args) == 1 else None
+            matching = [k for k, name in enumerate(elements) if name == element]
+            if len(found) > 1 or len(matching) != 1:
                 self.refuse(
-                    f"helper '{function.name}' takes a stream other than the geometry stage's one output stream",
+                    f"helper '{function.name}' takes several streams, or a stream whose vertex structure is not "
+                    "the one of exactly one of the geometry stage's output streams",
                     "helper-stream",
                 )
-            helpers[function] = found[0]
+            helpers[function] = (*found[0], matching[0])
         return helpers
 
     def candidate_functions(self):
@@ -426,18 +497,19 @@ class _GeometryLowering:
             getattr(self.stage, "local_functions", None) or []
         )
 
-    def rewrite_streams(self, function, stream_names, element_name, outputs, helpers):
-        by_name = {helper.name: index for helper, (index, _) in helpers.items()}
+    def rewrite_streams(self, function, stream_names, elements, outputs, helpers):
+        """Lower the stream methods of ``function``; ``stream_names`` maps its stream names to stream numbers."""
+        by_name = {helper.name: (index, k) for helper, (index, _, k) in helpers.items()}
         if len(by_name) != len(helpers):
             self.refuse("two stream helpers share a name", "helper-overload")
         splices = []
         for parent, field, key, node in _slots(function.body):
             if isinstance(node, A.FunctionCallNode) and call_name(node) in by_name:
-                index = by_name[call_name(node)]
+                index, k = by_name[call_name(node)]
                 argument = (node.arguments or [None] * (index + 1))[index]
                 if not (
                     isinstance(argument, A.IdentifierNode)
-                    and argument.name in stream_names
+                    and stream_names.get(argument.name, -1) == k
                 ):
                     self.refuse(
                         f"call to '{call_name(node)}' does not pass the output stream",
@@ -455,9 +527,10 @@ class _GeometryLowering:
                     f"stream method {method[0]}() is used as a value", "stream-value"
                 )
             splices.append((parent, method))
-        for statement, (method, arguments) in splices:
+        for statement, (method, arguments, name) in splices:
+            k = stream_names[name]
             replacement = self.stream_statements(
-                method, arguments, element_name, outputs
+                method, arguments, k, elements[k], outputs[k]
             )
             replace_statement(function.body, statement, replacement)
         for parent, field, key, node in _slots(function.body):
@@ -467,9 +540,15 @@ class _GeometryLowering:
                     "stream-use",
                 )
 
-    def stream_statements(self, method, arguments, element_name, outputs):
+    def stream_call(self, single, multiple, k):
+        """``EmitVertex()``-style call of a single stream, or its ``EmitStreamVertex(k)``-style form."""
+        if self.multiple:
+            return _call_statement(multiple, [_int(k)])
+        return _call_statement(single)
+
+    def stream_statements(self, method, arguments, k, element_name, outputs):
         if method == "RestartStrip" and not arguments:
-            return [_call_statement("EndPrimitive")]
+            return [self.stream_call("EndPrimitive", "EndStreamPrimitive", k)]
         if method != "Append" or len(arguments) != 1:
             self.refuse(
                 f"stream method {method}() is not Append(v) or RestartStrip()",
@@ -494,7 +573,7 @@ class _GeometryLowering:
                 # gl_Layer, gl_ViewportIndex and gl_PrimitiveID are int; HLSL declares them uint.
                 source = A.FunctionCallNode(A.IdentifierNode(glsl_type), [source])
             statements.append(A.AssignmentNode(A.IdentifierNode(target_name), source))
-        statements.append(_call_statement("EmitVertex"))
+        statements.append(self.stream_call("EmitVertex", "EmitStreamVertex", k))
         return statements
 
     def move_into_stage(self, helper):
@@ -517,5 +596,5 @@ def _stream_method(node, stream_names):
         and isinstance(callee.object_expr, A.IdentifierNode)
         and callee.object_expr.name in stream_names
     ):
-        return callee.member, list(node.arguments or [])
+        return callee.member, list(node.arguments or []), callee.object_expr.name
     return None

@@ -199,6 +199,49 @@ def test_codegen_geometry_repeated_stream_layouts_from_glslang_roundtrip():
     assert "layout(stream = 1) out;" in glsl
 
 
+def test_outputs_after_a_default_stream_layout_belong_to_that_stream():
+    # GLSL 4.60 section 4.4.2.2: an output declared without a stream belongs to the current default stream.
+    code = """
+    #version 450
+    layout(points) in;
+    layout(points, max_vertices = 2) out;
+    layout(location = 0) in vec4 position[];
+    layout(location = 1) out vec4 first;
+    layout(stream = 1) out;
+    layout(location = 0) out vec4 extra;
+    layout(location = 3) out Captured { vec4 value; } captured;
+    layout(location = 2, stream = 0) out vec4 back;
+    layout(stream = 0) out;
+    layout(location = 4) out vec4 last;
+
+    void main() {
+        gl_Position = position[0];
+        first = position[0];
+        back = position[0];
+        last = position[0];
+        EmitStreamVertex(0);
+        extra = position[0];
+        captured.value = position[0];
+        EmitStreamVertex(1);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "geometry")
+
+    assert "out vec4 first @location(1);" in crossgl
+    assert "out vec4 extra @location(0) @stream(1);" in crossgl
+    assert "@location(3) @stream(1) @glsl_interface_instance(captured)" in crossgl
+    assert "out vec4 back @location(2) @stream(0);" in crossgl
+    assert "out vec4 last @location(4);" in crossgl
+    parse_crossgl(crossgl)
+
+    glsl = regenerate_glsl(code, "geometry")
+
+    assert "layout(location = 0, stream = 1) out vec4 extra;" in glsl
+    assert "layout(location = 3, stream = 1) out Captured" in glsl
+    assert "layout(location = 4) out vec4 last;" in glsl
+
+
 def test_codegen_geometry_builtin_gl_pervertex_redeclarations_roundtrip():
     # Reduced from Khronos GLSL 4.60.8 section 7.5, which documents
     # redeclaring the built-in gl_PerVertex block.

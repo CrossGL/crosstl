@@ -451,6 +451,7 @@ class GLSLParser:
         self.known_type_names = set()
         self.current_xfb_output_buffer = None
         self.xfb_output_stride_by_buffer = {}
+        self.current_output_stream = None
 
     def is_auto_shader_type(self, shader_type):
         return shader_type in AUTO_SHADER_TYPES
@@ -878,6 +879,10 @@ class GLSLParser:
         if not self.has_out_qualifier(qualifiers):
             return layout
 
+        stream = self.get_layout_key(layout, "stream")
+        if stream is not None:
+            self.current_output_stream = stream
+
         remaining = dict(layout)
         xfb_buffer = self.pop_layout_key(remaining, "xfb_buffer")
         if xfb_buffer is not None:
@@ -917,6 +922,23 @@ class GLSLParser:
             if stride is not None:
                 merged["xfb_stride"] = stride
 
+        return merged
+
+    def output_layout_with_stream_default(self, qualifiers, layout):
+        """An output's layout, given the stream that a standalone ``layout(stream = N) out;`` last made the default.
+
+        GLSL 4.60 section 4.4.2.2: an output declared without a stream belongs to the current default stream.
+        Stream 0 is every output's stream unless it names another, so it is not spelled out.
+        """
+        stream = self.current_output_stream
+        if stream is None or not self.has_out_qualifier(qualifiers):
+            return layout
+        if str(self.layout_value_key(stream)) == "0":
+            return layout
+        if self.get_layout_key(layout, "stream") is not None:
+            return layout
+        merged = dict(layout or {})
+        merged["stream"] = stream
         return merged
 
     def apply_variable_io_type(self, var, qualifiers):
@@ -1540,6 +1562,9 @@ class GLSLParser:
             variable_layout = self.output_layout_with_xfb_defaults(
                 qualifiers, variable_layout
             )
+            variable_layout = self.output_layout_with_stream_default(
+                qualifiers, variable_layout
+            )
 
             var = VariableNode(
                 declarator_type,
@@ -1668,6 +1693,7 @@ class GLSLParser:
         if register_layout:
             layout = self.merge_layout_qualifiers(layout, register_layout)
         layout = self.output_layout_with_xfb_defaults(qualifiers, layout)
+        layout = self.output_layout_with_stream_default(qualifiers, layout)
         self.skip_newlines()
         self.eat("LBRACE")
 
