@@ -424,6 +424,7 @@ from .metal_texel_buffers import (
     texel_buffer_component_type,
 )
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
+from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
 from .metal_wave_extended import (
     emit_metal_wave_extension_helpers,
     metal_subgroup_lane_mask_expression,
@@ -2070,6 +2071,7 @@ class MetalCodeGen(
         ast = rename_msl_library_functions(ast)
         ast = rename_metal_namespace_names(ast)
         ast = rename_metal_keyword_parameters(ast)
+        refuse_unbound_metal_vertex_inputs(ast, self)
         ast = split_metal_stage_input_builtins(ast, self)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
         self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)

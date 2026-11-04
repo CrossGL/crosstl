@@ -325,7 +325,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             "gl_InstanceID": "SV_InstanceID",
             "gl_BaseVertex": "SV_StartVertexLocation",
             "gl_BaseInstance": "SV_StartInstanceLocation",
-            "gl_DrawID": "SV_DrawID",
+            "gl_DrawID": "SV_DrawIndex",
             "gl_PrimitiveID": "SV_PrimitiveID",
             "gl_PrimitiveIDIn": "SV_PrimitiveID",
             "gl_TessCoord": "SV_DomainLocation",
@@ -7995,7 +7995,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 "gl_InstanceID": ("uint", "SV_InstanceID"),
                 "gl_BaseVertex": ("int", "SV_StartVertexLocation"),
                 "gl_BaseInstance": ("uint", "SV_StartInstanceLocation"),
-                "gl_DrawID": ("uint", "SV_DrawID"),
+                "gl_DrawID": ("uint", "SV_DrawIndex"),
             }
         if shader_stage == "fragment":
             return {

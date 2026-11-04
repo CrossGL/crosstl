@@ -615,6 +615,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             "VERTEX_ID": "gl_VertexID",
             "SV_VertexID": "gl_VertexID",
             "SV_InstanceID": "gl_InstanceID",
+            # Draw parameters; slangc lowers them to SPIR-V's BuiltIn
+            # BaseVertex, BaseInstance and DrawIndex.
+            "SV_StartVertexLocation": "gl_BaseVertex",
+            "SV_StartInstanceLocation": "gl_BaseInstance",
+            "SV_DrawIndex": "gl_DrawID",
             "SV_PrimitiveID": "gl_PrimitiveID",
             # Vertex outputs. The clip position is the built-in, as the HLSL
             # importer maps it; a fragment input is gl_FragCoord (map_semantic).

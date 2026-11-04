@@ -486,6 +486,10 @@ class HLSLToCrossGLConverter(
             # System-value semantics - Vertex inputs
             "SV_VertexID": "gl_VertexID",
             "SV_InstanceID": "gl_InstanceID",
+            # Shader Model 6.8 draw parameters; DXC lowers them to SPIR-V's
+            # BuiltIn BaseVertex and BaseInstance.
+            "SV_StartVertexLocation": "gl_BaseVertex",
+            "SV_StartInstanceLocation": "gl_BaseInstance",
             "SV_PrimitiveID": "gl_PrimitiveID",
             # System-value semantics - Vertex outputs
             "SV_POSITION": "gl_Position",
