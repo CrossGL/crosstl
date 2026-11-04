@@ -55,17 +55,17 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "5b185082c2cdeaf972cbf0d004dccafb71b478bcd93e65ed3ebfe6f1b6851a89"
+    "80f420b646b84e90a4061ac04deda925a2846b4ba7c9803b6764d22b0de327d6"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1797532
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1796827
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
-REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37744695
+REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37727715
 REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24201740
 REDUCE_DIRECTX_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1976)
 REDUCE_DIRECTX_GENERATED_SIZE_MAXIMUM = (
     "row_reduce_looped_large_5_reduce_mincomplex64",
-    30444,
+    30398,
 )
 REDUCE_DIRECTX_DXIL_SIZE_MINIMUM = ("init_reduce_andbool_", 2852)
 REDUCE_DIRECTX_DXIL_SIZE_MAXIMUM = (
@@ -337,26 +337,6 @@ def test_reduce_artifact_refresh_preserves_compiled_identities() -> None:
                 "reviewedBodyCount": 76,
                 "nativeCompiledChangedEntryCount": 76,
                 "changedDxilCompilerVersion": "1.9.0.5191",
-                "unchangedSourceAndInterfaceContracts": True,
-                "numericalReferencesUnchanged": True,
-                "numericalExecution": False,
-                "fullUpstreamSuite": False,
-            },
-            {
-                "reason": (
-                    "Regenerate the HLSL identities under the translator on main at "
-                    "2444d82f5; every regenerated body compiles to its recorded DXIL "
-                    "byte for byte."
-                ),
-                "previousContractSha256": (
-                    "80f420b646b84e90a4061ac04deda925a2846b4ba7c9803b6764d22b0de327d6"
-                ),
-                "changedEntryCount": 1206,
-                "unaffectedEntryCount": 1190,
-                "reviewedBodyCount": 1206,
-                "nativeCompiledChangedEntryCount": 1206,
-                "changedDxilCompilerVersion": "1.9.0.5191",
-                "compiledBodiesIdentical": True,
                 "unchangedSourceAndInterfaceContracts": True,
                 "numericalReferencesUnchanged": True,
                 "numericalExecution": False,

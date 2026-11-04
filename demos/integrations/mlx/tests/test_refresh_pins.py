@@ -327,3 +327,26 @@ def test_command_line_reads_drift_and_writes_a_summary(tmp_path, capsys):
     printed = json.loads(capsys.readouterr().out)
     assert printed["written"] is True
     assert printed["changedFiles"] == 4
+
+
+def test_the_tool_and_its_tests_are_never_rewritten(tmp_path):
+    # The tool's own fixtures quote README phrases such as "7,129 bytes"; a
+    # real README drift of that phrase must not rewrite them.
+    assert refresh_pins.SELF_FILES == {
+        Path(refresh_pins.__file__).resolve(),
+        Path(__file__).resolve(),
+    }
+    scope = tmp_path / SCOPE
+    (scope / "tests").mkdir(parents=True)
+    (scope / "README.md").write_text("A 7,129-byte artifact.\n", encoding="utf-8")
+    kept = scope / "tests" / "test_kept.py"
+    fixture = scope / "tests" / "test_fixture.py"
+    for path in (kept, fixture):
+        path.write_text('assert "7,129-byte" in README\n', encoding="utf-8")
+    texts = refresh_pins._scan(
+        tmp_path, [Path(SCOPE)], excluded=frozenset({fixture.resolve()})
+    )
+    assert sorted(texts) == [
+        f"{SCOPE}/README.md",
+        f"{SCOPE}/tests/test_kept.py",
+    ]

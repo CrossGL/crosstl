@@ -54,6 +54,14 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SCOPE = Path("demos/integrations/mlx")
 SCANNED_SUFFIXES = frozenset((".json", ".md", ".py", ".toml"))
+# This tool and its tests hold synthetic pins and README phrases. A real drift
+# that happens to share one of their values must not rewrite them.
+SELF_FILES = frozenset(
+    (
+        Path(__file__).resolve(),
+        Path(__file__).resolve().parent / "tests" / "test_refresh_pins.py",
+    )
+)
 DRIFT_PREFIX = "MLX-PIN-DRIFT "
 HASH_FIELD = "generatedHash"
 SIZE_FIELD = "generatedSizeBytes"
@@ -734,7 +742,9 @@ def _mirror_prose_sizes(
             report.applied["mirroredProse"] += len(edits)
 
 
-def _scan(root: Path, scopes: Sequence[Path]) -> dict[str, str]:
+def _scan(
+    root: Path, scopes: Sequence[Path], excluded: frozenset[Path] = SELF_FILES
+) -> dict[str, str]:
     texts = {}
     for scope in scopes:
         for path in sorted((root / scope).rglob("*")):
@@ -742,6 +752,7 @@ def _scan(root: Path, scopes: Sequence[Path]) -> dict[str, str]:
                 path.is_file()
                 and path.suffix in SCANNED_SUFFIXES
                 and "__pycache__" not in path.parts
+                and path.resolve() not in excluded
             ):
                 texts[path.relative_to(root).as_posix()] = path.read_text(
                     encoding="utf-8"
