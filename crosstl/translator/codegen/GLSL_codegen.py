@@ -243,6 +243,7 @@ from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
+from .glsl_draw_parameters import DRAW_PARAMETERS, vertex_builtin_spelling
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
@@ -256,7 +257,7 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
-from .glsl_instance_index import INSTANCE_INDEX, instance_index_expression
+from .glsl_instance_index import INSTANCE_INDEX
 from .glsl_interface_block_io import (
     block_declared_stage_io,
     block_member_location_type,
@@ -24256,11 +24257,17 @@ class GLSLCodeGen(
             "gl_PrimitiveID",
             "gl_SampleID",
             "gl_SampleMaskIn",
+            INSTANCE_INDEX,
+            *DRAW_PARAMETERS,
         }
         if builtin in scalar_int_builtins:
             if mapped_type == "int":
                 return None
-            source = "gl_SampleMaskIn[0]" if builtin == "gl_SampleMaskIn" else builtin
+            source = (
+                "gl_SampleMaskIn[0]"
+                if builtin == "gl_SampleMaskIn"
+                else vertex_builtin_spelling(self, builtin)
+            )
             if mapped_type == "uint":
                 return f"uint({source})"
             return None
@@ -37466,7 +37473,7 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_builtin_identifier_result_type(self, name):
         if not name:
             return None
-        if name == INSTANCE_INDEX:
+        if name == INSTANCE_INDEX or name in DRAW_PARAMETERS:
             return crossgl_builtin_variable_type(name)
         return crossgl_builtin_variable_type(self.glsl_target_builtin_identifier(name))
 
@@ -40118,8 +40125,8 @@ complex64_t crossgl_complex64_mod_assign(
                 return quadgroup_alias
         if stage_name == "vertex" and name == "gl_VertexIndex":
             return "gl_VertexID"
-        if stage_name == "vertex" and name == INSTANCE_INDEX:
-            return instance_index_expression(self)
+        if stage_name == "vertex":
+            return vertex_builtin_spelling(self, name)
         return name
 
     def glsl_identifier_is_resolved(self, name):
@@ -58825,6 +58832,8 @@ complex64_t crossgl_complex64_mod_assign(
 
     def stage_input_builtin_alias(self, semantic, stage_name=None):
         mapped = self.map_stage_input_semantic(semantic, stage_name)
+        if normalize_stage_name(stage_name) == "vertex":
+            mapped = vertex_builtin_spelling(self, mapped)
         if normalize_stage_name(stage_name) == "compute":
             quadgroup_alias = {
                 "gl_QuadGroupID": "(gl_LocalInvocationIndex / 4u)",
