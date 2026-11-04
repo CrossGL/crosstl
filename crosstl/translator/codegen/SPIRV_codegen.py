@@ -200,6 +200,7 @@ from .spirv_ray_builtins import (
     ray_constant_value,
     transposed_ray_builtin,
 )
+from .spirv_ray_locations import ray_location_variable, ray_variable_location
 from .spirv_refusals import SpirvRefusals
 from .spirv_separate_textures import separate_texture_type_info
 from .spirv_shading_rate import (
@@ -583,6 +584,8 @@ class VulkanSPIRVCodeGen(
 
         self.required_capabilities = set()
         self.global_variables = {}
+        # (ray tracing storage class, location) -> variable names, for payloads named by location.
+        self.ray_storage_locations = {}
         self.stage_global_variables = {}
         self.local_variables = {}
         self.named_constants = {}
@@ -8235,6 +8238,12 @@ class VulkanSPIRVCodeGen(
             direction_expr, "TraceRay", "direction"
         )
         tmax = self.ray_tracing_float_operand(tmax_expr, "TraceRay", "Tmax")
+        payload_expr = (
+            ray_location_variable(
+                payload_expr, self.ray_storage_locations, "RayPayloadKHR"
+            )
+            or payload_expr
+        )
         payload, payload_destination = self.ray_tracing_storage_pointer(
             payload_expr, "RayPayloadKHR", "TraceRay", "payload"
         )
@@ -8267,8 +8276,14 @@ class VulkanSPIRVCodeGen(
         shader_index = self.ray_tracing_uint_operand(
             arguments[0], "CallShader", "shader index"
         )
+        callable_expr = (
+            ray_location_variable(
+                arguments[1], self.ray_storage_locations, "CallableDataKHR"
+            )
+            or arguments[1]
+        )
         callable_data, callable_destination = self.ray_tracing_storage_pointer(
-            arguments[1], "CallableDataKHR", "CallShader", "callable data"
+            callable_expr, "CallableDataKHR", "CallShader", "callable data"
         )
         if shader_index is None or callable_data is None:
             return self.ray_tracing_default_value("CallShader")
@@ -22115,6 +22130,13 @@ class VulkanSPIRVCodeGen(
             return "TaskPayloadWorkgroupEXT"
         ray_storage = ray_storage_class(attribute_names | qualifiers)
         if ray_storage is not None:
+            location = ray_variable_location(node)
+            if location is not None:
+                names = self.ray_storage_locations.setdefault(
+                    (ray_storage, location), []
+                )
+                if node.name not in names:
+                    names.append(node.name)
             if getattr(node, "initial_value", None) is not None:
                 raise UnsupportedSPIRVFeatureError(
                     "ray tracing variable initializer",
