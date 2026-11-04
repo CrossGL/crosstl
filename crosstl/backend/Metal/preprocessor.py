@@ -30,6 +30,7 @@ from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
 from .conditional_types import select_conditional_type, select_nested_conditional_types
+from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
 from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
@@ -12358,6 +12359,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             ast.GtE,
             ast.Name,
             ast.Load,
+            ast.Call,
         )
         nodes = list(ast.walk(parsed))
         if len(nodes) > 128 or any(
@@ -12682,6 +12684,23 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     return True, 0
                 left = right
             return True, 1
+
+        if isinstance(node, ast.Call):
+            # Only Clang's bit-counting builtins, with one concrete operand.
+            if (
+                not isinstance(node.func, ast.Name)
+                or node.func.id not in BIT_BUILTIN_WIDTHS
+                or len(node.args) != 1
+                or node.keywords
+            ):
+                return False, None
+            valid, operand = self._evaluate_static_integral_node(node.args[0])
+            if not valid or operand is None:
+                return False, None
+            value = fold_bit_builtin(node.func.id, operand)
+            if value is None:
+                return False, None
+            return True, value
 
         return False, None
 

@@ -537,6 +537,7 @@ from .pointer_reinterpret import (
     same_scalar_lane_view,
     scalar_storage_layout,
 )
+from .private_array_rows import array_row_shape, array_row_view
 from .private_member_views import (
     glsl_member_view_root,
     is_single_object_type,
@@ -51824,13 +51825,19 @@ complex64_t crossgl_complex64_mod_assign(
         else:
             return None
         extent = self.literal_int_value(size_expression, constants)
-        return {
+        info = {
             "extent": extent if isinstance(extent, int) and extent > 0 else None,
             "element_type": (
                 self.map_type(element_type) if element_type is not None else None
             ),
             "source_location": getattr(node, "source_location", None),
         }
+        rows = array_row_shape(
+            node_type, lambda size: self.literal_int_value(size, constants)
+        )
+        if rows is not None:
+            info["rows"] = (rows[0], self.map_type(rows[1]))
+        return info
 
     def glsl_private_pointer_local_scalar_node_info(self, node):
         node_type = getattr(
@@ -53647,6 +53654,18 @@ complex64_t crossgl_complex64_mod_assign(
                 return None
         return refined
 
+    @staticmethod
+    def glsl_private_pointer_array_row(expression, local_arrays, excluded_names):
+        """The row of a fixed multidimensional local array ``expression`` selects, or None."""
+
+        def shape_of(name):
+            info = local_arrays.get(name)
+            if name in excluded_names or info is None or info.get("extent") is None:
+                return None
+            return info.get("rows")
+
+        return array_row_view(expression, shape_of)
+
     def glsl_private_pointer_static_binding(
         self,
         expression,
@@ -53701,6 +53720,35 @@ complex64_t crossgl_complex64_mod_assign(
                     "element_type": local_arrays[name]["element_type"],
                 }
             return None
+
+        if isinstance(expression, ArrayAccessNode):
+            row = self.glsl_private_pointer_array_row(
+                expression,
+                local_arrays,
+                set(parameter_element_types)
+                | {
+                    name
+                    for name, binding in (lexical_bindings or {}).items()
+                    if binding.get("root_kind") != "local"
+                    or binding.get("root") != name
+                },
+            )
+            if row is None:
+                return None
+            root_name, extent, element_type, indices = row
+            return {
+                "root_kind": "local",
+                "root": root_name,
+                "extent": extent,
+                "offset": 0,
+                "offset_interval": (0, 0),
+                "side_effecting": any(
+                    self.glsl_private_pointer_expression_has_side_effects(index)
+                    for index in indices
+                ),
+                "element_type": element_type,
+                "row_view": True,
+            }
 
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
@@ -55685,6 +55733,30 @@ complex64_t crossgl_complex64_mod_assign(
                     "root_kind": "local",
                 }
             return None
+
+        if isinstance(expression, ArrayAccessNode):
+            row = self.glsl_private_pointer_array_row(
+                expression,
+                local_arrays,
+                set(self.current_glsl_private_pointer_base_names),
+            )
+            if row is None:
+                return None
+            if any(
+                self.glsl_private_pointer_expression_has_side_effects(index)
+                for index in row[3]
+            ):
+                raise OpenGLPrivatePointerParameterError(
+                    "OpenGL cannot emit a side-effecting private array row index",
+                    function_name=self.glsl_private_pointer_display_name(function_name),
+                    reason="side-effecting-view-offset",
+                    source_location=getattr(expression, "source_location", None),
+                )
+            return {
+                "backing": self.generate_expression(expression),
+                "offset": "0",
+                "root_kind": "local",
+            }
 
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
