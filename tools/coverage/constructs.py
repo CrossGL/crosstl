@@ -1005,6 +1005,12 @@ def is_construct(feature: Feature) -> bool:
     return feature.category in CATEGORIES
 
 
+def spells(name: str, language: str) -> bool:
+    """Whether ``language`` has a spelling for the construct ``name``: a probe template, or none yet but not
+    :data:`ABSENT` either."""
+    return _template(name, language) is not ABSENT
+
+
 def semantic_id(feature: Feature) -> str:
     """Constructs are defined independently of any language, so the construct itself is the semantic feature."""
     return f"construct:{feature.category}/{feature.name}"

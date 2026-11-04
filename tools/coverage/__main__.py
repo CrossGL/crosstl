@@ -14,7 +14,17 @@ import re
 import sys
 from pathlib import Path
 
-from . import compare, execution, features, issues, publish, report, runner, validators
+from . import (
+    compare,
+    execution,
+    features,
+    issues,
+    publish,
+    report,
+    runner,
+    spirv_input,
+    validators,
+)
 from .model import DIRECTIONS
 from .upstream import UpstreamError
 
@@ -134,12 +144,14 @@ def _run(args: argparse.Namespace) -> int:
         for language in languages
         if language in validators.SPIRV_COMPILERS and not validators.can_lower(language)
     ]
-    if (
-        "spirv" in languages
-        and "input" in directions
-        and not validators.can_lower("glsl")
-    ):
-        missing.append(f"spirv input ({', '.join(_lowering_gaps('glsl'))})")
+    # SPIR-V input probes are lowered from GLSL, and from HLSL for the constructs GLSL cannot spell.
+    gaps = dict.fromkeys(
+        gap
+        for source in ("glsl", spirv_input.FALLBACK)
+        for gap in _lowering_gaps(source)
+    )
+    if "spirv" in languages and "input" in directions and gaps:
+        missing.append(f"spirv input ({', '.join(gaps)})")
     if args.strict and missing:
         print("error: missing tools for " + "; ".join(missing), file=sys.stderr)
         return 2
