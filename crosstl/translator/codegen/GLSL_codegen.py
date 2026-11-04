@@ -170,6 +170,10 @@ from .comma_expressions import (
 )
 from .congruent_intervals import congruent_ring_interval
 from .constant_ordering import partition_constants_by_struct_dependency
+from .cooperative_matrix_diagonal import (
+    generate_glsl_cooperative_matrix_diagonal,
+    generate_glsl_cooperative_matrix_diagonal_helper,
+)
 from .counter_loops import (
     any_start_counter_loop_terminates,
     any_start_counter_loops,
@@ -4843,7 +4847,7 @@ class GLSLCodeGen(
             node
             for node in self.walk_ast(root)
             if isinstance(node, CooperativeMatrixOpNode)
-            and node.operation in {"fill", "load", "store"}
+            and node.operation in {"fill", "diagonal", "load", "store"}
         ]
 
     def glsl_software_subgroup_stage_entries(self, ast, target_stage=None):
@@ -34042,6 +34046,8 @@ class GLSLCodeGen(
             return self.generate_glsl_cooperative_matrix_multiply_accumulate(node)
         if operation == "fill":
             return self.generate_glsl_cooperative_matrix_fill(node)
+        if operation == "diagonal":
+            return generate_glsl_cooperative_matrix_diagonal(self, node)
         if operation in {"load", "store"}:
             return self.generate_glsl_cooperative_matrix_transfer(node)
 
@@ -34766,6 +34772,13 @@ class GLSLCodeGen(
                 continue
 
             helper_name = contract["helpers"][operation]
+            if operation == "diagonal":
+                blocks.append(
+                    generate_glsl_cooperative_matrix_diagonal_helper(
+                        type_name, helper_name, contract
+                    )
+                )
+                continue
             if operation == "fill":
                 component = contract["mapped_component_type"]
                 lines = [

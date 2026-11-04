@@ -141,6 +141,7 @@ WAVE_INTRINSICS = {
 COOPERATIVE_MATRIX_INTRINSICS = {
     "cooperative_matrix_element": "element",
     "cooperative_matrix_fill": "fill",
+    "cooperative_matrix_diagonal": "diagonal",
     "cooperative_matrix_load": "load",
     "cooperative_matrix_store": "store",
     "cooperative_matrix_multiply": "multiply",
@@ -3359,12 +3360,12 @@ class Parser:
         arguments = operation_node.arguments
         if operation in {"load", "store"}:
             return operation_node
-        if operation == "fill":
-            # A fill names only its value; the declaration, assignment or
-            # return it initializes supplies the matrix contract.
+        if operation in {"fill", "diagonal"}:
+            # A fill or diagonal names only its value; the declaration,
+            # assignment or return it initializes supplies the matrix contract.
             if len(arguments) != 1:
                 raise SyntaxError(
-                    "Cooperative matrix fill expects 1 argument, got "
+                    f"Cooperative matrix {operation} expects 1 argument, got "
                     f"{len(arguments)}"
                 )
             return operation_node
@@ -3451,6 +3452,26 @@ class Parser:
         operation_node.set_result_contract(result)
         return operation_node
 
+    def parse_cooperative_matrix_constructor(self, generic_args):
+        """Parse ``CooperativeMatrix<...>(value)``, the diagonal constructor.
+
+        Like a GLSL ``matN(s)`` constructor, the one value fills the diagonal
+        and every other element is zero; it is the canonical
+        ``cooperative_matrix_diagonal`` with the written type as its result.
+        """
+        matrix_type = self.cooperative_matrix_type(generic_args)
+        self.eat("LPAREN")
+        arguments = self.parse_call_arguments()
+        self.eat("RPAREN")
+        if len(arguments) != 1:
+            raise SyntaxError(
+                "CooperativeMatrix constructor expects 1 diagonal value, got "
+                f"{len(arguments)}"
+            )
+        operation = CooperativeMatrixOpNode("diagonal", arguments)
+        operation.set_result_contract(matrix_type)
+        return operation
+
     def infer_cooperative_matrix_operation_or_preserve(self, operation_node):
         """Preserve operations for target diagnostics in permissive parse mode."""
         try:
@@ -3513,7 +3534,7 @@ class Parser:
                 f"{self.format_cooperative_matrix_contract_value(expected_type)}"
             )
         if expression.result_type is None:
-            if expression.operation == "fill":
+            if expression.operation in {"fill", "diagonal"}:
                 expression.set_result_contract(deepcopy(expected_contract))
             return
         result = self.merge_cooperative_matrix_contracts(
@@ -5333,6 +5354,12 @@ class Parser:
                 )
             ):
                 generic_args = self.parse_generic_arguments()
+                if (
+                    left.name.rsplit("::", 1)[-1] == "CooperativeMatrix"
+                    and self.current_token[0] == "LPAREN"
+                ):
+                    left = self.parse_cooperative_matrix_constructor(generic_args)
+                    continue
                 args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
                 left = IdentifierNode(f"{left.name}<{args}>")
             elif self.current_token[0] == "LPAREN":
