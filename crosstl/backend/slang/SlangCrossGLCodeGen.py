@@ -12,6 +12,11 @@ from .slang_specialization_import import (
     specialization_ids,
     specialized_workgroup_sizes,
 )
+from .slang_stage_roles import (
+    slang_mesh_parameter_role,
+    slang_mesh_stage_attributes,
+    slang_ray_parameter_role,
+)
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -810,6 +815,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
                 code += "    }\n\n"
             elif qualifier:
                 code += f"    {qualifier} {{\n"
+                code += slang_mesh_stage_attributes(func, qualifier)
                 code += self.generate_function(func)
                 code += "    }\n\n"
             else:
@@ -1227,8 +1233,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
                 preserve_parameter_qualifiers,
                 function_qualifier,
                 unnamed_parameter_names.get(id(p)),
+                parameter_index=index,
             )
-            for p in func.params
+            for index, p in enumerate(func.params)
         )
         semantic = self.map_semantic(getattr(func, "semantic", None))
         semantic_suffix = f" {semantic}" if semantic else ""
@@ -1283,10 +1290,16 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         preserve_qualifiers=False,
         function_qualifier=None,
         fallback_name=None,
+        parameter_index=None,
     ):
         qualifier_prefix = self.format_parameter_qualifier_prefix(
             param, preserve_qualifiers
         )
+        # ``out vertices V v[N]``, ``out indices``, ``out primitives`` and ``in payload P p``: the mesh roles the
+        # HLSL importer writes as ``@ vertices out V v[N]`` and ``@ mesh_payload in P p``.
+        role = slang_mesh_parameter_role(param, function_qualifier)
+        if role is not None:
+            qualifier_prefix = f"@ {role} {qualifier_prefix}"
         parameter_name = param.name or fallback_name or "_param"
         parameter_type = self.map_parameter_type(param.vtype, function_qualifier)
         array_suffix = self.format_array_suffixes(param)
@@ -1308,6 +1321,12 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         )
         if semantic:
             parameter += f" {semantic}"
+        elif param.semantic is None:
+            ray_role = slang_ray_parameter_role(
+                param, function_qualifier, parameter_index
+            )
+            if ray_role is not None:
+                parameter += f" @ {ray_role}"
         return parameter
 
     def format_parameter_metadata(self, param):
