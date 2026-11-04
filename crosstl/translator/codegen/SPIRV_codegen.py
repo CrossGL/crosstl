@@ -250,6 +250,9 @@ from .spirv_uniform_block_arrays import (
 )
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
+from .stage_utils import (
+    order_functions_by_dependencies as order_functions_by_call_dependencies,
+)
 from .stage_utils import requests_early_fragment_tests
 from .task_payload_variables import dispatch_mesh_payload_names
 from .texture_lod_clamp import (
@@ -22847,45 +22850,21 @@ class VulkanSPIRVCodeGen(
         )
 
     def order_functions_by_dependencies(self, functions):
-        ordered = []
-        visiting = set()
-        visited = set()
-        function_list = list(functions)
-        function_names = [getattr(func, "name", None) for func in function_list]
-        unique_names = {
-            name for name in function_names if name and function_names.count(name) == 1
-        }
-        functions_by_name = {
-            func.name: func
-            for func in function_list
-            if getattr(func, "name", None) in unique_names
-        }
+        """Order ``functions`` so that every callee precedes its callers.
 
-        def visit(func):
-            func_id = id(func)
-            if func_id in visited:
-                return
-            if func_id in visiting:
-                return
-
-            visiting.add(func_id)
-            for node in self.walk_ast_nodes(getattr(func, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
-
-                dependency_name = self.function_call_name(node)
-                dependency = functions_by_name.get(dependency_name)
-                if dependency is not None and dependency is not func:
-                    visit(dependency)
-
-            visiting.remove(func_id)
-            visited.add(func_id)
-            ordered.append(func)
-
-        for func in function_list:
-            visit(func)
-
-        return ordered
+        A call is resolved against the overloads already emitted, so a call
+        depends on every overload of its callee's name, wherever the source
+        declares them. Overloads of one name that call each other keep their
+        source order.
+        """
+        return order_functions_by_call_dependencies(
+            functions,
+            self.walk_ast_nodes,
+            self.function_call_name,
+            FunctionCallNode,
+            include_overloads=True,
+            keep_overload_family_order=True,
+        )
 
     def walk_ast_nodes(self, root):
         return walk_ast_values(root)
