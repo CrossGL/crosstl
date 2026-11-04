@@ -10,21 +10,16 @@ has none of them; :mod:`.glsl_target_builtins` refuses them for the WebGL target
 
 from __future__ import annotations
 
+from .glsl_instance_index import desktop_glsl_version
+
 __all__ = ["DRAW_PARAMETER_BUILTINS", "draw_parameter_expression"]
 
 DRAW_PARAMETER_BUILTINS = ("gl_BaseVertex", "gl_BaseInstance", "gl_DrawID")
 
 
-def _desktop_version(codegen):
-    version_line = getattr(codegen, "current_glsl_version_line", None)
-    if codegen.glsl_version_is_es(version_line):
-        return None
-    return codegen.glsl_version_number(version_line) or 450
-
-
 def draw_parameter_expression(codegen, name):
     """The OpenGL spelling of a draw-parameter built-in for the version ``codegen`` emits."""
-    version = _desktop_version(codegen)
+    version = desktop_glsl_version(codegen)
     if version is None or version >= 460:
         return name
     return f"{name}ARB"

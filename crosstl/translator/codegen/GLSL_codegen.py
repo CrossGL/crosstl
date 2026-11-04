@@ -58794,6 +58794,8 @@ complex64_t crossgl_complex64_mod_assign(
 
     def stage_input_builtin_alias(self, semantic, stage_name=None):
         mapped = self.map_stage_input_semantic(semantic, stage_name)
+        if mapped in DRAW_PARAMETER_BUILTINS:
+            return draw_parameter_expression(self, mapped)
         if normalize_stage_name(stage_name) == "compute":
             quadgroup_alias = {
                 "gl_QuadGroupID": "(gl_LocalInvocationIndex / 4u)",
