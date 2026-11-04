@@ -26,6 +26,7 @@ from tools.coverage.templates import (
     relations,
     specializations,
     subgroups,
+    tessellation,
     textures,
     vertices,
 )
@@ -90,6 +91,125 @@ GRAMMAR = _grammar()
 def _feature(language: str, name: str) -> Feature:
     (feature,) = (f for f in constructs.features(language, GRAMMAR) if f.name == name)
     return feature
+
+
+def test_tessellation_probes_state_each_languages_domain_spacing_and_patch_values():
+    feature = _feature("glsl", "tessellation-domain-quads")
+    assert (feature.category, feature.stage) == ("graphics", "tessellation-evaluation")
+    assert feature.group == "ExecutionMode.Quads"
+    assert _feature("hlsl", "tessellation-control-winding-ccw").stage == (
+        "tessellation-control"
+    )
+    assert _feature("glsl", "tessellation-level-input").group == (
+        "BuiltIn.TessLevelOuter BuiltIn.TessLevelInner"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "tessellation-domain-isolines",
+            "layout(isolines, equal_spacing, ccw) in;\n",
+        ),
+        (
+            "glsl",
+            "tessellation-spacing-fractional-odd",
+            "layout(triangles, fractional_odd_spacing, ccw) in;\n",
+        ),
+        ("glsl", "tessellation-point-mode", "equal_spacing, ccw, point_mode) in;\n"),
+        (
+            "glsl",
+            "tessellation-patch-input",
+            "layout(location = 1) patch in vec4 extra;\n",
+        ),
+        ("glsl", "tessellation-patch-vertices", "* float(gl_PatchVerticesIn);\n"),
+        ("glsl", "tessellation-level-input", "position[1] * gl_TessLevelInner[0]"),
+        (
+            "hlsl",
+            "tessellation-domain-quads",
+            "    float inside[2] : SV_InsideTessFactor;\n",
+        ),
+        ("hlsl", "tessellation-domain-quads", "float2 coord : SV_DomainLocation"),
+        (
+            "hlsl",
+            "tessellation-domain-isolines",
+            "const OutputPatch<ControlPoint, 2> patch",
+        ),
+        ("hlsl", "tessellation-level-input", "patch[1].position * constants.inside"),
+        ("hlsl", "tessellation-control-point-mode", '[outputtopology("point")]\n'),
+        (
+            "hlsl",
+            "tessellation-patch-output",
+            "    output.extra = patch[0].position;\n",
+        ),
+        (
+            "slang",
+            "tessellation-domain-quads",
+            '[shader("domain")]\n[domain("quad")]\n',
+        ),
+        (
+            "slang",
+            "tessellation-control-spacing-fractional-even",
+            '[shader("hull")]\n[domain("tri")]\n[partitioning("fractional_even")]\n',
+        ),
+        ("metal", "tessellation-domain-quads", "[[patch(quad, 4)]]\n"),
+        ("metal", "tessellation-patch-input", "    float4 extra [[attribute(1)]];\n"),
+        (
+            "rust",
+            "tessellation-domain-quads",
+            "#[spirv(tessellation_evaluation(quads, spacing_equal, vertex_order_ccw))]",
+        ),
+        (
+            "rust",
+            "tessellation-level-input",
+            "#[spirv(tess_level_inner)] inner: [f32; 2]",
+        ),
+        (
+            "rust",
+            "tessellation-control-spacing-fractional-odd",
+            "tessellation_control(output_vertices = 3, spacing_fraction_odd, vertex_order_cw)",
+        ),
+        ("rust", "tessellation-patch-vertices", "#[spirv(patch_vertices)] count: u32"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert (
+        probes.build(_feature("glsl", "tessellation-winding-cw"), "glsl").suffix
+        == ".tese"
+    )
+    crossgl = probes.build(
+        _feature("glsl", "tessellation-winding-cw"), "crossgl"
+    ).source
+    assert "        layout(triangles, equal_spacing, cw) in;\n" in crossgl
+    crossgl = probes.build(
+        _feature("hlsl", "tessellation-domain-quads"), "crossgl"
+    ).source
+    assert "OutputPatch<ControlPoint, 4> patch) @domain(quad) {\n" in crossgl
+    crossgl = probes.build(
+        _feature("hlsl", "tessellation-control-point-mode"), "crossgl"
+    )
+    assert "            @outputtopology(point)\n" in crossgl.source
+    # HLSL and Slang state spacing, winding and points only on the hull shader, and GLSL only on the evaluation
+    # shader. Metal has quads and per-patch inputs alone, rust-gpu no Patch decoration, and GLSL ES 3.00, WGSL and the
+    # kernel languages no tessellation.
+    names = set(tessellation.NAMES)
+    evaluation_layouts = {
+        "tessellation-spacing-fractional-odd",
+        "tessellation-spacing-fractional-even",
+        "tessellation-winding-cw",
+        "tessellation-point-mode",
+    }
+    hull = {name for name in names if name.startswith("tessellation-control-")}
+    absent = {
+        "glsl": hull,
+        "hlsl": evaluation_layouts | {"tessellation-patch-vertices"},
+        "slang": evaluation_layouts | {"tessellation-patch-vertices"},
+        "metal": names - {"tessellation-domain-quads", "tessellation-patch-input"},
+        "rust": {"tessellation-patch-input", "tessellation-patch-output"},
+        **dict.fromkeys(("wgsl", "webgl"), names),
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
 
 
 def test_stages_are_the_shader_execution_models():

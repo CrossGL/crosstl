@@ -52,6 +52,7 @@ from .rows import WEBGL as _ROWS
 from .scopes import WEBGL as _SCOPES
 from .specializations import WEBGL as _SPECIALIZATIONS
 from .subgroups import WEBGL as _SUBGROUPS
+from .tessellation import WEBGL as _TESSELLATION
 from .textures import WEBGL as _TEXTURES
 from .values import FAMILY as _VALUES
 from .vectors import GLSL as _VECTORS
@@ -131,6 +132,7 @@ WEBGL = {
     **_PIPELINE,
     **_EXTENSIONS,
     **_PRIMITIVES,
+    **_TESSELLATION,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

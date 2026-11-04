@@ -38,9 +38,15 @@ _IMAGE_KINDS = frozenset({"Dim", "Capability"})
 # ``IsHelperLane()``.
 _INSTRUCTIONS = {"BuiltIn.HelperInvocation": r"^\s*%\w+ = OpIsHelperInvocationEXT\b"}
 # The anchors whose operand must differ from the default as well: glslang, DXC and slangc write ``Invocations 1``
-# for every geometry stage, so a translation keeps an instanced stage only with more than one invocation.
+# for every geometry stage, so a translation keeps an instanced stage only with more than one invocation. Every
+# tessellation stage decorates its levels ``Patch``, so a translation keeps a per-patch value only when a variable
+# with a ``Location`` is ``Patch`` too.
 _OPERANDS = {
-    "ExecutionMode.Invocations": r"^\s*OpExecutionMode %\w+ Invocations (?!1\b)\d+\b"
+    "ExecutionMode.Invocations": r"^\s*OpExecutionMode %\w+ Invocations (?!1\b)\d+\b",
+    "Decoration.Patch": (
+        r"^\s*OpDecorate (%\w+) Patch\b[\s\S]*^\s*OpDecorate \1 Location\b"
+        r"|^\s*OpDecorate (%\w+) Location\b[\s\S]*^\s*OpDecorate \2 Patch\b"
+    ),
 }
 
 # The metadata the Metal compiler writes in AIR for the attribute that carries each anchor: ``[[flat]]`` becomes
@@ -84,6 +90,7 @@ AIR = {
     "BuiltIn.BaryCoordKHR": "air.barycentric_coord",
     "BuiltIn.ViewIndex": "air.amplification_id",
     "BuiltIn.FragStencilRefEXT": "air.stencil",
+    "Decoration.Patch": "air.patch_input",
 }
 # The attributes that AIR names apart when a fragment function reads them: a ``[[sample_mask]]`` input is
 # ``!"air.sample_mask_in"``. A feature whose name ends in ``-input`` reads its built-in.
@@ -91,13 +98,15 @@ AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
 # The anchors that AIR carries otherwise than as an attribute, as patterns of its text: ``simd_is_helper_thread()``
 # calls ``@air.simd_is_helper_thread``, each function constant is an entry of ``!air.function_constants``, a
 # ``__restrict`` pointer is a ``noalias`` kernel argument, a ``volatile`` one is read and written with volatile loads
-# and stores, and a ``coherent(device)`` one through the ``device_coherent`` intrinsics.
+# and stores, a ``coherent(device)`` one through the ``device_coherent`` intrinsics, and a quad patch is named in
+# the ``!"air.patch"`` metadata of its post-tessellation vertex function.
 AIR_PATTERNS = {
     "BuiltIn.HelperInvocation": r"@air\.simd_is_helper_thread\(",
     "Decoration.SpecId": r"^!air\.function_constants = ",
     "Decoration.Restrict": r"^define [^\n]*\bnoalias\b",
     "Decoration.Volatile": r"\b(?:load|store) volatile\b",
     "Decoration.Coherent": r"@air\.\w+\.device_coherent\.",
+    "ExecutionMode.Quads": r'!"air\.patch", !"quad"',
 }
 # The AIR type of a texture of each dimension: a ``texturecube`` argument is a ``%struct._texture_cube_t``, and an
 # arrayed one a ``%struct._texture_cube_array_t``.
@@ -111,16 +120,22 @@ AIR_TEXTURES = {
 # DXC writes every output of a geometry stage on stream 0 when it compiles HLSL to SPIR-V, and slangc cannot compile
 # a second stream to SPIR-V at all, so an HLSL or Slang translation keeps its streams with a second stream parameter.
 _STREAMS = r"\binout\s+PointStream\s*<[^>]*>\s*\w+\s*,[^)]*\binout\s+PointStream\s*<"
+# slangc does not decorate a member of a patch-constant structure ``Patch`` unless it is a tessellation level, so a
+# Slang translation keeps a per-patch value when the structure that holds the levels has a member with a user
+# semantic.
+_PATCH_VALUE = (
+    r"\bstruct\s+\w+\s*\{(?=[^}]*\bSV_TessFactor\b)[^}]*:\s*(?!SV_)[A-Za-z_]\w*\s*;"
+)
 # The anchors a language's compiler resolves before it writes SPIR-V, with the declaration that keeps each one in the
 # translation itself: naga replaces every pipeline-overridable constant with its value, so a WGSL translation keeps a
 # specialization constant when it declares an ``override``.
+_STREAM_ANCHORS = ("Decoration.Stream", "Capability.GeometryStreams")
 SOURCE = {
     "wgsl": {"Decoration.SpecId": r"^\s*override\s+\w+"},
-    **{
-        language: dict.fromkeys(
-            ("Decoration.Stream", "Capability.GeometryStreams"), _STREAMS
-        )
-        for language in ("hlsl", "slang")
+    "hlsl": dict.fromkeys(_STREAM_ANCHORS, _STREAMS),
+    "slang": {
+        **dict.fromkeys(_STREAM_ANCHORS, _STREAMS),
+        "Decoration.Patch": _PATCH_VALUE,
     },
 }
 # The built-ins that are constants: GLSL defines ``gl_WorkGroupSize`` as the local size, so a translation may write

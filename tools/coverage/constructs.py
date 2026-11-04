@@ -754,6 +754,46 @@ def _curated() -> list[Construct]:
             "Capability.GeometryStreams",
             stage="geometry",
         ),
+        *(
+            c("graphics", name, *anchors, stage="tessellation-evaluation")
+            for name, *anchors in (
+                ("tessellation-domain-quads", "ExecutionMode.Quads"),
+                ("tessellation-domain-isolines", "ExecutionMode.Isolines"),
+                (
+                    "tessellation-level-input",
+                    "BuiltIn.TessLevelOuter",
+                    "BuiltIn.TessLevelInner",
+                ),
+                ("tessellation-patch-input", "Decoration.Patch"),
+                (
+                    "tessellation-spacing-fractional-odd",
+                    "ExecutionMode.SpacingFractionalOdd",
+                ),
+                (
+                    "tessellation-spacing-fractional-even",
+                    "ExecutionMode.SpacingFractionalEven",
+                ),
+                ("tessellation-winding-cw", "ExecutionMode.VertexOrderCw"),
+                ("tessellation-point-mode", "ExecutionMode.PointMode"),
+            )
+        ),
+        *(
+            c("graphics", name, anchor, stage="tessellation-control")
+            for name, anchor in (
+                (
+                    "tessellation-control-spacing-fractional-odd",
+                    "ExecutionMode.SpacingFractionalOdd",
+                ),
+                (
+                    "tessellation-control-spacing-fractional-even",
+                    "ExecutionMode.SpacingFractionalEven",
+                ),
+                ("tessellation-control-winding-ccw", "ExecutionMode.VertexOrderCcw"),
+                ("tessellation-control-point-mode", "ExecutionMode.PointMode"),
+                ("tessellation-patch-output", "Decoration.Patch"),
+                ("tessellation-patch-vertices", "BuiltIn.PatchVertices"),
+            )
+        ),
         c(
             "resource",
             "uniform-struct",

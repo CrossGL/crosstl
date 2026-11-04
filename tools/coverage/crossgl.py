@@ -89,6 +89,7 @@ from .templates.relations import CROSSGL as RELATIONS
 from .templates.rows import CROSSGL as ROWS_CROSSGL
 from .templates.specializations import CROSSGL as SPECIALIZATIONS
 from .templates.subgroups import CROSSGL as SUBGROUPS
+from .templates.tessellation import CROSSGL as TESSELLATION
 from .templates.textures import CROSSGL as TEXTURES
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
@@ -643,6 +644,7 @@ CONSTRUCTS: dict[str, Template] = {
     **PIPELINE,
     **EXTENSIONS,
     **PRIMITIVES,
+    **TESSELLATION,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

@@ -711,3 +711,107 @@ def test_glslang_lowers_geometry_primitives_instances_and_streams():
     assert decorations.lost(streams, "glsl", single) == (
         "the translation loses Decoration.Stream, Capability.GeometryStreams"
     )
+
+
+def _patch(language, name, group, stage="tessellation-control"):
+    return Feature(language, "graphics", name, None, group=group, stage=stage)
+
+
+def test_a_per_patch_translation_must_keep_a_located_patch_variable():
+    # Every tessellation stage decorates its levels Patch, so only a Patch variable with a Location keeps the value.
+    output = _patch("spirv", "tessellation-patch-output", "Decoration.Patch")
+    levels = "OpDecorate %gl_TessLevelOuter BuiltIn TessLevelOuter\nOpDecorate %gl_TessLevelOuter Patch\n"
+    assert decorations.lost(output, "spirv", levels) == (
+        "the translation loses Decoration.Patch"
+    )
+    assert decorations.lost(
+        output, "spirv", levels + "OpDecorate %20 Location 1\nOpDecorate %24 Patch\n"
+    ) == ("the translation loses Decoration.Patch")
+    for kept in (
+        "OpDecorate %extra Patch\nOpDecorate %extra Location 1\n",
+        "OpDecorate %extra Location 1\nOpDecorate %extra Patch\n",
+    ):
+        assert decorations.lost(output, "spirv", levels + kept) == ""
+
+
+def test_a_slang_per_patch_translation_keeps_a_user_semantic_beside_its_levels():
+    # slangc writes no Patch decoration for a patch-constant member, so the translation itself must declare one.
+    output = _patch("slang", "tessellation-patch-output", "Decoration.Patch")
+    source = (
+        "struct PatchConstants {\n    float edges[3] : SV_TessFactor;\n"
+        "    float inside : SV_InsideTessFactor;\n    float4 extra : EXTRA;\n};\n"
+    )
+    assert decorations.lost(output, "slang", source) == ""
+    assert decorations.lost(
+        output, "slang", source.replace("    float4 extra : EXTRA;\n", "")
+    ) == ("the translation loses Decoration.Patch")
+    unrelated = "struct Other {\n    float4 extra : EXTRA;\n};\n"
+    assert decorations.lost(
+        output,
+        "slang",
+        unrelated + source.replace("    float4 extra : EXTRA;\n", ""),
+    ) == ("the translation loses Decoration.Patch")
+
+
+def test_a_metal_tessellation_translation_keeps_its_quad_patch_and_per_patch_input():
+    quads = _patch(
+        "metal",
+        "tessellation-domain-quads",
+        "ExecutionMode.Quads",
+        "tessellation-evaluation",
+    )
+    patch_input = _patch(
+        "metal",
+        "tessellation-patch-input",
+        "Decoration.Patch",
+        "tessellation-evaluation",
+    )
+    assert decorations._wanted(quads, "metal") == [
+        ("ExecutionMode.Quads", r'!"air\.patch", !"quad"')
+    ]
+    assert decorations._wanted(patch_input, "metal") == [
+        ("Decoration.Patch", r'!"air\.patch_input"')
+    ]
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_tessellation_domains_spacing_and_patch_values():
+    quads = _patch(
+        "glsl",
+        "tessellation-domain-quads",
+        "ExecutionMode.Quads",
+        "tessellation-evaluation",
+    )
+    source = (
+        "#version 460\nlayout(quads, equal_spacing, ccw) in;\nlayout(location = 0) in vec4 position[];\n"
+        "void main() {\n    gl_Position = position[0] * gl_TessCoord.x;\n}\n"
+    )
+    assert decorations.lost(quads, "glsl", source) == ""
+    assert decorations.lost(quads, "glsl", source.replace("quads", "triangles")) == (
+        "the translation loses ExecutionMode.Quads"
+    )
+    odd = _patch(
+        "glsl",
+        "tessellation-spacing-fractional-odd",
+        "ExecutionMode.SpacingFractionalOdd",
+        "tessellation-evaluation",
+    )
+    spaced = source.replace("equal_spacing", "fractional_odd_spacing")
+    assert decorations.lost(odd, "glsl", spaced) == ""
+    assert decorations.lost(odd, "glsl", source) == (
+        "the translation loses ExecutionMode.SpacingFractionalOdd"
+    )
+    output = _patch("glsl", "tessellation-patch-output", "Decoration.Patch")
+    source = (
+        "#version 460\nlayout(vertices = 3) out;\nlayout(location = 0) in vec4 position[];\n"
+        "layout(location = 0) out vec4 outPosition[];\nlayout(location = 1) patch out vec4 extra;\n"
+        "void main() {\n    outPosition[gl_InvocationID] = position[gl_InvocationID];\n"
+        "    extra = position[0];\n    gl_TessLevelOuter[0] = 1.0;\n}\n"
+    )
+    assert decorations.lost(output, "glsl", source) == ""
+    dropped = source.replace(
+        "layout(location = 1) patch out vec4 extra;\n", ""
+    ).replace("    extra = position[0];\n", "")
+    assert decorations.lost(output, "glsl", dropped) == (
+        "the translation loses Decoration.Patch"
+    )
