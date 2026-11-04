@@ -525,6 +525,7 @@ from .pointer_reinterpret import (
     same_scalar_lane_view,
     scalar_storage_layout,
 )
+from .private_array_rows import aliased_row_view, array_row_shape, array_row_view
 from .private_member_views import hlsl_aliased_scalar_view, hlsl_member_view_root
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases, references_provably_disjoint
@@ -20300,6 +20301,34 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "root_kind": "local",
                 }
             return None
+
+        if isinstance(expression, ArrayAccessNode):
+            row = self.hlsl_private_pointer_array_row(
+                expression,
+                self.current_hlsl_private_pointer_base_names,
+                local_extents,
+                self.function_private_pointer_local_backing_types.get(
+                    self.current_function_name, {}
+                ),
+                self.literal_int_constants,
+            )
+            if row is None:
+                return None
+            if any(
+                self.hlsl_private_pointer_expression_has_side_effects(index)
+                for index in row[3]
+            ):
+                raise DirectXPrivatePointerParameterError(
+                    "DirectX cannot emit a side-effecting private array row index",
+                    function_name=self.current_function_name,
+                    reason="side-effecting-view-offset",
+                    source_location=getattr(expression, "source_location", None),
+                )
+            return {
+                "backing": self.generate_expression(expression),
+                "offset": "0",
+                "root_kind": "local",
+            }
 
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
@@ -43598,7 +43627,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             scalar_parameters[call["callee"]].add(parameter_name)
                             changed = True
         self.function_private_pointer_scalar_parameters = scalar_parameters
-        aliased = hlsl_aliased_scalar_view(view_calls, scalar_parameters)
+        aliased = hlsl_aliased_scalar_view(
+            view_calls, scalar_parameters
+        ) or aliased_row_view(view_calls)
         if aliased is not None:
             call, first, second, root = aliased
             raise DirectXPrivatePointerParameterError(
@@ -44321,6 +44352,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         return None
 
+    def hlsl_private_pointer_array_row(
+        self, expression, parameter_names, local_extents, local_types, constants
+    ):
+        """The row of a fixed multidimensional local array ``expression`` selects, or None."""
+
+        def shape_of(name):
+            if name in parameter_names or name not in local_extents:
+                return None
+            return array_row_shape(
+                (local_types or {}).get(name),
+                lambda size: self.literal_int_value(size, constants),
+            )
+
+        return array_row_view(expression, shape_of)
+
     def hlsl_private_pointer_static_binding(
         self,
         expression,
@@ -44387,6 +44433,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "side_effecting": False,
                 }
             return None
+        if isinstance(expression, ArrayAccessNode):
+            row = self.hlsl_private_pointer_array_row(
+                expression, parameter_names, local_extents, local_types, constants
+            )
+            if row is None:
+                return None
+            root_name, extent, _element_type, indices = row
+            return {
+                "root_kind": "local",
+                "root": root_name,
+                "extent": extent,
+                "offset": (0, 0),
+                "side_effecting": any(
+                    self.hlsl_private_pointer_expression_has_side_effects(index)
+                    for index in indices
+                ),
+                "row_view": True,
+            }
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
             if isinstance(operand, (IdentifierNode, VariableNode)):
