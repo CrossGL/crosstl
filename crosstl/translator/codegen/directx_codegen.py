@@ -31976,6 +31976,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """``length()`` of a helper's ``buffer T*`` parameter: its buffer's elements from the offset on."""
         # A buffer parameter is passed as its buffer plus an element offset, so its
         # length is that buffer's element count less the offset, not a member call.
+        if not isinstance(pointer_expr, (IdentifierNode, VariableNode)):
+            # An element such as data[3] is a value, not a view, even though its
+            # binding is the view moved to that element.
+            return None
         binding = self.hlsl_resource_pointer_binding(pointer_expr)
         if (
             binding is None

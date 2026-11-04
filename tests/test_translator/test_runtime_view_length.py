@@ -103,6 +103,68 @@ def test_hlsl_counts_a_helper_view_parameter_from_its_offset(tmp_path):
         )
 
 
+LOCAL_VIEW = """shader LocalView {
+    buffer float* data;
+    RWStructuredBuffer<float> outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            buffer float* p = data + 2;
+            outp[0] = float(p.length());
+        }
+    }
+}"""
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            HELPER_VIEW.replace("count(data)", "count(data + 2)"),
+            ["count(data, int64_t(2))", "(int(cgl_buffer_count(v)) - int(v_offset))"],
+        ),
+        (LOCAL_VIEW, ["float((int(cgl_buffer_count(data)) - int(p_offset)))"]),
+    ],
+    ids=["helper-offset", "local-view"],
+)
+def test_hlsl_counts_offset_views_from_their_offset(source, expected, tmp_path):
+    """A view passed to a helper with an offset, and a local view, count the
+    elements from their offset on, as GLSL output does."""
+    hlsl = HLSLCodeGen().generate(parse(source))
+
+    for text in expected:
+        assert text in hlsl
+    assert ".length()" not in hlsl
+    dxc = shutil.which("dxc")
+    if dxc:
+        (tmp_path / "view.hlsl").write_text(hlsl, encoding="utf-8")
+        _check(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-HV",
+                "2021",
+                "-E",
+                "CSMain",
+                "view.hlsl",
+                "-Fo",
+                "view.o",
+            ],
+            tmp_path,
+        )
+
+
+def test_hlsl_does_not_count_an_element_of_a_view_as_the_view():
+    """data[3] is one float of the view, whose binding is the view moved to
+    element 3, so its length() must not become the view's element count."""
+    hlsl = HLSLCodeGen().generate(
+        parse(LOCAL_VIEW.replace("float(p.length())", "float(data[3].length())"))
+    )
+
+    assert "cgl_buffer_count" not in hlsl
+
+
 def test_spirv_reads_the_runtime_array_length(tmp_path):
     spirv = VulkanSPIRVCodeGen().generate(parse(VIEWS))
 
