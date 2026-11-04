@@ -144,6 +144,7 @@ from .slang_projected_compare import (
     is_slang_projected_compare,
 )
 from .slang_refusals import SlangLoweringRefused
+from .slang_specialization_constants import plan_slang_specialization_constants
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
@@ -1960,7 +1961,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         return code
 
     def generate_constants(self, ast, constants=None):
-        """Emit CrossGL compile-time constants as Slang static constants."""
+        """Emit CrossGL compile-time constants as Slang static constants.
+
+        Specialization constants keep their id, and the constants that follow them are planned once per program by
+        :func:`plan_slang_specialization_constants`.
+        """
+        plan = self.slang_specialization_plan(ast)
         code = ""
         for node in (
             getattr(ast, "constants", []) or [] if constants is None else constants
@@ -1973,13 +1979,41 @@ class SlangCodeGen(LoweringRefusalMixin):
                 getattr(node, "const_type", getattr(node, "vtype", "float"))
             )
             self.register_variable_type(name, const_type_name, node)
-            value_code = self.generate_constant_expression(getattr(node, "value", None))
+            value = getattr(node, "value", None)
+            value_code = (
+                None if value is None else self.generate_constant_expression(value)
+            )
             declaration = format_c_style_array_declaration(
                 self.convert_type(const_type_name), name
             )
+            specialized = plan.declaration(name, declaration, value_code)
+            if specialized is not None:
+                code += f"{specialized}\n"
+                continue
             code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
+
+    def slang_interface_array_type(self, member):
+        """A stage-interface member's array type sized by its default, when a specialization constant sizes it."""
+        cached = getattr(self, "_slang_specialization_plan", None)
+        if cached is None:
+            return None
+        return cached[1].interface_array_type(getattr(member, "member_type", None))
+
+    def slang_specialization_plan(self, ast):
+        """The specialization plan of ``ast``, computed once for the program being generated."""
+        cached = getattr(self, "_slang_specialization_plan", None)
+        if cached is not None and cached[0] is ast:
+            return cached[1]
+        plan = plan_slang_specialization_constants(
+            ast,
+            lambda type_node: self.convert_type(
+                self.convert_type_node_to_string(type_node)
+            ),
+        )
+        self._slang_specialization_plan = (ast, plan)
+        return plan
 
     def generate_constant_expression(self, expr):
         value_code = self.generate_expression(expr)
@@ -5956,6 +5990,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             semantic = self.semantic_from_node(member)
             if semantic is None:
                 semantic = default_member_semantics.get(member.name)
+            interface_type = (
+                self.slang_interface_array_type(member) if semantic else None
+            )
+            if interface_type is not None:
+                member_type = self.convert_type(
+                    self.convert_type_node_to_string(interface_type)
+                )
             self.validate_slang_builtin_semantic_type(
                 semantic,
                 self.slang_tess_factor_member_type_name(member),
