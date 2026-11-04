@@ -20,7 +20,6 @@ from copy import deepcopy
 
 from ..semantics.function_name_collisions import (
     names_called_with_other_arity,
-    names_with_generic_overloads,
     rename_functions,
     user_function_names,
 )
@@ -200,10 +199,7 @@ def rename_cuda_library_functions(ast):
     names = {name for name in user_function_names(ast) if shadows_cuda_library(name)}
     # The generators treat every call of a declared name as a call of the user function, so one that only a
     # built-in accepts, such as ``clamp(x, 0.0, 1.0)`` beside a user ``clamp(float)``, needs the user one renamed.
-    # A name with a generic overload is exempt: renaming its definition away from a call no overload takes would
-    # hide that call from generic overload resolution, so instead of being refused it would be emitted verbatim
-    # with no declaration.
-    names |= names_called_with_other_arity(ast) - names_with_generic_overloads(ast)
+    names |= names_called_with_other_arity(ast)
     if not names:
         return ast
     ast = deepcopy(ast)

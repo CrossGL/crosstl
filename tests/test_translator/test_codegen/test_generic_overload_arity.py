@@ -98,11 +98,42 @@ def test_fewer_arguments_fall_back_to_concrete_overload(tmp_path, backend):
     assert "inc_float" not in code
 
 
-@pytest.mark.parametrize("backend", C_STYLE_TARGETS)
+# CUDA and HIP rename a user function that a call uses with an argument count none of its overloads takes, so
+# that a built-in of the same name stays reachable (see the clamp test below); the call then keeps the old name.
+@pytest.mark.parametrize(
+    "backend",
+    [backend for backend in C_STYLE_TARGETS if backend not in {"cuda", "hip"}],
+)
 def test_fewer_arguments_without_concrete_are_refused(tmp_path, backend):
     with pytest.raises(Exception, match="inc") as error:
         translate(tmp_path, FEWER_ARGS_NO_CONCRETE, backend)
     assert "generic" in str(error.value)
+
+
+BUILTIN_BESIDE_GENERIC = """
+shader P {
+    buffer float* outp;
+    T clamp<T>(T v) { return v; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = outp[i];
+            outp[i] = clamp(x, 0.0, 1.0) + clamp(x);
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_builtin_call_beside_a_generic_of_the_same_name_reaches_the_builtin(
+    tmp_path, backend
+):
+    # clamp(x, 0.0, 1.0) fits no overload of the user clamp<T>(T v), so it is the built-in.
+    code = translate(tmp_path, BUILTIN_BESIDE_GENERIC, backend)
+    assert "fmaxf(0.0f, fminf(1.0f, x))" in code
+    assert "clamp_fn_float(x)" in code
 
 
 @pytest.mark.parametrize("backend", ["directx", "opengl", "metal"])
@@ -116,6 +147,35 @@ def test_more_arguments_fall_back_to_concrete_overload(tmp_path, backend):
 def test_defaulted_parameter_keeps_working(tmp_path, backend):
     code = translate(tmp_path, DEFAULTED_PARAMETER, backend)
     assert "scale_float" in code
+
+
+TOO_MANY_FOR_EVERY_OVERLOAD = """
+shader P {
+    buffer float2* outp;
+    void inc<T>(inout T value) { value = value + T(1.0); }
+    void inc<T>(inout T value, T step) { value = value + step; }
+    void inc<T>(inout T value, T step, T scale) { value = value + step * scale; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float2 w = outp[i];
+            inc(w, w, w, w);
+            outp[i] = w;
+        }
+    }
+}
+"""
+
+
+# SPIR-V output used to inline the three-parameter body and drop the fourth argument.
+@pytest.mark.parametrize(
+    "backend", ["directx", "opengl", "metal", "slang", "mojo", "vulkan"]
+)
+def test_call_no_generic_overload_takes_is_refused(tmp_path, backend):
+    with pytest.raises(Exception, match="inc") as error:
+        translate(tmp_path, TOO_MANY_FOR_EVERY_OVERLOAD, backend)
+    assert "generic" in str(error.value)
 
 
 @pytest.mark.parametrize("backend", C_STYLE_TARGETS)

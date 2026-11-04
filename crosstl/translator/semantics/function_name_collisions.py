@@ -21,7 +21,6 @@ from .hub_types import call_name
 
 __all__ = [
     "names_called_with_other_arity",
-    "names_with_generic_overloads",
     "rename_colliding_functions",
     "rename_functions",
     "user_function_names",
@@ -182,17 +181,6 @@ def names_called_with_other_arity(program) -> set:
                 if name in arities and _call_arity(node) not in arities[name]:
                     found.add(name)
     return found
-
-
-def names_with_generic_overloads(program) -> set:
-    """User function names that have at least one generic overload."""
-    return {
-        function.name
-        for function, entry in _functions(program)
-        if not entry
-        and getattr(function, "name", None)
-        and getattr(function, "generic_params", None)
-    }
 
 
 def rename_functions(program, names, *, by_arity=False) -> dict:
