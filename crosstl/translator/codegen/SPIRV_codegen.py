@@ -18526,6 +18526,19 @@ class VulkanSPIRVCodeGen(
             if qualifier in supported:
                 qualifiers.add(aliases.get(qualifier, qualifier))
 
+        if {"coherent(system)", "coherent(host)"} & {
+            memory_qualifier_name(qualifier)
+            for qualifier in [
+                *(getattr(node, "qualifiers", []) or []),
+                *(getattr(node, "resource_qualifiers", []) or []),
+            ]
+        }:
+            # Vulkan's Coherent reaches the device at most; the CrossDevice scope is not allowed.
+            self.refuse_lowering(
+                f"resource '{getattr(node, 'name', '<unnamed>')}' is coherent at system "
+                "scope: Vulkan SPIR-V has no coherence wider than the device"
+            )
+
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
