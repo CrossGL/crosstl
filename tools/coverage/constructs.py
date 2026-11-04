@@ -1,10 +1,11 @@
 """Language-level features: control flow, operators, types, compute and graphics built-ins, resources and stages.
 
 The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches, what
-its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core grammar items it needs (an
-instruction, a capability, a storage class, a built-in or an execution model), and the anchors are checked against the
-pinned grammar. The stages are the grammar's shader execution models and the scalar types its width capabilities, so
-a new stage or width upstream shows up as untested until it has a probe.
+its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core
+grammar items it needs (an instruction, a capability, a storage class, a built-in, an image dimension or an execution
+model), and the anchors are checked against the pinned grammar. The stages are the grammar's shader execution models
+and the scalar types its width capabilities, so a new stage or width upstream shows up as untested until it has a
+probe.
 
 Probe templates are written per language: CrossGL's in :mod:`.crossgl`, the others in :mod:`.templates`. A language
 with no spelling for a feature, such as WGSL for a geometry stage, leaves it out of its feature list; one that has the
@@ -387,6 +388,58 @@ def _curated() -> list[Construct]:
         c("compute", "workgroup-id", "BuiltIn.WorkgroupId"),
         c("compute", "local-invocation-index", "BuiltIn.LocalInvocationIndex"),
         c("compute", "num-workgroups", "BuiltIn.NumWorkgroups"),
+        c("compute", "subgroup-size", "BuiltIn.SubgroupSize"),
+        c(
+            "compute",
+            "subgroup-invocation-id",
+            "BuiltIn.SubgroupLocalInvocationId",
+        ),
+        c("compute", "num-subgroups", "BuiltIn.NumSubgroups"),
+        c("compute", "subgroup-id", "BuiltIn.SubgroupId"),
+        c("compute", "workgroup-size", "BuiltIn.WorkgroupSize"),
+        c("compute", "specialization-constant", "OpSpecConstant", "Decoration.SpecId"),
+        c(
+            "compute",
+            "specialization-constant-bool",
+            "OpSpecConstantTrue",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-constant-expression",
+            "OpSpecConstantOp",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-workgroup-size",
+            "BuiltIn.WorkgroupSize",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "restrict-buffer",
+            "StorageClass.StorageBuffer",
+            "Decoration.Restrict",
+        ),
+        c(
+            "compute",
+            "coherent-buffer",
+            "StorageClass.StorageBuffer",
+            "Decoration.Coherent",
+        ),
+        c(
+            "compute",
+            "volatile-buffer",
+            "StorageClass.StorageBuffer",
+            "Decoration.Volatile",
+        ),
+        c(
+            "compute",
+            "write-only-buffer",
+            "StorageClass.StorageBuffer",
+            "Decoration.NonReadable",
+        ),
         c(
             "compute",
             "invocation-id-in-helper",
@@ -415,6 +468,19 @@ def _curated() -> list[Construct]:
             "OpImageSampleExplicitLod",
         ),
         c("resource", "storage-image", "OpTypeImage", "OpImageWrite"),
+        c("resource", "texture-1d", "OpTypeImage", "Dim.1D", "Capability.Sampled1D"),
+        c("resource", "texture-3d", "OpTypeImage", "Dim.3D"),
+        c("resource", "texture-cube", "OpTypeImage", "Dim.Cube"),
+        c("resource", "texture-2d-array", "OpTypeImage", "Dim.2D"),
+        # DXC and slangc declare no SampledCubeArray capability for a cube array, so its shape is the anchor.
+        c("resource", "texture-cube-array", "OpTypeImage", "Dim.Cube"),
+        c(
+            "resource",
+            "texel-buffer",
+            "OpTypeImage",
+            "Dim.Buffer",
+            "Capability.SampledBuffer",
+        ),
         c(
             "resource",
             "buffer-in-helper",
@@ -575,6 +641,34 @@ def _curated() -> list[Construct]:
             stage="vertex",
         ),
         c("graphics", "invariant-position", "Decoration.Invariant", stage="vertex"),
+        c(
+            "graphics",
+            "draw-index",
+            "BuiltIn.DrawIndex",
+            "Capability.DrawParameters",
+            stage="vertex",
+        ),
+        c(
+            "graphics",
+            "base-vertex",
+            "BuiltIn.BaseVertex",
+            "Capability.DrawParameters",
+            stage="vertex",
+        ),
+        c(
+            "graphics",
+            "base-instance",
+            "BuiltIn.BaseInstance",
+            "Capability.DrawParameters",
+            stage="vertex",
+        ),
+        c(
+            "graphics",
+            "cull-distance",
+            "BuiltIn.CullDistance",
+            "Capability.CullDistance",
+            stage="vertex",
+        ),
         c("graphics", "primitive-id", "BuiltIn.PrimitiveId", stage="fragment"),
         c(
             "graphics",
@@ -605,6 +699,34 @@ def _curated() -> list[Construct]:
             "conservative-depth",
             "BuiltIn.FragDepth",
             "ExecutionMode.DepthGreater",
+            stage="fragment",
+        ),
+        c(
+            "graphics",
+            "barycentric-coordinate",
+            "BuiltIn.BaryCoordKHR",
+            "Capability.FragmentBarycentricKHR",
+            stage="fragment",
+        ),
+        c(
+            "graphics",
+            "shading-rate",
+            "BuiltIn.ShadingRateKHR",
+            "Capability.FragmentShadingRateKHR",
+            stage="fragment",
+        ),
+        c(
+            "graphics",
+            "view-index",
+            "BuiltIn.ViewIndex",
+            "Capability.MultiView",
+            stage="fragment",
+        ),
+        c(
+            "graphics",
+            "stencil-export",
+            "BuiltIn.FragStencilRefEXT",
+            "Capability.StencilExportEXT",
             stage="fragment",
         ),
         c(
@@ -765,6 +887,7 @@ def universe(grammar_text: str) -> list[Construct]:
         "Decoration",
         "ExecutionModel",
         "ExecutionMode",
+        "Dim",
     ):
         found |= {f"{kind}.{e['enumerant']}" for e in kinds[kind]}
     found |= {f"Capability.{name}" for name in capabilities}
@@ -796,7 +919,8 @@ def features(language: str, grammar_text: str) -> list[Feature]:
     """The language-level features ``language`` has. SPIR-V has all of them: they are SPIR-V's own items."""
     result = []
     for construct in universe(grammar_text):
-        if language != "spirv" and _template(construct.name, language) is ABSENT:
+        template = None if language == "spirv" else _template(construct.name, language)
+        if template is ABSENT:
             continue
         result.append(
             Feature(
@@ -806,6 +930,7 @@ def features(language: str, grammar_text: str) -> list[Feature]:
                 None,
                 group=" ".join(construct.anchors),
                 stage=construct.stage,
+                target=template.target if template else "",
             )
         )
     return result

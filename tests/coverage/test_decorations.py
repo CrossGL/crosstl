@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from tools.coverage import decorations, validators
@@ -47,11 +49,165 @@ def test_a_translation_must_keep_each_anchor_of_its_graphics_feature():
     )
 
 
-def test_only_graphics_features_are_checked():
+def test_only_graphics_compute_and_resource_features_are_checked():
     loop = Feature("glsl", "control-flow", "for-loop", None, group="OpLoopMerge")
     shift = Feature("glsl", "operator", "vector-shift", None, group="Decoration.Flat")
     assert decorations.lost(loop, "spirv", "") == ""
     assert decorations.lost(shift, "spirv", "") == ""
+    # Workgroup memory and barriers are instructions and storage classes, which only running the probe checks.
+    shared = Feature(
+        "glsl",
+        "compute",
+        "shared-memory",
+        None,
+        group="StorageClass.Workgroup OpControlBarrier",
+    )
+    assert decorations.lost(shared, "spirv", "") == ""
+    # A resource keeps only the shape of its image; its buffer decorations are left to running the probe.
+    buffer = Feature(
+        "glsl",
+        "resource",
+        "read-only-buffer",
+        None,
+        group="StorageClass.StorageBuffer Decoration.NonWritable",
+    )
+    assert decorations.lost(buffer, "spirv", "") == ""
+
+
+def _texture(name, group):
+    return Feature("glsl", "resource", name, None, group=f"OpTypeImage {group}")
+
+
+def test_a_texture_translation_must_keep_the_shape_of_its_image():
+    cube = _texture("texture-cube", "Dim.Cube")
+    array = _texture("texture-cube-array", "Dim.Cube")
+    line = "%type_cube_image = OpTypeImage %float Cube 2 {arrayed} 0 1 Unknown\n"
+    assert decorations.lost(cube, "spirv", line.format(arrayed=0)) == ""
+    assert decorations.lost(array, "spirv", line.format(arrayed=1)) == ""
+    # An array texture must stay arrayed, and a single texture must not become one.
+    assert decorations.lost(array, "spirv", line.format(arrayed=0)) == (
+        "the translation loses Dim.Cube"
+    )
+    assert decorations.lost(cube, "spirv", line.format(arrayed=1)) == (
+        "the translation loses Dim.Cube"
+    )
+    flat = "%7 = OpTypeImage %float 2D 0 0 0 1 Unknown\n"
+    assert decorations.lost(cube, "spirv", flat) == "the translation loses Dim.Cube"
+    line1d = "OpCapability Sampled1D\n%5 = OpTypeImage %float 1D 0 0 0 1 Unknown\n"
+    texture1d = _texture("texture-1d", "Dim.1D Capability.Sampled1D")
+    assert decorations.lost(texture1d, "spirv", line1d) == ""
+    assert decorations.lost(texture1d, "spirv", line1d.split("\n", 1)[1]) == (
+        "the translation loses Capability.Sampled1D"
+    )
+
+
+def test_a_metal_texture_translation_keeps_the_air_type_of_its_shape(monkeypatch):
+    air = {"source": ""}
+    monkeypatch.setattr(validators, "air", lambda source: air["source"])
+    array = _texture("texture-2d-array", "Dim.2D")
+    air["source"] = "%struct._texture_2d_array_t = type opaque\n"
+    assert decorations.lost(array, "metal", "kernel") == ""
+    air["source"] = "%struct._texture_2d_t = type opaque\n"
+    assert decorations.lost(array, "metal", "kernel") == (
+        "the translation loses Dim.2D"
+    )
+    # A capability has no AIR type, so a 1D texture is checked for its shape only.
+    texture1d = _texture("texture-1d", "Dim.1D Capability.Sampled1D")
+    air["source"] = "%struct._texture_1d_t = type opaque\n"
+    assert decorations.lost(texture1d, "metal", "kernel") == ""
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+@pytest.mark.parametrize(
+    ("texture", "read", "air"),
+    [
+        (
+            "texturecube<float>",
+            "tex.sample(smp, float3(fin[0]), level(0.0))",
+            "texture_cube",
+        ),
+        (
+            "texturecube_array<float>",
+            "tex.sample(smp, float3(fin[0]), 1, level(0.0))",
+            "texture_cube_array",
+        ),
+        ("texture_buffer<float>", "tex.read(0u)", "texture_buffer_1d"),
+    ],
+)
+def test_the_metal_compiler_names_each_texture_shape_in_air(texture, read, air):
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        f"kernel void probe(device float* fin [[buffer(0)]], {texture} tex [[texture(0)]],\n"
+        "                  sampler smp [[sampler(0)]]) {\n"
+        f"    fin[0] = {read}.x;\n}}\n"
+    )
+    assert f"%struct._{air}_t = type opaque" in validators.air(source)
+
+
+def _compute(name, group):
+    return Feature("glsl", "compute", name, None, group=group)
+
+
+def test_a_compute_translation_must_keep_its_built_in():
+    # One invocation per workgroup makes the lane index 0, so only the decoration tells it from a constant.
+    lane = _compute("subgroup-invocation-id", "BuiltIn.SubgroupLocalInvocationId")
+    decorated = (
+        "OpDecorate %gl_SubgroupInvocationID BuiltIn SubgroupLocalInvocationId\n"
+    )
+    assert decorations.lost(lane, "spirv", decorated) == ""
+    assert decorations.lost(lane, "spirv", "%float_0 = OpConstant %float 0\n") == (
+        "the translation loses BuiltIn.SubgroupLocalInvocationId"
+    )
+
+
+def test_a_constant_built_in_may_be_written_as_its_value(monkeypatch):
+    size = _compute("workgroup-size", "BuiltIn.WorkgroupSize")
+    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(
+        validators,
+        "lower",
+        lambda *args, **kwargs: ("%uint_1 = OpConstant %uint 1\n", ""),
+    )
+    assert decorations.lost(size, "slang", "outp[i] = float(WorkgroupSize().x);") == ""
+    assert decorations.lost(size, "spirv", "%uint_1 = OpConstant %uint 1\n") == ""
+
+
+def test_a_language_without_the_feature_only_validates_its_translation():
+    # HLSL has no workgroup count, so the HLSL that CrossTL writes for an OpenCL C probe cannot keep one.
+    count = _compute("num-workgroups", "BuiltIn.NumWorkgroups")
+    assert decorations.lost(count, "hlsl", "outp[i] = float(_num_groups.x);") == ""
+    assert decorations.lost(count, "spirv", "%uint_1 = OpConstant %uint 1\n") == (
+        "the translation loses BuiltIn.NumWorkgroups"
+    )
+
+
+def test_a_metal_compute_translation_keeps_the_air_of_its_built_in(monkeypatch):
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    groups = _compute("num-subgroups", "BuiltIn.NumSubgroups")
+    assert (
+        decorations.lost(groups, "metal", '!{!"air.simdgroups_per_threadgroup"}') == ""
+    )
+    assert decorations.lost(groups, "metal", '!{!"air.thread_position_in_grid"}') == (
+        "the translation loses BuiltIn.NumSubgroups"
+    )
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_records_the_subgroup_attributes_in_air():
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "kernel void probe(device float* outp [[buffer(0)]], uint lane [[thread_index_in_simdgroup]]) {\n"
+        "    outp[0] = float(lane);\n}\n"
+    )
+    lane = _compute("subgroup-invocation-id", "BuiltIn.SubgroupLocalInvocationId")
+    assert decorations.lost(lane, "metal", source) == ""
+    assert decorations.lost(
+        lane,
+        "metal",
+        source.replace(
+            "lane [[thread_index_in_simdgroup]]", "lane [[thread_index_in_threadgroup]]"
+        ),
+    ) == ("the translation loses BuiltIn.SubgroupLocalInvocationId")
 
 
 def test_a_translation_is_lowered_with_its_entry_point_and_automatic_locations(
@@ -236,6 +392,80 @@ def test_the_metal_compiler_records_early_tests_and_conservative_depth_in_air():
     )
 
 
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_records_barycentrics_views_and_stencil_in_air():
+    header = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "struct In { float2 uv; };\n"
+    )
+    bary = _fragment(
+        "barycentric-coordinate",
+        "BuiltIn.BaryCoordKHR Capability.FragmentBarycentricKHR",
+    )
+    source = header + (
+        "fragment float4 probe(In in [[stage_in]], float3 b [[barycentric_coord]]) "
+        "{ return float4(b, in.uv.x); }\n"
+    )
+    assert decorations.lost(bary, "metal", source) == ""
+    assert decorations.lost(
+        bary,
+        "metal",
+        source.replace(", float3 b [[barycentric_coord]]", "").replace(
+            "float4(b,", "float4(in.uv, 0.0,"
+        ),
+    ) == ("the translation loses BuiltIn.BaryCoordKHR")
+    view = _fragment("view-index", "BuiltIn.ViewIndex Capability.MultiView")
+    source = header + (
+        "fragment float4 probe(In in [[stage_in]], uint v [[amplification_id]]) "
+        "{ return float4(in.uv, float(v), 1.0); }\n"
+    )
+    assert decorations.lost(view, "metal", source) == ""
+    assert decorations.lost(
+        view, "metal", source.replace("[[amplification_id]]", "[[primitive_id]]")
+    ) == ("the translation loses BuiltIn.ViewIndex")
+    stencil = _fragment(
+        "stencil-export", "BuiltIn.FragStencilRefEXT Capability.StencilExportEXT"
+    )
+    source = header + (
+        "struct Out { float4 color [[color(0)]]; uint s [[stencil]]; };\n"
+        "fragment Out probe(In in [[stage_in]]) { Out out; out.color = float4(in.uv, 0.0, 1.0); "
+        "out.s = 1; return out; }\n"
+    )
+    assert decorations.lost(stencil, "metal", source) == ""
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_extension_built_ins_with_their_capabilities():
+    rate = _fragment(
+        "shading-rate", "BuiltIn.ShadingRateKHR Capability.FragmentShadingRateKHR"
+    )
+    source = (
+        "#version 460\n#extension GL_EXT_fragment_shading_rate : require\n"
+        "layout(location = 0) out vec4 color;\n"
+        "void main() {\n    color = vec4(float(gl_ShadingRateEXT));\n}\n"
+    )
+    assert decorations.lost(rate, "glsl", source) == ""
+    assert decorations.lost(
+        rate, "glsl", source.replace("gl_ShadingRateEXT", "gl_FrontFacing")
+    ) == (
+        "the translation loses BuiltIn.ShadingRateKHR, Capability.FragmentShadingRateKHR"
+    )
+    stencil = _fragment(
+        "stencil-export", "BuiltIn.FragStencilRefEXT Capability.StencilExportEXT"
+    )
+    source = (
+        "#version 460\n#extension GL_ARB_shader_stencil_export : require\n"
+        "layout(location = 0) out vec4 color;\n"
+        "void main() {\n    color = vec4(1.0);\n    gl_FragStencilRefARB = 1;\n}\n"
+    )
+    assert decorations.lost(stencil, "glsl", source) == ""
+    assert decorations.lost(
+        stencil, "glsl", source.replace("    gl_FragStencilRefARB = 1;\n", "")
+    ) == (
+        "the translation loses BuiltIn.FragStencilRefEXT, Capability.StencilExportEXT"
+    )
+
+
 def test_a_webgl_translation_is_lowered_as_glsl_es_3_10(monkeypatch):
     calls = []
 
@@ -273,3 +503,115 @@ def test_glslang_lowers_a_glsl_es_3_00_vertex_shader():
     assert decorations.lost(
         INVARIANT, "webgl", source.replace("invariant gl_Position;\n", "")
     ) == ("the translation loses Decoration.Invariant")
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_records_the_base_vertex_and_instance_in_air():
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "vertex float4 probe(uint base [[base_vertex]]) { return float4(float(base)); }\n"
+    )
+    base = Feature(
+        "metal",
+        "graphics",
+        "base-vertex",
+        None,
+        group="BuiltIn.BaseVertex Capability.DrawParameters",
+        stage="vertex",
+    )
+    assert decorations.lost(base, "metal", source) == ""
+    assert decorations.lost(
+        base, "metal", source.replace("[[base_vertex]]", "[[vertex_id]]")
+    ) == ("the translation loses BuiltIn.BaseVertex")
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_a_draw_index_read_with_its_capability():
+    source = (
+        "#version 460\nvoid main() {\n"
+        "    gl_Position = vec4(float(gl_DrawID), 0.0, 0.0, 1.0);\n}\n"
+    )
+    draw = Feature(
+        "glsl",
+        "graphics",
+        "draw-index",
+        None,
+        group="BuiltIn.DrawIndex Capability.DrawParameters",
+        stage="vertex",
+    )
+    assert decorations.lost(draw, "glsl", source) == ""
+    assert decorations.lost(
+        draw, "glsl", source.replace("gl_DrawID", "gl_VertexID")
+    ) == ("the translation loses BuiltIn.DrawIndex, Capability.DrawParameters")
+
+
+_SPECIALIZATION = Feature(
+    "wgsl",
+    "compute",
+    "specialization-constant",
+    None,
+    group="OpSpecConstant Decoration.SpecId",
+)
+
+
+def test_a_wgsl_translation_keeps_a_specialization_constant_as_an_override():
+    # naga resolves overrides before it writes SPIR-V, so the declaration is checked in the translation itself and no
+    # compiler is needed.
+    source = (
+        "override scale: i32 = 3;\n"
+        "@group(0) @binding(0) var<storage, read_write> outp: array<f32>;\n"
+        "@compute @workgroup_size(1, 1, 1)\n"
+        "fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+        "    outp[id.x] = f32(scale);\n}\n"
+    )
+    assert decorations.lost(_SPECIALIZATION, "wgsl", source) == ""
+    assert decorations.lost(
+        _SPECIALIZATION, "wgsl", source.replace("override scale", "const scale")
+    ) == ("the translation loses Decoration.SpecId")
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+def test_the_metal_compiler_lists_function_constants_in_air():
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "constant int scale [[function_constant(0)]];\n"
+        "kernel void probe(device float* outp [[buffer(0)]]) { outp[0] = float(scale); }\n"
+    )
+    metal = dataclasses.replace(_SPECIALIZATION, language="metal")
+    assert decorations.lost(metal, "metal", source) == ""
+    assert decorations.lost(
+        metal, "metal", source.replace(" [[function_constant(0)]]", " = 3")
+    ) == ("the translation loses Decoration.SpecId")
+
+
+@pytest.mark.skipif(not validators.command("metal"), reason="Metal is not installed")
+@pytest.mark.parametrize(
+    ("name", "anchor", "qualified"),
+    [
+        ("restrict-buffer", "Decoration.Restrict", "device float* __restrict outp"),
+        ("volatile-buffer", "Decoration.Volatile", "volatile device float* outp"),
+        (
+            "coherent-buffer",
+            "Decoration.Coherent",
+            "coherent(device) device float* outp",
+        ),
+    ],
+)
+def test_the_metal_compiler_keeps_buffer_memory_qualifiers_in_air(
+    name, anchor, qualified
+):
+    # AIR has no attribute for these qualifiers: a restrict buffer is a noalias argument, a volatile one is stored to
+    # with volatile stores, and a coherent one through the device_coherent intrinsics.
+    source = (
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        f"kernel void probe(device float* fin [[buffer(0)]], {qualified} [[buffer(1)]],\n"
+        "                  uint3 id [[thread_position_in_grid]]) {\n"
+        "    outp[id.x] = fin[id.x] * 2.0;\n}\n"
+    )
+    feature = Feature(
+        "metal", "compute", name, None, group=f"StorageClass.StorageBuffer {anchor}"
+    )
+    assert decorations.lost(feature, "metal", source) == ""
+    assert decorations.lost(
+        feature, "metal", source.replace(qualified, "device float* outp")
+    ) == (f"the translation loses {anchor}")

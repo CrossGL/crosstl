@@ -1,13 +1,19 @@
-"""Whether a translated graphics probe keeps the decorations, built-ins, capabilities and execution modes its feature
-is anchored to.
+"""Whether a translated graphics, compute or texture probe keeps the decorations, built-ins, capabilities, execution
+modes and image shapes its feature is anchored to.
 
 A graphics probe is validated but never run, so a translation that drops an interpolation qualifier or a built-in
-still validates. Where the target language compiles to SPIR-V, the translation is lowered with the language's
-reference compiler and must keep every ``Decoration``, ``BuiltIn``, ``Capability`` and ``ExecutionMode`` anchor of
-its feature, as each native probe does. GLSL ES 3.00 is lowered as GLSL ES 3.10, the first version glslang compiles
-for Vulkan. Metal compiles to AIR instead, where a translation must keep the attribute of each anchor (:data:`AIR`)
-or the call that stands for it (:data:`AIR_CALLS`). A translation that its validator accepts but its compiler does
-not lower here is only validated.
+still validates. A compute probe runs with one invocation per workgroup, so a translation that writes a constant in
+place of a built-in such as the subgroup invocation index computes what the native probe computes. A translation that
+samples a 2D texture where its probe samples a cube or an array texture can still validate, since HLSL truncates the
+extra coordinate. Where the target language compiles to SPIR-V, the translation is lowered with the language's
+reference compiler and must keep every ``Decoration``, ``BuiltIn``, ``Capability`` and ``ExecutionMode`` anchor of its
+feature, as each native probe does, except the anchors in :data:`FOLDED`. A resource feature keeps only its image's
+``Dim`` anchor, arrayed when the feature's name ends in ``-array``, and the capability that shape needs. GLSL ES 3.00
+is lowered as GLSL ES 3.10, the first version glslang compiles for Vulkan. Metal compiles to AIR instead, where a
+translation must keep the attribute of each anchor (:data:`AIR`), the call, metadata or qualifier that stands for it
+(:data:`AIR_PATTERNS`), or the texture type of its shape (:data:`AIR_TEXTURES`). An anchor the compiler resolves
+before it writes SPIR-V is checked in the translation's own declarations instead (:data:`SOURCE`). A translation that
+its validator accepts but its compiler does not lower here is only validated.
 """
 
 from __future__ import annotations
@@ -16,13 +22,17 @@ import re
 
 from . import validators
 from .model import Feature
+from .templates import ABSENT, TEMPLATES
 
 _PATTERNS = {
     "Decoration": r"^\s*Op(?:Member)?Decorate %\w+(?: \d+)? {name}\b",
     "BuiltIn": r"^\s*Op(?:Member)?Decorate %\w+(?: \d+)? BuiltIn {name}\b",
     "Capability": r"^\s*OpCapability {name}\b",
     "ExecutionMode": r"^\s*OpExecutionMode %\w+ {name}\b",
+    # An image type's dimension and, after its depth operand, whether it is arrayed.
+    "Dim": r"^\s*%\w+ = OpTypeImage %\w+ {name} \d+ {arrayed}\b",
 }
+_IMAGE_KINDS = frozenset({"Dim", "Capability"})
 # The instructions that stand for an anchor as well: whether an invocation is a helper is the ``HelperInvocation``
 # built-in or, with SPV_EXT_demote_to_helper_invocation, ``OpIsHelperInvocationEXT``, which DXC and slangc emit for
 # ``IsHelperLane()``.
@@ -54,33 +64,86 @@ AIR = {
     "Decoration.Location": "air.render_target",
     "ExecutionMode.EarlyFragmentTests": "early_fragment_tests",
     "ExecutionMode.DepthGreater": "air.greater",
+    "BuiltIn.BaseVertex": "air.base_vertex",
+    "BuiltIn.BaseInstance": "air.base_instance",
+    "BuiltIn.GlobalInvocationId": "air.thread_position_in_grid",
+    "BuiltIn.LocalInvocationId": "air.thread_position_in_threadgroup",
+    "BuiltIn.WorkgroupId": "air.threadgroup_position_in_grid",
+    "BuiltIn.LocalInvocationIndex": "air.thread_index_in_threadgroup",
+    "BuiltIn.NumWorkgroups": "air.threadgroups_per_grid",
+    "BuiltIn.WorkgroupSize": "air.threads_per_threadgroup",
+    "BuiltIn.SubgroupSize": "air.threads_per_simdgroup",
+    "BuiltIn.SubgroupLocalInvocationId": "air.thread_index_in_simdgroup",
+    "BuiltIn.NumSubgroups": "air.simdgroups_per_threadgroup",
+    "BuiltIn.SubgroupId": "air.simdgroup_index_in_threadgroup",
+    "BuiltIn.BaryCoordKHR": "air.barycentric_coord",
+    "BuiltIn.ViewIndex": "air.amplification_id",
+    "BuiltIn.FragStencilRefEXT": "air.stencil",
 }
 # The attributes that AIR names apart when a fragment function reads them: a ``[[sample_mask]]`` input is
 # ``!"air.sample_mask_in"``. A feature whose name ends in ``-input`` reads its built-in.
 AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
-# The anchors that AIR carries as a call rather than an attribute: ``simd_is_helper_thread()`` calls
-# ``@air.simd_is_helper_thread``.
-AIR_CALLS = {"BuiltIn.HelperInvocation": "air.simd_is_helper_thread"}
+# The anchors that AIR carries otherwise than as an attribute, as patterns of its text: ``simd_is_helper_thread()``
+# calls ``@air.simd_is_helper_thread``, each function constant is an entry of ``!air.function_constants``, a
+# ``__restrict`` pointer is a ``noalias`` kernel argument, a ``volatile`` one is read and written with volatile loads
+# and stores, and a ``coherent(device)`` one through the ``device_coherent`` intrinsics.
+AIR_PATTERNS = {
+    "BuiltIn.HelperInvocation": r"@air\.simd_is_helper_thread\(",
+    "Decoration.SpecId": r"^!air\.function_constants = ",
+    "Decoration.Restrict": r"^define [^\n]*\bnoalias\b",
+    "Decoration.Volatile": r"\b(?:load|store) volatile\b",
+    "Decoration.Coherent": r"@air\.\w+\.device_coherent\.",
+}
+# The AIR type of a texture of each dimension: a ``texturecube`` argument is a ``%struct._texture_cube_t``, and an
+# arrayed one a ``%struct._texture_cube_array_t``.
+AIR_TEXTURES = {
+    "Dim.1D": "texture_1d",
+    "Dim.2D": "texture_2d",
+    "Dim.3D": "texture_3d",
+    "Dim.Cube": "texture_cube",
+    "Dim.Buffer": "texture_buffer_1d",
+}
+# The anchors a language's compiler resolves before it writes SPIR-V, with the declaration that keeps each one in the
+# translation itself: naga replaces every pipeline-overridable constant with its value, so a WGSL translation keeps a
+# specialization constant when it declares an ``override``.
+SOURCE = {"wgsl": {"Decoration.SpecId": r"^\s*override\s+\w+"}}
+# The built-ins that are constants: GLSL defines ``gl_WorkGroupSize`` as the local size, so a translation may write
+# the value itself, as slangc does for ``WorkgroupSize()``.
+FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
 
 _ESSL_300 = re.compile(r"\A(\s*#version\s+)300(\s+es\b)")
 
 
 def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
-    """The anchors of a graphics ``feature`` that the compiled ``language`` shows, as ``(anchor, pattern)`` pairs."""
-    if feature.category != "graphics":
+    """The anchors of a graphics or compute ``feature`` that the compiled ``language`` shows, as ``(anchor,
+    pattern)`` pairs."""
+    if feature.category not in ("graphics", "compute", "resource"):
         return []
+    # A language that cannot spell the feature has no native probe to match, as HLSL has no workgroup count for the
+    # OpenCL C translations it carries, so its translation is only validated.
+    if TEMPLATES.get(language, {}).get(feature.name) is ABSENT:
+        return []
+    # A resource keeps the shape of its image: the dimension, whether it is arrayed, and the capability the shape
+    # needs. Its other anchors are the layouts and access of buffers, which running the probe compares.
+    kinds = _IMAGE_KINDS if feature.category == "resource" else _PATTERNS
+    arrayed = int(feature.name.endswith("-array"))
     wanted = []
     for anchor in feature.group.split():
         kind, _, name = anchor.partition(".")
+        if anchor in FOLDED or kind not in kinds:
+            continue
         if language == "metal":
             air = AIR_INPUTS if feature.name.endswith("-input") else {}
             attribute = air.get(anchor, AIR.get(anchor))
             if attribute:
                 wanted.append((anchor, rf'!"{re.escape(attribute)}"'))
-            elif anchor in AIR_CALLS:
-                wanted.append((anchor, rf"@{re.escape(AIR_CALLS[anchor])}\("))
-        elif kind in _PATTERNS:
-            pattern = _PATTERNS[kind].format(name=re.escape(name))
+            elif anchor in AIR_PATTERNS:
+                wanted.append((anchor, AIR_PATTERNS[anchor]))
+            elif anchor in AIR_TEXTURES:
+                texture = AIR_TEXTURES[anchor] + ("_array" if arrayed else "")
+                wanted.append((anchor, rf"%struct\._{texture}_t\b"))
+        else:
+            pattern = _PATTERNS[kind].format(name=re.escape(name), arrayed=arrayed)
             if anchor in _INSTRUCTIONS:
                 pattern = f"{pattern}|{_INSTRUCTIONS[anchor]}"
             wanted.append((anchor, pattern))
@@ -114,12 +177,18 @@ def lost(feature: Feature, language: str, source: str) -> str:
     Empty when it keeps them all, when ``feature`` has none to check or when ``source`` cannot be compiled here.
     """
     wanted = _wanted(feature, language)
-    if not wanted:
-        return ""
-    compiled = _compiled(feature, language, source)
-    if not compiled:
-        return ""
+    declared = SOURCE.get(language, {})
     missing = [
-        anchor for anchor, pattern in wanted if not re.search(pattern, compiled, re.M)
+        anchor
+        for anchor, _ in wanted
+        if anchor in declared and not re.search(declared[anchor], source, re.M)
     ]
+    wanted = [(anchor, pattern) for anchor, pattern in wanted if anchor not in declared]
+    compiled = _compiled(feature, language, source) if wanted else ""
+    if compiled:
+        missing += [
+            anchor
+            for anchor, pattern in wanted
+            if not re.search(pattern, compiled, re.M)
+        ]
     return f"the translation loses {', '.join(missing)}" if missing else ""
