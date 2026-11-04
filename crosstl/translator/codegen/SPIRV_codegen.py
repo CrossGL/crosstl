@@ -10474,6 +10474,18 @@ class VulkanSPIRVCodeGen(
                     "taskPayloadSharedEXT storage"
                 )
                 return self.register_constant(0, uint_type)
+        elif self.task_payload_shared_variables:
+            # GL_EXT_mesh_shader's EmitMeshTasksEXT(x, y, z) passes the stage's one taskPayloadSharedEXT variable,
+            # which OpEmitMeshTasksEXT names; without it the mesh workgroups would read no payload.
+            if len(self.task_payload_shared_variables) > 1:
+                names = ", ".join(sorted(self.task_payload_shared_variables))
+                self.refuse_lowering(
+                    "SPIR-V mesh DispatchMesh without a payload argument is "
+                    f"ambiguous between task payload variables: {names}"
+                )
+                return self.register_constant(0, uint_type)
+            payload_pointer = next(iter(self.task_payload_shared_variables.values()))
+            self.record_task_payload_interface(payload_pointer)
 
         self.require_capability("MeshShadingEXT")
         self.require_extension("SPV_EXT_mesh_shader")

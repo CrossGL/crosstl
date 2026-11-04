@@ -5515,7 +5515,12 @@ class VulkanParser:
             storage_class = variable["storage_class"] or pointer_type.get(
                 "storage_class"
             )
-            if storage_class != "Workgroup" or pointer_type.get("kind") != "pointer":
+            # A task or mesh stage's payload (SPV_EXT_mesh_shader) is GL_EXT_mesh_shader's taskPayloadSharedEXT.
+            qualifier = {
+                "Workgroup": "groupshared",
+                "TaskPayloadWorkgroupEXT": "taskPayloadSharedEXT",
+            }.get(storage_class)
+            if qualifier is None or pointer_type.get("kind") != "pointer":
                 continue
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
@@ -5526,7 +5531,7 @@ class VulkanParser:
 
             declarations.append(
                 VariableNode(
-                    f"groupshared {data_type}",
+                    f"{qualifier} {data_type}",
                     f"{self.spirv_assembly_value_name(variable['id'], names, decorations)}"
                     f"{array_suffix}",
                     spirv_id=variable["id"],
