@@ -1973,7 +1973,10 @@ Base-two logarithms
 ~~~~~~~~~~~~~~~~~~~
 
 Metal ``log2`` and ``precise::log2`` have independent opt-in operand and
-finite-accuracy policies. Neither changes ``binary32_log_profile`` or natural
+finite-accuracy policies. The same options govern ``log10`` and
+``precise::log10``, which become the profiled base-two logarithm times
+log10(2), so a target's own base-two logarithm no longer decides their
+accuracy near one. Neither changes ``binary32_log_profile`` or natural
 logarithms. Explicit fast calls and source-owned overloads keep their existing
 behavior. With both options unset, generated code is unchanged.
 
@@ -1993,7 +1996,10 @@ is selected. Operand-only profiles leave ordinary finite calculations native.
 ``portable-finite`` uses integer normalization and a reduced odd-series
 approximation, avoiding the target logarithm's cancellation near one. Native
 regressions compare against independently rounded 120- and 180-digit decimal
-references with a four-ULP binary32 bound. This tested bound is not an exhaustive
+references with a four-ULP binary32 bound. Base-ten results are checked against
+the same references with a nine-ULP bound: four ULPs of the base-two result can
+be eight of the base-ten one when the two sit at opposite ends of their
+binades, plus the rounding of the product. This tested bound is not an exhaustive
 accuracy proof or a promise of bit identity with every source device. The
 original Metal control characterizes the tested compiler/device's flush policy.
 
