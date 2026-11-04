@@ -336,7 +336,8 @@ class FakeCache:
 
     def get(self, entry):
         assert entry == self.entry
-        prefix = "" if self.target == "metal" else entry + "_"
+        # Reflection collapses the doubled underscore of a Boolean entry.
+        prefix = "" if self.target == "metal" else entry.rstrip("_") + "_"
         kernel, source, destination = copy_packages.signature(entry)
         names = (
             ("src", "dst", "size")
@@ -723,3 +724,33 @@ def test_general_copy_indices_match_the_layout_enumeration():
     assert copy_evidence.strided_indices(np, [], [], 5).tolist() == [5]
     assert copy_evidence.strided_indices(np, [3, 0], [1, 1], 5).tolist() == []
     assert copy_evidence.strided_indices(np, [2, 2], [3], 1).tolist() == [1, 1, 4, 4]
+
+
+@pytest.mark.parametrize(
+    "member",
+    # DirectX collapses the doubled underscore of ``<entry>_size``; OpenGL
+    # and Metal name the parameter itself.
+    ("v_copyfloat16bool_size", "size"),
+)
+def test_boolean_destination_scalars_bind_to_their_parameter(monkeypatch, member):
+    from demos.integrations.mlx.portable_host import copy_dispatch
+
+    monkeypatch.setattr(copy_dispatch, "reflected_layout_matches", lambda *args: True)
+    descriptor = {
+        "bindings": [
+            {"name": "size_binding", "scalarLayout": {"memberName": member}},
+            {"name": "src", "scalarLayout": {}},
+            {"name": "dst", "scalarLayout": {}},
+        ]
+    }
+    supplied = {
+        name: SimpleNamespace(dtype=b"uint32") for name in ("src", "dst", "size")
+    }
+    uploads = {
+        name: {"dtype": "uint32", "shape": [1], "values": [0]} for name in supplied
+    }
+    _, outputs, observed, matched = copy_dispatch._bind(
+        "v_copyfloat16bool_", descriptor, supplied, uploads
+    )
+    assert matched == {"size": "size_binding", "src": "src", "dst": "dst"}
+    assert set(outputs) == {"dst"} and observed == ["size_binding", "src"]

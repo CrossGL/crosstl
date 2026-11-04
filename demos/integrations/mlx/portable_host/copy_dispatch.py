@@ -108,8 +108,13 @@ def validate(entry, buffers, threads, execution):
 
 
 def _bind(entry, descriptor, supplied, uploads):
-    """Map reflected bindings to the source parameters and their packets."""
-    prefix = entry + "_"
+    """Map reflected bindings to the source parameters and their packets.
+
+    DirectX names a scalar ``<entry>_<parameter>`` with doubled underscores
+    collapsed, as for every Boolean ``..._bool_`` entry, so the prefix drops
+    the entry's trailing underscore, as elementwise_dispatch's does.
+    """
+    prefix = entry.rstrip("_") + "_"
     _, source, destination = signature(entry)
     inputs, outputs, observed, matched = {}, {}, [], {}
     for binding in descriptor["bindings"]:

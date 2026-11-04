@@ -711,7 +711,18 @@ TARGET_EXCLUSIONS = {
         # Reverse scans read through wrapped unsigned pointer offsets.
         "test_ops.TestOps.test_scans": "CrossGL/crosstl#2905",
         "test_ops.TestOps.test_scans_complex_exclusive": "CrossGL/crosstl#2905",
-    }
+        "test_ops.TestOps.test_cummax_cummin_nan": "CrossGL/crosstl#2905",
+        # precise::log2 and precise::log10 become GLSL's log2, whose absolute
+        # error near one (2^-21 in [0.5, 2]) exceeds np.allclose's bound.
+        "test_ops.TestOps.test_unary_ops_from_non_array": "CrossGL/crosstl#2123",
+    },
+    # Whole-array arg reductions take more than one wave, whose numbering
+    # need not keep thread 0 in the surviving wave.
+    "directx": {
+        "test_ops.TestOps.test_argmin_argmax": "CrossGL/crosstl#2120",
+        "test_reduce.TestReduce.test_arg_reduce": "CrossGL/crosstl#2120",
+        "test_bf16.TestBF16.test_arg_reduction_ops": "CrossGL/crosstl#2120",
+    },
 }
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
 INDEXING_PREFIXES = ("gather", "scatter_axis", "scatter")

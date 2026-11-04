@@ -358,24 +358,29 @@ def test_dispatch_returns_and_audits_every_dtype(monkeypatch, tmp_path, target, 
             assert audit(monkeypatch, event, target) == len(out)
 
 
-@pytest.mark.parametrize("target", ("metal", "directx"))
-def test_multi_simdgroup_rows_run_where_waves_are_exact(monkeypatch, tmp_path, target):
+def test_multi_simdgroup_rows_run_on_metal(monkeypatch, tmp_path):
     words = sample_words("float32", 1560)
     out, event, host = run(
-        monkeypatch, tmp_path, target, "argmax_float32", words, (1560,), 0
+        monkeypatch, tmp_path, "metal", "argmax_float32", words, (1560,), 0
     )
     assert out == [reference("argmax", "float32", words)]
     assert host.arg_reductions.requests == ["argmax_float32@416"]
     assert event["workgroupSize"] == [416, 1, 1]
-    assert audit(monkeypatch, event, target) == 1
+    assert audit(monkeypatch, event, "metal") == 1
 
 
-def test_opengl_refuses_rows_of_more_than_one_simdgroup(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "target, issue",
+    (("opengl", "crosstl#2207"), ("directx", "crosstl#2120")),
+)
+def test_rows_of_more_than_one_simdgroup_are_refused(
+    monkeypatch, tmp_path, target, issue
+):
     words = sample_words("float32", 1560)
-    with pytest.raises(ValueError, match="crosstl#2207"):
-        run(monkeypatch, tmp_path, "opengl", "argmin_float32", words, (1560,), 0)
+    with pytest.raises(ValueError, match=issue):
+        run(monkeypatch, tmp_path, target, "argmin_float32", words, (1560,), 0)
     words = sample_words("float32", 128)
-    out, _, _ = run(monkeypatch, tmp_path, "opengl", "argmin_float32", words, (128,), 0)
+    out, _, _ = run(monkeypatch, tmp_path, target, "argmin_float32", words, (128,), 0)
     assert out == [reference("argmin", "float32", words)]
 
 

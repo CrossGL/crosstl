@@ -53,13 +53,18 @@ def uploads(dtype, target, values, outputs, metadata):
     }
 
 
+# The translator issue behind each target's width limit.
+ARG_WIDTH_ISSUES = {"opengl": "CrossGL/crosstl#2207", "directx": "CrossGL/crosstl#2120"}
+
+
 def require_target_width(target, execution):
     """Refuse a threadgroup width ``target``'s subgroup lowering cannot run."""
     limit = arg_reduce_layout.TARGET_WIDTH_LIMITS.get(target)
     if limit is not None and execution["workgroupSize"][0] > limit:
+        issue = ARG_WIDTH_ISSUES[target]
         raise ValueError(
             f"{target} arg reductions of more than one simdgroup are not supported "
-            "yet; see CrossGL/crosstl#2207"
+            f"yet; see {issue}"
         )
 
 
