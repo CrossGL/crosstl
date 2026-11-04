@@ -7,6 +7,7 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     ConstructorNode,
+    ExpressionNode,
     ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
@@ -507,6 +508,20 @@ def generic_function_call_key(generator, func_name, args):
         # instantiated while specializations are collected; later passes only
         # look them up.
         return matches[0]["key"]
+    if not getattr(generator, "collecting_generic_function_specializations", False):
+        # Leading arguments read as types (``inc(w, w)``) are only trusted while
+        # specializations are collected, when the call's variables are in scope;
+        # later passes may lack that scope, so they only look such calls up.
+        specializations = (
+            getattr(generator, "generic_function_specializations", {}) or {}
+        )
+        matches = [
+            match
+            for match in matches
+            if not match["leading_type_arguments"] or match["key"] in specializations
+        ]
+        if not matches:
+            return None
     for match in matches:
         _ensure_generic_function_specialization(
             generator,
@@ -708,6 +723,9 @@ def _generic_function_candidate_call_match(
         "function": func,
         "key": key,
         "substitutions": substitutions,
+        "leading_type_arguments": (
+            explicit_types is None and value_args is not call_args
+        ),
         "rank": (
             matched_params,
             exact_matches,
@@ -1421,7 +1439,13 @@ def _type_argument_name(generator, expr):
     if isinstance(expr, str):
         return expr
     if isinstance(expr, IdentifierNode):
+        # A variable in scope is a value, not a type argument: ``inc(w, w)`` must not read ``w`` as ``T``.
+        if _fallback_expression_result_type(generator, expr):
+            return None
         return expr.name
+    if isinstance(expr, ExpressionNode):
+        # A call, member, element, literal or operator is a value too, as ``sel(w, w)`` in ``sel(sel(w, w), w)``.
+        return None
     return generator.type_name_string(expr)
 
 
