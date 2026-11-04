@@ -138,6 +138,7 @@ from .wgsl_specialization_constants import (
     WGSLSpecializationPlan,
     plan_wgsl_specialization_constants,
 )
+from .wgsl_specialized_workgroup_size import specialized_workgroup_size
 from .wgsl_stage_io import (
     entry_parameter_locations,
     interpolation_qualifiers,
@@ -1306,7 +1307,12 @@ class WGSLCodeGen(
                     self.pop_parameter_plan()
                 self.pop_pointer_identifier_scope()
                 self.pop_identifier_scope()
-            return "\n".join(attributes + [f"{signature} {body}"])
+            overrides = (
+                self.stage_workgroup_size_overrides(stage_node)
+                if stage_name == "compute"
+                else []
+            )
+            return "\n".join(overrides + attributes + [f"{signature} {body}"])
         finally:
             self._current_stage_name = previous_stage
             self._current_workgroup_size = previous_workgroup_size
@@ -1729,6 +1735,21 @@ class WGSLCodeGen(
         )
 
     def stage_workgroup_size_values(self, stage_node):
+        config = getattr(stage_node, "execution_config", {}) or {}
+        arguments, _ = specialized_workgroup_size(
+            config, self.stage_workgroup_size_defaults(stage_node)
+        )
+        return arguments
+
+    def stage_workgroup_size_overrides(self, stage_node):
+        """Module-scope overrides of the workgroup dimensions the stage specializes."""
+        config = getattr(stage_node, "execution_config", {}) or {}
+        _, declarations = specialized_workgroup_size(
+            config, self.stage_workgroup_size_defaults(stage_node)
+        )
+        return declarations
+
+    def stage_workgroup_size_defaults(self, stage_node):
         config = getattr(stage_node, "execution_config", {}) or {}
         require_static_workgroup_size(config)
         values = config.get("numthreads") or [

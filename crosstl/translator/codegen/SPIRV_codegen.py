@@ -220,6 +220,11 @@ from .spirv_single_evaluation import (
     recording_subscript_indices,
     subscript_index_scope,
 )
+from .spirv_specialized_workgroup_size import (
+    declare_specialized_workgroup_size,
+    module_compute_stage_config,
+    workgroup_size_components,
+)
 from .spirv_stage_distances import (
     entry_point_distance_layout,
     entry_point_distance_variable,
@@ -31184,12 +31189,14 @@ class VulkanSPIRVCodeGen(
         self, name: str, type_id: SpirvId, builtin_name: str
     ) -> SpirvId:
         uint_type = self.register_primitive_type("uint")
-        x, y, z = self.compute_local_size(self.current_stage)
-        components = [self.register_constant(value, uint_type) for value in (x, y, z)]
+        components, specialized = workgroup_size_components(
+            self, self.current_stage, uint_type
+        )
 
         id_value = self.get_id()
         component_list = " ".join(f"%{component.id}" for component in components)
-        self.emit(f"%{id_value} = OpConstantComposite %{type_id.id} {component_list}")
+        opcode = "OpSpecConstantComposite" if specialized else "OpConstantComposite"
+        self.emit(f"%{id_value} = {opcode} %{type_id.id} {component_list}")
         self.emit(f'OpName %{id_value} "{name}"')
         self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
 
@@ -32029,6 +32036,7 @@ class VulkanSPIRVCodeGen(
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
             self.emit_tessellation_execution_modes(execution_model, function_id, stage)
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
+            declare_specialized_workgroup_size(self, stage)
             x, y, z = self.compute_local_size(stage)
             if self.requires_compute_derivatives:
                 x = max(2, x + (x % 2))
@@ -32604,6 +32612,8 @@ class VulkanSPIRVCodeGen(
         ):
             # Built-ins read outside a stage take the size of the module's compute entries.
             self.module_compute_entry_config = compute_entry_configs[0]
+        elif not compute_entry_configs:
+            self.module_compute_entry_config = module_compute_stage_config(self, ast)
 
         if self.tessellation_control_stage is None:
             for func, qualifier in top_level_entries:

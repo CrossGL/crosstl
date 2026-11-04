@@ -247,7 +247,11 @@ from .glsl_buffer_layout import (
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
-from .glsl_draw_parameters import DRAW_PARAMETERS, vertex_builtin_spelling
+from .glsl_draw_parameters import (
+    DRAW_PARAMETERS,
+    draw_parameter_spelling,
+    vertex_builtin_spelling,
+)
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
@@ -559,6 +563,7 @@ from .scalar_return_bounds import (
 )
 from .sizeof_calls import sizeof_call_bytes
 from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS, glsl_quad_sum_helper
+from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -19356,8 +19361,20 @@ class GLSLCodeGen(
         x, y, z = self.validate_glsl_compute_workgroup_size(
             compute_local_size(execution_config)
         )
+        fixed = f"local_size_x = {x}, local_size_y = {y}, local_size_z = {z}"
+        ids = workgroup_size_specialization_ids(execution_config, "OpenGL")
+        specialized = "".join(
+            f", local_size_{axis}_id = {spec_id}"
+            for axis, spec_id in zip("xyz", ids)
+            if spec_id is not None
+        )
+        if not specialized:
+            return f"layout({fixed}) in;\n"
+        # local_size_*_id exists only when the shader is compiled to SPIR-V (GLSL 4.60 section 4.4.1.4,
+        # GL_KHR_vulkan_glsl); a driver compiling the source keeps the defaults, as for layout(constant_id).
         return (
-            f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
+            f"{GLSL_SPIRV_GUARD}layout({fixed}{specialized}) in;\n"
+            f"#else\nlayout({fixed}) in;\n#endif\n"
         )
 
     def validate_glsl_compute_workgroup_size(self, values):
@@ -40160,7 +40177,7 @@ complex64_t crossgl_complex64_mod_assign(
             return "gl_VertexID"
         if stage_name == "vertex":
             return vertex_builtin_spelling(self, name)
-        return name
+        return draw_parameter_spelling(self, name)
 
     def glsl_identifier_is_resolved(self, name):
         symbol_tables = (
@@ -58921,6 +58938,8 @@ complex64_t crossgl_complex64_mod_assign(
         mapped = self.map_stage_input_semantic(semantic, stage_name)
         if normalize_stage_name(stage_name) == "vertex":
             mapped = vertex_builtin_spelling(self, mapped)
+        else:
+            mapped = draw_parameter_spelling(self, mapped)
         if normalize_stage_name(stage_name) == "compute":
             quadgroup_alias = {
                 "gl_QuadGroupID": "(gl_LocalInvocationIndex / 4u)",

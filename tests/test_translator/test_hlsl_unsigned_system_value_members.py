@@ -58,3 +58,44 @@ def test_only_int_members_of_those_system_values_change():
     assert codegen.hlsl_unsigned_system_value_type("uint", "SV_PrimitiveID") == "uint"
     assert codegen.hlsl_unsigned_system_value_type("int", "TEXCOORD0") == "int"
     assert codegen.hlsl_unsigned_system_value_type("float4", "SV_Position") == "float4"
+
+
+STENCIL_EXPORT = """
+shader Probe {
+    struct FragmentInput {
+        vec2 uv;
+    }
+    struct FragmentOutput {
+        vec4 color;
+        int stencil @ gl_FragStencilRefARB;
+    }
+    fragment {
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            output.color = vec4(input.uv, 0.0, 1.0);
+            output.stencil = int(input.uv.x * 255.0);
+            return output;
+        }
+    }
+}
+"""
+
+
+def test_int_stencil_export_member_is_uint(tmp_path):
+    # GL_ARB_shader_stencil_export declares gl_FragStencilRefARB int; DXIL requires SV_StencilRef uint.
+    path = tmp_path / "shader.cgl"
+    path.write_text(STENCIL_EXPORT)
+    hlsl = crosstl.translate(str(path), backend="directx", format_output=False)
+    assert re.search(r"uint stencil\s*:\s*SV_StencilRef;", hlsl)
+    assert HLSLCodeGen().hlsl_unsigned_system_value_type("int", "SV_StencilRef") == (
+        "uint"
+    )
+    if shutil.which("dxc"):
+        (tmp_path / "out.hlsl").write_text(hlsl)
+        result = subprocess.run(
+            ["dxc", "-T", "ps_6_0", "-E", "PSMain", "out.hlsl"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr

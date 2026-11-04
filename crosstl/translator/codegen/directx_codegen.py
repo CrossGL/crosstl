@@ -542,6 +542,7 @@ from .software_quad_reductions import (
     hlsl_quad_sum_body,
     quad_builtin_expression,
 )
+from .specialized_workgroup_size import require_fixed_workgroup_size
 from .stage_distance_layout import distance_semantic
 from .stage_refusals import RayStageInterfaceUnsupportedError
 from .stage_utils import (
@@ -13522,6 +13523,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return None
 
     def generate_compute_numthreads(self, execution_config=None):
+        require_fixed_workgroup_size(
+            execution_config,
+            "HLSL",
+            "Direct3D has no specialization constants, and numthreads takes literals",
+        )
         x, y, z = self.validate_hlsl_compute_workgroup_size(
             compute_local_size(execution_config)
         )
@@ -36471,8 +36477,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
     # System values DXIL requires to be uint; Vulkan HLSL and GLSL (gl_Layer, gl_PrimitiveID) also take int.
+    # GLSL declares the stencil export gl_FragStencilRefARB as int (GL_ARB_shader_stencil_export).
     HLSL_UNSIGNED_SYSTEM_VALUES = frozenset(
         {
+            "SV_STENCILREF",
             "SV_RENDERTARGETARRAYINDEX",
             "SV_VIEWPORTARRAYINDEX",
             "SV_PRIMITIVEID",
