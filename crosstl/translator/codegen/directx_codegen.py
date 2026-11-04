@@ -319,6 +319,7 @@ from .hlsl_texture_residency import (
     hlsl_texture_resident_call,
 )
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
+from .hlsl_unrepresentable_memory import hlsl_unrepresentable_memory_qualifier
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_subgroup_lane_mask_expression,
@@ -53581,6 +53582,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def resource_memory_qualifier(self, mapped_type, node):
+        unrepresentable = hlsl_unrepresentable_memory_qualifier(node)
+        if unrepresentable is not None:
+            return self.refuse_lowering(unrepresentable)
         if not (
             self.is_hlsl_rw_texture_type(mapped_type)
             or str(mapped_type).startswith("RWBuffer")
