@@ -578,11 +578,34 @@ def test_image_probes_pass_sample_and_index_textures_and_update_an_image_in_plac
         ("hip", "read-write-image", "hipSurfaceObject_t img"),
         ("opencl", "read-write-image", "__read_write image2d_t img"),
         ("rust", "array-of-textures", "tex: &[Image!(2D, type=f32, sampled); 2]"),
+        ("glsl", "array-of-textures-loop-index", "    acc += textureLod(tex[k], "),
+        (
+            "glsl",
+            "array-of-textures-nonuniform-index",
+            "#extension GL_EXT_nonuniform_qualifier : require\n",
+        ),
+        ("glsl", "array-of-textures-nonuniform-index", "tex[nonuniformEXT(k)]"),
+        (
+            "hlsl",
+            "array-of-textures-nonuniform-index",
+            "tex[NonUniformResourceIndex(k)]",
+        ),
+        (
+            "metal",
+            "array-of-textures-nonuniform-index",
+            "uint k = uint(fin[i]) & 1u;\n",
+        ),
+        ("rust", "array-of-textures-loop-index", "for k in 0..2 {\n"),
     ):
         probe = probes.build(_feature(language, name), language)
         assert line in probe.source, (language, name)
     crossgl = probes.build(_feature("glsl", "array-of-textures"), "crossgl").source
     assert "        uniform sampler2D tex[2];\n" in crossgl
+    # CrossGL spells the non-uniform index as GLSL does, with no extension to enable.
+    crossgl = probes.build(
+        _feature("glsl", "array-of-textures-nonuniform-index"), "crossgl"
+    ).source
+    assert "tex[nonuniformEXT(k)]" in crossgl and "#extension" not in crossgl
     # A helper samples a program-scope texture by name where the language has them, and takes it as a parameter
     # where textures are entry-point parameters.
     assert (
@@ -599,12 +622,18 @@ def test_image_probes_pass_sample_and_index_textures_and_update_an_image_in_plac
     for language in ("glsl", "hlsl", "slang", "metal"):
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert names <= listed, language
+    arrays = {name for name in names if name.startswith("array-of-")}
     absent = {
-        "wgsl": {"array-of-textures"},
-        "webgl": {"read-write-image"},
-        "cuda": {"array-of-textures"},
-        "hip": {"array-of-textures"},
-        "opencl": {"array-of-textures"},
+        "wgsl": arrays,
+        "webgl": {
+            "read-write-image",
+            "array-of-textures-loop-index",
+            "array-of-textures-nonuniform-index",
+        },
+        "cuda": arrays,
+        "hip": arrays,
+        "opencl": arrays,
+        "rust": {"array-of-textures-nonuniform-index"},
         "mojo": names,
     }
     for language, missing in absent.items():

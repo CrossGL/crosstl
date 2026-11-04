@@ -520,6 +520,21 @@ def _curated() -> list[Construct]:
         c("resource", "read-write-image", "OpImageRead", "OpImageWrite", "Dim.2D"),
         c(
             "resource",
+            "array-of-textures-loop-index",
+            "OpTypeArray",
+            "OpLoopMerge",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
+            "array-of-textures-nonuniform-index",
+            "Capability.ShaderNonUniform",
+            "Decoration.NonUniform",
+            "OpTypeArray",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
             "buffer-in-helper",
             "OpFunctionCall",
             "StorageClass.StorageBuffer",
