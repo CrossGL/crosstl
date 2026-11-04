@@ -1,6 +1,7 @@
 """Reverse code generator that emits CrossGL from Vulkan SPIR-V AST nodes."""
 
 from ..common_ast import InitializerListNode
+from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
 from .tessellation_control_import import tessellation_control_mode_attributes
 from .VulkanAst import (
@@ -1024,7 +1025,9 @@ class VulkanToCrossGLConverter:
                     if "readonly" in getattr(node, "declaration_qualifiers", [])
                     else "RWStructuredBuffer"
                 )
-                attributes = self.uniform_block_attribute_suffix(node)
+                attributes = self.uniform_block_attribute_suffix(
+                    node
+                ) + storage_buffer_memory_attribute_suffix(node)
                 if block_name not in self.emitted_storage_buffer_type_names:
                     code += f"    struct {block_name} {{\n"
                     for field_type, field_name in node.struct_fields:

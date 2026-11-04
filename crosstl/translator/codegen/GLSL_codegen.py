@@ -30804,7 +30804,14 @@ class GLSLCodeGen(
             source_location=getattr(expression, "source_location", None),
         )
 
-    def validate_glsl_storage_pointer_mutation_target(self, expression):
+    def validate_glsl_storage_pointer_mutation_target(
+        self, expression, required_access="read_write"
+    ):
+        """Refuse a mutation through a storage view whose backing buffer lacks ``required_access``.
+
+        A plain store needs ``write`` access, so a ``writeonly`` buffer accepts it; a compound assignment, an
+        increment or an atomic reads the value as well and needs ``read_write``.
+        """
         self.glsl_storage_struct_reinterpret_mutation(expression)
         binding = self.glsl_storage_pointer_mutation_binding(
             expression, self.glsl_storage_pointer_aliases()
@@ -30823,7 +30830,7 @@ class GLSLCodeGen(
                 source_location=getattr(expression, "source_location", None),
             )
         self.validate_glsl_storage_pointer_binding_access(
-            binding, "read_write", expression
+            binding, required_access, expression
         )
 
     def generate_glsl_workgroup_pointer_alias_declaration(self, node, indent):
@@ -39261,7 +39268,9 @@ complex64_t crossgl_complex64_mod_assign(
             left = self.generate_glsl_buffer_block_mutation_target(left_node)
             return f"{left} = {storage_aggregate}"
         self.validate_glsl_private_pointer_byte_view_mutation(left_node)
-        self.validate_glsl_storage_pointer_mutation_target(left_node)
+        self.validate_glsl_storage_pointer_mutation_target(
+            left_node, "write" if op == "=" else "read_write"
+        )
         self.validate_glsl_buffer_block_assignment_target(left_node, op)
         storage_assignment = self.float_atomic_storage.assignment(
             node, left_node, right_node, op, statement_context
