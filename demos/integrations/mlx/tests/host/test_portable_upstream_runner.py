@@ -1,6 +1,7 @@
 """The shared upstream matrix-product runner and its CI job, for every runner."""
 
 import json
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,8 @@ from demos.integrations.mlx.portable_host import (
     verify_upstream_fp_qmv,
     verify_upstream_fp_qmv_large_output,
     verify_upstream_fp_qvm,
+    verify_upstream_gated_delta,
+    verify_upstream_hadamard,
     verify_upstream_qmm,
     verify_upstream_qmm_shapes,
     verify_upstream_qmm_vjp,
@@ -40,6 +43,13 @@ RUNNERS = {
     "fp_qvm": verify_upstream_fp_qvm,
     "qmv_small_non_multiples": verify_upstream_qmv_small_non_multiples,
     "qmm_vjp": verify_upstream_qmm_vjp,
+    "hadamard": verify_upstream_hadamard,
+    "gated_delta": verify_upstream_gated_delta,
+}
+# The pinned suite of each runner whose tests are not test_quantized's.
+SUITES = {
+    "hadamard": "test_ops.TestOps",
+    "gated_delta": "test_fast_gated_delta.TestGatedDelta",
 }
 RUN_STEP = "Run the unchanged upstream test through translated kernels"
 
@@ -66,6 +76,35 @@ def trace(spec, target):
     return items + [
         {"entry": spec.REDUCTIONS[0], "target": target, "threads": 64},
         {"entry": "rbitsc", "target": target},
+    ]
+
+
+def workloads(spec, mode):
+    """Records ``spec.validate_workloads`` accepts for ``mode``."""
+    from demos.integrations.mlx.portable_host import (
+        gated_delta_workloads,
+        hadamard_workloads,
+    )
+
+    if spec.WORKLOADS is gated_delta_workloads.run:
+        return [
+            {
+                "id": case["id"],
+                "maximumErrors": [0.0],
+                "close": [True],
+                "dispatchCount": int(mode == "native"),
+            }
+            for case in gated_delta_workloads.cases()
+        ]
+    assert spec.WORKLOADS is hadamard_workloads.run
+    return [
+        {
+            "id": case["id"],
+            "maximumError": 0.0,
+            "bound": 1.0,
+            "dispatchCount": int(mode == "native"),
+        }
+        for case in hadamard_workloads.cases()
     ]
 
 
@@ -201,6 +240,22 @@ def test_maxima_need_a_whole_array_family(maxima, message):
         upstream_runner.maxima_directories(Path("r"), maxima)
 
 
+def test_row_reductions_sit_beside_the_maxima():
+    directories = upstream_runner.maxima_directories(
+        Path("o/r"),
+        (
+            "all_reduce_maxfloat32",
+            "row_reduce_simple_sumfloat32",
+            "row_reduce_looped_1_reduce_sumbfloat16",
+        ),
+    )
+    assert directories == {
+        "all": (Path("o/r"), ("all_reduce_maxfloat32",)),
+        "row": (Path("o/r-row"), ("row_reduce_simple_sumfloat32",)),
+        "row-half": (Path("o/r-row-half"), ("row_reduce_looped_1_reduce_sumbfloat16",)),
+    }
+
+
 def test_operator_families_are_the_ones_the_worker_loads():
     assert upstream_runner.operator_directory(Path("o/r"), "half") == Path(
         "o/half-packages"
@@ -244,6 +299,27 @@ def test_cli_worker_loads_every_reduction_directory(monkeypatch):
     ]
 
 
+def test_cli_worker_unsets_the_environment_a_test_skips_under(monkeypatch):
+    # test_hadamard skips itself under CI; other runners keep the environment.
+    seen = []
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr(
+        upstream_runner,
+        "worker",
+        lambda args, tests, trace_values, **extra: seen.append("CI" in os.environ),
+    )
+    common = ["--mlx-root", "m", "--packages", "p", "--output-dir", "o"]
+    upstream_runner.main(verify_upstream_qvm, [*common, "--worker", "cpu"])
+    upstream_runner.main(verify_upstream_hadamard, [*common, "--worker", "native"])
+    assert seen == [True, False]
+    assert verify_upstream_hadamard.UNSET_ENVIRONMENT == ("CI",)
+    assert all(
+        not hasattr(spec, "UNSET_ENVIRONMENT")
+        for name, spec in RUNNERS.items()
+        if name != "hadamard"
+    )
+
+
 @pytest.mark.parametrize("name", sorted(RUNNERS))
 @pytest.mark.parametrize(
     "fault", [None, "random", "packages", "cpu", "native", "source"]
@@ -283,6 +359,10 @@ def test_runner_prepares_packages_before_both_workers(
             quantization.write_json(
                 destination / "results.json", record(spec, mode, len(items))
             )
+            if hasattr(spec, "WORKLOADS"):
+                quantization.write_json(
+                    destination / "workloads.json", workloads(spec, mode)
+                )
             if mode == "native":
                 (destination / "trace.jsonl").write_text(
                     "\n".join(json.dumps(item) for item in items)
@@ -320,6 +400,9 @@ def test_runner_prepares_packages_before_both_workers(
             expected_reductions = [
                 str(output / ("reductions-half" if name == "qmm" else "reductions"))
             ]
+            if name == "gated_delta":
+                # Its fallback's float32 row sums.
+                expected_reductions.append(str(output / "reductions-row"))
             if getattr(spec, "COLUMN_SUMS", ()):
                 expected_reductions.append(str(output / "reductions-column"))
             assert loaded == expected_reductions
@@ -346,11 +429,12 @@ def test_runner_module_names_itself(name):
     assert spec.MODULE == spec.__name__
     assert spec.LABEL == "test_" + name
     first, *others = spec.UPSTREAM_TESTS
-    assert first == f"test_quantized.TestQuantized.test_{name}"
+    suite = SUITES.get(name, "test_quantized.TestQuantized")
+    assert first.startswith(f"{suite}.test_{name}")
     # Further tests are distinct tests of the same pinned suite, such as the
     # named test's multi-row form.
     assert len(set(spec.UPSTREAM_TESTS)) == len(spec.UPSTREAM_TESTS)
-    assert all(test.startswith("test_quantized.TestQuantized.test_") for test in others)
+    assert all(test.startswith(f"{suite}.test_") for test in others)
     assert set(spec.TIMEOUTS) == {"random", "packages", "cpu", "native"}
 
 
@@ -364,8 +448,8 @@ def test_cli_dispatches_each_mode(tmp_path, monkeypatch, name):
     monkeypatch.setattr(
         upstream_runner,
         "worker",
-        lambda args, tests, trace_values: calls.append(
-            ("worker", args.worker, tests, trace_values)
+        lambda args, tests, trace_values, **extra: calls.append(
+            ("worker", args.worker, tests, trace_values, extra)
         ),
     )
     monkeypatch.setattr(
@@ -377,7 +461,13 @@ def test_cli_dispatches_each_mode(tmp_path, monkeypatch, name):
     upstream_runner.main(spec, common)
     assert calls == [
         ("prepare", (Path("m"), Path("p"), Path("o"), 2)),
-        ("worker", "native", spec.UPSTREAM_TESTS, False),
+        (
+            "worker",
+            "native",
+            spec.UPSTREAM_TESTS,
+            False,
+            {"workloads": spec.WORKLOADS} if hasattr(spec, "WORKLOADS") else {},
+        ),
         ("run", spec),
     ]
 

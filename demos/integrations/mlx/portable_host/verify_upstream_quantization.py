@@ -79,10 +79,13 @@ def validate_trace(trace, target, count):
         )
 
 
-def worker(args, tests=UPSTREAM_TESTS, *, trace_values=True):
+def worker(args, tests=UPSTREAM_TESTS, *, trace_values=True, workloads=None):
     """Run ``tests`` unchanged on MLX's CPU or through the translated host.
 
     ``trace_values=False`` records long value arrays only by length and digest.
+    ``workloads(mx, np, host, mlx_root)``, when given, runs first and returns
+    records the worker keeps in ``workloads.json``; its dispatches count
+    toward ``nativeDispatches``.
     """
     import mlx.core as mx
 
@@ -100,6 +103,7 @@ def worker(args, tests=UPSTREAM_TESTS, *, trace_values=True):
             half=getattr(args, "half", None),
             half_arithmetic=getattr(args, "half_arithmetic", None),
             bfloat=getattr(args, "bfloat", None),
+            selection=getattr(args, "selection", None),
             trace_values=trace_values,
         )
         host.install()
@@ -108,6 +112,13 @@ def worker(args, tests=UPSTREAM_TESTS, *, trace_values=True):
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     try:
+        if workloads is not None:
+            import numpy as np
+
+            write_json(
+                args.output_dir / "workloads.json",
+                workloads(mx, np, host, args.mlx_root),
+            )
         suite = unittest.TestSuite(
             unittest.defaultTestLoader.loadTestsFromName(name) for name in tests
         )

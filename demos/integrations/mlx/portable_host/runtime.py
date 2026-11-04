@@ -54,6 +54,8 @@ from demos.integrations.mlx.portable_host import (
     fft_packages,
     fp_matmul_layout,
     fp_qmm_layout,
+    gated_delta_dispatch,
+    gated_delta_packages,
     gather_dispatch,
     gather_mm_dispatch,
     gemm_dispatch,
@@ -62,6 +64,8 @@ from demos.integrations.mlx.portable_host import (
     gemm_splitk_layout,
     gemv_dispatch,
     gemv_layout,
+    hadamard_dispatch,
+    hadamard_layout,
     half_storage,
     masked_scatter_dispatch,
     masked_scatter_packages,
@@ -195,6 +199,10 @@ from demos.integrations.mlx.portable_host.gemv_packages import (
     CACHE_DIRECTORY as GEMV_CACHE,
 )
 from demos.integrations.mlx.portable_host.gemv_packages import GemvPackageCache
+from demos.integrations.mlx.portable_host.hadamard_packages import (
+    CACHE_DIRECTORY as HADAMARD_CACHE,
+)
+from demos.integrations.mlx.portable_host.hadamard_packages import HadamardPackageCache
 from demos.integrations.mlx.portable_host.matmul_packages import (
     CACHE_DIRECTORY as QUANTIZED_MATMUL_CACHE,
 )
@@ -693,6 +701,16 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # The gated-delta recurrences, one per gated_delta_update.cpp hash name.
+        self.gated_deltas = (
+            gated_delta_packages.GatedDeltaPackageCache(
+                mlx_root,
+                self.directory / gated_delta_packages.CACHE_DIRECTORY,
+                self.target,
+            )
+            if mlx_root is not None
+            else None
+        )
         # The vector attention kernels, one per sdpa_vector pipeline hash name.
         self.sdpas = (
             sdpa_packages.SdpaPackageCache(
@@ -775,6 +793,11 @@ class HostRuntime:
             wide_reduction_packages.cache(
                 mlx_root, self.directory / wide_reduction_packages.CACHE, self.target
             )
+            if mlx_root is not None
+            else None
+        )
+        self.hadamards = (
+            HadamardPackageCache(mlx_root, self.directory / HADAMARD_CACHE, self.target)
             if mlx_root is not None
             else None
         )
@@ -981,6 +1004,8 @@ class HostRuntime:
                 return int(self.ffts is not None)
             if sdpa_dispatch.is_entry(name):
                 return int(self.sdpas is not None)
+            if gated_delta_dispatch.is_entry(name):
+                return int(self.gated_deltas is not None)
             if steel_attention_dispatch.is_entry(name):
                 return int(self.steel_attentions is not None)
             if sdpa_vjp_dispatch.is_entry(name):
@@ -988,6 +1013,12 @@ class HostRuntime:
             if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
                 kind = gather_mm_dispatch.family(name)
                 return int(gather_mm_dispatch.cache_for(self, kind) is not None)
+            if (
+                name.startswith(hadamard_layout.ENTRY_PREFIXES)
+                and self.hadamards is not None
+            ):
+                hadamard_layout.signature(name)
+                return 1
             if name.startswith(("gather", "scatter")) and self.gathers is not None:
                 gather_signature(name)
                 return 1
@@ -1183,6 +1214,10 @@ class HostRuntime:
             return divmod_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
+        if entry.startswith(hadamard_layout.ENTRY_PREFIXES):
+            return hadamard_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(matmul_layout.ENTRY_PREFIXES):
             return matmul_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
@@ -1230,6 +1265,10 @@ class HostRuntime:
             return fft_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if sdpa_dispatch.is_entry(entry):
             return sdpa_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if gated_delta_dispatch.is_entry(entry):
+            return gated_delta_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if steel_attention_dispatch.is_entry(entry):
             return steel_attention_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch

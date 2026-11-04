@@ -53,13 +53,17 @@ NORMALIZATION_PRIMITIVES = ("LayerNorm", "RMSNorm", "LayerNormVJP", "RMSNormVJP"
 CROSS_ENTROPY_PRIMITIVES = ("CrossEntropy", "CrossEntropyVJP")
 # fast::ConvertFP8 launches the unary ToFP8 and FromFP8 vectors; sdpa.inc
 # ports the forward attention and its fused VJP, whose use_fallback and
-# supports_bool_mask no_gpu defines outright (ATTENTION_DEFINITIONS).
+# supports_bool_mask no_gpu defines outright (ATTENTION_DEFINITIONS);
+# gated_delta.inc ports GatedDeltaUpdate and its VJP, whose use_fallback
+# no_gpu also defines (GATED_DELTA_DEFINITIONS).
 FAST_PRIMITIVES = (
     *NORMALIZATION_PRIMITIVES,
     *CROSS_ENTROPY_PRIMITIVES,
     "ConvertFP8",
     "ScaledDotProductAttention",
     "ScaledDotProductAttentionVJP",
+    "GatedDeltaUpdate",
+    "GatedDeltaUpdateVJP",
 )
 # no_gpu's attention definitions that sdpa.inc replaces with
 # scaled_dot_product_attention.cpp's.
@@ -90,6 +94,30 @@ ATTENTION_DEFINITIONS = (
 """,
     """bool fast::ScaledDotProductAttentionVJP::use_fallback(
     const array& q,
+    Stream s) {
+  return true;
+}
+""",
+)
+
+# no_gpu's gated-delta fallback rules, which gated_delta.inc replaces with
+# gated_delta_update.cpp's.
+GATED_DELTA_DEFINITIONS = (
+    """bool fast::GatedDeltaUpdate::use_fallback(
+    const int Hk,
+    const int Dk,
+    const int Hv,
+    const int Dv,
+    const bool has_mask,
+    Stream s) {
+  return true;
+}
+""",
+    """bool fast::GatedDeltaUpdateVJP::use_fallback(
+    const int Hk,
+    const int Dk,
+    const int Hv,
+    const int Dv,
     Stream s) {
   return true;
 }
@@ -139,6 +167,7 @@ def adapted_sources(original, primitives, events):
         "MaskedScatter",
         "DivMod",
         "Compiled",
+        "Hadamard",
         *UNARY_OPERATIONS,
         *VIEW_PRIMITIVES,
         *HOST_EVAL_PRIMITIVES,
@@ -175,6 +204,12 @@ def adapted_sources(original, primitives, events):
             primitives,
             definition,
             "// sdpa.inc ports this ScaledDotProductAttention member.\n",
+        )
+    for definition in GATED_DELTA_DEFINITIONS:
+        primitives = replace_once(
+            primitives,
+            definition,
+            "// gated_delta.inc ports this gated-delta member.\n",
         )
     events = replace_once(
         events,
@@ -225,6 +260,7 @@ else()
         "crosstl_cross_entropy.inc": (HERE / "cross_entropy.inc").read_bytes(),
         "crosstl_fft.inc": (HERE / "fft.inc").read_bytes(),
         "crosstl_sdpa.inc": (HERE / "sdpa.inc").read_bytes(),
+        "crosstl_gated_delta.inc": (HERE / "gated_delta.inc").read_bytes(),
     }
 
 

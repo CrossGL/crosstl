@@ -10,6 +10,7 @@
 
 #include "mlx/allocator.h"
 #include "mlx/backend/common/binary.h"
+#include "mlx/backend/common/hadamard.h"
 #include "mlx/backend/common/matmul.h"
 #include "mlx/backend/common/reduce.h"
 #include "mlx/backend/common/slicing.h"
@@ -1069,6 +1070,20 @@ void cast_elements(
     const mlx::core::array& in,
     mlx::core::array& out,
     uint64_t count) {
+  if ((in.dtype() == mlx::core::float16 && out.dtype() == mlx::core::bfloat16) ||
+      (in.dtype() == mlx::core::bfloat16 && out.dtype() == mlx::core::float16)) {
+    // copy.metal converts between the 16-bit float types through float: the
+    // widening is exact and the narrowing is the only rounding, so the
+    // translated float32 conversions of both families give the same words.
+    if (count > uint64_t(std::numeric_limits<int32_t>::max())) {
+      throw std::invalid_argument("CrossTL 16-bit float conversion exceeds its bounds.");
+    }
+    mlx::core::array wide({static_cast<int>(count)}, mlx::core::float32, nullptr, {});
+    wide.set_data(mlx::core::allocator::malloc(count * sizeof(float)));
+    cast_elements(in, wide, count);
+    cast_elements(wide, out, count);
+    return;
+  }
   const char* source_type = cast_type(in.dtype());
   const char* destination_type = cast_type(out.dtype());
   std::string entry = std::string("v_copy") + source_type + destination_type;
@@ -1732,6 +1747,128 @@ void Scan::eval_gpu(const std::vector<array>& inputs, array& out) {
     throw std::invalid_argument("CrossTL scan requires one input.");
   }
   dispatch_scan(inputs[0], out, reduce_type_, axis_, reverse_, inclusive_);
+}
+
+// Ports mlx/backend/metal/hadamard.cpp: the same decomposition, stage order,
+// specializations, scales and launch geometry. Each launch covers whole
+// transforms, so arrays whose launches would exceed the portable 65,535
+// workgroups per axis run in consecutive batches of transforms.
+void Hadamard::eval_gpu(const std::vector<array>& inputs, array& out) {
+  require_runtime();
+  if (inputs.size() != 1 || inputs[0].ndim() == 0 ||
+      inputs[0].shape() != out.shape() || inputs[0].dtype() != out.dtype() ||
+      (out.dtype() != float32 && out.dtype() != float16 && out.dtype() != bfloat16)) {
+    throw std::invalid_argument(
+        "CrossTL hadamard requires one float32, float16 or bfloat16 input of the output shape.");
+  }
+  const auto& in = inputs[0];
+  const int size = in.shape().back();
+  auto [n, m] = decompose_hadamard(size);
+  if (n * m != size || !is_power_of_2(n)) {
+    throw std::invalid_argument("CrossTL hadamard size is not m*2^k for a supported m.");
+  }
+  int n1 = 1, n2 = n;
+  if (n > 8192) {
+    for (n2 = 2; n2 * n2 < n; n2 *= 2) {
+    }
+    n1 = n / n2;
+  }
+  const int read_width_m = (n == 1) ? 1 : ((n == 2 || m == 28) ? 2 : 4);
+  const int max_radix_1 = std::min(n1, 16);
+  const int max_radix_2 = std::min(n2, 16);
+  const uint32_t width_m = std::min(n / read_width_m, 256);
+  const float scale_n1 = 1.0f;
+  const float scale_n2 = (m == 1) ? scale_ : 1.0f;
+  const float scale_m = scale_;
+
+  constexpr uint64_t max_elements = (uint64_t(1) << 28) - 1;
+  uint64_t batch = max_elements / uint64_t(size);
+  if (n2 > 1) {
+    batch = std::min<uint64_t>(batch, 65535 / uint64_t(size / n2));
+  }
+  if (n1 > 1) {
+    batch = std::min<uint64_t>(batch, 65535 / uint64_t(m));
+  }
+  if (m > 1) {
+    batch = std::min<uint64_t>(batch, 65535 / (uint64_t(n) / (read_width_m * width_m)));
+  }
+  if (batch == 0) {
+    throw std::invalid_argument("CrossTL hadamard transform exceeds one portable launch.");
+  }
+
+  const char* dtype = out.dtype() == float32 ? "float32"
+      : out.dtype() == float16                 ? "float16"
+                                               : "bfloat16";
+  const std::string name =
+      std::string("hadamard_") + std::to_string(size) + "_" + dtype;
+  if (n1 > 1) {
+    require_entry("n1" + name);
+  }
+  if (n2 > 1) {
+    require_entry("n2" + name);
+  }
+  if (m > 1) {
+    require_entry("m" + name);
+  }
+
+  // Hadamard::eval_gpu: transform row-contiguous inputs into a donated or new
+  // buffer, and anything else in place after a general copy into the output.
+  array x = in;
+  if (in.flags().row_contiguous && in.data_size() == in.size()) {
+    if (in.is_donatable()) {
+      out.copy_shared_buffer(in);
+    } else {
+      out.set_data(allocator::malloc(out.nbytes()));
+    }
+  } else {
+    dispatch_copy(in, out);
+    x = out;
+  }
+  const uint64_t total = out.size();
+  const uint64_t itemsize = out.itemsize();
+  auto launch_stage = [&](const std::string& entry, const array& source, float scale,
+                          auto geometry) {
+    for (uint64_t first = 0; first < total;) {
+      const uint64_t elements = std::min<uint64_t>(batch * size, total - first);
+      float bound_scale = scale;
+      CrosstlMlxBuffer buffers[] = {
+          {"in", dtype,
+           const_cast<uint8_t*>(source.data<uint8_t>()) + first * itemsize, elements, 0},
+          {"out", dtype, out.data<uint8_t>() + first * itemsize, elements, 1},
+          {"scale", "float32", &bound_scale, 1, 0},
+      };
+      const CrosstlMlxLaunch launch = geometry(elements);
+      char error[2048] = {};
+      const int status = dispatch_callback.load()(
+          entry.c_str(), buffers, 3, elements, &launch, error, sizeof(error));
+      error[sizeof(error) - 1] = '\0';
+      if (status != 0) {
+        throw std::runtime_error(std::string("CrossTL native hadamard failed: ") + error);
+      }
+      first += elements;
+    }
+  };
+  // hadamard_mn_contiguous: the strided n1 stage, then n2, then m.
+  if (n1 > 1) {
+    launch_stage("n1" + name, x, scale_n1, [&](uint64_t elements) {
+      return CrosstlMlxLaunch{
+          {1, uint32_t(elements / n), uint32_t(n2)},
+          {uint32_t(n1 / max_radix_1), 1, 1}};
+    });
+  }
+  if (n2 > 1) {
+    launch_stage("n2" + name, n1 > 1 ? out : x, scale_n2, [&](uint64_t elements) {
+      return CrosstlMlxLaunch{
+          {1, uint32_t(elements / n2), 1}, {uint32_t(n2 / max_radix_2), 1, 1}};
+    });
+  }
+  if (m > 1) {
+    // With n == 1 no earlier stage wrote the output, so read from x.
+    launch_stage("m" + name, n > 1 ? out : x, scale_m, [&](uint64_t elements) {
+      return CrosstlMlxLaunch{
+          {1, uint32_t(elements / m / read_width_m / width_m), 1}, {width_m, 1, 1}};
+    });
+  }
 }
 
 void RandomBits::eval_gpu(const std::vector<array>& inputs, array& out) {
@@ -4895,3 +5032,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_fft.inc"
 // And the port of the vector attention kernels, whose views take the copy.
 #include "mlx/backend/no_gpu/crosstl_sdpa.inc"
+// And the port of the gated-delta recurrence and its backward.
+#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"

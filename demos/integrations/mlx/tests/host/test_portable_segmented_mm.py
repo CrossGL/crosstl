@@ -517,7 +517,7 @@ def test_backend_ports_segmented_mm_eval_gpu():
     ]
     assert tail.index("crosstl_gather_mm.inc") < tail.index("crosstl_segmented_mm.inc")
     # Only the BlockMaskedMM, general Scatter, Convolution, cross-entropy,
-    # FFT and vector attention ports follow it.
+    # FFT, vector attention and gated-delta ports follow it.
     assert backend.rstrip().endswith(
         '#include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"\n'
         "// So does the port of BlockMaskedMM's masked products.\n"
@@ -531,7 +531,9 @@ def test_backend_ports_segmented_mm_eval_gpu():
         "// And the port of FFT, whose inputs take the strided copy.\n"
         '#include "mlx/backend/no_gpu/crosstl_fft.inc"\n'
         "// And the port of the vector attention kernels, whose views take the copy.\n"
-        '#include "mlx/backend/no_gpu/crosstl_sdpa.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_sdpa.inc"\n'
+        "// And the port of the gated-delta recurrence and its backward.\n"
+        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"'
     )
     start = port.index("void SegmentedMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]

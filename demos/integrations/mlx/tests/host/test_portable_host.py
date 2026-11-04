@@ -85,6 +85,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Convolution",
                     "FFT",
                     "Hadamard",
+                    "Cholesky",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
                     *prepare.HOST_EVAL_PRIMITIVES,
@@ -100,8 +101,9 @@ def checkout(root, monkeypatch, newline=b"\n"):
                 if name not in {"Log2", "Log10", "Rsqrt"}
             ).encode()
             + b"\n"
-            # no_gpu defines these attention members outright.
+            # no_gpu defines these attention and gated-delta members outright.
             + "".join(prepare.ATTENTION_DEFINITIONS).encode()
+            + "".join(prepare.GATED_DELTA_DEFINITIONS).encode()
         ),
         "event.cpp": (
             b"void Event::wait(Stream stream) {\n  cpu_wait();\n}\n"
@@ -131,7 +133,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
 ):
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
-    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 15
+    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 16
     for name in prepare.FAST_PRIMITIVES:
         declared = f"{declaration_macro(name)}({name})"
         assert declared not in (backend / "crosstl_primitives.cpp").read_text()
@@ -162,6 +164,9 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     )
     assert (backend / "crosstl_sdpa.inc").read_bytes() == (
         Path(prepare.__file__).with_name("sdpa.inc").read_bytes()
+    )
+    assert (backend / "crosstl_gated_delta.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("gated_delta.inc").read_bytes()
     )
     assert "NO_GPU(FFT)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert (
@@ -216,7 +221,8 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
         assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Convolution)" not in (backend / "crosstl_primitives.cpp").read_text()
     # A primitive without a host port keeps MLX's explicit GPU error.
-    assert "NO_GPU(Hadamard)" in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Cholesky)" in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Hadamard)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2

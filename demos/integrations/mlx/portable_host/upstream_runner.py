@@ -8,16 +8,24 @@ test and passes itself here. It provides:
 - ``TIMEOUTS``: the deadline of each bounded command, by mode;
 - ``prepare_packages(root, packages, reductions, jobs)``: the ``--prepare`` step;
 - ``validate_trace(trace, target, count)``: the native trace's requirements;
-- ``REDUCTIONS``: the whole-array maxima of its error bounds. Each reduction
-  family's maxima sit in ``maxima_directories(reductions, REDUCTIONS)``, which
-  the native worker loads;
+- ``REDUCTIONS``: the whole-array maxima of its error bounds, and any row
+  reductions its operations run. Each reduction family's entries sit in
+  ``maxima_directories(reductions, REDUCTIONS)``, which the native worker
+  loads;
 - optionally ``COLUMN_SUMS``: column reduction entries ``prepare_packages``
   translates into ``column_directory(reductions)``, which the native worker
   also loads;
 - optionally ``OPERATORS``: element-wise package families (``packages.py``'s
   ``half``, ``half-arithmetic`` and ``bfloat``) for a test that computes in,
-  or converts from, a 16-bit float type. ``prepare_packages`` translates each into
+  or converts from, a 16-bit float type, and ``selection`` for one that
+  selects with ``mx.where``. ``prepare_packages`` translates each into
   ``operator_directory(reductions, family)`` and the native worker loads them.
+- optionally ``WORKLOADS(mx, np, host, mlx_root)`` and
+  ``validate_workloads(records, native)``: public-API workloads both workers
+  run before the test, for paths the unchanged test cannot reach on this
+  host. Their dispatches are part of the native trace ``validate_trace`` checks.
+- optionally ``UNSET_ENVIRONMENT``: variables the workers remove before they
+  load the tests, for an unchanged test that skips itself when one is set.
 
 ``run`` translates the random packages, then the module's packages, then runs
 the test on MLX's CPU and through the translated host, and checks that the
@@ -26,6 +34,7 @@ pinned sources and adaptation are the same afterwards.
 
 import argparse
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -39,13 +48,16 @@ from demos.integrations.mlx.portable_host.verify_upstream_quantization import (
 )
 
 RANDOM_PACKAGES = "demos.integrations.mlx.portable_host.random_packages"
-# Whole-array reduction families, in the order the worker loads them.
-MAXIMA_FAMILIES = ("all", "half", "bfloat")
+# On-demand reduction families, in the order the worker loads them: the
+# whole-array families of error bounds, and the row families of a test whose
+# operations reduce rows.
+MAXIMA_FAMILIES = ("all", "half", "bfloat", "row", "row-half")
 # The worker option that loads each element-wise package family.
 OPERATOR_OPTIONS = {
     "half": "--half",
     "half-arithmetic": "--half-arithmetic",
     "bfloat": "--bfloat",
+    "selection": "--selection",
 }
 
 
@@ -90,8 +102,9 @@ def column_directory(reductions):
 def maxima_directories(reductions, maxima):
     """Each reduction family of ``maxima`` and the directory that packages it.
 
-    The float32 family keeps ``reductions`` itself; a 16-bit family sits
-    beside it, as ``reductions-half`` or ``reductions-bfloat``.
+    The float32 family keeps ``reductions`` itself; every other family sits
+    beside it, as ``reductions-half``, ``reductions-bfloat``,
+    ``reductions-row`` or ``reductions-row-half``.
     """
     from demos.integrations.mlx.portable_host.reduction_packages import ENTRY_GROUPS
 
@@ -232,6 +245,11 @@ def run(spec, root, packages, output, jobs=3):
         raise RuntimeError(
             f"Upstream {label} workers failed: {', '.join(failures)}; inspect {output}"
         )
+    workloads = {}
+    if hasattr(spec, "WORKLOADS"):
+        for mode in ("cpu", "native"):
+            workloads[mode] = json.loads((output / mode / "workloads.json").read_text())
+            spec.validate_workloads(workloads[mode], native=mode == "native")
     trace = read_trace_summary(output / "native/trace.jsonl")
     spec.validate_trace(trace, target, results["native"]["nativeDispatches"])
     evidence = {
@@ -240,6 +258,7 @@ def run(spec, root, packages, output, jobs=3):
         "upstreamTestSources": sources,
         "results": results,
         "entries": dict(sorted(Counter(record["entry"] for record in trace).items())),
+        **({"workloads": workloads} if workloads else {}),
         "sourceUnchanged": True,
         "fullUpstreamSuite": False,
     }
@@ -258,6 +277,7 @@ def main(spec, argv=None):
     parser.add_argument("--half", type=Path)
     parser.add_argument("--half-arithmetic", type=Path)
     parser.add_argument("--bfloat", type=Path)
+    parser.add_argument("--selection", type=Path)
     parser.add_argument("--jobs", type=int, default=3)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--worker", choices=("cpu", "native"))
@@ -266,7 +286,12 @@ def main(spec, argv=None):
     if args.prepare:
         spec.prepare_packages(args.mlx_root, args.packages, args.output_dir, args.jobs)
     elif args.worker:
+        # A test that skips itself when one of these is set runs unchanged
+        # with it unset.
+        for name in getattr(spec, "UNSET_ENVIRONMENT", ()):
+            os.environ.pop(name, None)
         # Thousands of dispatches: full value arrays would exceed 4 GB of trace.
-        worker(args, spec.UPSTREAM_TESTS, trace_values=False)
+        extra = {"workloads": spec.WORKLOADS} if hasattr(spec, "WORKLOADS") else {}
+        worker(args, spec.UPSTREAM_TESTS, trace_values=False, **extra)
     else:
         run(spec, args.mlx_root, args.packages, args.output_dir, args.jobs)
