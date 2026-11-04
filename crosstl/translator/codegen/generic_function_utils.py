@@ -210,9 +210,7 @@ def program_scope_variable_types(generator, shader_ast):
     return types
 
 
-def prepare_generic_function_specializations(
-    generator, functions, shader_ast=None
-):
+def prepare_generic_function_specializations(generator, functions, shader_ast=None):
     """Collect concrete generic function instantiations used by ``functions``.
 
     ``shader_ast`` supplies the shader-scope variable types the collection
@@ -252,9 +250,7 @@ def prepare_generic_function_specializations(
             if getattr(func, "name", None) in definitions:
                 continue
             pending.extend(
-                _collect_from_function(
-                    generator, func, {}, program_scope_types
-                )
+                _collect_from_function(generator, func, {}, program_scope_types)
             )
 
         seen_analysis = set()
@@ -893,9 +889,7 @@ def generate_static_generic_numeric_call(generator, func_name):
     return str(value)
 
 
-def _collect_from_function(
-    generator, func, substitutions, program_scope_types=None
-):
+def _collect_from_function(generator, func, substitutions, program_scope_types=None):
     previous_local_variable_types = getattr(generator, "local_variable_types", {})
     previous_expected_type = getattr(
         generator, "current_expression_expected_type", None
@@ -1216,9 +1210,7 @@ def _array_access_element_type(generator, expr):
         open_bracket = array_type.find("[")
         close_bracket = array_type.find("]", open_bracket)
         if close_bracket != -1:
-            return (
-                array_type[:open_bracket] + array_type[close_bracket + 1 :]
-            ) or None
+            return (array_type[:open_bracket] + array_type[close_bracket + 1 :]) or None
 
     buffer_base, buffer_args = generic_type_parts(array_type)
     if buffer_base in TYPED_BUFFER_TYPE_NAMES and len(buffer_args) == 1:

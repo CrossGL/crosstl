@@ -15,8 +15,7 @@ import crosstl
 
 TARGETS = ("opengl", "directx", "metal", "vulkan", "slang", "cuda", "hip")
 
-PICK = textwrap.dedent(
-    """
+PICK = textwrap.dedent("""
     shader P {
         buffer float* outp;
         T pick<T>(T x) { return x; }
@@ -28,11 +27,9 @@ PICK = textwrap.dedent(
             }
         }
     }
-    """
-)
+    """)
 
-SEL2 = textwrap.dedent(
-    """
+SEL2 = textwrap.dedent("""
     shader P {
         buffer float* outp;
         T sel2<T>(T a, T b) { return a; }
@@ -44,8 +41,7 @@ SEL2 = textwrap.dedent(
             }
         }
     }
-    """
-)
+    """)
 
 
 def _translate(tmp_path, source, backend):
