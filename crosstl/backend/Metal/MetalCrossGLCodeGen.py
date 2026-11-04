@@ -19790,6 +19790,14 @@ float {scalar}(float value) {{
             element_type = self.map_type(template_arguments[0])
             value = self.generate_expression(expression.args[0], is_main)
             return f"cooperative_matrix_fill({element_type}({value}))"
+        if base_name == "simdgroup_matrix" and len(expression.args) == 1:
+            # simdgroup_matrix<T, Cols, Rows>(T value) is the diagonal
+            # constructor: value on the diagonal and zero elsewhere.
+            if len(template_arguments) not in {2, 3}:
+                return None
+            element_type = self.map_type(template_arguments[0])
+            value = self.generate_expression(expression.args[0], is_main)
+            return f"cooperative_matrix_diagonal({element_type}({value}))"
         if function_name == "simdgroup_multiply":
             # simdgroup_multiply(d, a, b) stores a * b into d; it returns void.
             if len(expression.args) != 3:
