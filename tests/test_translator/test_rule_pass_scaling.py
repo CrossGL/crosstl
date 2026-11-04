@@ -33,27 +33,30 @@ def _compute_blocks(count):
     ] * count
 
 
-def _helper_body_walks(monkeypatch, program, run):
-    bodies = {id(function.body): function.name for function in program.functions}
-    walks = {name: 0 for name in bodies.values()}
+def _helper_body_walks(program, run):
+    # Key by identity but keep each body alive, and undo the patch before returning: a counter left installed would
+    # wrap the next measurement and count that program's nodes whenever one reuses a freed body's address.
+    bodies = {id(function.body): function for function in program.functions}
+    walks = {function.name: 0 for function in bodies.values()}
     walk = builtin_input_reads._walk
 
     def counting(node, seen=None):
         if seen is None and id(node) in bodies:
-            walks[bodies[id(node)]] += 1
+            walks[bodies[id(node)].name] += 1
         return walk(node, seen)
 
-    monkeypatch.setattr(builtin_input_reads, "_walk", counting)
-    run(program)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(builtin_input_reads, "_walk", counting)
+        run(program)
     return walks
 
 
-def test_builtin_input_pass_walks_shared_helpers_once(monkeypatch):
+def test_builtin_input_pass_walks_shared_helpers_once():
     def run(program):
         builtin_input_reads.pass_builtin_inputs(program, "directx")
 
-    one = _helper_body_walks(monkeypatch, _program(_compute_blocks(1)), run)
-    many = _helper_body_walks(monkeypatch, _program(_compute_blocks(6)), run)
+    one = _helper_body_walks(_program(_compute_blocks(1)), run)
+    many = _helper_body_walks(_program(_compute_blocks(6)), run)
 
     assert one == many
     assert all(count <= 2 for count in many.values()), many
