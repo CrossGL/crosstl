@@ -134,6 +134,10 @@ from .wgsl_primitive_index import (
     refuse_misplaced_primitive_index,
     refuse_primitive_index_write,
 )
+from .wgsl_specialization_constants import (
+    WGSLSpecializationPlan,
+    plan_wgsl_specialization_constants,
+)
 from .wgsl_specialized_workgroup_size import specialized_workgroup_size
 from .wgsl_stage_io import (
     entry_parameter_locations,
@@ -853,6 +857,8 @@ class WGSLCodeGen(
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
         self._constant_values = {}
+        self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
+        self._specialization_default_values = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
         self._allocated_bindings_by_group = {}
@@ -928,6 +934,8 @@ class WGSLCodeGen(
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
         self._constant_values = {}
+        self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
+        self._specialization_default_values = {}
         self._function_resource_member_parameters = {}
         self._reserved_bindings_by_group = {}
         self._allocated_bindings_by_group = {}
@@ -984,6 +992,7 @@ class WGSLCodeGen(
         self._stage_interface_member_locations = self.stage_interface_member_locations(
             ast, target_stage, structs
         )
+        self.plan_specialization_constants(ast, structs)
         self._vertex_output_interpolation = vertex_output_interpolation(
             self, self._stage_nodes(ast, target_stage)
         )
@@ -2567,11 +2576,19 @@ class WGSLCodeGen(
         return self.generate_expression(value)
 
     def generate_constant(self, node):
-        value = self.generate_module_scope_value(node.value, node.const_type)
-        return (
-            f"const {self.module_identifier_name(node.name)}: "
-            f"{self.type_name_string(node.const_type)} = {value};"
+        value = (
+            None
+            if node.value is None
+            else self.generate_module_scope_value(node.value, node.const_type)
         )
+        name = self.module_identifier_name(node.name)
+        type_name = self.type_name_string(node.const_type)
+        specialized = self._specialization_plan.declaration(
+            node.name, name, type_name, value
+        )
+        if specialized is not None:
+            return specialized
+        return f"const {name}: {type_name} = {value};"
 
     def generate_global_variable(self, node):
         sampled_texture_array = self.sampled_texture_array_info(node.var_type)
@@ -6548,10 +6565,46 @@ class WGSLCodeGen(
         member_type = self._struct_member_types.get((struct_name, member_name))
         return self.stage_interface_array_member_info_for_type(member_type)
 
+    def plan_specialization_constants(self, ast, structs):
+        """Plan the overrides of ``ast``'s specialization constants; constants that follow one stop folding.
+
+        A stage-interface array is flattened to one member per element of its default size, as its interface
+        locations are assigned from that size, so it is the one array a dependent constant may size outside
+        workgroup memory.
+        """
+        flattened = [
+            member.member_type
+            for struct in structs
+            if getattr(struct, "name", "") in self._stage_interface_struct_names
+            for member in getattr(struct, "members", []) or []
+            if self.stage_interface_array_member_info_for_type(
+                getattr(member, "member_type", None)
+            )
+            is not None
+        ]
+        self._specialization_plan = plan_wgsl_specialization_constants(
+            ast, self.type_name_string, flattened
+        )
+        dependent = self._specialization_plan.dependent
+        self._specialization_default_values = {
+            name: value
+            for name, value in self._constant_values.items()
+            if name in dependent
+        }
+        self._constant_values = {
+            name: value
+            for name, value in self._constant_values.items()
+            if name not in dependent
+        }
+
     def stage_interface_array_member_info_for_type(self, member_type):
         if not isinstance(member_type, ArrayType):
             return None
         size = self.resolve_integer_expression(member_type.size)
+        if size is None:
+            size = self.resolve_integer_expression(
+                member_type.size, self._specialization_default_values
+            )
         if size is None or size < 1:
             return None
         element_type = member_type.element_type
@@ -6706,7 +6759,10 @@ class WGSLCodeGen(
             "element count"
         )
 
-    def resolve_integer_expression(self, expr):
+    def resolve_integer_expression(self, expr, constant_values=None):
+        constant_values = (
+            self._constant_values if constant_values is None else constant_values
+        )
         if expr is None:
             return None
         if isinstance(expr, int):
@@ -6715,14 +6771,14 @@ class WGSLCodeGen(
             try:
                 return int(expr, 0)
             except ValueError:
-                return self._constant_values.get(expr)
+                return constant_values.get(expr)
         if isinstance(expr, LiteralNode):
             try:
                 return int(expr.value)
             except (TypeError, ValueError):
                 return None
         if isinstance(expr, IdentifierNode):
-            return self._constant_values.get(expr.name)
+            return constant_values.get(expr.name)
         return None
 
     def binding_group_for_resource_array(self, node):
