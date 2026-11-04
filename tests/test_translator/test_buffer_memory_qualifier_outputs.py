@@ -102,11 +102,13 @@ def _memory_decorations(spirv, block):
 
 def test_metal_output_qualifies_buffer_pointers(tmp_path):
     metal = _translate(tmp_path, POINTERS, ".cgl", "metal")
-    assert re.search(r"device float \*\s*__restrict fin \[\[buffer\(0\)\]\]", metal)
-    assert re.search(r"volatile device float \*\s*outp \[\[buffer\(1\)\]\]", metal)
-    assert re.search(r"coherent device float \*\s*co \[\[buffer\(2\)\]\]", metal)
+    assert re.search(r"device float\s*\*\s*__restrict fin\s+\[\[buffer\(0\)\]\]", metal)
+    assert re.search(r"volatile device float\s*\*\s*outp\s+\[\[buffer\(1\)\]\]", metal)
+    assert re.search(r"coherent device float\s*\*\s*co\s+\[\[buffer\(2\)\]\]", metal)
     # The helper that reads the restricted buffer takes it restricted as well.
-    assert re.search(r"float load\(uint i, device float \*\s*__restrict fin\)", metal)
+    assert re.search(
+        r"float load\(uint i,\s*device float\s*\*\s*__restrict fin\)", metal
+    )
     air = _air(tmp_path, metal)
     if air is not None:
         assert re.search(r"^define [^\n]*\bnoalias\b", air, flags=re.M)
@@ -117,7 +119,7 @@ def test_metal_output_qualifies_buffer_pointers(tmp_path):
 def test_metal_output_restricts_a_structured_buffer(tmp_path):
     metal = _translate(tmp_path, STRUCTURED, ".cgl", "metal")
     assert re.search(
-        r"const device float \*\s*__restrict fin \[\[buffer\(0\)\]\]", metal
+        r"const device float\s*\*\s*__restrict fin\s+\[\[buffer\(0\)\]\]", metal
     )
     assert not re.search(r"__restrict\s+outp", metal)
     _air(tmp_path, metal)
@@ -125,8 +127,8 @@ def test_metal_output_restricts_a_structured_buffer(tmp_path):
 
 def test_metal_import_keeps_restrict(tmp_path):
     crossgl = _translate(tmp_path, METAL, ".metal", "cgl")
-    assert re.search(r"restrict StructuredBuffer<float> fin\b", crossgl), crossgl
-    assert re.search(r"restrict RWStructuredBuffer<float> r2\b", crossgl), crossgl
+    assert re.search(r"restrict\s+StructuredBuffer<float>\s+fin\b", crossgl), crossgl
+    assert re.search(r"restrict\s+RWStructuredBuffer<float>\s+r2\b", crossgl), crossgl
     metal = _translate(tmp_path, METAL, ".metal", "metal")
     assert re.search(r"\*\s*__restrict fin\b", metal)
     assert re.search(r"\*\s*__restrict r2\b", metal)
@@ -139,14 +141,14 @@ def test_metal_scoped_coherence_reaches_spirv_and_hlsl(tmp_path):
     assert {"Restrict", "NonWritable"} <= _memory_decorations(spirv, "finBuffer")
     assert "Restrict" in _memory_decorations(spirv, "r2Buffer")
     hlsl = _translate(tmp_path, METAL, ".metal", "directx")
-    assert re.search(r"globallycoherent RWStructuredBuffer<float> co\b", hlsl), hlsl
+    assert re.search(r"globallycoherent\s+RWStructuredBuffer<float>\s+co\b", hlsl), hlsl
 
 
 def test_opengl_output_declares_qualified_buffer_pointers(tmp_path):
     glsl = _translate(tmp_path, POINTERS, ".cgl", "opengl")
-    assert re.search(r"\brestrict buffer finBuffer\b", glsl), glsl
-    assert re.search(r"\bvolatile buffer outpBuffer\b", glsl), glsl
-    assert re.search(r"\bcoherent buffer coBuffer\b", glsl), glsl
+    assert re.search(r"\brestrict\s+buffer\s+finBuffer\b", glsl), glsl
+    assert re.search(r"\bvolatile\s+buffer\s+outpBuffer\b", glsl), glsl
+    assert re.search(r"\bcoherent\s+buffer\s+coBuffer\b", glsl), glsl
     validator = shutil.which("glslangValidator")
     if validator is not None:
         source = tmp_path / "out.comp"
