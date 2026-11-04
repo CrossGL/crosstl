@@ -290,7 +290,10 @@ def test_current_mlx_unary_opengl_contract_is_complete_and_classified() -> None:
         == contract["classifications"]["families"]
     )
     assert sum(entry["sizeBytes"] for entry in entries) == 5336679
-    assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (3615, "v_Absint32int32")
+    assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
+        3615,
+        "v_Absint32int32",
+    )
     assert max((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         21355,
         "gn4large_ArcTancomplex64complex64",
