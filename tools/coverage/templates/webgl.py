@@ -12,6 +12,7 @@ from .abstractions import FAMILY as _ABSTRACTIONS
 from .abstractions import GLSL as _ABSTRACTIONS_GLSL
 from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
+from .bindings import WEBGL as _BINDINGS
 from .blocks import WEBGL as _BLOCKS
 from .booleans import WEBGL as _BOOLEANS
 from .calls import WEBGL as _CALLS
@@ -139,6 +140,7 @@ WEBGL = {
     **_MESHES,
     **_TASKS,
     **_RAYS,
+    **_BINDINGS,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

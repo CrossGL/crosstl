@@ -10,7 +10,8 @@ reference compiler and must keep every ``Decoration``, ``BuiltIn``, ``Capability
 feature, the task-payload storage a mesh stage reads, and the storage and calls through which a ray-tracing stage
 hands data to another, as each native probe does, except the anchors in
 :data:`FOLDED`. A resource feature keeps only its image's
-``Dim`` anchor, arrayed when the feature's name ends in ``-array``, and the capability that shape needs. GLSL ES 3.00
+``Dim`` anchor, arrayed when the feature's name ends in ``-array``, the capability that shape needs, its push-constant
+storage and a descriptor set other than the first. GLSL ES 3.00
 is lowered as GLSL ES 3.10, the first version glslang compiles for Vulkan. Metal compiles to AIR instead, where a
 translation must keep the attribute of each anchor (:data:`AIR`), the call, metadata or qualifier that stands for it
 (:data:`AIR_PATTERNS`), or the texture type of its shape (:data:`AIR_TEXTURES`). An anchor the compiler resolves
@@ -70,6 +71,10 @@ _OPERANDS = {
         r"^\s*(%\w+) = OpTypeStruct\b[\s\S]*"
         r"^\s*%\w+ = OpTypePointer HitAttribute(?:KHR|NV) \1\s*$"
     ),
+    # Push constants are a variable in push-constant storage, and a block bound past the first descriptor set is
+    # decorated with that set.
+    "StorageClass.PushConstant": r"^\s*%\w+ = OpVariable %\w+ PushConstant\b",
+    "Decoration.DescriptorSet": r"^\s*OpDecorate %\w+ DescriptorSet (?!0\b)\d+\b",
 }
 
 # The enumerants SPIR-V shares with an earlier NV extension under one value, which a disassembler built from an older

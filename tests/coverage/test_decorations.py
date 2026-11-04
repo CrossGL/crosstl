@@ -1058,3 +1058,58 @@ def test_glslang_lowers_the_data_ray_tracing_stages_hand_over():
     assert decorations.lost(attributes, "glsl", barycentrics) == (
         "the translation loses StorageClass.HitAttributeKHR"
     )
+
+
+def _resource(name, group):
+    return Feature("spirv", "resource", name, None, group=group)
+
+
+def test_a_binding_translation_keeps_its_push_constants_and_descriptor_set():
+    # A storage class is no decoration, so push constants are kept only by a variable in push-constant storage.
+    push = _resource("push-constant", "StorageClass.PushConstant")
+    variable = "%pc = OpVariable %_ptr_PushConstant_Constants PushConstant\n"
+    assert decorations.lost(push, "spirv", variable) == ""
+    uniform = "%pc = OpVariable %_ptr_Uniform_Constants Uniform\n"
+    assert decorations.lost(push, "spirv", uniform) == (
+        "the translation loses StorageClass.PushConstant"
+    )
+    # Every buffer is decorated with its set, so only a set other than the first keeps the probe's.
+    bound = _resource("descriptor-set", "Decoration.DescriptorSet")
+    first = "OpDecorate %fin DescriptorSet 0\nOpDecorate %params DescriptorSet 0\n"
+    assert decorations.lost(bound, "spirv", first) == (
+        "the translation loses Decoration.DescriptorSet"
+    )
+    second = first.replace("%params DescriptorSet 0", "%params DescriptorSet 1")
+    assert decorations.lost(bound, "spirv", second) == ""
+    assert decorations.lost(bound, "spirv", second.replace("Set 1", "Set 10")) == ""
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_push_constants_and_a_second_descriptor_set():
+    head = (
+        "#version 460\nlayout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+        "layout(std430, binding = 0) buffer B0 { float fin[]; };\n"
+        "layout(std430, binding = 1) buffer B1 { float outp[]; };\n"
+    )
+    body = "void main() {\n    outp[0] = fin[0] * scale;\n}\n"
+    push = Feature(
+        "glsl", "resource", "push-constant", None, group="StorageClass.PushConstant"
+    )
+    pushed = (
+        head
+        + "layout(push_constant) uniform Constants {\n    float scale;\n};\n"
+        + body
+    )
+    assert decorations.lost(push, "glsl", pushed) == ""
+    uniform = pushed.replace("push_constant", "std140, binding = 3")
+    assert decorations.lost(push, "glsl", uniform) == (
+        "the translation loses StorageClass.PushConstant"
+    )
+    bound = Feature(
+        "glsl", "resource", "descriptor-set", None, group="Decoration.DescriptorSet"
+    )
+    assert decorations.lost(bound, "glsl", uniform) == (
+        "the translation loses Decoration.DescriptorSet"
+    )
+    second = uniform.replace("std140, binding = 3", "std140, set = 1, binding = 3")
+    assert decorations.lost(bound, "glsl", second) == ""

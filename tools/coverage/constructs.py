@@ -996,6 +996,14 @@ def _curated() -> list[Construct]:
             "Decoration.RowMajor",
             "Decoration.ArrayStride",
         ),
+        c("resource", "push-constant", "StorageClass.PushConstant"),
+        c(
+            "resource",
+            "push-constant-offset",
+            "StorageClass.PushConstant",
+            "Decoration.Offset",
+        ),
+        c("resource", "descriptor-set", "Decoration.DescriptorSet"),
     ]
 
 

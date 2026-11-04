@@ -43,6 +43,7 @@ from .templates.base import (
     POSE,
     SPREAD,
 )
+from .templates.bindings import CROSSGL as BINDINGS
 from .templates.blocks import CROSSGL as BLOCKS_CROSSGL
 from .templates.booleans import CROSSGL as BOOLEANS_CROSSGL
 from .templates.columns import CROSSGL as COLUMNS_CROSSGL
@@ -651,6 +652,7 @@ CONSTRUCTS: dict[str, Template] = {
     **MESHES,
     **TASKS,
     **RAYS,
+    **BINDINGS,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

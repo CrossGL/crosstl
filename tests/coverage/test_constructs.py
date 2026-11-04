@@ -15,6 +15,7 @@ from tools.coverage import (
 )
 from tools.coverage.model import Feature, Result
 from tools.coverage.templates import (
+    bindings,
     draws,
     extensions,
     fragments,
@@ -469,6 +470,69 @@ def test_ray_tracing_probes_hand_payloads_callable_data_attributes_and_records_o
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert names <= listed, language
     for language in ("metal", "wgsl", "webgl", "cuda", "hip", "opencl", "mojo"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not listed & names, language
+
+
+def test_binding_probes_push_constants_and_bind_a_block_in_another_set():
+    feature = _feature("glsl", "push-constant")
+    assert (feature.category, feature.target) == ("resource", "vulkan")
+    assert feature.group == "StorageClass.PushConstant"
+    assert _feature("hlsl", "push-constant-offset").group == (
+        "StorageClass.PushConstant Decoration.Offset"
+    )
+    assert _feature("wgsl", "descriptor-set").group == "Decoration.DescriptorSet"
+    assert _feature("glsl", "descriptor-set").target == "vulkan"
+    for language, name, line in (
+        ("glsl", "push-constant", "layout(push_constant) uniform Constants {\n"),
+        ("glsl", "push-constant-offset", "    layout(offset = 16) float scale;\n"),
+        (
+            "glsl",
+            "descriptor-set",
+            "layout(std140, set = 1, binding = 3) uniform Params {\n",
+        ),
+        (
+            "hlsl",
+            "push-constant",
+            "[[vk::push_constant]] ConstantBuffer<Constants> pc;\n",
+        ),
+        ("hlsl", "push-constant-offset", "    [[vk::offset(16)]] float scale;\n"),
+        ("slang", "descriptor-set", "cbuffer Params : register(b3, space1) {\n"),
+        (
+            "wgsl",
+            "descriptor-set",
+            "@group(1) @binding(3) var<uniform> params: Params;\n",
+        ),
+        ("rust", "push-constant", "#[spirv(push_constant)] pc: &Constants"),
+        (
+            "rust",
+            "descriptor-set",
+            "#[spirv(uniform, descriptor_set = 1, binding = 3)] scale: &f32",
+        ),
+        ("glsl", "push-constant", "    outp[i] = fin[i] * pc.scale + pc.bias;\n"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    for name, line in (
+        ("push-constant", "    cbuffer Constants @push_constant {\n"),
+        ("push-constant-offset", "        float scale @offset(16);\n"),
+        ("descriptor-set", "    cbuffer Params @set(1) @binding(3) {\n"),
+    ):
+        assert line in probes.build(_feature("glsl", name), "crossgl").source, name
+    # Metal binds every argument at an index of one table per resource kind, WGSL has no push-constant address
+    # space, rust-gpu places no push-constant member, and GLSL ES 3.00 and the kernel languages have neither.
+    names = set(bindings.NAMES)
+    for language in ("glsl", "hlsl", "slang"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    assert {f.name for f in constructs.features("wgsl", GRAMMAR)} & names == {
+        "descriptor-set"
+    }
+    assert {f.name for f in constructs.features("rust", GRAMMAR)} & names == {
+        "push-constant",
+        "descriptor-set",
+    }
+    for language in ("metal", "webgl", "cuda", "hip", "opencl", "mojo"):
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert not listed & names, language
 
