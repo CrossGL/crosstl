@@ -592,7 +592,9 @@ def test_backend_ports_block_masked_mm_eval_gpu():
         "// And the port of the vector attention kernels, whose views take the copy.\n"
         '#include "mlx/backend/no_gpu/crosstl_sdpa.inc"\n'
         "// And the port of the gated-delta recurrence and its backward.\n"
-        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"\n'
+        "// And the port of GatherQMM's gathered quantized products.\n"
+        '#include "mlx/backend/no_gpu/crosstl_gather_qmm.inc"'
     )
     start = port.index("void BlockMaskedMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]
