@@ -387,6 +387,7 @@ from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
+from .metal_draw_base_indices import offset_metal_draw_base_indices
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_hlsl_functions import MetalHlslFunctionMixin
 from .metal_hlsl_matrix import (
@@ -2073,6 +2074,7 @@ class MetalCodeGen(
         ast = rename_metal_keyword_parameters(ast)
         refuse_unbound_metal_vertex_inputs(ast, self)
         ast = split_metal_stage_input_builtins(ast, self)
+        ast = offset_metal_draw_base_indices(ast, self)
         self.metal_type_aliases = self.collect_metal_type_aliases(ast)
         self.metal_fenced_image_names = self.collect_metal_read_after_write_images(ast)
         self.metal_program_identifier_names = (

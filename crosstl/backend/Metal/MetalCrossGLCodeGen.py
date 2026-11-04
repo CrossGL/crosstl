@@ -2114,7 +2114,7 @@ class MetalToCrossGLConverter(
         # [[attribute(n)]] is the vertex input at location n: see map_semantic.
         self.map_semantics = {
             "vertex_id": "gl_VertexID",
-            "instance_id": "gl_InstanceID",
+            "instance_id": "gl_InstanceIndex",
             "base_vertex": "gl_BaseVertex",
             "base_instance": "gl_BaseInstance",
             "position": "gl_Position",

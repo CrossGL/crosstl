@@ -170,10 +170,15 @@ def test_metal_vertex_stage_reads_inputs_and_returns_outputs(tmp_path):
     assert re.search(
         r"vertex VertexOutput vertex_main\(VertexInput input \[\[stage_in\]\],\s*"
         r"uint cgl_VertexID_bits \[\[vertex_id\]\],\s*"
-        r"uint cgl_InstanceID_bits \[\[instance_id\]\]\)",
+        r"uint _crossglInstanceIndex \[\[instance_id\]\],\s*"
+        r"uint _crossglBaseInstance \[\[base_instance\]\]\)",
         code,
     )
     assert "int cgl_VertexID = int(cgl_VertexID_bits);" in code
+    assert re.search(
+        r"uint cgl_InstanceID_bits =\s*uint\(_crossglInstanceIndex - _crossglBaseInstance\);",
+        code,
+    )
     assert "__attribute__((unused)) float3 inPos" not in code
     assert re.search(r"output\.outColor = shade\(input\.inPos, cgl_VertexID\);", code)
     assert re.search(r"place\(input\.inPos, output\);", code)

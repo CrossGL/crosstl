@@ -135,6 +135,7 @@ from .shader_records import (
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
+from .slang_vertex_indices import spell_slang_vertex_indices
 from .stage_constant_blocks import (
     StageConstantBlockConflictError,
     hoist_stage_constant_blocks,
@@ -413,6 +414,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_shading_rate_flags(program, report.target)
     refuse_mixed_metal_barycentrics(program, report.target)
     declare_builtin_outputs(program, report.target)
+    spell_slang_vertex_indices(program, report.target)
     pass_builtin_inputs(program, report.target)
     name_fragment_colour_outputs(program, report.target)
     attribute_vertex_input_positions(program, report.target)
