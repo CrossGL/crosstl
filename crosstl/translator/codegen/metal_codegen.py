@@ -410,6 +410,11 @@ from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_refusals import metal_refusals
+from .metal_signed_builtins import (
+    collect_metal_signed_builtin_members,
+    metal_signed_builtin_parameter_name,
+    metal_signed_member_assignment,
+)
 from .metal_specialization_constants import (
     flattened_stage_io_array_types,
     metal_function_constant_type_refusal,
@@ -1170,6 +1175,8 @@ class MetalCodeGen(
         self.metal_fragment_entry_output_struct_names = set()
         self.metal_stage_io_struct_names = set()
         self.metal_stage_io_member_lowerings = {}
+        self.metal_signed_builtin_members = {}
+        self.metal_signed_member_raw_reads = set()
         self.type_mapping = {
             # Scalar Types
             "void": "void",
@@ -1519,6 +1526,13 @@ class MetalCodeGen(
             "SV_InstanceId": "instance_id",
             "sv_instance_id": "instance_id",
             "sv_instanceid": "instance_id",
+            # GLSL 4.60 / GL_ARB_shader_draw_parameters; SV_Start*Location is HLSL SM 6.8.
+            "gl_BaseVertex": "base_vertex",
+            "gl_BaseVertexARB": "base_vertex",
+            "SV_StartVertexLocation": "base_vertex",
+            "gl_BaseInstance": "base_instance",
+            "gl_BaseInstanceARB": "base_instance",
+            "SV_StartInstanceLocation": "base_instance",
             "gl_IsFrontFace": "front_facing",
             "SV_IsFrontFace": "front_facing",
             "SV_IsFrontFacing": "front_facing",
@@ -2104,6 +2118,8 @@ class MetalCodeGen(
         self.metal_fragment_entry_output_struct_names = set()
         self.metal_stage_io_struct_names = set()
         self.metal_stage_io_member_lowerings = {}
+        self.metal_signed_builtin_members = {}
+        self.metal_signed_member_raw_reads = set()
         self.hlsl_program_constant_global_ids = set()
         self.cbuffer_variables = list(getattr(ast, "cbuffers", []) or [])
         hlsl_program_constants = self.synthetic_hlsl_program_constants_cbuffer(ast)
@@ -2623,6 +2639,9 @@ class MetalCodeGen(
         )
         self.metal_stage_io_member_lowerings = (
             self.collect_metal_stage_io_member_lowerings(structs)
+        )
+        self.metal_signed_builtin_members = collect_metal_signed_builtin_members(
+            self, structs
         )
         code = "\n"
         code += source_license_comments(ast, "metal")
@@ -4936,6 +4955,8 @@ class MetalCodeGen(
             if self.metal_native_narrow_bitcast_storage_type(raw_type) is not None:
                 member_type = self.metal_struct_storage_type(raw_type)
         member_type = self.metal_packed_storage_type(member, member_type)
+        if member.name in self.metal_signed_builtin_members.get(struct_name, ()):
+            member_type = "uint"
         dependencies.update(self.metal_struct_type_dependencies(member_type))
         return (
             f"    {member_type} {member.name}{abi_attr}{semantic_attr}"
@@ -7184,6 +7205,8 @@ class MetalCodeGen(
         expected_types = {
             "vertex_id": "uint",
             "instance_id": "uint",
+            "base_vertex": "uint",
+            "base_instance": "uint",
             "primitive_id": "uint",
             "front_facing": "bool",
             "render_target_array_index": "uint",
@@ -7307,20 +7330,14 @@ class MetalCodeGen(
         stage_name,
         reserved_names=None,
     ):
-        if stage_name != "vertex":
-            return None
         metal_semantic = self.canonical_metal_semantic(
             self.semantic_from_node(parameter)
         )
-        if metal_semantic not in {"vertex_id", "instance_id"}:
+        base_name = metal_signed_builtin_parameter_name(
+            stage_name, metal_semantic, mapped_param_type
+        )
+        if base_name is None:
             return None
-        if mapped_param_type != "int":
-            return None
-
-        base_name = {
-            "vertex_id": "_crossglVertexID",
-            "instance_id": "_crossglInstanceID",
-        }[metal_semantic]
         return {
             "type": "uint",
             "name": self.unique_metal_generated_name(base_name, reserved_names or ()),
@@ -7600,7 +7617,12 @@ class MetalCodeGen(
         }
 
     def validate_struct_member_semantic_types(self, struct_node):
+        signed_members = self.metal_signed_builtin_members.get(
+            getattr(struct_node, "name", None), ()
+        )
         for member in getattr(struct_node, "members", []) or []:
+            if getattr(member, "name", None) in signed_members:
+                continue
             semantic = self.semantic_from_node(member)
             metal_semantic = self.canonical_metal_semantic(semantic)
             expected_type = self.struct_member_builtin_semantic_type(metal_semantic)
@@ -11254,10 +11276,13 @@ class MetalCodeGen(
         narrow_update = (
             isinstance(expr, UnaryOpNode)
             and self.map_operator(expr.op) in {"++", "--"}
-            and self.metal_narrow_integer_conversion_expression(
-                "value", self.expression_result_type(expr.operand)
+            and (
+                self.metal_narrow_integer_conversion_expression(
+                    "value", self.expression_result_type(expr.operand)
+                )
+                is not None
+                or self.is_metal_signed_builtin_member(expr.operand)
             )
-            is not None
         )
         if narrow_update or self.is_discarded_metal_type_constructor(expr):
             # Postfix lowering reconstructs the old value after the stored update.
@@ -11376,6 +11401,8 @@ class MetalCodeGen(
         )
         if stage_io_assignment is not None:
             return stage_io_assignment
+        if self.is_metal_signed_builtin_member(target):
+            return self.generate_metal_signed_builtin_member_assignment(target, rhs, op)
 
         mesh_output_store = self.generate_metal_mesh_output_assignment(
             target, rhs, op, getattr(node, "value", getattr(node, "right", None))
@@ -11485,6 +11512,41 @@ class MetalCodeGen(
                 reason="target-has-side-effects",
             )
         return f"{lhs} = {update}"
+
+    def is_metal_signed_builtin_member(self, expr):
+        """Whether ``expr`` reads a ``uint``-declared member that holds GLSL's ``int`` built-in value."""
+        if not self.metal_signed_builtin_members or not isinstance(
+            expr, MemberAccessNode
+        ):
+            return False
+        object_type = self.expression_result_type(getattr(expr, "object", None))
+        struct_name = self.type_name_string(self.member_lookup_type_name(object_type))
+        return str(getattr(expr, "member", "")) in (
+            self.metal_signed_builtin_members.get(struct_name, ())
+        )
+
+    def generate_metal_signed_builtin_member_storage(self, expr):
+        """The ``uint`` storage of a signed built-in member, without the conversion its reads take."""
+        self.metal_signed_member_raw_reads.add(id(expr))
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.metal_signed_member_raw_reads.discard(id(expr))
+
+    def generate_metal_signed_builtin_member_assignment(self, target, rhs, op):
+        lhs = self.generate_metal_signed_builtin_member_storage(target)
+        assignment = metal_signed_member_assignment(
+            lhs, op, rhs, self.metal_expression_is_side_effect_free(target)
+        )
+        if assignment is None:
+            raise UnsupportedMetalFeatureError(
+                "signed built-in member update",
+                f"Metal declares '{lhs}' uint; the signed '{op}' update of it "
+                "reads the target twice, and the target has side effects",
+                operation=op,
+                reason="target-has-side-effects",
+            )
+        return assignment
 
     def generate_metal_stage_io_lowered_assignment(self, target, rhs, op):
         if isinstance(target, MemberAccessNode):
@@ -12276,8 +12338,18 @@ class MetalCodeGen(
             local_reinterpret = self.generate_metal_local_reinterpret_read(expr)
             if local_reinterpret is not None:
                 return local_reinterpret
-            operand = self.generate_unary_operand(expr.operand)
             operator = self.map_operator(expr.op)
+            if operator in {"++", "--"} and self.is_metal_signed_builtin_member(
+                expr.operand
+            ):
+                # The uint storage steps with the int's bits; the value read is converted back.
+                storage = self.generate_metal_signed_builtin_member_storage(
+                    expr.operand
+                )
+                if getattr(expr, "is_postfix", False):
+                    return f"int({storage}{operator})"
+                return f"int({operator}{storage})"
+            operand = self.generate_unary_operand(expr.operand)
             if operator in {"++", "--"}:
                 byte_update = self.metal_narrow_integer_update_expression(
                     expr, expr.operand, operator
@@ -13166,6 +13238,12 @@ class MetalCodeGen(
             stage_io_access = self.generate_metal_stage_io_lowered_member_access(expr)
             if stage_io_access is not None:
                 return stage_io_access
+            if id(
+                expr
+            ) not in self.metal_signed_member_raw_reads and self.is_metal_signed_builtin_member(
+                expr
+            ):
+                return f"int({self.generate_metal_signed_builtin_member_storage(expr)})"
             unsupported_value = (
                 self.unsupported_metal_ray_function_table_array_expression(expr)
             )
@@ -13840,7 +13918,7 @@ class MetalCodeGen(
             )
 
         rendered = [self.generate_expression(argument) for argument in arguments]
-        if operation == "fill":
+        if operation in {"fill", "diagonal"}:
             result_type = getattr(node, "result_type", None)
             contract = (
                 self.cooperative_matrix_contract(result_type)
@@ -13850,7 +13928,7 @@ class MetalCodeGen(
             if contract is None or len(arguments) != 1:
                 raise UnsupportedMetalFeatureError(
                     "cooperative-matrix-operation-lowering",
-                    "Metal cooperative-matrix fill requires one value and a "
+                    f"Metal cooperative-matrix {operation} requires one value and a "
                     "declared matrix result",
                     missing_capabilities=(
                         "metal.cooperative-matrix-operation-lowering",
@@ -13860,6 +13938,9 @@ class MetalCodeGen(
                     source_location=getattr(node, "source_location", None),
                 )
             matrix_type = self.map_cooperative_matrix_type(result_type, contract)
+            if operation == "diagonal":
+                # The one-value simdgroup_matrix constructor is the diagonal.
+                return f"{matrix_type}({rendered[0]})"
             fill_arguments = matrix_type[len("simdgroup_matrix") :]
             return f"make_filled_simdgroup_matrix{fill_arguments}({rendered[0]})"
         if operation == "element":

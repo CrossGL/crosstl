@@ -7,17 +7,27 @@ HLSL copied it, which DXC rejects, WGSL wrote ``array()``, and GLSL refused it a
 in variable and constant declarations whose type is ``float``, ``double``, ``half``, ``int``, ``uint``, ``bool``, an
 8-, 16- or 64-bit integer (``i16 s = {};`` becomes ``i16 s = 0;``, as written by hand), or an alias of one
 (``typedef float real_t; real_t one = {};``).
+
+An enumeration is value-initialized to zero as well. For a plain enumeration, whose variants carry no data,
+``Mode m = {};`` becomes ``Mode m = 0;``: the generators write a variable of a plain enumeration as ``int`` (``i32``
+in WGSL), whatever type the enumeration names (``enum Mode : uint``), so the zero is ``int``'s. Two targets are left
+alone: CUDA output declares the variable with the enumeration's own type, for which ``Mode m = {};`` is already zero
+and ``Mode m = 0;`` is an error, and a Rust enum has no integer value. An enumeration whose variants carry data is a
+structure on most targets and keeps its braces.
 """
 
 from __future__ import annotations
 
 from .. import ast as A
+from ..codegen.enum_utils import collect_plain_enums
 
 __all__ = ["zero_empty_scalar_initializers"]
 
 _SKIPPED_FIELDS = frozenset({"parent", "annotations", "source_location"})
 # CrossGL output keeps the program as written.
 _CARRYING = frozenset({"cgl", "crossgl", ""})
+# Targets whose generators declare an enumeration-typed variable with the enumeration's own type.
+_ENUM_TYPED_TARGETS = frozenset({"cuda", "rust"})
 # Scalar spellings, CrossGL and WGSL, by the CrossGL name of their zero's type. An 8-, 16- or 64-bit integer's zero is
 # the 32-bit literal of its signedness, as in ``i64 a = 0;`` and ``u8 c = 0u;``.
 _SCALAR_NAMES = {
@@ -51,7 +61,8 @@ _ZERO_LITERALS = {
 
 def zero_empty_scalar_initializers(program, target) -> int:
     """Replace each empty brace initializer of a scalar declaration with the scalar's zero; return how many."""
-    if str(target or "").lower() in _CARRYING:
+    target = str(target or "").lower()
+    if target in _CARRYING:
         return 0
     nodes = list(_nodes(program))
     aliases = {
@@ -61,6 +72,10 @@ def zero_empty_scalar_initializers(program, target) -> int:
         and getattr(node, "is_type_alias", False)
         and isinstance(node.name, str)
     }
+    if target not in _ENUM_TYPED_TARGETS:
+        for enum in collect_plain_enums(nodes):
+            if isinstance(enum.name, str):
+                aliases.setdefault(enum.name, "int")
     count = 0
     for node in nodes:
         if isinstance(node, A.VariableNode) and not getattr(
