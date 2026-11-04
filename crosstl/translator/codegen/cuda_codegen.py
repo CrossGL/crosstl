@@ -74,6 +74,7 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .gpu_device_globals import (
     at_file_scope,
@@ -3459,7 +3460,7 @@ class CudaCodeGen(
         if specialized_func_name is not None:
             func_name = specialized_func_name
         else:
-            raise_unresolved_generic_function_call(self, func_name, "CUDA")
+            reject_unresolved_generic_function_call(self, func_name, "CUDA")
 
         args = [self.visit(arg) for arg in raw_args]
 

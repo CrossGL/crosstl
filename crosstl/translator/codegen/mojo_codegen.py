@@ -82,6 +82,7 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .image_access_contracts import (
     explicit_image_format,
@@ -9015,7 +9016,7 @@ class MojoCodeGen:
                 func_name = specialized_func_name
                 callee = specialized_func_name
             else:
-                raise_unresolved_generic_function_call(self, func_name, "Mojo")
+                reject_unresolved_generic_function_call(self, func_name, "Mojo")
 
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)

@@ -110,6 +110,7 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import named_struct_constructor_arguments
 from .glsl_buffer_layout import (
@@ -9729,7 +9730,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             if specialized_callee is not None:
                 callee = specialized_callee
             else:
-                raise_unresolved_generic_function_call(self, callee, "Slang")
+                reject_unresolved_generic_function_call(self, callee, "Slang")
             synchronization_call = self.generate_slang_synchronization_call(
                 callee, node.args, statement_context=False
             )
