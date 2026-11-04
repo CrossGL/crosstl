@@ -8,7 +8,11 @@ import sys
 import unittest
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import absolute_workloads, selection_workloads
+from demos.integrations.mlx.portable_host import (
+    absolute_workloads,
+    elementwise_evidence,
+    selection_workloads,
+)
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.reduction_packages import load_index
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
@@ -52,6 +56,11 @@ def worker(args):
             selection=args.selection,
             absolute=args.absolute,
             reductions=args.reductions,
+            # The upstream test also reaches scalar-operand kernels (sv_, vs_)
+            # no prebuilt family installs, which the native path translates
+            # from the pinned source. The negative controls keep no source,
+            # so each still finds its package missing.
+            mlx_root=args.mlx_root if args.worker == "native" else None,
         )
         if args.worker == "missing":
             host.descriptors.pop("v_Selectint32")
@@ -225,7 +234,15 @@ def verify(args):
     absolute_workloads.validate(
         absolute_results["native"], trace[selection_count:count], native=True
     )
-    verify_native_identity(trace, base["target"])
+    installed = {
+        entry for index in (base, selection, absolute) for entry in index["descriptors"]
+    }
+    # Lazy dispatches run on the native runtime directly; their audit checks
+    # the native modules the parity adapter's identity steps cover otherwise.
+    lazy = elementwise_evidence.audit_lazy_events(
+        trace, args.mlx_root, args.packages, base["target"], installed
+    )
+    verify_native_identity(elementwise_evidence.remaining(trace, lazy), base["target"])
     checked_events = 0
     for index, directory, variants in (
         (base, args.packages, False),
@@ -245,6 +262,7 @@ def verify(args):
         ]
         checked_events += len(events)
         verify_artifacts(events, directory, index, variants=variants)
+    checked_events += len(lazy)
     if checked_events != len(trace):
         raise ValueError("Selection trace references an unknown artifact")
     after = verify_prepared(args.mlx_root)

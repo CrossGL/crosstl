@@ -13,6 +13,7 @@ themselves.
 
 import ctypes
 import hashlib
+from pathlib import Path
 
 from demos.integrations.mlx.portable_host.copy_evidence import integer_bounds, wrap
 from demos.integrations.mlx.portable_host.element_storage import (
@@ -28,12 +29,15 @@ from demos.integrations.mlx.portable_host.elementwise_dispatch import (
 )
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     BINARY_KERNELS,
+    CACHE,
+    ENTRIES,
     TERNARY,
 )
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     UNARY as UNARY_KERNEL,
 )
 from demos.integrations.mlx.portable_host.elementwise_packages import (
+    ElementwisePackageCache,
     operand_types,
     signature,
 )
@@ -231,3 +235,28 @@ def audit_event(event, cache=None, *, native=True):
         )
         audit_native_execution(event)
     return threads
+
+
+def audit_lazy_events(trace, mlx_root, packages, target, installed):
+    """Audit each dispatch the lazy cache served in place of an installed package.
+
+    ``packages`` is the host's package directory, whose cache the runtime
+    filled, and ``installed`` the entries its prebuilt families provide.
+    Each lazy event's package is derived again from the pinned source and its
+    integer or Boolean results are recomputed. Returns the audited events.
+    """
+    cache = ElementwisePackageCache(mlx_root, Path(packages) / CACHE, target)
+    events = [
+        event
+        for event in trace
+        if event["entry"] in ENTRIES and event["entry"] not in installed
+    ]
+    for event in events:
+        audit_event(event, cache)
+    return events
+
+
+def remaining(trace, events):
+    """The records of ``trace`` that are not ``events``, compared by identity."""
+    chosen = {id(event) for event in events}
+    return [event for event in trace if id(event) not in chosen]

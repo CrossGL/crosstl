@@ -241,7 +241,8 @@ def test_axis_gather_wide_launches_validate_and_compose_the_result(case):
 
 def test_axis_gather_wide_validation_bounds_storage_and_launch_axes():
     case = next(case for case in WIDE if case["layout"] == "wide-trailing")
-    entry, supplied, _, execution, outputs, _ = next(launches(case))
+    # The buffers hold raw addresses into ``arrays``, which must outlive them.
+    entry, supplied, arrays, execution, outputs, _ = next(launches(case))
     assert outputs == 65535 and entry.endswith("ncnc")
     layout.validate(entry, supplied, outputs, execution)
     for fault in ("grid", "storage", "alignment", "span"):

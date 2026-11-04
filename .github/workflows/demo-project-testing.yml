@@ -2950,7 +2950,9 @@ jobs:
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family absolute --jobs 4 --output-dir .mlx-portable-upstream-ops/absolute-packages \
               2>&1 | tee .mlx-portable-upstream-ops/absolute-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX integer64 translation" -- \
+          # The integer64 family took 98 to 135 s on all three platforms in one
+          # merge-queue run; the bound leaves the lazy vectors room in the job.
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX integer64 translation" -- \
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family integer64 --jobs 4 --output-dir .mlx-portable-upstream-ops/integer64-packages \
               2>&1 | tee .mlx-portable-upstream-ops/integer64-translation.log
@@ -2959,7 +2961,9 @@ jobs:
             python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --family slice-update --jobs 4 --output-dir .mlx-portable-upstream-ops/slice-updates-packages \
               2>&1 | tee .mlx-portable-upstream-ops/slice-update-translation.log
-          python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX lazy vector translation" -- \
+          # The 430 lazy vector entries took 970 to 1010 s on Linux and 1320 s
+          # to more than 1800 s on Windows runners in one merge-queue run.
+          python tools/run_bounded_command.py --timeout-seconds 3600 --label "MLX lazy vector translation" -- \
             python -m demos.integrations.mlx.portable_host.elementwise_warm --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-upstream-ops/base/packages \
               --jobs ${{ runner.os == 'macOS' && 3 || 4 }} --summary .mlx-portable-upstream-ops/lazy-vectors.json \

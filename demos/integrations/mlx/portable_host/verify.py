@@ -145,7 +145,8 @@ UNDISPATCHED_CHECKS = frozenset(
     }
 )
 REDUCTION_NEGATIVE_CHECKS = {
-    "reduce-dtype": "matching float32/int32/uint32",
+    # Each dtype's reduction is looked up by name; no family installs float16.
+    "reduce-dtype": "No translated package for all_reduce_sumfloat16",
     "reduce-large-allocation": "storage does not match",
     "reduce-row-limit": "row reductions support at most 268435455",
     "reduce-row-launch": "row reduction launch exceeds 65535 workgroups",
@@ -259,11 +260,15 @@ def worker(args):
                 source = mx.broadcast_to(mx.array(1.0), (16384, 16385))
                 value = mx.sum(source, axis=1)
             elif args.worker == "reduce-row-launch":
-                # 65,536 looped output rows exceed one launch axis's workgroups.
+                # 65,536 looped output rows exceed one launch axis's
+                # workgroups. They span two kept axes of 256, which do not
+                # collapse, so no single axis exceeds its own bound first.
                 source = mx.as_strided(
-                    mx.array(np.ones(130, dtype=np.float32)), (2, 65536, 65), (65, 0, 1)
+                    mx.array(np.ones(400, dtype=np.float32)),
+                    (2, 256, 256, 65),
+                    (65, 1, 0, 1),
                 )
-                value = mx.sum(source, axis=(0, 2))
+                value = mx.sum(source, axis=(0, 3))
             elif args.worker == "reduce-allocation":
                 source = mx.as_strided(mx.array([1.0, 2.0, 3.0]), (5,), (1,), 2)
                 value = mx.sum(source)
