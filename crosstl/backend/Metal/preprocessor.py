@@ -56,6 +56,7 @@ from .member_address_types import (
 )
 from .member_lowering_layers import lower_members_with_late_specializations
 from .pattern_cache import pattern as _cached_pattern
+from .source_analysis_cache import SourceAnalysisCache, memoized
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
@@ -590,6 +591,8 @@ class _MetalSourceAnalysis:
     static_constexpr_functions: Optional[Dict[str, List["_MetalConstexprFunction"]]] = (
         None
     )
+    # Whole-source query results memoized by name; see source_analysis_cache.memoized.
+    values: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -1117,7 +1120,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self._fail_closed_static_assertions = False
         self._static_constexpr_helper_values = {}
         self._static_constexpr_helper_resolution_stack = []
-        self._source_analysis_cache: Dict[str, _MetalSourceAnalysis] = {}
+        self._source_analysis_cache: SourceAnalysisCache[_MetalSourceAnalysis] = (
+            SourceAnalysisCache(SOURCE_ANALYSIS_CACHE_LIMIT)
+        )
         self._local_data_member_memo: Dict[
             str, Optional[Tuple[str, _MetalDataMember]]
         ] = {}
@@ -1229,14 +1234,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             self._discovering_entry_points = False
 
     def _source_analysis(self, code: str) -> _MetalSourceAnalysis:
-        cache = self._source_analysis_cache
-        analysis = cache.pop(code, None)
-        if analysis is None:
-            analysis = _MetalSourceAnalysis()
-        cache[code] = analysis
-        if len(cache) > SOURCE_ANALYSIS_CACHE_LIMIT:
-            del cache[next(iter(cache))]
-        return analysis
+        return self._source_analysis_cache.get(code, _MetalSourceAnalysis)
 
     def _strip_leading_compiler_diagnostics(self, code: str) -> str:
         lines = code.splitlines(keepends=True)
@@ -25785,19 +25783,34 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         arguments = self._split_template_parameter_list(pattern[start + 1 : end])
         if not 1 <= len(arguments) <= 2:
             raise self._UnrecognizedConstraint(pattern)
-        aliases = self._collect_local_type_alias_bindings(
-            code,
-            [(0, len(code))],
-            skip_spans=self._find_template_declaration_spans(code),
+        # Every query below depends on the source text only, and a module with many
+        # partial specializations evaluates one constraint per candidate.
+        values = self._source_analysis(code).values
+        aliases = memoized(
+            values,
+            "global_type_alias_bindings",
+            lambda: self._collect_local_type_alias_bindings(
+                code,
+                [(0, len(code))],
+                skip_spans=self._find_template_declaration_spans(code),
+            ),
         )
-        structs = self._find_concrete_struct_definitions(code)
+        structs = memoized(
+            values,
+            "concrete_struct_definitions",
+            lambda: self._find_concrete_struct_definitions(code),
+        )
         if not self._evaluate_boolean_constraint(
             arguments[0],
             bindings,
             structs=structs,
             type_aliases=aliases,
             position=position,
-            boolean_templates=self._find_boolean_variable_templates(code),
+            boolean_templates=memoized(
+                values,
+                "boolean_variable_templates",
+                lambda: self._find_boolean_variable_templates(code),
+            ),
             namespace_visibility=self._metal_namespace_visibility(code),
             lookup_position=template.span[0],
         ):
@@ -25815,7 +25828,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if not self._type_trait_operand_is_concrete(
             result,
-            self._concrete_type_trait_names(code, structs),
+            memoized(
+                values,
+                "concrete_type_trait_names",
+                lambda: self._concrete_type_trait_names(code, structs),
+            ),
             allow_unknown_named_types=False,
         ):
             raise self._UnrecognizedConstraint(pattern)
@@ -27802,7 +27819,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         the whole materialization snapshot: resolving through a possibly
         possibly shadowed declaration would be a silent specialization guess.
         """
+        return memoized(
+            self._source_analysis(code).values,
+            "unqualified_remove_cv_t_available",
+            lambda: self._scan_unqualified_remove_cv_t_available(code),
+        )
 
+    def _scan_unqualified_remove_cv_t_available(self, code: str) -> bool:
         ignored_spans = self._find_comment_and_literal_spans(code)
         masked = self._mask_comments_and_literals(code)
         if re.search(
