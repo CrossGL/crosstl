@@ -18021,6 +18021,9 @@ class MetalCodeGen(
             kind = getattr(value, "kind", None)
             scope = getattr(value, "scope", None)
             text = str(value).lower()
+            if kind is None and text == "globallycoherent":
+                # HLSL's device-wide UAV coherence (Slang and the HLSL importer keep the HLSL name).
+                kind, scope = "coherent", "device"
             if kind is None:
                 match = re.fullmatch(
                     r"(?P<kind>volatile|coherent)(?:\((?P<scope>[a-z_][a-z0-9_]*)\))?",
@@ -18041,6 +18044,10 @@ class MetalCodeGen(
 
         for attribute in getattr(node, "attributes", []) or []:
             kind = str(getattr(attribute, "name", "")).lower()
+            if kind == "globallycoherent":
+                if ("coherent", "device") not in contracts:
+                    contracts.append(("coherent", "device"))
+                continue
             if kind not in {"volatile", "coherent"}:
                 continue
             arguments = getattr(attribute, "arguments", []) or []
