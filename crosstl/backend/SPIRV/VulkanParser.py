@@ -6127,13 +6127,21 @@ class VulkanParser:
             struct_decorations + variable_decorations
         )
         # A buffer's Restrict is also written on the block's members (glslang
-        # writes it both ways); CrossGL spells it on the block, so a member
-        # Restrict qualifies the block as the variable decoration does.
-        if "restrict" not in declaration_qualifiers and any(
-            decoration == "Restrict"
-            for _member, decoration, _operands in member_decorations.get(
+        # writes it both ways). CrossGL spells it on the whole block, so the
+        # members' Restrict qualifies the block only when every member has it:
+        # `buffer B { restrict float a[4]; float d[]; }` stays unqualified.
+        restrict_members = {
+            str(member)
+            for member, decoration, _operands in member_decorations.get(
                 struct_type_id, []
             )
+            if decoration == "Restrict"
+        }
+        member_count = len(struct_type.get("member_types", []))
+        if (
+            "restrict" not in declaration_qualifiers
+            and member_count
+            and restrict_members.issuperset(map(str, range(member_count)))
         ):
             declaration_qualifiers.append("restrict")
 
