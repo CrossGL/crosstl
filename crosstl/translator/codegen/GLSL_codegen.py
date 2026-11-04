@@ -239,6 +239,7 @@ from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
+from .glsl_draw_parameters import DRAW_PARAMETER_BUILTINS, draw_parameter_expression
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
@@ -253,7 +254,6 @@ from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_instance_index import INSTANCE_INDEX, instance_index_expression
-from .glsl_draw_parameters import DRAW_PARAMETER_BUILTINS, draw_parameter_expression
 from .glsl_interface_block_io import (
     block_declared_stage_io,
     block_member_location_type,
