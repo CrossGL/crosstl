@@ -9,6 +9,7 @@ import pytest
 import crosstl
 from crosstl.translator.codegen.spirv_extension_builtins import unmapped_builtin_reason
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+from crosstl.translator.semantics.builtin_values import BuiltinValueUnsupportedError
 
 FRAGMENT_INPUT = """shader Probe {
     fragment {
@@ -234,3 +235,56 @@ def test_colour_outputs_and_user_semantics_keep_locations(semantic):
 def test_unknown_gl_names_are_left_to_the_name_check():
     # resolve_builtin_names refuses names CrossGL does not define before generation.
     assert unmapped_builtin_reason("gl_FragBogus", "Input", "Fragment") is None
+
+
+VERTEX_PARAMETER = """shader Probe {
+    vertex {
+        vec4 main(int probe @NAME) @gl_Position {
+            return vec4(float(probe));
+        }
+    }
+}
+"""
+
+# A stage-scope input, as SPIR-V and GLSL input import a draw parameter.
+VERTEX_GLOBAL = """shader Probe {
+    vertex {
+        vec4 position @input @location(0);
+        int probe @input @NAME;
+        void main() {
+            gl_Position = position + vec4(float(probe), 0.0, 0.0, 0.0);
+        }
+    }
+}
+"""
+
+# (spelling, BuiltIn): GLSL 4.60, GL_ARB_shader_draw_parameters and HLSL Shader Model 6.8 names.
+DRAW_PARAMETERS = [
+    ("gl_BaseVertex", "BaseVertex"),
+    ("gl_BaseInstance", "BaseInstance"),
+    ("gl_DrawID", "DrawIndex"),
+    ("gl_BaseVertexARB", "BaseVertex"),
+    ("gl_BaseInstanceARB", "BaseInstance"),
+    ("gl_DrawIDARB", "DrawIndex"),
+    ("SV_StartVertexLocation", "BaseVertex"),
+    ("SV_StartInstanceLocation", "BaseInstance"),
+]
+
+
+@pytest.mark.parametrize("template", [VERTEX_PARAMETER, VERTEX_GLOBAL])
+@pytest.mark.parametrize("name, builtin", DRAW_PARAMETERS)
+def test_vertex_draw_parameters_are_builtins(tmp_path, template, name, builtin):
+    # Before, a draw parameter took a user Location the vertex fetch never fills.
+    code = _translate(tmp_path, template.replace("NAME", name))
+    variable = _builtin_variable_has_no_location(code, builtin)
+    assert "OpCapability DrawParameters" in code
+    assert 'OpExtension "SPV_KHR_shader_draw_parameters"' in code
+    assert re.search(rf"OpEntryPoint Vertex %\w+ \"main\"[^\n]* %{variable}\b", code)
+    assert re.search(rf"OpLoad %\w+ %{variable}\b", code)
+    _validate(tmp_path, code)
+
+
+def test_draw_parameter_outside_the_vertex_stage_is_refused(tmp_path):
+    source = FRAGMENT_INPUT.replace("TYPE", "int").replace("NAME", "gl_BaseVertex")
+    with pytest.raises(BuiltinValueUnsupportedError, match=r"input of vertex"):
+        _translate(tmp_path, source.replace("READ", ""))

@@ -36471,8 +36471,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
     # System values DXIL requires to be uint; Vulkan HLSL and GLSL (gl_Layer, gl_PrimitiveID) also take int.
+    # GLSL declares the stencil export gl_FragStencilRefARB as int (GL_ARB_shader_stencil_export).
     HLSL_UNSIGNED_SYSTEM_VALUES = frozenset(
         {
+            "SV_STENCILREF",
             "SV_RENDERTARGETARRAYINDEX",
             "SV_VIEWPORTARRAYINDEX",
             "SV_PRIMITIVEID",
