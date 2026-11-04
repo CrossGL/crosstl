@@ -72,6 +72,7 @@ from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
+from .opaque_matrix_contracts import complete_opaque_matrix_contracts
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
     MetalPreprocessor,
@@ -9291,6 +9292,13 @@ class MetalToCrossGLConverter(
 
     def resource_memory_qualifier_prefix(self, var):
         qualifiers = self.resource_memory_qualifiers(var)
+        # ``T* __restrict p`` promises that no other pointer reaches the buffer: CrossGL's ``restrict``.
+        if self.declaration_has_resource_storage(var) and {
+            "restrict",
+            "__restrict",
+            "__restrict__",
+        } & set(self.effective_declaration_qualifiers(var)):
+            qualifiers = [*qualifiers, "restrict"]
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def map_resource_pointer_element_type(self, var, element_type):
@@ -19301,6 +19309,12 @@ float {scalar}(float value) {{
 
     def propagate_cooperative_matrix_fragment_type_contracts(self, code):
         replacements = self.cooperative_matrix_fragment_type_replacements
+        complete_opaque_matrix_contracts(
+            code,
+            replacements,
+            self.cooperative_matrix_fragment_mapping,
+            self.cooperative_matrix_fragment_mapping_provenance,
+        )
         if not replacements:
             return code
         legacy_types = sorted(replacements, key=lambda value: (-len(value), value))

@@ -20,6 +20,7 @@ from tools.coverage.templates import (
     fragments,
     interfaces,
     pipeline,
+    primitives,
     qualifiers,
     rasterization,
     relations,
@@ -956,6 +957,94 @@ def test_extension_probes_read_each_languages_fragment_built_ins():
         "rust": {"shading-rate"},
         "wgsl": names,
         "webgl": names - {"view-index"},
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_geometry_probes_state_each_languages_primitives_instances_and_streams():
+    feature = _feature("glsl", "geometry-input-lines")
+    assert (feature.category, feature.stage) == ("graphics", "geometry")
+    assert feature.group == "ExecutionMode.InputLines"
+    assert _feature("hlsl", "geometry-invocations").group == (
+        "ExecutionMode.Invocations BuiltIn.InvocationId"
+    )
+    assert _feature("slang", "geometry-streams").group == (
+        "Decoration.Stream Capability.GeometryStreams"
+    )
+    for language, name, line in (
+        ("glsl", "geometry-input-lines", "layout(lines) in;\n"),
+        (
+            "glsl",
+            "geometry-input-triangles-adjacency",
+            "layout(triangles_adjacency) in;\n",
+        ),
+        (
+            "glsl",
+            "geometry-output-line-strip",
+            "layout(line_strip, max_vertices = 2) out;\n",
+        ),
+        ("glsl", "geometry-invocations", "layout(points, invocations = 2) in;\n"),
+        (
+            "glsl",
+            "geometry-streams",
+            "layout(stream = 1, location = 0) out vec4 extra;\n",
+        ),
+        ("glsl", "geometry-streams", "    EmitStreamVertex(1);\n"),
+        (
+            "hlsl",
+            "geometry-input-lines-adjacency",
+            "void main(lineadj float4 position[4] : POSITION",
+        ),
+        (
+            "hlsl",
+            "geometry-output-triangle-strip",
+            "inout TriangleStream<GeometryOut> stream",
+        ),
+        ("hlsl", "geometry-invocations", "[instance(2)]\n[maxvertexcount(1)]\n"),
+        ("hlsl", "geometry-invocations", "uint id : SV_GSInstanceID"),
+        ("hlsl", "geometry-streams", "inout PointStream<ExtraOut> extras"),
+        (
+            "slang",
+            "geometry-input-triangles",
+            '[shader("geometry")]\n[maxvertexcount(1)]\n',
+        ),
+        ("slang", "geometry-invocations", '[shader("geometry")]\n[instance(2)]\n'),
+        (
+            "rust",
+            "geometry-input-triangles",
+            "#[spirv(geometry(triangles = 3, output_points = 1",
+        ),
+        (
+            "rust",
+            "geometry-output-line-strip",
+            "output_line_strip = 2, output_vertices = 2",
+        ),
+        ("rust", "geometry-invocations", "#[spirv(invocation_id)] id: u32"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert (
+        probes.build(_feature("glsl", "geometry-input-lines"), "glsl").suffix == ".geom"
+    )
+    crossgl = probes.build(
+        _feature("glsl", "geometry-input-triangles"), "crossgl"
+    ).source
+    assert "    in vec4 inPosition[3] @location(0);\n" in crossgl
+    assert "        layout(triangles) in;\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "geometry-streams"), "crossgl").source
+    assert "    out vec4 extra @location(0) @stream(1);\n" in crossgl
+    # rust-gpu has no Stream decoration; Metal, WGSL and GLSL ES 3.00 have no geometry stage, and the kernel languages
+    # no graphics stages.
+    names = set(primitives.NAMES)
+    absent = {
+        "glsl": set(),
+        "hlsl": set(),
+        "slang": set(),
+        "rust": {"geometry-streams"},
+        **dict.fromkeys(("metal", "wgsl", "webgl"), names),
         **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
     }
     for language, missing in absent.items():

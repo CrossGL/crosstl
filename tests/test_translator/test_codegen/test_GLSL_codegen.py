@@ -10234,11 +10234,18 @@ def test_glsl_private_pointer_view_rejects_unresolved_address_base():
 
         void dispatch() {
             float backing[2][3];
-            fill(&backing[1][0]);
+            fill(&backing[ROW][0]);
         }
     }
     """
 
+    # An element of an existing row is a view into that row's fixed array.
+    generated = GLSLCodeGen().generate(
+        crosstl.translator.parse(code.replace("ROW", "1"))
+    )
+    assert "fill(backing[1], int(0));" in generated
+    # A row outside the array has no fixed backing array to pass.
+    code = code.replace("ROW", "2")
     with pytest.raises(
         OpenGLPrivatePointerParameterError,
         match="private pointer view 'fill.values' has no concrete fixed backing array",

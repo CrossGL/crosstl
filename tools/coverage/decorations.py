@@ -37,6 +37,11 @@ _IMAGE_KINDS = frozenset({"Dim", "Capability"})
 # built-in or, with SPV_EXT_demote_to_helper_invocation, ``OpIsHelperInvocationEXT``, which DXC and slangc emit for
 # ``IsHelperLane()``.
 _INSTRUCTIONS = {"BuiltIn.HelperInvocation": r"^\s*%\w+ = OpIsHelperInvocationEXT\b"}
+# The anchors whose operand must differ from the default as well: glslang, DXC and slangc write ``Invocations 1``
+# for every geometry stage, so a translation keeps an instanced stage only with more than one invocation.
+_OPERANDS = {
+    "ExecutionMode.Invocations": r"^\s*OpExecutionMode %\w+ Invocations (?!1\b)\d+\b"
+}
 
 # The metadata the Metal compiler writes in AIR for the attribute that carries each anchor: ``[[flat]]`` becomes
 # ``!"air.flat"`` and ``[[vertex_id]]`` ``!"air.vertex_id"``. A fragment function's ``[[position]]`` input is the
@@ -103,10 +108,21 @@ AIR_TEXTURES = {
     "Dim.Cube": "texture_cube",
     "Dim.Buffer": "texture_buffer_1d",
 }
+# DXC writes every output of a geometry stage on stream 0 when it compiles HLSL to SPIR-V, and slangc cannot compile
+# a second stream to SPIR-V at all, so an HLSL or Slang translation keeps its streams with a second stream parameter.
+_STREAMS = r"\binout\s+PointStream\s*<[^>]*>\s*\w+\s*,[^)]*\binout\s+PointStream\s*<"
 # The anchors a language's compiler resolves before it writes SPIR-V, with the declaration that keeps each one in the
 # translation itself: naga replaces every pipeline-overridable constant with its value, so a WGSL translation keeps a
 # specialization constant when it declares an ``override``.
-SOURCE = {"wgsl": {"Decoration.SpecId": r"^\s*override\s+\w+"}}
+SOURCE = {
+    "wgsl": {"Decoration.SpecId": r"^\s*override\s+\w+"},
+    **{
+        language: dict.fromkeys(
+            ("Decoration.Stream", "Capability.GeometryStreams"), _STREAMS
+        )
+        for language in ("hlsl", "slang")
+    },
+}
 # The built-ins that are constants: GLSL defines ``gl_WorkGroupSize`` as the local size, so a translation may write
 # the value itself, as slangc does for ``WorkgroupSize()``.
 FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
@@ -143,7 +159,9 @@ def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
                 texture = AIR_TEXTURES[anchor] + ("_array" if arrayed else "")
                 wanted.append((anchor, rf"%struct\._{texture}_t\b"))
         else:
-            pattern = _PATTERNS[kind].format(name=re.escape(name), arrayed=arrayed)
+            pattern = _OPERANDS.get(anchor) or _PATTERNS[kind].format(
+                name=re.escape(name), arrayed=arrayed
+            )
             if anchor in _INSTRUCTIONS:
                 pattern = f"{pattern}|{_INSTRUCTIONS[anchor]}"
             wanted.append((anchor, pattern))

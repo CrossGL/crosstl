@@ -113,6 +113,7 @@ from .image_access_contracts import (
     image_access_satisfies_requirement,
 )
 from .interface_qualifiers import INTERFACE_QUALIFIER_ATTRIBUTES
+from .memory_qualifier_names import memory_qualifier_name
 from .pack_builtins import PACK_FUNCTIONS, spirv_pack_call, spirv_pack_result_type
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -220,6 +221,11 @@ from .spirv_single_evaluation import (
     recording_subscript_indices,
     subscript_index_scope,
 )
+from .spirv_specialized_workgroup_size import (
+    declare_specialized_workgroup_size,
+    module_compute_stage_config,
+    workgroup_size_components,
+)
 from .spirv_stage_distances import (
     entry_point_distance_layout,
     entry_point_distance_variable,
@@ -250,6 +256,9 @@ from .spirv_uniform_block_arrays import (
 )
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
+from .stage_utils import (
+    order_functions_by_dependencies as order_functions_by_call_dependencies,
+)
 from .stage_utils import requests_early_fragment_tests
 from .task_payload_variables import dispatch_mesh_payload_names
 from .texture_lod_clamp import (
@@ -18456,12 +18465,12 @@ class VulkanSPIRVCodeGen(
         qualifiers = set()
 
         for qualifier in getattr(node, "qualifiers", []) or []:
-            qualifier = str(qualifier).lower()
+            qualifier = memory_qualifier_name(qualifier)
             if qualifier in supported:
                 qualifiers.add(aliases.get(qualifier, qualifier))
 
         for qualifier in getattr(node, "resource_qualifiers", []) or []:
-            qualifier = str(qualifier).lower()
+            qualifier = memory_qualifier_name(qualifier)
             if qualifier in supported:
                 qualifiers.add(aliases.get(qualifier, qualifier))
 
@@ -22847,45 +22856,21 @@ class VulkanSPIRVCodeGen(
         )
 
     def order_functions_by_dependencies(self, functions):
-        ordered = []
-        visiting = set()
-        visited = set()
-        function_list = list(functions)
-        function_names = [getattr(func, "name", None) for func in function_list]
-        unique_names = {
-            name for name in function_names if name and function_names.count(name) == 1
-        }
-        functions_by_name = {
-            func.name: func
-            for func in function_list
-            if getattr(func, "name", None) in unique_names
-        }
+        """Order ``functions`` so that every callee precedes its callers.
 
-        def visit(func):
-            func_id = id(func)
-            if func_id in visited:
-                return
-            if func_id in visiting:
-                return
-
-            visiting.add(func_id)
-            for node in self.walk_ast_nodes(getattr(func, "body", [])):
-                if not isinstance(node, FunctionCallNode):
-                    continue
-
-                dependency_name = self.function_call_name(node)
-                dependency = functions_by_name.get(dependency_name)
-                if dependency is not None and dependency is not func:
-                    visit(dependency)
-
-            visiting.remove(func_id)
-            visited.add(func_id)
-            ordered.append(func)
-
-        for func in function_list:
-            visit(func)
-
-        return ordered
+        A call is resolved against the overloads already emitted, so a call
+        depends on every overload of its callee's name, wherever the source
+        declares them. Overloads of one name that call each other keep their
+        source order.
+        """
+        return order_functions_by_call_dependencies(
+            functions,
+            self.walk_ast_nodes,
+            self.function_call_name,
+            FunctionCallNode,
+            include_overloads=True,
+            keep_overload_family_order=True,
+        )
 
     def walk_ast_nodes(self, root):
         return walk_ast_values(root)
@@ -31184,12 +31169,14 @@ class VulkanSPIRVCodeGen(
         self, name: str, type_id: SpirvId, builtin_name: str
     ) -> SpirvId:
         uint_type = self.register_primitive_type("uint")
-        x, y, z = self.compute_local_size(self.current_stage)
-        components = [self.register_constant(value, uint_type) for value in (x, y, z)]
+        components, specialized = workgroup_size_components(
+            self, self.current_stage, uint_type
+        )
 
         id_value = self.get_id()
         component_list = " ".join(f"%{component.id}" for component in components)
-        self.emit(f"%{id_value} = OpConstantComposite %{type_id.id} {component_list}")
+        opcode = "OpSpecConstantComposite" if specialized else "OpConstantComposite"
+        self.emit(f"%{id_value} = {opcode} %{type_id.id} {component_list}")
         self.emit(f'OpName %{id_value} "{name}"')
         self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
 
@@ -31939,6 +31926,24 @@ class VulkanSPIRVCodeGen(
                 return True
         return False
 
+    def tessellation_control_stated_modes(self, stage) -> List[str]:
+        """Return the spacing, winding and point mode a control stage without ``@domain`` states itself.
+
+        SPIR-V allows these modes on either tessellation stage; the evaluation stage then states the domain
+        and anything else, so nothing is defaulted here.
+        """
+        modes = []
+        if self.stage_attribute_value(stage, "partitioning") is not None:
+            modes.append(self.tessellation_spacing_mode(stage))
+        topology = self.normalized_stage_value(
+            self.stage_attribute_value(stage, "outputtopology")
+        )
+        if topology in {"cw", "ccw", "triangle_cw", "triangle_ccw"}:
+            modes.append(self.tessellation_vertex_order_mode(stage))
+        if self.tessellation_point_mode(stage):
+            modes.append("PointMode")
+        return modes
+
     def emit_tessellation_execution_modes(
         self, execution_model: str, function_id: SpirvId, stage
     ):
@@ -31950,6 +31955,8 @@ class VulkanSPIRVCodeGen(
                 f"{self.tessellation_control_output_vertices(stage)}"
             )
             if not self.tessellation_modes_follow_hlsl(stage):
+                for mode in self.tessellation_control_stated_modes(stage):
+                    self.emit(f"OpExecutionMode %{function_id.id} {mode}")
                 return
             # An HLSL hull declares the domain, spacing and winding; DXC states them on the control stage too.
 
@@ -32029,6 +32036,7 @@ class VulkanSPIRVCodeGen(
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
             self.emit_tessellation_execution_modes(execution_model, function_id, stage)
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
+            declare_specialized_workgroup_size(self, stage)
             x, y, z = self.compute_local_size(stage)
             if self.requires_compute_derivatives:
                 x = max(2, x + (x % 2))
@@ -32604,6 +32612,8 @@ class VulkanSPIRVCodeGen(
         ):
             # Built-ins read outside a stage take the size of the module's compute entries.
             self.module_compute_entry_config = compute_entry_configs[0]
+        elif not compute_entry_configs:
+            self.module_compute_entry_config = module_compute_stage_config(self, ast)
 
         if self.tessellation_control_stage is None:
             for func, qualifier in top_level_entries:
