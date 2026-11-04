@@ -122,3 +122,38 @@ def test_alias_of_a_sized_integer_as_vector_element_type_is_resolved(tmp_path, b
     assert translate(tmp_path, SIZED_ALIASES, backend) == translate(
         tmp_path, by_hand, backend
     )
+
+
+WGSL_SPELLING_ALIASES = textwrap.dedent("""
+    shader P {
+        typedef f32 r32;
+        typedef i32 s32;
+        compute {
+            buffer float* outp;
+            void main() {
+                vec2<r32> d = vec2<r32>(outp[1]);
+                vec3<s32> c;
+                c.x = 1;
+                outp[0] = d.x + float(c.x);
+            }
+        }
+    }
+""")
+
+
+@pytest.mark.parametrize(
+    "backend", ["cuda", "directx", "hip", "metal", "opengl", "spirv", "wgsl"]
+)
+def test_alias_of_a_wgsl_scalar_spelling_as_vector_element_type_is_resolved(
+    tmp_path, backend
+):
+    # The parser reads ``vec2<f32>`` as a vector of ``float``; CUDA output wrote ``f322`` for a vector of ``f32``.
+    by_hand = (
+        WGSL_SPELLING_ALIASES.replace("    typedef f32 r32;\n", "")
+        .replace("    typedef i32 s32;\n", "")
+        .replace("r32", "f32")
+        .replace("s32", "i32")
+    )
+    assert translate(tmp_path, WGSL_SPELLING_ALIASES, backend) == translate(
+        tmp_path, by_hand, backend
+    )
