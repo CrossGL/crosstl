@@ -1,7 +1,8 @@
-"""DirectX output refuses resource memory qualifiers HLSL cannot express instead of dropping them.
+"""DirectX and SPIR-V output refuse resource memory qualifiers the target cannot express instead of dropping them.
 
 HLSL has no volatile resources (DXC rejects ``volatile`` on a global) and no coherence wider than the device
-(``globallycoherent``); the generator emitted such buffers as ordinary UAVs.
+(``globallycoherent``); the generator emitted such buffers as ordinary UAVs. Vulkan's ``Coherent`` reaches the device
+at most, and the SPIR-V generator dropped Metal's ``coherent(system)``.
 """
 
 import pytest
@@ -11,6 +12,7 @@ from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.hlsl_unrepresentable_memory import (
     hlsl_unrepresentable_memory_qualifier,
 )
+from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 
 GLSL = """#version 450
 layout(local_size_x = 1) in;
@@ -39,10 +41,10 @@ kernel void probe({qualifier} device float* outp [[buffer(0)]],
 """
 
 
-def _translate(tmp_path, source, suffix):
+def _translate(tmp_path, source, suffix, backend="directx"):
     path = tmp_path / f"shader{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend="directx")
+    return crosstl.translate(str(path), backend=backend)
 
 
 @pytest.mark.parametrize(
@@ -65,6 +67,13 @@ def test_volatile_resource_is_refused(tmp_path, source, suffix, resource):
 def test_system_scope_coherence_is_refused(tmp_path):
     with pytest.raises(DirectXLoweringRefused, match=r"system scope"):
         _translate(tmp_path, METAL.format(qualifier="coherent(system)"), ".metal")
+
+
+def test_vulkan_refuses_system_scope_coherence(tmp_path):
+    source = METAL.format(qualifier="coherent(system)")
+    with pytest.raises(SpirvLoweringRefused, match=r"system scope") as refused:
+        _translate(tmp_path, source, ".metal", backend="vulkan")
+    assert refused.value.code == "project.translate.vulkan-lowering-unsupported"
 
 
 def test_device_scope_coherence_is_globallycoherent(tmp_path):
