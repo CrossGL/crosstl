@@ -46,7 +46,7 @@ class Clock:
         return self.now
 
 
-def warm_group(monkeypatch, tmp_path, entries, step, budget):
+def warm_group(monkeypatch, tmp_path, entries, step, budget, unreached=()):
     built = []
 
     def build_one(root, packages, target, entry):
@@ -55,6 +55,7 @@ def warm_group(monkeypatch, tmp_path, entries, step, budget):
         return {"entry": entry, "target": target}
 
     monkeypatch.setattr(warm, "ENTRIES", {"blas": entries})
+    monkeypatch.setattr(warm, "TARGET_UNREACHED", {"opengl": frozenset(unreached)})
     monkeypatch.setattr(warm, "build_one", build_one)
     monkeypatch.setattr(warm, "ProcessPoolExecutor", ThreadPoolExecutor)
     monkeypatch.setattr(warm, "time", Clock(step))
@@ -80,6 +81,51 @@ def test_entries_past_the_budget_are_left_to_translate_on_demand(monkeypatch, tm
     assert built == [("opengl", GEMM)]
     assert [record["entry"] for record in records] == [GEMM]
     assert deferred == [OFFSETS, GEMV]
+
+
+def test_targets_skip_the_entries_only_their_excluded_tests_reach():
+    # gather_mm_offsets and gather_mm_rhs run only for sorted right indices,
+    # whose tests DirectX and OpenGL exclude until #2546.
+    sorted_gather = {
+        name
+        for name, issue in ops.TARGET_EXCLUSIONS["opengl"].items()
+        if issue.endswith("#2546")
+    }
+    assert sorted_gather == {
+        "test_blas.TestBlas.test_gather_mm_sorted",
+        "test_blas.TestBlas.test_gather_mm_sorted_vjp",
+    }
+    assert warm.SORTED_GATHER_ENTRIES == (
+        OFFSETS,
+        "steel_gather_mm_rhs_nn_float32_float32_bm16_bn64_bk16_wm1_wn2_align_N_n_align_K_n",
+        "steel_gather_mm_rhs_nt_float32_float32_bm16_bn64_bk16_wm1_wn2_align_N_n_align_K_n",
+    )
+    excluding = {
+        target
+        for target, names in ops.TARGET_EXCLUSIONS.items()
+        if sorted_gather <= set(names)
+    }
+    assert set(warm.TARGET_UNREACHED) == excluding == {"directx", "opengl"}
+    assert warm.target_entries("blas-gather", "metal") == warm.ENTRIES["blas-gather"]
+    for target in excluding:
+        entries = warm.target_entries("blas-gather", target)
+        assert entries == tuple(
+            entry
+            for entry in warm.ENTRIES["blas-gather"]
+            if entry not in warm.SORTED_GATHER_ENTRIES
+        )
+        assert len(entries) == len(warm.ENTRIES["blas-gather"]) - 3
+        for group in set(warm.ENTRIES) - {"blas-gather"}:
+            assert warm.target_entries(group, target) == warm.ENTRIES[group]
+
+
+def test_warming_skips_a_targets_unreached_entries(monkeypatch, tmp_path):
+    built, records, deferred = warm_group(
+        monkeypatch, tmp_path, (GEMM, GEMV, OFFSETS), 1.0, 100.0, unreached={OFFSETS}
+    )
+    assert built == [("opengl", GEMM), ("opengl", GEMV)]
+    assert [record["entry"] for record in records] == sorted((GEMM, GEMV))
+    assert deferred == []
 
 
 @pytest.mark.parametrize(

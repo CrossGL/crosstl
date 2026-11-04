@@ -164,12 +164,13 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     # simdgroup yet, its reverse scans cannot prove their wrapped pointer
     # offsets yet, and its logarithms are not precise near one. Direct3D's
     # waves are numbered in arrival order, so its wide arg reductions can
-    # leave their result unwritten.
+    # leave their result unwritten. Neither lowers the sorted gather's
+    # row-tile scheduling yet.
     assert set(ops.TARGET_EXCLUSIONS) == {"opengl", "directx"}
     excluded = ops.TARGET_EXCLUSIONS["opengl"]
     for target, issues in (
-        ("opengl", {"2207", "2905", "2123"}),
-        ("directx", {"2120"}),
+        ("opengl", {"2207", "2905", "2123", "2546"}),
+        ("directx", {"2120", "2546"}),
     ):
         names = ops.TARGET_EXCLUSIONS[target]
         assert set(names) <= set(ops.UPSTREAM_TESTS)
@@ -182,12 +183,25 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
         "test_ops.TestOps.test_cummax_cummin_nan",
     ]
     wide = [name for name, issue in excluded.items() if issue.endswith("2207")]
-    assert list(ops.TARGET_EXCLUSIONS["directx"]) == wide
+    sorted_gather = [
+        "test_blas.TestBlas.test_gather_mm_sorted",
+        "test_blas.TestBlas.test_gather_mm_sorted_vjp",
+    ]
+    assert list(ops.TARGET_EXCLUSIONS["directx"]) == wide + sorted_gather
+    for target in ("opengl", "directx"):
+        names = ops.TARGET_EXCLUSIONS[target]
+        assert [name for name in names if names[name].endswith("2546")] == (
+            sorted_gather
+        )
+        assert set(sorted_gather) < set(ops.GROUPS["blas-gather"])
+        assert ops.upstream_tests(target, "blas-gather") == tuple(
+            name for name in ops.GROUPS["blas-gather"] if name not in sorted_gather
+        )
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     directx = ops.upstream_tests("directx")
-    assert len(directx) == len(ops.UPSTREAM_TESTS) - 3
+    assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 542 and not set(opengl) & set(excluded)
+    assert len(opengl) == 540 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):

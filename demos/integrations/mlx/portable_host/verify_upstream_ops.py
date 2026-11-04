@@ -701,6 +701,14 @@ UPSTREAM_TESTS = (
         name for tests in MODULE_GROUPS.values() for name in tests
     )
 )
+# Sorted right indices route a one-row product through gather_mm_rhs, which
+# finds its row tile with subgroup scans of ``offsets`` and returns early on
+# their reduction. DirectX and OpenGL software subgroups lower that only once
+# reductions of lane-symmetric values count as workgroup-uniform.
+SORTED_GATHER_EXCLUSIONS = {
+    "test_blas.TestBlas.test_gather_mm_sorted": "CrossGL/crosstl#2546",
+    "test_blas.TestBlas.test_gather_mm_sorted_vjp": "CrossGL/crosstl#2546",
+}
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
 TARGET_EXCLUSIONS = {
@@ -715,6 +723,7 @@ TARGET_EXCLUSIONS = {
         # precise::log2 and precise::log10 become GLSL's log2, whose absolute
         # error near one (2^-21 in [0.5, 2]) exceeds np.allclose's bound.
         "test_ops.TestOps.test_unary_ops_from_non_array": "CrossGL/crosstl#2123",
+        **SORTED_GATHER_EXCLUSIONS,
     },
     # Whole-array arg reductions take more than one wave, whose numbering
     # need not keep thread 0 in the surviving wave.
@@ -722,6 +731,7 @@ TARGET_EXCLUSIONS = {
         "test_ops.TestOps.test_argmin_argmax": "CrossGL/crosstl#2120",
         "test_reduce.TestReduce.test_arg_reduce": "CrossGL/crosstl#2120",
         "test_bf16.TestBF16.test_arg_reduction_ops": "CrossGL/crosstl#2120",
+        **SORTED_GATHER_EXCLUSIONS,
     },
 }
 # Source-specialized indexing kernels by entry prefix, longest prefix first.

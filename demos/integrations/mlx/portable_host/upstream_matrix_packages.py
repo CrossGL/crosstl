@@ -320,6 +320,26 @@ ENTRIES = {
 }
 
 
+# Entries that only the tests a target excludes dispatch
+# (``verify_upstream_ops.TARGET_EXCLUSIONS``): the sorted gather's offsets and
+# its row-tile products (CrossGL/crosstl#2546).
+SORTED_GATHER_ENTRIES = tuple(
+    entry
+    for entry in ENTRIES["blas-gather"]
+    if entry == "gather_mm_offsets" or entry.startswith("steel_gather_mm_rhs_")
+)
+TARGET_UNREACHED = {
+    "directx": frozenset(SORTED_GATHER_ENTRIES),
+    "opengl": frozenset(SORTED_GATHER_ENTRIES),
+}
+
+
+def target_entries(group, target):
+    """``group``'s recorded entries that ``target``'s run reaches, in order."""
+    unreached = TARGET_UNREACHED.get(target, frozenset())
+    return tuple(entry for entry in ENTRIES[group] if entry not in unreached)
+
+
 def ordered(entries):
     """``entries`` in translation order; raises for a non-matrix entry."""
     keyed = []
@@ -356,7 +376,7 @@ def build_group(root, packages, target, group, jobs, budget):
         raise ValueError(f"No matrix entries are recorded for group {group}")
     if type(jobs) is not int or jobs < 1 or not budget > 0:
         raise ValueError("Matrix warming needs jobs and a positive budget")
-    entries = ordered(ENTRIES[group])
+    entries = ordered(target_entries(group, target))
     lazy = caches(root, Path(packages).resolve(), target)
     for entry in entries:
         lazy[lazy_package_evidence.family(entry)].signature(entry)
