@@ -9291,6 +9291,13 @@ class MetalToCrossGLConverter(
 
     def resource_memory_qualifier_prefix(self, var):
         qualifiers = self.resource_memory_qualifiers(var)
+        # ``T* __restrict p`` promises that no other pointer reaches the buffer: CrossGL's ``restrict``.
+        if self.declaration_has_resource_storage(var) and {
+            "restrict",
+            "__restrict",
+            "__restrict__",
+        } & set(self.effective_declaration_qualifiers(var)):
+            qualifiers = [*qualifiers, "restrict"]
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def map_resource_pointer_element_type(self, var, element_type):

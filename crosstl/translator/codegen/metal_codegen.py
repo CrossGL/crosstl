@@ -410,6 +410,7 @@ from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_refusals import metal_refusals
+from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
     collect_metal_signed_builtin_members,
     metal_signed_builtin_parameter_name,
@@ -7907,6 +7908,7 @@ class MetalCodeGen(
                     buffer_name,
                     array_size,
                     address_space,
+                    buffer_variable,
                 )
                 resource_params.append(f"{declaration} [[buffer({i})]]")
         if self.texture_variables:
@@ -8269,7 +8271,11 @@ class MetalCodeGen(
             if buffer_name:
                 resource_params.append(
                     self.format_metal_buffer_resource_parameter(
-                        buffer_type, buffer_name, array_size, address_space
+                        buffer_type,
+                        buffer_name,
+                        array_size,
+                        address_space,
+                        buffer_variable,
                     )
                 )
         for (
@@ -17033,7 +17039,7 @@ class MetalCodeGen(
         if array_size is not None:
             array_size = array_size or "1"
             return f"array<{pointer_type}, {array_size}> {name}"
-        return f"{pointer_type} {name}"
+        return f"{pointer_type}{metal_restrict_suffix(node)} {name}"
 
     def structured_buffer_length_resource_name(self, name):
         return self.metal_generated_companion_name(f"{name}Length")
@@ -17829,8 +17835,10 @@ class MetalCodeGen(
                 and self.parameter_qualifier_names(node) & {"out", "inout"}
                 else ""
             )
+            restrict = "" if reference else metal_restrict_suffix(node, raw_param_type)
             return (
-                f"{memory_qualifiers}{address_space} {pointee_type}*{reference} {name}"
+                f"{memory_qualifiers}{address_space} {pointee_type}*{restrict}"
+                f"{reference} {name}"
             )
 
         if isinstance(raw_param_type, ReferenceType):
@@ -21599,17 +21607,22 @@ class MetalCodeGen(
         return 1
 
     def format_metal_buffer_resource_parameter(
-        self, raw_type, name, array_size=None, address_space="device"
+        self, raw_type, name, array_size=None, address_space="device", node=None
     ):
         mapped_type = self.map_resource_type_with_format(raw_type)
+        memory = self.resource_memory_qualifier_prefix(node, raw_type) if node else ""
         if str(mapped_type).endswith("*"):
             if array_size is not None:
                 array_size = array_size or "1"
-                return f"array<{address_space} {mapped_type}, {array_size}> {name}"
-            return f"{address_space} {mapped_type} {name}"
+                return (
+                    f"array<{memory}{address_space} {mapped_type}, {array_size}> {name}"
+                )
+            restrict = metal_restrict_suffix(node, raw_type)
+            return f"{memory}{address_space} {mapped_type}{restrict} {name}"
         if array_size is not None:
-            return f"{address_space} {mapped_type}* {name}"
-        return f"{address_space} {mapped_type}& {name}"
+            restrict = metal_restrict_suffix(node, raw_type)
+            return f"{memory}{address_space} {mapped_type}*{restrict} {name}"
+        return f"{memory}{address_space} {mapped_type}& {name}"
 
     def register_metal_buffer_resource_parameter_scope(
         self, func_name, include_all=False

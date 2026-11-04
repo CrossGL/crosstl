@@ -113,6 +113,7 @@ from .image_access_contracts import (
     image_access_satisfies_requirement,
 )
 from .interface_qualifiers import INTERFACE_QUALIFIER_ATTRIBUTES
+from .memory_qualifier_names import memory_qualifier_name
 from .pack_builtins import PACK_FUNCTIONS, spirv_pack_call, spirv_pack_result_type
 from .pointer_reinterpret import (
     PointerReinterpretationError,
@@ -18456,12 +18457,12 @@ class VulkanSPIRVCodeGen(
         qualifiers = set()
 
         for qualifier in getattr(node, "qualifiers", []) or []:
-            qualifier = str(qualifier).lower()
+            qualifier = memory_qualifier_name(qualifier)
             if qualifier in supported:
                 qualifiers.add(aliases.get(qualifier, qualifier))
 
         for qualifier in getattr(node, "resource_qualifiers", []) or []:
-            qualifier = str(qualifier).lower()
+            qualifier = memory_qualifier_name(qualifier)
             if qualifier in supported:
                 qualifiers.add(aliases.get(qualifier, qualifier))
 
