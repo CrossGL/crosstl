@@ -15,26 +15,26 @@ Only a row of the innermost dimension decays to a pointer to scalars. ``x[a]`` o
 pointer to ``float[C]``, which is not a private scalar view, so it is not recognized here.
 """
 
-from ..ast import ArrayAccessNode, ArrayType, IdentifierNode, VariableNode
+from ..ast import ArrayAccessNode, ArrayType, IdentifierNode, LiteralNode, VariableNode
 
 
 def array_row_shape(array_type, literal_int):
-    """The row extents and innermost element type of a fixed multidimensional array type, or None.
+    """The extents and innermost element type of a fixed multidimensional array type, or None.
 
-    The row extents are the literal extents of every dimension after the outermost one, outermost first.
+    The extents are the literal extents of every dimension, outermost first, so the last one is the row length.
     ``literal_int`` resolves a size expression to an int, or None.
     """
     if not isinstance(array_type, ArrayType):
         return None
     extents = []
-    element = array_type.element_type
+    element = array_type
     while isinstance(element, ArrayType):
         extent = literal_int(element.size)
         if not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0:
             return None
         extents.append(extent)
         element = element.element_type
-    if not extents:
+    if len(extents) < 2:
         return None
     return tuple(extents), element
 
@@ -43,7 +43,8 @@ def array_row_view(expression, shape_of):
     """``(root, extent, element_type, indices)`` when ``expression`` is a row of a known local array.
 
     ``shape_of`` returns a local array name's :func:`array_row_shape`, or None for any other name. ``indices`` are
-    the subscripts that select the row, outermost first. The expression must index every dimension but the innermost.
+    the subscripts that select the row, outermost first. The expression must index every dimension but the innermost,
+    and a literal subscript must lie within its dimension ([expr.add]); otherwise the view has no fixed backing row.
     """
     indices = []
     node = expression
@@ -56,9 +57,14 @@ def array_row_view(expression, shape_of):
     if shape is None:
         return None
     extents, element_type = shape
-    if len(indices) != len(extents):
+    indices.reverse()
+    if len(indices) != len(extents) - 1:
         return None
-    return node.name, extents[-1], element_type, tuple(reversed(indices))
+    for index, extent in zip(indices, extents):
+        value = getattr(index, "value", None) if isinstance(index, LiteralNode) else None
+        if isinstance(value, int) and not isinstance(value, bool) and not 0 <= value < extent:
+            return None
+    return node.name, extents[-1], element_type, tuple(indices)
 
 
 def aliased_row_view(view_calls):

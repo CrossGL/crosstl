@@ -93,13 +93,13 @@ def _literal(value):
     return LiteralNode(value, PrimitiveType("int"))
 
 
-def test_row_shape_lists_the_inner_extents():
+def test_row_shape_lists_every_extent():
     cube = ArrayType(
         ArrayType(ArrayType(PrimitiveType("float"), _literal(4)), _literal(3)),
         _literal(2),
     )
     extents, element = array_row_shape(cube, lambda size: size.value)
-    assert extents == (3, 4) and element.name == "float"
+    assert extents == (2, 3, 4) and element.name == "float"
     row = ArrayAccessNode(
         ArrayAccessNode(IdentifierNode("x"), IdentifierNode("a")), IdentifierNode("b")
     )
@@ -109,8 +109,17 @@ def test_row_shape_lists_the_inner_extents():
     assert (root, extent, [index.name for index in indices]) == ("x", 4, ["a", "b"])
     # A plane of the cube decays to a pointer to rows, not to scalars.
     assert array_row_view(row.array, {"x": (extents, element)}.get) is None
+    # A literal subscript outside its dimension selects no row.
+    for outer, inner in ((2, 0), (0, 3), (-1, 0)):
+        beyond = ArrayAccessNode(
+            ArrayAccessNode(IdentifierNode("x"), _literal(outer)), _literal(inner)
+        )
+        assert array_row_view(beyond, {"x": (extents, element)}.get) is None
+    inside = ArrayAccessNode(ArrayAccessNode(IdentifierNode("x"), _literal(1)), _literal(2))
+    assert array_row_view(inside, {"x": (extents, element)}.get)[1] == 4
     # One-dimensional and non-literal arrays have no rows.
-    assert array_row_shape(ArrayType(PrimitiveType("float"), _literal(4)), int) is None
+    flat = ArrayType(PrimitiveType("float"), _literal(4))
+    assert array_row_shape(flat, lambda size: size.value) is None
     assert array_row_shape(cube, lambda size: None) is None
 
 
