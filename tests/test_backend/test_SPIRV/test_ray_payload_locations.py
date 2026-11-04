@@ -84,9 +84,15 @@ def _spirv(tmp_path, source, suffix=".cgl"):
 
 
 def _operand_name(spirv, opcode):
+    """The ``%name`` of the last operand of ``opcode``, through ``OpName`` when the ids are numbers.
+
+    Without SPIRV-Tools the emitter writes numeric ids and names them with ``OpName`` only.
+    """
     instruction = re.search(rf"^\s*{opcode}\b(.*)$", spirv, flags=re.M)
     assert instruction is not None, spirv
-    return instruction.group(1).split()[-1]
+    operand = instruction.group(1).split()[-1]
+    names = dict(re.findall(r'OpName (%\w+) "(\w+)"', spirv))
+    return f"%{names[operand]}" if operand in names else operand
 
 
 @pytest.mark.parametrize("location, name", [(0, "%near"), (1, "%far")])
