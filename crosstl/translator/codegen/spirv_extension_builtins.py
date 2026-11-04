@@ -11,7 +11,10 @@ tables did not list, such as a fragment input ``@gl_HelperInvocation``, therefor
 * the AMD barycentric coordinates of ``GL_AMD_shader_explicit_vertex_parameter``
   (``SPV_AMD_shader_explicit_vertex_parameter``) in a fragment stage;
 * ``gl_DeviceIndex`` (``SPV_KHR_device_group``) and the ``GL_NV_shader_sm_builtins`` values
-  (``SPV_NV_shader_sm_builtins``), which every stage reads.
+  (``SPV_NV_shader_sm_builtins``), which every stage reads;
+* the vertex draw parameters ``gl_BaseVertex``, ``gl_BaseInstance`` and ``gl_DrawID`` (``BaseVertex``,
+  ``BaseInstance`` and ``DrawIndex`` with the ``DrawParameters`` capability, ``SPV_KHR_shader_draw_parameters``),
+  also under their ``ARB`` and HLSL ``SV_StartVertexLocation``/``SV_StartInstanceLocation`` spellings.
 
 ``gl_BaryCoordNV`` and ``gl_BaryCoordNoPerspNV`` take the ``SPV_KHR_fragment_shader_barycentric`` built-ins: the
 NV extension's ``BaryCoordNV`` and ``BaryCoordNoPerspNV`` are the same enumerants (5286 and 5287) with the same
@@ -47,6 +50,7 @@ _ANY_STAGE_INPUTS = {
 }
 
 _FRAGMENT = {"Fragment"}
+_VERTEX = {"Vertex"}
 
 # ``stage_builtin_info`` entries.
 _STAGE_BUILTINS = {
@@ -80,18 +84,33 @@ _STAGE_BUILTINS = {
         _FRAGMENT,
     ),
     "gl_BaryCoordPullModelAMD": ("vec3", "BaryCoordPullModelAMD", "Input", _FRAGMENT),
+    # GLSL 4.60 / GL_ARB_shader_draw_parameters: ``in int`` each, vertex stage only.
+    "gl_BaseVertex": ("int", "BaseVertex", "Input", _VERTEX),
+    "gl_BaseInstance": ("int", "BaseInstance", "Input", _VERTEX),
+    "gl_DrawID": ("int", "DrawIndex", "Input", _VERTEX),
 }
 
 # Upper-case spellings, as ``spirv_builtin_alias`` looks names up.
 BUILTIN_ALIASES = {
     "GL_BARYCOORDNV": "gl_BaryCoordEXT",
     "GL_BARYCOORDNOPERSPNV": "gl_BaryCoordNoPerspEXT",
+    # GL_ARB_shader_draw_parameters spellings and the HLSL Shader Model 6.8 system values.
+    "GL_BASEVERTEXARB": "gl_BaseVertex",
+    "GL_BASEINSTANCEARB": "gl_BaseInstance",
+    "GL_DRAWIDARB": "gl_DrawID",
+    "SV_STARTVERTEXLOCATION": "gl_BaseVertex",
+    "SV_STARTINSTANCELOCATION": "gl_BaseInstance",
 }
 
 # BuiltIn -> (capability or None, extension).
 _REQUIREMENTS = {
     "DeviceIndex": ("DeviceGroup", "SPV_KHR_device_group"),
     "FullyCoveredEXT": ("FragmentFullyCoveredEXT", "SPV_EXT_fragment_fully_covered"),
+    # SPV_KHR_shader_draw_parameters, core since SPIR-V 1.3; the capability is still required.
+    **{
+        builtin: ("DrawParameters", "SPV_KHR_shader_draw_parameters")
+        for builtin in ("BaseVertex", "BaseInstance", "DrawIndex")
+    },
     **{
         builtin: ("ShaderSMBuiltinsNV", "SPV_NV_shader_sm_builtins")
         for builtin in ("SMCountNV", "SMIDNV", "WarpIDNV", "WarpsPerSMNV")
