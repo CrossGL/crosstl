@@ -418,6 +418,32 @@ def _curated() -> list[Construct]:
         ),
         c(
             "compute",
+            "specialization-constant-float",
+            "OpSpecConstant",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-constant-vector",
+            "OpSpecConstantComposite",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-array-size",
+            "OpTypeArray",
+            "StorageClass.Workgroup",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-constant-in-helper",
+            "OpFunctionCall",
+            "OpSpecConstant",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
             "restrict-buffer",
             "StorageClass.StorageBuffer",
             "Decoration.Restrict",

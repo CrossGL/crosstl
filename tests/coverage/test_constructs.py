@@ -1602,6 +1602,39 @@ def test_specialization_probes_declare_each_languages_pipeline_constants():
             "specialization-constant",
             "#[spirv(spec_constant(id = 0, default = 3))] scale: u32",
         ),
+        (
+            "glsl",
+            "specialization-constant-float",
+            "layout(constant_id = 0) const float gain = 1.5;",
+        ),
+        (
+            "glsl",
+            "specialization-constant-vector",
+            "const ivec2 steps = ivec2(scale, 1);",
+        ),
+        ("glsl", "specialization-array-size", "shared float tile[count];"),
+        ("slang", "specialization-array-size", "groupshared float tile[count];"),
+        ("wgsl", "specialization-constant-float", "override gain: f32 = 1.5;"),
+        (
+            "wgsl",
+            "specialization-array-size",
+            "var<workgroup> tile: array<f32, count>;",
+        ),
+        (
+            "metal",
+            "specialization-constant-vector",
+            "constant int2 steps = int2(scale, 1);",
+        ),
+        (
+            "metal",
+            "specialization-constant-in-helper",
+            "return x * float(scale) + 1.0;",
+        ),
+        (
+            "rust",
+            "specialization-constant-in-helper",
+            "fn scaled(x: f32, scale: u32) -> f32",
+        ),
     ):
         probe = probes.build(_feature(language, name), language)
         assert line in probe.source, (language, name)
@@ -1609,15 +1642,24 @@ def test_specialization_probes_declare_each_languages_pipeline_constants():
         _feature("glsl", "specialization-constant-bool"), "crossgl"
     ).source
     assert "const bool negate @constant_id(0) = true;" in crossgl
-    # HLSL for Direct3D, GLSL ES 3.00 and the kernel languages have no specialization constants, Metal no specialized
-    # threadgroup size, and rust-gpu only u32 parameters.
+    crossgl = probes.build(
+        _feature("glsl", "specialization-array-size"), "crossgl"
+    ).source
+    assert "const int count @constant_id(0) = 4;" in crossgl
+    assert "shared float tile[count];" in crossgl
+    # HLSL for Direct3D, GLSL ES 3.00 and the kernel languages have no specialization constants. Metal has no
+    # specialized threadgroup size or array length, WGSL and Slang no vector computed from a constant, and rust-gpu
+    # only u32 parameters.
     names = set(specializations.NAMES)
+    vector = {"specialization-constant-vector"}
     absent = {
         "glsl": set(),
-        "slang": set(),
-        "wgsl": set(),
-        "metal": {"specialization-workgroup-size"},
-        "rust": names - {"specialization-constant"},
+        "slang": vector,
+        "wgsl": vector,
+        "metal": {"specialization-workgroup-size", "specialization-array-size"},
+        "rust": (
+            names - {"specialization-constant", "specialization-constant-in-helper"}
+        ),
         **dict.fromkeys(("hlsl", "webgl", "cuda", "hip", "opencl", "mojo"), names),
     }
     for language, missing in absent.items():
