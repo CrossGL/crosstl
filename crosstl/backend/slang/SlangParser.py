@@ -3586,6 +3586,10 @@ class SlangParser:
 
         try:
             close_pos = self.skip_generic_type_suffix_tokens(type_pos + 1)
+            # `(float[3])0` casts to an array type, the HLSL zero-fill idiom.
+            # Only builtin type names take this path, so `(values[i])` is
+            # still read as a parenthesized index expression.
+            close_pos = self.skip_type_array_suffix_tokens(close_pos)
         except SyntaxError:
             return False
         close_pos = self.skip_pointer_declarator_tokens(close_pos)
@@ -3621,6 +3625,8 @@ class SlangParser:
     def parse_c_style_cast(self):
         self.eat("LPAREN")
         target_type = self.parse_type_name()
+        if self.current_token[0] == "LBRACKET":
+            target_type += self.parse_type_array_suffixes()
         target_type += self.parse_pointer_suffix()
         self.eat("RPAREN")
         return CastNode(target_type, self.parse_unary())

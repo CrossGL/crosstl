@@ -12296,7 +12296,54 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def rust_callable_name(self, name):
         if isinstance(name, str) and name.isidentifier():
             return self.rust_identifier(name)
-        return name
+        return self.rust_turbofish_callable_name(name)
+
+    def rust_turbofish_callable_name(self, name):
+        """Restore the turbofish on a callee that carries explicit type arguments.
+
+        CrossGL has no ``::``, so the Rust importer writes ``f::<T>(x)`` into
+        CrossGL as ``f<T>(x)``.  Emitted back verbatim, rustc reads the ``<`` as
+        a comparison and the generated crate does not parse, so the ``::`` goes
+        back in front of the type arguments here.  A path that already carries
+        one, and anything whose head is not a ``::``-separated path of plain
+        identifiers, is left exactly as it was.
+        """
+        if not isinstance(name, str):
+            return name
+        head, separator, type_arguments = name.partition("<")
+        if not separator:
+            return name
+        segments = head.split("::")
+        if not all(segment.isidentifier() for segment in segments):
+            return name
+        return f"{head}::<{self.rust_explicit_type_arguments(type_arguments)}"
+
+    def rust_explicit_type_arguments(self, type_arguments):
+        """Spell the CrossGL type arguments ``float, vec3>`` of a call as Rust types.
+
+        ``type_arguments`` is the text after the call's ``<``, closing ``>``
+        included.  Each top-level argument goes through ``map_type``, so
+        ``pick<float>`` becomes ``pick::<f32>`` rather than naming ``float``,
+        which Rust does not have.  Text that is not a closed argument list is
+        returned unchanged.
+        """
+        if not type_arguments.endswith(">"):
+            return type_arguments
+        arguments, depth, start = [], 0, 0
+        body = type_arguments[:-1]
+        for index, character in enumerate(body):
+            if character in "<[(":
+                depth += 1
+            elif character in ">])":
+                depth -= 1
+            elif character == "," and depth == 0:
+                arguments.append(body[start:index])
+                start = index + 1
+        if depth != 0:
+            return type_arguments
+        arguments.append(body[start:])
+        mapped = [self.map_type(argument.strip()) for argument in arguments]
+        return ", ".join(mapped) + ">"
 
     def rust_reserved_identifiers(self):
         return {
@@ -14322,8 +14369,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if matrix_alias != vtype_str:
             return self.map_type(matrix_alias)
 
-        if "[" in vtype_str and "]" in vtype_str:
-            base_type, sizes = self.c_array_type_parts(vtype_str)
+        base_type, sizes = self.c_array_type_parts(vtype_str)
+        # Brackets that do not end the name, as in the callee ``pick<float[2]>``,
+        # are not an array suffix; the generic mapping below spells its argument.
+        if sizes:
             base_mapped = self.map_type(base_type)
             rust_type = self.qualify_colliding_runtime_type(base_mapped)
             for size in reversed(sizes):

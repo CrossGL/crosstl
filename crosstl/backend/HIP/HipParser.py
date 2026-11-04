@@ -3,6 +3,7 @@
 import re
 from typing import List
 
+from ..CUDA.local_memory_spaces import refuse_local_memory_space
 from .HipAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -2784,6 +2785,10 @@ class HipParser:
         qualifiers.extend(self.parse_declaration_qualifiers())
         return base_type
 
+    def reject_disallowed_local_memory_space(self, qualifiers, name):
+        """Refuse a function-body variable that HIP allows in its memory space only with static storage."""
+        refuse_local_memory_space(qualifiers, name)
+
     def parse_variable_declarator(
         self, base_type, qualifiers, allow_prefix, attributes=None
     ):
@@ -2815,6 +2820,9 @@ class HipParser:
         self.skip_newlines()
         bitfield_width = self.parse_bitfield_width()
         value = self.parse_variable_initializer(var_type)
+
+        if self.block_depth > 0:
+            self.reject_disallowed_local_memory_space(qualifiers, name)
 
         declaration = VariableNode(
             var_type,

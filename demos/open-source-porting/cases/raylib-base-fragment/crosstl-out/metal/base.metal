@@ -11,9 +11,9 @@ struct Uniforms {
     float4 colDiffuse;
 };
 // Fragment Shader
-fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniforms& uniforms [[buffer(0)]], texture2d<float> texture0 [[texture(0)]]) {
+fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniforms& uniforms [[buffer(0)]], texture2d<float> texture0 [[texture(0)]], sampler texture0Sampler [[sampler(0)]]) {
     float4 finalColor;
-    float4 texelColor = texture0.sample(sampler(mag_filter::linear, min_filter::linear), input.fragTexCoord);
+    float4 texelColor = texture0.sample(texture0Sampler, input.fragTexCoord);
     finalColor = texelColor * uniforms.colDiffuse * input.fragColor;
     return finalColor;
 }

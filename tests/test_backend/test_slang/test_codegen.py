@@ -4,6 +4,7 @@ import pytest
 
 import crosstl.translator as cgl_translator
 from crosstl import translate
+from crosstl.backend.import_refusals import SlangImportRefused
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 from crosstl.translator.ast import ShaderStage
 
@@ -4327,6 +4328,100 @@ def test_c_style_user_type_identifier_cast_codegen_reparse_from_enum_sample():
     assert "Mode mode = Mode(raw);" in generated_code
     assert "return uint(mode);" in generated_code
     cgl_translator.parse(generated_code)
+
+
+def test_c_style_array_type_cast_codegen_reparse():
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {
+        float a[3] = (float[3])0;
+        float4 v[2] = (float4[2])0;
+        a[1] = outp[tid.x];
+        outp[tid.x] = a[0] + a[1] + v[1].x;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float a[3] = float[3](0);" in generated_code
+    assert "vec4 v[2] = vec4[2](0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
+@pytest.mark.parametrize(
+    ("cast", "expected"),
+    [
+        ("(float[3])0.0", "float[3](0.0)"),
+        ("(float[3])0.0f", "float[3](0.0)"),
+        ("(uint[3])0u", "uint[3](0u)"),
+        ("(int[N])0", "int[N](0)"),
+    ],
+)
+def test_c_style_array_type_cast_of_a_zero_literal_codegen(cast, expected):
+    code = f"""
+    static const int N = 3;
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {{
+        let a = {cast};
+        outp[tid.x] = float(a[2]);
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert expected in generated_code
+
+
+@pytest.mark.parametrize(
+    "cast",
+    [
+        # Slang fills only the first element from a scalar, HLSL every element.
+        "(float[3])2.0",
+        "(float[3])x",
+        "(float[3])values",
+        "(float[3])(x - x)",
+        "(float[2][3])0",
+    ],
+)
+def test_c_style_array_type_cast_of_another_operand_is_refused(cast):
+    code = f"""
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {{
+        float x = outp[tid.x];
+        float values[3] = {{ 1.0, 2.0, 3.0 }};
+        let a = {cast};
+        outp[tid.x] = a[0];
+    }}
+    """
+
+    with pytest.raises(SlangImportRefused, match="cast to the array type"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_parenthesized_index_expression_is_not_an_array_cast():
+    code = """
+    RWStructuredBuffer<float> outp;
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void probe(uint3 tid : SV_DispatchThreadID) {
+        float values[2] = { 1.0, 2.0 };
+        outp[tid.x] = (values[1]) - 1.0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "outp[tid.x] = values[1] - 1.0;" in generated_code
 
 
 def test_rwtexture_load_codegen_from_official_texture_capability_sample():

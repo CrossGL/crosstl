@@ -310,9 +310,14 @@ def test_published_results_qualify_the_current_contract():
         assert exactness.get("floatOperations", 0) > 0, name
         assert exactness.get("exactArtifacts", 0) > 0, name
         assert exactness["exactArtifacts"] == profile["translation"]["translated"], name
-        assert exactness.get("notCompiled") == profile["translation"].get(
-            "compile-failed", 0
-        ), name
+        # Every shader without a translated artifact, whether translation or
+        # the target compiler rejected it, is recorded as not compiled.
+        untranslated = sum(
+            count
+            for status, count in profile["translation"].items()
+            if status != "translated"
+        )
+        assert exactness.get("notCompiled") == untranslated, name
         assert exactness.get("tool"), name
         assert profile["evidence"]["records"]["dispatch"] > 0
         assert set(profile["negativeControls"]["faults"]) == faults

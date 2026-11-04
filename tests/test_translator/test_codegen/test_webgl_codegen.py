@@ -1277,7 +1277,8 @@ def test_webgl_codegen_rejects_sampled_resource_types_outside_glsl_es300(
     (
         ("double value = 1.0;", "double"),
         ("dvec2 value = dvec2(1.0);", "dvec2"),
-        ("dmat2x2 value = dmat2x2(1.0);", "dmat2x2"),
+        ("dmat2x2 value = dmat2x2(1.0);", "dmat2"),
+        ("dmat3 value;", "dmat3"),
     ),
 )
 def test_webgl_codegen_rejects_64_bit_float_types(declaration, diagnostic_type):

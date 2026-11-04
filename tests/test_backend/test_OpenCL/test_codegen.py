@@ -581,6 +581,258 @@ def test_opencv_anonymous_enum_and_constant_array_codegen_reparse():
     assert "sector_data: array<array<i32, 3>>" in crossgl
 
 
+CONSTANT_TABLE_KERNEL_SOURCE = """
+    __constant float coeffs_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+    __kernel void first(__global float* out) {
+        size_t i = get_global_id(0);
+        out[i] = coeffs_table[i % 4];
+    }
+    """
+
+
+def test_opencl_program_constant_binds_before_kernel_buffers(tmp_path):
+    crossgl = generate_crossgl(CONSTANT_TABLE_KERNEL_SOURCE)
+
+    assert "@group(0) @binding(0) var<uniform> coeffs_table: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+
+    opencl_path = tmp_path / "constant_table.cl"
+    opencl_path.write_text(CONSTANT_TABLE_KERNEL_SOURCE, encoding="utf-8")
+    metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+
+    assert "constant float* coeffs_table [[buffer(0)]]" in metal
+    assert "device float* out [[buffer(1)]]" in metal
+
+
+def test_opencl_program_constant_after_kernel_counts_before_parameters():
+    crossgl = generate_crossgl("""
+        __constant float scale[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+        __kernel void first(__global float* values) {
+            size_t i = get_global_id(0);
+            values[i] = values[i] * scale[i % 4];
+        }
+        __constant float bias[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+        __kernel void second(__global float* values) {
+            size_t i = get_global_id(0);
+            values[i] = values[i] + bias[i % 4] + scale[0];
+        }
+        """)
+
+    assert "@group(0) @binding(0) var<uniform> scale: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<uniform> bias: array<f32, 4>" in crossgl
+    assert crossgl.count("@group(0) @binding(2) var<storage, read_write> values") == 2
+    assert crossgl.count("@group(0) @binding(1)") == 1
+
+
+def test_opencl_constant_pointer_local_is_not_a_resource():
+    crossgl = generate_crossgl("""
+        __constant float coeffs_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void first(__global float* out) {
+            __constant float *coeffs = coeffs_table;
+            size_t i = get_global_id(0);
+            out[i] = coeffs[i % 4];
+        }
+        """)
+
+    assert "var coeffs: ptr<f32> = coeffs_table;" in crossgl
+    assert "var<uniform> coeffs:" not in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert crossgl.count("@group(0) @binding(") == 2
+
+
+def test_opencl_local_pointer_local_keeps_its_initializer():
+    crossgl = generate_crossgl("""
+        __kernel void k(__global float* out, __global const float* in) {
+            __local float tile[64];
+            size_t l = get_local_id(0);
+            tile[l] = in[get_global_id(0)];
+            barrier(CLK_LOCAL_MEM_FENCE);
+            __local float *t = tile;
+            out[get_global_id(0)] = t[63 - l];
+        }
+        """)
+
+    assert "var<workgroup> tile: array<f32, 64>;" in crossgl
+    assert "var t: ptr<f32> = tile;" in crossgl
+    assert "var<workgroup> t:" not in crossgl
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        ("__local float *t = tile + 4;", "var t: ptr<f32> = (tile + 4);"),
+        ("__local float *t = &tile[l];", "var t: ptr<f32> = (&tile[l]);"),
+        ("local float *t = tile;", "var t: ptr<f32> = tile;"),
+        ("__local const float *t = tile;", "var t: ptr<f32> = tile;"),
+    ],
+    ids=["offset", "address-of-element", "unprefixed", "const"],
+)
+def test_opencl_local_pointer_local_initializer_forms(declaration, expected):
+    crossgl = generate_crossgl(f"""
+        __kernel void k(__global float* out) {{
+            __local float tile[64];
+            size_t l = get_local_id(0);
+            tile[l] = 1.0f;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            {declaration}
+            out[get_global_id(0)] = t[0];
+        }}
+        """)
+
+    assert expected in crossgl
+    assert "var<workgroup> t:" not in crossgl
+
+
+def test_opencl_pointer_declared_in_local_memory_stays_a_workgroup_variable():
+    # The trailing __local puts t itself in local memory: one pointer shared
+    # by the work-group, set by one work-item and read by all of them.
+    crossgl = generate_crossgl("""
+        __kernel void k(__global float* out) {
+            __local float tile[64];
+            __local float * __local t;
+            size_t l = get_local_id(0);
+            tile[l] = 1.0f;
+            if (l == 0) {
+                t = tile;
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[get_global_id(0)] = t[63 - l];
+        }
+        """)
+
+    assert "var<workgroup> t: ptr<f32>;" in crossgl
+
+
+def test_opencl_kernel_scope_constant_array_is_a_local():
+    crossgl = generate_crossgl("""
+        __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void first(__global float* out) {
+            __constant float local_table[2] = {5.0f, 6.0f};
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4] + local_table[i % 2];
+        }
+
+        __kernel void second(__global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = table[0];
+        }
+        """)
+
+    assert "var local_table: array<f32, 2> = {5.0f, 6.0f};" in crossgl
+    assert "var<uniform> local_table:" not in crossgl
+    # The kernel-scope table takes no binding, so the next kernel's buffer
+    # still follows the program-scope constant.
+    assert crossgl.count("@group(0) @binding(1) var<storage, read_write> out") == 2
+    assert crossgl.count("@group(0) @binding(") == 3
+
+
+def test_opencl_program_sampler_constant_takes_no_binding():
+    crossgl = generate_crossgl("""
+        __constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE |
+            CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+        __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        __kernel void k(__global const float *fin, __global float *outp,
+                        __read_only image2d_t tex) {
+            int i = get_global_id(0);
+            outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x * table[i % 4];
+        }
+        """)
+
+    assert "const sampler smp = sampler(" in crossgl
+    assert "@group(0) @binding(0) var<uniform> table: array<f32, 4>" in crossgl
+    assert "@group(0) @binding(1) var<storage, read> fin: array<f32>" in crossgl
+    assert "@group(0) @binding(2) var<storage, read_write> outp: array<f32>" in crossgl
+
+
+@pytest.mark.parametrize("leading_qualifier", ["static", "const"])
+def test_opencl_multiline_constant_qualifier_after_static_or_const(
+    tmp_path, leading_qualifier
+):
+    source = f"""
+        {leading_qualifier}
+        __constant float table[4] = {{1.0f, 2.0f, 3.0f, 4.0f}};
+
+        __kernel void first(__global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4];
+        }}
+        """
+    crossgl = generate_crossgl(source)
+
+    assert (
+        "@group(0) @binding(0) var<uniform> table: array<f32, 4> = {1.0f, 2.0f, 3.0f, 4.0f};"
+        in crossgl
+    )
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+
+    opencl_path = tmp_path / f"multiline_{leading_qualifier}_constant.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    metal = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+
+    assert "constant float* table [[buffer(0)]]" in metal
+    assert "device float* out [[buffer(1)]]" in metal
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "const __constant float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};",
+        "__constant\n        static float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};",
+        "static\n        const\n        __constant\n        float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};",
+    ],
+)
+def test_opencl_constant_qualifier_before_the_type_in_any_order(declaration):
+    crossgl = generate_crossgl(f"""
+        {declaration}
+
+        __kernel void first(__global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4];
+        }}
+        """)
+
+    assert (
+        "@group(0) @binding(0) var<uniform> table: array<f32, 4> = {1.0f, 2.0f, 3.0f, 4.0f};"
+        in crossgl
+    )
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+
+
+@pytest.mark.parametrize("separator", [" ", "\n            "])
+def test_opencl_kernel_scope_const_constant_array_is_a_local(separator):
+    crossgl = generate_crossgl(f"""
+        __kernel void first(__global float* out) {{
+            const{separator}__constant float t[2] = {{5.0f, 6.0f}};
+            size_t i = get_global_id(0);
+            out[i] = t[i % 2];
+        }}
+        """)
+
+    assert "var t: array<f32, 2> = {5.0f, 6.0f};" in crossgl
+    assert "var<uniform> t:" not in crossgl
+    assert crossgl.count("@group(0) @binding(") == 1
+
+
+@pytest.mark.parametrize("separator", [" ", "\n            "])
+def test_opencl_volatile_local_array_is_workgroup_memory(separator):
+    crossgl = generate_crossgl(f"""
+        __kernel void first(__global float* out) {{
+            volatile{separator}__local float tile[16];
+            size_t l = get_local_id(0);
+            tile[l] = 1.0f;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[get_global_id(0)] = tile[15 - l];
+        }}
+        """)
+
+    assert "var<workgroup> tile: array<f32, 16>;" in crossgl
+    assert "var tile:" not in crossgl
+
+
 def test_darktable_unsigned_char_pointer_to_array_kernel_param_codegen_reparse():
     crossgl = generate_crossgl("""
         static inline int FCxtrans(const int row,
@@ -1302,3 +1554,100 @@ def test_opencl_fences_refuse_scopes_no_crossgl_fence_orders(call):
                 outp[get_global_id(0)] = 0u;
             }}
             """)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "second_line", "expected"),
+    [
+        (
+            "const",
+            "__global float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global",
+            "const float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "const __global",
+            "float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global const",
+            "float* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+    ],
+)
+def test_opencl_kernel_parameter_qualifiers_split_across_lines(
+    first_line, second_line, expected
+):
+    split_source = f"""
+        __kernel void first({first_line}
+            {second_line}, __global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = in[i];
+        }}
+        """
+    one_line_source = split_source.replace(f"{first_line}\n", f"{first_line} ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert expected in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_constant_kernel_parameter_split_from_const():
+    split_source = """
+        __kernel void first(const
+            __constant float* table, __global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = table[i % 4];
+        }
+        """
+    one_line_source = split_source.replace("const\n", "const ")
+
+    assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "second_line"),
+    [("unsigned", "n"), ("unsigned", "int n"), ("const", "unsigned n")],
+)
+def test_opencl_unsigned_kernel_parameter_split_across_lines(first_line, second_line):
+    # `unsigned` / `n` is an `unsigned int` named `n`, as on one line.
+    split_source = f"""
+        __kernel void first(__global float* out, {first_line}
+            {second_line}) {{
+            out[get_global_id(0)] = (float)n;
+        }}
+        """
+    one_line_source = split_source.replace(f"{first_line}\n", f"{first_line} ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert "u32 n" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_function_parameter_qualifier_split_across_lines():
+    split_source = """
+        float twice(const
+            float v) {
+            return v * 2.0f;
+        }
+
+        __kernel void first(__global const float* in, __global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = twice(in[i]);
+        }
+        """
+    one_line_source = split_source.replace("const\n", "const ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert "f32 twice(f32 v)" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)

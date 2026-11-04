@@ -23,6 +23,17 @@ The initial WGSL target surface covers common portable shader output:
 
 * vertex, fragment, and compute entry point generation
 * scalar, vector, matrix, array, struct, function, and local variable syntax
+* brace initializers of structures, such as ``Pair p = {x, 2.0};``, written as
+  the structure's value constructor ``Pair(x, 2.0)``, with each value converted
+  to its member's type and omitted members set to zero; an initializer with
+  more values than members, or one for a structure WGSL cannot construct, is
+  refused with ``project.translate.wgsl-struct-initializer-unsupported``
+* brace initializers of vectors and matrices, such as ``vec3 v = {x, 1.0, 2.0};``
+  or ``mat2 m = {{1.0, 0.0}, {0.0, x}};``, written as the type's value
+  constructor ``vec3<f32>(x, 1.0, 2.0)``, with one vector per matrix column or
+  one scalar per component, each value converted to the component or column
+  type and omitted vector components set to zero; any other list is refused
+  with ``project.translate.wgsl-vector-initializer-unsupported``
 * generic functions, monomorphized into one concrete WGSL function per
   instantiation the module calls; calls whose type arguments cannot be
   deduced, ambiguous generic overloads and generic resource parameters are
@@ -48,11 +59,23 @@ The initial WGSL target surface covers common portable shader output:
 * typed diagnostics (``project.translate.wgsl-numeric-type-unsupported``) for
   64-bit floating-point, 64-bit integer and bfloat16 types, which WGSL cannot
   represent; they are never narrowed to ``f32`` or ``i32``
+* ``texture(sampler, coords, bias)`` lowered to ``textureSampleBias`` with the
+  texture's split sampler, and ``texture(texture, sampler, coords, bias)``,
+  the form HLSL ``SampleBias`` and Metal ``bias()`` import as, with its
+  explicit sampler; a bias on a 1D or depth texture, which have no
+  ``textureSampleBias`` overload, through a comparison sampler, or on an
+  element of a sampled texture array selected at run time is refused with
+  ``project.translate.wgsl-texture-bias-unsupported``, and a bias in a compute
+  stage with ``project.translate.wgsl-implicit-lod-stage-unsupported``
 * typed diagnostics (``project.translate.wgsl-integer-texture-sample-unsupported``)
   for ``texture``, ``textureLod``, ``textureGrad``, ``textureOffset`` and their
   offset forms on ``isampler*`` and ``usampler*`` textures, which WGSL cannot
   sample; ``texelFetch`` and ``textureSize`` on them become ``textureLoad`` and
   ``textureDimensions``
+* typed diagnostics (``project.translate.wgsl-cube-texture-offset-unsupported``)
+  for ``textureOffset``, ``textureLodOffset``, ``textureGradOffset``,
+  ``textureCompareOffset`` and ``textureCompareLodOffset`` on cube array
+  textures, for which WGSL has no offset lookup
 
 Implementation Notes
 --------------------

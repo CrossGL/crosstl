@@ -66,6 +66,11 @@ from .fragment_colour_outputs import (
     FragmentColourOutputUnsupportedError,
     name_fragment_colour_outputs,
 )
+from .fragment_rate_barycentrics import (
+    MetalBarycentricsUnsupportedError,
+    lower_shading_rate_flags,
+    refuse_mixed_metal_barycentrics,
+)
 from .function_name_collisions import rename_colliding_functions
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
@@ -118,6 +123,7 @@ from .row_major_constant_members import store_row_major_constant_members_transpo
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
+from .scalar_brace_values import zero_empty_scalar_initializers
 from .scalar_swizzles import expand_scalar_swizzles
 from .shader_execution_reordering import (
     ShaderExecutionReorderingUnsupportedError,
@@ -204,6 +210,7 @@ __all__ = [
     "InterfaceBlockInstanceUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "LocalStructUnsupportedError",
+    "MetalBarycentricsUnsupportedError",
     "MetalRayDispatchUnsupportedError",
     "MetalRuntimeTypeUnsupportedError",
     "NarrowIntegerUnsupportedError",
@@ -276,7 +283,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
-    (:mod:`.type_aliases`). GLSL's
+    (:mod:`.type_aliases`), and an empty brace initializer of a scalar, ``float one = {};``, its zero
+    (:mod:`.scalar_brace_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
     structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
@@ -344,7 +352,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Fragment built-in inputs read by name are passed to the HLSL and MSL entry point and its helpers
     (:mod:`.builtin_input_reads`). For them, the built-in outputs a vertex or fragment stage writes by name and its
     ``in``/``out`` variables become stage-level interface variables, and ``int`` ones carrying a ``uint`` system value
-    are retyped with conversions at each use (:mod:`.builtin_output_writes`).
+    are retyped with conversions at each use (:mod:`.builtin_output_writes`). The GLSL shading-rate flag constants
+    become their values for every target but GLSL, and a Metal fragment stage reading barycentrics with and without
+    perspective is refused (:mod:`.fragment_rate_barycentrics`).
     Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
     GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
     gathers and explicit-level samples do (:mod:`.shadow_samples`).
@@ -386,6 +396,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    zero_empty_scalar_initializers(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)
     lower_device_struct_references(program, report.target)
@@ -399,6 +410,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     strip_non_uniform_qualifiers(program, report.target)
     canonicalize_atomic_calls(program, report.target)
     hlsl_out_argument_atomics(program, report.target)
+    lower_shading_rate_flags(program, report.target)
+    refuse_mixed_metal_barycentrics(program, report.target)
     declare_builtin_outputs(program, report.target)
     pass_builtin_inputs(program, report.target)
     name_fragment_colour_outputs(program, report.target)

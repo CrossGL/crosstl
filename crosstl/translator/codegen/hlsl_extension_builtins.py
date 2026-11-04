@@ -9,7 +9,8 @@ This module maps the built-ins HLSL can express:
 
 * ``gl_SampleID`` takes ``SV_SampleIndex`` in the generator itself, not only after ``translate``'s canonicalization;
 * ``gl_BaryCoordNV`` and ``gl_BaryCoordNoPerspNV`` take ``SV_Barycentrics`` (Shader Model 6.1), as their EXT
-  equivalents do (GL_EXT_fragment_shader_barycentric defines the same values as the NV extension);
+  equivalents do (GL_EXT_fragment_shader_barycentric defines the same values as the NV extension); the
+  no-perspective ones take semantic index 1, so that a shader may read both;
 * ``gl_ShadingRateEXT`` (a fragment input) and ``gl_PrimitiveShadingRateEXT`` (a vertex, geometry or mesh output)
   take ``SV_ShadingRate`` (Shader Model 6.4). GL_EXT_fragment_shading_rate's flags and ``D3D12_SHADING_RATE`` encode
   a rate the same way, log2 of the width in bits 2 and 3 and log2 of the height in bits 0 and 1, so the value passes
@@ -53,7 +54,7 @@ __all__ = [
 HLSL_GLSL_SYSTEM_VALUES = {
     "gl_SampleID": "SV_SampleIndex",
     "gl_BaryCoordNV": "SV_Barycentrics",
-    "gl_BaryCoordNoPerspNV": "SV_Barycentrics",
+    "gl_BaryCoordNoPerspNV": "SV_Barycentrics1",
     "gl_ShadingRateEXT": "SV_ShadingRate",
     "gl_PrimitiveShadingRateEXT": "SV_ShadingRate",
 }

@@ -115,6 +115,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "write_only",
         "read_write",
     }
+    OPENCL_LOCAL_QUALIFIERS = {"__shared__", "__local", "__local__", "local"}
     OPENCL_SCALAR_TYPE_MAPPING = {
         "signed char": "i8",
         "unsigned char": "u8",
@@ -610,7 +611,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         self.push_identifier_name_scope()
         sampler_states = dict(self.opencl_sampler_states)
         try:
-            resource_binding = 0
+            # Program-scope __constant variables take the first bindings, so
+            # the kernel's buffers start after them, as in HIP input.
+            resource_binding = self.global_resource_binding_count
             for index, param in enumerate(getattr(kernel, "params", []) or []):
                 if isinstance(param, dict):
                     raw_type = param.get("type", "int")
@@ -699,7 +702,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
 
     def is_opencl_local_pointer_type(self, raw_type):
         qualifiers = set(str(raw_type).split())
-        return bool(qualifiers & {"__shared__", "__local", "__local__", "local"})
+        return bool(qualifiers & self.OPENCL_LOCAL_QUALIFIERS)
 
     def opencl_kernel_pointer_access(self, raw_type):
         qualifiers = set(str(raw_type).split())
@@ -782,11 +785,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             self.emit(f"// skipped host OpenCL source string: {node.name}")
             return
         self.register_opencl_sizeof_symbol(node)
-        if (
-            getattr(node, "value", None) is not None
-            and self.convert_hip_type_to_crossgl(getattr(node, "vtype", ""))
-            == "sampler"
-        ):
+        if self.is_opencl_fixed_sampler_declaration(node):
             # A sampler_t constant fixes its state in source with CLK_* flags,
             # as a CrossGL sampler(...) constructor does.
             state = self.format_opencl_sampler_state(node.value)
@@ -796,7 +795,66 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 self.opencl_sampler_states[name] = state
             self.emit(f"const sampler {output_name} = {state};")
             return
+        if self.is_opencl_function_scope_constant(node):
+            # In `__constant float *p = table;` __constant is the address space
+            # p points into. p itself is a private local, like a `__global
+            # float *` local. A kernel's `__constant float t[4] = {...};` is a
+            # table fixed in source. Neither is a resource the host binds, so
+            # neither takes a binding of its own.
+            qualifiers = node.qualifiers
+            node.qualifiers = [q for q in qualifiers if q != "__constant__"]
+            try:
+                super().visit_VariableNode(node)
+            finally:
+                node.qualifiers = qualifiers
+            return
+        if self.is_opencl_function_scope_local_pointer(node):
+            # In `__local float *t = tile;` __local is the address space t
+            # points into, as __constant is above; t itself is a private
+            # local that keeps its initializer, not a workgroup variable.
+            qualifiers = node.qualifiers
+            node.qualifiers = [
+                q for q in qualifiers if q not in self.OPENCL_LOCAL_QUALIFIERS
+            ]
+            try:
+                super().visit_VariableNode(node)
+            finally:
+                node.qualifiers = qualifiers
+            return
         super().visit_VariableNode(node)
+
+    def is_opencl_fixed_sampler_declaration(self, node):
+        return (
+            getattr(node, "value", None) is not None
+            and self.convert_hip_type_to_crossgl(getattr(node, "vtype", ""))
+            == "sampler"
+        )
+
+    def is_global_resource_declaration(self, statement):
+        # A __constant sampler_t imports as a `const sampler`, not as a
+        # resource, so it takes no binding.
+        return super().is_global_resource_declaration(
+            statement
+        ) and not self.is_opencl_fixed_sampler_declaration(statement)
+
+    def is_opencl_function_scope_constant(self, node):
+        return self.indent_level > 0 and "__constant__" in (
+            getattr(node, "qualifiers", None) or []
+        )
+
+    def is_opencl_function_scope_local_pointer(self, node):
+        if self.indent_level <= 0:
+            return False
+        qualifiers = set(getattr(node, "qualifiers", None) or [])
+        if not qualifiers & self.OPENCL_LOCAL_QUALIFIERS:
+            return False
+        vtype = str(getattr(node, "vtype", ""))
+        if "*" not in vtype:
+            return False
+        # `__local float * __local t;` declares the pointer itself in local
+        # memory, shared by the work-group, so it stays a workgroup variable.
+        outermost = set(vtype.rsplit("*", 1)[1].split())
+        return not outermost & self.OPENCL_LOCAL_QUALIFIERS
 
     def visit_FunctionNode(self, node):
         previous_function_name = self.opencl_current_function_name

@@ -124,6 +124,14 @@ def _validate_hlsl(tmp_path, code, profile, entry):
     _run([compiler, "-T", profile, "-E", entry, str(source)])
 
 
+def _validate_glsl(tmp_path, code, stage):
+    if shutil.which("glslangValidator") is None:
+        return
+    source = tmp_path / f"out.{stage}"
+    source.write_text(code)
+    _run(["glslangValidator", "-S", stage, str(source)])
+
+
 def _entry_statements(program):
     return next(iter(program.stages.values())).entry_point.body.statements
 
@@ -166,6 +174,66 @@ def test_glsl_keeps_array_constructors_as_values():
 
     assert hoist_array_constructors(program, "opengl") == 0
     assert len(_constructors(program)) == 4
+
+
+SHORT_ARRAY_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    float total(float v[3]) { return v[0] + v[1] + v[2]; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            float a[3];
+            a = float[3](0.0);
+            outp[0] = a[2] + total(float[3](0.0));
+        }
+    }
+}
+"""
+
+
+def test_glsl_pads_short_array_constructors_outside_declarations(tmp_path):
+    """GLSL needs one constructor argument per element (GLSL 4.60 section 5.4.4).
+
+    A declaration's initializer is rewritten to an initializer list and
+    zero-filled, but an assignment or a call argument kept the short call,
+    which glslang rejects. Pad it the same way: given elements first, then
+    the element type's value initializer for each missing element.
+    """
+    code = _translate(tmp_path, SHORT_ARRAY_CONSTRUCTOR_CGL, ".cgl", "opengl")
+
+    assert "a = float[3](0.0, 0.0, 0.0);" in code
+    assert "total(float[3](0.0, 0.0, 0.0))" in code
+    assert "float[3](0.0)" not in code
+    _validate_glsl(tmp_path, code, "comp")
+
+
+SHORT_NON_ZERO_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    struct S { float x; int k; };
+    float[3] make() { return float[3](1.0); }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            S s[2];
+            s = S[2](S(1.0, 2));
+            float a[3] = make();
+            outp[i] = a[2] + float[3](1.0)[i % 3u] + s[1].x;
+        }
+    }
+}
+"""
+
+
+def test_glsl_short_array_constructors_zero_fill_after_the_given_elements(tmp_path):
+    code = _translate(tmp_path, SHORT_NON_ZERO_CONSTRUCTOR_CGL, ".cgl", "opengl")
+
+    assert "return float[3](1.0, 0.0, 0.0);" in code
+    assert "float[3](1.0, 0.0, 0.0)[" in code
+    assert "s = S[2](S(1.0, 2), S(0.0, 0));" in code
+    _validate_glsl(tmp_path, code, "comp")
 
 
 @pytest.mark.parametrize(

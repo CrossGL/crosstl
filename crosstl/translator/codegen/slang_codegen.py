@@ -51,6 +51,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.builtin_names import is_crossgl_gl_builtin
 from ..semantics.builtin_values import glsl_builtin_name
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
@@ -4341,7 +4342,22 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
 
     def semantic_suffix(self, semantic, shader_type=None):
+        """The ``: semantic`` a declaration takes; a built-in with no Slang system value is refused.
+
+        ``map_semantic`` returns such a ``gl_`` name unchanged, and slangc would read it as a user semantic, an
+        ordinary varying, so the declaration would not carry the built-in.
+        """
         mapped_semantic = self.map_semantic(semantic, shader_type)
+        name = str(mapped_semantic or "")
+        if (
+            name.startswith("gl_")
+            and is_crossgl_gl_builtin(name)
+            and not name.lower().startswith(("gl_fragcolor", "gl_fragdata"))
+        ):
+            self.refuse_lowering(
+                f"Slang has no system value for the built-in @{name}; "
+                "it would become a user varying, not the built-in"
+            )
         return f" : {mapped_semantic}" if mapped_semantic else ""
 
     def generate_stage(self, stage_type, stage):
@@ -9573,11 +9589,35 @@ class SlangCodeGen(LoweringRefusalMixin):
             return f"mul({left}, {right})"
         return f"{left} {node.op} {right}"
 
+    def slang_helper_invocation_expression(self):
+        """A read of ``gl_HelperInvocation`` as Slang's ``IsHelperLane()``, unless a variable of that name is in scope.
+
+        Slang declares no ``gl_HelperInvocation``; ``IsHelperLane()`` is available in fragment stages only, so it is
+        refused in another stage's entry point. A helper function is left to slangc, which checks the stages that
+        call it.
+        """
+        if "gl_HelperInvocation" in self.variable_types:
+            return "gl_HelperInvocation"
+        shader_type = self.current_shader_type
+        if (
+            shader_type is not None
+            and self.slang_shader_stage_name(shader_type) != "fragment"
+        ):
+            self.refuse_lowering(
+                "Slang gl_HelperInvocation: lowered to IsHelperLane() only in a "
+                f"fragment stage, not in a {shader_type} entry point"
+            )
+        return "IsHelperLane()"
+
     def generate_expression(self, node):
         """Render a CrossGL expression as Slang expression syntax."""
         if isinstance(node, VariableNode):
+            if node.name == "gl_HelperInvocation":
+                return self.slang_helper_invocation_expression()
             return node.name
         elif isinstance(node, IdentifierNode):
+            if node.name == "gl_HelperInvocation":
+                return self.slang_helper_invocation_expression()
             if isinstance(node.name, str) and "::" in node.name:
                 enum_value = enum_value_expression(self, node.name)
                 if enum_value != node.name:
