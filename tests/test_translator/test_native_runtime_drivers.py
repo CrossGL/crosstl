@@ -5257,6 +5257,92 @@ def test_vulkan_compute_runtime_reports_missing_python_binding(tmp_path):
     assert availability.details["missingPythonModules"] == ["vulkan"]
 
 
+def _fake_vulkan_module(*, instance_extensions, create_error=None):
+    vk = SimpleNamespace(
+        VK_STRUCTURE_TYPE_APPLICATION_INFO=0,
+        VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO=1,
+        VK_API_VERSION_1_0=1,
+        VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR=0x1,
+        VK_QUEUE_COMPUTE_BIT=0x2,
+        created=[],
+    )
+    vk.VkApplicationInfo = lambda **kwargs: kwargs
+    vk.VkInstanceCreateInfo = lambda **kwargs: kwargs
+
+    def create_instance(create_info, allocator):
+        vk.created.append(create_info)
+        if create_error is not None:
+            raise create_error
+        return "instance"
+
+    vk.vkCreateInstance = create_instance
+    vk.vkDestroyInstance = lambda instance, allocator: None
+    vk.vkEnumerateInstanceExtensionProperties = lambda layer: [
+        SimpleNamespace(extensionName=name) for name in instance_extensions
+    ]
+    vk.vkEnumeratePhysicalDevices = lambda instance: ["device"]
+    vk.vkGetPhysicalDeviceQueueFamilyProperties = lambda device: [
+        SimpleNamespace(queueFlags=0x2)
+    ]
+    vk.vkGetPhysicalDeviceProperties = lambda device: SimpleNamespace(
+        deviceName="Fake GPU"
+    )
+    return vk
+
+
+def test_vulkan_compute_runtime_enables_portability_enumeration(tmp_path):
+    vk = _fake_vulkan_module(instance_extensions=["VK_KHR_portability_enumeration"])
+    runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is True
+    assert availability.details["physicalDevice"] == "Fake GPU"
+    assert availability.details["portabilityEnumeration"] is True
+    assert vk.created[0]["flags"] == 0x1
+    assert vk.created[0]["ppEnabledExtensionNames"] == [
+        "VK_KHR_portability_enumeration"
+    ]
+
+
+def test_vulkan_compute_runtime_skips_portability_enumeration_when_absent(tmp_path):
+    vk = _fake_vulkan_module(instance_extensions=["VK_EXT_debug_utils"])
+    runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is True
+    assert availability.details["portabilityEnumeration"] is False
+    assert "flags" not in vk.created[0]
+    assert "ppEnabledExtensionNames" not in vk.created[0]
+
+
+@pytest.mark.parametrize(
+    ("instance_extensions", "reason_kind"),
+    [
+        (["VK_KHR_portability_enumeration"], "portability-enumeration-failed"),
+        ([], "vulkan-runtime-unavailable"),
+    ],
+)
+def test_vulkan_compute_runtime_reports_instance_creation_failure(
+    tmp_path, instance_extensions, reason_kind
+):
+    class VkErrorIncompatibleDriver(Exception):
+        pass
+
+    vk = _fake_vulkan_module(
+        instance_extensions=instance_extensions,
+        create_error=VkErrorIncompatibleDriver(),
+    )
+    runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == reason_kind
+    assert availability.details["error"] == "VkErrorIncompatibleDriver"
+
+
 def test_vulkan_compute_runtime_reports_unavailable_through_native_adapter(tmp_path):
     artifact_path = tmp_path / "out" / "vulkan" / "add.spv"
     artifact_path.parent.mkdir(parents=True)
@@ -5587,9 +5673,8 @@ void main() {
     instance = runtime._create_instance(vk)
     try:
         device, _ = runtime._select_compute_device(vk, instance)
-        limit = vk.vkGetPhysicalDeviceProperties(
-            device
-        ).limits.maxComputeWorkGroupCount[axis]
+        properties = vk.vkGetPhysicalDeviceProperties(device)
+        limit = properties.limits.maxComputeWorkGroupCount[axis]
     finally:
         runtime._destroy_instance(vk, instance)
     counts = [1, 1, 1]
