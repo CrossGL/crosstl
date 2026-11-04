@@ -449,6 +449,7 @@ class CudaCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(ast_node)),
+            shader_ast=ast_node,
         )
         self.function_return_types.update(
             {

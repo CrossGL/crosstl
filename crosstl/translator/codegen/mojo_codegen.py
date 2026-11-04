@@ -1658,6 +1658,7 @@ class MojoCodeGen:
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(ast)),
+            shader_ast=ast,
         )
         for func in generic_function_specializations.values():
             self.register_function_return_type(func)

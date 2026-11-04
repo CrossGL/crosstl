@@ -9260,6 +9260,7 @@ class GLSLCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             functions,
+            shader_ast=ast,
         )
         if generic_function_specializations:
             additional_generic_enum_specializations = (
