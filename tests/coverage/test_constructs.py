@@ -17,6 +17,7 @@ from tools.coverage.model import Feature, Result
 from tools.coverage.templates import (
     fragments,
     interfaces,
+    pipeline,
     rasterization,
     relations,
     vertices,
@@ -53,6 +54,7 @@ def _grammar(drop: str = "") -> str:
         "BuiltIn": [],
         "Decoration": [],
         "ExecutionModel": [],
+        "ExecutionMode": [],
     }
     instructions = []
     for anchor in sorted(anchors - {drop}):
@@ -797,6 +799,66 @@ def test_rasterization_probes_read_the_primitive_and_sample_or_write_coverage():
         assert (
             listed & set(rasterization.NAMES) == set(rasterization.NAMES) - names
         ), language
+
+
+def test_pipeline_probes_use_each_languages_fragment_built_ins_and_modes():
+    feature = _feature("glsl", "conservative-depth")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    assert feature.group == "BuiltIn.FragDepth ExecutionMode.DepthGreater"
+    assert _feature("glsl", "early-fragment-tests").group == (
+        "ExecutionMode.EarlyFragmentTests"
+    )
+    for language, name, line in (
+        ("glsl", "helper-invocation", "gl_HelperInvocation ? 1.0 : 0.0"),
+        (
+            "glsl",
+            "early-fragment-tests",
+            "layout(early_fragment_tests) in;\nvoid main()",
+        ),
+        ("glsl", "conservative-depth", "layout(depth_greater) out float gl_FragDepth;"),
+        ("webgl", "point-coordinate", "vec4(gl_PointCoord, uv.x, 1.0)"),
+        ("hlsl", "helper-invocation", "IsHelperLane() ? 1.0 : 0.0"),
+        ("hlsl", "early-fragment-tests", "[earlydepthstencil]\nfloat4 main("),
+        ("hlsl", "layer", "uint layer : SV_RenderTargetArrayIndex"),
+        ("hlsl", "conservative-depth", "float depth : SV_DepthGreaterEqual;"),
+        ("slang", "point-coordinate", "float2 point : SV_PointCoord"),
+        (
+            "slang",
+            "early-fragment-tests",
+            '[shader("fragment")]\n[earlydepthstencil]\n',
+        ),
+        ("metal", "early-fragment-tests", "[[early_fragment_tests]] fragment float4"),
+        ("metal", "viewport-index", "uint viewport [[viewport_array_index]]"),
+        ("metal", "conservative-depth", "float depth [[depth(greater)]];"),
+        ("rust", "helper-invocation", "#[spirv(helper_invocation)] helper: bool"),
+        ("rust", "layer", "#[spirv(layer, flat)] layer: u32"),
+        ("rust", "early-fragment-tests", "#[spirv(fragment(early_fragment_tests))]"),
+        (
+            "rust",
+            "conservative-depth",
+            "#[spirv(fragment(depth_replacing, depth_greater))]",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "early-fragment-tests"), "crossgl").source
+    assert "    fragment {\n        layout(early_fragment_tests) in;\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "viewport-index"), "crossgl").source
+    assert "        int viewport @ gl_ViewportIndex;\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "conservative-depth"), "crossgl").source
+    assert "    out float gl_FragDepth @depth_greater;\n" in crossgl
+    # Direct3D has no point sprites, WGSL none of the six, GLSL ES 3.00 only the point coordinate, and the kernel
+    # languages no fragment stage.
+    names = set(pipeline.NAMES)
+    absent = {
+        "hlsl": {"point-coordinate"},
+        "wgsl": names,
+        "webgl": names - {"point-coordinate"},
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
 
 
 def test_relation_probes_compare_integer_and_boolean_vectors_per_language():

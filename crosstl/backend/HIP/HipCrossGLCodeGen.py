@@ -6,7 +6,10 @@ import re
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.keyword_renames import source_identifier_names, unused_identifier_name
+from ..CUDA.local_memory_spaces import crossgl_zero_value
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..namespace_constants import is_c_family_namespace_constant
 from ..thread_hierarchy import (
     global_invocation_axis,
     kernel_workgroup_size_attribute,
@@ -314,7 +317,8 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "precision"}
+    # ``let``, ``match`` and ``var`` are CrossGL lexer keywords.
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
     CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
         "-": "minus",
@@ -532,7 +536,10 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.generated_matrix_helper_types = set()
         self.namespace_aliases = {}
+        self.source_identifier_names = frozenset()
         self.anonymous_enum_count = 0
+        self.global_resource_bindings = {}
+        self.global_resource_binding_count = 0
         self.function_local_record_definitions = {}
         self.function_local_record_node_ids = set()
         self.function_local_record_declaration_types = {}
@@ -547,10 +554,14 @@ class HipToCrossGLConverter:
         self.union_active_member_scopes = [{}]
         self.union_object_identity_scopes = [{}]
         self.union_indirect_object_scopes = [set()]
+        self.namespace_scope_variable = False
+        self.namespace_constant_names = set()
+        self.function_body_depth = 0
 
     def generate(self, ast_node):
         self.output = []
         self.indent_level = 0
+        self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -580,14 +591,40 @@ class HipToCrossGLConverter:
         self.suppress_identifier_name_rewrite = 0
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.anonymous_enum_count = 0
+        self.global_resource_binding_count = 0
+        self.namespace_constant_names = set()
+        self.function_body_depth = 0
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
+        self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
         return "\n".join(self.output)
+
+    def prepare_global_resource_bindings(self, ast_node):
+        self.global_resource_bindings = {}
+        for statement in getattr(ast_node, "statements", []) or []:
+            if self.is_global_resource_declaration(statement):
+                self.global_resource_bindings[id(statement)] = len(
+                    self.global_resource_bindings
+                )
+        self.global_resource_binding_count = len(self.global_resource_bindings)
+
+    def is_global_resource_declaration(self, statement):
+        """Whether a top-level declaration imports as a resource with a binding."""
+        return isinstance(statement, VariableNode) and "__constant__" in set(
+            getattr(statement, "qualifiers", []) or []
+        )
+
+    def global_resource_binding_for(self, node):
+        binding = self.global_resource_bindings.get(id(node))
+        if binding is None:
+            binding = self.global_resource_binding_count
+            self.global_resource_binding_count += 1
+        return binding
 
     def reset_function_local_record_materializations(self):
         self.function_local_record_definitions = {}
@@ -1605,13 +1642,13 @@ class HipToCrossGLConverter:
 
     def sanitize_identifier_name(self, name):
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
-            return f"{name}_"
+            return unused_identifier_name(name, self.source_identifier_names)
         return name
 
     def sanitize_crossgl_type_identifier(self, name):
         parts = []
         for char in str(name):
-            if char.isalnum() or char == "_":
+            if char.isascii() and (char.isalnum() or char == "_"):
                 parts.append(char)
             elif char == ":":
                 if not parts or parts[-1] != "_":
@@ -1619,7 +1656,13 @@ class HipToCrossGLConverter:
             elif not parts or parts[-1] != "_":
                 parts.append("_")
 
-        sanitized = "".join(parts).strip("_") or "anonymous"
+        raw_name = str(name)
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw_name):
+            # A plain identifier keeps its underscores, so the declaration and
+            # every use of the type agree, as in the CUDA importer.
+            sanitized = raw_name
+        else:
+            sanitized = "".join(parts).strip("_") or "anonymous"
         if sanitized[0].isdigit():
             sanitized = f"type_{sanitized}"
         return self.sanitize_identifier_name(sanitized)
@@ -5080,7 +5123,11 @@ class HipToCrossGLConverter:
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, VariableNode):
-                self.visit(stmt)
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(stmt)
+                finally:
+                    self.namespace_scope_variable = False
                 self.emit("")
             elif isinstance(stmt, TypeAliasNode):
                 self.visit(stmt)
@@ -5180,12 +5227,14 @@ class HipToCrossGLConverter:
                     self.register_cooperative_group_parameter(param)
             if hasattr(node, "body") and node.body:
                 try:
+                    self.function_body_depth += 1
                     if isinstance(node.body, list):
                         for stmt in node.body:
                             self.emit_statement(stmt)
                     else:
                         self.emit_statement(node.body)
                 finally:
+                    self.function_body_depth -= 1
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -5277,7 +5326,7 @@ class HipToCrossGLConverter:
                             element_type,
                         )
                         params.append(
-                            f"@group(0) @binding({len(params)}) "
+                            f"@group(0) @binding({self.global_resource_binding_count + len(params)}) "
                             f"var<storage, {access}> "
                             f"{output_name}: array<{element_type}>"
                         )
@@ -5290,7 +5339,7 @@ class HipToCrossGLConverter:
                         self.register_variable_type(param_name, param_type)
                         if self.is_crossgl_scalar_type(param_type):
                             params.append(
-                                f"@group(0) @binding({len(params)}) "
+                                f"@group(0) @binding({self.global_resource_binding_count + len(params)}) "
                                 f"var<uniform> {output_name}: {param_type}"
                             )
                         else:
@@ -5321,12 +5370,14 @@ class HipToCrossGLConverter:
                         self.register_unique_ptr_parameter(param)
                         self.register_cooperative_group_parameter(param)
                 try:
+                    self.function_body_depth += 1
                     if isinstance(kernel.body, list):
                         for stmt in kernel.body:
                             self.emit_statement(stmt)
                     else:
                         self.emit_statement(kernel.body)
                 finally:
+                    self.function_body_depth -= 1
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -5964,15 +6015,34 @@ class HipToCrossGLConverter:
             return
 
         if "__constant__" in qualifiers:
+            if (
+                not (hasattr(node, "value") and node.value)
+                and self.function_body_depth > 0
+                and "static" in qualifiers
+            ):
+                # A function-scope static __constant__ local has static
+                # storage, so without an initializer every element is zero,
+                # and device code cannot write constant memory. Emit it as a
+                # function-scope constant of zeros: it must neither take a
+                # resource binding nor be read uninitialized by a later
+                # backend. A block-scope extern declaration names a
+                # namespace-scope variable the host may have written, so it
+                # is not one.
+                self.emit(
+                    f"let {output_name}: {var_type} = "
+                    f"{crossgl_zero_value(var_type)};"
+                )
+                return
+            binding = self.global_resource_binding_for(node)
             if hasattr(node, "value") and node.value:
                 value = self.format_variable_initializer_value(node.value)
                 self.emit(
-                    f"@group(0) @binding(0) var<uniform> {output_name}: "
+                    f"@group(0) @binding({binding}) var<uniform> {output_name}: "
                     f"{var_type} = {value};"
                 )
             else:
                 self.emit(
-                    f"@group(0) @binding(0) var<uniform> {output_name}: {var_type};"
+                    f"@group(0) @binding({binding}) var<uniform> {output_name}: {var_type};"
                 )
             return
 
@@ -5999,9 +6069,23 @@ class HipToCrossGLConverter:
                 return
 
             value = self.format_variable_initializer_value(node.value)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(raw_name)
+                self.emit(f"const {var_type} {output_name} = {value};")
+                return
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
             self.emit(f"var {output_name}: {var_type};")
+
+    def is_namespace_scope_constant(self, node):
+        """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
+
+        Such a constant imports as a CrossGL ``const`` so every target can read it
+        from device code; a mutable global would become a host variable.
+        """
+        return self.namespace_scope_variable and is_c_family_namespace_constant(
+            node, self.namespace_constant_names
+        )
 
     def format_variable_initializer_value(self, value):
         string_value = self.format_single_string_initializer(value)
@@ -6072,14 +6156,17 @@ class HipToCrossGLConverter:
         var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, node.name)
         output_name = self.register_identifier_name(node.name)
         self.register_variable_type(node.name, var_type)
+        binding = self.global_resource_binding_for(node)
         if node.value is not None:
             value = self.visit(node.value)
             self.emit(
-                f"@group(0) @binding(0) var<uniform> {output_name}: "
+                f"@group(0) @binding({binding}) var<uniform> {output_name}: "
                 f"{var_type} = {value};"
             )
         else:
-            self.emit(f"@group(0) @binding(0) var<uniform> {output_name}: {var_type};")
+            self.emit(
+                f"@group(0) @binding({binding}) var<uniform> {output_name}: {var_type};"
+            )
 
     def visit_HipErrorHandlingNode(self, node):
         error_type = self.visit(node.error_type)
@@ -7765,6 +7852,12 @@ class HipToCrossGLConverter:
         user_defined_call_name = self.format_user_defined_function_call_name(func_name)
         if user_defined_call_name is not None:
             return f"{user_defined_call_name}({args_str})"
+        if (
+            self.is_simple_identifier(func_name)
+            and func_name in self.record_definitions
+        ):
+            # ``let{1.0f}`` and ``let()`` construct the record under its declared name.
+            return f"{self.convert_hip_type_to_crossgl(func_name)}({args_str})"
 
         timer_intrinsic = self.format_hip_timer_intrinsic_call(func_name, args)
         if timer_intrinsic is not None:
@@ -9305,7 +9398,8 @@ class HipToCrossGLConverter:
                 return
         if self.indent_level == 0:
             alias_type = self.normalize_top_level_type_alias(alias_type)
-        self.emit(f"typedef {alias_type} {node.name};")
+        # An alias named ``let`` is declared as ``let_``, the name its uses get.
+        self.emit(f"typedef {alias_type} {self.sanitize_identifier_name(node.name)};")
 
     def normalize_top_level_type_alias(self, alias_type):
         """Keep C++ trait aliases reparsable by CrossGL's top-level typedef parser."""
@@ -10007,6 +10101,9 @@ class HipToCrossGLConverter:
         if self.is_decltype_type_name(hip_type):
             return "auto"
 
+        if hip_type in self.CROSSGL_RESERVED_IDENTIFIERS:
+            # A struct named after a CrossGL keyword is declared under its renamed name.
+            return self.sanitize_identifier_name(hip_type)
         return type_mapping.get(hip_type, hip_type)
 
     def is_decltype_type_name(self, type_name):
@@ -10397,7 +10494,10 @@ class HipToCrossGLConverter:
         return normalized_name
 
     def visit_EnumNode(self, node):
-        name = node.name or self.next_anonymous_enum_name()
+        # An enum named ``let`` is declared as ``let_``, the name its uses get.
+        name = (
+            self.sanitize_identifier_name(node.name) or self.next_anonymous_enum_name()
+        )
         underlying = getattr(node, "underlying_type", None)
         if getattr(node, "name", None):
             self.enum_underlying_types[node.name] = underlying or "int"

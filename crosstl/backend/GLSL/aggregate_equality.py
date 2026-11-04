@@ -76,9 +76,7 @@ _EXPLICIT_SCALAR = re.compile(r"u?int(?:8|16|32|64)_t|float(?:16|32|64)_t")
 _FLOAT_LITERAL = re.compile(
     r"^(?:\d+\.\d*|\.\d+|\d+[eE][+-]?\d+|\d+\.\d*[eE][+-]?\d+|\.\d+[eE][+-]?\d+)(?P<suffix>[fF]|[lL][fF])?$"
 )
-_INTEGER_LITERAL = re.compile(
-    r"^(?:0[xX][0-9a-fA-F]+|\d+)(?P<suffix>[uU])?$"
-)
+_INTEGER_LITERAL = re.compile(r"^(?:0[xX][0-9a-fA-F]+|\d+)(?P<suffix>[uU])?$")
 # Sampling and fetch built-ins return a four-component vector of the sampler's component type (GLSL 4.60 section
 # 8.9); comparison (shadow) lookups other than gathers return one float.
 _TEXEL_FUNCTION = re.compile(r"^(?:texture|texelFetch|imageLoad|subpassLoad)")
@@ -416,9 +414,17 @@ def _arithmetic_type(op, left, right):
             return _matrix_type(lhs.scalar, rhs.matrix[0], lhs.matrix[1])
         return left
     if lhs.matrix:
-        return format_type(lhs.scalar, lhs.matrix[1], GLSL_FAMILY) if (multiply and rhs.width > 1) else left
+        return (
+            format_type(lhs.scalar, lhs.matrix[1], GLSL_FAMILY)
+            if (multiply and rhs.width > 1)
+            else left
+        )
     if rhs.matrix:
-        return format_type(rhs.scalar, rhs.matrix[0], GLSL_FAMILY) if (multiply and lhs.width > 1) else right
+        return (
+            format_type(rhs.scalar, rhs.matrix[0], GLSL_FAMILY)
+            if (multiply and lhs.width > 1)
+            else right
+        )
     scalar = lhs.scalar
     if "double" in (lhs.scalar, rhs.scalar):
         scalar = "double"
@@ -429,7 +435,9 @@ def _arithmetic_type(op, left, right):
 
 def _matrix_type(scalar, columns, rows):
     prefix = {"double": "d", "half": "f16"}.get(scalar, "")
-    return f"{prefix}mat{columns}" if columns == rows else f"{prefix}mat{columns}x{rows}"
+    return (
+        f"{prefix}mat{columns}" if columns == rows else f"{prefix}mat{columns}x{rows}"
+    )
 
 
 def _is_pure(expr):

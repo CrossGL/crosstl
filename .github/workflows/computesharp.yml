@@ -93,9 +93,7 @@ jobs:
         with:
           cache: pip
           cache-dependency-path: |
-            requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
       - uses: actions/setup-dotnet@v6
         with:
@@ -200,12 +198,12 @@ jobs:
           python demos/integrations/computesharp/source.py --source upstream-computesharp --check evidence/source.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run the companion test projects on the original runtime
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         run: >-
           python demos/integrations/computesharp/companions.py baseline
           --source upstream-computesharp --output evidence/suites
       - name: Retain the original Windows-specific and CPU-only test projects
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         run: >-
           python demos/integrations/computesharp/retained.py run
           --source upstream-computesharp --output evidence/retained
@@ -299,9 +297,7 @@ jobs:
         with:
           cache: pip
           cache-dependency-path: |
-            requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
       - uses: actions/setup-dotnet@v6
         with:
@@ -343,20 +339,20 @@ jobs:
           --profile metal-apple-gpu --work evidence/run
           --prebuilt-tests --negative-controls
       - name: Run the companion test projects on Metal with negative controls
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         run: >-
           python demos/integrations/computesharp/companions.py translated
           --adapted adapted-computesharp --profile metal-apple-gpu
           --output evidence/suites
       - name: Evaluate the HLSL intrinsics on Metal
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         run: >-
           python demos/integrations/computesharp/precision/run_probe.py
           --adapted adapted-computesharp --target metal
           --native-library evidence/run/native/libcsbackend_metal.dylib
           --output evidence/precision
       - name: Dispatch the HLSL constant-buffer layout checks on Metal
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         env:
           CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION: "1"
         run: >-
@@ -391,9 +387,7 @@ jobs:
         with:
           cache: pip
           cache-dependency-path: |
-            requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
       - uses: actions/setup-dotnet@v6
         with:
@@ -435,7 +429,7 @@ jobs:
           --profile opengl-mesa-llvmpipe --work evidence/run
           --prebuilt-tests --negative-controls
       - name: Run the companion test projects on OpenGL with negative controls
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         env:
           EGL_PLATFORM: surfaceless
         run: >-
@@ -443,7 +437,7 @@ jobs:
           --adapted adapted-computesharp --profile opengl-mesa-llvmpipe
           --output evidence/suites
       - name: Evaluate the HLSL intrinsics on OpenGL
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         env:
           EGL_PLATFORM: surfaceless
         run: >-
@@ -452,7 +446,7 @@ jobs:
           --native-library evidence/run/native/libcsbackend_gl.so
           --output evidence/precision
       - name: Dispatch the HLSL constant-buffer layout checks on OpenGL
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         env:
           CROSSTL_REQUIRE_HLSL_CBUFFER_EXECUTION: "1"
           EGL_PLATFORM: surfaceless
@@ -482,9 +476,7 @@ jobs:
         with:
           cache: pip
           cache-dependency-path: |
-            requirements.txt
             pyproject.toml
-            setup.cfg
           python-version: "3.12"
       - name: Install image comparison dependencies
         run: python -m pip install numpy==2.5.4 pillow==13.0.0

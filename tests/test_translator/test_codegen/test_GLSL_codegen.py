@@ -7401,6 +7401,64 @@ def test_glsl_buffer_pointer_helper_parameters_specialize_per_buffer():
     assert "PointerType" not in generated
 
 
+@pytest.mark.parametrize("buffer_type", ["StructuredBuffer", "RWStructuredBuffer"])
+def test_glsl_structured_buffer_helper_parameter_length_reads_buffer_length(
+    buffer_type, tmp_path
+):
+    code = f"""
+    shader Probe {{
+        {buffer_type}<float> values;
+        RWStructuredBuffer<float> outp;
+        int count({buffer_type}<float> v) {{
+            return v.length();
+        }}
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                outp[0] = float(count(values));
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "return (values.length() - int(v_offset));" in generated
+    assert "values[v_offset].length()" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, f"helper_parameter_length_{buffer_type}"
+    )
+
+
+def test_glsl_buffer_view_helper_parameter_length_counts_from_its_offset(tmp_path):
+    # v[k] reads data[v_offset + k], so the view holds the elements from the
+    # offset it is passed to the end of the buffer.
+    code = """
+    shader Probe {
+        buffer float* data;
+        RWStructuredBuffer<float> outp;
+        int count(buffer float* v) {
+            return v.length();
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(count(data + 2));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "return (data.length() - int(v_offset));" in generated
+    assert "count_glsl_v_data_float(int(2))" in generated
+    assert "data[v_offset].length()" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "buffer_view_helper_parameter_length"
+    )
+
+
 def test_glsl_private_pointer_helper_uses_fixed_local_array_extent():
     code = """
     shader PrivatePointerHelper {

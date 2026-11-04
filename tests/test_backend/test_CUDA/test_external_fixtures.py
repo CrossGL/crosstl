@@ -453,7 +453,7 @@ def test_current_cccl_exec_check_macro_prefixed_template_constructor_reparse():
         ("_T1", "first"),
         ("_T2", "second"),
     ]
-    assert "struct pair_base" in crossgl
+    assert "struct __pair_base" in crossgl
     assert "_CCCL_EXEC_CHECK_DISABLE" not in crossgl
     assert "_CCCL_HIDE_FROM_ABI" not in crossgl
     assert "__pair_base()" not in crossgl
@@ -657,7 +657,7 @@ def test_cccl_libcudacxx_forward_scoped_enum_codegen_reparse():
     assert ast.structs[1].members == []
     assert [function.name for function in ast.functions] == ["keep_after_forward_decl"]
     assert "enum __fp_format" in crossgl
-    assert "struct cccl_fp" in crossgl
+    assert "struct __cccl_fp" in crossgl
     assert "i32 keep_after_forward_decl(i32 value)" in crossgl
     assert_crossgl_reparse(crossgl)
 

@@ -1961,6 +1961,40 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         addend = self.maybe_parenthesize_expression(expr.args[2], addend)
         return f"(({multiplier} * {multiplicand}) + {addend})"
 
+    def refuse_array_cast(self, expr):
+        """Refuse a cast to an array type other than ``(T[N])0``, the zero-filled array.
+
+        HLSL fills every element from a scalar operand, but Slang fills only the
+        first: ``(float[3])x`` is ``{x, 0, 0}``, and an array operand is copied.
+        Only a literal zero means the same on both readings. slangc rejects a
+        cast to an array of arrays such as ``(float[2][3])0``.
+        """
+        if "][" in expr.target_type:
+            reason = "slangc rejects a cast to an array of arrays"
+        elif not self.is_zero_literal(expr.expression):
+            reason = (
+                "only a literal zero operand, the zero-filled array, is imported; "
+                "Slang fills only the first element from a scalar"
+            )
+        else:
+            return
+        raise SlangImportRefused(
+            [f"cast to the array type {expr.target_type}: {reason}"]
+        )
+
+    @staticmethod
+    def is_zero_literal(value):
+        """Whether ``value`` is a numeric literal equal to zero, such as ``0``, ``0.0f`` or ``0u``."""
+        if not isinstance(value, str):
+            return False
+        text = value.lower()
+        try:
+            if text.startswith(("0x", "0b")):
+                return int(text.rstrip("ul"), 0) == 0
+            return Decimal(text.rstrip("fhul")) == 0
+        except (ValueError, InvalidOperation):
+            return False
+
     def generate_expression(self, expr, is_main=False):
         """Render a Slang backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
@@ -1987,6 +2021,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             if matrix_cast is not None:
                 return matrix_cast
             value = self.generate_expression(expr.expression, is_main)
+            base_type, bracket, array_suffix = expr.target_type.partition("[")
+            if bracket:
+                self.refuse_array_cast(expr)
+                # `(float4[2])0` keeps its array suffix after the mapped element type.
+                return f"{self.map_type(base_type)}[{array_suffix}({value})"
             return f"{self.map_type(expr.target_type)}({value})"
         elif isinstance(expr, UnaryOpNode):
             self.refuse_matrix_row_update(expr)

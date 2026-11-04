@@ -404,3 +404,19 @@ def test_function_local_anonymous_record_declarators_are_preserved():
     assert getattr(union_node, "is_union", False) is True
     assert isinstance(payloads, VariableNode)
     assert (payloads.vtype, payloads.name) == ("union <anonymous>[2]", "payloads")
+
+
+def test_multiline_static_and_const_constant_address_space_qualifiers():
+    ast = parse_code("""
+        static
+        __constant float static_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        const
+        __constant float const_table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+        """)
+
+    static_table, const_table = ast.statements
+    assert static_table.vtype == "float[4]"
+    assert static_table.qualifiers == ["static", "__constant__"]
+    assert const_table.vtype == "const float[4]"
+    assert const_table.qualifiers == ["__constant__"]

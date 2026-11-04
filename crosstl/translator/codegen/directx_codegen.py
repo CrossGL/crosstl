@@ -32145,11 +32145,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_byteaddress_interlocked_uint_input_matches(self, expr):
         kind = self.scalar_expression_kind(expr)
-        if kind is None or kind == "uint":
+        if kind == "uint":
             return True
         if kind == "int":
             value = self.literal_int_value(expr, self.literal_int_constants)
             return value is not None and value >= 0
+        if kind is None:
+            # A value whose numeric kind is unknown passes only when its type
+            # cannot be resolved at all. A resolvable non-uint scalar such as
+            # bool or int64_t is refused like float: DXC would otherwise
+            # silently convert the bool or narrow the 64-bit value to uint.
+            return self.type_name_string(self.expression_result_type(expr)) is None
         return False
 
     def validate_hlsl_byteaddress_interlocked_uint_input(
@@ -32159,15 +32165,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         if self.hlsl_byteaddress_interlocked_uint_input_matches(args[index]):
             return
-        kind = self.scalar_expression_kind(args[index]) or "unknown"
+        kind = (
+            self.scalar_expression_kind(args[index])
+            or self.type_name_string(self.expression_result_type(args[index]))
+            or "unknown"
+        )
         raise ValueError(
             f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
             f"{role} argument must be scalar uint, got {kind}"
         )
 
-    def validate_hlsl_byteaddress_interlocked_original(self, method_name, original_arg):
+    def validate_hlsl_byteaddress_interlocked_original(
+        self, method_name, original_arg, signed=False
+    ):
         original_kind = self.scalar_expression_kind(original_arg)
-        if original_kind != "uint":
+        expected = "int or uint" if signed else "uint"
+        if original_kind != "uint" and not (signed and original_kind == "int"):
             original_type = (
                 self.type_name_string(self.expression_result_type(original_arg))
                 or original_kind
@@ -32175,12 +32188,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             raise ValueError(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
-                f"original argument must be scalar uint, got {original_type}"
+                f"original argument must be scalar {expected}, got {original_type}"
             )
         if not self.hlsl_typed_buffer_atomic_original_is_lvalue(original_arg):
             raise ValueError(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
-                "original argument must be an assignable scalar uint target"
+                f"original argument must be an assignable scalar {expected} target"
             )
 
     def generate_hlsl_byteaddress_interlocked_member_call(self, func_expr, args):
@@ -32234,18 +32247,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_hlsl_byteaddress_interlocked_uint_input(
             method_name, args, 0, "address"
         )
-        for index, role in value_roles:
-            self.validate_hlsl_byteaddress_interlocked_uint_input(
-                method_name, args, index, role
-            )
+        # An int value selects the signed IMin/IMax operation.  A non-negative
+        # int literal still passes as uint: DXC reads InterlockedMax(0, 5) as
+        # the unsigned UMax, so it cannot take an int original value.
+        signed = (
+            method_name in {"InterlockedMin", "InterlockedMax"}
+            and self.scalar_expression_kind(args[1]) == "int"
+            and not self.hlsl_byteaddress_interlocked_uint_input_matches(args[1])
+        )
+        if not signed:
+            for index, role in value_roles:
+                self.validate_hlsl_byteaddress_interlocked_uint_input(
+                    method_name, args, index, role
+                )
         if original_index is not None and len(args) > original_index:
             self.validate_hlsl_byteaddress_interlocked_original(
-                method_name, args[original_index]
+                method_name, args[original_index], signed
             )
 
         receiver = self.generate_expression(object_expr)
         rendered_args = [
-            self.generate_expression_with_expected(arg, "uint") for arg in args
+            self.generate_expression_with_expected(
+                arg, "int" if signed and index == 1 else "uint"
+            )
+            for index, arg in enumerate(args)
         ]
         return f"{receiver}.{method_name}({', '.join(rendered_args)})"
 

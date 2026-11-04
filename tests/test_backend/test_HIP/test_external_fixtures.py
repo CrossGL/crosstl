@@ -786,7 +786,7 @@ extern "C" __global__ void saxpy_kernel()
     assert 'extern "C" __global__ void saxpy_kernel' in declaration.value.elements[0]
     assert 'R"(' not in crossgl
     assert ')"' not in crossgl
-    assert "var saxpy_kernel: auto = " in crossgl
+    assert "const auto saxpy_kernel = " in crossgl
     assert 'extern \\"C\\" __global__ void saxpy_kernel' in crossgl
     assert "HIPRTC create program: output: prog, source: saxpy_kernel" in crossgl
     assert 'name: "saxpy_kernel.cu"' in crossgl
@@ -1203,7 +1203,7 @@ def test_external_rocm_occupancy_unsigned_long_suffix_literals_crossgl_reparse()
 
     _, crossgl = assert_crossgl_reparses(source)
 
-    assert "var fully_allocate_lds: u32 = ((64u * 1024u) / 8);" in crossgl
+    assert "const u32 fully_allocate_lds = ((64u * 1024u) / 8);" in crossgl
     assert "64ul" not in crossgl
     assert "1024ul" not in crossgl
 

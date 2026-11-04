@@ -2569,7 +2569,13 @@ def test_image_load_result_kind_mismatch_requires_numeric_component_kind():
     assert image_load_result_kind_mismatch(None, "float") is None
     assert image_load_result_kind_mismatch("float", "double") is None
     assert image_load_result_kind_mismatch("float", "float") is None
-    assert image_load_result_kind_mismatch("float", "int") == "float"
+    # GLSL 4.60 section 4.1.10 converts int and uint to float, and int to uint, implicitly.
+    assert image_load_result_kind_mismatch("float", "int") is None
+    assert image_load_result_kind_mismatch("float", "uint") is None
+    assert image_load_result_kind_mismatch("uint", "int") is None
+    assert image_load_result_kind_mismatch("int", "float") == "int"
+    assert image_load_result_kind_mismatch("int", "uint") == "int"
+    assert image_load_result_kind_mismatch("uint", "float") == "uint"
 
 
 def test_image_load_result_shape_mismatch_matches_component_rules():

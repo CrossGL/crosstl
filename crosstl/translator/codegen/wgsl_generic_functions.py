@@ -153,6 +153,10 @@ class WGSLGenericFunctionSpecializer:
         return emitted
 
     def _render(self, type_value):
+        if isinstance(type_value, str) and "[" in type_value:
+            # An explicit array type argument keeps its CrossGL spelling, as in
+            # ``pick<float[2]>(a)``; read it as a type so it renders ``array<f32, 2>``.
+            type_value = _crossgl_type(type_value)
         if type_value is None:
             return None
         try:
@@ -374,6 +378,17 @@ class _GenericSubstituter:
         if not args:
             return name
         return _substitute_spelling(name, self.bindings)
+
+
+def _crossgl_type(spelling):
+    """The type node a CrossGL type spelling such as ``float[2]`` names, or ``None``."""
+    from ..lexer import Lexer
+    from ..parser import Parser
+
+    try:
+        return Parser(Lexer(f"{spelling} x;").tokens).parse_type()
+    except Exception:
+        return None  # not a type spelling, so no specialization matches
 
 
 def _is_numeric_literal(node):

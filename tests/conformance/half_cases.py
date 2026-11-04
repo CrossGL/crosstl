@@ -86,9 +86,7 @@ def sqrt_inputs():
 def sqrt_reference(inputs):
     # A binary16 square root is never within 2^-23 (relative) of a binary16 midpoint: rounding the binary64 root
     # exactly is the correctly rounded result.
-    return [
-        round_half(Fraction(float(np.sqrt(np.float64(value))))) for value in inputs
-    ]
+    return [round_half(Fraction(float(np.sqrt(np.float64(value))))) for value in inputs]
 
 
 def fma_inputs(count=512):
@@ -106,7 +104,9 @@ def fma_inputs(count=512):
     # products that are binary16 midpoints, with an addend at most half a binary32 ULP of the product: the binary32
     # sum rounds back onto the midpoint, and only the exact sum decides the direction
     for m in range(2049, 4096, 2):
-        factor = next((f for f in range(3, 46, 2) if m % f == 0 and m // f < 2048), None)
+        factor = next(
+            (f for f in range(3, 46, 2) if m % f == 0 and m // f < 2048), None
+        )
         if factor is None:
             continue
         scale = int(rng.integers(0, 3))
@@ -136,9 +136,7 @@ def fma_inputs(count=512):
 
 def fma_reference(inputs):
     triples = inputs.astype(np.float64).reshape(-1, 3)
-    return [
-        round_half(Fraction(a) * Fraction(b) + Fraction(c)) for a, b, c in triples
-    ]
+    return [round_half(Fraction(a) * Fraction(b) + Fraction(c)) for a, b, c in triples]
 
 
 def round_inputs(count=512):
@@ -146,17 +144,27 @@ def round_inputs(count=512):
     rng = np.random.default_rng(1604)
     midpoints = [(2 * k + 1) * 2.0**-25 for k in (0, 1, 2, 3, 511, 1022, 1023)]
     for exponent in (-14, -13, -1, 0, 1, 10, 15):
-        midpoints += [(2 * k + 1) * 2.0 ** (exponent - 11) for k in (1024, 1025, 1536, 2047)]
+        midpoints += [
+            (2 * k + 1) * 2.0 ** (exponent - 11) for k in (1024, 1025, 1536, 2047)
+        ]
     values = []
     for midpoint in midpoints:
         exact = np.float32(midpoint)
-        values += [np.nextafter(exact, np.float32(-np.inf)), exact, np.nextafter(exact, np.float32(np.inf))]
+        values += [
+            np.nextafter(exact, np.float32(-np.inf)),
+            exact,
+            np.nextafter(exact, np.float32(np.inf)),
+        ]
     values += [np.float32(v) for v in (65504.0, 65519.996, 65520.0, 65536.0, 2.0**-26)]
     values = np.array(values, np.float32)
     signs = np.where(np.arange(values.size) % 2 == 0, 1.0, -1.0).astype(np.float32)
     values = values * signs
-    patterns = rng.integers(0x33000000, 0x47800000, count, dtype=np.int64).astype(np.uint32)
-    random = patterns.view(np.float32) * np.where(np.arange(count) % 2, -1, 1).astype(np.float32)
+    patterns = rng.integers(0x33000000, 0x47800000, count, dtype=np.int64).astype(
+        np.uint32
+    )
+    random = patterns.view(np.float32) * np.where(np.arange(count) % 2, -1, 1).astype(
+        np.float32
+    )
     return np.concatenate([values, random])[:count].astype(np.float32)
 
 
@@ -177,7 +185,9 @@ def check(reference):
         if bad.size:
             first = int(bad[0])
             detail.update(
-                first_index=first, got=repr(float(got[first])), want=repr(float(want[first]))
+                first_index=first,
+                got=repr(float(got[first])),
+                want=repr(float(want[first])),
             )
         return bad.size == 0, detail
 

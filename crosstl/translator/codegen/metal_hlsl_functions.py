@@ -22,6 +22,7 @@ from ..ast import (
     AssignmentNode,
     ASTNode,
     BinaryOpNode,
+    ConstantNode,
     FunctionCallNode,
     IdentifierNode,
     MemberAccessNode,
@@ -532,13 +533,17 @@ class MetalHlslFunctionMixin:
     def rename_metal_reserved_program_identifiers(self, ast):
         """Rename program-scope variables spelled like Metal keywords.
 
-        Program-scope resources and values become entry parameters or
-        declarations whose names Metal parses as keywords. Every declaration
-        and reference with the name is renamed on a copy of the AST.
+        Program-scope resources, values and shader-scope constants become
+        entry parameters or declarations whose names Metal parses as keywords.
+        Every declaration and reference with the name is renamed on a copy of
+        the AST.
         """
         reserved = {
             getattr(node, "name", None)
-            for node in getattr(ast, "global_variables", []) or []
+            for node in [
+                *(getattr(ast, "global_variables", []) or []),
+                *(getattr(ast, "constants", []) or []),
+            ]
         } & self.METAL_RESERVED_PROGRAM_IDENTIFIERS
         for cbuffer in getattr(ast, "cbuffers", []) or []:
             for member in getattr(cbuffer, "members", []) or []:
@@ -558,8 +563,19 @@ class MetalHlslFunctionMixin:
                 candidate = f"{candidate}_"
             used.add(candidate)
             renames[name] = candidate
+        # A callee such as ``half(1.0)`` names a type or function, not the
+        # renamed variable.
+        callees = {
+            id(node.function)
+            for node in self.iter_unique_ast_nodes(ast)
+            if isinstance(node, FunctionCallNode)
+        }
         for node in self.iter_unique_ast_nodes(ast):
-            if isinstance(node, (IdentifierNode, VariableNode, ParameterNode)):
+            if id(node) in callees:
+                continue
+            if isinstance(
+                node, (IdentifierNode, VariableNode, ParameterNode, ConstantNode)
+            ):
                 new_name = renames.get(getattr(node, "name", None))
                 if new_name is not None:
                     node.name = new_name

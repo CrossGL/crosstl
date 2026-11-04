@@ -40,6 +40,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .wgsl_frexp_modf import is_two_argument_frexp_or_modf
 
 REFERENCE_PARAMETER_QUALIFIERS = ("inout", "out")
 INCREMENT_OPERATORS = frozenset({"++", "--"})
@@ -180,9 +181,15 @@ class WGSLParameterLoweringMixin:
         return names
 
     def reference_argument_indices_by_name(self, call):
-        """Argument positions that any overload of the callee takes by reference."""
+        """Argument positions that the callee takes by reference.
+
+        Those of any overload of a declared function, and the written second
+        argument of the built-in ``frexp`` and ``modf`` (``wgsl_frexp_modf``).
+        """
         if not isinstance(call.function, IdentifierNode):
             return ()
+        if is_two_argument_frexp_or_modf(self, call):
+            return (1,)
         overloads = getattr(self, "_function_overloads_by_name", {}).get(
             call.function.name, ()
         )

@@ -16,9 +16,20 @@ from __future__ import annotations
 
 import re
 
-from ..ast import IdentifierNode, MatrixType, NamedType, PrimitiveType, VectorType
+from ..ast import (
+    ArrayType,
+    IdentifierNode,
+    MatrixType,
+    NamedType,
+    PrimitiveType,
+    VectorType,
+)
 
-__all__ = ["wgsl_array_constructor"]
+__all__ = [
+    "wgsl_array_constructor",
+    "wgsl_array_constructor_type",
+    "wgsl_array_element",
+]
 
 _ARRAY_CONSTRUCTOR = re.compile(r"\s*([A-Za-z_]\w*)\s*\[\s*(\w*)\s*\]\s*")
 
@@ -45,8 +56,8 @@ def _element_type(codegen, spelling):
     return None
 
 
-def wgsl_array_constructor(codegen, node):
-    """WGSL ``array<T, N>(...)`` for a CrossGL array constructor call, or ``None`` for any other call."""
+def _array_constructor_callee(codegen, node):
+    """``(spelling, element type)`` of a CrossGL array constructor call, or ``None`` for any other call."""
     callee = node.function
     if not isinstance(callee, IdentifierNode) or "[" not in str(callee.name):
         return None
@@ -54,6 +65,32 @@ def wgsl_array_constructor(codegen, node):
     element_type = _element_type(codegen, function_name.split("[", 1)[0])
     if element_type is None:
         return None
+    return function_name, element_type
+
+
+def wgsl_array_constructor_type(codegen, node):
+    """The ``ArrayType`` a CrossGL array constructor call constructs, or ``None`` for any other call."""
+    callee = _array_constructor_callee(codegen, node)
+    if callee is None:
+        return None
+    function_name, element_type = callee
+    match = _ARRAY_CONSTRUCTOR.fullmatch(function_name)
+    if match is None:
+        return None
+    size = match.group(2)
+    if not size:
+        return ArrayType(element_type, len(node.arguments or []))
+    if size.isdigit():
+        return ArrayType(element_type, int(size))
+    return ArrayType(element_type, IdentifierNode(size))
+
+
+def wgsl_array_constructor(codegen, node):
+    """WGSL ``array<T, N>(...)`` for a CrossGL array constructor call, or ``None`` for any other call."""
+    callee = _array_constructor_callee(codegen, node)
+    if callee is None:
+        return None
+    function_name, element_type = callee
     match = _ARRAY_CONSTRUCTOR.fullmatch(function_name)
     if match is None:
         raise ValueError(
@@ -77,5 +114,21 @@ def wgsl_array_constructor(codegen, node):
     else:
         size = codegen.identifier_name(size)
     element = codegen.type_name_string(element_type)
-    values = ", ".join(codegen.generate_expression(argument) for argument in arguments)
+    values = ", ".join(
+        wgsl_array_element(codegen, argument, element_type) for argument in arguments
+    )
     return f"array<{element}, {size}>({values})"
+
+
+def wgsl_array_element(codegen, value, element_type):
+    """WGSL for ``value`` as one element of an array constructor or initializer of ``element_type`` elements.
+
+    A scalar element of a matrix array, as in ``mat3[2](0.0)``, stands for the matrix ``mat3(0.0)``, with the
+    scalar on the diagonal and zero elsewhere (GLSL 4.60 section 5.4.2), as Metal output writes it. WGSL has no
+    conversion from a scalar to a matrix, so the matrix is written out. Only array elements are read this way: a
+    scalar stored to a matrix, as in ``m += 1.0`` or HLSL's ``float3x3 m = 1.0;``, applies to every component.
+    """
+    diagonal = codegen.generate_scalar_matrix_constructor(element_type, value)
+    if diagonal is not None:
+        return diagonal
+    return codegen.generate_expression_for_target(value, element_type)

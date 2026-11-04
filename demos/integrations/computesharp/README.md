@@ -13,8 +13,8 @@ on Windows (WARP) is the independent baseline.
 ## Results
 
 The qualification job of workflow run
-[39407200030](https://github.com/CrossGL/crosstl/actions/runs/39407200030)
-(commit `9f2bcbcccefc11f06071a7124aa840d8f820e3ea`), the merge-queue run of the
+[41073072485](https://github.com/CrossGL/crosstl/actions/runs/41073072485)
+(commit `73569ccadcbabce56797639396eb76fd423ca1f3`), the merge-queue run of the
 commit that landed on `main`, recomputed every check from the fresh artifacts of
 the three profile jobs and passed, for the main test project, the three ported
 companion projects and the two retained projects.
@@ -24,14 +24,15 @@ companion projects and the two retained projects.
 
 This run also verified arithmetic exactness on the target compilers: 144 Metal
 artifacts with 11,336 floating-point operations and 148 OpenGL artifacts with
-32,235 floating-point operations had no contractible operations. Four Metal
-artifacts require fp64 and are not compiled on that profile, as declared by the
-frozen capability contract.
+32,235 floating-point operations had no contractible operations. CrossTL
+refuses to translate the four shaders that require fp64 to Metal, which has no
+double type, so they produce no Metal artifact; their cases are gated on that
+profile, as declared by the frozen capability contract.
 
 | Profile | Device | Execution | Required GPU passed | Capability-gated | Windows-specific | Negative controls |
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | `directx-warp` (original) | Direct3D 12 WARP (Microsoft Basic Render Driver), Windows Server 2025 | software | 1,809 WARP rows (1,964 cases in total) | 11 | run, 61 cases | n/a |
-| `metal-apple-gpu` | Apple Paravirtual device (the GPU of the `macos-15` runner), macOS 15.7.9, Metal | hardware | 3,604 (3,713 cases in total) | 18 | excluded | 6 of 6 rejected |
+| `metal-apple-gpu` | Apple Paravirtual device (the GPU of the `macos-15` runner), macOS 15.8.2, Metal | hardware | 3,604 (3,713 cases in total) | 18 | excluded | 6 of 6 rejected |
 | `opengl-mesa-llvmpipe` | llvmpipe (LLVM 20.1.2, 256 bits), Mesa 25.2.8, OpenGL 4.5 core through EGL, Ubuntu 24.04 | software | 3,600 (3,709 cases in total) | 22 | excluded | 6 of 6 rejected |
 
 Every one of the 3,792 discovered cases is accounted for on every profile:
@@ -612,14 +613,18 @@ loosening any upstream threshold:
 ## Pinned Dependency Exceptions
 
 The unmodified upstream pin uses ImageSharp 3.1.11 and treats NuGet advisory
-warnings as errors. Five current advisories prevent restoring that historical
+warnings as errors. Six current advisories prevent restoring that historical
 baseline: [ICC profile allocation](https://github.com/advisories/GHSA-gwg2-r3hj-4w44),
 [histogram equalization](https://github.com/advisories/GHSA-j3p4-wp97-rph4),
 [TIFF T4 encoding](https://github.com/advisories/GHSA-j9gm-c75j-xc9q),
-[TIFF T6 encoding](https://github.com/advisories/GHSA-jjfr-hcj7-qf5w), and
+[TIFF T6 encoding](https://github.com/advisories/GHSA-jjfr-hcj7-qf5w),
+[tiled fax TIFF decoding](https://github.com/advisories/GHSA-v76p-62qx-wwq2), and
 [BigTIFF decoding](https://github.com/advisories/GHSA-wmxv-xphr-5c9g).
-The identified fixed release, 4.1.2, requires a separate license key to build and
-is not substituted into the original baseline. `baseline-audit.props` keeps NuGet
+The fixed releases, 3.2.0 and 4.1.2, require a separate license key to build and
+are not substituted into the original baseline: the portable runtime must resolve
+the same ImageSharp 3.1.11 as the upstream test project, which NuGet otherwise
+reports as a package downgrade (NU1605). Dependabot therefore ignores ImageSharp
+in this directory. `baseline-audit.props` keeps NuGet
 auditing enabled and adds advisory-specific exceptions only for
 `ComputeSharp.Tests`, its three ported companion test projects, the portable
 runtime and the intrinsic probe, enabled by `CrossTLTrustedCorpusBaseline=true`.
