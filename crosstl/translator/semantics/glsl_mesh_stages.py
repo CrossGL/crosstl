@@ -1,4 +1,4 @@
-"""GLSL-style mesh and task stages rewritten into the entry-parameter form for HLSL and Metal targets.
+"""GLSL-style mesh and task stages rewritten into the entry-parameter form for HLSL, Slang and Metal targets.
 
 The GLSL importer, and CrossGL written the GLSL way, declares a mesh stage's outputs as module-scope arrays and
 its launch shape as stage layouts (GL_EXT_mesh_shader; GLSL 4.60 with that extension, sections 4.3.4, 4.3.6 and
@@ -74,7 +74,8 @@ from .stage_varyings import stages as _stages
 __all__ = ["GlslMeshStageUnsupportedError", "raise_glsl_mesh_stages"]
 
 _HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
-_TARGETS = _HLSL_TARGETS | {"metal"}
+# Slang declares mesh and task stages as HLSL does (out vertices/indices/primitives, DispatchMesh).
+_TARGETS = _HLSL_TARGETS | {"metal", "slang"}
 _TASK_STAGES = frozenset({"task", "amplification", "object"})
 _MESH_ROLES = frozenset({"vertices", "indices", "primitives"})
 _TASK_PAYLOAD = frozenset({"taskpayloadsharedext", "taskpayloadsharednv"})
@@ -179,10 +180,11 @@ def _pass_compute_builtins(program, stage, target):
                 "a parameter",
                 "helper-builtin",
             )
-    if "gl_NumWorkGroups" in used and target in _HLSL_TARGETS:
+    if "gl_NumWorkGroups" in used and target != "metal":
         _refuse(
             target,
-            f"the {_stage_name(stage)} stage reads gl_NumWorkGroups, for which HLSL has no system value",
+            f"the {_stage_name(stage)} stage reads gl_NumWorkGroups, for which {_label(target)} has no "
+            "system value",
             "num-work-groups",
         )
     fresh = FreshNames(program)
@@ -238,7 +240,7 @@ def _layout_sizes(stage, target):
 
 
 def _label(target):
-    return "Metal" if target == "metal" else "HLSL"
+    return {"metal": "Metal", "slang": "Slang"}.get(target, "HLSL")
 
 
 def _refuse(target, detail, reason):

@@ -145,10 +145,6 @@ def test_metal_declares_a_primitive_culled_member(tmp_path, source):
 @pytest.mark.parametrize("source", sorted(SOURCES) + ["glsl"])
 @pytest.mark.parametrize("backend", ["directx", "slang"])
 def test_hlsl_family_writes_sv_cull_primitive(tmp_path, source, backend):
-    if source == "glsl" and backend == "slang":
-        pytest.skip(
-            "Slang output does not raise GLSL-style mesh stages to the entry form"
-        )
     text, suffix = SOURCES.get(source, (GLSL, ".mesh"))
     code = _translate(tmp_path, text, suffix, backend)
     assert re.search(r"bool \w+\s*:\s*SV_CullPrimitive\s*;", code), code
