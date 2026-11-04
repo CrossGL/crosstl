@@ -615,3 +615,99 @@ def test_the_metal_compiler_keeps_buffer_memory_qualifiers_in_air(
     assert decorations.lost(
         feature, "metal", source.replace(qualified, "device float* outp")
     ) == (f"the translation loses {anchor}")
+
+
+def _geometry(language, name, group):
+    return Feature(language, "graphics", name, None, group=group, stage="geometry")
+
+
+def test_an_instanced_geometry_translation_must_keep_more_than_one_invocation():
+    # glslang, DXC and slangc write Invocations 1 for every geometry stage, so only a larger count keeps the mode.
+    instanced = _geometry(
+        "spirv",
+        "geometry-invocations",
+        "ExecutionMode.Invocations BuiltIn.InvocationId",
+    )
+    kept = (
+        "OpExecutionMode %main InputPoints\nOpExecutionMode %main Invocations 2\n"
+        "OpDecorate %gl_InvocationID BuiltIn InvocationId\n"
+    )
+    assert decorations.lost(instanced, "spirv", kept) == ""
+    assert (
+        decorations.lost(
+            instanced, "spirv", kept.replace("Invocations 2", "Invocations 12")
+        )
+        == ""
+    )
+    assert decorations.lost(
+        instanced, "spirv", kept.replace("Invocations 2", "Invocations 1")
+    ) == ("the translation loses ExecutionMode.Invocations")
+    lines = _geometry("spirv", "geometry-input-lines", "ExecutionMode.InputLines")
+    assert decorations.lost(lines, "spirv", "OpExecutionMode %main InputLines\n") == ""
+    assert decorations.lost(lines, "spirv", "OpExecutionMode %main InputPoints\n") == (
+        "the translation loses ExecutionMode.InputLines"
+    )
+
+
+@pytest.mark.parametrize("language", ["hlsl", "slang"])
+def test_an_hlsl_or_slang_stream_translation_keeps_a_second_stream_parameter(language):
+    # DXC writes every HLSL output on stream 0 in SPIR-V and slangc cannot write a second stream there, so the
+    # translation itself must declare a second point stream.
+    streams = _geometry(
+        language, "geometry-streams", "Decoration.Stream Capability.GeometryStreams"
+    )
+    source = (
+        "[maxvertexcount(2)]\n"
+        "void main(point float4 position[1] : POSITION, inout PointStream<GeometryOut> stream,\n"
+        "          inout PointStream<ExtraOut> extras) {\n}\n"
+    )
+    assert decorations.lost(streams, language, source) == ""
+    single = source.replace(",\n          inout PointStream<ExtraOut> extras", "")
+    assert decorations.lost(streams, language, single) == (
+        "the translation loses Decoration.Stream, Capability.GeometryStreams"
+    )
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_geometry_primitives_instances_and_streams():
+    lines = _geometry("glsl", "geometry-input-lines", "ExecutionMode.InputLines")
+    source = (
+        "#version 460\nlayout(lines) in;\nlayout(points, max_vertices = 1) out;\n"
+        "layout(location = 0) in vec4 position[];\n"
+        "void main() {\n    gl_Position = position[0];\n    EmitVertex();\n}\n"
+    )
+    assert decorations.lost(lines, "glsl", source) == ""
+    assert decorations.lost(lines, "glsl", source.replace("(lines)", "(points)")) == (
+        "the translation loses ExecutionMode.InputLines"
+    )
+    instanced = _geometry(
+        "glsl",
+        "geometry-invocations",
+        "ExecutionMode.Invocations BuiltIn.InvocationId",
+    )
+    source = (
+        "#version 460\nlayout(points, invocations = 2) in;\nlayout(points, max_vertices = 1) out;\n"
+        "void main() {\n    gl_Position = vec4(float(gl_InvocationID));\n    EmitVertex();\n}\n"
+    )
+    assert decorations.lost(instanced, "glsl", source) == ""
+    assert decorations.lost(
+        instanced, "glsl", source.replace(", invocations = 2", "")
+    ) == ("the translation loses ExecutionMode.Invocations")
+    streams = _geometry(
+        "glsl", "geometry-streams", "Decoration.Stream Capability.GeometryStreams"
+    )
+    source = (
+        "#version 460\nlayout(points) in;\nlayout(points, max_vertices = 2) out;\n"
+        "layout(stream = 1, location = 0) out vec4 extra;\n"
+        "void main() {\n    gl_Position = vec4(1.0);\n    EmitStreamVertex(0);\n"
+        "    extra = vec4(2.0);\n    EmitStreamVertex(1);\n}\n"
+    )
+    assert decorations.lost(streams, "glsl", source) == ""
+    single = (
+        "#version 460\nlayout(points) in;\nlayout(points, max_vertices = 2) out;\n"
+        "layout(location = 0) out vec4 extra;\n"
+        "void main() {\n    gl_Position = vec4(1.0);\n    extra = vec4(2.0);\n    EmitVertex();\n}\n"
+    )
+    assert decorations.lost(streams, "glsl", single) == (
+        "the translation loses Decoration.Stream, Capability.GeometryStreams"
+    )

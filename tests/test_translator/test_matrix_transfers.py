@@ -1079,8 +1079,8 @@ def _expected(src, steps):
     return dst
 
 
-def _package(root, target, **translate_options):
-    report = _translate(root, target, **translate_options)
+def _package(root, target, source=METAL_KERNEL, conditions=(CONDITION,)):
+    report = _translate(root, target, source, conditions)
     report.write_json(root / "report.json")
     assert report.to_json()["summary"]["failedCount"] == 0, report.to_json()
     manifest = build_runtime_artifact_manifest(root / "report.json")
@@ -1304,3 +1304,173 @@ def test_ci_requires_matrix_transfer_execution():
             workflow_text.workflow_event_path_filters(workflow, event),
             "tests/test_translator/test_matrix_transfers.py",
         )
+
+
+# --- Matrices no lane-level view constrains ----------------------------------
+
+OPAQUE_KERNEL = """#include <metal_stdlib>
+using namespace metal;
+
+kernel void opaque_products(
+    const device float* src [[buffer(0)]],
+    device float* dst [[buffer(1)]],
+    uint sg [[simdgroup_index_in_threadgroup]]) {
+  simdgroup_float8x8 A, B, C, D;
+  const device float* in = src + sg * 128;
+  device float* out = dst + 4 + sg * 192;
+  simdgroup_load(A, in, 8);
+  simdgroup_load(B, in + 64, 8, ulong2(0, 0), true);
+  C = make_filled_simdgroup_matrix<float, 8>(0.25f);
+  simdgroup_multiply_accumulate(C, A, B, C);
+  simdgroup_multiply(D, C, A);
+  simdgroup_store(C, out, 8);
+  simdgroup_store(D, out + 64, 8, ulong2(0, 0), true);
+  simdgroup_store(A, out + 128, 8);
+}
+"""
+OPAQUE = MAPPED.replace(
+    "metal_thread_elements_reference_view", "metal_opaque_simdgroup_matrix"
+)
+MAPPING = dict(
+    cooperative_matrix_fragment_mapping="tile_4x4_row_pair",
+    cooperative_matrix_fragment_mapping_provenance="unit_lane_coordinates",
+)
+
+
+def test_unviewed_matrices_take_the_configured_mapping():
+    # No result of a load, fill, product or store depends on which lane owns
+    # which element, so the configured mapping is a complete contract.
+    crossgl = _crossgl(OPAQUE_KERNEL, **MAPPING)
+    for name in "ABCD":
+        assert f"{OPAQUE} {name};" in crossgl
+    assert "unspecified,unspecified>" not in crossgl
+
+
+def test_unviewed_matrices_keep_an_unspecified_contract_without_a_mapping():
+    crossgl = _crossgl(OPAQUE_KERNEL)
+    assert "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified> A;" in (
+        crossgl
+    )
+    assert "metal_thread_elements" not in crossgl
+
+
+def test_a_lane_view_keeps_its_own_provenance():
+    crossgl = _crossgl(**MAPPING)
+    assert "metal_opaque_simdgroup_matrix" not in crossgl
+    assert f"{MAPPED} A;" in crossgl
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_unviewed_matrices_need_the_mapping_for_software_lowering(tmp_path, target):
+    report = translate_project(
+        ProjectConfig(
+            root=_write(tmp_path, OPAQUE_KERNEL),
+            include_patterns=("transfers.metal",),
+            targets=(target,),
+            output_dir="out",
+            workgroup_size=(32, 4, 1),
+            source_options={
+                "metal": {
+                    "target_options": {
+                        target: {
+                            "cooperative_matrix_software_lowering": True,
+                            "software_subgroup_width": 32,
+                            **(
+                                {"relative_wave_shuffle_out_of_range": "self"}
+                                if target == "directx"
+                                else {}
+                            ),
+                        }
+                    }
+                }
+            },
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["summary"]["translatedCount"] == 0
+    (diagnostic,) = report["diagnostics"]
+    assert diagnostic["code"] == (
+        f"project.translate.{target}-cooperative-matrix-unsupported"
+    )
+
+
+def _write(root, source):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "transfers.metal").write_text(source)
+    return root
+
+
+@pytest.mark.parametrize("target", ("metal", *TARGETS))
+def test_unviewed_kernel_translates_and_validates(tmp_path, target):
+    report = _translate(tmp_path, target, OPAQUE_KERNEL, ()).to_json()
+    assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+    (artifact,) = report["artifacts"]
+    text = (tmp_path / artifact["path"]).read_text()
+    if target != "metal":
+        assert "simdgroup_" not in text
+    work = tmp_path / "validation"
+    work.mkdir()
+    if target == "metal":
+        _compile(text, "metal", work, metal_compile_flags=("-fno-fast-math",))
+    elif os.environ.get("CROSTL_SKIP_NATIVE_VALIDATORS") != "1":
+        if target == "opengl":
+            _compile(text, "opengl", work)
+        else:
+            _dx_compile(text, work)
+
+
+def _opaque_expected(src):
+    dst = [GUARD] * (8 + 4 * 192)
+    for group in range(4):
+        values = [Fraction(value) for value in src[group * 128 : group * 128 + 128]]
+        a = [[values[row * 8 + column] for column in range(8)] for row in range(8)]
+        b = [[values[64 + column * 8 + row] for column in range(8)] for row in range(8)]
+        c = _add(_product(a, b), [[Fraction(1, 4)] * 8 for _ in range(8)])
+        d = _product(c, a)
+        # Every value is a small multiple of 1/4, exact in binary32 whatever
+        # the summation order.
+        assert all(abs(x) * 4 < (1 << 20) for row in d for x in row)
+        base = 4 + group * 192
+        for row in range(8):
+            for column in range(8):
+                dst[base + row * 8 + column] = float(c[row][column])
+                dst[base + 64 + column * 8 + row] = float(d[row][column])
+                dst[base + 128 + row * 8 + column] = float(a[row][column])
+    return dst
+
+
+def test_unviewed_kernel_executes_natively(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for native matrix transfer checks")
+    target = {"darwin": "metal", "linux": "opengl", "win32": "directx"}[sys.platform]
+    descriptor, package = _package(
+        tmp_path, target, source=OPAQUE_KERNEL, conditions=()
+    )
+    names = _source_binding_names(descriptor)
+    assert set(names) == {"src", "dst"}, names
+    src = _inputs()
+    size = 8 + 4 * 192
+    inputs = {
+        names["src"]: dict(dtype="float32", shape=[len(src)], values=src),
+        names["dst"]: dict(dtype="float32", shape=[size], values=[GUARD] * size),
+    }
+    outputs = {
+        names["dst"]: dict(dtype="float32", shape=[size], values=_opaque_expected(src))
+    }
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        {"workgroupCount": [1, 1, 1], "workgroupSize": [32, 4, 1]},
+    )
+    work = tmp_path / "native"
+    work.mkdir()
+    _execute(
+        request,
+        outputs,
+        work,
+        validate=_validate,
+        original_source=OPAQUE_KERNEL,
+        original_entry="opaque_products",
+    )

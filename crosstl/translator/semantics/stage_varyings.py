@@ -90,6 +90,15 @@ def literal_int(node):
     return None
 
 
+def attribute_text(argument):
+    """The text of a string or bare-identifier attribute argument: ``"tri"`` and ``tri`` both give ``tri``."""
+    if isinstance(argument, A.IdentifierNode):
+        text = argument.name
+    else:
+        text = getattr(argument, "value", argument)
+    return str(text).strip().strip("\"'")
+
+
 def semantic(node):
     """The semantic attribute of a member or parameter: its first attribute that is no interpolation or layout."""
     for attr in getattr(node, "attributes", None) or []:

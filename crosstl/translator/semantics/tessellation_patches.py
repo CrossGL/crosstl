@@ -59,6 +59,7 @@ from .stage_varyings import (
     SPIRV_TARGETS,
     FreshNames,
     allocated_locations,
+    attribute_text,
     builtin,
     call_statement,
     explicit_location,
@@ -338,7 +339,7 @@ class _TessellationLowering:
                 f"hull entry point '{entry.name}' needs one [patchconstantfunc(\"name\")]",
                 "patchconstantfunc",
             )
-        name = str(getattr(arguments[0], "value", arguments[0])).strip().strip("\"'")
+        name = attribute_text(arguments[0])
         matches = [
             function
             for function in self.functions()
@@ -976,7 +977,7 @@ def _attribute_text(function, name):
     args = _attribute_args(function, name)
     if not args or len(args) != 1:
         return None
-    return str(getattr(args[0], "value", args[0])).strip().strip("\"'").lower()
+    return attribute_text(args[0]).lower()
 
 
 def _link_key(member):
