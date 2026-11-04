@@ -8,11 +8,11 @@ in variable and constant declarations whose type is ``float``, ``double``, ``hal
 8-, 16- or 64-bit integer (``i16 s = {};`` becomes ``i16 s = 0;``, as written by hand), or an alias of one
 (``typedef float real_t; real_t one = {};``).
 
-An enumeration is value-initialized to zero as well. For a plain enumeration, whose variants carry no data, ``Mode m =
-{};`` becomes ``Mode m = 0;``: the generators write a variable of a plain enumeration as ``int`` (``i32`` in WGSL),
-whatever type the enumeration names (``enum Mode : uint``), so the zero is ``int``'s. Two targets are left alone:
-CUDA output declares the variable with the enumeration's own type, for which ``Mode m = {};`` is already zero and
-``Mode m = 0;`` is an error, and a Rust enum has no integer value. An enumeration whose variants carry data is a
+An enumeration is value-initialized to zero as well. For a plain enumeration, whose variants carry no data,
+``Mode m = {};`` becomes ``Mode m = 0;``: the generators write a variable of a plain enumeration as ``int`` (``i32``
+in WGSL), whatever type the enumeration names (``enum Mode : uint``), so the zero is ``int``'s. Two targets are left
+alone: CUDA output declares the variable with the enumeration's own type, for which ``Mode m = {};`` is already zero
+and ``Mode m = 0;`` is an error, and a Rust enum has no integer value. An enumeration whose variants carry data is a
 structure on most targets and keeps its braces.
 """
 
