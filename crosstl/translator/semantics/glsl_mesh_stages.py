@@ -286,16 +286,29 @@ def _payload_variables(program, stage):
 
 
 def _payload_users(program):
-    """``id(payload variable) -> names of the stages whose functions use it``."""
+    """``id(payload variable) -> names of the stages whose functions use it``.
+
+    Only stages that see a payload variable are scanned, and each function body is scanned once however many
+    stages share it.
+    """
     users = {}
+    names_by_function = {}
     for stage in _stages(program):
         if getattr(stage, "entry_point", None) is None:
+            continue
+        variables = _payload_variables(program, stage)
+        if not variables:
             continue
         used = set()
         for function in _stage_functions(program, stage):
             if getattr(function, "body", None) is not None:
-                used |= _identifier_names(function.body)
-        for variable in _payload_variables(program, stage):
+                names = names_by_function.get(id(function))
+                if names is None:
+                    names = names_by_function[id(function)] = _identifier_names(
+                        function.body
+                    )
+                used |= names
+        for variable in variables:
             if variable.name in used:
                 users.setdefault(id(variable), set()).add(_stage_name(stage))
     return users

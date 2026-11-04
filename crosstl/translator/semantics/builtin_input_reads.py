@@ -115,12 +115,37 @@ def _walk(node, seen=None):
         yield from _walk(get_child(node, field, key), seen)
 
 
-def _reads(function, names):
-    return {
-        node.name
-        for node in _walk(getattr(function, "body", None))
-        if isinstance(node, A.IdentifierNode) and node.name in names
-    }
+class _NameIndex:
+    """Per function, the names its body declares and the identifiers it reads, each walked once.
+
+    Every stage of a module sees the module's helper functions, so walking them again for each entry point costs
+    entries times module size. :meth:`clear` drops the index after a rewrite changes a function.
+    """
+
+    def __init__(self):
+        self._names = {}
+
+    def _entry(self, function):
+        key = id(function)
+        entry = self._names.get(key)
+        if entry is None or entry[0] is not function:
+            identifiers = {
+                node.name
+                for node in _walk(getattr(function, "body", None))
+                if isinstance(node, A.IdentifierNode)
+            }
+            entry = (function, _declared(function), identifiers)
+            self._names[key] = entry
+        return entry
+
+    def declared(self, function):
+        return self._entry(function)[1]
+
+    def reads(self, function, names):
+        return self._entry(function)[2] & names
+
+    def clear(self):
+        self._names.clear()
 
 
 def _declared(function):
@@ -230,6 +255,10 @@ def pass_builtin_inputs(program, target) -> int:
     if target not in TARGETS or not isinstance(program, A.ShaderNode):
         return 0
     program_names = _program_names(program)
+    index = _NameIndex()
+    # id(helper) -> {built-in: parameter} for the helpers an earlier stage threaded. A module-scope helper is shared
+    # by every stage, so a later stage that reads the same built-in passes it to the parameter already there.
+    threaded = {}
     changed = 0
     for stage in _stages(program):
         entry = getattr(stage, "entry_point", None)
@@ -246,7 +275,10 @@ def pass_builtin_inputs(program, target) -> int:
         ]
         candidates = set(inputs) - program_names
         direct = {
-            function.name: _reads(function, candidates - _declared(function))
+            function.name: (
+                index.reads(function, candidates - index.declared(function))
+                | (set(threaded.get(id(function), ())) & candidates)
+            )
             for function in [entry, *helpers]
         }
         helper_reads = (
@@ -261,12 +293,17 @@ def pass_builtin_inputs(program, target) -> int:
         )
         if not builtins:
             continue
-        _thread(program, entry, helpers, direct, builtins, _all_names(program))
+        _thread(
+            program, entry, helpers, direct, builtins, _all_names(program), threaded
+        )
+        # Threading adds parameters and replaces reads, so later stages see the functions afresh.
+        index.clear()
         changed += 1
     return changed
 
 
-def _thread(program, entry, helpers, direct, builtins, taken):
+def _thread(program, entry, helpers, direct, builtins, taken, threaded):
+    earlier = set(threaded)
     sources, conversions = {}, []
     for builtin in builtins:
         existing = _existing_source(program, entry, builtin)
@@ -322,6 +359,9 @@ def _thread(program, entry, helpers, direct, builtins, taken):
 
     parameter_names = {}
     for helper in helpers:
+        if id(helper) in earlier:
+            parameter_names[helper.name] = threaded[id(helper)]
+            continue
         names = {}
         for builtin in builtins:
             if builtin in needs[helper.name]:
@@ -330,8 +370,13 @@ def _thread(program, entry, helpers, direct, builtins, taken):
                     A.ParameterNode(names[builtin], _type_node(_INPUT_TYPES[builtin]))
                 ]
         parameter_names[helper.name] = names
+        if names:
+            threaded[id(helper)] = names
 
     for function in [entry, *helpers]:
+        if id(function) in earlier:
+            # An earlier stage already passes the built-ins through this helper's body and calls.
+            continue
         local = (
             sources
             if function is entry
