@@ -14400,12 +14400,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"{helper_name}({group_index_name});",
                 )
         elif effective_shader_type == "vertex":
+            explicit_stage_builtins = self.explicit_hlsl_vertex_builtin_parameters(
+                param_list
+            )
             for (
                 name,
                 param_type,
                 semantic,
             ) in self.required_hlsl_vertex_builtin_parameters(func):
                 if not name or name in param_names:
+                    continue
+                # An input that already carries the system value delivers it; a second one would overlap it.
+                existing = explicit_stage_builtins.get(semantic.lower())
+                if existing:
+                    self.current_identifier_aliases[name] = existing
                     continue
                 declaration = f"{param_type} {name}"
                 if semantic:
@@ -41549,6 +41557,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return [
             parameter for parameter in builtin_parameters if parameter[0] in used_names
         ]
+
+    def explicit_hlsl_vertex_builtin_parameters(self, parameters):
+        """Lower-case system value -> the vertex input that already carries it."""
+        stage_parameters = {}
+        system_values = ("SV_VertexID", "SV_InstanceID", "SV_ViewID")
+        for parameter in parameters or []:
+            name = getattr(parameter, "name", None)
+            semantic = self.hlsl_canonical_semantic(self.semantic_from_node(parameter))
+            if name and semantic:
+                stage_parameters.setdefault(str(semantic).lower(), name)
+                continue
+            for system_value in system_values:
+                member = self.hlsl_struct_member_with_semantic(parameter, system_value)
+                if name and member is not None:
+                    stage_parameters.setdefault(
+                        system_value.lower(), f"{name}.{member}"
+                    )
+        return stage_parameters
 
     def explicit_hlsl_fragment_builtin_parameters(self, parameters):
         stage_parameters = {}
