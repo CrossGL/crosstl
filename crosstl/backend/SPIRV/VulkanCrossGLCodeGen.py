@@ -1558,9 +1558,48 @@ class VulkanToCrossGLConverter:
 
     def function_attribute_suffix(self, node):
         """Return CrossGL attributes needed to preserve stage entry identity."""
+        attributes = []
         if self.function_shader_stage(node) is not None and node.name != "main":
-            return " @stage_entry"
-        return ""
+            attributes.append("@stage_entry")
+        if self.function_shader_stage(node) == "tessellation_control":
+            attributes.extend(self.spirv_tessellation_control_mode_attributes(node))
+        return " " + " ".join(attributes) if attributes else ""
+
+    def spirv_tessellation_control_mode_attributes(self, node):
+        """Return ``@domain``/``@partitioning``/``@outputtopology`` for a control entry.
+
+        SPIR-V allows the domain, spacing, winding and point modes on either
+        tessellation stage, and DXC declares them on the control entry point;
+        CrossGL carries them as tessellation_control function attributes.
+        """
+        domains = {"Triangles": "tri", "Quads": "quad", "Isolines": "isoline"}
+        spacings = {
+            "SpacingEqual": "integer",
+            "SpacingFractionalEven": "fractional_even",
+            "SpacingFractionalOdd": "fractional_odd",
+        }
+        windings = {"VertexOrderCw": "triangle_cw", "VertexOrderCcw": "triangle_ccw"}
+        attributes = []
+        point_mode = False
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            mode_name = mode.get("mode")
+            if mode_name in domains:
+                attributes.append(f'@domain("{domains[mode_name]}")')
+            elif mode_name in spacings:
+                attributes.append(f'@partitioning("{spacings[mode_name]}")')
+            elif mode_name in windings:
+                attributes.append(f'@outputtopology("{windings[mode_name]}")')
+            elif mode_name == "PointMode":
+                point_mode = True
+        if point_mode:
+            # outputtopology carries a single value, and point mode subsumes winding.
+            attributes = [
+                attribute
+                for attribute in attributes
+                if not attribute.startswith("@outputtopology(")
+            ]
+            attributes.append('@outputtopology("point")')
+        return attributes
 
     def generate_function_parameter(self, node):
         type_name, ray_attributes = self.ray_storage_qualified_type_parts(

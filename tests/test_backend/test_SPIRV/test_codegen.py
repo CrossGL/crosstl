@@ -5002,6 +5002,46 @@ OpReturn
 OpFunctionEnd
 """
 
+# Reduced from the SPIR-V that DXC writes for an HLSL hull shader with
+# [domain("tri")] [partitioning("integer")] [outputtopology("point")]
+# [outputcontrolpoints(3)]: SPIR-V allows the domain, spacing, winding and
+# point modes on either tessellation stage, and DXC declares them on the
+# control entry point.
+SPIRV_TESSELLATION_CONTROL_EXECUTION_MODES_ASSEMBLY = """
+OpCapability Tessellation
+OpMemoryModel Logical GLSL450
+OpEntryPoint TessellationControl %main "main"
+OpExecutionMode %main Triangles
+OpExecutionMode %main SpacingEqual
+OpExecutionMode %main PointMode
+OpExecutionMode %main OutputVertices 3
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+# Same declaration site as above, for [domain("quad")]
+# [partitioning("fractional_odd")] [outputtopology("triangle_ccw")]
+# [outputcontrolpoints(4)].
+SPIRV_TESSELLATION_CONTROL_FRACTIONAL_ODD_CCW_MODES_ASSEMBLY = """
+OpCapability Tessellation
+OpMemoryModel Logical GLSL450
+OpEntryPoint TessellationControl %main "main"
+OpExecutionMode %main Quads
+OpExecutionMode %main SpacingFractionalOdd
+OpExecutionMode %main VertexOrderCcw
+OpExecutionMode %main OutputVertices 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_GEOMETRY_EMIT_PRIMITIVE_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -8248,6 +8288,38 @@ def test_spirv_tessellation_evaluation_execution_modes_codegen_reparse():
     parse_crossgl(generated_code)
     assert "tessellation_evaluation {" in generated_code
     assert "layout(triangles, equal_spacing, ccw) in;" in generated_code
+    assert "fragment {" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tessellation_control_execution_modes_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TESSELLATION_CONTROL_EXECUTION_MODES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "tessellation_control {" in generated_code
+    assert (
+        'void main() @domain("tri") @partitioning("integer") '
+        '@outputtopology("point") {' in generated_code
+    )
+    assert "layout(vertices = 3) out;" in generated_code
+    assert "fragment {" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tessellation_control_fractional_odd_ccw_modes_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TESSELLATION_CONTROL_FRACTIONAL_ODD_CCW_MODES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "tessellation_control {" in generated_code
+    assert (
+        'void main() @domain("quad") @partitioning("fractional_odd") '
+        '@outputtopology("triangle_ccw") {' in generated_code
+    )
+    assert "layout(vertices = 4) out;" in generated_code
     assert "fragment {" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
