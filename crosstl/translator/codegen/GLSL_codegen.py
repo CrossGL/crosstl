@@ -253,6 +253,7 @@ from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_instance_index import INSTANCE_INDEX, instance_index_expression
+from .glsl_draw_parameters import DRAW_PARAMETER_BUILTINS, draw_parameter_expression
 from .glsl_interface_block_io import (
     block_declared_stage_io,
     block_member_location_type,
@@ -40107,6 +40108,8 @@ complex64_t crossgl_complex64_mod_assign(
             return "gl_VertexID"
         if stage_name == "vertex" and name == INSTANCE_INDEX:
             return instance_index_expression(self)
+        if name in DRAW_PARAMETER_BUILTINS:
+            return draw_parameter_expression(self, name)
         return name
 
     def glsl_identifier_is_resolved(self, name):

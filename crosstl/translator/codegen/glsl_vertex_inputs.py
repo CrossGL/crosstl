@@ -42,6 +42,7 @@ def vertex_input_builtin(codegen, member) -> str | None:
     builtin = str(codegen.map_stage_input_semantic(semantic, "vertex"))
     if not builtin.startswith("gl_"):
         return None
+    builtin = codegen.glsl_target_builtin_identifier(builtin)
     mapped_type = str(codegen.member_type_name(member))
     return (
         codegen.stage_builtin_parameter_local_alias_expression(builtin, mapped_type)
