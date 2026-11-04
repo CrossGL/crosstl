@@ -58834,6 +58834,12 @@ complex64_t crossgl_complex64_mod_assign(
             address_space = str(
                 getattr(contract_type, "address_space", "") or ""
             ).lower()
+            # ``buffer T* p``: a storage pointer the emitter declares as a shader-storage block.
+            if not address_space and "buffer" in {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }:
+                return True
             return address_space in {"device", "global", "storage"}
         if self.is_structured_buffer_type(vtype):
             return True

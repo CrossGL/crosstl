@@ -513,6 +513,7 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .matrix_compound_assignment import matrix_product_assignment
+from .memory_qualifier_names import memory_qualifier_name
 from .metadata_call_bounds import (
     call_parameter_bounds,
     inherited_metadata_bindings,
@@ -53683,7 +53684,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return ""
 
-        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        qualifiers = {
+            memory_qualifier_name(q) for q in getattr(node, "qualifiers", []) or []
+        }
         attributes = {
             str(getattr(attr, "name", "")).lower()
             for attr in getattr(node, "attributes", []) or []
