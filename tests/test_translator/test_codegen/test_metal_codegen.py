@@ -16643,11 +16643,12 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
     ("stage", "param_type", "semantic", "metal_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_InstanceID", "instance_id", "uint"),
-        ("fragment", "int", "gl_PrimitiveID", "primitive_id", "uint"),
+        # GLSL's int forms of these are accepted (test_metal_signed_builtins.py); a float is not.
+        ("fragment", "float", "gl_PrimitiveID", "primitive_id", "uint"),
         ("fragment", "int", "gl_FrontFacing", "front_facing", "bool"),
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
-        ("fragment", "int", "gl_SampleID", "sample_id", "uint"),
+        ("fragment", "float", "gl_SampleID", "sample_id", "uint"),
         ("fragment", "int", "gl_SampleMaskIn", "sample_mask", "uint"),
     ],
 )
@@ -16819,9 +16820,9 @@ def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
         ("vec2 depth @ gl_FragDepth", "depth\\(any\\)", "float"),
         ("int frontFacing @ gl_FrontFacing", "front_facing", "bool"),
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
-        ("int primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
+        ("float primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
         ("vec2 pointSize @ gl_PointSize", "point_size", "float"),
-        ("int sampleID @ gl_SampleID", "sample_id", "uint"),
+        ("float sampleID @ gl_SampleID", "sample_id", "uint"),
         ("int sampleMask @ gl_SampleMask", "sample_mask", "uint"),
     ],
 )

@@ -73,6 +73,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .constant_ordering import partition_constants_by_struct_dependency
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -110,6 +111,7 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import named_struct_constructor_arguments
 from .glsl_buffer_layout import (
@@ -395,6 +397,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         """
         if self._generating:
             return self.generate_program(ast)
+        refuse_cooperative_matrices(ast, label="Slang", target="slang")
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         try:
@@ -9729,7 +9732,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             if specialized_callee is not None:
                 callee = specialized_callee
             else:
-                raise_unresolved_generic_function_call(self, callee, "Slang")
+                reject_unresolved_generic_function_call(self, callee, "Slang")
             synchronization_call = self.generate_slang_synchronization_call(
                 callee, node.args, statement_context=False
             )

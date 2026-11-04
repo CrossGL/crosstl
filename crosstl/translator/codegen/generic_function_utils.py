@@ -350,8 +350,12 @@ def collect_unresolved_generic_function_call_names(generator, functions):
                 visit(arg)
             explicit_call = explicit_generic_call_target(generator, func_name)
             definition_name = func_name if explicit_call is None else explicit_call[0]
+            # A call that a concrete overload of the same name can take is not
+            # unresolved: it falls back to that overload instead of the generic.
+            concrete_names = getattr(generator, "concrete_function_names", None) or ()
             if (
                 definition_name in definitions
+                and definition_name not in concrete_names
                 and id(value) not in resolved_call_ids
                 and generic_function_call_name(generator, func_name, args) is None
                 and definition_name not in seen_names
@@ -557,9 +561,24 @@ def _compatible_existing_specialized_call_name(generator, func_name, args):
     return None
 
 
+def _generic_function_call_arity_range(param_list):
+    """``(minimum, maximum)`` argument counts a call to ``param_list`` may carry.
+
+    Parameters with a default value may be omitted, so the minimum counts
+    only parameters without one; the maximum is the full parameter list.
+    """
+    required = 0
+    for param in param_list:
+        default = getattr(param, "default_value", getattr(param, "value", None))
+        if default is None:
+            required += 1
+    return required, len(param_list)
+
+
 def _specialized_function_accepts_call(generator, func, args):
     param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
-    if len(args or []) < len(param_list):
+    minimum_args, maximum_args = _generic_function_call_arity_range(param_list)
+    if not minimum_args <= len(args or []) <= maximum_args:
         return False
 
     saw_informative_argument = False
@@ -640,6 +659,13 @@ def _generic_function_candidate_call_match(
             substitutions.update(explicit_substitutions)
         else:
             value_args = call_args
+
+    # A generic overload matches a call only when the argument count lies
+    # between its parameters without defaults and all its parameters; a
+    # count no parameter list allows must not specialize this overload.
+    minimum_args, maximum_args = _generic_function_call_arity_range(param_list)
+    if not minimum_args <= len(value_args) <= maximum_args:
+        return None
 
     matched_params = len(substitutions)
     exact_matches = 0

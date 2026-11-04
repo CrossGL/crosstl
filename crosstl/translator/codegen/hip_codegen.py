@@ -66,6 +66,7 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_library_functions import rename_cuda_library_functions
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -107,6 +108,7 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -847,6 +849,7 @@ class HipCodeGen(
         A construct with no faithful HIP lowering is refused; no program is returned while a refusal is
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
+        refuse_cooperative_matrices(node, label="HIP", target="hip")
         return self.refusals.run(self.render_program, node)
 
     def render_program(self, node: ASTNode) -> str:
@@ -4309,7 +4312,7 @@ class HipCodeGen(
             func_name = specialized_func_name
             callee = specialized_func_name
         else:
-            raise_unresolved_generic_function_call(self, func_name, "HIP")
+            reject_unresolved_generic_function_call(self, func_name, "HIP")
 
         enum_constructor = generate_enum_constructor_call(self, func_name, raw_args)
         if enum_constructor is not None:

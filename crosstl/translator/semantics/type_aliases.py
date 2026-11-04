@@ -4,8 +4,9 @@ CrossGL reads ``typedef float real;`` as a declaration (a :class:`~crosstl.trans
 ``is_type_alias``) at program scope, in a stage, or in a block. An alias has no run-time state and no identity of
 its own: a value of type ``real`` is a ``float``. :func:`resolve_type_aliases` therefore writes the aliased type in
 place of the alias wherever it names a type (declarations, parameters, return types, structure members, generic
-arguments), turns a constructor or cast through the alias (``real(x)``, ``(real)x``) into one through the aliased
-type, and drops the alias declarations. An alias of an alias resolves to the type at the end of the chain.
+arguments, the element type of a vector such as ``vec2<real>``), turns a constructor or cast through the alias
+(``real(x)``, ``(real)x``, ``vec2<real>(x)``) into one through the aliased type, and drops the alias declarations. An
+alias of an alias resolves to the type at the end of the chain.
 
 The MSL, HLSL and GLSL generators declare a program-scope alias themselves, so for those targets the program's
 aliases are kept and only those of stages and blocks are resolved; every other generator then reads no alias at all.
@@ -13,11 +14,13 @@ A block alias is visible from its declaration to the end of its block, and a var
 same name hides it, as in C. Two forms cannot be resolved faithfully and are refused with
 :class:`TypeAliasUnsupportedError`: an alias carrying a qualifier or attribute (``typedef const float cf;``), whose
 meaning would have to move onto each declaration, and a constructor call through an alias of a type CrossGL has no
-constructor spelling for (a pointer, a resource, a generic type).
+constructor spelling for (a pointer, a resource, a generic type). An alias of a type that is not a scalar, used as a
+vector's element type (``vec2<pair>`` for ``typedef vec2 pair;``), is refused with the same error.
 """
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 
 from .. import ast as A
@@ -64,6 +67,38 @@ _TYPE_NAME_FIELDS = frozenset(
 _TYPE_OPERAND_CALLS = frozenset({"sizeof", "alignof", "metal_sizeof"})
 _VECTOR_PREFIX = {"float": "", "int": "i", "uint": "u", "bool": "b", "double": "d"}
 _MATRIX_PREFIX = {"float": "", "double": "d"}
+# A vector constructor's callee with its element type, ``vec2<real>``.
+_VECTOR_CALLEE = re.compile(r"^((?:vec|ivec|uvec|bvec|dvec)[234])<\s*(\w+)\s*>$")
+_ELEMENT_SCALARS = frozenset(
+    {
+        "float",
+        "double",
+        "half",
+        "int",
+        "uint",
+        "bool",
+        "f16",
+        "f32",
+        "f64",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+    }
+)
+# The element type the parser writes for each scalar spelling in ``vec2<...>`` (``vector_element_type_from_generic``):
+# ``f32``, ``f64``, ``i32`` and ``u32`` become ``float``, ``double``, ``int`` and ``uint``, and the others are kept.
+_PARSED_ELEMENT_NAMES = {
+    **{name: name for name in _ELEMENT_SCALARS},
+    "f32": "float",
+    "f64": "double",
+    "i32": "int",
+    "u32": "uint",
+}
 
 
 class TypeAliasUnsupportedError(TranslationDiagnostic):
@@ -183,6 +218,8 @@ class _Resolver:
         self.target = target
         self.visited = set()
         self.dropped = 0
+        # Program-scope aliases a generator declares itself; a vector's element type cannot name one.
+        self.kept_aliases = {}
 
     def declare(self, alias, env):
         """Resolve ``alias``'s own type under ``env``; returns the scope that follows the declaration."""
@@ -226,6 +263,9 @@ class _Resolver:
         self.walk_fields(node, env)
 
     def walk_fields(self, node, env):
+        elements = {**self.kept_aliases, **env}
+        if elements:
+            self.vector_element(node, elements)
         if env:
             self.rename_strings(node, env)
             if isinstance(node, A.FunctionCallNode):
@@ -248,6 +288,33 @@ class _Resolver:
                     self.replace(node, value, replacement)
                 else:
                     self.node(value, scope)
+
+    def vector_element(self, node, aliases):
+        """Write the scalar an alias names as a vector's element type, in ``vec2<real>`` and ``vec2<real>(x)``."""
+        if isinstance(node, A.VectorType):
+            element = node.element_type
+            name = getattr(element, "name", None)
+            if isinstance(element, (A.PrimitiveType, A.NamedType)) and name in aliases:
+                scalar = self.element_scalar(name, aliases)
+                node.element_type = A.PrimitiveType(_PARSED_ELEMENT_NAMES[scalar])
+        elif isinstance(node, A.FunctionCallNode) and isinstance(
+            node.function, A.IdentifierNode
+        ):
+            match = _VECTOR_CALLEE.match(str(node.function.name))
+            if match and match.group(2) in aliases:
+                scalar = self.element_scalar(match.group(2), aliases)
+                spelled = f"{match.group(1)}<{scalar}>"
+                node.function.name = spelled
+                node.function.identifier = spelled
+
+    def element_scalar(self, name, aliases):
+        scalar = _scalar_name(aliases[name])
+        if scalar not in _ELEMENT_SCALARS:
+            raise TypeAliasUnsupportedError(
+                f"type alias '{name}' is used as a vector's element type but does not name a scalar type",
+                self.target,
+            )
+        return scalar
 
     @staticmethod
     def hidden_by_header(node, env):
@@ -403,6 +470,7 @@ def _resolve_alias_chains(resolver, variables):
         aliased = chain.get(alias.name)
         if aliased is not None and aliased is not alias.var_type:
             resolver.replace(alias, alias.var_type, aliased)
+    resolver.kept_aliases = chain
 
 
 def resolve_type_aliases(program, target) -> int:
