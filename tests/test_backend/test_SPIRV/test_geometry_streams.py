@@ -150,7 +150,12 @@ def _validate(tmp_path, spirv):
 
 
 def _streams(spirv):
-    return dict(re.findall(r"OpDecorate %(\w+) Stream (\d+)", spirv))
+    """``{name: stream}``; without SPIRV-Tools the ids are numbers that only ``OpName`` names."""
+    names = dict(re.findall(r'OpName %(\w+) "(\w+)"', spirv))
+    return {
+        names.get(target, target): stream
+        for target, stream in re.findall(r"OpDecorate %(\w+) Stream (\d+)", spirv)
+    }
 
 
 def _check_stream_module(tmp_path, spirv):
