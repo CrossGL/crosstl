@@ -31939,6 +31939,24 @@ class VulkanSPIRVCodeGen(
                 return True
         return False
 
+    def tessellation_control_stated_modes(self, stage) -> List[str]:
+        """Return the spacing, winding and point mode a control stage without ``@domain`` states itself.
+
+        SPIR-V allows these modes on either tessellation stage; the evaluation stage then states the domain
+        and anything else, so nothing is defaulted here.
+        """
+        modes = []
+        if self.stage_attribute_value(stage, "partitioning") is not None:
+            modes.append(self.tessellation_spacing_mode(stage))
+        topology = self.normalized_stage_value(
+            self.stage_attribute_value(stage, "outputtopology")
+        )
+        if topology in {"cw", "ccw", "triangle_cw", "triangle_ccw"}:
+            modes.append(self.tessellation_vertex_order_mode(stage))
+        if self.tessellation_point_mode(stage):
+            modes.append("PointMode")
+        return modes
+
     def emit_tessellation_execution_modes(
         self, execution_model: str, function_id: SpirvId, stage
     ):
@@ -31950,6 +31968,8 @@ class VulkanSPIRVCodeGen(
                 f"{self.tessellation_control_output_vertices(stage)}"
             )
             if not self.tessellation_modes_follow_hlsl(stage):
+                for mode in self.tessellation_control_stated_modes(stage):
+                    self.emit(f"OpExecutionMode %{function_id.id} {mode}")
                 return
             # An HLSL hull declares the domain, spacing and winding; DXC states them on the control stage too.
 
