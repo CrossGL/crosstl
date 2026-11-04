@@ -4185,7 +4185,10 @@ class GLSLCodeGen(
         lines = []
         if self.uses_nonuniform_ext(ast):
             lines.append("#extension GL_EXT_nonuniform_qualifier : require")
-        if stage_names & self.MESH_STAGE_NAMES:
+        # A program written against GL_NV_mesh_shader keeps it: glslang refuses both extensions together.
+        if stage_names & self.MESH_STAGE_NAMES and not self.glsl_extension_enabled(
+            "GL_NV_mesh_shader"
+        ):
             lines.append("#extension GL_EXT_mesh_shader : require")
         uses_ray_stage = bool(stage_names & self.RAY_STAGE_NAMES)
         if uses_ray_stage:
