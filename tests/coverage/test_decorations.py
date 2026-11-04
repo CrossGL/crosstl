@@ -941,3 +941,24 @@ def test_glslang_lowers_mesh_topologies_per_primitive_outputs_and_payloads():
     assert decorations.lost(payload, "glsl", triangles) == (
         "the translation loses StorageClass.TaskPayloadWorkgroupEXT"
     )
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_the_ids_a_task_stage_reads():
+    feature = Feature(
+        "glsl",
+        "graphics",
+        "task-workgroup-id",
+        None,
+        group="BuiltIn.WorkgroupId",
+        stage="task",
+    )
+    source = (
+        "#version 460\n#extension GL_EXT_mesh_shader : require\nlayout(local_size_x = 1) in;\n"
+        "struct Payload {\n    uint value;\n};\ntaskPayloadSharedEXT Payload payload;\n"
+        "void main() {\n    payload.value = gl_WorkGroupID.x;\n    EmitMeshTasksEXT(1, 1, 1);\n}\n"
+    )
+    assert decorations.lost(feature, "glsl", source) == ""
+    assert decorations.lost(
+        feature, "glsl", source.replace("gl_WorkGroupID.x", "0u")
+    ) == ("the translation loses BuiltIn.WorkgroupId")

@@ -813,6 +813,24 @@ def _curated() -> list[Construct]:
                 ("mesh-layer", "BuiltIn.Layer"),
                 ("mesh-viewport-index", "BuiltIn.ViewportIndex"),
                 ("mesh-task-payload", "StorageClass.TaskPayloadWorkgroupEXT"),
+                ("mesh-workgroup-id", "BuiltIn.WorkgroupId"),
+                ("mesh-local-invocation-index", "BuiltIn.LocalInvocationIndex"),
+            )
+        ),
+        *(
+            c("graphics", name, *anchors, stage="task")
+            for name, *anchors in (
+                (
+                    "task-payload-array",
+                    "StorageClass.TaskPayloadWorkgroupEXT",
+                    "OpTypeArray",
+                ),
+                ("task-workgroup-id", "BuiltIn.WorkgroupId"),
+                (
+                    "task-local-invocation-index",
+                    "BuiltIn.LocalInvocationIndex",
+                    "OpTypeArray",
+                ),
             )
         ),
         c(

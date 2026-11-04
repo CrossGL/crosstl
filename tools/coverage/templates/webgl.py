@@ -53,6 +53,7 @@ from .rows import WEBGL as _ROWS
 from .scopes import WEBGL as _SCOPES
 from .specializations import WEBGL as _SPECIALIZATIONS
 from .subgroups import WEBGL as _SUBGROUPS
+from .tasks import WEBGL as _TASKS
 from .tessellation import WEBGL as _TESSELLATION
 from .textures import WEBGL as _TEXTURES
 from .values import FAMILY as _VALUES
@@ -135,6 +136,7 @@ WEBGL = {
     **_PRIMITIVES,
     **_TESSELLATION,
     **_MESHES,
+    **_TASKS,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

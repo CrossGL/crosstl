@@ -27,6 +27,7 @@ from tools.coverage.templates import (
     relations,
     specializations,
     subgroups,
+    tasks,
     tessellation,
     textures,
     vertices,
@@ -295,6 +296,82 @@ def test_mesh_probes_state_each_languages_topology_primitive_values_and_payload(
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & names == names - missing, language
+
+
+def test_mesh_and_task_probes_read_their_workgroup_and_invocation_ids():
+    assert _feature("glsl", "mesh-workgroup-id").group == "BuiltIn.WorkgroupId"
+    feature = _feature("hlsl", "task-local-invocation-index")
+    assert (feature.category, feature.stage) == ("graphics", "task")
+    assert feature.group == "BuiltIn.LocalInvocationIndex OpTypeArray"
+    for language, name, line in (
+        (
+            "glsl",
+            "mesh-workgroup-id",
+            "vec4(float(gl_WorkGroupID.x), 0.0, 0.0, 1.0);\n",
+        ),
+        ("glsl", "mesh-local-invocation-index", "layout(local_size_x = 3) in;\n"),
+        (
+            "glsl",
+            "mesh-local-invocation-index",
+            "    if (gl_LocalInvocationIndex == 0u) {\n",
+        ),
+        ("glsl", "task-payload-array", "    uint values[2];\n"),
+        ("glsl", "task-workgroup-id", "    payload.value = gl_WorkGroupID.x;\n"),
+        (
+            "glsl",
+            "task-local-invocation-index",
+            "    payload.values[gl_LocalInvocationIndex] = 1u;\n",
+        ),
+        ("hlsl", "mesh-workgroup-id", ", uint3 group : SV_GroupID) {\n"),
+        ("hlsl", "mesh-local-invocation-index", ", uint index : SV_GroupIndex) {\n"),
+        ("hlsl", "task-workgroup-id", "void main(uint3 group : SV_GroupID) {\n"),
+        ("hlsl", "task-local-invocation-index", "[numthreads(2, 1, 1)]\n"),
+        (
+            "slang",
+            "task-payload-array",
+            '[shader("amplification")]\n[numthreads(1, 1, 1)]\n',
+        ),
+        (
+            "metal",
+            "mesh-workgroup-id",
+            "uint3 group [[threadgroup_position_in_grid]]",
+        ),
+        (
+            "metal",
+            "mesh-local-invocation-index",
+            "    output.set_vertex(index, Vertex{float4(float(index), 0.0, 0.0, 1.0)});\n",
+        ),
+        (
+            "metal",
+            "task-local-invocation-index",
+            "uint index [[thread_index_in_threadgroup]]",
+        ),
+        ("rust", "mesh-workgroup-id", "#[spirv(workgroup_id)] group: UVec3"),
+        ("rust", "task-payload-array", "    pub values: [u32; 2],\n"),
+        (
+            "rust",
+            "task-local-invocation-index",
+            "#[spirv(task_ext(threads(2)))]\n",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert probes.build(_feature("glsl", "task-workgroup-id"), "glsl").suffix == ".task"
+    crossgl = probes.build(_feature("hlsl", "task-local-invocation-index"), "crossgl")
+    assert (
+        "void main(uint index @ gl_LocalInvocationIndex) @numthreads(2, 1, 1) {\n"
+        in crossgl.source
+    )
+    crossgl = probes.build(_feature("hlsl", "mesh-workgroup-id"), "crossgl").source
+    assert ", uvec3 group @ gl_WorkGroupID)\n" in crossgl
+    # WGSL, GLSL ES 3.00 and the kernel languages have no mesh or task stage.
+    names = {"mesh-workgroup-id", "mesh-local-invocation-index", *tasks.NAMES}
+    for language in ("glsl", "hlsl", "slang", "metal", "rust"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    for language in ("wgsl", "webgl", "cuda", "hip", "opencl", "mojo"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not listed & names, language
 
 
 def test_stages_are_the_shader_execution_models():

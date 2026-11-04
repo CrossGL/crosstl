@@ -1,17 +1,21 @@
-"""Mesh-stage probes: the primitives a mesh stage emits, the per-primitive values it writes and the payload it reads.
+"""Mesh-stage probes: the primitives a mesh stage emits, the per-primitive values it writes and the payload and IDs it
+reads.
 
 Each probe is the mesh probe of :mod:`.graphics`, a stage that writes one triangle, with one part changed: it emits a
 point or a line instead, writes a per-primitive output, culls its primitive, writes the primitive's ID, layer or
-viewport, or reads the payload a task stage hands it into the position of its second vertex. GLSL states the topology
-in its ``layout`` qualifier, writes the indices through ``gl_Primitive*IndicesEXT`` and the per-primitive built-ins
-through ``gl_MeshPrimitivesEXT``, declares a per-primitive output ``perprimitiveEXT`` and the payload
-``taskPayloadSharedEXT``. HLSL and Slang state the topology in ``[outputtopology]`` and the index array's element
-type, write the per-primitive values through an ``out primitives`` array of a structure with semantics, and read the
-payload through an ``in payload`` parameter. Metal states the topology and the primitive structure in the ``mesh``
-type, the built-ins as attributes of the primitive structure, and the payload as an ``object_data`` reference.
-rust-gpu states the topology in the ``mesh_ext`` execution modes, and the built-ins, per-primitive outputs and payload
-as attributed parameters. CrossGL writes them as its HLSL importer does, with the attributes after the parameters as
-in the mesh stage probe of :mod:`..crossgl`.
+viewport, or reads the payload a task stage hands it or the ID of its workgroup into the position of its second
+vertex. One probe runs three invocations instead of one, each writing the vertex its local invocation index names, and
+the first also the indices. GLSL states the topology in its ``layout`` qualifier, writes the indices through
+``gl_Primitive*IndicesEXT`` and the per-primitive built-ins through ``gl_MeshPrimitivesEXT``, declares a per-primitive
+output ``perprimitiveEXT`` and the payload ``taskPayloadSharedEXT``. HLSL and Slang state the topology in
+``[outputtopology]`` and the index array's element type, write the per-primitive values through an ``out primitives``
+array of a structure with semantics, and read the payload through an ``in payload`` parameter and the IDs through
+``SV_GroupID`` and ``SV_GroupIndex``. Metal states the topology and the primitive structure in the ``mesh`` type, the
+built-ins as attributes of the primitive structure, the payload as an ``object_data`` reference and the IDs as
+``[[threadgroup_position_in_grid]]`` and ``[[thread_index_in_threadgroup]]``. rust-gpu states the topology in the
+``mesh_ext`` execution modes, and the built-ins, per-primitive outputs, payload and IDs as attributed parameters.
+CrossGL writes them as its HLSL importer does, with the attributes after the parameters as in the mesh stage probe of
+:mod:`..crossgl`.
 
 HLSL has no point topology: DXC accepts only lines and triangles. WGSL, GLSL ES 3.00 and the kernel languages have no
 mesh stage.
@@ -114,6 +118,8 @@ NAMES = (
     "mesh-per-primitive-output",
     *_BUILTINS,
     "mesh-task-payload",
+    "mesh-workgroup-id",
+    "mesh-local-invocation-index",
 )
 _COLOR = "1.0, 0.0, 0.0, 1.0"
 
@@ -167,6 +173,16 @@ GLSL = {
         declarations="struct Payload {\n    uint value;\n};\n"
         "taskPayloadSharedEXT Payload payload;\n",
         second=_PAYLOAD_X["glsl"],
+    ),
+    "mesh-workgroup-id": _glsl(second="float(gl_WorkGroupID.x)"),
+    "mesh-local-invocation-index": Template(
+        program="#version 460\n#extension GL_EXT_mesh_shader : require\nlayout(local_size_x = 3) in;\n"
+        "layout(triangles, max_vertices = 3, max_primitives = 1) out;\n"
+        "void main() {\n    SetMeshOutputsEXT(3, 1);\n"
+        "    gl_MeshVerticesEXT[gl_LocalInvocationIndex].gl_Position = "
+        "vec4(float(gl_LocalInvocationIndex), 0.0, 0.0, 1.0);\n"
+        "    if (gl_LocalInvocationIndex == 0u) {\n"
+        "        gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0, 1, 2);\n    }\n}\n"
     ),
 }
 WEBGL = dict.fromkeys(NAMES, ABSENT)
@@ -230,6 +246,18 @@ def _hlsl(stage: str = "") -> dict[str, Template]:
             params=", in payload Payload payload",
             second=_PAYLOAD_X["hlsl"],
         ),
+        "mesh-workgroup-id": _hlsl_program(
+            stage, params=", uint3 group : SV_GroupID", second="float(group.x)"
+        ),
+        "mesh-local-invocation-index": Template(
+            program="struct Vertex {\n    float4 position : SV_Position;\n};\n\n"
+            f'{stage}[numthreads(3, 1, 1)]\n[outputtopology("triangle")]\n'
+            "void main(out vertices Vertex verts[3], out indices uint3 tris[1], uint index : SV_GroupIndex) {\n"
+            "    SetMeshOutputCounts(3, 1);\n"
+            "    verts[index].position = float4(float(index), 0.0, 0.0, 1.0);\n"
+            "    if (index == 0) {\n        tris[0] = uint3(0, 1, 2);\n    }\n}\n",
+            entry="main",
+        ),
     }
 
 
@@ -282,6 +310,20 @@ METAL = {
         params=",\n                    const object_data Payload& payload [[payload]]",
         second=_PAYLOAD_X["metal"],
     ),
+    "mesh-workgroup-id": _metal(
+        params=",\n                    uint3 group [[threadgroup_position_in_grid]]",
+        second="float(group.x)",
+    ),
+    "mesh-local-invocation-index": Template(
+        program="#include <metal_stdlib>\nusing namespace metal;\n\n"
+        "struct Vertex {\n    float4 position [[position]];\n};\n\n"
+        "[[mesh]] void probe(mesh<Vertex, void, 3, 1, topology::triangle> output,\n"
+        "                    uint index [[thread_index_in_threadgroup]]) {\n"
+        "    output.set_primitive_count(1);\n"
+        "    output.set_vertex(index, Vertex{float4(float(index), 0.0, 0.0, 1.0)});\n"
+        "    if (index == 0) {\n        output.set_index(0, 0);\n        output.set_index(1, 1);\n"
+        "        output.set_index(2, 2);\n    }\n}\n"
+    ),
 }
 
 
@@ -328,6 +370,20 @@ RUST = {
         types="pub struct Payload {\n    pub value: u32,\n}\n\n",
         params=", #[spirv(task_payload_workgroup_ext)] payload: &Payload",
         second=_PAYLOAD_X["rust"],
+    ),
+    "mesh-workgroup-id": _rust(
+        params=", #[spirv(workgroup_id)] group: UVec3", second="group.x as f32"
+    ),
+    "mesh-local-invocation-index": Template(
+        program="#![no_std]\nuse spirv_std::glam::*;\nuse spirv_std::spirv;\n\n"
+        "#[spirv(mesh_ext(threads(3), output_vertices = 3, output_primitives_ext = 1, output_triangles_ext))]\n"
+        "pub fn main(#[spirv(position)] positions: &mut [Vec4; 3], "
+        "#[spirv(primitive_triangle_indices_ext)] indices: &mut [UVec3; 1], "
+        "#[spirv(local_invocation_index)] index: u32) {\n"
+        "    unsafe {\n        spirv_std::arch::set_mesh_outputs_ext(3, 1);\n    }\n"
+        "    positions[index as usize] = Vec4::new(index as f32, 0.0, 0.0, 1.0);\n"
+        "    if index == 0 {\n        indices[0] = UVec3::new(0, 1, 2);\n    }\n}\n",
+        entry="main",
     ),
 }
 
@@ -380,5 +436,18 @@ CROSSGL = {
         types="    struct Payload {\n        uint value;\n    }\n",
         params=", @ mesh_payload in Payload payload",
         second="float(payload.value)",
+    ),
+    "mesh-workgroup-id": _crossgl(
+        params=", uvec3 group @ gl_WorkGroupID", second="float(group.x)"
+    ),
+    "mesh-local-invocation-index": Template(
+        program="shader Probe {\n    struct Vertex {\n        vec4 position @ gl_Position;\n    }\n    mesh {\n"
+        "        void main(@ vertices out Vertex verts[3], @ indices out uvec3 tris[1], "
+        "uint index @ gl_LocalInvocationIndex)\n"
+        "            @numthreads(3, 1, 1)\n            @outputtopology(triangle) {\n"
+        "            SetMeshOutputCounts(3, 1);\n"
+        "            verts[index].position = vec4(float(index), 0.0, 0.0, 1.0);\n"
+        "            if (index == 0u) {\n                tris[0] = uvec3(0, 1, 2);\n            }\n"
+        "        }\n    }\n}\n"
     ),
 }
