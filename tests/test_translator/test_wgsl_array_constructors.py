@@ -147,6 +147,18 @@ def test_constructor_longer_than_its_size_is_refused(tmp_path):
         refused.value.project_diagnostic_code
         == "project.translate.wgsl-aggregate-initializer-invalid"
     )
+    # The same details as a declared initializer's refusal (#3689).
+    assert refused.value.expected_type == "array<f32, 2>"
+    assert refused.value.element_count == 3
+    assert refused.value.expected_element_count == 2
+
+
+def test_empty_constructor_is_refused(tmp_path):
+    # GLSL has no empty array constructor (GLSL 4.60 section 5.4.4).
+    from crosstl.translator.codegen.wgsl_codegen import WGSLAggregateInitializerError
+
+    with pytest.raises(WGSLAggregateInitializerError, match="empty array constructor"):
+        translate(tmp_path, "float a[3];\n a = float[3]();\n values[i] = a[0];")
 
 
 def test_one_argument_constructor_in_declaration_zero_fills(tmp_path):

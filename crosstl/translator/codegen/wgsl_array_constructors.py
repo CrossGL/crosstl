@@ -119,10 +119,11 @@ def wgsl_array_constructor(codegen, node):
     elif size.isdigit():
         expected = int(size)
         if len(arguments) > expected:
+            array_type = f"array<{element}, {expected}>"
             raise _aggregate_error(
-                f"WGSL array constructor {function_name} for 'array<{element}, {expected}>' "
+                f"WGSL array constructor {function_name} for '{array_type}' "
                 f"expects at most {expected} elements, got {len(arguments)}",
-                expected_type=ArrayType(element_type, expected),
+                expected_type=array_type,
                 element_count=len(arguments),
                 expected_element_count=expected,
             )
