@@ -717,6 +717,17 @@ def _curated() -> list[Construct]:
             "ExecutionMode.EarlyFragmentTests",
             stage="fragment",
         ),
+        *(
+            c(
+                "graphics",
+                name,
+                "ExecutionMode.PixelInterlockOrderedEXT",
+                "Capability.FragmentShaderPixelInterlockEXT",
+                "OpBeginInvocationInterlockEXT",
+                stage="fragment",
+            )
+            for name in ("rasterizer-ordered-image", "rasterizer-ordered-buffer")
+        ),
         c("graphics", "layer", "BuiltIn.Layer", stage="fragment"),
         c("graphics", "viewport-index", "BuiltIn.ViewportIndex", stage="fragment"),
         c("graphics", "point-coordinate", "BuiltIn.PointCoord", stage="fragment"),

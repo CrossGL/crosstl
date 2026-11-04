@@ -62,6 +62,8 @@ _OPERANDS = {
         f"StorageClass.{name}KHR": rf"^\s*%\w+ = OpVariable %\w+ {name}(?:KHR|NV)\b"
         for name in ("RayPayload", "CallableData", "ShaderRecordBuffer")
     },
+    # A fragment stage whose accesses are ordered opens its interlocked region.
+    "OpBeginInvocationInterlockEXT": r"^\s*OpBeginInvocationInterlockEXT\b",
     "OpTraceRayKHR": r"^\s*OpTraceRayKHR\b",
     "OpExecuteCallableKHR": r"^\s*OpExecuteCallableKHR\b",
     "OpReportIntersectionKHR": r"^\s*%\w+ = OpReportIntersection(?:KHR|NV)\b",
@@ -83,7 +85,8 @@ _ALIASES = {"OutputLinesEXT": "OutputLinesNV", "PerPrimitiveEXT": "PerPrimitiveN
 
 # The metadata the Metal compiler writes in AIR for the attribute that carries each anchor: ``[[flat]]`` becomes
 # ``!"air.flat"`` and ``[[vertex_id]]`` ``!"air.vertex_id"``. A fragment function's ``[[position]]`` input is the
-# fragment coordinate, and ``[[color(n)]]`` is a render target at a location. A capability has no attribute, so a
+# fragment coordinate, ``[[color(n)]]`` is a render target at a location, and an argument in a ``raster_order_group``
+# is ordered as the pixel-interlocked accesses of SPIR-V are. A capability has no attribute, so a
 # Metal translation is not checked for one.
 AIR = {
     "BuiltIn.FragCoord": "air.position",
@@ -107,6 +110,7 @@ AIR = {
     "Decoration.Location": "air.render_target",
     "ExecutionMode.EarlyFragmentTests": "early_fragment_tests",
     "ExecutionMode.DepthGreater": "air.greater",
+    "ExecutionMode.PixelInterlockOrderedEXT": "air.raster_order_group",
     "BuiltIn.BaseVertex": "air.base_vertex",
     "BuiltIn.BaseInstance": "air.base_instance",
     "BuiltIn.GlobalInvocationId": "air.thread_position_in_grid",

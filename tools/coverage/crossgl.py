@@ -67,6 +67,7 @@ from .templates.initializers import CROSSGL as INITIALIZERS_CROSSGL
 from .templates.initializers import FAMILY as INITIALIZERS
 from .templates.integers import CROSSGL as INTEGERS_CROSSGL
 from .templates.interfaces import CROSSGL as INTERFACES
+from .templates.interlocks import CROSSGL as INTERLOCKS
 from .templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
@@ -653,6 +654,7 @@ CONSTRUCTS: dict[str, Template] = {
     **TASKS,
     **RAYS,
     **BINDINGS,
+    **INTERLOCKS,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,

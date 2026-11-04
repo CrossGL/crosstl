@@ -1113,3 +1113,63 @@ def test_glslang_lowers_push_constants_and_a_second_descriptor_set():
     )
     second = uniform.replace("std140, binding = 3", "std140, set = 1, binding = 3")
     assert decorations.lost(bound, "glsl", second) == ""
+
+
+_ORDERED = (
+    "ExecutionMode.PixelInterlockOrderedEXT Capability.FragmentShaderPixelInterlockEXT"
+    " OpBeginInvocationInterlockEXT"
+)
+
+
+def test_a_rasterizer_ordered_translation_keeps_its_interlocked_region(monkeypatch):
+    ordered = Feature(
+        "spirv", "graphics", "rasterizer-ordered-image", None, group=_ORDERED
+    )
+    interlocked = (
+        "OpCapability FragmentShaderPixelInterlockEXT\n"
+        "OpExecutionMode %main PixelInterlockOrderedEXT\n"
+        "OpBeginInvocationInterlockEXT\nOpEndInvocationInterlockEXT\n"
+    )
+    assert decorations.lost(ordered, "spirv", interlocked) == ""
+    unordered = interlocked.replace("OpBeginInvocationInterlockEXT\n", "")
+    assert decorations.lost(ordered, "spirv", unordered) == (
+        "the translation loses OpBeginInvocationInterlockEXT"
+    )
+    # Metal orders the accesses to an argument in a raster order group, and has no capability to check.
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    argument = '!15 = !{i32 2, !"air.texture", !"air.raster_order_group", i32 0}\n'
+    assert decorations.lost(ordered, "metal", argument) == ""
+    assert decorations.lost(
+        ordered, "metal", argument.replace("raster_order_group", "read_write")
+    ) == ("the translation loses ExecutionMode.PixelInterlockOrderedEXT")
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_a_pixel_interlocked_region():
+    ordered = Feature(
+        "glsl",
+        "graphics",
+        "rasterizer-ordered-image",
+        None,
+        group=_ORDERED,
+        stage="fragment",
+    )
+    source = (
+        "#version 460\n#extension GL_ARB_fragment_shader_interlock : require\n"
+        "layout(pixel_interlock_ordered) in;\n"
+        "layout(rgba32f, binding = 0) uniform image2D accum;\n"
+        "layout(location = 0) out vec4 color;\n"
+        "void main() {\n    ivec2 p = ivec2(gl_FragCoord.xy);\n"
+        "    beginInvocationInterlockARB();\n"
+        "    imageStore(accum, p, imageLoad(accum, p) + vec4(1.0));\n"
+        "    endInvocationInterlockARB();\n    color = vec4(1.0);\n}\n"
+    )
+    assert decorations.lost(ordered, "glsl", source) == ""
+    unordered = (
+        source.replace("layout(pixel_interlock_ordered) in;\n", "")
+        .replace("    beginInvocationInterlockARB();\n", "")
+        .replace("    endInvocationInterlockARB();\n", "")
+    )
+    lost = decorations.lost(ordered, "glsl", unordered)
+    assert "OpBeginInvocationInterlockEXT" in lost
+    assert "ExecutionMode.PixelInterlockOrderedEXT" in lost

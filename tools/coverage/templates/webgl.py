@@ -35,6 +35,7 @@ from .initializers import FAMILY as _INITIALIZERS
 from .initializers import GLSL as _INITIALIZERS_GLSL
 from .integers import WEBGL as _INTEGERS
 from .interfaces import WEBGL as _INTERFACES
+from .interlocks import WEBGL as _INTERLOCKS
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
@@ -141,6 +142,7 @@ WEBGL = {
     **_TASKS,
     **_RAYS,
     **_BINDINGS,
+    **_INTERLOCKS,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

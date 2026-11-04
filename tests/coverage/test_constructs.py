@@ -20,6 +20,7 @@ from tools.coverage.templates import (
     extensions,
     fragments,
     interfaces,
+    interlocks,
     meshes,
     pipeline,
     primitives,
@@ -533,6 +534,54 @@ def test_binding_probes_push_constants_and_bind_a_block_in_another_set():
         "descriptor-set",
     }
     for language in ("metal", "webgl", "cuda", "hip", "opencl", "mojo"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not listed & names, language
+
+
+def test_rasterizer_ordered_probes_order_the_accesses_of_overlapping_fragments():
+    feature = _feature("glsl", "rasterizer-ordered-image")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    assert feature.group == (
+        "ExecutionMode.PixelInterlockOrderedEXT Capability.FragmentShaderPixelInterlockEXT"
+        " OpBeginInvocationInterlockEXT"
+    )
+    for language, name, line in (
+        ("glsl", "rasterizer-ordered-image", "layout(pixel_interlock_ordered) in;\n"),
+        ("glsl", "rasterizer-ordered-buffer", "    beginInvocationInterlockARB();\n"),
+        ("glsl", "rasterizer-ordered-image", "    endInvocationInterlockARB();\n"),
+        (
+            "hlsl",
+            "rasterizer-ordered-image",
+            "RasterizerOrderedTexture2D<float4> accum : register(u1);\n",
+        ),
+        (
+            "slang",
+            "rasterizer-ordered-buffer",
+            "RasterizerOrderedStructuredBuffer<float4> accum : register(u1);\n",
+        ),
+        ("metal", "rasterizer-ordered-image", "[[texture(0), raster_order_group(0)]]"),
+        ("metal", "rasterizer-ordered-buffer", "[[buffer(0), raster_order_group(0)]]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    for name, line in (
+        (
+            "rasterizer-ordered-image",
+            "    image2D accum @rasterizer_ordered @rgba32f;\n",
+        ),
+        (
+            "rasterizer-ordered-buffer",
+            "    RWStructuredBuffer<vec4> accum @rasterizer_ordered;\n",
+        ),
+    ):
+        assert line in probes.build(_feature("glsl", name), "crossgl").source, name
+    # WGSL and GLSL ES 3.00 have no ordered fragment access, the kernel languages no fragment stage, and rust-gpu
+    # cannot open the interlocked region.
+    names = set(interlocks.NAMES)
+    for language in ("glsl", "hlsl", "slang", "metal"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    for language in ("wgsl", "webgl", "rust", "cuda", "hip", "opencl", "mojo"):
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert not listed & names, language
 
