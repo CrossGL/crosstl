@@ -84,6 +84,7 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import resource_identity_marker
 from ..semantics.constant_buffers import constant_buffer_element
+from ..semantics.hlsl_geometry_streams import EMPTY_STREAM_VERTEX_ATTRIBUTE
 from ..semantics.hlsl_ray_payloads import (
     PAYLOAD_ACCESS_ATTRIBUTES,
     PAYLOAD_STAGES,
@@ -10827,7 +10828,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             for member in getattr(node, "members", [])
             if not self.hlsl_static_struct_member(member)
         ]
-        if not members:
+        if not members and not self.hlsl_union_attribute(
+            node, EMPTY_STREAM_VERTEX_ATTRIBUTE
+        ):
             code += "    int _crossgl_empty;\n"
         default_member_semantics = self.hlsl_default_struct_member_semantics(node)
         for member in members:

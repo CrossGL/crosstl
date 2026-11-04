@@ -287,7 +287,18 @@ def _geometry(
 @pytest.mark.parametrize(
     "source, reason",
     [
-        (_geometry("gl_Position = v[0]; EmitStreamVertex(1);"), "multiple-streams"),
+        (
+            _geometry(
+                "gl_Position = v[0]; EmitStreamVertex(1);",
+                "layout(points) in;\nlayout(triangle_strip, max_vertices = 3) out;",
+            ),
+            "multiple-streams-topology",
+        ),
+        (_geometry("gl_Position = v[0]; EmitStreamVertex(4);"), "stream-index"),
+        (
+            _geometry("int s = 1; gl_Position = v[0]; EmitStreamVertex(s);"),
+            "stream-index",
+        ),
         (_geometry("gl_PointSize = 2.0; EmitVertex();"), "point-size"),
         (
             _geometry("gl_Position = vec4(gl_in[0].gl_ClipDistance[0]); EmitVertex();"),
@@ -314,3 +325,155 @@ def test_constructs_without_an_hlsl_stream_form_are_refused(tmp_path, source, re
         _translate(tmp_path, source, "shader.cgl")
     assert raised.value.reason_code == reason
     assert raised.value.code == f"{CODE_PREFIX}hlsl-geometry-stream-unsupported"
+
+
+# A geometry stage writing two vertex streams, the coverage probe ``geometry-streams``
+# (tools/coverage/templates/primitives.py) written in CrossGL.
+TWO_STREAMS_CGL = """
+shader main {
+    in vec4 position @location(0)[];
+    out vec4 extra @location(0) @stream(1);
+
+    geometry {
+    layout(points) in;
+    layout(points, max_vertices = 2) out;
+
+    void main() {
+        gl_Position = position[0];
+        EmitStreamVertex(0);
+        EndStreamPrimitive(0);
+        extra = (position[0] * 2.0);
+        EmitStreamVertex(1);
+        EndStreamPrimitive(1);
+    }
+    }
+}
+"""
+
+TWO_STREAMS_GLSL = """#version 450
+layout(points) in;
+layout(points, max_vertices = 2) out;
+layout(location = 0) in vec4 position[];
+layout(stream = 1, location = 0) out vec4 extra;
+layout(stream = 1, location = 1) flat out int tag;
+void main() {
+    gl_Position = position[0];
+    EmitVertex();
+    EndPrimitive();
+    extra = position[0] * 2.0;
+    tag = 3;
+    EmitStreamVertex(1);
+    EndStreamPrimitive(1);
+}
+"""
+
+# Stream 2 has no outputs and stream 3 is written by a helper; gl_Layer belongs to stream 0.
+STREAM_GAP_CGL = """
+shader main {
+    in vec4 position @location(0)[];
+    out vec4 far @location(0) @stream(3);
+    out int tag @location(1) @stream(1);
+
+    geometry {
+    layout(points) in;
+    layout(points, max_vertices = 4) out;
+
+    void emitFar(vec4 p) {
+        far = p;
+        EmitStreamVertex(3);
+    }
+
+    void main() {
+        gl_Position = position[0];
+        gl_Layer = gl_PrimitiveIDIn;
+        EmitVertex();
+        EndPrimitive();
+        tag = 7;
+        EmitStreamVertex(1);
+        EmitStreamVertex(2);
+        emitFar(position[0] * 3.0);
+        EndStreamPrimitive(3);
+    }
+    }
+}
+"""
+
+
+def _entry_streams(flat):
+    """The ``(kind, vertex structure, name)`` of each stream parameter of the geometry entry, in order."""
+    signature = re.search(r"void GSMain\((.*?)\)\s*\{", flat).group(1)
+    return re.findall(r"inout (\w+)<(\w+)> (\w+)", signature)
+
+
+def test_each_vertex_stream_gets_its_own_point_stream_in_stream_order(tmp_path):
+    code = _translate(tmp_path, TWO_STREAMS_CGL, "streams.cgl")
+    flat = _flat(code)
+    assert _entry_streams(flat) == [
+        ("PointStream", "GeometryOutput0", "stream0"),
+        ("PointStream", "GeometryOutput1", "stream1"),
+    ]
+    assert _struct_semantics(code, "GeometryOutput0") == {"position": "SV_POSITION"}
+    assert _struct_semantics(code, "GeometryOutput1") == {"extra": "TEXCOORD0"}
+    assert (
+        "output0.position = input[0].position; stream0.Append(output0); "
+        "stream0.RestartStrip();"
+    ) in flat
+    assert (
+        "output1.extra = (input[0].position * 2.0); stream1.Append(output1); "
+        "stream1.RestartStrip();"
+    ) in flat
+    assert not _GLSL_NAMES.search(code) and "EmitStream" not in code
+    _dxc(tmp_path, code)
+
+
+def test_glsl_stream_layouts_choose_the_stream_of_each_output(tmp_path):
+    code = _translate(tmp_path, TWO_STREAMS_GLSL, "streams.geom")
+    flat = _flat(code)
+    assert [kind for kind, _, _ in _entry_streams(flat)] == ["PointStream"] * 2
+    assert _struct_semantics(code, "GeometryOutput0") == {"position": "SV_POSITION"}
+    assert _struct_semantics(code, "GeometryOutput1") == {
+        "extra": "TEXCOORD0",
+        "tag": "TEXCOORD1",
+    }
+    # EmitVertex() and EndPrimitive() write stream 0.
+    assert "stream0.Append(output0); stream0.RestartStrip();" in flat
+    assert "output1.tag = 3; stream1.Append(output1); stream1.RestartStrip();" in flat
+    assert not _GLSL_NAMES.search(code) and "EmitStream" not in code
+    _dxc(tmp_path, code)
+
+
+def test_streams_without_outputs_keep_their_number_and_helpers_take_theirs(tmp_path):
+    code = _translate(tmp_path, STREAM_GAP_CGL, "gap.cgl")
+    flat = _flat(code)
+    assert [name for _, _, name in _entry_streams(flat)] == [
+        "stream0",
+        "stream1",
+        "stream2",
+        "stream3",
+    ]
+    # An empty vertex structure declares no signature element, so it needs no padding member.
+    assert re.search(r"struct GeometryOutput2\s*\{\s*\};", code)
+    assert _struct_semantics(code, "GeometryOutput0") == {
+        "position": "SV_POSITION",
+        "layer": "SV_RenderTargetArrayIndex",
+    }
+    assert _struct_semantics(code, "GeometryOutput3") == {"far": "TEXCOORD0"}
+    assert (
+        "void emitFar(float4 p, inout GeometryOutput3 output3, "
+        "inout PointStream<GeometryOutput3> stream3)"
+    ) in flat
+    assert "output3.far = p; stream3.Append(output3);" in flat
+    assert "stream2.Append(output2);" in flat
+    assert "emitFar((input[0].position * 3.0), output3, stream3);" in flat
+    assert not _GLSL_NAMES.search(code) and "EmitStream" not in code
+    _dxc(tmp_path, code)
+
+
+def test_stream_zero_alone_keeps_the_single_stream_form(tmp_path):
+    source = _geometry(
+        "gl_Position = v[0]; EmitStreamVertex(0); EndStreamPrimitive(0);",
+        "layout(points) in;\nlayout(triangle_strip, max_vertices = 3) out;",
+    )
+    flat = _flat(_translate(tmp_path, source, "zero.cgl"))
+    assert _entry_streams(flat) == [("TriangleStream", "GeometryOutput", "stream")]
+    assert "stream.Append(output); stream.RestartStrip();" in flat
