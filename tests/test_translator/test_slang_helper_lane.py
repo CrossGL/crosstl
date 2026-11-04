@@ -152,3 +152,37 @@ def test_slang_keeps_workgroup_count_entry_parameter():
 
     assert "uint3 groups = WorkgroupCount();" in slang
     assert "gl_NumWorkGroups" not in slang
+
+
+def test_slang_binds_helper_invocation_entry_parameter_from_is_helper_lane():
+    slang = generate("""
+        shader Probe {
+            fragment {
+                vec4 main(vec2 uv @ TEXCOORD0, bool helper @ gl_HelperInvocation)
+                    @ gl_FragColor {
+                    return vec4(uv, helper ? 1.0 : 0.0, 1.0);
+                }
+            }
+        }
+    """)
+
+    assert "float4 main(float2 uv : TEXCOORD0) : SV_Target" in slang
+    assert "bool helper = IsHelperLane();" in slang
+    assert "gl_HelperInvocation" not in slang
+
+
+def test_slang_refuses_helper_invocation_entry_parameter_outside_fragment():
+    with pytest.raises(
+        SlangLoweringRefused,
+        match="gl_HelperInvocation parameter 'helper' of a vertex entry point",
+    ):
+        generate("""
+            shader Probe {
+                vertex {
+                    vec4 main(vec3 position @ POSITION, bool helper @ gl_HelperInvocation)
+                        @ gl_Position {
+                        return vec4(position, helper ? 0.0 : 1.0);
+                    }
+                }
+            }
+        """)

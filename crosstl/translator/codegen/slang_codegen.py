@@ -6147,11 +6147,15 @@ class SlangCodeGen(LoweringRefusalMixin):
                         if shader_type == "compute"
                         else None
                     )
-                    num_workgroups_alias = self.slang_num_workgroups_parameter_alias(
+                    intrinsic_alias = self.slang_num_workgroups_parameter_alias(
                         param, param_type, semantic, shader_type
                     )
-                    if num_workgroups_alias is not None:
-                        local_alias_declarations.append(num_workgroups_alias)
+                    if intrinsic_alias is None:
+                        intrinsic_alias = self.slang_helper_invocation_parameter_alias(
+                            param, param_type, semantic, shader_type
+                        )
+                    if intrinsic_alias is not None:
+                        local_alias_declarations.append(intrinsic_alias)
                         emitted_param_names.add(param.name)
                         continue
                     if dispatch_thread_id_bridge is not None:
@@ -6801,6 +6805,33 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             return None
         return f"uint3 {name} = WorkgroupCount();"
+
+    def slang_helper_invocation_parameter_alias(
+        self, parameter, param_type, semantic, shader_type
+    ):
+        """Bind a ``gl_HelperInvocation`` entry parameter from ``IsHelperLane()``.
+
+        Slang has no system-value semantic for it, so the parameter becomes a local read from the
+        ``IsHelperLane()`` intrinsic in a fragment entry point and is refused in other entry points.
+        """
+        if semantic is None or str(semantic).lower() != "gl_helperinvocation":
+            return None
+        name = getattr(parameter, "name", None)
+        if shader_type is None:
+            return None
+        if self.slang_shader_stage_name(shader_type) != "fragment":
+            self.refuse_lowering(
+                f"Slang has no system value for the gl_HelperInvocation parameter '{name}' "
+                f"of a {shader_type} entry point; IsHelperLane() is read in fragment "
+                "entry points only"
+            )
+            return None
+        if str(param_type) != "bool":
+            self.refuse_lowering(
+                f"Slang gl_HelperInvocation parameter '{name}' must be a bool, not {param_type}"
+            )
+            return None
+        return f"bool {name} = IsHelperLane();"
 
     def slang_unique_local_identifier(self, candidate, used_names):
         while candidate in used_names:
