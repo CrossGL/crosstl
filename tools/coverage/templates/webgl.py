@@ -43,6 +43,7 @@ from .pipeline import WEBGL as _PIPELINE
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
+from .primitives import WEBGL as _PRIMITIVES
 from .qualifiers import WEBGL as _QUALIFIERS
 from .rasterization import WEBGL as _RASTERIZATION
 from .records import WEBGL as _RECORDS
@@ -129,6 +130,7 @@ WEBGL = {
     **_RASTERIZATION,
     **_PIPELINE,
     **_EXTENSIONS,
+    **_PRIMITIVES,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

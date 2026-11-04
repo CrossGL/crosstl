@@ -729,6 +729,31 @@ def _curated() -> list[Construct]:
             "Capability.StencilExportEXT",
             stage="fragment",
         ),
+        *(
+            c("graphics", name, f"ExecutionMode.{mode}", stage="geometry")
+            for name, mode in (
+                ("geometry-input-lines", "InputLines"),
+                ("geometry-input-triangles", "Triangles"),
+                ("geometry-input-lines-adjacency", "InputLinesAdjacency"),
+                ("geometry-input-triangles-adjacency", "InputTrianglesAdjacency"),
+                ("geometry-output-line-strip", "OutputLineStrip"),
+                ("geometry-output-triangle-strip", "OutputTriangleStrip"),
+            )
+        ),
+        c(
+            "graphics",
+            "geometry-invocations",
+            "ExecutionMode.Invocations",
+            "BuiltIn.InvocationId",
+            stage="geometry",
+        ),
+        c(
+            "graphics",
+            "geometry-streams",
+            "Decoration.Stream",
+            "Capability.GeometryStreams",
+            stage="geometry",
+        ),
         c(
             "resource",
             "uniform-struct",
