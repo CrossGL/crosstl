@@ -63,6 +63,7 @@ from .templates.idioms import (
 )
 from .templates.idioms import FAMILY as IDIOMS
 from .templates.idioms import SHADOW_HELPERS
+from .templates.images import CROSSGL as IMAGES
 from .templates.initializers import CROSSGL as INITIALIZERS_CROSSGL
 from .templates.initializers import FAMILY as INITIALIZERS
 from .templates.integers import CROSSGL as INTEGERS_CROSSGL
@@ -659,6 +660,7 @@ CONSTRUCTS: dict[str, Template] = {
     **SPECIALIZATIONS,
     **QUALIFIERS,
     **TEXTURES,
+    **IMAGES,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

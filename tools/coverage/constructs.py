@@ -507,6 +507,17 @@ def _curated() -> list[Construct]:
             "Dim.Buffer",
             "Capability.SampledBuffer",
         ),
+        c("resource", "texture-in-helper", "OpFunctionCall", "OpTypeImage", "Dim.2D"),
+        c(
+            "resource",
+            "texture-argument",
+            "OpFunctionCall",
+            "OpFunctionParameter",
+            "Dim.2D",
+        ),
+        # An array of textures keeps its images as the elements of one array (decorations.ELEMENTS).
+        c("resource", "array-of-textures", "OpTypeArray", "OpTypeImage", "Dim.2D"),
+        c("resource", "read-write-image", "OpImageRead", "OpImageWrite", "Dim.2D"),
         c(
             "resource",
             "buffer-in-helper",

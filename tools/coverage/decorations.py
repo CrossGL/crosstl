@@ -10,7 +10,8 @@ reference compiler and must keep every ``Decoration``, ``BuiltIn``, ``Capability
 feature, the task-payload storage a mesh stage reads, and the storage and calls through which a ray-tracing stage
 hands data to another, as each native probe does, except the anchors in
 :data:`FOLDED`. A resource feature keeps only its image's
-``Dim`` anchor, arrayed when the feature's name ends in ``-array``, the capability that shape needs, its push-constant
+``Dim`` anchor, arrayed when the feature's name ends in ``-array`` and the element of an array of textures when it
+begins with ``array-of-`` (:data:`ELEMENTS`), the capability that shape needs, its push-constant
 storage and a descriptor set other than the first. GLSL ES 3.00
 is lowered as GLSL ES 3.10, the first version glslang compiles for Vulkan. Metal compiles to AIR instead, where a
 translation must keep the attribute of each anchor (:data:`AIR`), the call, metadata or qualifier that stands for it
@@ -150,6 +151,14 @@ AIR_PATTERNS = {
     "ExecutionMode.OutputPoints": r'!"air\.mesh_type_info",[^\n]*!"air\.point"\}',
     "ExecutionMode.OutputLinesEXT": r'!"air\.mesh_type_info",[^\n]*!"air\.line"\}',
 }
+# An array of textures keeps its images as the elements of one array: ``Texture2D tex[2]`` is an ``OpTypeArray`` of
+# images, ``sampler2D tex[2]`` one of sampled images, and Metal's ``array<texture2d<float>, 2>`` an AIR array of
+# texture pointers, ``[2 x %struct._texture_2d_t addrspace(1)*]``.
+ELEMENTS = (
+    r"^\s*(%\w+) = OpTypeImage %\w+ {name} \d+ {arrayed}\b[\s\S]*^\s*(?:%\w+ = OpTypeArray \1\b"
+    r"|(%\w+) = OpTypeSampledImage \1\s*$[\s\S]*^\s*%\w+ = OpTypeArray \2\b)"
+)
+AIR_ELEMENTS = r"\[\d+ x "
 # The AIR type of a texture of each dimension: a ``texturecube`` argument is a ``%struct._texture_cube_t``, and an
 # arrayed one a ``%struct._texture_cube_array_t``.
 AIR_TEXTURES = {
@@ -200,6 +209,7 @@ def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
     # needs. Its other anchors are the layouts and access of buffers, which running the probe compares.
     kinds = _IMAGE_KINDS if feature.category == "resource" else _PATTERNS
     arrayed = int(feature.name.endswith("-array"))
+    elements = feature.name.startswith("array-of-")
     wanted = []
     for anchor in feature.group.split():
         kind, _, name = anchor.partition(".")
@@ -214,14 +224,16 @@ def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
                 wanted.append((anchor, AIR_PATTERNS[anchor]))
             elif anchor in AIR_TEXTURES:
                 texture = AIR_TEXTURES[anchor] + ("_array" if arrayed else "")
-                wanted.append((anchor, rf"%struct\._{texture}_t\b"))
+                prefix = AIR_ELEMENTS if elements else ""
+                wanted.append((anchor, rf"{prefix}%struct\._{texture}_t\b"))
         else:
             spelled = re.escape(name)
             if name in _ALIASES:
                 spelled = f"(?:{spelled}|{_ALIASES[name]})"
-            pattern = _OPERANDS.get(anchor) or _PATTERNS[kind].format(
-                name=spelled, arrayed=arrayed
-            )
+            pattern = _OPERANDS.get(anchor)
+            if not pattern:
+                shape = ELEMENTS if elements and kind == "Dim" else _PATTERNS[kind]
+                pattern = shape.format(name=spelled, arrayed=arrayed)
             if anchor in _INSTRUCTIONS:
                 pattern = f"{pattern}|{_INSTRUCTIONS[anchor]}"
             wanted.append((anchor, pattern))

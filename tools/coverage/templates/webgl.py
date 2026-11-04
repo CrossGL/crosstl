@@ -31,6 +31,7 @@ from .helpers import WEBGL as _HELPERS
 from .identifiers import WEBGL as _IDENTIFIERS
 from .idioms import FAMILY as _IDIOMS
 from .idioms import GLSL as _IDIOMS_GLSL
+from .images import WEBGL as _IMAGES
 from .initializers import FAMILY as _INITIALIZERS
 from .initializers import GLSL as _INITIALIZERS_GLSL
 from .integers import WEBGL as _INTEGERS
@@ -147,6 +148,7 @@ WEBGL = {
     **_SPECIALIZATIONS,
     **_QUALIFIERS,
     **_TEXTURES,
+    **_IMAGES,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

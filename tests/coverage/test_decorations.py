@@ -1173,3 +1173,33 @@ def test_glslang_lowers_a_pixel_interlocked_region():
     lost = decorations.lost(ordered, "glsl", unordered)
     assert "OpBeginInvocationInterlockEXT" in lost
     assert "ExecutionMode.PixelInterlockOrderedEXT" in lost
+
+
+_ARRAY = "OpTypeArray OpTypeImage Dim.2D"
+
+
+def test_an_array_of_textures_keeps_its_images_as_array_elements(monkeypatch):
+    textures = Feature("spirv", "resource", "array-of-textures", None, group=_ARRAY)
+    image = "%img = OpTypeImage %float 2D 2 0 0 1 Unknown\n"
+    # HLSL's Texture2D tex[2] is an array of images, GLSL's sampler2D tex[2] one of sampled images.
+    for elements in (
+        image + "%arr = OpTypeArray %img %uint_2\n",
+        image + "%si = OpTypeSampledImage %img\n%arr = OpTypeArray %si %uint_2\n",
+    ):
+        assert decorations.lost(textures, "spirv", elements) == ""
+    # Two separate textures keep the shape but not the array.
+    separate = (
+        image + "%si = OpTypeSampledImage %img\n%arr = OpTypeArray %float %uint_2\n"
+    )
+    assert (
+        decorations.lost(textures, "spirv", separate) == "the translation loses Dim.2D"
+    )
+    # Metal passes an array of textures as an array of texture pointers.
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    argument = "define void @probe([2 x %struct._texture_2d_t addrspace(1)*]* %3)\n"
+    assert decorations.lost(textures, "metal", argument) == ""
+    single = "define void @probe(%struct._texture_2d_t addrspace(1)* %3)\n"
+    assert decorations.lost(textures, "metal", single) == "the translation loses Dim.2D"
+    # A texture that is not an array keeps the plain shape.
+    helper = dataclasses.replace(textures, name="texture-in-helper")
+    assert decorations.lost(helper, "metal", single) == ""

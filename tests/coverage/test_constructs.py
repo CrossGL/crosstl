@@ -19,6 +19,7 @@ from tools.coverage.templates import (
     draws,
     extensions,
     fragments,
+    images,
     interfaces,
     interlocks,
     meshes,
@@ -536,6 +537,79 @@ def test_binding_probes_push_constants_and_bind_a_block_in_another_set():
     for language in ("metal", "webgl", "cuda", "hip", "opencl", "mojo"):
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert not listed & names, language
+
+
+def test_image_probes_pass_sample_and_index_textures_and_update_an_image_in_place():
+    assert (
+        _feature("glsl", "array-of-textures").group == "OpTypeArray OpTypeImage Dim.2D"
+    )
+    assert _feature("hlsl", "read-write-image").category == "resource"
+    for language, name, line in (
+        ("glsl", "texture-in-helper", "float lookup(float x) {\n"),
+        ("glsl", "texture-argument", "float lookup(sampler2D t, float x) {\n"),
+        (
+            "glsl",
+            "array-of-textures",
+            "layout(binding = 3) uniform sampler2D tex[2];\n",
+        ),
+        (
+            "glsl",
+            "read-write-image",
+            "layout(r32f, binding = 4) uniform image2D img;\n",
+        ),
+        ("webgl", "texture-argument", "float lookup(highp sampler2D t, float x) {\n"),
+        ("webgl", "array-of-textures", "uniform highp sampler2D tex[2];\n"),
+        (
+            "hlsl",
+            "texture-argument",
+            "float lookup(Texture2D<float4> t, SamplerState s, float x) {\n",
+        ),
+        ("hlsl", "array-of-textures", "Texture2D<float4> tex[2] : register(t1);\n"),
+        ("slang", "read-write-image", "RWTexture2D<float> img;\n"),
+        ("metal", "array-of-textures", "array<texture2d<float>, 2> tex [[texture(0)]]"),
+        ("metal", "read-write-image", "texture2d<float, access::read_write> img"),
+        (
+            "wgsl",
+            "texture-argument",
+            "fn lookup(t: texture_2d<f32>, s: sampler, x: f32)",
+        ),
+        ("wgsl", "read-write-image", "texture_storage_2d<r32float, read_write>;\n"),
+        ("cuda", "texture-in-helper", "__device__ float lookup(cudaTextureObject_t t"),
+        ("hip", "read-write-image", "hipSurfaceObject_t img"),
+        ("opencl", "read-write-image", "__read_write image2d_t img"),
+        ("rust", "array-of-textures", "tex: &[Image!(2D, type=f32, sampled); 2]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "array-of-textures"), "crossgl").source
+    assert "        uniform sampler2D tex[2];\n" in crossgl
+    # A helper samples a program-scope texture by name where the language has them, and takes it as a parameter
+    # where textures are entry-point parameters.
+    assert (
+        "lookup(fin[i])" in probes.build(
+            _feature("hlsl", "texture-in-helper"), "hlsl"
+        ).source
+    )
+    assert (
+        "lookup(tex, smp, fin[i])" in probes.build(
+            _feature("metal", "texture-in-helper"), "metal"
+        ).source
+    )
+    names = set(images.NAMES)
+    for language in ("glsl", "hlsl", "slang", "metal"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    absent = {
+        "wgsl": {"array-of-textures"},
+        "webgl": {"read-write-image"},
+        "cuda": {"array-of-textures"},
+        "hip": {"array-of-textures"},
+        "opencl": {"array-of-textures"},
+        "mojo": names,
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names & listed == names - missing, language
 
 
 def test_rasterizer_ordered_probes_order_the_accesses_of_overlapping_fragments():
