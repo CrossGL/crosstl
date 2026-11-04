@@ -57,6 +57,7 @@ from .array_utils import (
     get_array_size_from_node,
 )
 from .comma_expressions import is_comma_expression, refuse_comma_expression
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -1543,6 +1544,7 @@ class MojoCodeGen:
 
     def generate(self, ast):
         """Generate complete Mojo-like shader source for a CrossGL AST."""
+        refuse_cooperative_matrices(ast, label="Mojo", target="mojo")
         # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
         ast = canonicalize_separate_textures(ast)
         self.struct_types = {}

@@ -73,6 +73,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .constant_ordering import partition_constants_by_struct_dependency
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -395,6 +396,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         """
         if self._generating:
             return self.generate_program(ast)
+        refuse_cooperative_matrices(ast, label="Slang", target="slang")
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         try:
