@@ -415,6 +415,12 @@ from .metal_signed_builtins import (
     metal_signed_builtin_parameter_name,
     metal_signed_member_assignment,
 )
+from .metal_specialization_constants import (
+    flattened_stage_io_array_types,
+    metal_function_constant_type_refusal,
+    refuse_specialization_sized_arrays,
+    render_metal_specialization_constant,
+)
 from .metal_stage_input_builtins import split_metal_stage_input_builtins
 from .metal_stage_refusals import refuse_metal_stages
 from .metal_texel_buffers import (
@@ -2323,6 +2329,16 @@ class MetalCodeGen(
             | set(self.metal_fragment_entry_input_struct_names)
             | set(self.metal_fragment_entry_output_struct_names)
         )
+        refuse_specialization_sized_arrays(
+            ast,
+            lambda node: self.metal_specialization_constant_id(node) is not None,
+            self.refuse_lowering,
+            flattened_stage_io_array_types(
+                structs,
+                self.metal_stage_io_struct_names,
+                self.metal_stage_io_member_array_info,
+            ),
+        )
         self.metal_ray_payload_parameter_types = (
             self.collect_metal_ray_payload_parameter_types(getattr(ast, "stages", {}))
         )
@@ -3458,19 +3474,25 @@ class MetalCodeGen(
             )
             mapped_type = self.map_type(const_type)
             specialization_id = self.metal_specialization_constant_id(node)
-            if specialization_id is not None:
-                code += (
-                    "/* CrossGL fallback: Metal source output cannot preserve "
-                    f"GLSL specialization constant id {specialization_id} for "
-                    f"'{name}'; using the default literal. */\n"
-                )
-            if specialization_id is not None and mapped_type == "double":
-                code += (
-                    "/* CrossGL fallback: Metal does not support double "
-                    f"specialization constant '{name}'; lowered to float. */\n"
-                )
-                mapped_type = "float"
             declaration = format_c_style_array_declaration(mapped_type, name)
+            if specialization_id is not None:
+                refusal = metal_function_constant_type_refusal(
+                    name,
+                    self.type_name_string(const_type),
+                    mapped_type,
+                    self.is_metal_function_constant_value_type,
+                )
+                if refusal is None:
+                    code += render_metal_specialization_constant(
+                        self.metal_unused_declaration_qualifier("constant"),
+                        mapped_type,
+                        declaration,
+                        name,
+                        specialization_id,
+                        value_code,
+                    )
+                    continue
+                self.refuse_lowering(refusal)
             if mapped_type == "sampler":
                 # Program-scope fixed sampler state; texture calls take it as
                 # their explicit sampler argument.
