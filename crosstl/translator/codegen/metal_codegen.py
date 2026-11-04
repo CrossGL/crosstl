@@ -411,6 +411,7 @@ from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowering
 from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_refusals import metal_refusals
 from .metal_specialization_constants import (
+    flattened_stage_io_array_types,
     metal_function_constant_type_refusal,
     refuse_specialization_sized_arrays,
     render_metal_specialization_constant,
@@ -2056,11 +2057,6 @@ class MetalCodeGen(
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
-        refuse_specialization_sized_arrays(
-            ast,
-            lambda node: self.metal_specialization_constant_id(node) is not None,
-            self.refuse_lowering,
-        )
         ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
         ast = rename_msl_library_functions(ast)
@@ -2316,6 +2312,16 @@ class MetalCodeGen(
             | set(self.metal_vertex_entry_output_struct_names)
             | set(self.metal_fragment_entry_input_struct_names)
             | set(self.metal_fragment_entry_output_struct_names)
+        )
+        refuse_specialization_sized_arrays(
+            ast,
+            lambda node: self.metal_specialization_constant_id(node) is not None,
+            self.refuse_lowering,
+            flattened_stage_io_array_types(
+                structs,
+                self.metal_stage_io_struct_names,
+                self.metal_stage_io_member_array_info,
+            ),
         )
         self.metal_ray_payload_parameter_types = (
             self.collect_metal_ray_payload_parameter_types(getattr(ast, "stages", {}))

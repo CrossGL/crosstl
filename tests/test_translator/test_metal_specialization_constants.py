@@ -259,3 +259,57 @@ def test_array_sized_by_a_plain_constant_still_compiles(tmp_path):
             tmp_path / "sized.air",
         ]
     )
+
+
+STAGE_INPUT_ARRAY = """
+shader SpecializedStageInputArray {
+    const int count @constant_id(3) = 3;
+    struct VertexInput {
+        vec4 weights[count] @location(0);
+        vec2 uv @location(3);
+    }
+    struct VertexOutput {
+        vec4 position @gl_Position;
+    }
+    vertex {
+        VertexOutput main(VertexInput input) {
+            VertexOutput output;
+            vec4 total = vec4(input.uv, 0.0, 0.0);
+            for (int i = 0; i < count; i++) {
+                total += input.weights[i];
+            }
+            output.position = total;
+            return output;
+        }
+    }
+}
+"""
+
+
+def test_stage_input_array_sized_by_a_specialization_constant_is_flattened(tmp_path):
+    # Interface locations follow the default size, and Metal declares one attribute per element instead of an
+    # array, so the array never needs a constant-expression size; the loop bound still follows the host value.
+    metal = translate(tmp_path, STAGE_INPUT_ARRAY)
+    assert "[[function_constant(3)]];" in metal, metal
+    for index in range(3):
+        assert f"float4 weights_{index} [[attribute({index})]];" in metal, metal
+    assert "float2 uv [[attribute(3)]];" in metal, metal
+    assert "weights[count]" not in metal, metal
+    xcrun = metal_compiler()
+    if xcrun is None:
+        return
+    shader = tmp_path / "stage_input.metal"
+    shader.write_text(metal, encoding="utf-8")
+    run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-Werror",
+            "-c",
+            shader,
+            "-o",
+            tmp_path / "stage_input.air",
+        ]
+    )

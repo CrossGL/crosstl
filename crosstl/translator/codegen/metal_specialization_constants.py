@@ -22,6 +22,11 @@ the default. A type that MSL cannot use for a function constant is refused rathe
 A function constant is not a constant expression to the Metal front end, so it cannot size an array ("array size
 is not a constant expression"). Freezing such an array at the default would disagree with every specialized value,
 so a specialization constant that sizes an array, directly or through a constant expression, is refused too.
+
+A stage-interface array is the exception. Its interface locations are assigned from the default size (a larger
+specialized size would overlap the next interface variable), and Metal never declares it as an array: each element
+becomes its own ``[[attribute(N)]]`` or ``[[user(...)]]`` member, read through constant indices or a switch helper.
+The caller passes those member types as ``flattened_array_types`` and they are not refused.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from .ast_walk import walk_ast_values
 
 __all__ = [
     "METAL_FUNCTION_CONSTANT_PREFIX",
+    "flattened_stage_io_array_types",
     "metal_function_constant_type_refusal",
     "refuse_specialization_sized_arrays",
     "render_metal_specialization_constant",
@@ -96,16 +102,25 @@ def specialization_dependent_constants(constants, is_specialization_constant):
     return dependent
 
 
-def refuse_specialization_sized_arrays(ast, is_specialization_constant, refuse):
-    """Call ``refuse(reason)`` once per specialization-dependent constant that sizes an array in ``ast``."""
+def refuse_specialization_sized_arrays(
+    ast, is_specialization_constant, refuse, flattened_array_types=()
+):
+    """Call ``refuse(reason)`` once per specialization-dependent constant that sizes an array in ``ast``.
+
+    ``flattened_array_types`` holds the ``ArrayType`` nodes of stage-interface members that Metal emits one
+    element per member; they never reach a Metal array declarator, so they are not refused.
+    """
     dependent = specialization_dependent_constants(
         getattr(ast, "constants", None), is_specialization_constant
     )
     if not dependent:
         return
+    flattened = {id(node) for node in flattened_array_types}
     reported = set()
     for node in walk_ast_values(ast):
         if not isinstance(node, ArrayType) or node.size is None:
+            continue
+        if id(node) in flattened:
             continue
         if isinstance(node.size, (int, str)):
             names = {node.size} if isinstance(node.size, str) else set()
@@ -118,3 +133,20 @@ def refuse_specialization_sized_arrays(ast, is_specialization_constant, refuse):
                 "expression, and a function constant is not one (Metal Shading Language Specification, "
                 "section 5.8.1)"
             )
+
+
+def flattened_stage_io_array_types(structs, stage_io_struct_names, array_info):
+    """Return the ``ArrayType`` member types of stage-interface structs that Metal flattens per element.
+
+    ``array_info(member)`` is the code generator's flattening test; it returns ``None`` for a member it keeps as
+    a Metal array.
+    """
+    flattened = []
+    for struct in structs or []:
+        if getattr(struct, "name", None) not in stage_io_struct_names:
+            continue
+        for member in getattr(struct, "members", None) or []:
+            raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if isinstance(raw_type, ArrayType) and array_info(member) is not None:
+                flattened.append(raw_type)
+    return flattened

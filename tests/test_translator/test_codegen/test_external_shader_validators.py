@@ -2024,15 +2024,13 @@ def _glsl_metal_expressible_specialization_constant_ast():
     """The specialization fixture without what Metal cannot specialize.
 
     Metal has no double type, and a function constant cannot size an array, so the double constants become
-    floats and the two array sizes become plain constants; every other specialization constant keeps its id.
+    floats and ``arraySize``, which also sizes ``foo``'s parameter, becomes a plain constant. ``dupArraySize``
+    sizes only a stage input, which Metal flattens into one attribute per element, so it keeps its id like every
+    other specialization constant.
     """
     source = GLSL_SPECIALIZATION_CONSTANT_VERTEX_SHADER.replace(
         "const double", "const float"
-    )
-    for constant_id in (16, 116):
-        source = source.replace(
-            f"layout(constant_id = {constant_id}) const int", "const int"
-        )
+    ).replace("layout(constant_id = 16) const int", "const int")
     return _mixed_glsl_ast(source, "vertex")
 
 
@@ -2141,8 +2139,9 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
 
     with pytest.raises(MetalLoweringRefused) as refusal:
         MetalCodeGen().generate(shader_ast)
-    for name in ("arraySize", "dupArraySize"):
-        assert f"array sized by specialization constant '{name}'" in str(refusal.value)
+    assert "array sized by specialization constant 'arraySize'" in str(refusal.value)
+    # ``dupUcol[dupArraySize]`` is a stage input that Metal declares one attribute per element.
+    assert "'dupArraySize'" not in str(refusal.value)
     for name in ("spDouble", "spDupDouble"):
         assert f"specialization constant '{name}'" in str(refusal.value)
 
@@ -2161,11 +2160,12 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
         ("spDupFloat", 118),
         ("spDupDouble", 119),
         ("dupScale", 122),
+        ("dupArraySize", 116),
     ):
         raw = f"__crossgl_function_constant_{name}"
         assert f" {raw} [[function_constant({constant_id})]];" in metal
         assert f" {name} = is_function_constant_defined({raw}) ? {raw} : " in metal
-    assert metal.count("[[function_constant(") == 9
+    assert metal.count("[[function_constant(") == 10
     assert "constant int arraySize = 5;" in metal
     assert "thread VertexOutput& output" in metal
     assert (
