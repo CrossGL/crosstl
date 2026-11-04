@@ -239,7 +239,11 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
-from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .glsl_buffer_layout import (
+    glsl_buffer_block_node_type,
+    std430_array_stride,
+    std430_value_type_info,
+)
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
@@ -40800,6 +40804,12 @@ complex64_t crossgl_complex64_mod_assign(
                 ):
                     return self.structured_buffer_length_expression(func_expr.object)
 
+            get_dimensions = self.glsl_structured_buffer_get_dimensions(
+                func_expr, expr.args
+            )
+            if get_dimensions is not None:
+                return get_dimensions
+
             synchronization_call = self.synchronization_function_call(
                 original_func_name,
                 expr.args,
@@ -44734,6 +44744,54 @@ complex64_t crossgl_complex64_mod_assign(
         if instance_member:
             return f"{buffer}.{instance_member}[{element_index}]"
         return f"{buffer}[{element_index}]"
+
+    def glsl_structured_buffer_get_dimensions(self, func_expr, args):
+        """``b.GetDimensions(count, stride)`` on a structured buffer: its element count and std430 stride."""
+        if not (
+            isinstance(func_expr, MemberAccessNode)
+            and func_expr.member == "GetDimensions"
+            and len(args or ()) == 2
+        ):
+            return None
+        buffer_expr = func_expr.object
+        if not isinstance(buffer_expr, (IdentifierNode, VariableNode)):
+            return None
+        structured = {"StructuredBuffer", "RWStructuredBuffer"}
+        buffer_type = self.expression_result_type(buffer_expr)
+        if buffer_type is None or (
+            self.structured_buffer_type_name(buffer_type) not in structured
+        ):
+            # A helper's buffer parameter is an offset into the buffer the
+            # specialized helper reads, whose type its binding carries.
+            storage_binding = self.glsl_storage_pointer_binding(
+                buffer_expr, self.glsl_storage_pointer_aliases()
+            )
+            if (
+                storage_binding is None
+                or "pointer_reinterpretation" in storage_binding
+                or "byte_offset" in storage_binding
+            ):
+                return None
+            buffer_type = storage_binding.get("type")
+        if buffer_type is None or self.structured_buffer_type_name(buffer_type) not in (
+            structured
+        ):
+            return None
+        element = self.structured_buffer_element_type(buffer_type)
+        info = std430_value_type_info(element)
+        element_stride = None if info is None else std430_array_stride(info)
+        if element_stride is None:
+            return self.refuse_lowering(
+                "StructuredBuffer.GetDimensions: the std430 stride of element type "
+                f"'{element}' of '{self.expression_name(buffer_expr)}' is not known here",
+                "0",
+            )
+        count = self.generate_expression(args[0])
+        stride = self.generate_expression(args[1])
+        length = self.structured_buffer_length_expression(buffer_expr)
+        # A comma keeps the two writes one expression, so the call stays whole as the
+        # body of an unbraced if or for.
+        return f"{count} = uint({length}), {stride} = {element_stride}u"
 
     def structured_buffer_length_expression(self, buffer_arg):
         array_access = self.structured_buffer_array_parameter_access(buffer_arg)
