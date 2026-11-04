@@ -15,6 +15,7 @@ import crosstl
 from crosstl.translator import parse
 from crosstl.translator.codegen.buffer_length import BufferLengthUnsupportedError
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 
@@ -264,6 +265,73 @@ def test_metal_refuses_append_consume_and_array_element_lengths(
     ).replace("float(values.length()) + float(outp.length())", expression)
     with pytest.raises(BufferLengthUnsupportedError, match="'values'"):
         MetalCodeGen().generate(parse(source))
+
+
+def test_structured_buffer_array_element_lengths(tmp_path):
+    """An element of a structured buffer array is one block of a block array
+    on GLSL, so length() reads its member, and one resource on HLSL, so it
+    counts through GetDimensions. Both used to copy the call unchanged.
+    """
+    source = STRUCTURED_VIEWS.replace(
+        "StructuredBuffer<float> values;", "StructuredBuffer<float> values[2];"
+    ).replace(
+        "float(values.length()) + float(outp.length())", "float(values[1].length())"
+    )
+    glsl = GLSLCodeGen().generate(parse(source))
+    hlsl = HLSLCodeGen().generate(parse(source))
+
+    assert "float(values[1].data.length())" in glsl
+    assert "float(int(cgl_buffer_count(values[1])))" in hlsl
+    if shutil.which("glslangValidator"):
+        (tmp_path / "probe.comp").write_text(glsl, encoding="utf-8")
+        _check(["glslangValidator", "-S", "comp", "probe.comp"], tmp_path)
+    if shutil.which("dxc"):
+        (tmp_path / "probe.hlsl").write_text(hlsl, encoding="utf-8")
+        _check(
+            ["dxc", "-T", "cs_6_0", "-E", "CSMain", "probe.hlsl", "-Fo", "probe.o"],
+            tmp_path,
+        )
+
+
+ARRAY_ELEMENT_LENGTHS = """shader ArrayElementLengths {
+    BUFFER<float> values[2];
+    RWStructuredBuffer<float> outp;
+    int count() { return values[1].length(); }
+    compute {
+        layout(local_size_x = 2, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x % 2u;
+            for (int k = 0; k < values[i].length(); k++) {
+                outp[i] += float(count());
+            }
+        }
+    }
+}"""
+
+
+@pytest.mark.parametrize("buffer_type", ["StructuredBuffer", "RWStructuredBuffer"])
+def test_structured_buffer_array_element_lengths_in_helpers_and_loops(
+    buffer_type, tmp_path
+):
+    """An element selected at run time, and one read in a helper, are counted
+    like a constant element, for read-only and writable buffer arrays."""
+    source = ARRAY_ELEMENT_LENGTHS.replace("BUFFER", buffer_type)
+    glsl = GLSLCodeGen().generate(parse(source))
+    hlsl = HLSLCodeGen().generate(parse(source))
+
+    assert "return values[1].data.length();" in glsl
+    assert "(k < values[i].data.length())" in glsl
+    assert "return int(cgl_buffer_count(values[1]));" in hlsl
+    assert "(k < int(cgl_buffer_count(values[i])))" in hlsl
+    if shutil.which("glslangValidator"):
+        (tmp_path / "probe.comp").write_text(glsl, encoding="utf-8")
+        _check(["glslangValidator", "-S", "comp", "probe.comp"], tmp_path)
+    if shutil.which("dxc"):
+        (tmp_path / "probe.hlsl").write_text(hlsl, encoding="utf-8")
+        _check(
+            ["dxc", "-T", "cs_6_0", "-E", "CSMain", "probe.hlsl", "-Fo", "probe.o"],
+            tmp_path,
+        )
 
 
 def test_glsl_import_binds_anonymous_member_lengths(tmp_path):

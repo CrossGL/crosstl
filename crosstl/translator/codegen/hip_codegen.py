@@ -108,6 +108,7 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -4311,7 +4312,7 @@ class HipCodeGen(
             func_name = specialized_func_name
             callee = specialized_func_name
         else:
-            raise_unresolved_generic_function_call(self, func_name, "HIP")
+            reject_unresolved_generic_function_call(self, func_name, "HIP")
 
         enum_constructor = generate_enum_constructor_call(self, func_name, raw_args)
         if enum_constructor is not None:
