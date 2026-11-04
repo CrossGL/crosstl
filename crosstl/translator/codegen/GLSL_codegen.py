@@ -40992,8 +40992,9 @@ complex64_t crossgl_complex64_mod_assign(
                 and original_func_name in getattr(
                     self, "generic_function_definitions", {}
                 )
-                and original_func_name
-                not in (getattr(self, "concrete_function_names", None) or ())
+                and original_func_name not in (
+                    getattr(self, "concrete_function_names", None) or ()
+                )
                 and getattr(self, "enforce_concrete_glsl_types", False)
             ):
                 raise OpenGLTemplateTypeError(

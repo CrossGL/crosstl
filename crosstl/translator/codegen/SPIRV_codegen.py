@@ -32306,9 +32306,7 @@ class VulkanSPIRVCodeGen(
                     continue
                 if id(node) in resolved_call_ids:
                     continue
-                args = list(
-                    getattr(node, "arguments", getattr(node, "args", [])) or []
-                )
+                args = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
                 if generic_function_call_name(self, call_name, args) is not None:
                     continue
                 if not any(
@@ -32320,9 +32318,7 @@ class VulkanSPIRVCodeGen(
 
     def _storage_buffer_candidate_matches(self, candidate, args):
         try:
-            match, _reason = self.storage_buffer_candidate_call_match(
-                candidate, args
-            )
+            match, _reason = self.storage_buffer_candidate_call_match(candidate, args)
         except Exception:
             return False
         return match is not None
