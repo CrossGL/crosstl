@@ -144,6 +144,7 @@ from .slang_projected_compare import (
     is_slang_projected_compare,
 )
 from .slang_refusals import SlangLoweringRefused
+from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
@@ -6349,8 +6350,21 @@ class SlangCodeGen(LoweringRefusalMixin):
         return result
 
     def generate_compute_numthreads(self, execution_config=None):
-        x, y, z = compute_local_size(execution_config)
-        return f"[numthreads({x}, {y}, {z})]\n"
+        sizes = list(compute_local_size(execution_config))
+        ids = workgroup_size_specialization_ids(execution_config, "Slang")
+        declarations = ""
+        for index, (axis, spec_id) in enumerate(zip("xyz", ids)):
+            if spec_id is None:
+                continue
+            # A specialized dimension is a vk::constant_id constant named in numthreads; Slang sizes SPIR-V
+            # with LocalSizeId and refuses it for targets without specialization constants. It is an int:
+            # WorkgroupSize() is an int3, and a uint constant makes slangc build an invalid composite.
+            name = f"crossgl_workgroup_size_{axis}"
+            declarations += (
+                f"[vk::constant_id({spec_id})] const int {name} = {sizes[index]};\n"
+            )
+            sizes[index] = name
+        return f"{declarations}[numthreads({', '.join(map(str, sizes))})]\n"
 
     def validate_slang_return_semantic(
         self, shader_type, semantic, stage_role, ret_type_name
@@ -6832,16 +6846,21 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return_type, intrinsic = candidates[node.name]
                 aliases[node.name] = intrinsic
                 self.register_variable_type(node.name, return_type)
-            elif node.name == "gl_NumWorkGroups":
-                # Slang declares no gl_NumWorkGroups, and the WorkgroupCount()
-                # alias above is only made for a compute entry point.
+            elif node.name in ("gl_NumWorkGroups", "gl_WorkGroupSize"):
+                # Slang declares neither, and the WorkgroupCount() and WorkgroupSize()
+                # aliases above are only made for a compute entry point.
                 where = (
                     f"a {shader_type} entry point"
                     if shader_type
                     else "a helper function"
                 )
+                intrinsic = (
+                    "WorkgroupCount()"
+                    if node.name == "gl_NumWorkGroups"
+                    else "WorkgroupSize()"
+                )
                 self.refuse_lowering(
-                    "Slang gl_NumWorkGroups: lowered to WorkgroupCount() only "
+                    f"Slang {node.name}: lowered to {intrinsic} only "
                     f"in a compute entry point, not in {where}"
                 )
         return aliases
@@ -7956,7 +7975,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         if shader_stage == "compute":
             # Slang has no SV_ system value for the dispatch size; it exposes
             # the number of workgroups through the WorkgroupCount() intrinsic.
-            return {"gl_NumWorkGroups": ("uvec3", "WorkgroupCount()")}
+            return {
+                "gl_NumWorkGroups": ("uvec3", "WorkgroupCount()"),
+                # Slang declares no gl_WorkGroupSize; WorkgroupSize() is the entry's numthreads as an int3.
+                "gl_WorkGroupSize": ("uvec3", "uint3(WorkgroupSize())"),
+            }
         if shader_stage not in self.slang_ray_stage_types():
             return {}
 

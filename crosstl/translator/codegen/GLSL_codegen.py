@@ -563,6 +563,7 @@ from .scalar_return_bounds import (
 )
 from .sizeof_calls import sizeof_call_bytes
 from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS, glsl_quad_sum_helper
+from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -19360,8 +19361,20 @@ class GLSLCodeGen(
         x, y, z = self.validate_glsl_compute_workgroup_size(
             compute_local_size(execution_config)
         )
+        fixed = f"local_size_x = {x}, local_size_y = {y}, local_size_z = {z}"
+        ids = workgroup_size_specialization_ids(execution_config, "OpenGL")
+        specialized = "".join(
+            f", local_size_{axis}_id = {spec_id}"
+            for axis, spec_id in zip("xyz", ids)
+            if spec_id is not None
+        )
+        if not specialized:
+            return f"layout({fixed}) in;\n"
+        # local_size_*_id exists only when the shader is compiled to SPIR-V (GLSL 4.60 section 4.4.1.4,
+        # GL_KHR_vulkan_glsl); a driver compiling the source keeps the defaults, as for layout(constant_id).
         return (
-            f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
+            f"{GLSL_SPIRV_GUARD}layout({fixed}{specialized}) in;\n"
+            f"#else\nlayout({fixed}) in;\n#endif\n"
         )
 
     def validate_glsl_compute_workgroup_size(self, values):
