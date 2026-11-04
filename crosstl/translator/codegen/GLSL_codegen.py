@@ -247,7 +247,11 @@ from .glsl_buffer_layout import (
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
-from .glsl_draw_parameters import DRAW_PARAMETERS, vertex_builtin_spelling
+from .glsl_draw_parameters import (
+    DRAW_PARAMETERS,
+    draw_parameter_spelling,
+    vertex_builtin_spelling,
+)
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
@@ -40160,7 +40164,7 @@ complex64_t crossgl_complex64_mod_assign(
             return "gl_VertexID"
         if stage_name == "vertex":
             return vertex_builtin_spelling(self, name)
-        return name
+        return draw_parameter_spelling(self, name)
 
     def glsl_identifier_is_resolved(self, name):
         symbol_tables = (
@@ -58921,6 +58925,8 @@ complex64_t crossgl_complex64_mod_assign(
         mapped = self.map_stage_input_semantic(semantic, stage_name)
         if normalize_stage_name(stage_name) == "vertex":
             mapped = vertex_builtin_spelling(self, mapped)
+        else:
+            mapped = draw_parameter_spelling(self, mapped)
         if normalize_stage_name(stage_name) == "compute":
             quadgroup_alias = {
                 "gl_QuadGroupID": "(gl_LocalInvocationIndex / 4u)",
