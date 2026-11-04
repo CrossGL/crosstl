@@ -72,6 +72,7 @@ from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
+from .opaque_matrix_contracts import complete_opaque_matrix_contracts
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
     MetalPreprocessor,
@@ -19301,6 +19302,12 @@ float {scalar}(float value) {{
 
     def propagate_cooperative_matrix_fragment_type_contracts(self, code):
         replacements = self.cooperative_matrix_fragment_type_replacements
+        complete_opaque_matrix_contracts(
+            code,
+            replacements,
+            self.cooperative_matrix_fragment_mapping,
+            self.cooperative_matrix_fragment_mapping_provenance,
+        )
         if not replacements:
             return code
         legacy_types = sorted(replacements, key=lambda value: (-len(value), value))
