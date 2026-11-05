@@ -7109,24 +7109,24 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
 
     assert "device uchar* aliasBlock" in generated_code
     assert (
-        "uint word = uint(ushort((*reinterpret_cast<const device uint*>(aliasBlock + 4))));"
+        "uint word = uint(ushort((*reinterpret_cast<const device ushort*>(aliasBlock + 2))));"
         in generated_code
     )
     assert (
-        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (8 + index * 4))))"
+        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (4 + index * 4))))"
         in generated_code
     )
     assert "void writeAlias(uint index, uint word, uint64_t offset" in generated_code
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(uint(ushort(word)));"
+        "(*reinterpret_cast<device ushort*>(aliasBlock + 2)) = uint(ushort(word));"
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + (8 + index * 4))) = uint(offset);"
+        "(*reinterpret_cast<device uint*>(aliasBlock + (4 + index * 4))) = uint(offset);"
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(1u)))));"
+        "(*reinterpret_cast<device ushort*>(aliasBlock + 0)) = ((*reinterpret_cast<const device ushort*>(aliasBlock + 0)) + uint(ushort(uint(1u))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code

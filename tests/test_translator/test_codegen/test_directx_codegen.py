@@ -14492,15 +14492,15 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "RWByteAddressBuffer aliasBlock : register(u7);" in generated_code
-    assert "uint16_t word = aliasBlock.Load(4);" in generated_code
-    assert "uint64_t(aliasBlock.Load((8 + index * 4)))" in generated_code
+    assert "uint16_t word = aliasBlock.Load<uint16_t>(2);" in generated_code
+    assert "uint64_t(aliasBlock.Load((4 + index * 4)))" in generated_code
     assert (
         "void writeAlias(uint index, uint16_t word, uint64_t offset)" in generated_code
     )
-    assert "aliasBlock.Store(4, uint(word));" in generated_code
-    assert "aliasBlock.Store((8 + index * 4), uint(offset));" in generated_code
+    assert "aliasBlock.Store<uint16_t>(2, uint16_t(word));" in generated_code
+    assert "aliasBlock.Store((4 + index * 4), uint(offset));" in generated_code
     assert (
-        "aliasBlock.Store(0, uint((aliasBlock.Load(0) + uint16_t(1u))));"
+        "aliasBlock.Store<uint16_t>(0, uint16_t((aliasBlock.Load<uint16_t>(0) + uint16_t(1u))));"
         in generated_code
     )
     assert "unsupported HLSL GLSL buffer block" not in generated_code

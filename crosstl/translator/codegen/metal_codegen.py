@@ -381,7 +381,11 @@ from .metal_array_copies import (
 from .metal_atomic_addresses import metal_vector_component_address
 from .metal_bit_scans import emit_metal_bit_scan_helpers, metal_bit_scan_call
 from .metal_buffer_arrays import expand_entry_buffer_array
-from .metal_buffer_component_stores import metal_buffer_component_store
+from .metal_buffer_component_stores import (
+    metal_buffer_component_store,
+    metal_buffer_component_type,
+    metal_glsl_buffer_component_refusal,
+)
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
@@ -2504,6 +2508,7 @@ class MetalCodeGen(
             unsupported_type_message=(
                 "type is not supported by Metal pointer/offset lowering"
             ),
+            component_refusal=metal_glsl_buffer_component_refusal,
         )
         self.record_metal_glsl_buffer_block_layout_failures(
             global_vars,
@@ -12932,6 +12937,7 @@ class MetalCodeGen(
                     "float",
                     "half",
                     "float16",
+                    "float16_t",
                     "min16float",
                     "min10float",
                     "double",
@@ -23318,6 +23324,7 @@ class MetalCodeGen(
             unsupported_type_message=(
                 "type is not supported by Metal pointer/offset lowering"
             ),
+            component_refusal=metal_glsl_buffer_component_refusal,
         )
         self.record_metal_glsl_buffer_block_layout_failures(
             parameters, blocks, var_failures, struct_failures
@@ -23529,6 +23536,7 @@ class MetalCodeGen(
                 f"((*reinterpret_cast<const device uint*>"
                 f"({buffer_name} + {offset})) != 0u)"
             )
+        component_type = metal_buffer_component_type(component_type)
         return (
             f"(*reinterpret_cast<const device {component_type}*>"
             f"({buffer_name} + {offset}))"
@@ -23540,6 +23548,7 @@ class MetalCodeGen(
                 f"(*reinterpret_cast<device uint*>"
                 f"({buffer_name} + {offset})) = (({value}) ? 1u : 0u)"
             )
+        component_type = metal_buffer_component_type(component_type)
         return (
             f"(*reinterpret_cast<device {component_type}*>"
             f"({buffer_name} + {offset})) = {value}"
@@ -23566,7 +23575,7 @@ class MetalCodeGen(
 
         values = []
         for _, component_offset in vector_component_offsets(
-            offset, access["components"]
+            offset, access["components"], access.get("component_size", 4)
         ):
             values.append(
                 self.metal_scalar_load(
@@ -23586,7 +23595,9 @@ class MetalCodeGen(
 
         if access["components"] == 1:
             if access.get("layout_type") != access.get("type"):
-                value = f"{access['component_type']}({value})"
+                value = (
+                    f"{metal_buffer_component_type(access['component_type'])}({value})"
+                )
             return self.metal_scalar_store(
                 access["component_type"], buffer_name, offset, value
             )
@@ -23594,7 +23605,7 @@ class MetalCodeGen(
         temp_name = self.next_metal_temp_variable("buffer_store")
         lines = [f"{access['metal_type']} {temp_name} = {value}"]
         for component, component_offset in vector_component_offsets(
-            offset, access["components"]
+            offset, access["components"], access.get("component_size", 4)
         ):
             field = "xyzw"[component]
             lines.append(
