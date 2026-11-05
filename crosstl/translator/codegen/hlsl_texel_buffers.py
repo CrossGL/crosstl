@@ -150,6 +150,11 @@ class HLSLTexelBuffers:
                 )
             count = image_format_channel_count(image_format)
             return f"RWBuffer<{family}{'' if count == 1 else count}>"
+        declared_texel = self.codegen.declared_storage_texel_type(
+            node, crossgl_type, None
+        )
+        if declared_texel:
+            return f"RWBuffer<{declared_texel}>"
         if self.codegen.hlsl_atomic_resources.is_atomic_declaration(node):
             return f"RWBuffer<{family}>"
         return HLSL_TEXEL_BUFFER_TYPES[crossgl_type]

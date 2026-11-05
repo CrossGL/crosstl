@@ -29,6 +29,7 @@ from typing import (
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .concrete_free_operators import materialize_concrete_free_operators
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
 from .deduction_arguments import deduction_argument_type
@@ -45,6 +46,10 @@ from .identifier_rewrites import (
     unqualified_identifiers,
 )
 from .instantiation_memo import memoized_instantiations
+from .integral_binding_visibility import (
+    IntegralBindingTable,
+    indexed_visible_bindings,
+)
 from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
@@ -57,6 +62,7 @@ from .member_address_types import (
 from .member_lowering_layers import lower_members_with_late_specializations
 from .pattern_cache import pattern as _cached_pattern
 from .qualified_member_types import resolve_qualified_struct_member_types
+from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
     discarded_instantiated_branch_spans,
@@ -66,6 +72,7 @@ from .static_member_constants import (
     static_member_constant_substituter,
     substitute_parameter_extent_static_members,
 )
+from .template_argument_text import normalize_template_argument_text
 from .template_constants import unresolved_constant_references
 from .template_overloads import declared_type_names, select_instantiated_overload
 from .text_scanners import (
@@ -77,6 +84,7 @@ from .text_scanners import (
     strip_top_level_default_value,
 )
 from .type_layout import metal_type_layout, metal_type_size
+from .unused_specialization_members import prune_unreferenced_specialization_members
 from .value_traits import (
     complete_template_arguments,
     enable_if_parts,
@@ -590,6 +598,8 @@ class _MetalSourceAnalysis:
     static_constexpr_functions: Optional[Dict[str, List["_MetalConstexprFunction"]]] = (
         None
     )
+    # Whole-source query results memoized by name; see source_analysis_cache.memoized.
+    values: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -1123,7 +1133,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self._fail_closed_static_assertions = False
         self._static_constexpr_helper_values = {}
         self._static_constexpr_helper_resolution_stack = []
-        self._source_analysis_cache: Dict[str, _MetalSourceAnalysis] = {}
+        self._source_analysis_cache: SourceAnalysisCache[_MetalSourceAnalysis] = (
+            SourceAnalysisCache(SOURCE_ANALYSIS_CACHE_LIMIT)
+        )
         self._local_data_member_memo: Dict[
             str, Optional[Tuple[str, _MetalDataMember]]
         ] = {}
@@ -1214,6 +1226,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             processed
         )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
+        processed = prune_unreferenced_specialization_members(self, processed)
         processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
         # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
@@ -1236,14 +1249,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             self._discovering_entry_points = False
 
     def _source_analysis(self, code: str) -> _MetalSourceAnalysis:
-        cache = self._source_analysis_cache
-        analysis = cache.pop(code, None)
-        if analysis is None:
-            analysis = _MetalSourceAnalysis()
-        cache[code] = analysis
-        if len(cache) > SOURCE_ANALYSIS_CACHE_LIMIT:
-            del cache[next(iter(cache))]
-        return analysis
+        return self._source_analysis_cache.get(code, _MetalSourceAnalysis)
 
     def _strip_leading_compiler_diagnostics(self, code: str) -> str:
         lines = code.splitlines(keepends=True)
@@ -5397,7 +5403,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
 
         if not raw_declarations and not parameter_bindings:
             return {}
-        bindings: Dict[str, List[_MetalIntegralConstantBinding]] = {}
+        bindings = IntegralBindingTable()
         ordered_parameters = iter(sorted(parameter_bindings))
         pending_parameter = next(ordered_parameters, None)
 
@@ -5405,13 +5411,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             nonlocal pending_parameter
             while pending_parameter is not None and pending_parameter[0] <= position:
                 declaration_position, name, scope_start, scope_end = pending_parameter
-                bindings.setdefault(name, []).append(
+                bindings.add(
+                    name,
                     _MetalIntegralConstantBinding(
                         declaration_position=declaration_position,
                         scope_start=scope_start,
                         scope_end=scope_end,
                         value=None,
-                    )
+                    ),
                 )
                 pending_parameter = next(ordered_parameters, None)
 
@@ -5496,7 +5503,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 value = self._proven_integral_constant_value(
                     value_type_tokens[0], initializer
                 )
-            bindings.setdefault(name, []).append(
+            bindings.add(
+                name,
                 _MetalIntegralConstantBinding(
                     declaration_position=declaration_position,
                     scope_start=scope_start,
@@ -5511,7 +5519,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     ),
                     type_alias=bool(type_tokens)
                     and type_tokens[0] in {"using", "typedef"},
-                )
+                ),
             )
         record_parameters_through(len(code))
         return bindings
@@ -5676,6 +5684,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         *,
         names: Optional[Set[str]] = None,
     ) -> Dict[str, _MetalIntegralConstantBinding]:
+        indexed = indexed_visible_bindings(bindings, position, names)
+        if indexed is not None:
+            return indexed
         visible: Dict[str, _MetalIntegralConstantBinding] = {}
         binding_items = (
             bindings.items()
@@ -10377,6 +10388,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return self._apply_text_replacements(body, replacements)
 
     def _materialize_free_operator_overloads(self, code: str) -> str:
+        code = materialize_concrete_free_operators(self, code)
         if not self._materialized_struct_specializations or "operator" not in code:
             return code
         operators = self._find_free_operator_definitions(code)
@@ -25816,19 +25828,34 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         arguments = self._split_template_parameter_list(pattern[start + 1 : end])
         if not 1 <= len(arguments) <= 2:
             raise self._UnrecognizedConstraint(pattern)
-        aliases = self._collect_local_type_alias_bindings(
-            code,
-            [(0, len(code))],
-            skip_spans=self._find_template_declaration_spans(code),
+        # Every query below depends on the source text only, and a module with many
+        # partial specializations evaluates one constraint per candidate.
+        values = self._source_analysis(code).values
+        aliases = memoized(
+            values,
+            "global_type_alias_bindings",
+            lambda: self._collect_local_type_alias_bindings(
+                code,
+                [(0, len(code))],
+                skip_spans=self._find_template_declaration_spans(code),
+            ),
         )
-        structs = self._find_concrete_struct_definitions(code)
+        structs = memoized(
+            values,
+            "concrete_struct_definitions",
+            lambda: self._find_concrete_struct_definitions(code),
+        )
         if not self._evaluate_boolean_constraint(
             arguments[0],
             bindings,
             structs=structs,
             type_aliases=aliases,
             position=position,
-            boolean_templates=self._find_boolean_variable_templates(code),
+            boolean_templates=memoized(
+                values,
+                "boolean_variable_templates",
+                lambda: self._find_boolean_variable_templates(code),
+            ),
             namespace_visibility=self._metal_namespace_visibility(code),
             lookup_position=template.span[0],
         ):
@@ -25846,7 +25873,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if not self._type_trait_operand_is_concrete(
             result,
-            self._concrete_type_trait_names(code, structs),
+            memoized(
+                values,
+                "concrete_type_trait_names",
+                lambda: self._concrete_type_trait_names(code, structs),
+            ),
             allow_unknown_named_types=False,
         ):
             raise self._UnrecognizedConstraint(pattern)
@@ -27798,32 +27829,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
 
     def _normalize_template_argument_text(self, value: str) -> str:
-        value = self._strip_template_argument_comments(value).strip()
-        if not value:
-            return ""
-        collapsed = re.sub(r"\s+", " ", value)
-        normalized = re.sub(r"\s*([<>,:*&\[\](){}])\s*", r"\1", collapsed).strip()
-        # Redundant parentheses around a literal non-type template argument do
-        # not change its value.  Strip them only after proving that the complete
-        # nested spelling reduces to an integral or Boolean literal.  Grouping
-        # remains semantic for expressions such as `(2 > 2)`: removing that pair
-        # would turn a recursive `Struct<..., (2 > 2)>` substitution into the
-        # ambiguous token sequence `Struct<..., 2 > 2>`.
-        candidate = normalized
-        while candidate.startswith("(") and candidate.endswith(")"):
-            closing = self._find_matching_delimiter(candidate, 0, "(", ")")
-            if closing != len(candidate) - 1:
-                break
-            inner = candidate[1:-1].strip()
-            if not inner:
-                break
-            candidate = inner
-        if re.fullmatch(
-            r"(?:true|false|[-+]?(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|\d+)[uUlL]*)",
-            candidate,
-        ):
-            normalized = candidate
-        return normalized
+        return normalize_template_argument_text(
+            value,
+            self._strip_template_argument_comments,
+            self._find_matching_delimiter,
+        )
 
     def _metal_unqualified_remove_cv_t_available(self, code: str) -> bool:
         """Whether unqualified ``remove_cv_t`` can denote Metal's stdlib alias.
@@ -27833,7 +27843,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         the whole materialization snapshot: resolving through a possibly
         possibly shadowed declaration would be a silent specialization guess.
         """
+        return memoized(
+            self._source_analysis(code).values,
+            "unqualified_remove_cv_t_available",
+            lambda: self._scan_unqualified_remove_cv_t_available(code),
+        )
 
+    def _scan_unqualified_remove_cv_t_available(self, code: str) -> bool:
         ignored_spans = self._find_comment_and_literal_spans(code)
         masked = self._mask_comments_and_literals(code)
         if re.search(

@@ -186,7 +186,7 @@ def test_hlsl_storage_texel_buffers_take_the_format_of_the_bound_view(tmp_path):
     crossgl = _crossgl(tmp_path, HLSL_TEXEL_BUFFERS, ".hlsl")
     for name in ("counters", "ipairs", "colors"):
         assert re.search(
-            rf"@ format\(unknown\)\n\s*\w+ {name};", crossgl
+            rf"@ format\(unknown\)\n(?:\s*@ texel\(\w+\)\n)?\s*\w+ {name};", crossgl
         ), f"{name} lacks @ format(unknown)"
 
 
@@ -282,7 +282,7 @@ def test_hlsl_declares_storage_texel_buffers_by_format_and_atomic_use(tmp_path):
 def test_hlsl_unformatted_atomic_texel_buffer_is_single_channel(tmp_path):
     hlsl = _translate(tmp_path, HLSL_TEXEL_BUFFERS, ".hlsl", "directx")
     assert "RWBuffer<uint> counters : register(u0);" in hlsl
-    assert "RWBuffer<int4> ipairs : register(u1);" in hlsl
+    assert "RWBuffer<int2> ipairs : register(u1);" in hlsl
     assert (
         "InterlockedCompareExchange(buffer[coord], value0, value1, original);" in hlsl
     )

@@ -277,6 +277,12 @@ from .hlsl_bfloat16_vectors import (
 )
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
+from .hlsl_byteaddress_typed_access import (
+    hlsl_byteaddress_component_refusal,
+    hlsl_byteaddress_is_typed_access,
+    hlsl_byteaddress_typed_load,
+    hlsl_byteaddress_typed_store,
+)
 from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
 from .hlsl_extension_builtins import (
     HLSL_GLSL_SYSTEM_VALUES,
@@ -286,7 +292,15 @@ from .hlsl_extension_builtins import (
     refuse_unmapped_hlsl_builtin,
 )
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
+from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
+from .hlsl_image_formats import (
+    declared_texel_type,
+    dxc_vulkan_image_format_prefix,
+    normalized_texel_type,
+    strip_texel_modifier,
+    texel_attribute,
+)
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_mesh_semantics import collect_hlsl_mesh_output_struct_offsets
@@ -295,6 +309,7 @@ from .hlsl_narrow_system_values import (
     HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
     hlsl_narrow_compute_system_value_bridge,
 )
+from .hlsl_push_constants import hlsl_push_constant_block, is_push_constant
 from .hlsl_ray_queries import (
     hlsl_ray_query_expression,
     hlsl_ray_query_helpers,
@@ -580,6 +595,7 @@ from .storage_image_texels import (
     store_value_allowed,
     texel_vector_type,
 )
+from .storage_parameter_texels import StorageParameterTexels
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
@@ -2526,6 +2542,7 @@ class HLSLCodeGen(
         self.hlsl_buffer_length = HlslBufferLength()
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
+        self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
         self.hlsl_image_load_swizzle_extent = None
         self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
@@ -3887,6 +3904,8 @@ class HLSLCodeGen(
             if getattr(node, "is_type_alias", False)
             and node.name not in self.METAL_TYPE_ALIAS_GLOBALS
         }
+        # Typed binary16 loads, stores and selections may change NaN payloads.
+        ast = lower_half_private_storage(ast, self.map_type)
         target_stage = normalize_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False
@@ -3944,6 +3963,7 @@ class HLSLCodeGen(
         self.hlsl_buffer_length = HlslBufferLength()
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
+        self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
         self.hlsl_image_load_swizzle_extent = None
         self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
@@ -4365,6 +4385,9 @@ class HLSLCodeGen(
             unsupported_type_message=(
                 "type is not supported by ByteAddressBuffer lowering"
             ),
+            component_refusal=lambda info: hlsl_byteaddress_component_refusal(
+                self, info
+            ),
         )
         self.record_unsupported_glsl_buffer_block_layout_failures(
             global_vars,
@@ -4580,6 +4603,7 @@ class HLSLCodeGen(
         )
 
         self.hlsl_atomic_resources.prepare(ast)
+        self.storage_parameter_texels.prepare(ast)
         comparison_texture_names, comparison_sampler_names = (
             self.collect_comparison_resources(ast)
         )
@@ -4781,6 +4805,9 @@ class HLSLCodeGen(
                     f"{mapped_type}{array_suffix}", var_name
                 )
                 qualifier = self.resource_memory_qualifier(mapped_type, node)
+                qualifier = (
+                    self.storage_image_format_prefix(mapped_type, node) + qualifier
+                )
                 code += f"{qualifier}{declaration}{register};\n"
                 continue
 
@@ -5090,7 +5117,8 @@ class HLSLCodeGen(
                     node.initial_value, node.var_type
                 )
                 declaration += f" = {initializer}"
-            code += f"{qualifier}{declaration}{register};\n"
+            image_format_prefix = self.storage_image_format_prefix(mapped_type, node)
+            code += f"{image_format_prefix}{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
                 and var_name in self.global_mixed_sampler_aliases
@@ -5492,6 +5520,7 @@ class HLSLCodeGen(
                 getattr(function, "parameters", None) or [],
                 getattr(prototype, "parameters", None) or [],
             ):
+                self.storage_parameter_texels.copy_parameter(original, copied)
                 view = self.hlsl_view_storage_array_parameters.get(id(original))
                 if view is not None and view[0] is original:
                     self.hlsl_view_storage_array_parameters[id(copied)] = (
@@ -13298,7 +13327,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 packoffsets = self.hlsl_block_packoffsets(ast, node)
                 if isinstance(packoffsets, HlslRegisterBlockPlan):
-                    code += self.hlsl_glsl_block_register_buffer(
+                    block = self.hlsl_glsl_block_register_buffer(
                         ast,
                         node,
                         packoffsets.layout,
@@ -13306,14 +13335,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         buffer_keyword,
                         register,
                     )
-                    continue
-                code += f"{buffer_keyword} {node.name}{register} {{\n"
-                for member in getattr(node, "members", []) or []:
-                    declaration = self.generate_hlsl_cbuffer_member_declaration(
-                        member, packoffsets.get(getattr(member, "name", None))
-                    )
-                    code += f"    {declaration};\n"
-                code += "};\n"
+                else:
+                    block = f"{buffer_keyword} {node.name}{register} {{\n"
+                    for member in getattr(node, "members", []) or []:
+                        declaration = self.generate_hlsl_cbuffer_member_declaration(
+                            member, packoffsets.get(getattr(member, "name", None))
+                        )
+                        block += f"    {declaration};\n"
+                    block += "};\n"
+                if is_push_constant(node):
+                    block = hlsl_push_constant_block(self, ast, node, block)
+                code += block
         return code
 
     def hlsl_block_packoffsets(self, ast, node):
@@ -47951,7 +47983,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         image_type = self.resource_base_type(image_type)
         if "<" not in image_type or ">" not in image_type:
             return None
-        return image_type.split("<", 1)[1].split(">", 1)[0].strip()
+        # A unorm or snorm element has the shape of its float type.
+        return strip_texel_modifier(image_type.split("<", 1)[1].split(">", 1)[0])
 
     def hlsl_storage_image_component_kind(self, image_type):
         component_type = self.hlsl_storage_image_component_type(image_type)
@@ -53690,6 +53723,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.explicit_resource_register_space(node),
         )
 
+    def storage_image_format_prefix(self, mapped_type, node):
+        if not self.is_hlsl_rw_texture_type(mapped_type):
+            return ""
+        image_format = explicit_image_format(node, self.attribute_value_to_string)
+        return dxc_vulkan_image_format_prefix(image_format)
+
     def resource_memory_qualifier(self, mapped_type, node):
         unrepresentable = hlsl_unrepresentable_memory_qualifier(node)
         if unrepresentable is not None:
@@ -54180,6 +54219,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         return self.map_image_base_type_with_format(vtype_str, node)
 
+    def storage_parameter_type(self, node):
+        """The HLSL type of the storage images a parameter receives, or ``None``."""
+        if node is None or texel_attribute(node) is not None:
+            return None
+        try:
+            return self.storage_parameter_texels.parameter_type(
+                node,
+                lambda declaration: self.map_image_base_type_with_format(
+                    declaration.vtype, declaration
+                ),
+            )
+        except ValueError as error:
+            return self.refuse_lowering(f"DirectX {error}", None)
+
+    def declared_storage_texel_type(self, node, image_type, explicit_format):
+        """The HLSL texel type a storage image's ``@texel`` declares, or ``None``."""
+        if node is None:
+            return None
+        try:
+            return declared_texel_type(
+                node, image_type, explicit_format, self.attribute_value_to_string
+            )
+        except ValueError as error:
+            return self.refuse_lowering(f"DirectX {error}", None)
+
     def map_image_base_type_with_format(self, vtype, node=None):
         base_type = self.resource_base_type(vtype)
         explicit_format = (
@@ -54187,6 +54251,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if node is not None
             else None
         )
+        if explicit_format is None:
+            parameter_type = self.storage_parameter_type(node)
+            if parameter_type is not None:
+                return parameter_type
         component_type = self.scalar_image_format_components().get(
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
@@ -54220,8 +54288,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "RWTexture3D": "RWTexture3D",
         }
         texture_type = texture_types.get(base_type)
+        declared_texel = (
+            self.declared_storage_texel_type(node, base_type, explicit_format)
+            if texture_type
+            else None
+        )
         if component_type and texture_type:
-            mapped_type = f"{texture_type}<{component_type}>"
+            texel_type = normalized_texel_type(explicit_format, component_type)
+            mapped_type = f"{texture_type}<{texel_type}>"
+        elif declared_texel:
+            mapped_type = f"{texture_type}<{declared_texel}>"
         elif texture_type and base_type.startswith(("iimage", "uimage")):
             # An integer storage image without a format is as wide as its texels,
             # except as an image atomic's target, which needs a scalar element.
@@ -54361,6 +54437,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             target_type_key="hlsl_type",
             unsupported_type_message=(
                 "type is not supported by ByteAddressBuffer lowering"
+            ),
+            component_refusal=lambda info: hlsl_byteaddress_component_refusal(
+                self, info
             ),
         )
         self.record_unsupported_glsl_buffer_block_layout_failures(
@@ -54557,6 +54636,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"x{access['matrix_rows']}"
             )
             return f"transpose({transposed_type}({', '.join(columns)}))"
+
+        if hlsl_byteaddress_is_typed_access(access):
+            return hlsl_byteaddress_typed_load(self, buffer_name, offset, access)
 
         if access["component_type"] == "bool" and access["components"] > 1:
             values = []
@@ -54773,6 +54855,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if access.get("matrix_columns"):
             return self.hlsl_byteaddress_matrix_store(
                 buffer_name, offset, value, access
+            )
+        if hlsl_byteaddress_is_typed_access(access):
+            return hlsl_byteaddress_typed_store(
+                self, buffer_name, offset, value, access
             )
         if access["component_type"] == "bool" and access["components"] > 1:
             return self.hlsl_byteaddress_bool_vector_store(

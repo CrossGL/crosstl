@@ -36,6 +36,7 @@ from .ast_walk import walk_ast_values
 
 __all__ = [
     "METAL_FUNCTION_CONSTANT_PREFIX",
+    "block_member_array_types",
     "flattened_stage_io_array_types",
     "metal_function_constant_type_refusal",
     "refuse_specialization_sized_arrays",
@@ -133,6 +134,33 @@ def refuse_specialization_sized_arrays(
                 "expression, and a function constant is not one (Metal Shading Language Specification, "
                 "section 5.8.1)"
             )
+
+
+def block_member_array_types(cbuffers, structs, lowered_block_struct_names):
+    """Return the ``ArrayType`` types of uniform and storage block members, whose layout ignores specialization.
+
+    GL_KHR_vulkan_glsl, "Specialization Constants": an array inside a block may be sized with a specialization
+    constant, "but the block will have a static layout. Changing the specialized size will not re-layout the block.
+    In the absence of explicit offsets, the layout will be based on the default size of the array." Metal lays the
+    block out from that default (a ``constant`` struct for a uniform block, byte offsets into the bound buffer for a
+    lowered storage block), while ``length()``, loop bounds and every other value use keep reading the function
+    constant. Only direct block members qualify; a structure nested inside a block may also be declared as a value
+    of its own, where its array would need a constant size.
+    """
+    found = []
+    for cbuffer in cbuffers or []:
+        for member in getattr(cbuffer, "members", None) or []:
+            raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if isinstance(raw_type, ArrayType):
+                found.append(raw_type)
+    for struct in structs or []:
+        if getattr(struct, "name", None) not in lowered_block_struct_names:
+            continue
+        for member in getattr(struct, "members", None) or []:
+            raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if isinstance(raw_type, ArrayType):
+                found.append(raw_type)
+    return found
 
 
 def flattened_stage_io_array_types(structs, stage_io_struct_names, array_info):

@@ -66,6 +66,7 @@ _UINT_OPS = {
     "^": lambda a, b: a ^ b,
     "<<": lambda a, b: a << b,
     ">>": lambda a, b: a >> b,
+    "%": lambda a, b: a % b,
 }
 
 
@@ -195,6 +196,8 @@ class HelperInterpreter:
             assert right < 32, (op, right)
         if op == "-":
             assert left >= right, "uint underflow in a helper"
+        if op == "%":
+            assert right != 0, "uint remainder by zero in a helper"
         return _UINT_OPS[op](left, right) & MASK
 
     def function_call(self, node, frame):
@@ -427,6 +430,56 @@ def test_fma_helper_is_correctly_rounded():
         )
 
 
+def _remainder_pairs(rng, count):
+    """Random binary16 pairs, and every sign of pairs of extreme significands and exponents (29 binades apart)."""
+    halves = finite_halves()
+    pairs = list(zip(rng.choice(halves, count), rng.choice(halves, count)))
+    small = halves[np.abs(halves) < 2.0**-8]
+    pairs += list(zip(rng.choice(halves, count), rng.choice(small, count)))
+    edges = [
+        65504.0,
+        2.0**-24,
+        2.0**-14,
+        2.0**-14 - 2.0**-24,
+        1.0,
+        1.0 + 2.0**-10,
+        3.0,
+        2047.0,
+        0.099975586,
+    ]
+    pairs += [
+        (a * s, b * t) for a in edges for b in edges for s in (1, -1) for t in (1, -1)
+    ]
+    return [(np.float32(a), np.float32(b)) for a, b in pairs]
+
+
+def test_remainder_helper_is_exact():
+    """``fmod`` of binary16 values is exact (IEEE 754-2019 section 5.3.1); binary64 ``math.fmod`` is the reference."""
+    interpreter = HelperInterpreter()
+    rng = np.random.default_rng(29)
+    for a, b in _remainder_pairs(rng, 3000):
+        if b == 0:
+            assert np.isnan(interpreter.call("cgl_half_fmod", a, b)), (a, b)
+            continue
+        expected = math.fmod(float(a), float(b))
+        assert_same(
+            interpreter.call("cgl_half_fmod", a, b), expected, f"fmod({a!r}, {b!r})"
+        )
+    inf, nan = np.float32(np.inf), np.float32(np.nan)
+    for a, b in [
+        (inf, 2.0),
+        (-inf, -2.0),
+        (nan, 2.0),
+        (2.0, nan),
+        (1.0, 0.0),
+        (-0.0, -0.0),
+    ]:
+        assert np.isnan(interpreter.call("cgl_half_fmod", np.float32(a), np.float32(b)))
+    for a in (np.float32(-0.0), np.float32(1.5), np.float32(-65504.0)):
+        assert_same(interpreter.call("cgl_half_fmod", a, inf), a, f"fmod({a!r}, inf)")
+        assert_same(interpreter.call("cgl_half_fmod", a, -inf), a, f"fmod({a!r}, -inf)")
+
+
 @pytest.mark.parametrize(
     "helper, inputs, reference, arity",
     [
@@ -617,8 +670,55 @@ def test_metal_half_and_float_operands_make_a_binary32_operation(tmp_path):
     assert "d: vec3<f32> = vec3<f32>((1.0 + (c * y)));" in wgsl
 
 
+def test_half_remainders_use_the_exact_helper(tmp_path):
+    # MSL converts ``a[i + 2u]`` to half, so ``v * a[i + 2u]`` and ``fmod`` of it with a half are half operations.
+    body = (
+        "    half h = half(a[i]);\n"
+        "    half3 v = half3(a[i + 1u]);\n"
+        "    half3 w = fmod(v * a[i + 2u], half(1.0h));\n"
+        "    o[i] = float(fmod(h, half(0.75h))) + float(metal::fmod(v, h).y) + float(w.z);"
+    )
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert names == [
+        "cgl_half_round",
+        "cgl_half_index",
+        "cgl_half_fmod",
+        "cgl_half_round3",
+        "cgl_half_fmod3",
+    ]
+    assert "cgl_half_fmod(h, 0.75)" in wgsl
+    assert "cgl_half_fmod3(v, vec3<f32>(h))" in wgsl
+    assert "fmod(" not in wgsl.replace("cgl_half_fmod", "")
+
+
+def test_half_and_float_remainders_stay_binary32_operations(tmp_path):
+    # A half and a float scalar make a float remainder; the half operand converts exactly.
+    body = "    half h = half(a[i]);\n    float f = a[i + 1u];\n    o[i] = fmod(h, f);"
+    wgsl, names = helpers_in(tmp_path, metal, body)
+    assert "cgl_half_fmod" not in names
+
+
+def test_hlsl_half_remainder_operator_uses_the_exact_helper(tmp_path):
+    source = """RWStructuredBuffer<float> o : register(u0);
+StructuredBuffer<float> a : register(t0);
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint i = id.x;
+    float16_t h = float16_t(a[i]);
+    float16_t2 v = float16_t2(a[i + 1u], a[i + 2u]);
+    o[i] = float(h % float16_t(0.75)) + float((v % h).y);
+}
+"""
+    for backend in ("wgsl", "vulkan"):
+        output = translate(tmp_path, source, backend, ".hlsl")
+        if backend == "wgsl":
+            assert "cgl_half_fmod(h, 0.75)" in output
+            assert "cgl_half_fmod2(v, vec2<f32>(h))" in output
+
+
 def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_path):
-    # ``(l + s)`` becomes a rounding call; its product with a float is a float4 the compound assignment rounds.
+    # ``(l + s)`` becomes a rounding call. MSL converts the float scalar ``w`` to the vector's ``half`` (MSL section
+    # 2.12), so the product is a rounded half4 too, and so is the compound assignment's sum.
     body = (
         "    half4 l = half4(a[i]);\n"
         "    half4 s = half4(a[i + 1]);\n"
@@ -629,7 +729,8 @@ def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_
     wgsl, names = helpers_in(tmp_path, metal, body)
     assert "cgl_half_round4" in names
     assert (
-        "l = cgl_half_round4(vec4<f32>((l + (cgl_half_round4((l + s)) * w))));" in wgsl
+        "l = cgl_half_round4((l + cgl_half_round4((cgl_half_round4((l + s)) "
+        "* cgl_half_round(f32(w))))));" in wgsl
     )
     assert "max(cgl_half_round4((l + s)), vec4<f32>(0.0))" in wgsl
 
@@ -643,7 +744,8 @@ def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_
         ),
         ("    half h = half(a[i]);\n    o[i] = float(h++);", "step-value"),
         (
-            "    half h = half(a[i]);\n    o[i] = float(fmod(h, half(2.0h)));",
+            "    half h = half(a[i]);\n    half whole;\n"
+            "    o[i] = float(modf(h, whole)) + float(whole);",
             "remainder",
         ),
         ("    half2 h = half2(a[i]);\n    o[i] = float(as_type<uint>(h));", "bitcast"),
