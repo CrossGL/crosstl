@@ -56,8 +56,8 @@ from .member_address_types import (
 )
 from .member_lowering_layers import lower_members_with_late_specializations
 from .pattern_cache import pattern as _cached_pattern
-from .source_analysis_cache import SourceAnalysisCache, memoized
 from .qualified_member_types import resolve_qualified_struct_member_types
+from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
     discarded_instantiated_branch_spans,
