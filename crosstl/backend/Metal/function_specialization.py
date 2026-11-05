@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any, Container, Iterable, Mapping, Sequence
 
 
 def _strip_metal_attribute_blocks(text: str) -> str:
@@ -589,3 +589,21 @@ def deducible_template_parameters(preprocessor: Any, template: Any) -> set[str]:
             if not qualified:
                 deducible.add(token)
     return deducible
+
+
+def unique_specialization_identifier(
+    preferred: str, source_identifiers: Container[str], generated: Iterable[str]
+) -> str:
+    """Name a new concrete specialization without reusing an identifier already taken.
+
+    The readable name drops punctuation from the template arguments, so ``f<(N > 2)>`` and
+    ``f<(N < 2)>`` both read ``f_N_2``, and ``f<int>`` reads like an ordinary function
+    ``f_int``. ``source_identifiers`` holds the names in the translation unit and ``generated``
+    the names earlier specializations own; a taken name gets the first free numbered suffix.
+    """
+    generated = set(generated)
+    candidate, suffix = preferred, 2
+    while candidate in source_identifiers or candidate in generated:
+        candidate = f"{preferred}_{suffix}"
+        suffix += 1
+    return candidate

@@ -40,6 +40,7 @@ from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
     deducible_template_parameters,
+    unique_specialization_identifier,
 )
 from .identifier_rewrites import (
     qualified_identifiers,
@@ -1496,6 +1497,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
             replacements: List[Tuple[int, int, str]] = []
             new_materializations: List[str] = []
+            source_identifiers = None
             for (
                 function_name,
                 template_arguments,
@@ -1567,8 +1569,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                             length=max(spans[0][1] - spans[0][0], 0),
                             context=context,
                         )
-                specialized_name = self._template_specialization_identifier(
-                    function_name, list(key[1])
+                if source_identifiers is None:
+                    source_identifiers = set(
+                        IDENTIFIER_RE.findall(self._mask_comments_and_literals(working))
+                    )
+                specialized_name = unique_specialization_identifier(
+                    self._template_specialization_identifier(
+                        function_name, list(key[1])
+                    ),
+                    source_identifiers,
+                    materialized_names.values(),
                 )
                 materialized = self._materialize_template_function_with_name(
                     template,
