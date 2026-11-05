@@ -35,6 +35,7 @@ from .translator.source_registry import (
     SOURCE_REGISTRY,
     register_default_sources,
 )
+from .translator.stage_feasibility import refuse_infeasible_entry_stages
 
 try:
     from .formatter import format_shader_code
@@ -282,6 +283,17 @@ def _translate_with_codegen(
             "intermediate target",
             entry_point=selected_entry_point,
         )
+
+    refuse_infeasible_entry_stages(
+        source_spec,
+        shader_code,
+        normalized_backend,
+        file_path=file_path,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=entry_point,
+    )
 
     if source_spec.name == "metal" and normalized_backend not in {
         "cgl",
