@@ -1588,6 +1588,7 @@ jobs:
           CROSTL_REQUIRE_WORKGROUP_VIEW_IDENTITY_BRANCHES: "1"
           CROSTL_REQUIRE_SUBGROUP_BRANCH_REASSIGNMENTS: "1"
           CROSTL_REQUIRE_IMMUTABLE_STORAGE: "1"
+          CROSTL_REQUIRE_ORDERED_WAVE_IDS: "1"
           CROSTL_REQUIRE_WORKGROUP_IDENTITY_REINTERPRET: "1"
           CROSTL_REQUIRE_RESOURCE_STORAGE_VIEWS: "1"
           CROSTL_REQUIRE_BINARY16_ALIAS_AGGREGATES: "1"
@@ -1643,6 +1644,7 @@ jobs:
               tests/test_translator/test_directx_narrow_buffer_extents.py::test_narrow_buffer_extent_execute \
               tests/test_translator/test_subgroup_uniform_arguments.py \
               tests/test_translator/test_subgroup_uniform_returns.py \
+              tests/test_translator/test_directx_ordered_wave_ids.py \
               tests/test_translator/test_collective_loop_strides.py \
               tests/test_translator/test_subgroup_strided_trips.py \
               tests/test_translator/test_matrix_transfers.py \

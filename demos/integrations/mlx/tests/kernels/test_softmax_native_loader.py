@@ -342,11 +342,11 @@ def test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(target):
                     assert "__crossgl_physical_subgroup" not in generated
                 else:
                     assert (
-                        "groupshared uint __crossgl_physical_subgroup_counter;"
+                        "groupshared uint __crossgl_physical_subgroup_leaders[32];"
                         in generated
                     )
                     assert (
-                        "InterlockedAdd(__crossgl_physical_subgroup_counter"
+                        "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]"
                         in generated
                     )
                     assert "uint crossglPhysicalSubgroupID = " in generated
