@@ -67,6 +67,10 @@ from .dependent_builtins import (
 )
 from .external_functions import refuse_external_function_calls
 from .library_structs import declare_referenced_library_structs
+from .local_aggregate_declarators import (
+    union_layout,
+    unnamed_aggregate_display_name,
+)
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
 from .mesh_import import MetalMeshImport
@@ -10936,7 +10940,12 @@ class MetalToCrossGLConverter(
             self.current_function_specialization
             or self.current_function_name
             or "<unknown>",
-            getattr(struct_node, "name", None)
+            (
+                f"<unnamed {struct_node.unnamed_aggregate_kind}>"
+                if getattr(struct_node, "unnamed_aggregate_kind", None)
+                else None
+            )
+            or getattr(struct_node, "name", None)
             or getattr(struct_node, "typedef_tag", None)
             or "<anonymous>",
             reason,
@@ -10950,7 +10959,7 @@ class MetalToCrossGLConverter(
 
     def validate_local_aggregate_shape(self, struct_node):
         aggregate_kind = getattr(struct_node, "aggregate_kind", None) or "struct"
-        if aggregate_kind != "struct":
+        if aggregate_kind not in {"struct", "union"}:
             raise self.local_aggregate_error(
                 struct_node,
                 f"{aggregate_kind} storage semantics cannot be represented by "
@@ -11161,10 +11170,16 @@ class MetalToCrossGLConverter(
             str(qualifier).lower()
             for qualifier in getattr(declaration, "qualifiers", None) or []
         }
+        declared_type = getattr(declaration, "vtype", None)
+        # ``constexpr auto`` deduces an integral type exactly when the folded
+        # initializer is an integer; floating initializers do not fold below.
         if (
             not name
             or "constexpr" not in qualifiers
-            or not self.is_integral_constexpr_type(getattr(declaration, "vtype", None))
+            or not (
+                str(declared_type or "").strip() == "auto"
+                or self.is_integral_constexpr_type(declared_type)
+            )
         ):
             return
         rendered_value = self.substitute_local_integral_constant_text(rendered_value)
@@ -11187,8 +11202,11 @@ class MetalToCrossGLConverter(
             return canonical_name
 
         self.validate_local_aggregate_shape(struct_node)
+        unnamed_kind = getattr(struct_node, "unnamed_aggregate_kind", None)
         canonical_name = self.reserve_local_aggregate_name(
-            getattr(struct_node, "name", None)
+            unnamed_aggregate_display_name(unnamed_kind)
+            if unnamed_kind
+            else getattr(struct_node, "name", None)
             or getattr(struct_node, "typedef_tag", None)
         )
         self.bind_local_aggregate_aliases(struct_node, canonical_name)
@@ -11278,6 +11296,12 @@ class MetalToCrossGLConverter(
                 layout[1] for _member, _source_type, layout in member_layouts
             )
 
+        layout_contract = None
+        if getattr(struct_node, "aggregate_kind", None) == "union":
+            rendered_members, layout_contract = self.local_union_layout_contract(
+                struct_node, rendered_members, member_layouts
+            )
+
         self.local_aggregate_declaration_keys[key] = canonical_name
         self.local_aggregate_declarations.append(
             {
@@ -11287,11 +11311,38 @@ class MetalToCrossGLConverter(
                     struct_node, "declaration_source_location", None
                 ),
                 "native_storage_alignment": native_storage_alignment,
+                "union_layout": layout_contract,
             }
         )
         self.struct_member_types[canonical_name] = member_types
         self.struct_member_name_maps[canonical_name] = member_names
         return canonical_name
+
+    def local_union_layout_contract(
+        self, struct_node, rendered_members, member_layouts
+    ):
+        """Members annotated with their overlapping storage, and the union's size and alignment.
+
+        Hoisting keeps a block-scope union's storage semantics through the same layout metadata that a
+        program-scope union carries, so every member layout must be known.
+        """
+        unresolved = sorted(
+            source_type
+            for _member, source_type, layout in member_layouts
+            if layout is None
+        )
+        if unresolved:
+            raise self.local_aggregate_error(
+                struct_node,
+                "union storage layout cannot be proven for " + ", ".join(unresolved),
+                unresolved_dependencies=tuple(unresolved),
+            )
+        layouts = [layout for _member, _source_type, layout in member_layouts]
+        annotated = tuple(
+            f"@union_member_layout(0, {size}, {alignment}) {member}"
+            for member, (size, alignment) in zip(rendered_members, layouts)
+        )
+        return annotated, union_layout(layouts)
 
     def render_struct_member_identifier(self, object_expression, member):
         try:
@@ -11314,6 +11365,13 @@ class MetalToCrossGLConverter(
             native_storage_alignment = declaration.get("native_storage_alignment")
             if native_storage_alignment is not None:
                 code += f"{pad}@metal_alignas({native_storage_alignment})\n"
+            if declaration.get("union_layout") is not None:
+                size, alignment = declaration["union_layout"]
+                code += (
+                    f"{pad}// Metal union {declaration['name']} retains overlapping "
+                    "storage through layout metadata\n"
+                    f"{pad}@union_layout({size}, {alignment}, little_endian, metal)\n"
+                )
             code += f"{pad}struct {declaration['name']} {{\n"
             for member in declaration["members"]:
                 code += f"{member_pad}{member}\n"
@@ -13414,7 +13472,7 @@ class MetalToCrossGLConverter(
             if (
                 target_type is None
                 or expected_type is None
-                or self.map_type(target_type) not in {"int", "uint", "float"}
+                or not self.is_portable_atomic_scalar_type(self.map_type(target_type))
                 or self.map_type(expected_type) != self.map_type(target_type)
             ):
                 raise error(
@@ -13458,11 +13516,9 @@ class MetalToCrossGLConverter(
             pointee = self.metal_pointer_pointee_type_once(
                 self.expression_metal_type(args[0])
             )
-            if pointee is None or self.map_type(pointee) not in {
-                "int",
-                "uint",
-                "float",
-            }:
+            if pointee is None or not self.is_portable_atomic_scalar_type(
+                self.map_type(pointee)
+            ):
                 raise MetalAtomicLoadLoweringError(
                     "requires a scalar int, uint or float atomic target",
                     source_location,
@@ -21215,6 +21271,28 @@ float {scalar}(float value) {{
         return self.wide_vector_type_info(
             expression_type,
             getattr(expression, "source_location", None),
+        )
+
+    def is_portable_atomic_scalar_type(self, mapped_type):
+        """Whether an atomic target of ``mapped_type`` has a portable scalar contract.
+
+        A type parameter the enclosing generic function leaves open is accepted: every
+        backend monomorphizes generic functions and checks the bound scalar type of each
+        specialization's atomic target before it emits the operation.
+        """
+        mapped_type = str(mapped_type or "").strip()
+        if mapped_type in {"int", "uint", "float"}:
+            return True
+        func = self.current_function
+        if func is None or getattr(func, "qualifier", None):
+            return False
+        bound = self.current_function_materialization_bindings or {}
+        return any(
+            kind in {"typename", "class"}
+            and name
+            and name not in bound
+            and mapped_type in {name, self.sanitize_identifier(name)}
+            for kind, name in getattr(func, "template_parameters", None) or ()
         )
 
     def metal_pointer_pointee_type_once(self, metal_type):

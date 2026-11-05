@@ -230,6 +230,7 @@ from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
 )
+from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -5361,6 +5362,7 @@ class HLSLCodeGen(
                 continue
 
             if generic_function_parameters(func):
+                mark_generic_function_emitted(self, func)
                 specialized_functions = generic_function_emission_list(self, func)
                 for specialized_func in specialized_functions:
                     if (
@@ -5426,6 +5428,7 @@ class HLSLCodeGen(
                     if getattr(func, "name", None) in self.hlsl_omitted_function_names:
                         continue
                     if generic_function_parameters(func):
+                        mark_generic_function_emitted(self, func)
                         specialized_functions = generic_function_emission_list(
                             self, func
                         )

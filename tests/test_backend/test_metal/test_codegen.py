@@ -7482,10 +7482,6 @@ def test_codegen_rejects_unresolved_function_local_struct_extent():
     ("declaration", "reason"),
     [
         (
-            "typedef union { uint bits; float value; } LocalValue;",
-            "union storage semantics",
-        ),
-        (
             "class LocalValue { uint value; };",
             "class storage semantics",
         ),
@@ -7528,10 +7524,6 @@ def test_codegen_rejects_unresolved_function_local_struct_extent():
         (
             "typedef struct { uint value; } *LocalValue;",
             "typedef declarator changes",
-        ),
-        (
-            "struct LocalValue { uint value; } local;",
-            "trailing object declaration",
         ),
         (
             "struct LocalValue {};",
