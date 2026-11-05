@@ -1994,7 +1994,8 @@ def converge_subgroup_bounded_loops(ast, entries, walk_ast, map_operator):
 
 
 _CONVERSIONS = re.compile(
-    r"(?:bool|half|float|double|float(?:16|32|64)_t|u?int(?:8|16|32|64)?(?:_t)?)"
+    r"(?:bool|half|float|double|float(?:16|32|64)_t|bfloat(?:16(?:_t)?)?"
+    r"|u?int(?:8|16|32|64)?(?:_t)?)"
 )
 _WORKGROUP_BARRIERS = frozenset({"workgroupBarrier", "workgroupExecutionBarrier"})
 # Updates a pure function may apply to its own value parameters and locals:
@@ -2259,18 +2260,48 @@ def _inactive_collective_statement(
     return safe(value)
 
 
-def _value_function_kinds(functions, walk_ast, map_operator):
+def _value_struct_arities(nodes):
+    """Member counts of non-generic structs built only from value members.
+
+    ``Name(a, b)`` of such a struct, as the Metal frontend lowers MLX's
+    ``IndexValPair<U>{index, val}``, only copies its arguments.
+    """
+    arities = {}
+    for node in nodes:
+        if not isinstance(node, StructNode) or (
+            node.generic_params or node.inheritance or node.attributes
+        ):
+            continue
+        members = node.members or []
+        if members and all(
+            isinstance(member, StructMemberNode)
+            and not isinstance(member.member_type, (PointerType, ReferenceType))
+            and not (
+                member.attributes or member.resource_qualifiers or member.default_value
+            )
+            and not set(getattr(member.member_type, "qualifiers", None) or [])
+            & _SHARED_QUALIFIERS
+            for member in members
+        ):
+            arities.setdefault(node.name, set()).add(len(members))
+    return {name: counts.pop() for name, counts in arities.items() if len(counts) == 1}
+
+
+def _value_function_kinds(functions, walk_ast, map_operator, structs=None):
     """Classify user overload sets that only compute values from arguments.
 
     A ``"pure"`` function takes value parameters, declares private value
     locals, assigns them or their members and ends in a return; every
     expression reads only those names, literals and conversions through
-    side-effect-free operators and calls to pure functions. A
-    ``"collective"`` one may also apply relative shuffles to such values,
-    as the complex overload of ``simd_shuffle_down`` shuffles both halves.
+    side-effect-free operators, constructions of value ``structs`` (name to
+    member count, see ``_value_struct_arities``) and calls to pure
+    functions. A ``"collective"`` one may also apply relative shuffles to
+    such values, as the complex overload of ``simd_shuffle_down`` shuffles
+    both halves and MLX's ``IndexValPair`` overload shuffles both members.
     A name is classified only when each of its overloads qualifies, so any
     resolution of a call is safe for invocations that left early.
     """
+    structs = structs or {}
     kinds = {}
 
     def classify(name, visiting):
@@ -2366,6 +2397,10 @@ def _value_function_kinds(functions, walk_ast, map_operator):
                 kind = classify(name, visiting)
                 collective = collective or kind == "collective"
                 return kind is not None and not getattr(node, "generic_args", None)
+            if name in structs:
+                return len(node.arguments) == structs[name] and not getattr(
+                    node, "generic_args", None
+                )
             if _bitcast_name(name, node):
                 return len(node.arguments) == 1
             if name.startswith(("Wave", "Quad", "subgroup", "simd_", "quad_")):
@@ -2444,13 +2479,19 @@ def _inactive_loop_header(loop, constants, map_operator):
         )
     if isinstance(update, ExpressionStatementNode):
         update = update.expression
-    return (
+    if not (
         isinstance(update, AssignmentNode)
-        and map_operator(update.operator) in {"+=", "-=", "*=", ">>=", "<<="}
         and isinstance(update.target, IdentifierNode)
         and update.target.name == counter
         and _inactive_safe(update.value, constants, map_operator)
-    )
+    ):
+        return False
+    operator = map_operator(update.operator)
+    if operator in {"/=", "%="}:
+        # MLX's ``offset /= 2`` halving loops; as for ``/`` and ``%``, only a
+        # nonzero constant divisor other than -1 cannot trap.
+        return _literal_divisor(update.value, constants) is not None
+    return operator in {"+=", "-=", "*=", ">>=", "<<="}
 
 
 def _escapes(statement, walk_ast):
@@ -3308,7 +3349,9 @@ def converge_subgroup_early_exits(ast, entries, walk_ast, map_operator):
         if isinstance(node, FunctionNode):
             functions.setdefault(node.name, []).append(node)
     effects = _effect_checker(nodes, walk_ast)
-    kinds = _value_function_kinds(functions, walk_ast, map_operator)
+    kinds = _value_function_kinds(
+        functions, walk_ast, map_operator, _value_struct_arities(nodes)
+    )
     uniformities = subgroup_uniformity(
         ast,
         entries,
@@ -3650,7 +3693,9 @@ def converge_subgroup_divergent_barriers(ast, entries, walk_ast, map_operator):
                         queued.add(id(callee))
                         pending.append(callee)
     effects = _effect_checker(nodes, walk_ast)
-    kinds = _value_function_kinds(functions, walk_ast, map_operator)
+    kinds = _value_function_kinds(
+        functions, walk_ast, map_operator, _value_struct_arities(nodes)
+    )
     plans = []
     for key, function in reachable.items():
         if _type_name(function.return_type) != "void" or getattr(
