@@ -286,6 +286,10 @@ from .hlsl_extension_builtins import (
 )
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
 from .hlsl_half_storage import HLSLHalfStorage
+from .hlsl_image_formats import (
+    dxc_vulkan_image_format_prefix,
+    normalized_texel_type,
+)
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_mesh_semantics import collect_hlsl_mesh_output_struct_offsets
@@ -4774,6 +4778,9 @@ class HLSLCodeGen(
                     f"{mapped_type}{array_suffix}", var_name
                 )
                 qualifier = self.resource_memory_qualifier(mapped_type, node)
+                qualifier = (
+                    self.storage_image_format_prefix(mapped_type, node) + qualifier
+                )
                 code += f"{qualifier}{declaration}{register};\n"
                 continue
 
@@ -5083,7 +5090,8 @@ class HLSLCodeGen(
                     node.initial_value, node.var_type
                 )
                 declaration += f" = {initializer}"
-            code += f"{qualifier}{declaration}{register};\n"
+            image_format_prefix = self.storage_image_format_prefix(mapped_type, node)
+            code += f"{image_format_prefix}{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
                 and var_name in self.global_mixed_sampler_aliases
@@ -53676,6 +53684,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.explicit_resource_register_space(node),
         )
 
+    def storage_image_format_prefix(self, mapped_type, node):
+        if not self.is_hlsl_rw_texture_type(mapped_type):
+            return ""
+        image_format = explicit_image_format(node, self.attribute_value_to_string)
+        return dxc_vulkan_image_format_prefix(image_format)
+
     def resource_memory_qualifier(self, mapped_type, node):
         if not (
             self.is_hlsl_rw_texture_type(mapped_type)
@@ -54204,7 +54218,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         texture_type = texture_types.get(base_type)
         if component_type and texture_type:
-            mapped_type = f"{texture_type}<{component_type}>"
+            texel_type = normalized_texel_type(explicit_format, component_type)
+            mapped_type = f"{texture_type}<{texel_type}>"
         elif texture_type and base_type.startswith(("iimage", "uimage")):
             # An integer storage image without a format is as wide as its texels,
             # except as an image atomic's target, which needs a scalar element.
