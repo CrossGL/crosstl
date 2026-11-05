@@ -112,11 +112,12 @@ def test_scalar_alias_spellings(spelling, canonical):
 
 def test_alias_spelled_template_call_selects_the_explicit_specialization(tmp_path):
     code = flat(translate(tmp_path, TEMPLATE_SPECIALIZATIONS))
-    assert "inline uint max_value_u3cuint_u3e()" in code
-    assert "inline uint max_value_u3cuchar_u3e()" in code
-    assert "o[id] == max_value_u3cuint_u3e()" in code
-    assert "p[id] = max_value_u3cuchar_u3e();" in code
-    assert "uint32_t_u3e" not in code and "uint8_t_u3e" not in code
+    # The declared spelling names the specialization; an alias spelled call reaches it.
+    assert "inline uint max_value_u3cuint32_t_u3e()" in code
+    assert "inline uint max_value_u3cuint8_t_u3e()" in code
+    assert "o[id] == max_value_u3cuint32_t_u3e()" in code
+    assert "p[id] = max_value_u3cuint8_t_u3e();" in code
+    assert "max_value_u3cuint_u3e" not in code and "max_value_u3cuchar_u3e" not in code
 
 
 def test_narrow_builtin_arguments_take_their_register_type(tmp_path):

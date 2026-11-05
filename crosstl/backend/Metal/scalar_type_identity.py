@@ -7,7 +7,8 @@ left the call naming a specialization nobody declared. ``char`` is not ``int8_t`
 ``signed char`` distinct, and MSL's ``int8_t`` is ``signed char``.
 
 :func:`canonical_scalar_type_spelling` rewrites every built-in alias in a type spelling to one spelling per type, for
-comparing template arguments. It never changes emitted text.
+comparing template arguments. The Metal importer names a specialization with the first spelling it meets, so this
+never changes the text of a source that spells each specialization one way.
 """
 
 from __future__ import annotations
