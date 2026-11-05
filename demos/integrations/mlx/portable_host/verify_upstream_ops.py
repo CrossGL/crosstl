@@ -280,6 +280,24 @@ CONV_TESTS = tuple(
         "repeated_conv",
     )
 )
+# The convolution tests that compare with PyTorch: 1-D, 2-D and 3-D
+# convolutions and their gradients, depthwise and general convolutions, and
+# asymmetric padding. They reach the same routes as CONV_TESTS over PyTorch's
+# shapes and run in a job that installs PyTorch.
+CONV_REFERENCE_TESTS = tuple(
+    "test_conv.TestConv.test_" + name
+    for name in (
+        "asymmetric_padding",
+        "torch_conv_1D",
+        "torch_conv_1D_grad",
+        "torch_conv_2D",
+        "torch_conv_2D_grad",
+        "torch_conv_3D",
+        "torch_conv_3D_grad",
+        "torch_conv_depthwise",
+        "torch_conv_general",
+    )
+)
 
 # test_array methods that reach the GPU: indexing and its gradients, item
 # assignment and functional .at[] updates, slice updates of 2-D contiguous
@@ -699,7 +717,7 @@ UPSTREAM_TESTS = (
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
-    ) + MODULE_TESTS + CONV_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS + tuple(
+    ) + MODULE_TESTS + CONV_TESTS + CONV_REFERENCE_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS + tuple(
         name for tests in MODULE_GROUPS.values() for name in tests
     )
 )
@@ -872,8 +890,10 @@ GROUP_TESTS = {
     # The module tests run in one job; the norm sweep is the longest of them.
     "modules": MODULE_TESTS,
     # The convolution tests translate their conv.metal, steel_conv and GEMM
-    # kernels on demand, so they run in a job of their own.
+    # kernels on demand, so they run in a job of their own. The PyTorch
+    # comparisons take about as long natively and run in a second job.
     "conv": CONV_TESTS,
+    "conv-references": CONV_REFERENCE_TESTS,
     # The array, autograd and compile modules each run in a job of their own;
     # each translates its lazy vectors, copies and compiled tapes on demand.
     "array": ARRAY_TESTS,
@@ -899,6 +919,10 @@ GROUPS = {
     group: tuple(name for name in UPSTREAM_TESTS if _group_of(name) == group)
     for group in ("operations", *GROUP_PREFIXES, *GROUP_TESTS)
 }
+# The groups whose tests compare with PyTorch or ml_dtypes. Only their jobs
+# install those libraries, and both workers fail a test that skips for want of
+# them, so such a test runs in one of these groups or fails.
+REFERENCE_LIBRARY_GROUPS = ("conv-references", "references")
 # The CI step bounds a group's workers and its audit at 5,000 seconds; a cold
 # native run also translates its lazy vectors and kernels.
 TIMEOUTS = {"cpu": 300, "native": 4400, "missing": 60}

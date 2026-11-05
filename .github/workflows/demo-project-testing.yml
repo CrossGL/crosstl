@@ -2792,7 +2792,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Ninety jobs, thirty of them on macOS: run them in nine waves.
+      # Ninety-three jobs, thirty-one of them on macOS: run them in ten waves.
       max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
@@ -2811,6 +2811,7 @@ jobs:
             sorting,
             modules,
             conv,
+            conv-references,
             array,
             autograd,
             compile,
@@ -2864,9 +2865,9 @@ jobs:
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
       - name: Install the reference libraries the upstream tests compare with
-        # Only the references group runs the tests that compare with PyTorch
-        # and ml_dtypes; Linux takes PyTorch's CPU-only build.
-        if: matrix.group == 'references'
+        # Only verify_upstream_ops.REFERENCE_LIBRARY_GROUPS run the tests that
+        # compare with PyTorch and ml_dtypes; Linux takes PyTorch's CPU-only build.
+        if: contains(fromJSON('["conv-references", "references"]'), matrix.group)
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then

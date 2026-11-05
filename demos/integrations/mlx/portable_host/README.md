@@ -2388,14 +2388,19 @@ the class indices; the host refuses a launch with an index outside
 `[-n, n)` rather than read past its row. Every dispatch must name its cached
 package, upload its retained operands and keep its output guard; launches over
 more than 65,536 logits keep their extents and digests.
-The `conv` group runs seven unchanged `test_conv` tests (`CONV_TESTS`):
-`test_conv2d_large_filter_small_channels`, `test_conv_1d_groups_flipped`,
-`test_conv_1d_with_2d`, `test_conv_general_flip_grad`, `test_conv_groups_grad`,
-`test_numpy_conv` and `test_repeated_conv`. They reach the unfold and steel
-GEMM, depthwise, padded-channel and implicit GEMM routes of the convolution
-port (see "Convolution") and its gradients, and translate their kernels on
-demand. The other `test_conv` and `test_conv_transpose` tests need PyTorch or
-the general implicit GEMM and small-depth 3-D routes.
+The `conv` group runs ten unchanged `test_conv` tests (`CONV_TESTS`):
+`test_basic_grad_shapes`, `test_conv2d_large_filter_small_channels`,
+`test_conv2d_unaligned_channels`, `test_conv_1d_groups_flipped`,
+`test_conv_1d_with_2d`, `test_conv_3D_small_kd_decomposition`,
+`test_conv_general_flip_grad`, `test_conv_groups_grad`, `test_numpy_conv` and
+`test_repeated_conv`. They reach the unfold and steel GEMM, depthwise,
+padded-channel, general and implicit GEMM and small-depth 3-D routes of the
+convolution port (see "Convolution") and its gradients, and translate their
+kernels on demand. The `conv-references` group runs the nine that compare with
+PyTorch (`CONV_REFERENCE_TESTS`): `test_asymmetric_padding`, the 1-D, 2-D and
+3-D `test_torch_conv_*` tests and their gradients, `test_torch_conv_depthwise`
+and `test_torch_conv_general`. `test_conv2d_winograd_batch_tiling` requires
+Metal itself, and the `test_conv_transpose` tests do not run yet.
 The `array`, `autograd` and `compile` groups run the `test_array` (42),
 `test_autograd` (45) and `test_compile` (55) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
@@ -2409,8 +2414,9 @@ embedding and fused transform methods of `test_fast` and the two antialiased
 `test_upsample` sweeps) and `references` (the nine methods that compare with
 PyTorch or ml_dtypes: both `test_bf16` conversions, `test_fft_grads`, batch
 normalization, AdamW and four `test_upsample` sweeps). Only the `references`
-job installs PyTorch 2.14.1 (the CPU build on Linux) and ml_dtypes 0.6.0, so no
-other group skips a test for want of them. A module's other
+and `conv-references` jobs (`REFERENCE_LIBRARY_GROUPS`) install PyTorch 2.14.1
+(the CPU build on Linux) and ml_dtypes 0.6.0; both workers fail a test that
+skips for want of them. A module's other
 methods dispatch nothing or need a kernel family the host does not port yet.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every

@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 563
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 572
     assert all(
         name.startswith(
             (
@@ -134,6 +134,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
     tail = (
         ops.MODULE_TESTS
         + ops.CONV_TESTS
+        + ops.CONV_REFERENCE_TESTS
         + ops.ARRAY_TESTS
         + ops.AUTOGRAD_TESTS
         + ops.COMPILE_TESTS
@@ -201,7 +202,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 556 and not set(opengl) & set(excluded)
+    assert len(opengl) == 565 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -225,6 +226,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "sorting",
         "modules",
         "conv",
+        "conv-references",
         "array",
         "autograd",
         "compile",
@@ -297,6 +299,10 @@ def test_upstream_op_groups_partition_the_inventory():
     assert ops.upstream_tests("opengl", "modules") == ops.MODULE_TESTS
     assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 10
     assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
+    references = ops.CONV_REFERENCE_TESTS
+    assert ops.GROUPS["conv-references"] == references and len(references) == 9
+    assert all(name.startswith("test_conv.TestConv.test_") for name in references)
+    assert ops.upstream_tests("opengl", "conv-references") == references
     # The array, autograd and compile modules each run alone in their group.
     for group, tests, module, count in (
         ("array", ops.ARRAY_TESTS, "test_array.", 42),
@@ -925,6 +931,26 @@ def test_upstream_op_trace_rejects_a_package_in_two_families(audit):
             audit.indexes,
             audit.reductions,
         )
+
+
+def test_only_the_reference_groups_install_the_reference_libraries():
+    workflow = yaml.safe_load(
+        Path(".github/workflows/demo-project-testing.yml").read_text()
+    )
+    job = workflow["jobs"]["upstream-ops-host"]
+    names = [step.get("name") for step in job["steps"]]
+    step = job["steps"][
+        names.index("Install the reference libraries the upstream tests compare with")
+    ]
+    groups = re.fullmatch(r"contains\(fromJSON\('(.*)'\), matrix\.group\)", step["if"])
+    assert tuple(json.loads(groups.group(1))) == ops.REFERENCE_LIBRARY_GROUPS
+    assert set(ops.REFERENCE_LIBRARY_GROUPS) < set(ops.GROUPS)
+    assert "torch==2.14.1" in step["run"] and "ml_dtypes==0.6.0" in step["run"]
+    # No other step installs them.
+    for item in job["steps"]:
+        if item is not step:
+            assert "torch" not in item.get("run", "")
+            assert "ml_dtypes" not in item.get("run", "")
 
 
 def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
