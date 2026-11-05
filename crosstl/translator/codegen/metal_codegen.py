@@ -437,6 +437,7 @@ from .metal_texel_buffers import (
     MetalTexelBuffers,
     texel_buffer_component_type,
 )
+from .metal_threadgroup_parameters import metal_threadgroup_parameter_attribute
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
 from .metal_wave_extended import (
@@ -17464,6 +17465,9 @@ class MetalCodeGen(
             "amplification",
             "mesh",
         }:
+            threadgroup_attr = metal_threadgroup_parameter_attribute(self, node)
+            if threadgroup_attr:
+                return threadgroup_attr
             resource_attr = self.resource_parameter_attribute(raw_param_type, node)
             if resource_attr:
                 return resource_attr
