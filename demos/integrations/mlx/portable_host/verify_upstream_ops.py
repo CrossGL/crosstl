@@ -298,6 +298,25 @@ CONV_REFERENCE_TESTS = tuple(
         "torch_conv_general",
     )
 )
+# The transposed convolution tests that compare with PyTorch: 1-D, 2-D and
+# 3-D transposed convolutions, their gradients and output padding. MLX runs
+# them as convolutions of the dilated input with the flipped kernel, so they
+# reach the routes of CONV_TESTS; test_conv_transpose_unfold_tiling requires
+# Metal itself.
+CONV_TRANSPOSE_TESTS = tuple(
+    "test_conv_transpose.TestConvTranspose.test_" + name
+    for name in (
+        "torch_conv_tranpose_1d_output_padding",
+        "torch_conv_transpose_1D",
+        "torch_conv_transpose_1D_grad",
+        "torch_conv_transpose_2D",
+        "torch_conv_transpose_2D_grad",
+        "torch_conv_transpose_2d_output_padding",
+        "torch_conv_transpose_3D",
+        "torch_conv_transpose_3D_grad",
+        "torch_conv_transpose_3d_output_padding",
+    )
+)
 
 # test_array methods that reach the GPU: indexing and its gradients, item
 # assignment and functional .at[] updates, slice updates of 2-D contiguous
@@ -717,7 +736,7 @@ UPSTREAM_TESTS = (
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
-    ) + MODULE_TESTS + CONV_TESTS + CONV_REFERENCE_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS + tuple(
+    ) + MODULE_TESTS + CONV_TESTS + CONV_REFERENCE_TESTS + CONV_TRANSPOSE_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS + tuple(
         name for tests in MODULE_GROUPS.values() for name in tests
     )
 )
@@ -891,9 +910,11 @@ GROUP_TESTS = {
     "modules": MODULE_TESTS,
     # The convolution tests translate their conv.metal, steel_conv and GEMM
     # kernels on demand, so they run in a job of their own. The PyTorch
-    # comparisons take about as long natively and run in a second job.
+    # comparisons take about as long natively and run in a second job, and
+    # the transposed convolutions' comparisons in a third.
     "conv": CONV_TESTS,
     "conv-references": CONV_REFERENCE_TESTS,
+    "conv-transpose": CONV_TRANSPOSE_TESTS,
     # The array, autograd and compile modules each run in a job of their own;
     # each translates its lazy vectors, copies and compiled tapes on demand.
     "array": ARRAY_TESTS,
@@ -922,7 +943,7 @@ GROUPS = {
 # The groups whose tests compare with PyTorch or ml_dtypes. Only their jobs
 # install those libraries, and both workers fail a test that skips for want of
 # them, so such a test runs in one of these groups or fails.
-REFERENCE_LIBRARY_GROUPS = ("conv-references", "references")
+REFERENCE_LIBRARY_GROUPS = ("conv-references", "conv-transpose", "references")
 # The CI step bounds a group's workers and its audit at 5,000 seconds; a cold
 # native run also translates its lazy vectors and kernels.
 TIMEOUTS = {"cpu": 300, "native": 4400, "missing": 60}

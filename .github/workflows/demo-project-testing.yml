@@ -2792,7 +2792,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Ninety-three jobs, thirty-one of them on macOS: run them in ten waves.
+      # Ninety-six jobs, thirty-two of them on macOS: run them in ten waves.
       max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
@@ -2812,6 +2812,7 @@ jobs:
             modules,
             conv,
             conv-references,
+            conv-transpose,
             array,
             autograd,
             compile,
@@ -2867,7 +2868,7 @@ jobs:
       - name: Install the reference libraries the upstream tests compare with
         # Only verify_upstream_ops.REFERENCE_LIBRARY_GROUPS run the tests that
         # compare with PyTorch and ml_dtypes; Linux takes PyTorch's CPU-only build.
-        if: contains(fromJSON('["conv-references", "references"]'), matrix.group)
+        if: contains(fromJSON('["conv-references", "conv-transpose", "references"]'), matrix.group)
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then

@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 572
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 581
     assert all(
         name.startswith(
             (
@@ -106,6 +106,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_tree.TestTreeUtils.test_",
                 "test_fft.TestFFT.test_",
                 "test_conv.TestConv.test_",
+                "test_conv_transpose.TestConvTranspose.test_",
                 "test_array.TestArray.test_",
                 "test_array.TestEquality.test_",
                 "test_array.TestInequality.test_",
@@ -135,6 +136,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         ops.MODULE_TESTS
         + ops.CONV_TESTS
         + ops.CONV_REFERENCE_TESTS
+        + ops.CONV_TRANSPOSE_TESTS
         + ops.ARRAY_TESTS
         + ops.AUTOGRAD_TESTS
         + ops.COMPILE_TESTS
@@ -202,7 +204,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 565 and not set(opengl) & set(excluded)
+    assert len(opengl) == 574 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -227,6 +229,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "modules",
         "conv",
         "conv-references",
+        "conv-transpose",
         "array",
         "autograd",
         "compile",
@@ -303,6 +306,13 @@ def test_upstream_op_groups_partition_the_inventory():
     assert ops.GROUPS["conv-references"] == references and len(references) == 9
     assert all(name.startswith("test_conv.TestConv.test_") for name in references)
     assert ops.upstream_tests("opengl", "conv-references") == references
+    transposed = ops.CONV_TRANSPOSE_TESTS
+    assert ops.GROUPS["conv-transpose"] == transposed and len(transposed) == 9
+    assert all(
+        name.startswith("test_conv_transpose.TestConvTranspose.test_torch_")
+        for name in transposed
+    )
+    assert ops.upstream_tests("directx", "conv-transpose") == transposed
     # The array, autograd and compile modules each run alone in their group.
     for group, tests, module, count in (
         ("array", ops.ARRAY_TESTS, "test_array.", 42),
