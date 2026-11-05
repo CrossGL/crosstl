@@ -26,6 +26,9 @@ from crosstl.project.uniform_layout import (
     hlsl_constant_buffer_block_layout,
     std140_block_layout,
 )
+from crosstl.translator.codegen.glsl_vulkan_descriptor_sets import (
+    DESCRIPTOR_BINDING_MACRO,
+)
 from crosstl.translator.codegen.stage_utils import compute_local_size
 from crosstl.translator.dispatch_region_contract import parse_dispatch_region_header
 from crosstl.translator.frozen_specializations import parse_frozen_specializations
@@ -1701,6 +1704,9 @@ def _hlsl_execution_input_contract(
 
 
 GLSL_LAYOUT_RE = re.compile(r"layout\s*\((?P<layout>[^)]*)\)\s*", re.IGNORECASE)
+GLSL_DESCRIPTOR_BINDING_RE = re.compile(
+    rf"\b{DESCRIPTOR_BINDING_MACRO}\(\s*\d+\s*,\s*\d+\s*,\s*(?P<opengl>\d+)\s*\)"
+)
 GLSL_LOCAL_SIZE_RE = re.compile(
     r"layout\s*\((?P<layout>[^)]*local_size_[^)]*)\)\s*in\s*;",
     re.IGNORECASE,
@@ -1753,6 +1759,17 @@ GLSL_SCALAR_CONSTANT_RE = re.compile(
 )
 
 
+def _expand_opengl_descriptor_bindings(source: str) -> str:
+    """Spell each Vulkan/OpenGL binding macro of a non-zero descriptor set as the OpenGL ``binding = N`` it means.
+
+    GLSL output places a resource of another descriptor set with ``CROSSGL_BINDING(set, vulkan, opengl)``, which
+    expands to ``binding = opengl`` unless ``VULKAN`` is defined (``glsl_vulkan_descriptor_sets``).
+    """
+    return GLSL_DESCRIPTOR_BINDING_RE.sub(
+        lambda match: f"binding = {match.group('opengl')}", source
+    )
+
+
 def _reflect_glsl_source(
     artifact_path: Path,
     *,
@@ -1764,7 +1781,7 @@ def _reflect_glsl_source(
     reflected_stage = _stage_name(stage) or _glsl_stage_from_source(
         raw_source, artifact_path
     )
-    source = _strip_comments(raw_source)
+    source = _expand_opengl_descriptor_bindings(_strip_comments(raw_source))
     struct_declarations = _scalar_struct_declarations(source)
     execution_config = {}
     local_size_match = GLSL_LOCAL_SIZE_RE.search(source)
