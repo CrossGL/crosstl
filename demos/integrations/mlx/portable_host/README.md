@@ -166,9 +166,10 @@ The unchanged upstream `test_scans`, `test_logcumsumexp`,
 the upstream-op host verification. They cover sums, products, extrema and
 log-add-exp of float32, int32, int64 and complex64, forward and reverse,
 inclusive and exclusive, along every axis of contiguous and strided views.
-OpenGL does not run `test_scans` or `test_scans_complex_exclusive` yet: reverse
-scans read through wrapped unsigned pointer offsets that its index proofs cannot
-bound ([#2905](https://github.com/CrossGL/crosstl/issues/2905)). Forward
+OpenGL does not run `test_scans` yet: strided reverse scans read through
+wrapped unsigned pointer offsets that its index proofs cannot bound
+([#2905](https://github.com/CrossGL/crosstl/issues/2905)). Contiguous reverse
+scans prove their rebased pointers from their guards, and forward
 strided entries use checked scalar and dispatch bounds for the software-subgroup
 path. The independently captured
 original bfloat16 scan-versus-reduction failure in
@@ -2312,8 +2313,8 @@ with a negative stride is sorted from a dense copy.
 `test_scans`, `test_logcumsumexp`, `test_scans_complex_exclusive` and
 `test_scan_size_one_axis` reach contiguous and strided, forward and reverse,
 inclusive and exclusive `scan.metal` entries of float32, int32, int64 and
-complex64 (see "Cumulative Operations"); OpenGL excludes the first and third,
-whose reverse scans it cannot bound yet (CrossGL/crosstl#2905).
+complex64 (see "Cumulative Operations"); OpenGL excludes the first, whose
+strided reverse scans it cannot bound yet (CrossGL/crosstl#2905).
 `test_to_from_fp8` reaches the `ToFP8` and `FromFP8` vectors.
 `test_searchsorted` reaches every searchsorted pass shape above: contiguous,
 strided, reversed and empty sequences, and transposed, sliced and broadcast
