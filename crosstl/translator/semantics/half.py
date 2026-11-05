@@ -12,17 +12,18 @@ gives every ``half`` register a ``float`` and keeps the invariant that it holds 
 - reads need nothing: binary32 represents every binary16 value;
 - arithmetic whose result is ``half`` is rounded once per operation, as MSL section 2.1, HLSL with 16-bit types and
   ``GL_EXT_shader_explicit_arithmetic_types_float16`` compute it: ``+``, ``-`` and ``*`` round the binary32 result,
-  ``/``, ``sqrt`` and ``fma`` call the exact helpers of :mod:`.half_helpers`, exact built-ins (``min``, ``abs``,
-  ``floor`` and the like) need nothing, and the other math built-ins round their binary32 result;
-- an operation of a ``half`` and a ``float`` is a ``float`` operation in every source. An integer operand converts to
-  ``half``. A floating-point literal adopts ``half`` in HLSL and Slang (literal float) and is a ``float`` elsewhere;
-  importers spell half literals (``1.5h``, ``1.5hf``) as conversions.
+  ``/``, ``%``, ``fmod``, ``sqrt`` and ``fma`` call the exact helpers of :mod:`.half_helpers`, exact built-ins
+  (``min``, ``abs``, ``floor`` and the like) need nothing, and the other math built-ins round their binary32 result;
+- an operation of a ``half`` and a ``float`` is a ``float`` operation in CrossGL; importers spell a source rule that
+  converts the ``float`` operand instead (MSL converts a scalar to a vector's element type) as a conversion. An
+  integer operand converts to ``half``. A floating-point literal adopts ``half`` in HLSL and Slang (literal float)
+  and is a ``float`` elsewhere; importers spell half literals (``1.5h``, ``1.5hf``) as conversions.
 
 Registers, private and workgroup arrays and struct members become ``float``; half matrices follow the same rules
 (:mod:`.half_matrices`). Half pointees in device, constant or unqualified memory, and buffer element types, are left to
 the emitters, which lay that storage out one 32-bit word per element (a layout change for the host that the reflection
 metadata does not report yet). Constructs the pass cannot keep exact are refused with
-:class:`HalfFloatUnsupportedError`: ``%`` and ``fmod`` on half,
+:class:`HalfFloatUnsupportedError`: the floored ``mod`` and ``modf``, ``frexp`` and ``remainder`` on half,
 a half operation with an operand of unknown type, a half increment used as a value and a compound assignment to an
 lvalue with side effects. ``min16float`` is a minimum-precision type that may compute in 32 bits and is not
 legalized here.
@@ -172,8 +173,14 @@ _ROUNDED = frozenset(
 )
 _SCALAR_RESULT = frozenset({"dot", "length", "distance"})
 _INTEGER_OPERAND = {"ldexp": 1, "pown": 1, "rootn": 1}
-_EXACT_HELPERS = {"sqrt": "cgl_half_sqrt", "fma": "cgl_half_fma", "mad": "cgl_half_fma"}
-_REFUSED_CALLS = frozenset({"fmod", "mod", "modf", "frexp", "remainder"})
+_EXACT_HELPERS = {
+    "sqrt": "cgl_half_sqrt",
+    "fma": "cgl_half_fma",
+    "mad": "cgl_half_fma",
+    "fmod": "cgl_half_fmod",
+}
+# GLSL ``mod`` floors the quotient, and its result is not always a binary16 value.
+_REFUSED_CALLS = frozenset({"mod", "modf", "frexp", "remainder"})
 _TO_BITS = re.compile(
     r"as_type<(?:ushort|short|uint16_t|int16_t|uint16|int16)>|asuint16|asint16"
     r"|float16BitsToUint16|float16BitsToInt16"
@@ -663,11 +670,10 @@ class HalfLegalizer(MatrixRules):
             if kind.name != "half":
                 set_child(node, side, None, self.coerce(getattr(node, side), HALF))
         lanes = max(left.lanes, right.lanes)
-        if node.op == "%":
-            self.refuse("'%' on half operands", "remainder", node)
-        if node.op == "/":
+        if node.op in ("/", "%"):
             operands = [self._splat(node.left, lanes), self._splat(node.right, lanes)]
-            return self.helper("cgl_half_div", lanes, operands, node)
+            helper = "cgl_half_div" if node.op == "/" else "cgl_half_fmod"
+            return self.helper(helper, lanes, operands, node)
         return self.helper("cgl_half_round", lanes, [node], node)
 
     def _half_operation(self, kinds, node, what) -> bool:
