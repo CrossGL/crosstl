@@ -709,13 +709,9 @@ SORTED_GATHER_EXCLUSIONS = {
     "test_blas.TestBlas.test_gather_mm_sorted": "CrossGL/crosstl#2546",
     "test_blas.TestBlas.test_gather_mm_sorted_vjp": "CrossGL/crosstl#2546",
 }
-# Tests a target cannot run yet, with the issue that tracks each. OpenGL's
-# software subgroups cannot run an arg reduction wider than one simdgroup.
+# Tests a target cannot run yet, with the issue that tracks each.
 TARGET_EXCLUSIONS = {
     "opengl": {
-        "test_ops.TestOps.test_argmin_argmax": "CrossGL/crosstl#2207",
-        "test_reduce.TestReduce.test_arg_reduce": "CrossGL/crosstl#2207",
-        "test_bf16.TestBF16.test_arg_reduction_ops": "CrossGL/crosstl#2207",
         # Strided reverse scans read through wrapped unsigned pointer offsets
         # whose rows are bounded only by an affine relation between locals.
         "test_ops.TestOps.test_scans": "CrossGL/crosstl#2905",

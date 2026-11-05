@@ -54,7 +54,7 @@ def uploads(dtype, target, values, outputs, metadata):
 
 
 # The translator issue behind each target's width limit.
-ARG_WIDTH_ISSUES = {"opengl": "CrossGL/crosstl#2207", "directx": "CrossGL/crosstl#2120"}
+ARG_WIDTH_ISSUES = {"directx": "CrossGL/crosstl#2120"}
 
 
 def require_target_width(target, execution):

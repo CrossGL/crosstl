@@ -5,9 +5,10 @@ threadgroup width, keyed ``<entry>@<width>``. The kernel reduces each simdgroup
 with ``simd_shuffle_down`` and then returns every simdgroup but the first
 before its final shuffles. Direct3D runs it in exact 32-lane waves
 (``WaveSize(32)``), which need no workgroup barrier for that exit but number
-the waves in arrival order (CrossGL/crosstl#2120); OpenGL runs 32-lane
-software subgroups, which synchronize the whole workgroup. Both hosts refuse
-widths above one simdgroup (``arg_reduce_dispatch``). Run as a
+the waves in arrival order (CrossGL/crosstl#2120), so its host refuses widths
+above one simdgroup (``arg_reduce_dispatch``). OpenGL runs 32-lane software
+subgroups, which synchronize the whole workgroup; the translator predicates
+the exit, so every invocation reaches their barriers. Run as a
 module, it translates variants into a host package directory's cache ahead
 of execution, several processes at a time.
 """

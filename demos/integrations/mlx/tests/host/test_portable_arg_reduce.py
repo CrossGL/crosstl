@@ -358,21 +358,19 @@ def test_dispatch_returns_and_audits_every_dtype(monkeypatch, tmp_path, target, 
             assert audit(monkeypatch, event, target) == len(out)
 
 
-def test_multi_simdgroup_rows_run_on_metal(monkeypatch, tmp_path):
+@pytest.mark.parametrize("target", ["metal", "opengl"])
+def test_multi_simdgroup_rows_run(monkeypatch, tmp_path, target):
     words = sample_words("float32", 1560)
     out, event, host = run(
-        monkeypatch, tmp_path, "metal", "argmax_float32", words, (1560,), 0
+        monkeypatch, tmp_path, target, "argmax_float32", words, (1560,), 0
     )
     assert out == [reference("argmax", "float32", words)]
     assert host.arg_reductions.requests == ["argmax_float32@416"]
     assert event["workgroupSize"] == [416, 1, 1]
-    assert audit(monkeypatch, event, "metal") == 1
+    assert audit(monkeypatch, event, target) == 1
 
 
-@pytest.mark.parametrize(
-    "target, issue",
-    (("opengl", "crosstl#2207"), ("directx", "crosstl#2120")),
-)
+@pytest.mark.parametrize("target, issue", (("directx", "crosstl#2120"),))
 def test_rows_of_more_than_one_simdgroup_are_refused(
     monkeypatch, tmp_path, target, issue
 ):
@@ -483,9 +481,12 @@ def test_package_configs_choose_exact_waves_or_software_subgroups(tmp_path):
     assert not configs["metal"].index_range_assertions
     assert not configs["directx"].index_range_assertions
     assert len(arg_reduce_packages.verification_entries("metal")) == 44
+    assert arg_reduce_packages.verification_entries(
+        "opengl"
+    ) == arg_reduce_packages.verification_entries("metal")
     assert all(
         key.endswith("@32")
-        for key in arg_reduce_packages.verification_entries("opengl")
+        for key in arg_reduce_packages.verification_entries("directx")
     )
 
 

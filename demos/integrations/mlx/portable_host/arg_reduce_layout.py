@@ -69,12 +69,12 @@ MAX_GROUPS = 65535
 SIGNED_MAX = 2**31 - 1
 SEPARATOR = "@"
 # A threadgroup of more than one simdgroup returns every simdgroup but the
-# first before the final shuffles, and thread 0 writes the result. OpenGL runs
-# simdgroups as 32-lane software subgroups, which cannot synchronize that exit
-# yet (CrossGL/crosstl#2207). Direct3D numbers its waves in arrival order, so
-# the surviving wave need not hold thread 0 and the result can stay unwritten
+# first before the final shuffles, and thread 0 writes the result. OpenGL's
+# 32-lane software subgroups predicate that exit, so every invocation reaches
+# their barriers. Direct3D numbers its waves in arrival order, so the
+# surviving wave need not hold thread 0 and the result can stay unwritten
 # (CrossGL/crosstl#2120).
-TARGET_WIDTH_LIMITS = {"opengl": SIMD_SIZE, "directx": SIMD_SIZE}
+TARGET_WIDTH_LIMITS = {"directx": SIMD_SIZE}
 
 
 def signature(entry):
