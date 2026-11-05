@@ -46,11 +46,7 @@ def glsl_preliminary_global_variable_types(codegen, ast, target_stage):
     variable_types = {}
     for node in declarations:
         name = codegen.resource_node_name(node)
-        if (
-            not name
-            or name in variable_types
-            or _is_array_declaration(node, codegen.resource_node_type(node))
-        ):
+        if not name or name in variable_types:
             continue
         vtype, _array_size, array_suffix, _count = codegen.resource_declaration_shape(
             node
@@ -75,7 +71,6 @@ def metal_generic_global_types(codegen, global_vars):
             or name in variable_types
             or node_type is None
             or isinstance(node_type, (PointerType, ReferenceType))
-            or _is_array_declaration(node, node_type)
         ):
             continue
         type_name = codegen.type_name_string(

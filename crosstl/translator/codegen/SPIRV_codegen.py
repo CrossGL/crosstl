@@ -15510,6 +15510,9 @@ class VulkanSPIRVCodeGen(
         source_type_name = self.source_storage_buffer_expression_type_name(expr)
         if source_type_name is not None:
             return source_type_name
+        if getattr(self, "collecting_generic_function_specializations", False):
+            # Collection runs before any variable is declared: resolving a pointer would lower the expression.
+            return None
 
         pointer = self.variable_pointer_from_expression(expr)
         if pointer is None:
@@ -20071,6 +20074,14 @@ class VulkanSPIRVCodeGen(
                 return self.variable_value_types.get(
                     variable.id
                 ) or self.value_types.get(variable.id)
+            named_constant = self.named_constants.get(name)
+            if named_constant is not None:
+                constant_type = self.value_types.get(named_constant.id)
+                if constant_type is not None:
+                    return constant_type
+            cbuffer_member = self.cbuffer_members.get(name)
+            if cbuffer_member is not None:
+                return cbuffer_member[1]
             builtin_type = self.infer_builtin_expression_result_type(name)
             if builtin_type is not None:
                 return builtin_type
@@ -21179,6 +21190,11 @@ class VulkanSPIRVCodeGen(
             if type_name is not None:
                 type_names[name] = type_name
 
+        for node in getattr(ast, "constants", []) or []:
+            # Program constants, such as ``const float LUT[3]``, are typed by ``const_type``.
+            type_name = self.type_name_from_value(getattr(node, "const_type", None))
+            if getattr(node, "name", None) and type_name is not None:
+                type_names[node.name] = type_name
         for node in getattr(ast, "global_variables", []) or []:
             record_variable(node)
         for cbuffer in getattr(ast, "cbuffers", []) or []:
@@ -22736,21 +22752,8 @@ class VulkanSPIRVCodeGen(
             return storage_buffer_type
         inferred_type = self.infer_expression_result_type(arg)
         if inferred_type is None:
-            return self.collected_global_argument_type_name(arg)
+            return None
         return inferred_type.type.base_type
-
-    def collected_global_argument_type_name(self, arg) -> Optional[str]:
-        """The source type of a global argument while generic specializations are collected.
-
-        Collection runs before globals are declared, so a generic call such as ``twice(scale)``
-        on a uniform would otherwise leave its type parameter unbound.
-        """
-        if not getattr(self, "collecting_generic_function_specializations", False):
-            return None
-        name = getattr(arg, "name", None) if isinstance(arg, IdentifierNode) else None
-        if not name or name in (self.local_variable_types or {}):
-            return None
-        return self.source_variable_type_names.get(name)
 
     def call_argument_type_names(self, args):
         return [self.call_argument_type_name(arg) or "unknown" for arg in args]
@@ -32603,6 +32606,7 @@ class VulkanSPIRVCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
+            global_types=self.source_variable_type_names,
         )
         if generic_function_specializations:
             all_functions = all_functions + list(

@@ -389,6 +389,7 @@ from .metal_buffer_component_stores import (
     metal_buffer_component_type,
     metal_glsl_buffer_component_refusal,
 )
+from .metal_buffer_resource_types import metal_buffer_resource_scope_type
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
@@ -21721,8 +21722,8 @@ class MetalCodeGen(
     ):
         if include_all:
             resources = [
-                (node, buffer_type, address_space)
-                for node, _, buffer_type, _, address_space in (
+                (node, buffer_type, array_size, address_space)
+                for node, _, buffer_type, array_size, address_space in (
                     self.metal_buffer_resource_variables
                 )
             ]
@@ -21731,12 +21732,7 @@ class MetalCodeGen(
                 for node, _, buffer_type, _ in self.structured_buffer_variables
             ]
         else:
-            resources = [
-                (node, buffer_type, address_space)
-                for node, buffer_type, _, address_space in (
-                    self.required_function_metal_buffer_resources(func_name)
-                )
-            ]
+            resources = self.required_function_metal_buffer_resources(func_name)
             structured_resources = [
                 (node, buffer_type)
                 for node, buffer_type, _ in self.required_function_structured_buffers(
@@ -21744,11 +21740,13 @@ class MetalCodeGen(
                 )
             ]
 
-        for node, buffer_type, address_space in resources:
+        for node, buffer_type, array_size, address_space in resources:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             if not name:
                 continue
-            self.local_variable_types[name] = self.type_name_string(buffer_type)
+            self.local_variable_types[name] = metal_buffer_resource_scope_type(
+                self, buffer_type, array_size
+            )
             self.current_address_space_variables[name] = address_space
             if address_space == "constant":
                 self.current_readonly_metal_parameters.add(name)

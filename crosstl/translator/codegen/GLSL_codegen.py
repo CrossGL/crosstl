@@ -37665,6 +37665,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.local_variable_types.get(name)
                 or self.glsl_buffer_block_variable_types.get(name)
                 or self.global_variable_types.get(name)
+                or self.glsl_constant_types.get(name)
                 or self.glsl_builtin_identifier_result_type(name)
             )
         if hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
@@ -37673,6 +37674,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.local_variable_types.get(name)
                 or self.glsl_buffer_block_variable_types.get(name)
                 or self.global_variable_types.get(name)
+                or self.glsl_constant_types.get(name)
                 or self.glsl_builtin_identifier_result_type(name)
             )
         if isinstance(expr, (int, float)):
