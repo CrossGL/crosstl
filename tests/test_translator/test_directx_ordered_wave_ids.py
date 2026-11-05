@@ -67,9 +67,9 @@ def _report(root, target, workgroup=WORKGROUP):
 def _artifact(report):
     data = report.to_json()
     assert [item["code"] for item in data["diagnostics"]] == []
-    (artifact,) = [
+    (artifact,) = (
         artifact for artifact in data["artifacts"] if artifact["target"] == "directx"
-    ]
+    )
     return (Path(data["project"]["root"]) / artifact["path"]).read_text()
 
 
