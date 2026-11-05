@@ -223,6 +223,8 @@ TRAINING_TESTS = (
         (
             "bernoulli",
             "categorical",
+            # Its 100,000-sample mean runs a long-column plan.
+            "multivariate_normal",
             "normal_and_laplace",
             "permutation",
             "randint",

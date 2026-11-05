@@ -9,6 +9,7 @@ import pytest
 from demos.integrations.mlx.portable_host import (
     column_long_layout,
     column_long_packages,
+    column_reduction_layout,
     column_workloads,
     lazy_package_evidence,
     runtime,
@@ -116,7 +117,7 @@ def test_long_variants_round_trip_and_bound_the_threadgroup():
 
 
 @pytest.mark.parametrize("dimension", [1, 2, 3])
-@pytest.mark.parametrize("rows", [1024, 32768])
+@pytest.mark.parametrize("rows", [1024, 32768, 100000])
 def test_valid_long_column_launch(dimension, rows):
     if dimension > 1:
         rows //= 2 ** (dimension - 1)
@@ -161,7 +162,7 @@ def test_long_partials_reduce_to_the_result_in_every_case():
         for case in column_workloads.cases()
         if case["entry"] in column_workloads.LONG_COLUMN_ENTRIES
     ]
-    assert len(cases) == 76
+    assert len(cases) == 78
     seen = set()
     for case in cases:
         _, logical, expected, partials = column_workloads.reference(np, case)
@@ -177,7 +178,7 @@ def test_long_partials_reduce_to_the_result_in_every_case():
 
 def test_long_variant_cache_and_lazy_family():
     keys = column_long_packages.verification_entries()
-    assert len(keys) == 44 and keys == sorted(keys)
+    assert len(keys) == 46 and keys == sorted(keys)
     assert all(column_long_layout.split_variant(key) for key in keys)
     entry = "col_reduce_longcolumn_1_reduce_sumfloat32"
     assert lazy_package_evidence.family(entry) == "long-column"
@@ -208,4 +209,26 @@ def test_long_column_binds_its_reduction_stride_as_size_t():
     assert re.search(
         r'long_column \? CrosstlMlxBuffer\{"reduction_stride", "uint64", &long_stride',
         source,
+    )
+
+
+def test_only_long_column_plans_reduce_more_than_65535_rows():
+    # strided_reduce_longcolumn strides its row blocks through every reduced
+    # row; the two-pass plan keeps the per-axis bound.
+    entry, buffers, count, execution, _ = _buffers(rows=65536)
+    assert column_long_layout.validate(entry, buffers, count, execution)
+    # The looped and two-pass kernels read their stride as int64_t.
+    buffers["reduction_stride"].dtype = b"int64"
+    with pytest.raises(ValueError, match="exceeds its bounds"):
+        column_reduction_layout.read_metadata(
+            "col_reduce_2pass_1_32_32_reduce_sumfloat32",
+            column_reduction_layout.COLUMN_ENTRIES,
+            column_reduction_layout.TWO_PASS,
+            buffers,
+            count,
+        )
+    source = (HOST / "backend.cpp").read_text()
+    assert (
+        "long_column ? column_reduced_size(reduce_shape) : column_shape_size(reduce_shape)"
+        in " ".join(source.split())
     )

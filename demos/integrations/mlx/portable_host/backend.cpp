@@ -783,6 +783,20 @@ uint64_t column_shape_size(const mlx::core::Shape& shape) {
   return size;
 }
 
+// The reduced elements of a long-column plan: no launch axis carries its
+// reduce axes, and the kernel strides its blocks of rows through all of them,
+// so only their product is bounded, by the storage bound.
+uint64_t column_reduced_size(const mlx::core::Shape& shape) {
+  uint64_t size = 1;
+  for (auto dimension : shape) {
+    if (dimension < 1 || uint64_t(dimension) > max_column_elements / size) {
+      throw std::invalid_argument("CrossTL column reduction shape exceeds its bounds.");
+    }
+    size *= dimension;
+  }
+  return size;
+}
+
 enum class ColumnPass { Small, Looped, TwoPass, LongColumn };
 
 // reduce.cpp strided_reduce_longcolumn: the partial results per output.
@@ -807,7 +821,8 @@ void dispatch_column_pass(
       reduce_shape.size() != reduce_strides.size()) {
     throw std::invalid_argument("CrossTL column reduction ranks do not match.");
   }
-  uint64_t total = column_shape_size(reduce_shape);
+  uint64_t total =
+      long_column ? column_reduced_size(reduce_shape) : column_shape_size(reduce_shape);
   uint64_t outer = column_shape_size(shape);
   uint64_t reduction_size = reduce_shape.back();
   // The columns each output row spans: the last reduced axis's stride, or
@@ -945,7 +960,7 @@ void dispatch_column_reduce(
   if (plan.shape.empty() || plan.shape.size() != plan.strides.size()) {
     throw std::invalid_argument("CrossTL column reduction plan is empty or inconsistent.");
   }
-  const uint64_t total = column_shape_size(plan.shape);
+  const uint64_t total = column_reduced_size(plan.shape);
   const int64_t stride = plan.strides.back();
   auto [shape, strides] = shapes_without_reduction_axes(in, axes);
   // Follow upstream's shape product, including broadcast views with zero strides.
@@ -2557,7 +2572,7 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   // strided_reduce_small's plans: fewer than 32 reduced elements per output.
   const bool small_columns =
       (plan.type == ContiguousStridedReduce || plan.type == GeneralStridedReduce) &&
-      !plan.shape.empty() && column_shape_size(plan.shape) < 32;
+      !plan.shape.empty() && column_reduced_size(plan.shape) < 32;
   // 16-bit floats also run the looped row and the looped and two-pass column
   // instantiations; the 8-byte types have only the small and whole-array ones.
   if ((eight_byte || narrow || truth_test) && plan.type != ContiguousAllReduce &&
