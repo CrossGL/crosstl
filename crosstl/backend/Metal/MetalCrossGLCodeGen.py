@@ -79,6 +79,7 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .scalar_type_identity import canonical_scalar_type_spelling
 from .scoped_member_types import resolve_concrete_scoped_member_type
 from .simd_aliases import SIMD_TYPE_ALIASES
 from .sparse_color import (
@@ -2067,6 +2068,7 @@ class MetalToCrossGLConverter(
         self.cooperative_matrix_fragment_type_replacements = {}
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
+        self.template_name_spellings = {}
         self.texture_method_functions = {
             "read": "textureLoad",
             "write": "textureStore",
@@ -2190,6 +2192,12 @@ class MetalToCrossGLConverter(
         ):
             return name
 
+        if "<" in str(name):
+            # ``f<uint>`` and ``f<uint32_t>`` name one specialization; the first spelling met names it.
+            spellings = self.__dict__.setdefault("template_name_spellings", {})
+            name = spellings.setdefault(
+                canonical_scalar_type_spelling(str(name)), str(name)
+            )
         parts = []
         for index, char in enumerate(str(name)):
             valid = (
@@ -8942,6 +8950,7 @@ class MetalToCrossGLConverter(
         self.suppressed_out_of_line_call_operator_ids = set()
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
+        self.template_name_spellings = {}
         self.storage_texture_declaration_ids = (
             self.collect_storage_texture_declaration_ids(ast)
         )
@@ -11959,7 +11968,7 @@ class MetalToCrossGLConverter(
             )
             if bfloat_plan is not None and bfloat_plan[1][1] is not None:
                 rhs = f"{self.map_type(bfloat_plan[1][1])}({rhs})"
-            conversion = self.metal_integer_vector_scalar_conversion(
+            conversion = self.metal_vector_scalar_conversion(
                 op[:-1],
                 self.expression_metal_type(node.left),
                 self.expression_metal_type(node.right),
@@ -12440,9 +12449,7 @@ class MetalToCrossGLConverter(
                             f"{self.map_type(conversion_type)}({operands[index]})"
                         )
                 return f"{operands[0]} {expr.op} {operands[1]}"
-            conversion = self.metal_integer_vector_scalar_conversion(
-                expr.op, *source_types
-            )
+            conversion = self.metal_vector_scalar_conversion(expr.op, *source_types)
             if conversion is not None:
                 index, element_type = conversion
                 operands = [left, right]
@@ -22149,7 +22156,7 @@ float {scalar}(float value) {{
             return signed_name
         return "uint64_t" if signed_bits == 64 else "uint"
 
-    def metal_integer_vector_scalar_conversion(self, operator, left_type, right_type):
+    def metal_vector_scalar_conversion(self, operator, left_type, right_type):
         if operator not in {
             "+",
             "-",
@@ -22178,17 +22185,29 @@ float {scalar}(float value) {{
             return None
         index = 1 if left_vector is not None else 0
         element_type, _width = left_vector or right_vector
+        scalar_type = (left_type, right_type)[index]
         element = self.metal_scalar_arithmetic_type_info(element_type)
-        scalar = self.metal_scalar_arithmetic_type_info((left_type, right_type)[index])
-        if (
-            element is None
-            or scalar is None
-            or element[0] != "integer"
-            or scalar[0] != "integer"
-            or element[2] == 1
-        ):
+        scalar = self.metal_scalar_arithmetic_type_info(scalar_type)
+        if element is None or scalar is None:
             return None
-        return index, element_type
+        if element[0] == "integer" and scalar[0] == "integer" and element[2] != 1:
+            return index, element_type
+        # MSL converts a scalar operand to a floating vector's element type,
+        # so ``half3 * float`` stays ``half3``. A wider floating scalar is the
+        # case CrossGL would otherwise widen the vector for.
+        if (
+            element[0] == "floating"
+            and scalar[0] == "floating"
+            and scalar[2] > element[2]
+            and operator in {"+", "-", "*", "/", "==", "!=", "<", "<=", ">", ">="}
+            and not any(
+                self.normalized_metal_type(self.resolve_type_alias(vtype))
+                in self.metal_source_bfloat_types
+                for vtype in (element_type, scalar_type)
+            )
+        ):
+            return index, element_type
+        return None
 
     def metal_vector_scalar_operand(self, rendered, source_type, element_type):
         if self.metal_scalar_arithmetic_type_info(
@@ -22383,9 +22402,7 @@ float {scalar}(float value) {{
         if left_vector is not None or right_vector is not None:
             vector = left_vector or right_vector
             if (
-                self.metal_integer_vector_scalar_conversion(
-                    expr.op, left_type, right_type
-                )
+                self.metal_vector_scalar_conversion(expr.op, left_type, right_type)
                 is not None
             ):
                 return self.metal_vector_type_from_element(vector[0], vector[1])
@@ -23462,7 +23479,7 @@ float {scalar}(float value) {{
             )
             if bfloat_plan is not None and bfloat_plan[1][1] is not None:
                 rendered_value = f"{self.map_type(bfloat_plan[1][1])}({rendered_value})"
-            conversion = self.metal_integer_vector_scalar_conversion(
+            conversion = self.metal_vector_scalar_conversion(
                 binary_op,
                 self.expression_metal_type(access),
                 self.expression_metal_type(value),

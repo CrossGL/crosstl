@@ -240,6 +240,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .glsl_affine_relations import related_local_interval
 from .glsl_buffer_layout import (
     glsl_buffer_block_node_type,
     std430_array_stride,
@@ -256,6 +257,11 @@ from .glsl_draw_parameters import (
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
+from .glsl_guarded_offsets import (
+    call_offset_relation,
+    composed_offset_range,
+    guarded_rebased_subscript,
+)
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
     wrap_glsl_helper_stage_guard,
@@ -338,6 +344,10 @@ from .glsl_vertex_inputs import (
     vertex_input_builtin,
     vertex_input_layouts,
     vertex_parameter_layouts,
+)
+from .glsl_vulkan_descriptor_sets import (
+    descriptor_binding_macro_definition,
+    descriptor_binding_qualifier,
 )
 from .glsl_wave_extended import (
     GLSL_CLUSTERED_BITWISE_OPERATIONS,
@@ -544,6 +554,11 @@ from .private_member_views import (
     member_view_chain,
 )
 from .private_vector_views import lower_private_vector_views
+from .push_constant_blocks import (
+    glsl_push_constant_cbuffer,
+    glsl_push_constant_struct_block,
+    is_push_constant,
+)
 from .reference_aliases import lower_reference_aliases
 from .relational_builtins import glsl_vector_logical_not
 from .resource_aggregates import lower_resource_aggregates
@@ -592,6 +607,7 @@ from .storage_image_texels import (
     texel_store_value,
     texel_vector_type,
 )
+from .storage_pointer_local_aliases import bind_local_storage_pointers
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
@@ -4046,17 +4062,30 @@ class GLSLCodeGen(
             True,
         )
 
-    def glsl_resource_layout_prefix(self, *layout_parts, binding=None):
+    def glsl_resource_layout_prefix(self, *layout_parts, binding=None, node=None):
         parts = [
             str(part).strip()
             for part in layout_parts
             if part is not None and str(part).strip()
         ]
         if binding is not None and self.should_emit_resource_binding_layouts():
-            parts.append(f"binding = {binding}")
+            parts.append(self.glsl_binding_qualifier(binding, node))
         if not parts:
             return ""
         return f"layout({', '.join(parts)})"
+
+    def glsl_binding_qualifier(self, binding, node=None):
+        """``binding = N``, or the Vulkan/OpenGL binding macro for a declaration in a descriptor set other than 0."""
+        descriptor_set = (
+            self.resource_descriptor_set_index(node) if node is not None else 0
+        )
+        vulkan_binding = (
+            self.raw_descriptor_binding_index(node) if descriptor_set else None
+        )
+        if vulkan_binding is None:
+            return f"binding = {binding}"
+        self.glsl_descriptor_binding_macro_used = True
+        return descriptor_binding_qualifier(descriptor_set, vulkan_binding, binding)
 
     def glsl_preprocessor_extensions(self, ast):
         extensions = set()
@@ -9445,6 +9474,7 @@ class GLSLCodeGen(
             version_line = required_version_line
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
+        self.glsl_descriptor_binding_macro_used = False
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -9961,7 +9991,9 @@ class GLSLCodeGen(
                     declaration = format_c_style_array_declaration(
                         f"{mapped_type}{array_suffix}", var_name
                     )
-                    layout = self.glsl_resource_layout_prefix(binding=resource_binding)
+                    layout = self.glsl_resource_layout_prefix(
+                        binding=resource_binding, node=node
+                    )
                     prefix = f"{layout} " if layout else ""
                     code += f"{prefix}uniform {declaration};\n"
                     self.advance_resource_binding(
@@ -10606,6 +10638,12 @@ class GLSLCodeGen(
             code = (
                 code[:cooperative_matrix_support_insertion_index]
                 + cooperative_matrix_support
+                + code[cooperative_matrix_support_insertion_index:]
+            )
+        if self.glsl_descriptor_binding_macro_used:
+            code = (
+                code[:cooperative_matrix_support_insertion_index]
+                + descriptor_binding_macro_definition()
                 + code[cooperative_matrix_support_insertion_index:]
             )
         code = self.finish_generic_resource_helper_refusals(code)
@@ -13483,6 +13521,10 @@ class GLSLCodeGen(
                 return
             if isinstance(node, (list, tuple, set)):
                 visit_sequence(list(node), visible_aliases)
+                return
+            # The emitter drops statements the interval proof refutes, so the
+            # calls in them need no helper specialization.
+            if getattr(node, "_glsl_checked_unreachable", False):
                 return
 
             if isinstance(node, VariableNode):
@@ -17407,6 +17449,22 @@ class GLSLCodeGen(
                     and 0 <= offset_range.minimum <= offset_range.maximum < (1 << 31)
                     else None
                 )
+                # A base that may lie before the buffer keeps its relation to
+                # the callee's scalar arguments for guarded subscripts.
+                binding.pop("guarded_offset_relation", None)
+                if binding["source_offset_interval"] is None:
+                    with self.glsl_lexical_source_type_scope(lexical_source_types):
+                        relation = call_offset_relation(
+                            self,
+                            callee,
+                            params,
+                            args,
+                            index,
+                            binding,
+                            local_names=lexical_source_types,
+                        )
+                    if relation is not None:
+                        binding["guarded_offset_relation"] = relation
                 bindings[index] = (param_name, binding)
                 key_parts.append(
                     (
@@ -17419,6 +17477,11 @@ class GLSLCodeGen(
                         binding.get("source_offset_interval"),
                         binding.get("wide_offset", False),
                         self.glsl_storage_pointer_specialization_view_key(binding),
+                    )
+                    + (
+                        (binding["guarded_offset_relation"],)
+                        if "guarded_offset_relation" in binding
+                        else ()
                     )
                 )
                 continue
@@ -19278,7 +19341,7 @@ class GLSLCodeGen(
                 1,
             )
             layout = self.glsl_resource_layout_prefix(
-                "std140", binding=resource_binding
+                "std140", binding=resource_binding, node=node
             )
             block_name = self.glsl_module_identifier_name(node.name)
             member_names = {
@@ -19300,6 +19363,10 @@ class GLSLCodeGen(
                 resource_binding,
             )
             code += resource_identity_marker(node, block_name)
+            push_constant = glsl_push_constant_cbuffer(self, node, layout, block_name)
+            if push_constant is not None:
+                code += push_constant
+                continue
             register_block = self.glsl_hlsl_cbuffer_block(node, layout, block_name)
             if register_block is not None:
                 code += register_block
@@ -21703,6 +21770,8 @@ class GLSLCodeGen(
         self.current_glsl_storage_pointer_aliases = {
             name: dict(binding) for name, binding in storage_pointer_aliases.items()
         }
+        previous_emitted_function = getattr(self, "current_glsl_emitted_function", None)
+        self.current_glsl_emitted_function = func
         self.current_glsl_synthetic_local_names = set(
             self.collect_glsl_function_local_identifier_names(func)
         )
@@ -21826,6 +21895,7 @@ class GLSLCodeGen(
         self.current_resource_aliases = previous_resource_aliases
         self.current_glsl_workgroup_pointer_aliases = previous_workgroup_pointer_aliases
         self.current_glsl_storage_pointer_aliases = previous_storage_pointer_aliases
+        self.current_glsl_emitted_function = previous_emitted_function
         self.current_glsl_synthetic_local_names = previous_synthetic_local_names
         self.current_glsl_scalar_array_view_plans = previous_scalar_array_view_plans
         self.current_glsl_scalar_array_views = previous_scalar_array_views
@@ -27936,20 +28006,17 @@ class GLSLCodeGen(
                 }
             }
             nodes = list(self.walk_ast(getattr(function, "body", [])))
-            changed = True
-            while changed:
-                changed = False
-                for node in nodes:
-                    if not isinstance(node, VariableNode):
-                        continue
-                    if not self.glsl_storage_pointer_declaration(node, aliases):
-                        continue
-                    binding = self.glsl_storage_pointer_binding(
-                        getattr(node, "initial_value", None), aliases
-                    )
-                    if binding is not None and aliases.get(node.name) != binding:
-                        aliases[node.name] = binding
-                        changed = True
+            if not bind_local_storage_pointers(
+                [node for node in nodes if isinstance(node, VariableNode)],
+                aliases,
+                self.glsl_storage_pointer_declaration,
+                self.glsl_storage_pointer_binding,
+                preferred_root=parameter_name,
+            ):
+                self.glsl_storage_pointer_access_requirement_cache[cache_key] = (
+                    "read_write"
+                )
+                return "read_write"
 
             for node in nodes:
                 if isinstance(node, AssignmentNode):
@@ -29192,7 +29259,12 @@ class GLSLCodeGen(
                 return asserted
         offset = binding.get("offset", 0)
         intervals = getattr(expression, "_glsl_control_flow_intervals", {})
-        return self.glsl_index_value_range(offset, intervals=intervals)
+        offset_range = self.glsl_index_value_range(offset, intervals=intervals)
+        if offset_range is None:
+            # A composed offset is the exact sum of its deltas, also where a
+            # source-typed negation of one delta would wrap.
+            offset_range = composed_offset_range(self, offset)
+        return offset_range
 
     @staticmethod
     def glsl_storage_to_workgroup_copy_index(offset, index):
@@ -45074,6 +45146,18 @@ complex64_t crossgl_complex64_mod_assign(
         else:
             key = self.expression_name(expression)
         interval = intervals.get(key) if key is not None else None
+        related = related_local_interval(
+            self,
+            getattr(self, "current_glsl_emitted_function", None),
+            expression,
+            intervals,
+        )
+        if related is not None:
+            interval = (
+                related
+                if interval is None
+                else (max(interval[0], related[0]), min(interval[1], related[1]))
+            )
         if interval is None:
             return None
 
@@ -45475,6 +45559,27 @@ complex64_t crossgl_complex64_mod_assign(
             return self.glsl_target_index_literal(operand.minimum, "int")
         return f"int({rendered})"
 
+    def glsl_guarded_rebased_index_expression(
+        self, rendered, index_expr, indexed_expr, binding, index_info
+    ):
+        """Render a subscript whose dominating guards bound its complete offset."""
+        if not guarded_rebased_subscript(
+            self,
+            getattr(self, "current_glsl_emitted_function", None),
+            index_expr,
+            indexed_expr,
+            binding,
+        ):
+            return None
+        bits = (
+            index_info["narrow"]["bits"]
+            if index_info["narrow"] is not None
+            else index_info["bits"]
+        )
+        if index_info["family"] == "int" and bits <= 32:
+            return rendered
+        return f"int({rendered})"
+
     def glsl_index_expression(self, index_expr, indexed_expr=None, **options):
         """Render a subscript index, scoping assertions to the indexed storage."""
         previous = getattr(self, "current_glsl_indexed_storage", None)
@@ -45586,6 +45691,11 @@ complex64_t crossgl_complex64_mod_assign(
                     )
                 accepted = IntegerRange(0, (1 << 31) - 1)
                 if base is None:
+                    guarded = self.glsl_guarded_rebased_index_expression(
+                        rendered, index_expr, indexed_expr, binding, index_info
+                    )
+                    if guarded is not None:
+                        return guarded
                     asserted = asserted_rebased_subscript()
                     if asserted is not None:
                         return asserted
@@ -53394,6 +53504,27 @@ complex64_t crossgl_complex64_mod_assign(
                 return False if left is False and right is False else None
         return None
 
+    def glsl_guard_addend_operand(self, candidate, lower, upper, constants):
+        """Move constant addends of a compared operand to its bounds."""
+        while isinstance(candidate, BinaryOpNode) and self.map_operator(
+            candidate.op
+        ) in {"+", "-"}:
+            operator = self.map_operator(candidate.op)
+            right = self.literal_int_value(candidate.right, constants)
+            left = self.literal_int_value(candidate.left, constants)
+            if isinstance(right, int) and not isinstance(right, bool):
+                delta = right if operator == "+" else -right
+                candidate = candidate.left
+            elif (
+                operator == "+" and isinstance(left, int) and not isinstance(left, bool)
+            ):
+                delta = left
+                candidate = candidate.right
+            else:
+                break
+            lower, upper = lower - delta, upper - delta
+        return candidate, lower, upper
+
     def glsl_private_pointer_refined_condition_intervals(
         self,
         expression,
@@ -53594,6 +53725,12 @@ complex64_t crossgl_complex64_mod_assign(
                     return refined
 
         def narrow(candidate, lower, upper):
+            if check_source_types:
+                # The operands were checked not to wrap, so a bound on
+                # ``x + c`` or ``x - c`` is a bound on ``x``.
+                candidate, lower, upper = self.glsl_guard_addend_operand(
+                    candidate, lower, upper, constants
+                )
             name = self.glsl_private_pointer_interval_key(candidate, refined, constants)
             if name not in refined:
                 return True
@@ -56609,7 +56746,7 @@ complex64_t crossgl_complex64_mod_assign(
         definitions = self.float_atomic_storage.take_definitions()
         memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
-        layout = self.glsl_resource_layout_prefix("std430", binding=binding)
+        layout = self.glsl_resource_layout_prefix("std430", binding=binding, node=node)
         block_name = self.glsl_generated_module_identifier(
             ("structured-buffer-block", name),
             f"{name}Buffer",
@@ -56909,7 +57046,9 @@ complex64_t crossgl_complex64_mod_assign(
         layout = self.glsl_buffer_block_layout(node)
         memory_qualifiers = self.resource_memory_qualifiers(node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
-        layout_prefix = self.glsl_resource_layout_prefix(layout, binding=binding)
+        layout_prefix = self.glsl_resource_layout_prefix(
+            layout, binding=binding, node=node
+        )
         code = f"{layout_prefix} {qualifier_prefix}buffer {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
@@ -57025,9 +57164,9 @@ complex64_t crossgl_complex64_mod_assign(
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if "uniform" not in qualifiers:
             return False
-        return (
-            str(self.resource_base_type(vtype)) in self.structs_by_name
-            and self.explicit_resource_binding_index(node) is not None
+        return str(self.resource_base_type(vtype)) in self.structs_by_name and (
+            self.explicit_resource_binding_index(node) is not None
+            or is_push_constant(node)
         )
 
     def glsl_constant_buffer_block_declaration(
@@ -57053,7 +57192,7 @@ complex64_t crossgl_complex64_mod_assign(
         block_name = self.unique_glsl_interface_block_name(
             "uniform", struct_name, var_name
         )
-        layout = self.glsl_resource_layout_prefix("std140", binding=binding)
+        layout = self.glsl_resource_layout_prefix("std140", binding=binding, node=node)
         code = resource_identity_marker(node, var_name)
         code += f"{layout} uniform {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
@@ -57063,7 +57202,16 @@ complex64_t crossgl_complex64_mod_assign(
                 preserve_unsized_arrays=True,
             )
         code += f"}} {var_name}{array_suffix};\n"
-        return code
+        return glsl_push_constant_struct_block(
+            self,
+            node,
+            struct,
+            block_name,
+            var_name,
+            array_suffix,
+            code,
+            resource_identity_marker(node, var_name),
+        )
 
     def pointer_buffer_structured_type(self, node, node_type):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
@@ -58733,7 +58881,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def opaque_resource_layout(self, vtype, binding, node=None):
         image_format = self.image_format_qualifier(vtype, node)
-        return self.glsl_resource_layout_prefix(image_format, binding=binding)
+        return self.glsl_resource_layout_prefix(
+            image_format, binding=binding, node=node
+        )
 
     def resource_precision_qualifiers(self, node):
         qualifiers = [

@@ -14492,15 +14492,15 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "RWByteAddressBuffer aliasBlock : register(u7);" in generated_code
-    assert "uint16_t word = aliasBlock.Load(4);" in generated_code
-    assert "uint64_t(aliasBlock.Load((8 + index * 4)))" in generated_code
+    assert "uint16_t word = aliasBlock.Load<uint16_t>(2);" in generated_code
+    assert "uint64_t(aliasBlock.Load((4 + index * 4)))" in generated_code
     assert (
         "void writeAlias(uint index, uint16_t word, uint64_t offset)" in generated_code
     )
-    assert "aliasBlock.Store(4, uint(word));" in generated_code
-    assert "aliasBlock.Store((8 + index * 4), uint(offset));" in generated_code
+    assert "aliasBlock.Store<uint16_t>(2, uint16_t(word));" in generated_code
+    assert "aliasBlock.Store((4 + index * 4), uint(offset));" in generated_code
     assert (
-        "aliasBlock.Store(0, uint((aliasBlock.Load(0) + uint16_t(1u))));"
+        "aliasBlock.Store<uint16_t>(0, uint16_t((aliasBlock.Load<uint16_t>(0) + uint16_t(1u))));"
         in generated_code
     )
     assert "unsupported HLSL GLSL buffer block" not in generated_code
@@ -32256,17 +32256,17 @@ def test_directx_explicit_narrow_rg_image_formats():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture2D<float2> rg8Float : register(u0);" in generated_code
-    assert "RWTexture2D<float2> rg8Snorm : register(u1);" in generated_code
-    assert "RWTexture3D<float2> rg16Float : register(u2);" in generated_code
-    assert "RWTexture2D<float2> rg16Snorm : register(u3);" in generated_code
+    assert "RWTexture2D<unorm float2> rg8Float : register(u0);" in generated_code
+    assert "RWTexture2D<snorm float2> rg8Snorm : register(u1);" in generated_code
+    assert "RWTexture3D<unorm float2> rg16Float : register(u2);" in generated_code
+    assert "RWTexture2D<snorm float2> rg16Snorm : register(u3);" in generated_code
     assert "RWTexture2DArray<float2> rg16Half : register(u4);" in generated_code
     assert "RWTexture2D<int2> rg8Signed : register(u5);" in generated_code
     assert "RWTexture3D<int2> rg16Signed : register(u6);" in generated_code
     assert "RWTexture2D<uint2> rg8Unsigned : register(u7);" in generated_code
     assert "RWTexture2DArray<uint2> rg16Unsigned : register(u8);" in generated_code
     assert (
-        "float2 touchFloat(RWTexture2D<float2> image, int2 pixel, float2 value)"
+        "float2 touchFloat(RWTexture2D<unorm float2> image, int2 pixel, float2 value)"
         in generated_code
     )
     assert (
@@ -32331,14 +32331,14 @@ def test_directx_explicit_rgba_float_image_formats():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture2D<float4> rgba8Color : register(u0);" in generated_code
-    assert "RWTexture2D<float4> rgba8Snorm : register(u1);" in generated_code
-    assert "RWTexture3D<float4> rgba16Color : register(u2);" in generated_code
-    assert "RWTexture2D<float4> rgba16Snorm : register(u3);" in generated_code
+    assert "RWTexture2D<unorm float4> rgba8Color : register(u0);" in generated_code
+    assert "RWTexture2D<snorm float4> rgba8Snorm : register(u1);" in generated_code
+    assert "RWTexture3D<unorm float4> rgba16Color : register(u2);" in generated_code
+    assert "RWTexture2D<snorm float4> rgba16Snorm : register(u3);" in generated_code
     assert "RWTexture2DArray<float4> rgba16Half : register(u4);" in generated_code
     assert "RWTexture3D<float4> rgba32Float : register(u5);" in generated_code
     assert (
-        "float4 touchColor(RWTexture2D<float4> image, int2 pixel, float4 value)"
+        "float4 touchColor(RWTexture2D<unorm float4> image, int2 pixel, float4 value)"
         in generated_code
     )
     assert (
@@ -34029,16 +34029,16 @@ def test_directx_explicit_scalar_float_image_formats():
     ast = crosstl.translator.parse(shader)
     generated_code = HLSLCodeGen().generate(ast)
 
-    assert "RWTexture2D<float> normalized8 : register(u0);" in generated_code
-    assert "RWTexture3D<float> normalized16 : register(u1);" in generated_code
+    assert "RWTexture2D<unorm float> normalized8 : register(u0);" in generated_code
+    assert "RWTexture3D<unorm float> normalized16 : register(u1);" in generated_code
     assert "RWTexture2DArray<float> halfLayers : register(u2);" in generated_code
-    assert "RWTexture2D<float> signedNormalized : register(u3);" in generated_code
+    assert "RWTexture2D<snorm float> signedNormalized : register(u3);" in generated_code
     assert (
-        "float touchR8(RWTexture2D<float> image, int2 pixel, float value)"
+        "float touchR8(RWTexture2D<unorm float> image, int2 pixel, float value)"
         in generated_code
     )
     assert (
-        "float touchR16(RWTexture3D<float> image, int3 voxel, float value)"
+        "float touchR16(RWTexture3D<unorm float> image, int3 voxel, float value)"
         in generated_code
     )
     assert (

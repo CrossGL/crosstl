@@ -66,7 +66,9 @@ def block_var(*, layout="std430", qualifiers=None, var_type=None):
     )
 
 
-def collect_for(struct, var=None, *, literal_int_value=None, structs_by_name=None):
+def collect_for(
+    struct, var=None, *, literal_int_value=None, structs_by_name=None, **options
+):
     var = var or block_var()
     structs_by_name = {"Block": struct, **(structs_by_name or {})}
     return collect_lowered_glsl_buffer_blocks(
@@ -81,6 +83,7 @@ def collect_for(struct, var=None, *, literal_int_value=None, structs_by_name=Non
         map_type=lambda type_name: f"mapped_{type_name}",
         target_type_key="target_type",
         unsupported_type_message="type is not supported by test lowering",
+        **options,
     )
 
 
@@ -129,8 +132,12 @@ def test_std140_type_info_uses_sixteen_byte_matrix_column_stride():
 
 
 def test_std430_type_info_normalizes_fixed_width_scalar_aliases():
-    assert std430_layout_type_name("int8_t") == "int"
-    assert std430_layout_type_name("uint16_t") == "uint"
+    # GL_EXT_shader_8bit_storage and GL_EXT_shader_16bit_storage scalars keep their width.
+    assert std430_layout_type_name("int8_t") == "int8_t"
+    assert std430_layout_type_name("uint16_t") == "uint16_t"
+    assert std430_layout_type_name("short") == "int16_t"
+    assert std430_value_type_info("int8_t")["size"] == 1
+    assert std430_value_type_info("uint16_t")["align"] == 2
     assert std430_layout_type_name("size_t") == "uint"
     assert std430_layout_type_name("i64") == "int64_t"
     assert std430_layout_type_name("u64") == "uint64_t"
@@ -263,16 +270,18 @@ def test_collect_lowered_glsl_buffer_blocks_accepts_fixed_width_alias_members():
         member("offsets", ArrayType(primitive("size_t"), size=None)),
     )
 
-    blocks, var_failures, struct_failures = collect_for(struct)
+    blocks, var_failures, struct_failures = collect_for(
+        struct, component_refusal=lambda member_info: None
+    )
 
     assert not var_failures
     assert not struct_failures
     block = blocks["block"]
     count = block["members"]["count"]
     assert count["type"] == "uint16_t"
-    assert count["layout_type"] == "uint"
-    assert count["size"] == 4
-    assert count["align"] == 4
+    assert count["layout_type"] == "uint16_t"
+    assert count["size"] == 2
+    assert count["align"] == 2
     assert count["target_type"] == "mapped_uint16_t"
 
     offsets = block["members"]["offsets"]
@@ -282,6 +291,11 @@ def test_collect_lowered_glsl_buffer_blocks_accepts_fixed_width_alias_members():
     assert offsets["stride"] == 4
     assert offsets["runtime_array"] is True
     assert offsets["target_type"] == "mapped_size_t"
+
+    # Without a component policy only 32- and 64-bit components lower, so a 16-bit member is refused.
+    blocks, var_failures, _ = collect_for(struct)
+    assert "block" not in blocks
+    assert "16-bit uint16_t components" in var_failures["block"]
 
 
 def test_collect_lowered_glsl_buffer_blocks_lays_out_bool_members():

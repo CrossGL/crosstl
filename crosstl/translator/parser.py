@@ -2571,7 +2571,8 @@ class Parser:
             return False
 
         next_token = self.peek(offset + 1)[0]
-        if next_token in {"LBRACKET", "EQUALS", "SEMICOLON", "COMMA"}:
+        # ``buffer float* data @binding(0);``: a post-declaration attribute follows the declarator.
+        if next_token in {"LBRACKET", "EQUALS", "SEMICOLON", "COMMA", "ATTRIBUTE"}:
             return True
         return next_token == "RPAREN" and self.in_parameter_context()
 

@@ -3772,6 +3772,27 @@ def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_lowers_fmod_builtin_to_truncated_remainder_operator():
+    shader = """
+    shader WGSLFmodBuiltin {
+        compute {
+            void main() {
+                vec3 v = vec3(-1.25, 2.75, 7.5);
+                vec3 wrapped = fmod(v * 4.0, 1.0);
+                float scalar = fmod(v.x, v.y);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var wrapped: vec3<f32> = (((v * 4.0)) % (1.0));" in generated
+    assert "var scalar: f32 = ((v.x) % (v.y));" in generated
+    assert "fmod(" not in generated
+
+
 def test_wgsl_codegen_lowers_mod_builtin_to_floor_semantics_expression():
     shader = """
     shader WGSLModBuiltin {

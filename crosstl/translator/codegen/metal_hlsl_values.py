@@ -11,6 +11,10 @@ import re
 
 from ..ast import FunctionCallNode, LiteralNode, UnaryOpNode
 from .metal_hlsl_matrix import hlsl_emulated_matrix_shape
+from .metal_narrow_builtin_arguments import (
+    NARROW_REGISTER_UNIFIED_BUILTINS,
+    narrow_scalar_register_type,
+)
 
 
 class MetalHlslValueMixin:
@@ -338,13 +342,15 @@ class MetalHlslValueMixin:
         """
         unified = self.metal_builtin_common_component(func_name, arguments)
         if unified is None:
-            return None
+            return self.generate_metal_narrow_register_arguments(func_name, arguments)
         common, described = unified
         rendered = []
         for argument, (mapped_type, component_type) in zip(arguments, described):
             code = self.generate_expression(argument)
             if component_type == common:
-                rendered.append(code)
+                rendered.append(
+                    self.metal_narrow_register_argument(func_name, argument, code)
+                )
                 continue
             literal = self.metal_converted_numeric_literal(argument, common)
             if literal is not None:
@@ -354,6 +360,40 @@ class MetalHlslValueMixin:
             target_type = common if width is None else f"{common}{width}"
             rendered.append(f"{target_type}({code})")
         return rendered
+
+    def metal_narrow_register_argument(self, func_name, argument, code):
+        """``code`` converted to its 32-bit register type when ``argument`` is an 8- or 16-bit integer scalar."""
+        if func_name not in NARROW_REGISTER_UNIFIED_BUILTINS:
+            return code
+        register_type = narrow_scalar_register_type(
+            self.type_name_string(self.expression_result_type(argument))
+        )
+        return code if register_type is None else f"{register_type}({code})"
+
+    def generate_metal_narrow_register_arguments(self, func_name, arguments):
+        """Render ``min``/``max``/``clamp`` arguments when one is an 8- or 16-bit integer scalar, else ``None``.
+
+        See :mod:`.metal_narrow_builtin_arguments`.
+        """
+        if (
+            func_name not in NARROW_REGISTER_UNIFIED_BUILTINS
+            or func_name in self.user_function_names
+        ):
+            return None
+        arguments = list(arguments or [])
+        if not any(
+            narrow_scalar_register_type(
+                self.type_name_string(self.expression_result_type(argument))
+            )
+            for argument in arguments
+        ):
+            return None
+        return [
+            self.metal_narrow_register_argument(
+                func_name, argument, self.generate_expression(argument)
+            )
+            for argument in arguments
+        ]
 
     def metal_unified_builtin_result_type(self, func_name, arguments):
         """Result type of a builtin whose arguments were unified, if any."""

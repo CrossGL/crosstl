@@ -163,7 +163,9 @@ def test_written_vertex_inputs_become_locals(tmp_path):
     assert "VSIn v_copy = " in body
     assert "v_copy.p.x += 1.0;" in body
     assert "extra_copy *= 2.0;" in body
-    assert "vid_copy" in body
+    # The vertex ID is a local already: the draw's base vertex is subtracted from the index into it.
+    assert "uint vid = (vid_index - uint(gl_BaseVertexARB));" in body
+    assert "(++vid);" in body
     assert _assigned_names(body) & {"p", "extra", "gl_VertexID"} == set()
     _glslang(tmp_path, code, "vert")
 

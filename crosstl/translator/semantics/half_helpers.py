@@ -16,6 +16,10 @@ floating-point operation they compare against is exact:
 - ``cgl_half_fma`` adds the exact binary32 product of two binary16 values to the third one in 32-bit integers with a
   sticky bit, and rounds the sum once (IEEE 754-2019 section 5.4.1, fusedMultiplyAdd). A zero product or a
   non-finite operand makes the binary32 sum exact. The GLSL emitter uses the same definition (:func:`glsl_source`).
+- ``cgl_half_fmod`` is the truncated remainder of C ``fmod`` and MSL/HLSL ``%`` (IEEE 754-2019 section 5.3.1
+  defines its exactness): it is always a binary16 value, computed in 32-bit integers from the significands, as
+  ``sx * 2^d mod sy`` scaled by the divisor's unit in the last place (``d`` is at most 29), with no floating-point
+  operation other than an exact scaling.
 - ``cgl_half_to_bits`` and ``cgl_half_from_bits`` convert between a binary16 value and its encoding.
 
 Vector forms apply the scalar helper per lane, and the matrix form of ``cgl_half_round`` (``lanes`` is a
@@ -212,6 +216,40 @@ float cgl_half_fma(float x0, float x1, float x2) {
 }
 """
 
+_FMOD = """
+float cgl_half_fmod(float x0, float x1) {
+    uint a = asuint(x0);
+    uint ma = a & 0x7fffffffu;
+    uint mb = asuint(x1) & 0x7fffffffu;
+    if (ma > 0x7f800000u) {
+        return x0;
+    }
+    if (mb > 0x7f800000u) {
+        return x1;
+    }
+    if (ma == 0x7f800000u || mb == 0u) {
+        return asfloat(0x7fc00000u);
+    }
+    if (ma < mb) {
+        return x0;
+    }
+    uint ka = cgl_half_index(x0);
+    uint kb = cgl_half_index(x1);
+    uint ea = ka >> 10u;
+    uint eb = kb >> 10u;
+    uint sa = ea == 0u ? ka : ((ka & 0x3ffu) | 0x400u);
+    uint sb = eb == 0u ? kb : ((kb & 0x3ffu) | 0x400u);
+    ea = ea == 0u ? 1u : ea;
+    eb = eb == 0u ? 1u : eb;
+    uint d = ea - eb;
+    uint low = d < 20u ? d : 20u;
+    uint scale = (((1u << low) % sb) * ((1u << (d - low)) % sb)) % sb;
+    uint r = ((sa % sb) * scale) % sb;
+    float remainder = float(r) * asfloat((eb + 102u) << 23u);
+    return asfloat((a & 0x80000000u) | asuint(remainder));
+}
+"""
+
 _TO_BITS = """
 uint cgl_half_to_bits(float x0) {
     uint bits = asuint(x0);
@@ -253,11 +291,18 @@ SCALAR_HELPERS = {
         ("cgl_half_round", "cgl_half_index", "cgl_half_value", "cgl_half_midpoint"),
     ),
     "cgl_half_fma": (_FMA, 3, ()),
+    "cgl_half_fmod": (_FMOD, 2, ("cgl_half_index",)),
     "cgl_half_to_bits": (_TO_BITS, 1, ("cgl_half_index",)),
     "cgl_half_from_bits": (_FROM_BITS, 1, ("cgl_half_value",)),
 }
 # Helpers with a per-lane vector form; their operands and results are floats.
-LANE_HELPERS = ("cgl_half_round", "cgl_half_div", "cgl_half_sqrt", "cgl_half_fma")
+LANE_HELPERS = (
+    "cgl_half_round",
+    "cgl_half_div",
+    "cgl_half_sqrt",
+    "cgl_half_fma",
+    "cgl_half_fmod",
+)
 # Helpers with a per-column matrix form.
 MATRIX_HELPERS = ("cgl_half_round",)
 _LANES = "xyzw"

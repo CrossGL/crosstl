@@ -290,7 +290,8 @@ class SlangMatrixImportMixin:
         if qualified_name:
             qualified_type = self.lookup_variable_type(qualified_name)
             if qualified_type:
-                return qualified_type, 0
+                # A namespaced global such as ``ns.table`` keeps its declared array rank.
+                return qualified_type, self._variable_rank(qualified_name)
         owner = self.matrix_value_type(expr.object)
         if owner is None or owner[1]:
             return None
