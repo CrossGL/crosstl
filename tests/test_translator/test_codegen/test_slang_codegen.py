@@ -21423,7 +21423,7 @@ def test_explicit_image_formats_emit_slang_storage_element_types():
     assert "RWTexture2D<uint2> rgUnsigned : register(u2);" in generated_code
     assert "RWTexture3D<float4> rgbaVolume : register(u3);" in generated_code
     assert "RWTexture2DMS<uint> msCounter : register(u4);" in generated_code
-    assert "RWTexture2DMSArray<float4> msLayers : register(u5);" in generated_code
+    assert "RWTexture2DMSArray<unorm float4> msLayers : register(u5);" in generated_code
     assert (
         "float scalarLoad(RWTexture2D<float2> image, int2 pixel, float value)"
         in generated_code
