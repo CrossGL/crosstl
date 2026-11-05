@@ -1211,7 +1211,15 @@ class Parser:
 
         execution_config = {}
         for entry in getattr(layout, "entries", []) or []:
-            if entry.name not in {"local_size_x", "local_size_y", "local_size_z"}:
+            # local_size_{x,y,z}_id name the specialization constants that set a dimension (GLSL 4.60 4.4.1.4).
+            if entry.name not in {
+                "local_size_x",
+                "local_size_y",
+                "local_size_z",
+                "local_size_x_id",
+                "local_size_y_id",
+                "local_size_z_id",
+            }:
                 continue
             if len(entry.arguments) != 1:
                 continue

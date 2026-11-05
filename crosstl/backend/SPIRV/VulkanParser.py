@@ -9,6 +9,7 @@ from .access_chains import chain_base_pointee, walk_indices
 from .barrier_import import spirv_barrier_statements
 from .block_arrays import SpirvBlockArrayUnsupportedError, block_array_element
 from .block_layout_import import spirv_block_layout
+from .buffer_memory_qualifiers import storage_block_memory_qualifiers
 from .function_structure import SpirvFunctionStructure
 from .integer_signedness_import import (
     spirv_integer_binary_expression,
@@ -123,6 +124,8 @@ class VulkanParser:
         "Location": "location",
         "Component": "component",
         "Index": "index",
+        # A geometry output's vertex stream (GLSL layout(stream = n)).
+        "Stream": "stream",
     }
     SPIRV_DECLARATION_DECORATION_QUALIFIERS = {
         "Centroid": "centroid",
@@ -5514,7 +5517,12 @@ class VulkanParser:
             storage_class = variable["storage_class"] or pointer_type.get(
                 "storage_class"
             )
-            if storage_class != "Workgroup" or pointer_type.get("kind") != "pointer":
+            # A task or mesh stage's payload (SPV_EXT_mesh_shader) is GL_EXT_mesh_shader's taskPayloadSharedEXT.
+            qualifier = {
+                "Workgroup": "groupshared",
+                "TaskPayloadWorkgroupEXT": "taskPayloadSharedEXT",
+            }.get(storage_class)
+            if qualifier is None or pointer_type.get("kind") != "pointer":
                 continue
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
@@ -5525,7 +5533,7 @@ class VulkanParser:
 
             declarations.append(
                 VariableNode(
-                    f"groupshared {data_type}",
+                    f"{qualifier} {data_type}",
                     f"{self.spirv_assembly_value_name(variable['id'], names, decorations)}"
                     f"{array_suffix}",
                     spirv_id=variable["id"],
@@ -6126,6 +6134,17 @@ class VulkanParser:
         declaration_qualifiers = self.spirv_declaration_qualifiers(
             struct_decorations + variable_decorations
         )
+        if layout_type == "BUFFER":
+            memory_qualifiers = storage_block_memory_qualifiers(
+                struct_decorations + variable_decorations,
+                member_decorations.get(struct_type_id, []),
+                len(struct_type.get("member_types", [])),
+            )
+            declaration_qualifiers = [
+                qualifier
+                for qualifier in declaration_qualifiers
+                if qualifier not in memory_qualifiers
+            ] + memory_qualifiers
 
         node = LayoutNode(
             qualifiers,

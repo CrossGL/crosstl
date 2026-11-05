@@ -244,6 +244,23 @@ def test_strict_run_names_glslang_for_spirv_input(monkeypatch, capsys):
     )
 
 
+def test_strict_run_names_dxc_for_the_spirv_input_constructs_glsl_cannot_spell(
+    monkeypatch, capsys
+):
+    from tools.coverage import __main__ as cli
+
+    monkeypatch.setattr(validators, "available", lambda language: True)
+    monkeypatch.setattr(validators, "can_lower", lambda language: language != "hlsl")
+    monkeypatch.setattr(
+        validators, "command", lambda tool: () if tool == "dxc" else (tool,)
+    )
+    argv = ["run", "--strict", "--backend", "spirv", "--direction", "input"]
+    assert cli.main(argv) == 2
+    assert capsys.readouterr().err.strip() == (
+        "error: missing tools for spirv input (dxc)"
+    )
+
+
 @needs_glslang
 def test_a_core_instruction_is_probed_with_the_glsl_call_that_compiles_to_it():
     probe = spirv_input.build(ULESS)
@@ -296,3 +313,64 @@ def test_a_dropped_core_instruction_the_generator_never_writes_is_left_to_execut
     assert runner._encodes_otherwise(ULESS)
     # Extended instructions are always judged by the call.
     assert not runner._encodes_otherwise(FABS)
+
+
+POINT_MODE = Feature(
+    "spirv",
+    "graphics",
+    "tessellation-control-point-mode",
+    None,
+    group="ExecutionMode.PointMode",
+    stage="tessellation-control",
+)
+needs_dxc = pytest.mark.skipif(
+    not (validators.can_lower("hlsl") and validators.available("spirv")),
+    reason="dxc or SPIRV-Tools is missing",
+)
+
+
+def test_a_construct_glsl_cannot_spell_is_probed_in_hlsl():
+    # GLSL declares spacing, winding and point mode only on the evaluation shader; HLSL declares them on the hull
+    # shader. A construct GLSL spells, and every function, stays with glslang.
+    assert spirv_input.source_language(POINT_MODE) == "hlsl"
+    domain = dataclasses.replace(
+        POINT_MODE,
+        name="tessellation-point-mode",
+        stage="tessellation-evaluation",
+    )
+    assert spirv_input.source_language(domain) == "glsl"
+    assert spirv_input.source_language(FABS) == "glsl"
+
+
+def test_the_hlsl_fallback_needs_dxc(monkeypatch):
+    monkeypatch.setattr(validators, "can_lower", lambda language: language != "hlsl")
+    with pytest.raises(ProbeError, match="dxc or spirv-dis is not installed"):
+        spirv_input.build(POINT_MODE)
+
+
+@needs_dxc
+def test_the_hlsl_fallback_is_the_assembly_dxc_compiles_the_hlsl_probe_to():
+    probe = spirv_input.build(POINT_MODE)
+    assert (probe.language, probe.suffix) == ("spirv", ".spvasm")
+    assert "OpEntryPoint TessellationControl %main" in probe.source
+    assert "OpExecutionMode %main PointMode" in probe.source
+    assert validators.validate("spirv", probe.source).accepted
+
+
+@needs_dxc
+def test_the_hlsl_fallback_keeps_the_buffers_a_compute_probe_declares():
+    # The execution harness binds the probe's buffers, so DXC must not drop one, nor declare a counter buffer the
+    # probe never uses.
+    probe = spirv_input.build(
+        Feature(
+            "spirv",
+            "control-flow",
+            "generic-function",
+            None,
+            group="OpFunctionCall OpIAdd OpFAdd",
+        )
+    )
+    assert probe.source.count("OpDecorate %iin Binding") == 1
+    assert probe.source.count("OpDecorate %outp Binding") == 1
+    assert "counter" not in probe.source
+    assert validators.validate("spirv", probe.source).accepted

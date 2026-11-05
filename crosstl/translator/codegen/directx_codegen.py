@@ -84,6 +84,7 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import resource_identity_marker
 from ..semantics.constant_buffers import constant_buffer_element
+from ..semantics.hlsl_geometry_streams import EMPTY_STREAM_VERTEX_ATTRIBUTE
 from ..semantics.hlsl_ray_payloads import (
     PAYLOAD_ACCESS_ATTRIBUTES,
     PAYLOAD_STAGES,
@@ -319,6 +320,7 @@ from .hlsl_texture_residency import (
     hlsl_texture_resident_call,
 )
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
+from .hlsl_unrepresentable_memory import hlsl_unrepresentable_memory_qualifier
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_subgroup_lane_mask_expression,
@@ -513,6 +515,7 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .matrix_compound_assignment import matrix_product_assignment
+from .memory_qualifier_names import memory_qualifier_name
 from .metadata_call_bounds import (
     call_parameter_bounds,
     inherited_metadata_bindings,
@@ -525,7 +528,12 @@ from .pointer_reinterpret import (
     same_scalar_lane_view,
     scalar_storage_layout,
 )
+from .private_array_rows import aliased_row_view, array_row_shape, array_row_view
 from .private_member_views import hlsl_aliased_scalar_view, hlsl_member_view_root
+from .private_pointer_alias_views import (
+    hlsl_aliased_writable_view,
+    hlsl_writable_pointer_parameters,
+)
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases, references_provably_disjoint
 from .relational_builtins import lower_relational_builtins
@@ -542,6 +550,7 @@ from .software_quad_reductions import (
     hlsl_quad_sum_body,
     quad_builtin_expression,
 )
+from .specialized_workgroup_size import require_fixed_workgroup_size
 from .stage_distance_layout import distance_semantic
 from .stage_refusals import RayStageInterfaceUnsupportedError
 from .stage_utils import (
@@ -3027,6 +3036,7 @@ class HLSLCodeGen(
             "gl_IsFrontFace": "SV_IsFrontFace",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_PrimitiveID": "SV_PrimitiveID",
+            "gl_CullPrimitiveEXT": "SV_CullPrimitive",
             "gl_ViewIndex": "SV_ViewID",
             "gl_Layer": "SV_RenderTargetArrayIndex",
             "gl_ViewportIndex": "SV_ViewportArrayIndex",
@@ -10818,7 +10828,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             for member in getattr(node, "members", [])
             if not self.hlsl_static_struct_member(member)
         ]
-        if not members:
+        if not members and not self.hlsl_union_attribute(
+            node, EMPTY_STREAM_VERTEX_ATTRIBUTE
+        ):
             code += "    int _crossgl_empty;\n"
         default_member_semantics = self.hlsl_default_struct_member_semantics(node)
         for member in members:
@@ -13522,6 +13534,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return None
 
     def generate_compute_numthreads(self, execution_config=None):
+        require_fixed_workgroup_size(
+            execution_config,
+            "HLSL",
+            "Direct3D has no specialization constants, and numthreads takes literals",
+        )
         x, y, z = self.validate_hlsl_compute_workgroup_size(
             compute_local_size(execution_config)
         )
@@ -14400,12 +14417,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"{helper_name}({group_index_name});",
                 )
         elif effective_shader_type == "vertex":
+            explicit_stage_builtins = self.explicit_hlsl_vertex_builtin_parameters(
+                param_list
+            )
             for (
                 name,
                 param_type,
                 semantic,
             ) in self.required_hlsl_vertex_builtin_parameters(func):
                 if not name or name in param_names:
+                    continue
+                # An input that already carries the system value delivers it; a second one would overlap it.
+                existing = explicit_stage_builtins.get(semantic.lower())
+                if existing:
+                    self.current_identifier_aliases[name] = existing
                     continue
                 declaration = f"{param_type} {name}"
                 if semantic:
@@ -20300,6 +20325,34 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "root_kind": "local",
                 }
             return None
+
+        if isinstance(expression, ArrayAccessNode):
+            row = self.hlsl_private_pointer_array_row(
+                expression,
+                self.current_hlsl_private_pointer_base_names,
+                local_extents,
+                self.function_private_pointer_local_backing_types.get(
+                    self.current_function_name, {}
+                ),
+                self.literal_int_constants,
+            )
+            if row is None:
+                return None
+            if any(
+                self.hlsl_private_pointer_expression_has_side_effects(index)
+                for index in row[3]
+            ):
+                raise DirectXPrivatePointerParameterError(
+                    "DirectX cannot emit a side-effecting private array row index",
+                    function_name=self.current_function_name,
+                    reason="side-effecting-view-offset",
+                    source_location=getattr(expression, "source_location", None),
+                )
+            return {
+                "backing": self.generate_expression(expression),
+                "offset": "0",
+                "root_kind": "local",
+            }
 
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
@@ -41550,6 +41603,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             parameter for parameter in builtin_parameters if parameter[0] in used_names
         ]
 
+    def explicit_hlsl_vertex_builtin_parameters(self, parameters):
+        """Lower-case system value -> the vertex input that already carries it."""
+        stage_parameters = {}
+        system_values = ("SV_VertexID", "SV_InstanceID", "SV_ViewID")
+        for parameter in parameters or []:
+            name = getattr(parameter, "name", None)
+            semantic = self.hlsl_canonical_semantic(self.semantic_from_node(parameter))
+            if name and semantic:
+                stage_parameters.setdefault(str(semantic).lower(), name)
+                continue
+            for system_value in system_values:
+                member = self.hlsl_struct_member_with_semantic(parameter, system_value)
+                if name and member is not None:
+                    stage_parameters.setdefault(
+                        system_value.lower(), f"{name}.{member}"
+                    )
+        return stage_parameters
+
     def explicit_hlsl_fragment_builtin_parameters(self, parameters):
         stage_parameters = {}
         for parameter in parameters or []:
@@ -43600,7 +43671,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             scalar_parameters[call["callee"]].add(parameter_name)
                             changed = True
         self.function_private_pointer_scalar_parameters = scalar_parameters
-        aliased = hlsl_aliased_scalar_view(view_calls, scalar_parameters)
+        aliased = hlsl_aliased_scalar_view(
+            view_calls, scalar_parameters
+        ) or aliased_row_view(view_calls)
+        if aliased is None:
+            aliased = hlsl_aliased_writable_view(
+                view_calls,
+                hlsl_writable_pointer_parameters(self, pointer_parameters),
+            )
         if aliased is not None:
             call, first, second, root = aliased
             raise DirectXPrivatePointerParameterError(
@@ -44323,6 +44401,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         return None
 
+    def hlsl_private_pointer_array_row(
+        self, expression, parameter_names, local_extents, local_types, constants
+    ):
+        """The row of a fixed multidimensional local array ``expression`` selects, or None."""
+
+        def shape_of(name):
+            if name in parameter_names or name not in local_extents:
+                return None
+            return array_row_shape(
+                (local_types or {}).get(name),
+                lambda size: self.literal_int_value(size, constants),
+            )
+
+        return array_row_view(expression, shape_of)
+
     def hlsl_private_pointer_static_binding(
         self,
         expression,
@@ -44389,6 +44482,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "side_effecting": False,
                 }
             return None
+        if isinstance(expression, ArrayAccessNode):
+            row = self.hlsl_private_pointer_array_row(
+                expression, parameter_names, local_extents, local_types, constants
+            )
+            if row is None:
+                return None
+            root_name, extent, _element_type, indices = row
+            return {
+                "root_kind": "local",
+                "root": root_name,
+                "extent": extent,
+                "offset": (0, 0),
+                "side_effecting": any(
+                    self.hlsl_private_pointer_expression_has_side_effects(index)
+                    for index in indices
+                ),
+                "row_view": True,
+            }
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
             if isinstance(operand, (IdentifierNode, VariableNode)):
@@ -53580,6 +53691,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def resource_memory_qualifier(self, mapped_type, node):
+        unrepresentable = hlsl_unrepresentable_memory_qualifier(node)
+        if unrepresentable is not None:
+            return self.refuse_lowering(unrepresentable)
         if not (
             self.is_hlsl_rw_texture_type(mapped_type)
             or str(mapped_type).startswith("RWBuffer")
@@ -53587,7 +53701,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return ""
 
-        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        qualifiers = {
+            memory_qualifier_name(q) for q in getattr(node, "qualifiers", []) or []
+        }
         attributes = {
             str(getattr(attr, "name", "")).lower()
             for attr in getattr(node, "attributes", []) or []

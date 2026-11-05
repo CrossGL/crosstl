@@ -16507,7 +16507,13 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
 
     vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
     assert "uint vertexID [[vertex_id]]" in vertex_code
-    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "uint _crossglInstanceIndex [[instance_id]]" in vertex_code
+    assert "uint _crossglBaseInstance [[base_instance]]" in vertex_code
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in vertex_code
+    )
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
@@ -16541,7 +16547,13 @@ def test_graphics_hlsl_vertex_system_value_aliases_lower_to_metal_builtins():
     generated = MetalCodeGen().generate_stage(ast, "vertex")
 
     assert "uint vertexID [[vertex_id]]" in generated
-    assert "uint instanceID [[instance_id]]" in generated
+    assert "uint _crossglInstanceIndex [[instance_id]]" in generated
+    assert "uint _crossglBaseInstance [[base_instance]]" in generated
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in generated
+    )
     assert "SV_VertexID" not in generated
     assert "SV_InstanceID" not in generated
 
@@ -16578,7 +16590,13 @@ def test_graphics_hlsl_system_value_semantic_alias_variants_lower_to_metal_built
 
     vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
     assert "uint vertexID [[vertex_id]]" in vertex_code
-    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "uint _crossglInstanceIndex [[instance_id]]" in vertex_code
+    assert "uint _crossglBaseInstance [[base_instance]]" in vertex_code
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in vertex_code
+    )
     assert "sv_vertex_id" not in vertex_code
     assert "SV_InstanceId" not in vertex_code
 

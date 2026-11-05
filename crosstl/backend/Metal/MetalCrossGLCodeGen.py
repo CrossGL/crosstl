@@ -46,6 +46,7 @@ from ..switch_clauses import ordered_switch_clauses
 from .aggregate_scalar_conversions import (
     refuse_aggregate_builtin_operation,
     render_aggregate_scalar_conversion,
+    render_explicit_aggregate_scalar_conversion,
 )
 from .barrier_import import metal_barrier_statements
 from .bit_scan_import import lower_scan as lower_bit_scan
@@ -72,6 +73,7 @@ from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
+from .opaque_matrix_contracts import complete_opaque_matrix_contracts
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
     MetalPreprocessor,
@@ -2114,7 +2116,7 @@ class MetalToCrossGLConverter(
         # [[attribute(n)]] is the vertex input at location n: see map_semantic.
         self.map_semantics = {
             "vertex_id": "gl_VertexID",
-            "instance_id": "gl_InstanceID",
+            "instance_id": "gl_InstanceIndex",
             "base_vertex": "gl_BaseVertex",
             "base_instance": "gl_BaseInstance",
             "position": "gl_Position",
@@ -9291,6 +9293,13 @@ class MetalToCrossGLConverter(
 
     def resource_memory_qualifier_prefix(self, var):
         qualifiers = self.resource_memory_qualifiers(var)
+        # ``T* __restrict p`` promises that no other pointer reaches the buffer: CrossGL's ``restrict``.
+        if self.declaration_has_resource_storage(var) and {
+            "restrict",
+            "__restrict",
+            "__restrict__",
+        } & set(self.effective_declaration_qualifiers(var)):
+            qualifiers = [*qualifiers, "restrict"]
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def map_resource_pointer_element_type(self, var, element_type):
@@ -12497,6 +12506,15 @@ class MetalToCrossGLConverter(
                 and isinstance(expr.args[0], InitializerListNode)
             ):
                 constructor_arguments = expr.args[0].elements
+            aggregate_conversion = render_explicit_aggregate_scalar_conversion(
+                self,
+                expr.name,
+                constructor_arguments,
+                is_main,
+                getattr(expr, "source_location", None),
+            )
+            if aggregate_conversion is not None:
+                return aggregate_conversion
             explicit_constructor = self.generate_explicit_constructor_call(
                 expr.name,
                 constructor_arguments,
@@ -13002,6 +13020,15 @@ class MetalToCrossGLConverter(
             )
             if cooperative_fragment is not None:
                 return cooperative_fragment
+            aggregate_conversion = render_explicit_aggregate_scalar_conversion(
+                self,
+                expr.target_type,
+                [expr.expression],
+                is_main,
+                getattr(expr, "source_location", None),
+            )
+            if aggregate_conversion is not None:
+                return aggregate_conversion
             explicit_constructor = self.generate_explicit_constructor_call(
                 expr.target_type,
                 [expr.expression],
@@ -13056,6 +13083,15 @@ class MetalToCrossGLConverter(
             size_query = self.texture_size_constructor_expression(expr, is_main)
             if size_query is not None:
                 return size_query
+            aggregate_conversion = render_explicit_aggregate_scalar_conversion(
+                self,
+                expr.type_name,
+                list(expr.args),
+                is_main,
+                getattr(expr, "source_location", None),
+            )
+            if aggregate_conversion is not None:
+                return aggregate_conversion
             explicit_constructor = self.generate_explicit_constructor_call(
                 expr.type_name,
                 list(expr.args),
@@ -14994,12 +15030,24 @@ class MetalToCrossGLConverter(
         unsupported.
         """
 
+        candidates = self.metal_lowered_readonly_scalar_conversions(metal_type)
+        return candidates[0] if len(candidates) == 1 else None
+
+    def metal_lowered_readonly_scalar_conversions(self, metal_type):
+        """Return every generated readonly aggregate-to-scalar conversion helper.
+
+        Each entry is ``(function, result_type)`` for one lowered
+        ``Struct__operator_*`` helper that takes the aggregate by readonly
+        thread reference and returns a native arithmetic scalar, in source
+        declaration order.
+        """
+
         value_type = self.metal_source_overload_value_type(metal_type)
         if value_type is None:
-            return None
+            return []
         resolved_type = self.normalized_metal_type(value_type)
         if resolved_type not in self.struct_member_types:
-            return None
+            return []
         prefix = f"{self.sanitize_identifier(resolved_type)}__operator_"
         candidates = []
         for function_name, overloads in self.user_function_overloads_by_name.items():
@@ -15067,7 +15115,7 @@ class MetalToCrossGLConverter(
                     ):
                         continue
                 candidates.append((function, result_type))
-        return candidates[0] if len(candidates) == 1 else None
+        return candidates
 
     def metal_builtin_lowered_conversion_plan(
         self,
@@ -19301,6 +19349,12 @@ float {scalar}(float value) {{
 
     def propagate_cooperative_matrix_fragment_type_contracts(self, code):
         replacements = self.cooperative_matrix_fragment_type_replacements
+        complete_opaque_matrix_contracts(
+            code,
+            replacements,
+            self.cooperative_matrix_fragment_mapping,
+            self.cooperative_matrix_fragment_mapping_provenance,
+        )
         if not replacements:
             return code
         legacy_types = sorted(replacements, key=lambda value: (-len(value), value))

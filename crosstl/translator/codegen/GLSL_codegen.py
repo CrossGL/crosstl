@@ -144,6 +144,7 @@ from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
     evaluate_literal_int_expression,
+    fold_array_type_counts,
     format_c_style_array_declaration,
     get_array_size_from_node,
     parse_array_type,
@@ -247,7 +248,11 @@ from .glsl_buffer_layout import (
 from .glsl_builtin_extensions import require_builtin_extensions
 from .glsl_constant_guards import glsl_constant_guards
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
-from .glsl_draw_parameters import DRAW_PARAMETERS, vertex_builtin_spelling
+from .glsl_draw_parameters import (
+    DRAW_PARAMETERS,
+    draw_parameter_spelling,
+    vertex_builtin_spelling,
+)
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
@@ -532,6 +537,7 @@ from .pointer_reinterpret import (
     same_scalar_lane_view,
     scalar_storage_layout,
 )
+from .private_array_rows import array_row_shape, array_row_view
 from .private_member_views import (
     glsl_member_view_root,
     is_single_object_type,
@@ -559,6 +565,7 @@ from .scalar_return_bounds import (
 )
 from .sizeof_calls import sizeof_call_bytes
 from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS, glsl_quad_sum_helper
+from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -3072,6 +3079,7 @@ class GLSLCodeGen(
             "sv_instanceid": "gl_InstanceID",
             "gl_IsFrontFace": "gl_FrontFacing",
             "gl_PrimitiveID": "gl_PrimitiveID",
+            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             **{
                 semantic: f"layout(location = {location})"
                 for semantic, location in SEMANTIC_LOCATIONS.items()
@@ -4185,7 +4193,10 @@ class GLSLCodeGen(
         lines = []
         if self.uses_nonuniform_ext(ast):
             lines.append("#extension GL_EXT_nonuniform_qualifier : require")
-        if stage_names & self.MESH_STAGE_NAMES:
+        # A program written against GL_NV_mesh_shader keeps it: glslang refuses both extensions together.
+        if stage_names & self.MESH_STAGE_NAMES and not self.glsl_extension_enabled(
+            "GL_NV_mesh_shader"
+        ):
             lines.append("#extension GL_EXT_mesh_shader : require")
         uses_ray_stage = bool(stage_names & self.RAY_STAGE_NAMES)
         if uses_ray_stage:
@@ -19356,8 +19367,20 @@ class GLSLCodeGen(
         x, y, z = self.validate_glsl_compute_workgroup_size(
             compute_local_size(execution_config)
         )
+        fixed = f"local_size_x = {x}, local_size_y = {y}, local_size_z = {z}"
+        ids = workgroup_size_specialization_ids(execution_config, "OpenGL")
+        specialized = "".join(
+            f", local_size_{axis}_id = {spec_id}"
+            for axis, spec_id in zip("xyz", ids)
+            if spec_id is not None
+        )
+        if not specialized:
+            return f"layout({fixed}) in;\n"
+        # local_size_*_id exists only when the shader is compiled to SPIR-V (GLSL 4.60 section 4.4.1.4,
+        # GL_KHR_vulkan_glsl); a driver compiling the source keeps the defaults, as for layout(constant_id).
         return (
-            f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
+            f"{GLSL_SPIRV_GUARD}layout({fixed}{specialized}) in;\n"
+            f"#else\nlayout({fixed}) in;\n#endif\n"
         )
 
     def validate_glsl_compute_workgroup_size(self, values):
@@ -30785,7 +30808,14 @@ class GLSLCodeGen(
             source_location=getattr(expression, "source_location", None),
         )
 
-    def validate_glsl_storage_pointer_mutation_target(self, expression):
+    def validate_glsl_storage_pointer_mutation_target(
+        self, expression, required_access="read_write"
+    ):
+        """Refuse a mutation through a storage view whose backing buffer lacks ``required_access``.
+
+        A plain store needs ``write`` access, so a ``writeonly`` buffer accepts it; a compound assignment, an
+        increment or an atomic reads the value as well and needs ``read_write``.
+        """
         self.glsl_storage_struct_reinterpret_mutation(expression)
         binding = self.glsl_storage_pointer_mutation_binding(
             expression, self.glsl_storage_pointer_aliases()
@@ -30804,7 +30834,7 @@ class GLSLCodeGen(
                 source_location=getattr(expression, "source_location", None),
             )
         self.validate_glsl_storage_pointer_binding_access(
-            binding, "read_write", expression
+            binding, required_access, expression
         )
 
     def generate_glsl_workgroup_pointer_alias_declaration(self, node, indent):
@@ -36753,8 +36783,12 @@ complex64_t crossgl_complex64_mod_assign(
         rejects it. Pad the same way here: the given elements first, then the
         element type's value initializer for each missing element; a missing
         element of an array of arrays is the zero inner array, as in
-        ``float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))``. A constructor
-        that already has enough arguments, or an unsized extent at any level,
+        ``float[2][2](float[2](1.0, 2.0), float[2](0.0, 0.0))``. An extent named
+        by a compile-time integer constant, ``float[N](x)``, is read as the
+        constant's value; a specialization constant is not one. A constructor
+        with more arguments than elements is refused, since that section allows
+        no extra argument. A constructor that has exactly enough arguments, or
+        an extent that is unsized or not a compile-time integer at any level,
         is left exactly as it was.
         """
         if func_name is None:
@@ -36765,7 +36799,9 @@ complex64_t crossgl_complex64_mod_assign(
         # array type argument, such as ``pick<float[2]>``, is not one.
         if not isinstance(func_name, str) or not func_name.rstrip().endswith("]"):
             return call_args
-        array_type = self.glsl_outer_array_type(func_name)
+        array_type = self.glsl_outer_array_type(
+            fold_array_type_counts(func_name, self.glsl_active_literal_int_constants())
+        )
         if array_type is None:
             return call_args
         extent_text, element_type = array_type
@@ -36775,6 +36811,17 @@ complex64_t crossgl_complex64_mod_assign(
             extent = int(extent_text)
         except ValueError:
             return call_args
+        if extent > 0 and len(call_args) > extent:
+            raise OpenGLAggregateInitializerError(
+                f"OpenGL array constructor '{func_name}' has {len(call_args)} "
+                f"arguments for {extent} elements; GLSL requires exactly one "
+                "argument per array element (GLSL 4.60 section 5.4.4)",
+                expected_type=func_name,
+                element_count=len(call_args),
+                expected_element_count=extent,
+                reason="element-count-mismatch",
+                source_location=getattr(expr, "source_location", None),
+            )
         if extent <= 0 or len(call_args) >= extent:
             return call_args
         padded = list(call_args)
@@ -36791,15 +36838,23 @@ complex64_t crossgl_complex64_mod_assign(
         The CrossGL parser keeps a one-dimensional constructor's extent in the
         callee's name, ``float[3]``, but reads the callee of an array of arrays
         as its base type subscripted once per extent, outermost first:
-        ``float[2][3]`` is ``float`` indexed by 2, then by 3. Only integer
-        literal extents are read.
+        ``float[2][3]`` is ``float`` indexed by 2, then by 3. Integer literal
+        extents and extents named by an identifier, ``float[N][2]``, are read;
+        the caller resolves a name against the compile-time constants.
         """
         extents = []
         while isinstance(callee, ArrayAccessNode):
             index = callee.index_expr
-            if not isinstance(index, LiteralNode) or type(index.value) is not int:
+            if isinstance(index, LiteralNode) and type(index.value) is int:
+                extents.append(index.value)
+            elif (
+                isinstance(index, IdentifierNode)
+                and isinstance(index.name, str)
+                and index.name.isidentifier()
+            ):
+                extents.append(index.name)
+            else:
                 return None
-            extents.append(index.value)
             callee = callee.array_expr
         if not extents or not isinstance(callee, IdentifierNode):
             return None
@@ -39217,7 +39272,9 @@ complex64_t crossgl_complex64_mod_assign(
             left = self.generate_glsl_buffer_block_mutation_target(left_node)
             return f"{left} = {storage_aggregate}"
         self.validate_glsl_private_pointer_byte_view_mutation(left_node)
-        self.validate_glsl_storage_pointer_mutation_target(left_node)
+        self.validate_glsl_storage_pointer_mutation_target(
+            left_node, "write" if op == "=" else "read_write"
+        )
         self.validate_glsl_buffer_block_assignment_target(left_node, op)
         storage_assignment = self.float_atomic_storage.assignment(
             node, left_node, right_node, op, statement_context
@@ -40160,7 +40217,7 @@ complex64_t crossgl_complex64_mod_assign(
             return "gl_VertexID"
         if stage_name == "vertex":
             return vertex_builtin_spelling(self, name)
-        return name
+        return draw_parameter_spelling(self, name)
 
     def glsl_identifier_is_resolved(self, name):
         symbol_tables = (
@@ -51781,13 +51838,19 @@ complex64_t crossgl_complex64_mod_assign(
         else:
             return None
         extent = self.literal_int_value(size_expression, constants)
-        return {
+        info = {
             "extent": extent if isinstance(extent, int) and extent > 0 else None,
             "element_type": (
                 self.map_type(element_type) if element_type is not None else None
             ),
             "source_location": getattr(node, "source_location", None),
         }
+        rows = array_row_shape(
+            node_type, lambda size: self.literal_int_value(size, constants)
+        )
+        if rows is not None:
+            info["rows"] = (rows[0], self.map_type(rows[1]))
+        return info
 
     def glsl_private_pointer_local_scalar_node_info(self, node):
         node_type = getattr(
@@ -53604,6 +53667,18 @@ complex64_t crossgl_complex64_mod_assign(
                 return None
         return refined
 
+    @staticmethod
+    def glsl_private_pointer_array_row(expression, local_arrays, excluded_names):
+        """The row of a fixed multidimensional local array ``expression`` selects, or None."""
+
+        def shape_of(name):
+            info = local_arrays.get(name)
+            if name in excluded_names or info is None or info.get("extent") is None:
+                return None
+            return info.get("rows")
+
+        return array_row_view(expression, shape_of)
+
     def glsl_private_pointer_static_binding(
         self,
         expression,
@@ -53658,6 +53733,35 @@ complex64_t crossgl_complex64_mod_assign(
                     "element_type": local_arrays[name]["element_type"],
                 }
             return None
+
+        if isinstance(expression, ArrayAccessNode):
+            row = self.glsl_private_pointer_array_row(
+                expression,
+                local_arrays,
+                set(parameter_element_types)
+                | {
+                    name
+                    for name, binding in (lexical_bindings or {}).items()
+                    if binding.get("root_kind") != "local"
+                    or binding.get("root") != name
+                },
+            )
+            if row is None:
+                return None
+            root_name, extent, element_type, indices = row
+            return {
+                "root_kind": "local",
+                "root": root_name,
+                "extent": extent,
+                "offset": 0,
+                "offset_interval": (0, 0),
+                "side_effecting": any(
+                    self.glsl_private_pointer_expression_has_side_effects(index)
+                    for index in indices
+                ),
+                "element_type": element_type,
+                "row_view": True,
+            }
 
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
@@ -55642,6 +55746,30 @@ complex64_t crossgl_complex64_mod_assign(
                     "root_kind": "local",
                 }
             return None
+
+        if isinstance(expression, ArrayAccessNode):
+            row = self.glsl_private_pointer_array_row(
+                expression,
+                local_arrays,
+                set(self.current_glsl_private_pointer_base_names),
+            )
+            if row is None:
+                return None
+            if any(
+                self.glsl_private_pointer_expression_has_side_effects(index)
+                for index in row[3]
+            ):
+                raise OpenGLPrivatePointerParameterError(
+                    "OpenGL cannot emit a side-effecting private array row index",
+                    function_name=self.glsl_private_pointer_display_name(function_name),
+                    reason="side-effecting-view-offset",
+                    source_location=getattr(expression, "source_location", None),
+                )
+            return {
+                "backing": self.generate_expression(expression),
+                "offset": "0",
+                "root_kind": "local",
+            }
 
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
@@ -58710,6 +58838,12 @@ complex64_t crossgl_complex64_mod_assign(
             address_space = str(
                 getattr(contract_type, "address_space", "") or ""
             ).lower()
+            # ``buffer T* p``: a storage pointer the emitter declares as a shader-storage block.
+            if not address_space and "buffer" in {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }:
+                return True
             return address_space in {"device", "global", "storage"}
         if self.is_structured_buffer_type(vtype):
             return True
@@ -58921,6 +59055,8 @@ complex64_t crossgl_complex64_mod_assign(
         mapped = self.map_stage_input_semantic(semantic, stage_name)
         if normalize_stage_name(stage_name) == "vertex":
             mapped = vertex_builtin_spelling(self, mapped)
+        else:
+            mapped = draw_parameter_spelling(self, mapped)
         if normalize_stage_name(stage_name) == "compute":
             quadgroup_alias = {
                 "gl_QuadGroupID": "(gl_LocalInvocationIndex / 4u)",

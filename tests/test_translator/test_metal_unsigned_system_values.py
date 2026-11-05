@@ -33,7 +33,8 @@ def _run(command, cwd):
 def test_the_indices_stay_uint(tmp_path):
     # The import used to read them as int, which made `vid - 1 < 3` true for vid == 0.
     cgl = translate(tmp_path, "cgl")
-    assert "uint vid @gl_VertexID, uint iid @gl_InstanceID" in cgl
+    # MSL instance_id counts from the base instance, as Vulkan's gl_InstanceIndex does.
+    assert "uint vid @gl_VertexID, uint iid @gl_InstanceIndex" in cgl
     glsl = translate(tmp_path, "opengl")
     assert "uint vid = uint(gl_VertexID);" in glsl
     essl = translate(tmp_path, "webgl")

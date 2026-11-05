@@ -784,7 +784,7 @@ def test_vertex_draw_metadata_builtins_emit_implicit_slang_parameters():
         "uint gl_InstanceID : SV_InstanceID, "
         "int gl_BaseVertex : SV_StartVertexLocation, "
         "uint gl_BaseInstance : SV_StartInstanceLocation, "
-        "uint gl_DrawID : SV_DrawID) : SV_Position" in generated_code
+        "uint gl_DrawID : SV_DrawIndex) : SV_Position" in generated_code
     )
     assert "int absoluteVertex = int(gl_VertexID) + gl_BaseVertex;" in generated_code
     assert "uint instance = gl_InstanceID + gl_BaseInstance;" in generated_code
@@ -813,10 +813,10 @@ def test_vertex_draw_metadata_uses_existing_semantic_parameter_aliases():
 
     assert "int baseVertex : SV_StartVertexLocation" in generated_code
     assert "uint baseInstance : SV_StartInstanceLocation" in generated_code
-    assert "uint drawIndex : SV_DrawID" in generated_code
+    assert "uint drawIndex : SV_DrawIndex" in generated_code
     assert "int gl_BaseVertex : SV_StartVertexLocation" not in generated_code
     assert "uint gl_BaseInstance : SV_StartInstanceLocation" not in generated_code
-    assert "uint gl_DrawID : SV_DrawID" not in generated_code
+    assert "uint gl_DrawID : SV_DrawIndex" not in generated_code
     assert "int absoluteVertex = baseVertex + baseVertex;" in generated_code
     assert "uint instance = baseInstance + baseInstance;" in generated_code
     assert "uint draw = drawIndex + drawIndex;" in generated_code
