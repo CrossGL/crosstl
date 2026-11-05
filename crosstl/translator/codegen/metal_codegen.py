@@ -61,6 +61,7 @@ from ..math_namespaces import (
 from ..matrix_shape import length_method_object
 from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
+from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
 from ..semantics.narrowing_constructors import select_narrowing_constructor_components
@@ -2083,6 +2084,7 @@ class MetalCodeGen(
                 "argument buffer"
             ),
         )
+        ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         ast = bind_combined_samplers(ast)
