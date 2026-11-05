@@ -129,6 +129,10 @@ from .gpu_device_globals import (
 )
 from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
+from .image_access_contracts import (
+    image_resource_metadata,
+    record_explicit_image_metadata,
+)
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -365,6 +369,8 @@ class HipCodeGen(
         self.match_temp_variable_index = 0
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.image_variable_formats = {}
+        self.image_load_expected_types = []
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -868,6 +874,8 @@ class HipCodeGen(
         self.validate_supported_stage_types(node)
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.image_variable_formats = {}
+        self.image_load_expected_types = []
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -1995,6 +2003,7 @@ class HipCodeGen(
         """Render a CrossGL function or compute entry point as HIP code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_image_variable_formats = self.image_variable_formats.copy()
         saved_buffer_resource_accesses = self.buffer_resource_accesses.copy()
         saved_glsl_buffer_block_accesses = self.glsl_buffer_block_accesses.copy()
         saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
@@ -2281,6 +2290,7 @@ class HipCodeGen(
         self.current_function_return_type = saved_current_function_return_type
         self.variable_types = saved_variable_types
         self.image_resource_accesses = saved_image_resource_accesses
+        self.image_variable_formats = saved_image_variable_formats
         self.buffer_resource_accesses = saved_buffer_resource_accesses
         self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
         self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
@@ -3541,7 +3551,14 @@ class HipCodeGen(
             declaration = f"{' '.join(qualifiers)} {declaration}"
 
         if initial_value is not None:
-            declaration += f" = {self.visit(initial_value)}"
+            expected_value_type = self.image_load_expected_type_for(var_type)
+            if expected_value_type is not None:
+                self.image_load_expected_types.append(expected_value_type)
+            try:
+                declaration += f" = {self.visit(initial_value)}"
+            finally:
+                if expected_value_type is not None:
+                    self.image_load_expected_types.pop()
 
         return declaration
 
@@ -3950,7 +3967,14 @@ class HipCodeGen(
             left = self.visit(node.left)
         finally:
             self.assignment_lhs_depth -= 1
-        right = self.visit(node.right)
+        expected_value_type = self.image_value_type_from_expression(node.left)
+        if expected_value_type is not None:
+            self.image_load_expected_types.append(expected_value_type)
+        try:
+            right = self.visit(node.right)
+        finally:
+            if expected_value_type is not None:
+                self.image_load_expected_types.pop()
         compound_binary_ops = {
             "+=": "+",
             "-=": "-",
@@ -6284,6 +6308,13 @@ class HipCodeGen(
         else:
             self.image_resource_accesses[name] = access
 
+        record_explicit_image_metadata(
+            name,
+            node,
+            self.attribute_value_to_string,
+            image_formats=self.image_variable_formats,
+        )
+
     @property
     def local_variable_types(self):
         return self.variable_types
@@ -6322,6 +6353,52 @@ class HipCodeGen(
         if type_name is not None and not isinstance(type_name, str):
             return self.convert_type_node_to_string(type_name)
         return type_name
+
+    def image_resource_format(self, texture_arg):
+        """Return the declared storage image format for an image argument."""
+        return image_resource_metadata(
+            texture_arg,
+            self.get_expression_name,
+            {},
+            self.image_variable_formats,
+        )
+
+    def image_generic_element_value_type(self, raw_image_arg):
+        """Return the element type from an HLSL-style image generic.
+
+        ``RWTexture2D<float>`` stores ``float`` texels, so surface access
+        uses ``float`` rather than the ``float4`` default.
+        """
+        raw_type = self.resource_expression_type(raw_image_arg)
+        if not isinstance(raw_type, str) or "<" not in raw_type:
+            return None
+        generic = raw_type.split("<", 1)[1].rsplit(">", 1)[0].strip()
+        generic = generic.split(",", 1)[0].strip()
+        if not generic:
+            return None
+        value_type = self.map_type(generic)
+        if value_type in self.image_surface_value_types:
+            return value_type
+        return None
+
+    def image_value_type_from_expression(self, node):
+        """Return the HIP value type inferred for a stored/loaded value."""
+        return self.image_load_expected_type_for(self.expression_result_type(node))
+
+    def image_load_expected_type_for(self, crossgl_type):
+        """Return the validated HIP value type for a CrossGL type spelling."""
+        if crossgl_type is None:
+            return None
+        value_type = self.map_type(crossgl_type)
+        if value_type in self.image_surface_value_types:
+            return value_type
+        return None
+
+    def current_image_load_expected_type(self):
+        """Return the value type an enclosing assignment expects a load to have."""
+        if not self.image_load_expected_types:
+            return None
+        return self.image_load_expected_types[-1]
 
     def is_buffer_resource_type(self, type_name):
         """Return whether a type is a structured or byte-address buffer resource."""
@@ -7501,7 +7578,11 @@ class HipCodeGen(
             )
             if coordinate_diagnostic is not None:
                 return coordinate_diagnostic
-            value_type = self.image_value_type(image_type)
+            value_type = self.image_access_value_type(
+                image_type,
+                raw_args[0],
+                expected_type=self.current_image_load_expected_type(),
+            )
             x = self.image_surface_x_offset(coord, value_type, image_type)
             y = self.coord_component(coord, "y")
 
@@ -7567,7 +7648,11 @@ class HipCodeGen(
             )
             if coordinate_diagnostic is not None:
                 return coordinate_diagnostic
-            value_type = self.image_value_type(image_type)
+            value_type = self.image_access_value_type(
+                image_type,
+                raw_args[0],
+                value_node=raw_args[2],
+            )
             x = self.image_surface_x_offset(coord, value_type, image_type)
             y = self.coord_component(coord, "y")
 
@@ -10307,6 +10392,17 @@ class HipCodeGen(
         return None
 
     def resource_call_result_type(self, func_name, raw_args):
+        if func_name == "imageLoad" and raw_args:
+            resource_type = self.resource_base_type(
+                self.resource_expression_type(raw_args[0])
+            )
+            if resource_type is not None:
+                return self.image_access_value_type(
+                    resource_type,
+                    raw_args[0],
+                    expected_type=self.current_image_load_expected_type(),
+                )
+
         if func_name in {"texelFetch", "texelFetchOffset"} and raw_args:
             resource_type = self.resource_base_type(
                 self.resource_expression_type(raw_args[0])
