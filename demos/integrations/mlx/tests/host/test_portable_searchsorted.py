@@ -415,7 +415,10 @@ def test_package_configs_carry_regions_and_opengl_index_bounds(tmp_path):
 def test_runtime_and_host_adapter_route_searchsorted():
     source = Path(runtime.__file__).read_text(encoding="utf-8")
     assert "searchsorted_dispatch.dispatch(" in source
-    assert "searchsorted_layout.ENTRIES and self.searchsorted is not None" in source
+    assert (
+        "name in searchsorted_layout.ENTRIES and self.searchsorted is not None"
+        in " ".join(source.split())
+    )
     adapter = (
         Path(runtime.__file__).with_name("backend.cpp").read_text(encoding="utf-8")
     )
