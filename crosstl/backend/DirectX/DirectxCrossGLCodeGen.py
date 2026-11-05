@@ -30,6 +30,7 @@ from ..common_ast import (
     TextureSampleNode,
 )
 from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
+from ..storage_image_texels import IMAGE_FORMAT_ATTRIBUTES
 from ..switch_clauses import ordered_switch_clauses
 from .DirectxAst import *
 from .DirectxLexer import *
@@ -4085,7 +4086,16 @@ class HLSLToCrossGLConverter(
                 getattr(node, "attributes", []), 1
             )
         else:
-            code = self.format_attributes(getattr(node, "attributes", []), 1)
+            # A typed storage texture's format attribute becomes ``@ format`` below.
+            format_attributes = (
+                IMAGE_FORMAT_ATTRIBUTES
+                if self.raw_type_base(getattr(node, "vtype", None))
+                in self.RUNTIME_FORMAT_STORAGE_TEXTURES
+                else None
+            )
+            code = self.format_attributes(
+                getattr(node, "attributes", []), 1, skip_names=format_attributes
+            )
         if id(node) in self.hlsl_program_constant_global_ids:
             code += "    @ hlsl_program_constant\n"
         code += self.format_resource_qualifier_attributes(node, 1)
@@ -4093,8 +4103,7 @@ class HLSLToCrossGLConverter(
         code += self.format_matrix_layout_attributes(node, 1)
         if self.is_structured_buffer_resource_type(getattr(node, "vtype", None)):
             code += f"    @ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_STRUCTURED_LAYOUT})\n"
-        if self.is_runtime_format_storage_texture(node):
-            code += "    @ format(unknown)\n"
+        code += self.format_storage_image_format_attributes(node, 1)
         storage_prefix = self.format_global_storage_qualifier_prefix(node)
         precise_prefix = self.format_precise_qualifier_prefix(node)
         array_suffix = self.format_array_suffixes(node)

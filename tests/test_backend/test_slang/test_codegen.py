@@ -2499,7 +2499,8 @@ def test_namespace_global_resource_array_codegen_from_current_slang_spirv_test()
 
     assert "ComputePush p @push_constant;" in generated_code
     assert (
-        "image2D test_namespace_textureTable[] @set(0) @binding(0);" in generated_code
+        "image2D test_namespace_textureTable[] @set(0) @binding(0) @format(unknown);"
+        in generated_code
     )
     assert (
         "test_namespace_textureTable[p.image_id][pixel_i.xy] = "
@@ -2529,7 +2530,10 @@ def test_dotted_namespace_global_resource_codegen_from_namespace_import_sample()
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D ns1_ns2_textureTable[] @set(0) @binding(0);" in generated_code
+    assert (
+        "image2D ns1_ns2_textureTable[] @set(0) @binding(0) @format(unknown);"
+        in generated_code
+    )
     assert "ns1_ns2_textureTable[0][pixel_i.xy] = vec4(0, 1, 0, 0);" in generated_code
     assert "ns1.ns2.textureTable" not in generated_code
     cgl_translator.parse(generated_code)
@@ -4442,7 +4446,7 @@ def test_rwtexture_load_codegen_from_official_texture_capability_sample():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D texHandle;" in generated_code
+    assert "image2D texHandle @format(unknown);" in generated_code
     assert "ret = int(imageLoad(texHandle, ivec2(0, 0)).x);" in generated_code
     assert "RWTexture2D<float4> texHandle;" not in generated_code
     assert ".Load(" not in generated_code
@@ -4466,7 +4470,7 @@ def test_rwtexture_store_codegen_from_slang_stdlib_texture_store_docs():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D texHandle;" in generated_code
+    assert "image2D texHandle @format(unknown);" in generated_code
     assert "imageStore(texHandle, pixel, color);" in generated_code
     assert "RWTexture2D<float4> texHandle;" not in generated_code
     assert ".Store(" not in generated_code

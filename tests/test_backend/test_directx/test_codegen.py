@@ -4353,7 +4353,7 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
 
     assert (
-        "globallycoherent RWTexture2D<uint4> counters : register(u4, space2);"
+        "globallycoherent RWTexture2D<uint> counters : register(u4, space2);"
         in regenerated_hlsl
     )
     assert "RWTexture2D<float4> outImage : register(u5, space2);" in regenerated_hlsl
