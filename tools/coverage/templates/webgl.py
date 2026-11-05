@@ -24,6 +24,7 @@ from .edges import FAMILY as _EDGES
 from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
 from .extensions import WEBGL as _EXTENSIONS
+from .formats import WEBGL as _FORMATS
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
 from .fragments import WEBGL as _FRAGMENTS
@@ -54,6 +55,7 @@ from .rays import WEBGL as _RAYS
 from .records import WEBGL as _RECORDS
 from .relations import GLSL as _RELATIONS
 from .rows import WEBGL as _ROWS
+from .samplers import WEBGL as _SAMPLERS
 from .scopes import WEBGL as _SCOPES
 from .specializations import WEBGL as _SPECIALIZATIONS
 from .subgroups import WEBGL as _SUBGROUPS
@@ -149,6 +151,8 @@ WEBGL = {
     **_QUALIFIERS,
     **_TEXTURES,
     **_IMAGES,
+    **_FORMATS,
+    **_SAMPLERS,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

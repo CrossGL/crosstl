@@ -70,6 +70,7 @@ def _grammar(drop: str = "") -> str:
         "ExecutionModel": [],
         "ExecutionMode": [],
         "Dim": [],
+        "ImageFormat": [],
     }
     instructions = []
     for anchor in sorted(anchors - {drop}):

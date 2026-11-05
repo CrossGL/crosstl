@@ -1230,3 +1230,55 @@ def test_an_unsized_array_of_textures_stays_unsized(monkeypatch):
     assert decorations.lost(unsized, "metal", texture) == (
         "the translation loses Capability.RuntimeDescriptorArray"
     )
+
+
+def test_a_storage_image_translation_keeps_its_texel_format():
+    unorm = Feature(
+        "spirv",
+        "resource",
+        "unorm-storage-image",
+        None,
+        group="OpImageWrite ImageFormat.Rgba8 Dim.2D",
+    )
+    image = "%img = OpTypeImage %float 2D 0 0 0 2 {}\n"
+    assert decorations.lost(unorm, "spirv", image.format("Rgba8")) == ""
+    assert decorations.lost(unorm, "spirv", image.format("Rgba32f")) == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+    # A format that only begins with the wanted one is another format.
+    assert decorations.lost(unorm, "spirv", image.format("Rgba8Snorm")) == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+    # DXC writes Rgba32f for any float4 storage texture, so HLSL keeps the format in its declaration.
+    assert decorations.lost(unorm, "hlsl", "RWTexture2D<unorm float4> img;\n") == ""
+    assert (
+        decorations.lost(
+            unorm, "hlsl", '[[vk::image_format("rgba8")]] RWTexture2D<float4> img;\n'
+        )
+        == ""
+    )
+    assert decorations.lost(unorm, "hlsl", "RWTexture2D<float4> img;\n") == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+    # An OpenCL C kernel names no format, so the HLSL CrossTL writes from it is not checked for one.
+    plain = "RWTexture2D<float4> img;\n"
+    assert decorations.lost(unorm, "hlsl", plain, imported="opencl") == ""
+    assert decorations.lost(unorm, "hlsl", plain, imported="hlsl") == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+
+
+def test_a_shared_sampler_translation_declares_the_sampler_apart():
+    shared = Feature(
+        "spirv",
+        "resource",
+        "shared-sampler",
+        None,
+        group="OpTypeSampler OpSampledImage Dim.2D",
+    )
+    image = "%img = OpTypeImage %float 2D 0 0 0 1 Unknown\n"
+    assert decorations.lost(shared, "spirv", image + "%smp = OpTypeSampler\n") == ""
+    combined = image + "%si = OpTypeSampledImage %img\n"
+    assert decorations.lost(shared, "spirv", combined) == (
+        "the translation loses OpTypeSampler"
+    )

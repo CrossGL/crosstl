@@ -2,10 +2,10 @@
 
 The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches, what
 its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core
-grammar items it needs (an instruction, a capability, a storage class, a built-in, an image dimension or an execution
-model), and the anchors are checked against the pinned grammar. The stages are the grammar's shader execution models
-and the scalar types its width capabilities, so a new stage or width upstream shows up as untested until it has a
-probe.
+grammar items it needs (an instruction, a capability, a storage class, a built-in, an image dimension or format, or an
+execution model), and the anchors are checked against the pinned grammar. The stages are the grammar's shader
+execution models and the scalar types its width capabilities, so a new stage or width upstream shows up as untested
+until it has a probe.
 
 Probe templates are written per language: CrossGL's in :mod:`.crossgl`, the others in :mod:`.templates`. A language
 with no spelling for a feature, such as WGSL for a geometry stage, leaves it out of its feature list; one that has the
@@ -546,6 +546,21 @@ def _curated() -> list[Construct]:
             "OpTypeArray",
             "OpImageRead",
             "OpImageWrite",
+            "Dim.2D",
+        ),
+        c("resource", "shared-sampler", "OpTypeSampler", "OpSampledImage", "Dim.2D"),
+        c(
+            "resource",
+            "unorm-storage-image",
+            "OpImageWrite",
+            "ImageFormat.Rgba8",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
+            "integer-storage-image",
+            "OpImageWrite",
+            "ImageFormat.R32ui",
             "Dim.2D",
         ),
         c(
@@ -1108,6 +1123,7 @@ def universe(grammar_text: str) -> list[Construct]:
         "ExecutionModel",
         "ExecutionMode",
         "Dim",
+        "ImageFormat",
     ):
         found |= {f"{kind}.{e['enumerant']}" for e in kinds[kind]}
     found |= {f"Capability.{name}" for name in capabilities}

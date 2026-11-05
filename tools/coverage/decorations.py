@@ -11,8 +11,8 @@ feature, the task-payload storage a mesh stage reads, and the storage and calls 
 hands data to another, as each native probe does, except the anchors in
 :data:`FOLDED`. A resource feature keeps only its image's
 ``Dim`` anchor, arrayed when the feature's name ends in ``-array`` and the element of an array of textures when it
-begins with ``array-of-`` (:data:`ELEMENTS`), the capability that shape needs, its push-constant
-storage and a descriptor set other than the first. GLSL ES 3.00
+begins with ``array-of-`` (:data:`ELEMENTS`), the capability that shape needs, its ``ImageFormat``, a sampler
+declared apart from its textures, its push-constant storage and a descriptor set other than the first. GLSL ES 3.00
 is lowered as GLSL ES 3.10, the first version glslang compiles for Vulkan. Metal compiles to AIR instead, where a
 translation must keep the attribute of each anchor (:data:`AIR`), the call, metadata or qualifier that stands for it
 (:data:`AIR_PATTERNS`), or the texture type of its shape (:data:`AIR_TEXTURES`). An anchor the compiler resolves
@@ -35,8 +35,10 @@ _PATTERNS = {
     "ExecutionMode": r"^\s*OpExecutionMode %\w+ {name}\b",
     # An image type's dimension and, after its depth operand, whether it is arrayed.
     "Dim": r"^\s*%\w+ = OpTypeImage %\w+ {name} \d+ {arrayed}\b",
+    # A storage image's texel format, the last operand of its type before the access qualifier.
+    "ImageFormat": r"^\s*%\w+ = OpTypeImage %\w+ \w+ \d+ \d+ \d+ \d+ {name}\b",
 }
-_IMAGE_KINDS = frozenset({"Dim", "Capability"})
+_IMAGE_KINDS = frozenset({"Dim", "Capability", "ImageFormat"})
 # The instructions that stand for an anchor as well: whether an invocation is a helper is the ``HelperInvocation``
 # built-in or, with SPV_EXT_demote_to_helper_invocation, ``OpIsHelperInvocationEXT``, which DXC and slangc emit for
 # ``IsHelperLane()``.
@@ -78,6 +80,8 @@ _OPERANDS = {
     # decorated with that set.
     "StorageClass.PushConstant": r"^\s*%\w+ = OpVariable %\w+ PushConstant\b",
     "Decoration.DescriptorSet": r"^\s*OpDecorate %\w+ DescriptorSet (?!0\b)\d+\b",
+    # Textures that share a sampler declare it apart from them.
+    "OpTypeSampler": r"^\s*%\w+ = OpTypeSampler\b",
 }
 
 # The enumerants SPIR-V shares with an earlier NV extension under one value, which a disassembler built from an older
@@ -183,11 +187,16 @@ _PATCH_VALUE = (
 )
 # The anchors a language's compiler resolves before it writes SPIR-V, with the declaration that keeps each one in the
 # translation itself: naga replaces every pipeline-overridable constant with its value, so a WGSL translation keeps a
-# specialization constant when it declares an ``override``.
+# specialization constant when it declares an ``override``. DXC gives a ``RWTexture2D<unorm float4>`` the ``Rgba32f``
+# format unless ``[[vk::image_format("rgba8")]]`` names another, so an HLSL translation keeps an 8-bit normalized
+# image with either.
 _STREAM_ANCHORS = ("Decoration.Stream", "Capability.GeometryStreams")
 SOURCE = {
     "wgsl": {"Decoration.SpecId": r"^\s*override\s+\w+"},
-    "hlsl": dict.fromkeys(_STREAM_ANCHORS, _STREAMS),
+    "hlsl": {
+        **dict.fromkeys(_STREAM_ANCHORS, _STREAMS),
+        "ImageFormat.Rgba8": r'\bunorm\s+float4\b|\[\[vk::image_format\("rgba8"\)\]\]',
+    },
     "slang": {
         **dict.fromkeys(_STREAM_ANCHORS, _STREAMS),
         "Decoration.Patch": _PATCH_VALUE,
@@ -196,6 +205,10 @@ SOURCE = {
 # The built-ins that are constants: GLSL defines ``gl_WorkGroupSize`` as the local size, so a translation may write
 # the value itself, as slangc does for ``WorkgroupSize()``.
 FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
+# The kinds of anchor a language leaves to the host, which a translation imported from it cannot carry: an OpenCL C
+# kernel names no image format, since the host gives each image its ``cl_image_format`` when it creates it, so the
+# HLSL CrossTL writes from an OpenCL C probe is not checked for one.
+HOSTED = {"opencl": frozenset({"ImageFormat"})}
 
 _ESSL_300 = re.compile(r"\A(\s*#version\s+)300(\s+es\b)")
 
@@ -265,12 +278,19 @@ def _compiled(feature: Feature, language: str, source: str) -> str:
     return assembly
 
 
-def lost(feature: Feature, language: str, source: str) -> str:
+def lost(feature: Feature, language: str, source: str, imported: str = "") -> str:
     """The anchors of ``feature`` that ``source``, a validated translation into ``language``, no longer has.
 
-    Empty when it keeps them all, when ``feature`` has none to check or when ``source`` cannot be compiled here.
+    Empty when it keeps them all, when ``feature`` has none to check or when ``source`` cannot be compiled here. A
+    translation ``imported`` from another language is not checked for the anchors that language leaves to the host
+    (:data:`HOSTED`).
     """
-    wanted = _wanted(feature, language)
+    hosted = HOSTED.get(imported, frozenset())
+    wanted = [
+        (anchor, pattern)
+        for anchor, pattern in _wanted(feature, language)
+        if anchor.partition(".")[0] not in hosted
+    ]
     declared = SOURCE.get(language, {})
     missing = [
         anchor
