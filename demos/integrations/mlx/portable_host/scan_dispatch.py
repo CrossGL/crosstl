@@ -68,7 +68,13 @@ def unpack(dtype, target, words):
 
 def _reflected(scalar, value, dtype):
     """Whether the reflected element carries ``value``'s exact storage."""
-    if dtype == element_storage.COMPLEX or "structMembers" in scalar:
+    # DirectX may lower float16 storage to uint16 binary16 words; the shared
+    # matcher accepts only that exact codec and stride.
+    if (
+        dtype == element_storage.COMPLEX
+        or "structMembers" in scalar
+        or "storageEncoding" in scalar
+    ):
         return element_storage.reflected_layout_matches(scalar, value, dtype)
     physical_size = (
         1

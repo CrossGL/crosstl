@@ -194,6 +194,50 @@ def test_scan_transport_preserves_source_words(target, dtype, words):
     assert value["shape"] == [parts * len(words)]
 
 
+BINARY16_BITS = {"encoding": "ieee754-binary16", "logicalElementType": "float16"}
+
+
+@pytest.mark.parametrize(
+    "target,layout,matches",
+    (
+        # DirectX lowers float16 memory to uint16 words holding binary16 bits.
+        (
+            "directx",
+            {
+                "elementType": "uint16",
+                "elementStrideBytes": 2,
+                "storageEncoding": BINARY16_BITS,
+            },
+            True,
+        ),
+        ("directx", {"elementType": "float16", "elementStrideBytes": 2}, True),
+        (
+            "directx",
+            {
+                "elementType": "uint16",
+                "elementStrideBytes": 4,
+                "storageEncoding": BINARY16_BITS,
+            },
+            False,
+        ),
+        (
+            "directx",
+            {
+                "elementType": "uint16",
+                "elementStrideBytes": 2,
+                "storageEncoding": {**BINARY16_BITS, "encoding": "bfloat16"},
+            },
+            False,
+        ),
+        ("directx", {"elementType": "uint16", "elementStrideBytes": 2}, False),
+        ("metal", {"elementType": "uint16", "elementStrideBytes": 2}, False),
+    ),
+)
+def test_scan_reflection_accepts_only_the_exact_binary16_codec(target, layout, matches):
+    value = scan_dispatch.packet("float16", target, [0x3C00, 0x8001])
+    assert scan_dispatch._reflected(layout, value, "float16") is matches
+
+
 @pytest.mark.parametrize(
     "dtype,word",
     (
