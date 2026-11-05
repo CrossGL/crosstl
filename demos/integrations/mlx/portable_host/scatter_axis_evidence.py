@@ -15,6 +15,7 @@ from demos.integrations.mlx.portable_host.runtime import COPY_GUARD, FLOAT32_BIT
 from demos.integrations.mlx.portable_host.scatter_axis_layout import (
     METADATA,
     launch_plan,
+    ordered_launch_plan,
     signature,
 )
 from demos.integrations.mlx.portable_host.scatter_layout import (
@@ -23,11 +24,12 @@ from demos.integrations.mlx.portable_host.scatter_layout import (
 )
 
 
-def exact_float_sums(np, initial, indices, updates, axis, axis_size):
-    """Whether every float32 destination sums exactly in any update order.
+def order_independent_sums(np, initial, indices, updates, axis, axis_size):
+    """Whether every float32 destination sums to one value in any update order.
 
     Native atomic additions land in an unspecified order and round after each
-    one, so a float32 sum is reconstructed only when no ordering can round.
+    one, so a float32 sum is reconstructed only when no ordering can change
+    it. A destination with at most one update rounds once in any order.
     Every finite float32 is an integer multiple of 2^-149; when a destination's
     terms share a coarser power-of-two step and their magnitudes sum to fewer
     than 2^24 steps, every partial sum in every order is exact. A zero sum is
@@ -39,6 +41,8 @@ def exact_float_sums(np, initial, indices, updates, axis, axis_size):
         destination[axis] = int(indices[coordinate]) % axis_size
         terms[tuple(destination)].append(updates[coordinate])
     for values in terms.values():
+        if len(values) <= 2:
+            continue
         if not all(np.isfinite(value) for value in values):
             return False
         scaled = [int(abs(float(value)) * 2.0**149) for value in values]
@@ -49,6 +53,18 @@ def exact_float_sums(np, initial, indices, updates, axis, axis_size):
         if sum(nonzero) >> step >= 2**24:
             return False
     return True
+
+
+def ordered(np, case, source, indices, updates):
+    """Whether the host runs a workload's float32 sum in index order."""
+    axis = 0 if case["axis"] is None else case["axis"] % source.ndim
+    return (
+        case["dtype"] == "float32"
+        and case["operation"] == "sum"
+        and not order_independent_sums(
+            np, np.zeros_like(source), indices, updates, axis, source.shape[axis]
+        )
+    )
 
 
 def audit_event(np, event):
@@ -179,7 +195,7 @@ def audit_event(np, event):
     require(
         dtype != "float32"
         or operation != "sum"
-        or exact_float_sums(np, initial, indices, updates, axis, axis_size),
+        or order_independent_sums(np, initial, indices, updates, axis, axis_size),
         "Axis-scatter float32 sum depends on its update order",
     )
     for coordinate in np.ndindex(indices.shape):
@@ -301,7 +317,14 @@ def validate(np, records, trace):
         plan = (
             []
             if case["layout"] == "empty"
-            else launch_plan(list(expected_indices.shape), axis)
+            else (
+                ordered_launch_plan(
+                    np.asarray(expected_indices).astype(np.int64) % source.shape[axis],
+                    axis,
+                )
+                if ordered(np, case, source, expected_indices, expected_updates)
+                else launch_plan(list(expected_indices.shape), axis)
+            )
         )
         require(len(events) == len(plan), "Axis-scatter dispatch count changed")
         # Each launch updates its slab of the result the earlier launches left.

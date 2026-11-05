@@ -387,6 +387,8 @@ AUTOGRAD_TESTS = (
             "scatter_max_vjp",
             "scatter_min_vjp",
             "scatter_vjp",
+            # Rounding float32 axis-scatter sums run in index order.
+            "second_order_permutation_ops",
             "slice_grads",
             "slice_grads_single_element",
             "slice_update_add_vjp",

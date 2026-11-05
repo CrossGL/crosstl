@@ -2126,11 +2126,12 @@ struct AxisLaunchTile {
 // (post) extent must fit one launch axis. Leading extents split into slabs
 // whose views start at the slab's first element. A launch that splits the
 // index axis covers one leading position, because the contiguous
-// specializations stride leading positions by the launch's y extent.
+// specializations stride leading positions by the launch's y extent;
+// ``one_leading`` asks for that split whatever the row count.
 std::vector<AxisLaunchTile> axis_launch_tiles(
-    const std::vector<int32_t>& pre_shape, uint64_t rows) {
+    const std::vector<int32_t>& pre_shape, uint64_t rows, bool one_leading = false) {
   constexpr uint64_t limit = 65535;
-  const uint64_t pre_limit = rows > limit ? 1 : limit;
+  const uint64_t pre_limit = rows > limit || one_leading ? 1 : limit;
   uint64_t before = 1;
   for (auto size : pre_shape) {
     before *= uint64_t(size);
@@ -2323,127 +2324,7 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   }
 }
 
-// Scatter::eval_gpu lives in crosstl_scatter.inc.
-
-void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
-  require_runtime();
-  constexpr uint64_t max_storage_elements = (uint64_t(1) << 28) - 33;
-  // The 32-bit types whose atomics every target provides.
-  if (inputs.size() != 3 ||
-      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32) ||
-      inputs[0].dtype() != out.dtype() || inputs[2].dtype() != out.dtype() ||
-      inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
-      inputs[1].ndim() != out.ndim() || inputs[2].shape() != inputs[1].shape() ||
-      axis_ < 0 || axis_ >= out.ndim() || out.size() > max_storage_elements ||
-      inputs[1].size() > max_storage_elements ||
-      (reduce_type_ != None && reduce_type_ != Sum)) {
-    throw std::invalid_argument("CrossTL axis scatter requires bounded int32, uint32 or float32 arrays.");
-  }
-  const auto index_dtype = inputs[1].dtype();
-  if (index_dtype != int32 && index_dtype != uint32 &&
-      index_dtype != int64 && index_dtype != uint64) {
-    throw std::invalid_argument("CrossTL axis scatter requires 32-bit or 64-bit integer indices.");
-  }
-  uint64_t after = 1;
-  for (size_t i = 0; i < out.ndim(); ++i) {
-    if (i != axis_ && inputs[1].shape(i) != out.shape(i)) {
-      throw std::invalid_argument("CrossTL axis scatter requires broadcast input shapes.");
-    }
-    if (i > axis_) {
-      after *= out.shape(i);
-    }
-  }
-  if (inputs[1].size() && after > 65535) {
-    throw std::invalid_argument("CrossTL axis scatter launch exceeds per-axis workgroup limits.");
-  }
-  // Preserve the source allocation, including when updates alias a source view.
-  dispatch_copy(inputs[0], out);
-  if (inputs[1].size() == 0) {
-    return;
-  }
-  auto upd = gather_input(inputs[2]);
-  auto idx = gather_input(inputs[1]);
-  const auto update_span = gather_span(upd, max_storage_elements);
-  const auto index_span = gather_span(idx, max_storage_elements);
-  const std::string entry = std::string("scatter_axis") + storage_type(out.dtype()) +
-      storage_type(index_dtype) + (reduce_type_ == None ? "_none_int" : "_sum_int") +
-      (upd.flags().row_contiguous ? "c" : "nc") + (idx.flags().row_contiguous ? "c" : "nc");
-  require_entry(entry);
-  std::vector<int32_t> shape, pre_shape;
-  std::vector<int64_t> update_strides, index_strides;
-  for (size_t i = 0; i < out.ndim(); ++i) {
-    if (i == axis_) {
-      continue;
-    }
-    shape.push_back(idx.shape(i));
-    update_strides.push_back(upd.strides()[i]);
-    index_strides.push_back(idx.strides()[i]);
-    if (i < axis_) {
-      pre_shape.push_back(idx.shape(i));
-    }
-  }
-  uint64_t ndim = out.ndim() - 1;
-  if (shape.empty()) {
-    shape.push_back(1);
-    update_strides.push_back(0);
-    index_strides.push_back(0);
-  }
-  const auto full_shape = shape;
-  int32_t axis = axis_, axis_size = out.shape(axis_);
-  uint64_t update_step = upd.strides()[axis_], index_step = idx.strides()[axis_];
-  auto* const update_data = static_cast<uint8_t*>(const_cast<void*>(upd.data<void>()));
-  auto* const index_data = static_cast<uint8_t*>(const_cast<void*>(idx.data<void>()));
-  CrosstlMlxBuffer buffers[] = {
-      {"upd", storage_type(upd.dtype()), update_data, update_span, 0},
-      {"indices", storage_type(idx.dtype()), index_data, index_span, 0},
-      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
-      {"shape", "int32", shape.data(), shape.size(), 0},
-      {"upd_strides", "int64", update_strides.data(), update_strides.size(), 0},
-      {"idx_strides", "int64", index_strides.data(), index_strides.size(), 0},
-      {"ndim", "uint64", &ndim, 1, 0},
-      {"axis", "int32", &axis, 1, 0},
-      {"out_axis_size", "int32", &axis_size, 1, 0},
-      {"upd_ax_stride", "uint64", &update_step, 1, 0},
-      {"idx_ax_stride", "uint64", &index_step, 1, 0},
-  };
-  for (const auto& tile : axis_launch_tiles(pre_shape, idx.shape(axis_))) {
-    std::copy(tile.pre_shape.begin(), tile.pre_shape.end(), shape.begin());
-    // Each view starts at the tile's first element and spans only the tile.
-    uint64_t update_offset = tile.first_row * update_step;
-    uint64_t index_offset = tile.first_row * index_step;
-    uint64_t update_extent = 1 + (tile.rows - 1) * update_step;
-    uint64_t index_extent = 1 + (tile.rows - 1) * index_step;
-    for (size_t i = 0; i < full_shape.size(); ++i) {
-      if (i < tile.pre_start.size()) {
-        update_offset += tile.pre_start[i] * uint64_t(update_strides[i]);
-        index_offset += tile.pre_start[i] * uint64_t(index_strides[i]);
-      }
-      update_extent += uint64_t(shape[i] - 1) * uint64_t(update_strides[i]);
-      index_extent += uint64_t(shape[i] - 1) * uint64_t(index_strides[i]);
-    }
-    if (update_offset > update_span || update_extent > update_span - update_offset ||
-        index_offset > index_span || index_extent > index_span - index_offset) {
-      throw std::invalid_argument("CrossTL axis scatter tile exceeds its input allocation.");
-    }
-    const uint64_t outputs = tile.pre_count * after * uint64_t(axis_size);
-    buffers[0].data = update_data + update_offset * upd.itemsize();
-    buffers[0].count = update_extent;
-    buffers[1].data = index_data + index_offset * idx.itemsize();
-    buffers[1].count = index_extent;
-    buffers[2].data = out.data<uint8_t>() + tile.first_pre * after * axis_size * out.itemsize();
-    buffers[2].count = outputs;
-    const CrosstlMlxLaunch launch{
-        {static_cast<uint32_t>(after), static_cast<uint32_t>(tile.rows),
-         static_cast<uint32_t>(tile.pre_count)}, {1, 1, 1}};
-    char error[2048] = {};
-    const int status = dispatch_callback.load()(
-        entry.c_str(), buffers, 11, outputs, &launch, error, sizeof(error));
-    error[sizeof(error) - 1] = '\0';
-    if (status != 0) {
-      throw std::runtime_error(std::string("CrossTL native axis scatter failed: ") + error);
-    }
-  }
-}
+// Scatter::eval_gpu and ScatterAxis::eval_gpu live in crosstl_scatter.inc.
 
 void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
