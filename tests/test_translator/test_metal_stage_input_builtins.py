@@ -106,10 +106,19 @@ shader S {
 """
 
 
+# The HLSL sources declare a zero base vertex, under which SV_VertexID is [[vertex_id]]; the base-vertex rewrite has
+# its own tests (test_relative_vertex_ids.py).
+_ZERO_BASE_VERTEX = {"zero_base_vertex": True}
+
+
 def _translate(tmp_path, source, suffix):
     path = tmp_path / f"shader{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend="metal")
+    return crosstl.translate(
+        str(path),
+        backend="metal",
+        source_options=_ZERO_BASE_VERTEX if suffix == ".hlsl" else None,
+    )
 
 
 def _compile(tmp_path, code):
@@ -225,7 +234,9 @@ def test_fragment_amplification_id_becomes_a_parameter(tmp_path):
 def test_other_targets_keep_the_input_structure(tmp_path, backend):
     path = tmp_path / "shader.hlsl"
     path.write_text(_VERTEX_IDS)
-    code = crosstl.translate(str(path), backend=backend)
+    code = crosstl.translate(
+        str(path), backend=backend, source_options=_ZERO_BASE_VERTEX
+    )
 
     assert "_StageIn" not in code
     assert "input_stage_in" not in code
