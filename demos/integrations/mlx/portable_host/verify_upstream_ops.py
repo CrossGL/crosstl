@@ -430,6 +430,7 @@ COMPILE_TESTS = (
             "compile_many_inputs",
             "compile_many_outputs",
             "compile_multi_output",
+            "compile_negative_strides",
             "compile_nonfinite_constants",
             "compile_output_with_siblings",
             "compile_release_on_another_thread",

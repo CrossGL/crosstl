@@ -2397,7 +2397,11 @@ port (see "Convolution") and its gradients, and translate their kernels on
 demand. The other `test_conv` and `test_conv_transpose` tests need PyTorch or
 the general implicit GEMM and small-depth 3-D routes.
 The `array`, `autograd` and `compile` groups run the `test_array` (41),
-`test_autograd` (45) and `test_compile` (51) methods that reach the GPU. Five
+`test_autograd` (45) and `test_compile` (55) methods that reach the GPU. A
+compiled tape runs the variant `Compiled::eval_gpu` selects, from the source
+the host generates with MLX's `build_kernel`; an input with a negative stride
+is copied densely first, because MLX's `int64_t` variants index it before its
+data pointer, where a host upload does not reach. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (39 `test_nn` methods: module state, weight files and the layers),
 `transforms` (24 `test_vmap` and 11 `test_eval` methods), `serialization` (16
