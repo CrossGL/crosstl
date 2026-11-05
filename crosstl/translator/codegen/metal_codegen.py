@@ -107,6 +107,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
+from .ast_value_walk import iter_ast_values
 from .barrier_peephole import merge_adjacent_metal_barriers
 from .bitfield_builtins import BITFIELD_ARITIES, metal_bitfield_call
 from .boolean_mix import boolean_mix_selector, metal_boolean_mix
@@ -22787,19 +22788,7 @@ class MetalCodeGen(
         return names
 
     def iter_ast_nodes(self, node):
-        if node is None or isinstance(node, (str, int, float, bool)):
-            return
-        if isinstance(node, (list, tuple, set)):
-            for item in node:
-                yield from self.iter_ast_nodes(item)
-            return
-        if not hasattr(node, "__dict__"):
-            return
-        yield node
-        for key, value in vars(node).items():
-            if key in {"parent", "annotations"}:
-                continue
-            yield from self.iter_ast_nodes(value)
+        return iter_ast_values(node)
 
     def literal_int_value(self, expr, constants=None):
         return evaluate_literal_int_expression(expr, constants)

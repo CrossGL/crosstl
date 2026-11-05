@@ -67,6 +67,7 @@ from .static_member_constants import (
     static_member_constant_substituter,
     substitute_parameter_extent_static_members,
 )
+from .template_argument_text import normalize_template_argument_text
 from .template_constants import unresolved_constant_references
 from .template_overloads import declared_type_names, select_instantiated_overload
 from .text_scanners import (
@@ -27815,32 +27816,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
 
     def _normalize_template_argument_text(self, value: str) -> str:
-        value = self._strip_template_argument_comments(value).strip()
-        if not value:
-            return ""
-        collapsed = re.sub(r"\s+", " ", value)
-        normalized = re.sub(r"\s*([<>,:*&\[\](){}])\s*", r"\1", collapsed).strip()
-        # Redundant parentheses around a literal non-type template argument do
-        # not change its value.  Strip them only after proving that the complete
-        # nested spelling reduces to an integral or Boolean literal.  Grouping
-        # remains semantic for expressions such as `(2 > 2)`: removing that pair
-        # would turn a recursive `Struct<..., (2 > 2)>` substitution into the
-        # ambiguous token sequence `Struct<..., 2 > 2>`.
-        candidate = normalized
-        while candidate.startswith("(") and candidate.endswith(")"):
-            closing = self._find_matching_delimiter(candidate, 0, "(", ")")
-            if closing != len(candidate) - 1:
-                break
-            inner = candidate[1:-1].strip()
-            if not inner:
-                break
-            candidate = inner
-        if re.fullmatch(
-            r"(?:true|false|[-+]?(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|\d+)[uUlL]*)",
-            candidate,
-        ):
-            normalized = candidate
-        return normalized
+        return normalize_template_argument_text(
+            value,
+            self._strip_template_argument_comments,
+            self._find_matching_delimiter,
+        )
 
     def _metal_unqualified_remove_cv_t_available(self, code: str) -> bool:
         """Whether unqualified ``remove_cv_t`` can denote Metal's stdlib alias.
