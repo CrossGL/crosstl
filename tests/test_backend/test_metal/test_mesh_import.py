@@ -76,6 +76,22 @@ struct V { float4 position [[position]]; float size [[point_size]]; };
 }
 """
 
+# ``using namespace metal`` lets the mesh type drop its namespace; the lexer reads the bare ``mesh`` as the stage
+# keyword of ``[[mesh]]``.
+UNQUALIFIED = """#include <metal_stdlib>
+using namespace metal;
+struct Vertex { float4 position [[position]]; };
+[[mesh]] void probe(mesh<Vertex, void, 3, 1, topology::triangle> output) {
+    output.set_primitive_count(1);
+    output.set_vertex(0, Vertex{float4(0.0, 0.0, 0.0, 1.0)});
+    output.set_vertex(1, Vertex{float4(1.0, 0.0, 0.0, 1.0)});
+    output.set_vertex(2, Vertex{float4(0.0, 1.0, 0.0, 1.0)});
+    output.set_index(0, 0);
+    output.set_index(1, 1);
+    output.set_index(2, 2);
+}
+"""
+
 SIZE = {"threadgroup_size": (8, 1, 1)}
 
 
@@ -128,6 +144,30 @@ def test_point_mesh_stores_8_bit_indices_directly(tmp_path):
     assert "output_indices[lid] = uint(lid + 256) & 255u;" in crossgl
     assert "groupshared" not in crossgl
     assert "workgroupBarrier" not in crossgl
+
+
+def test_unqualified_mesh_type_imports_as_a_mesh_stage(tmp_path):
+    crossgl = _translate(tmp_path, UNQUALIFIED, "cgl")
+
+    assert (
+        "void probe(out Vertex output_vertices[3] @vertices, "
+        "out uvec3 output_indices[1] @indices, "
+        "uint output_invocation @gl_LocalInvocationIndex) @outputtopology(triangle) {"
+    ) in crossgl
+    assert "SetMeshOutputCounts(3u, output_primitive_count);" in crossgl
+    assert "output_index_values[2] = uint(2) & 255u;" in crossgl
+    assert "set_vertex" not in crossgl
+
+
+def test_unqualified_mesh_alias_and_line_topology_import(tmp_path):
+    source = LINES.replace("metal::mesh<", "mesh<").replace(
+        "metal::topology::", "topology::"
+    )
+    crossgl = _translate(tmp_path, source, "cgl")
+
+    assert "out uvec2 output_indices[2] @indices" in crossgl
+    assert "@outputtopology(line)" in crossgl
+    assert crossgl == _translate(tmp_path, LINES, "cgl")
 
 
 def test_mesh_without_a_thread_index_parameter_gains_one_for_the_index_copy(
@@ -219,7 +259,7 @@ def test_mesh_constructs_without_a_faithful_form_are_refused(tmp_path, source, r
         _translate(tmp_path, source, "cgl")
 
 
-@pytest.mark.parametrize("source", [LINES, POINTS, TRIANGLES])
+@pytest.mark.parametrize("source", [LINES, POINTS, TRIANGLES, UNQUALIFIED])
 def test_imported_mesh_stage_compiles_for_metal(tmp_path, source):
     if shutil.which("xcrun") is None:
         pytest.skip("xcrun is not available")
@@ -245,8 +285,10 @@ def test_imported_mesh_stage_compiles_for_metal(tmp_path, source):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("source", [LINES, POINTS])
-def test_imported_mesh_stage_validates_as_glsl_and_spirv(tmp_path, source):
+@pytest.mark.parametrize(
+    ("source", "primitives"), [(LINES, 2), (POINTS, 8), (UNQUALIFIED, 1)]
+)
+def test_imported_mesh_stage_validates_as_glsl_and_spirv(tmp_path, source, primitives):
     glslang = shutil.which("glslangValidator")
     spirv_as = shutil.which("spirv-as")
     spirv_val = shutil.which("spirv-val")
@@ -270,7 +312,7 @@ def test_imported_mesh_stage_validates_as_glsl_and_spirv(tmp_path, source):
     assert result.returncode == 0, result.stdout + result.stderr
 
     assembly = _translate(tmp_path, source, "vulkan", SIZE)
-    assert "OutputPrimitivesEXT 1\n" not in assembly
+    assert f"OutputPrimitivesEXT {primitives}\n" in assembly
     spvasm = tmp_path / "mesh.spvasm"
     spvasm.write_text(assembly, encoding="utf-8")
     binary = tmp_path / "mesh.spv"
@@ -298,6 +340,16 @@ def test_imported_triangle_mesh_and_fragment_compile_with_dxc(tmp_path):
     for profile, entry in (("ms_6_5", "MSMain"), ("ps_6_5", "PSMain")):
         result = _run([dxc, "-T", profile, "-E", entry, str(shader)])
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_imported_unqualified_mesh_compiles_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not available")
+    shader = tmp_path / "mesh.hlsl"
+    shader.write_text(_translate(tmp_path, UNQUALIFIED, "directx", SIZE), "utf-8")
+    result = _run([dxc, "-T", "ms_6_5", "-E", "MSMain", str(shader)])
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_imported_triangle_mesh_and_fragment_link_as_glsl(tmp_path):

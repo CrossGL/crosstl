@@ -1281,7 +1281,13 @@ class SlangParser:
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
-            members.extend(self.parse_struct_field_members())
+            # A member may carry attributes, such as the [[vk::offset(N)]] of a push-constant block's member.
+            member_attributes = []
+            while self.current_token[0] == "LBRACKET":
+                member_attributes.extend(self.parse_attribute_list())
+            members.extend(
+                self.parse_struct_field_members(attributes=member_attributes)
+            )
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")

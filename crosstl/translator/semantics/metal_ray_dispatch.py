@@ -13,7 +13,12 @@ constants (``gl_RayFlagsOpaqueEXT``) likewise.
   the kernel's ``[[thread_position_in_grid]]``, and the launch size becomes ``gl_LaunchSizeEXT``, which it receives
   as ``[[threads_per_grid]]``: both ``uint3``, the type of the GLSL built-ins and the DXR intrinsics;
 * a GLSL ray flag constant becomes the DXR constant of the same value (``GL_EXT_ray_tracing`` section 8.19 and the
-  DXR ``RAY_FLAG`` enumeration agree bit for bit), which the generator prints as its value.
+  DXR ``RAY_FLAG`` enumeration agree bit for bit), which the generator prints as its value;
+* DXR's ``BuiltInTriangleIntersectionAttributes``, the hit attributes of a closest-hit or any-hit stage on a
+  triangle, is declared as the struct of its one ``float2 barycentrics`` member, which MSL does not predeclare. The
+  stage's ``[[visible]]`` function takes it as an ordinary argument, which a caller fills from the
+  ``triangle_barycentric_coord`` of its ``intersection_result`` (MSL section 6.18); the generator printed the
+  HLSL type name, which the Metal compiler rejects.
 
 Refused with :class:`MetalRayDispatchUnsupportedError`:
 
@@ -33,6 +38,7 @@ from __future__ import annotations
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .dxr_ray_interfaces import declare_dxr_builtin_structs
 from .hlsl_ray_interfaces import (
     _CONSTANTS,
     _attribute_names,
@@ -76,6 +82,7 @@ _RAY_FLAGS = {
     name: value for name, value in _CONSTANTS.items() if name.startswith("gl_RayFlags")
 }
 _PAYLOAD_ATTRIBUTES = frozenset({"raypayloadext", "raypayloadnv"})
+_TRIANGLE_ATTRIBUTES = "BuiltInTriangleIntersectionAttributes"
 # The state of the ray a hit, miss or intersection shader runs for: GLSL_EXT_ray_tracing section 8.19 and
 # GL_NV_ray_tracing built-ins, and the DXR intrinsics that read the same values.
 _RAY_STATE_VARIABLES = frozenset(
@@ -254,4 +261,5 @@ def lower_metal_ray_dispatch(program, target) -> int:
             _refuse_ray_state(stage, functions)
         for function in functions:
             _transform(function, _rewrite)
+    declare_dxr_builtin_structs(program, (_TRIANGLE_ATTRIBUTES,))
     return visited

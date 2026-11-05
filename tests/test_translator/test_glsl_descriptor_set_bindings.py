@@ -18,10 +18,12 @@ from crosstl.translator.codegen.glsl_descriptor_sets import plan_descriptor_set_
 
 
 def bindings(glsl):
+    """The OpenGL binding point of each declaration: ``binding = N``, or the last argument of CROSSGL_BINDING."""
     return {
-        name: int(binding)
-        for binding, name in re.findall(
-            r"layout\((?:std140, |std430, )?binding = (\d+)\)[^;{]*?(\w+)(?:\s*\{|;)",
+        name: int(binding or macro_binding)
+        for binding, macro_binding, name in re.findall(
+            r"layout\((?:std140, |std430, )?(?:binding = (\d+)|CROSSGL_BINDING\(\d+, \d+, (\d+)\))\)"
+            r"[^;{]*?(\w+)(?:\s*\{|;)",
             glsl,
         )
     }
@@ -93,11 +95,12 @@ def test_every_stage_of_a_program_gets_the_same_binding_points():
     vertex = GLSLCodeGen().generate_stage(ast, "vertex")
     fragment = GLSLCodeGen().generate_stage(ast, "fragment")
     # Texture units 1 and 0 are distinct, so both samplers keep their binding; the set-1 block moves past ubo.
+    # The set-1 resources keep their Vulkan set and binding under CROSSGL_BINDING.
     for glsl in (vertex, fragment):
         assert "layout(std140, binding = 0) uniform UBO {" in glsl
-        assert "layout(std140, binding = 1) uniform UBO_material {" in glsl
+        assert "layout(std140, CROSSGL_BINDING(1, 1, 1)) uniform UBO_material {" in glsl
         assert "layout(binding = 1) uniform sampler2D shadowMap;" in glsl
-        assert "layout(binding = 0) uniform sampler2D colorMap;" in glsl
+        assert "layout(CROSSGL_BINDING(1, 0, 0)) uniform sampler2D colorMap;" in glsl
 
 
 def test_hlsl_register_spaces_get_distinct_opengl_binding_points(tmp_path):
@@ -115,7 +118,13 @@ def test_hlsl_register_spaces_get_distinct_opengl_binding_points(tmp_path):
     glsl = crosstl.translate(str(source), backend="opengl", format_output=False)
     found = bindings(glsl)
     assert all(binding < 80 for binding in found.values()), found
-    uniform_blocks = re.findall(r"layout\(std140, binding = (\d+)\) uniform", glsl)
+    uniform_blocks = [
+        plain or macro
+        for plain, macro in re.findall(
+            r"layout\(std140, (?:binding = (\d+)|CROSSGL_BINDING\(\d+, \d+, (\d+)\))\) uniform",
+            glsl,
+        )
+    ]
     assert sorted(uniform_blocks) == ["0", "1"], glsl
     if shutil.which("glslangValidator"):
         artifact = tmp_path / "spaces.frag"

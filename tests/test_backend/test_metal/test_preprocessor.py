@@ -18,6 +18,10 @@ from crosstl.backend.Metal.preprocessor import (
     _MetalIntegralConstantBinding,
     _MetalTemplateStruct,
 )
+from crosstl.backend.Metal.source_analysis_cache import (
+    FRAGMENT_CACHE_LIMIT,
+    FRAGMENT_LENGTH_LIMIT,
+)
 
 
 def token_values(code, **lexer_options):
@@ -246,13 +250,30 @@ def test_source_analysis_cache_reuses_equal_snapshots_and_is_bounded(monkeypatch
 
     assert scan_counts == {name: 1 for name in scan_names}
 
-    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+    # Short sources are fragments and use the fragment tier's bound.
+    for index in range(FRAGMENT_CACHE_LIMIT + 2):
         preprocessor._find_namespace_spans(
             f"namespace generated_{index} {{ int value_{index}; }}"
         )
 
-    assert len(preprocessor._source_analysis_cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert len(preprocessor._source_analysis_cache) == FRAGMENT_CACHE_LIMIT
     assert source not in preprocessor._source_analysis_cache
+
+    # Translation-unit-sized sources are bounded by SOURCE_ANALYSIS_CACHE_LIMIT.
+    padding = " " * FRAGMENT_LENGTH_LIMIT
+    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+        preprocessor._find_namespace_spans(
+            f"namespace unit_{index} {{ int value_{index}; }}{padding}"
+        )
+
+    assert (
+        len(preprocessor._source_analysis_cache)
+        == FRAGMENT_CACHE_LIMIT + SOURCE_ANALYSIS_CACHE_LIMIT
+    )
+    assert (
+        f"namespace unit_0 {{ int value_0; }}{padding}"
+        not in preprocessor._source_analysis_cache
+    )
 
 
 def test_alias_free_struct_families_skip_detailed_scope_scans(monkeypatch):
@@ -430,9 +451,9 @@ def test_discovery_records_are_evicted_with_source_snapshots():
     preprocessor = MetalPreprocessor()
     first = "template <typename T> T identity(T x) { return x; }"
     preprocessor._find_template_functions(first)
-    for index in range(SOURCE_ANALYSIS_CACHE_LIMIT + 2):
+    for index in range(FRAGMENT_CACHE_LIMIT + 2):
         preprocessor._find_template_functions(first + f"\nint value{index};")
-    assert len(preprocessor._source_analysis_cache) == SOURCE_ANALYSIS_CACHE_LIMIT
+    assert len(preprocessor._source_analysis_cache) == FRAGMENT_CACHE_LIMIT
     assert first not in preprocessor._source_analysis_cache
 
 
