@@ -54,7 +54,7 @@ def _generate(guard="check < size", step="", prologue=""):
 
 
 def _subscript(generated):
-    (line,) = [line for line in generated.splitlines() if "* stride" in line]
+    (line,) = (line for line in generated.splitlines() if "* stride" in line)
     return line.strip()
 
 
