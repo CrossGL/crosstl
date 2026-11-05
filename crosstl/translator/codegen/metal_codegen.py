@@ -423,6 +423,7 @@ from .metal_signed_builtins import (
     metal_signed_member_assignment,
 )
 from .metal_specialization_constants import (
+    block_member_array_types,
     flattened_stage_io_array_types,
     metal_function_constant_type_refusal,
     refuse_specialization_sized_arrays,
@@ -2343,16 +2344,6 @@ class MetalCodeGen(
             | set(self.metal_fragment_entry_input_struct_names)
             | set(self.metal_fragment_entry_output_struct_names)
         )
-        refuse_specialization_sized_arrays(
-            ast,
-            lambda node: self.metal_specialization_constant_id(node) is not None,
-            self.refuse_lowering,
-            flattened_stage_io_array_types(
-                structs,
-                self.metal_stage_io_struct_names,
-                self.metal_stage_io_member_array_info,
-            ),
-        )
         self.metal_ray_payload_parameter_types = (
             self.collect_metal_ray_payload_parameter_types(getattr(ast, "stages", {}))
         )
@@ -2521,6 +2512,21 @@ class MetalCodeGen(
         self.lowered_glsl_buffer_block_struct_names = {
             block["type_name"] for block in self.lowered_glsl_buffer_blocks.values()
         }
+        refuse_specialization_sized_arrays(
+            ast,
+            lambda node: self.metal_specialization_constant_id(node) is not None,
+            self.refuse_lowering,
+            flattened_stage_io_array_types(
+                structs,
+                self.metal_stage_io_struct_names,
+                self.metal_stage_io_member_array_info,
+            )
+            + block_member_array_types(
+                self.cbuffer_variables,
+                structs,
+                self.lowered_glsl_buffer_block_struct_names,
+            ),
+        )
         self.unsupported_glsl_buffer_block_struct_names = set(
             self.glsl_buffer_block_struct_lowering_failures
         )
@@ -8372,7 +8378,11 @@ class MetalCodeGen(
         name = getattr(cbuffer, "name", "constants")
         if not name:
             return "constants"
-        return name[:1].lower() + name[1:]
+        name = name[:1].lower() + name[1:]
+        # ``Kernel`` would become the keyword ``kernel``, which MSL rejects as a parameter name.
+        if name in self.METAL_RESERVED_LOCAL_IDENTIFIERS:
+            return f"{name}_"
+        return name
 
     def collect_cbuffer_parameter_names(self, cbuffers, reserved_names=None):
         parameter_names = {}
