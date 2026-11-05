@@ -220,7 +220,12 @@ MODULE_TESTS = tuple(
                 "two_input_einsum",
             ),
         ),
-        ("test_init", "TestInit", ("orthogonal", "sparse_zeros_per_row", "uniform")),
+        (
+            "test_init",
+            "TestInit",
+            # identity and sparse scatter into float16 and bfloat16 arrays.
+            ("identity", "orthogonal", "sparse", "sparse_zeros_per_row", "uniform"),
+        ),
         (
             "test_linalg",
             "TestLinalg",
