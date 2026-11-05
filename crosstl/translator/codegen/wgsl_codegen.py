@@ -3933,6 +3933,8 @@ class WGSLCodeGen(
             return self.generate_bit_cast_call(node, function_name, bit_cast)
         if function_name == "mod":
             return self.generate_mod_call(node)
+        if function_name == "fmod" and not self.is_user_function_name(function_name):
+            return self.generate_fmod_call(node)
         if function_name in self.COLUMNWISE_MATRIX_BUILTINS and not (
             self.is_user_function_name(function_name)
         ):
@@ -4232,6 +4234,18 @@ class WGSLCodeGen(
         left = self.generate_expression(node.arguments[0])
         right = self.generate_expression(node.arguments[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    def generate_fmod_call(self, node):
+        # WGSL has no fmod built-in; its floating `%` is the same truncated remainder
+        # (e1 - e2 * trunc(e1 / e2), WGSL section 8.7) and accepts a scalar operand.
+        if len(node.arguments) != 2:
+            raise ValueError(
+                "WGSL target supports fmod() calls with exactly 2 arguments; got "
+                f"{len(node.arguments)}"
+            )
+        left = self.generate_expression(node.arguments[0])
+        right = self.generate_expression(node.arguments[1])
+        return f"(({left}) % ({right}))"
 
     # WGSL has `*` between a matrix and a scalar but no matrix-scalar `+`, `-` or `/`
     # and no matrixCompMult or outerProduct built-in (WGSL sections 8.7, 17.5), so
