@@ -152,6 +152,7 @@ from .slang_projected_compare import (
 )
 from .slang_refusals import SlangLoweringRefused
 from .slang_specialization_constants import plan_slang_specialization_constants
+from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_names
 from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_utils import (
     compute_local_size,
@@ -253,6 +254,7 @@ class SlangCodeGen(LoweringRefusalMixin):
     def __init__(self):
         """Initialize Slang generation state and helper caches."""
         self.indent_level = 0
+        self.workgroup_atomics = SlangWorkgroupAtomics(self, ())
         self.indent_str = "    "
         self.variable_types = {}
         self.local_variable_types = self.variable_types
@@ -433,6 +435,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 self.resource_base_type
             )
             self.storage_parameter_texels.prepare(ast)
+            self.workgroup_atomics = SlangWorkgroupAtomics(
+                self, workgroup_variable_names(ast)
+            )
             self.helper_name_aliases = {}
             self.user_symbol_names = self.collect_user_symbol_names(ast)
             self.current_function_return_type = None
@@ -13839,6 +13844,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         if structured_buffer_atomic is not None:
             return structured_buffer_atomic
+
+        workgroup_atomic = self.workgroup_atomics.expression(
+            func_name, args, statement_context
+        )
+        if workgroup_atomic is not None:
+            return workgroup_atomic
 
         if func_name in {"texture", "textureLod", "textureGrad"}:
             sample_args = self.sampled_texture_operation_args(func_name, args)

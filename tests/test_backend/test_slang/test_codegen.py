@@ -201,7 +201,10 @@ def test_numthreads_without_shader_attribute_codegen_emits_compute_layout():
         in generated_code
     )
     assert "uvec3 dispatchThreadId @ gl_GlobalInvocationID" in generated_code
-    assert "gStatsRayCountTotal[dispatchThreadId.xy] = totalRays;" in generated_code
+    assert (
+        "imageStore(gStatsRayCountTotal, dispatchThreadId.xy, "
+        "uvec4(totalRays, 0u, 0u, 1u));" in generated_code
+    )
     cgl_translator.parse(generated_code)
 
 
@@ -2503,8 +2506,8 @@ def test_namespace_global_resource_array_codegen_from_current_slang_spirv_test()
         in generated_code
     )
     assert (
-        "test_namespace_textureTable[p.image_id][pixel_i.xy] = "
-        "vec4(0, 1, 0, 0);" in generated_code
+        "imageStore(test_namespace_textureTable[p.image_id], pixel_i.xy, "
+        "vec4(0, 1, 0, 0));" in generated_code
     )
     assert "test_namespace.textureTable" not in generated_code
     cgl_translator.parse(generated_code)
@@ -2534,7 +2537,10 @@ def test_dotted_namespace_global_resource_codegen_from_namespace_import_sample()
         "image2D ns1_ns2_textureTable[] @set(0) @binding(0) @format(unknown);"
         in generated_code
     )
-    assert "ns1_ns2_textureTable[0][pixel_i.xy] = vec4(0, 1, 0, 0);" in generated_code
+    assert (
+        "imageStore(ns1_ns2_textureTable[0], pixel_i.xy, vec4(0, 1, 0, 0));"
+        in generated_code
+    )
     assert "ns1.ns2.textureTable" not in generated_code
     cgl_translator.parse(generated_code)
 
@@ -2598,7 +2604,7 @@ def test_parameter_attribute_codegen_from_cuda_format_docs_reparses():
     generated_code = generate_code(ast)
 
     assert "vec2 getValue(image2D t)" in generated_code
-    assert "return t[ivec2(0, 0)];" in generated_code
+    assert "return imageLoad(t, ivec2(0, 0)).xy;" in generated_code
     assert "[format" not in generated_code
     cgl_translator.parse(generated_code)
 
@@ -4492,7 +4498,10 @@ def test_parenthesized_expression_swizzle_codegen_from_autodiff_texture_learnmip
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 color = vec4((dstTexture[p] - val).xyz, 1.0);" in generated_code
+    assert (
+        "vec4 color = vec4((imageLoad(dstTexture, p) - val).xyz, 1.0);"
+        in generated_code
+    )
     assert "dstTexture[p] - val.xyz" not in generated_code
 
 
