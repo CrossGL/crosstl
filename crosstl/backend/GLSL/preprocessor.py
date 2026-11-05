@@ -4,6 +4,7 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 
+from crosstl.backend.DirectX.macro_expansion import GLSL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 HASH_BRACKETED_MARKER_RE = re.compile(r"#\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]")
@@ -19,6 +20,8 @@ EXTENSION_COMPANION_MACROS = {
 
 class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     """HLSL preprocessor variant with GLSL comment/directive semantics."""
+
+    macro_dialect = GLSL_MACROS
 
     def _handle_include(
         self, rest: str, file_path: Optional[str]
@@ -48,21 +51,6 @@ class _GLSLDirectivePreprocessor(HLSLPreprocessor):
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")
         return None
-
-    def _handle_define(self, rest: str):
-        rest = rest.lstrip()
-        name_match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", rest)
-        name = name_match.group(0) if name_match else None
-
-        super()._handle_define(rest)
-
-        macro = self.macros.get(name) if name else None
-        if (
-            macro is not None
-            and not macro.is_function_like()
-            and "##" in macro.replacement
-        ):
-            macro.replacement = self._replace_params(macro.replacement, {})
 
     def _split_logical_lines(self, code: str) -> List[str]:
         return super()._split_logical_lines(
