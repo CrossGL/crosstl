@@ -125,6 +125,13 @@ from .glsl_buffer_layout import (
     std430_layout_type_name,
     vector_component_offsets,
 )
+from .hlsl_buffer_component_stores import slang_buffer_component_store
+from .hlsl_byteaddress_typed_access import (
+    hlsl_byteaddress_component_refusal,
+    hlsl_byteaddress_is_typed_access,
+    hlsl_byteaddress_typed_load,
+    hlsl_byteaddress_typed_store,
+)
 from .hlsl_image_formats import (
     declared_texel_type,
     normalized_texel_type,
@@ -143,6 +150,10 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .matrix_compound_assignment import matrix_product_assignment
+from .push_constant_blocks import (
+    slang_push_constant_cbuffer,
+    slang_push_constant_declaration,
+)
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
 from .slang_projected_compare import (
@@ -1457,6 +1468,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             target_type_key="slang_type",
             unsupported_type_message=(
                 "type is not supported by Slang ByteAddressBuffer lowering"
+            ),
+            component_refusal=lambda info: hlsl_byteaddress_component_refusal(
+                self, info
             ),
         )
         scalar_blocks, scalar_failures, scalar_struct_failures = (
@@ -5825,6 +5839,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         forced_register_prefix=None,
         auto_assign=False,
     ):
+        push_constant = slang_push_constant_declaration(node, declaration)
+        if push_constant is not None:
+            return push_constant
         prefix, suffix = self.slang_resource_binding_decorations(
             node, type_name, forced_register_prefix, auto_assign
         )
@@ -5834,6 +5851,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         name = getattr(node, "name", None)
         if not name or not hasattr(node, "members"):
             return ""
+        push_constant = slang_push_constant_cbuffer(self, node)
+        if push_constant is not None:
+            return push_constant
         declaration = self.apply_slang_resource_binding_decorations(
             f"cbuffer {name}",
             node,
@@ -5954,7 +5974,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             placeholder_type = self.map_resource_type_with_format(vtype, node)
             placeholder = format_c_style_array_declaration(placeholder_type, node.name)
-            return diagnostic + f"{placeholder};\n"
+            # A block the byte-address lowering cannot lay out has no faithful Slang declaration.
+            return self.refuse_lowering(
+                diagnostic.removeprefix("// ").strip(), f"{placeholder};\n"
+            )
 
         if isinstance(node, ArrayNode):
             self.register_variable_type(node.name, node.element_type)
@@ -12473,6 +12496,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 columns.append(f"asfloat({load})")
             return f"{access['slang_type']}({', '.join(columns)})"
 
+        if hlsl_byteaddress_is_typed_access(access):
+            return hlsl_byteaddress_typed_load(self, buffer_name, offset, access)
+
         if access["component_type"] == "bool" and access["components"] > 1:
             values = []
             for _, component_offset in vector_component_offsets(
@@ -12687,6 +12713,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.slang_byteaddress_matrix_store(
                 buffer_name, offset, value, access
             )
+        if hlsl_byteaddress_is_typed_access(access):
+            return hlsl_byteaddress_typed_store(
+                self, buffer_name, offset, value, access
+            )
         if access["component_type"] == "bool" and access["components"] > 1:
             return self.slang_byteaddress_bool_vector_store(
                 buffer_name, offset, value, access
@@ -12848,7 +12878,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
-                return None
+                return slang_buffer_component_store(self, target, value, op)
             offset = access["offset"]
         else:
             offset = access["offset_expr"]

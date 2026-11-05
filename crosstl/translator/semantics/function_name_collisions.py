@@ -183,12 +183,13 @@ def names_called_with_other_arity(program) -> set:
     return found
 
 
-def rename_functions(program, names, *, by_arity=False) -> dict:
+def rename_functions(program, names, *, by_arity=False, keep_calls=frozenset()) -> dict:
     """Rename the user functions in ``names``, each overload and every call to it, in place; returns old -> new.
 
     A new name appends ``_fn`` (then a number) to the old one and collides with no declared name. With
     ``by_arity``, a call is redirected only when one of the renamed overloads takes its number of arguments, so a
-    call that only a target built-in of the same name accepts keeps the name.
+    call that only a target built-in of the same name accepts keeps the name. A call whose node identity is in
+    ``keep_calls`` keeps its name as well.
     """
     names = sorted(set(names) & user_function_names(program))
     if not names:
@@ -206,6 +207,8 @@ def rename_functions(program, names, *, by_arity=False) -> dict:
             if isinstance(node, A.FunctionCallNode) and call_name(node) in renamed:
                 old_name = call_name(node)
                 if by_arity and _call_arity(node) not in arities[old_name]:
+                    continue
+                if id(node) in keep_calls:
                     continue
                 _rename_call(node, old_name, renamed[old_name])
     return renamed

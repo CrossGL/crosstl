@@ -7,31 +7,77 @@ its own: the generator wrote the load as the target, ``float4(...).x = v``, whic
 ("expression is not assignable"; sascha-vulkan ``computeparticles/particle.comp``).
 
 :func:`metal_buffer_component_store` stores each written component on its own, as
-:mod:`.hlsl_buffer_component_stores` does for HLSL: a 32-bit component ``k`` of a vector at ``offset`` lies at
-``offset + 4 * k`` in every block layout (std140, std430 and scalar keep a vector's components contiguous). A
-compound assignment reads the component, combines and stores it, and a swizzle that writes several components
-evaluates the right-hand side once into a temporary. Components that are not 32 bits wide, and booleans, are left to
+:mod:`.hlsl_buffer_component_stores` does for HLSL: a component ``k`` of a vector at ``offset`` lies at
+``offset + size * k`` in every block layout (std140, std430 and scalar keep a vector's components contiguous), where
+``size`` is the component's width in bytes. A compound assignment reads the component, combines and stores it, and
+a swizzle that writes several components evaluates the right-hand side once into a temporary. Booleans are left to
 the existing paths.
 """
 
 from __future__ import annotations
+
+import re
 
 from ..ast import ArrayAccessNode, MemberAccessNode
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .glsl_buffer_layout import (
     byte_offset_add,
     byte_offset_expression,
+    glsl_buffer_component_size_refusal,
     glsl_buffer_compound_binary_operator,
 )
 
-__all__ = ["metal_buffer_component_store"]
+__all__ = [
+    "metal_buffer_component_store",
+    "metal_buffer_component_type",
+    "metal_glsl_buffer_component_refusal",
+]
 
 _COMPONENTS = {
     **{name: index for index, name in enumerate("xyzw")},
     **{name: index for index, name in enumerate("rgba")},
     **{name: index for index, name in enumerate("stpq")},
 }
-_WORD_TYPES = frozenset({"float", "int", "uint"})
+# CrossGL component type of a buffer block member -> its MSL scalar (MSL section 2.1); MSL vector names add
+# the component count to the same spelling.
+_METAL_COMPONENT_TYPES = {
+    "float16_t": "half",
+    "int8_t": "char",
+    "uint8_t": "uchar",
+    "int16_t": "short",
+    "uint16_t": "ushort",
+    "int64_t": "long",
+    "uint64_t": "ulong",
+}
+_METAL_NATIVE_COMPONENT_TYPES = frozenset({"float", "int", "uint", "bool"})
+_WORD_TYPES = frozenset({"float", "int", "uint", *_METAL_COMPONENT_TYPES})
+
+
+def metal_buffer_component_type(component_type):
+    """The MSL scalar a buffer block member's ``component_type`` is read and written as.
+
+    MSL has no 64-bit floating-point type (MSL section 2.1), so a ``double`` component, like any other type
+    without an MSL scalar, is refused.
+    """
+    mapped = _METAL_COMPONENT_TYPES.get(component_type)
+    if mapped is not None:
+        return mapped
+    if component_type in _METAL_NATIVE_COMPONENT_TYPES:
+        return component_type
+    raise BufferBlockUnsupportedError(
+        "metal",
+        "component type",
+        f"MSL has no buffer scalar for a {component_type} component",
+    )
+
+
+def metal_glsl_buffer_component_refusal(member_info):
+    """Why a byte-addressed Metal buffer cannot hold ``member_info``, or ``None``.
+
+    MSL addresses device memory in bytes and has 8-, 16-, 32- and 64-bit scalars, so every
+    component width a buffer block lays out reads and writes at its own width.
+    """
+    return glsl_buffer_component_size_refusal(member_info, frozenset({1, 2, 4, 8}))
 
 
 def _swizzle(member):
@@ -64,7 +110,8 @@ def _component_offsets(codegen, target):
             return None, None
         if any(index >= access.get("components", 0) for index in indices):
             return None, None
-        return access, [byte_offset_add(offset, 4 * index) for index in indices]
+        size = access.get("component_size", 4)
+        return access, [byte_offset_add(offset, size * index) for index in indices]
     if isinstance(target, ArrayAccessNode):
         base = getattr(target, "array_expr", getattr(target, "array", None))
         access, offset = _vector_access(codegen, base)
@@ -73,7 +120,9 @@ def _component_offsets(codegen, target):
         index = codegen.generate_expression(
             getattr(target, "index_expr", getattr(target, "index", None))
         )
-        return access, [byte_offset_expression(offset, index, 4)]
+        return access, [
+            byte_offset_expression(offset, index, access.get("component_size", 4))
+        ]
     return None, None
 
 
@@ -109,7 +158,10 @@ def metal_buffer_component_store(codegen, target, rhs, op):
         sources = [f"({rhs})"]
     else:
         temp = codegen.next_metal_temp_variable("component_store")
-        lines.append(f"{component_type}{len(offsets)} {temp} = {rhs}")
+        # The temporary holds the value in the vector the generator computes the member's type in (narrow
+        # integers widen to int or uint), and each component narrows as it is stored.
+        carrier = re.sub(r"[234]$", "", access["metal_type"])
+        lines.append(f"{carrier}{len(offsets)} {temp} = {rhs}")
         sources = [f"{temp}.{'xyzw'[position]}" for position in range(len(offsets))]
     for offset, source in zip(offsets, sources):
         if binary_op is not None:

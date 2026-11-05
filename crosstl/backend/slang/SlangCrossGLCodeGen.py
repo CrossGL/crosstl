@@ -445,7 +445,14 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         "yield",
     }
 
-    def __init__(self):
+    def __init__(self, zero_base_vertex=False):
+        """Create a converter.
+
+        ``zero_base_vertex`` declares that every draw the shader runs in has a zero base vertex. ``SV_VertexID``
+        excludes the base vertex, which the vertex index of OpenGL, Vulkan and Metal includes, so by default it
+        imports as ``gl_RelativeVertexID`` (see ``crosstl.translator.semantics.relative_vertex_ids``); under the
+        declaration it imports as ``gl_VertexID``.
+        """
         self.vertex_inputs = []
         self.vertex_outputs = []
         self.fragment_inputs = []
@@ -631,8 +638,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             "FRONT_FACE": "gl_IsFrontFace",
             "PRIMITIVE_ID": "gl_PrimitiveID",
             "INSTANCE_ID": "gl_InstanceID",
-            "VERTEX_ID": "gl_VertexID",
-            "SV_VertexID": "gl_VertexID",
+            # SV_VertexID excludes the draw's base vertex, which gl_VertexID
+            # includes; see crosstl.translator.semantics.relative_vertex_ids.
+            "VERTEX_ID": "gl_RelativeVertexID",
+            "SV_VertexID": "gl_RelativeVertexID",
             "SV_InstanceID": "gl_InstanceID",
             # Draw parameters; slangc lowers them to SPIR-V's BuiltIn
             # BaseVertex, BaseInstance and DrawIndex.
@@ -689,6 +698,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             "SV_DispatchThreadID": "gl_GlobalInvocationID",
             "SV_GroupIndex": "gl_LocalInvocationIndex",
         }
+        if zero_base_vertex:
+            for semantic in ("VERTEX_ID", "SV_VertexID"):
+                self.semantic_map[semantic] = "gl_VertexID"
         self.hlsl_system_semantic_map = {
             semantic.lower(): mapped
             for semantic, mapped in self.semantic_map.items()
@@ -1205,10 +1217,23 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                     code += self.matrix_layout_attributes(member, 2)
                     code += (
                         f"        {self.map_type(member.vtype)} {member_name}"
-                        f"{self.format_array_suffixes(member)};\n"
+                        f"{self.format_array_suffixes(member)}"
+                        f"{self.format_member_offset(member)};\n"
                     )
                 code += "    }\n"
         return code
+
+    @staticmethod
+    def format_member_offset(member):
+        """`` @offset(N)`` for a block member placed with ``[[vk::offset(N)]]``, else an empty string."""
+        for attribute in getattr(member, "attributes", None) or []:
+            if not isinstance(attribute, dict):
+                continue
+            name = str(attribute.get("name", "")).lower()
+            arguments = attribute.get("arguments") or []
+            if name == "vk::offset" and len(arguments) == 1:
+                return f" @offset({arguments[0]})"
+        return ""
 
     def is_glsl_storage_block(self, node):
         return getattr(node, "glsl_block_kind", None) == "buffer"

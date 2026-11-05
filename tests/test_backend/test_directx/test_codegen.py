@@ -814,7 +814,12 @@ def test_uint_vertex_id_import_uses_glsl_builtin_cast_alias():
             }
         """).strip()
 
-    generated = GLSLCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+    # Under a declared zero base vertex SV_VertexID is gl_VertexID; the default, gl_RelativeVertexID, is spelled
+    # for each target by the semantic passes (tests/test_translator/test_relative_vertex_ids.py).
+    tokens = HLSLLexer(hlsl).tokenize()
+    converter = DirectxCrossGLCodeGen.HLSLToCrossGLConverter(zero_base_vertex=True)
+    crossgl = converter.generate(HLSLParser(tokens).parse())
+    generated = GLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "uint VertID = uint(gl_VertexID);" in generated
     assert "gl_Position = vec4(float(VertID), 0.0, 0.0, 1.0);" in generated

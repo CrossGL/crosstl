@@ -305,6 +305,8 @@ class GLSLHlslConstantBuffers:
 
     def reset_glsl_hlsl_cbuffers(self):
         self.glsl_hlsl_cbuffer_loaders: List[str] = []
+        # Push-constant blocks of the program being generated (push_constant_blocks).
+        self.push_constant_block_names: List[str] = []
 
     # Layout types ---------------------------------------------------------
 

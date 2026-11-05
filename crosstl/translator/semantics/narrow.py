@@ -114,6 +114,11 @@ _COMPOUND = {
 }
 # Operations whose result may leave the range of in-range operands; ``&``, ``|``, ``^`` and ``>>`` stay in range.
 _LEAVES_RANGE = frozenset({"+", "-", "*", "/", "%", "<<"})
+_LEAVES_RANGE_UNARY = frozenset({"-", "~"})
+# Operations whose result keeps the narrow type of their operands; a shift keeps its left operand's type.
+_TYPED_BINARY = frozenset({"+", "-", "*", "/", "%", "&", "|", "^"})
+_SHIFTS = frozenset({"<<", ">>"})
+_TYPED_UNARY = frozenset({"-", "~", "+"})
 _STATEMENT_FIELDS = frozenset(
     {
         "statements",
@@ -414,8 +419,9 @@ class NarrowLegalizer:
             return node
         if isinstance(node, A.ForNode):
             self.scope.push()
-            if node.init is not None:
-                set_child(node, "init", None, self.statement(node.init))
+            # A header that declares several variables (``short i = 0, step = 3``) holds a list.
+            for slot in field_slots(node, "init"):
+                set_child(node, *slot, self.statement(get_child(node, *slot)))
             for field in ("condition", "body"):
                 child = getattr(node, field)
                 if child is not None:
@@ -486,8 +492,13 @@ class NarrowLegalizer:
             return node
         if isinstance(node, (A.BinaryOpNode, A.UnaryOpNode)):
             narrow = self.arithmetic_narrow(node)
-            if narrow is not None:
+            if narrow is None:
+                return node
+            unary = isinstance(node, A.UnaryOpNode)
+            if node.op in (_LEAVES_RANGE_UNARY if unary else _LEAVES_RANGE):
                 return normalized(node, narrow)
+            # An in-range result keeps its narrow type for the enclosing operation.
+            node.annotations["cgl_narrow"] = narrow
         return node
 
     def rewrite_assignment(self, node):
@@ -619,16 +630,26 @@ class NarrowLegalizer:
         return None
 
     def arithmetic_narrow(self, node):
-        """The narrow type an arithmetic result keeps, when the source does not promote it."""
+        """The narrow type an arithmetic result keeps under the source's rules, else ``None``.
+
+        A narrow scalar result of a promoting source is ``int``. A shift keeps its left operand's type whatever the
+        count's type (GLSL section 5.9, MSL section 2.2, HLSL and C++ [expr.shift]).
+        """
         if isinstance(node, A.UnaryOpNode):
-            if node.op not in ("-", "~"):
+            if node.op not in _TYPED_UNARY or getattr(node, "is_postfix", False):
                 return None
-            operand = self.narrow_value(node.operand)
-            if operand is None or (self.promotes and operand.lanes == 1):
-                return None
-            return operand
-        if node.op not in _LEAVES_RANGE:
+            result = self.narrow_value(node.operand)
+        elif node.op in _SHIFTS:
+            result = self.narrow_value(node.left)
+        elif node.op in _TYPED_BINARY:
+            result = self._common_narrow(node)
+        else:
             return None
+        if result is None or (self.promotes and result.lanes == 1):
+            return None
+        return result
+
+    def _common_narrow(self, node):
         left, right = self.narrow_value(node.left), self.narrow_value(node.right)
         if left is None and right is None:
             return None
@@ -645,10 +666,7 @@ class NarrowLegalizer:
             left.scalar == right.scalar and 1 in (left.lanes, right.lanes)
         ):
             return None
-        result = left if left.lanes >= right.lanes else right
-        if self.promotes and result.lanes == 1:
-            return None
-        return result
+        return left if left.lanes >= right.lanes else right
 
     # Retyping ---------------------------------------------------------------------------------------------------
     def retype(self):
