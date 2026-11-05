@@ -332,7 +332,7 @@ from .hlsl_ray_queries import (
     hlsl_ray_query_helpers,
     hlsl_ray_query_type,
 )
-from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_refusals import DirectXBufferLayoutError, DirectXLoweringRefused
 from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
 from .hlsl_storage_array_views import (
@@ -13418,10 +13418,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_constant_int_value,
             )
         except HlslLayoutError as exc:
-            raise ValueError(
-                f"Cannot reproduce the {layout} layout of block '{node.name}' "
-                f"in HLSL: {exc}"
-            ) from exc
+            raise DirectXBufferLayoutError(node.name, layout, exc) from exc
         try:
             offsets = hlsl_packoffsets_for_block(layout_type, layout)
         except HlslLayoutError:
@@ -13509,10 +13506,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 for (name, _member_type), offset in zip(layout_type.members, offsets)
             }
         except HlslLayoutError as exc:
-            raise ValueError(
-                f"Cannot reproduce the explicit member offsets of constant buffer "
-                f"'{node.name}' in HLSL: {exc}"
-            ) from exc
+            raise DirectXBufferLayoutError(node.name, "explicit-offset", exc) from exc
 
     def hlsl_block_member(self, member):
         """``(name, type, row_major, offset, alignment, packed)`` of a uniform-block or struct member."""

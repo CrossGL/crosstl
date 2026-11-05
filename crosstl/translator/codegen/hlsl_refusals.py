@@ -9,10 +9,10 @@ record through :func:`~.lowering_refusals.refuse_unsupported`, and generation ra
 
 from __future__ import annotations
 
-from ..diagnostics import CODE_PREFIX
+from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .lowering_refusals import LoweringRefused
 
-__all__ = ["DirectXLoweringRefused"]
+__all__ = ["DirectXBufferLayoutError", "DirectXLoweringRefused"]
 
 
 class DirectXLoweringRefused(LoweringRefused):
@@ -22,3 +22,18 @@ class DirectXLoweringRefused(LoweringRefused):
     label = "DirectX"
     aliases = ("HLSL",)
     code = f"{CODE_PREFIX}directx-lowering-unsupported"
+
+
+class DirectXBufferLayoutError(TranslationDiagnostic):
+    """A buffer block whose source layout HLSL declarations cannot reproduce."""
+
+    code = f"{CODE_PREFIX}directx-buffer-layout-unsupported"
+
+    def __init__(self, block, layout, reason):
+        self.block = block
+        self.layout = layout
+        self.missing_capabilities = (f"directx.buffer-layout.{layout}",)
+        super().__init__(
+            f"Cannot reproduce the {layout} layout of block '{block}' in HLSL: {reason}",
+            target="directx",
+        )
