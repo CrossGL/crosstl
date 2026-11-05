@@ -36,10 +36,7 @@ PROMOTING_TARGETS = frozenset({"metal", "directx", "cuda", "hip"})
 _CARRIED_BYTE_VECTOR_TARGETS = frozenset({"directx"})
 # Operators computed on ``uint`` operands so the 32-bit intermediate wraps.
 _UNSIGNED_INTERMEDIATE = frozenset({"+", "-", "*", "<<"})
-# Operators whose result keeps the narrow type of their operands.
-_TYPED_BINARY = frozenset({"+", "-", "*", "/", "%", "&", "|", "^"})
 _SHIFTS = frozenset({"<<", ">>"})
-_TYPED_UNARY = frozenset({"-", "~", "+"})
 _GLSL_PREFIX = {"i": "i", "u": "u"}
 
 
@@ -86,12 +83,9 @@ class NarrowArithmeticWrapper(NarrowLegalizer):
 
     # Rewrites ---------------------------------------------------------------------------------------------------
     def rewrite(self, node):
-        if isinstance(node, A.BinaryOpNode):
-            return self.operation(node, self.binary_narrow(node), unary=False)
-        if isinstance(node, A.UnaryOpNode) and node.op in _TYPED_UNARY:
-            if getattr(node, "is_postfix", False):
-                return node
-            return self.operation(node, self.narrow_value(node.operand), unary=True)
+        if isinstance(node, (A.BinaryOpNode, A.UnaryOpNode)):
+            unary = isinstance(node, A.UnaryOpNode)
+            return self.operation(node, self.arithmetic_narrow(node), unary=unary)
         if isinstance(node, A.AssignmentNode) and node.operator == "=":
             self._replace_stored(node, "value", self.narrow_lvalue(node.target))
         elif isinstance(node, A.ReturnNode) and node.value is not None:
@@ -124,8 +118,6 @@ class NarrowArithmeticWrapper(NarrowLegalizer):
     def operation(self, node, narrow, *, unary):
         if narrow is None:
             return node
-        if narrow.lanes == 1 and self.promotes:
-            return node
         node.annotations["cgl_narrow"] = narrow
         if not _leaves_range(node.op, narrow, unary):
             return node
@@ -157,30 +149,6 @@ class NarrowArithmeticWrapper(NarrowLegalizer):
         if isinstance(expr, A.LiteralNode):
             return narrow_of(expr.literal_type)
         return None
-
-    def binary_narrow(self, node):
-        """The narrow type of a binary operation's result under the source's rules, else ``None``."""
-        if node.op in _SHIFTS:
-            return self.narrow_value(node.left)
-        if node.op not in _TYPED_BINARY:
-            return None
-        left, right = self.narrow_value(node.left), self.narrow_value(node.right)
-        if left is None and right is None:
-            return None
-        if left is None or right is None:
-            other = node.left if left is None else node.right
-            known = left or right
-            if not (
-                isinstance(other, A.LiteralNode)
-                and (self.literal_adopts or known.lanes > 1)
-            ):
-                return None
-            left = right = known
-        if left != right and not (
-            left.scalar == right.scalar and 1 in (left.lanes, right.lanes)
-        ):
-            return None
-        return left if left.lanes >= right.lanes else right
 
 
 def wrap_narrow_arithmetic(program, source, target) -> bool:
