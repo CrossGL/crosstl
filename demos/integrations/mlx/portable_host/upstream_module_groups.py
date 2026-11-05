@@ -114,6 +114,8 @@ TRANSFORM_TESTS = (
             "async_eval_into_eval_diff_stream",
             "async_eval_twice",
             "async_eval_with_multiple_streams",
+            # Twenty unary passes over 16M elements, about 10,000 launches.
+            "donation_for_noops",
             "eval",
             "eval_mixed",
             "eval_slow_fast_multi_stream",

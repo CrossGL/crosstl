@@ -2404,7 +2404,7 @@ is copied densely first, because MLX's `int64_t` variants index it before its
 data pointer, where a host upload does not reach. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (39 `test_nn` methods: module state, weight files and the layers),
-`transforms` (24 `test_vmap` and 11 `test_eval` methods, and `test_threads`'
+`transforms` (24 `test_vmap` and 12 `test_eval` methods, and `test_threads`'
 per-thread streams; the runtime runs callbacks from several threads one at a
 time), `serialization` (16
 `test_export_import` and 14 `test_load` methods, with the NumPy, safetensors
@@ -3105,7 +3105,8 @@ output allocation is populated.
 These hooks support float32, int32, uint32, bool, int64 and uint64, and padding
 float16 and bfloat16 through the optional half-type copy packages. Padding and slice
 updates accept outputs within the storage capacity described below, and padding's
-copies split outputs wider than the portable launch limits into exact regions. The
+copies split outputs wider than the portable launch limits into exact regions;
+each region binds only the destination span it writes. The
 wider types require the optional `integer64` packages.
 MLX's unchanged edge, reflect and symmetric padding implementations compose these
 hooks with shared-buffer slices. Slice-update reductions require the optional
