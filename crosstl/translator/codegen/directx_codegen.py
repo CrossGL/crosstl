@@ -350,6 +350,13 @@ from .hlsl_wave_extended import (
     hlsl_subgroup_lane_mask_expression,
     hlsl_wave_extension_call,
 )
+from .hlsl_word_views import (
+    generate_hlsl_word_view_assignment,
+    hlsl_word_float_atomic_body,
+    hlsl_word_view_atomic_lvalue,
+    hlsl_word_view_atomic_storage,
+    hlsl_word_view_element,
+)
 from .image_access_contracts import (
     TEXTURE_COMPARE_INTRINSIC_NAMES,
     TEXTURE_GATHER_COMPARE_INTRINSIC_NAMES,
@@ -605,6 +612,7 @@ from .storage_image_texels import (
     texel_vector_type,
 )
 from .storage_parameter_texels import StorageParameterTexels
+from .storage_word_views import is_same_width_word_view, reinterpret_source_layout
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
@@ -23686,8 +23694,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or binding.get("element_type")
         )
         source_type_name = binding.get("source_element_type") or view_type_name
-        view_layout = scalar_storage_layout(view_type_name)
-        source_layout = scalar_storage_layout(source_type_name)
+        # A one-scalar wrapper record backs the view with its member's words.
+        view_layout, _ = reinterpret_source_layout(view_type_name, self.structs_by_name)
+        source_layout, source_member = reinterpret_source_layout(
+            source_type_name, self.structs_by_name
+        )
         target_layout = scalar_storage_layout(target_type_name)
         lane_gather = self.hlsl_same_scalar_lane_gather_binding(
             binding,
@@ -23756,6 +23767,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "source_layout": source_layout,
                 "target_layout": target_layout,
                 "target_width": target_width,
+                "source_member": source_member,
             },
         }
 
@@ -25122,6 +25134,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         *,
         require_write=False,
         physical=False,
+        word_view=False,
     ):
         binding = self.hlsl_resource_pointer_binding(pointer_expression)
         if binding is None:
@@ -25162,6 +25175,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 source_location=getattr(pointer_expression, "source_location", None),
             )
         reinterpretation = binding.get("pointer_reinterpretation")
+        if word_view and is_same_width_word_view(reinterpretation):
+            # The caller stores whole backing words through the bit-cast view.
+            return hlsl_word_view_element(self, binding, index_expression)["lvalue"]
         if require_write and reinterpretation is not None:
             error = PointerReinterpretationError(
                 "DirectX cannot preserve writes through a reinterpreted typed "
@@ -25243,6 +25259,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         source_layout = reinterpretation["source_layout"]
         target_layout = reinterpretation["target_layout"]
         target_width = reinterpretation.get("target_width", 1)
+        source_member = reinterpretation.get("source_member")
+        member_suffix = f".{source_member}" if source_member else ""
         byte_offset = str(binding.get("byte_offset", "0"))
         element_bytes = str(element_index)
         target_byte_width = target_layout.byte_width * target_width
@@ -25300,7 +25318,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         f"({byte_index} + {lane * target_layout.byte_width})"
                     )
                 source_index = f"uint(({lane_byte_index}) / {source_layout.byte_width})"
-                source_value = f"{binding['root']}[{source_index}]"
+                source_value = f"{binding['root']}[{source_index}]{member_suffix}"
                 if lane_gather:
                     # One structured-buffer element holds each logical lane.
                     components.append(
@@ -25336,7 +25354,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"({binding['root']}, {source_index})"
             )
         else:
-            source_value = f"{binding['root']}[{source_index}]"
+            source_value = f"{binding['root']}[{source_index}]{member_suffix}"
             if source_layout.kind == "floating" or source_layout.signed:
                 source_bits = f"asuint({source_value})"
             else:
@@ -25694,6 +25712,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     value,
                 )
             )
+
+        word_store = generate_hlsl_word_view_assignment(self, node, target, value, op)
+        if word_store is not None:
+            return word_store
 
         pointer_store = self.generate_hlsl_resource_pointer_dereference_assignment(
             target, value, op
@@ -50428,6 +50450,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 binding.get("resource_type") if binding is not None else None
             ) or self.hlsl_buffer_helper_resource_type(container)
             if self.hlsl_typed_buffer_element_type(resource_type) is not None:
+                word_storage = (
+                    hlsl_word_view_atomic_storage(self, binding, index, resource_type)
+                    if binding is not None
+                    else None
+                )
+                if word_storage is not None:
+                    return word_storage
                 if binding is not None and (
                     binding.get("pointer_reinterpretation")
                     or str(binding.get("byte_offset", "0")) != "0"
@@ -50597,6 +50626,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             storage.get("root"),
             tuple(storage["index_types"]),
             storage["suffix"],
+            storage.get("physical_kind", "float"),
         )
         helper = self.hlsl_float_atomic_helpers.get(key)
         if helper is None:
@@ -50657,7 +50687,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             target = f"{root}{suffix}"
             code += f"void {helper['name']}({', '.join(parameters)}) {{\n"
-            if helper["operation"] == "atomicLoad":
+            physical_kind = helper.get("physical_kind", "float")
+            if physical_kind != "float":
+                code += hlsl_word_float_atomic_body(
+                    helper["operation"], target, names, physical_kind
+                )
+            elif helper["operation"] == "atomicLoad":
                 # Equal compare/replacement bits make this a non-modifying atomic read.
                 code += f"    InterlockedCompareExchangeFloatBitwise({target}, 0.0f, 0.0f, {names['original']});\n"
             elif helper["operation"] in {"atomicExchange", "atomicStore"}:
@@ -50790,9 +50825,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         # statement context before the containing call can be emitted.
         if not render_operands:
             return parts
-        rendered_target = self.generate_expression(
-            self.hlsl_typed_buffer_atomic_lvalue(target)
+        rendered_target = (
+            None if float_atomic else hlsl_word_view_atomic_lvalue(self, target)
         )
+        if rendered_target is None:
+            rendered_target = self.generate_expression(
+                self.hlsl_typed_buffer_atomic_lvalue(target)
+            )
         target_args = [rendered_target]
         if float_atomic:
             storage = self.hlsl_buffer_atomic_storage(

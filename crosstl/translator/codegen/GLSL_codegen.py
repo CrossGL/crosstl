@@ -359,6 +359,10 @@ from .glsl_wave_extended import (
     GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
     GLSL_EXTENDED_WAVE_EXTENSIONS,
 )
+from .glsl_word_views import (
+    generate_glsl_word_view_assignment,
+    glsl_word_view_integer_storage,
+)
 from .glsl_zero_values import zero_array_value
 from .image_access_contracts import (
     collect_function_image_access_requirements,
@@ -611,6 +615,7 @@ from .storage_image_texels import (
     texel_vector_type,
 )
 from .storage_pointer_local_aliases import bind_local_storage_pointers
+from .storage_word_views import reinterpret_source_layout
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
@@ -28612,8 +28617,11 @@ class GLSLCodeGen(
             or binding.get("element_type")
         )
         source_type_name = binding.get("source_element_type") or view_type_name
-        view_layout = scalar_storage_layout(view_type_name)
-        source_layout = scalar_storage_layout(source_type_name)
+        # A one-scalar wrapper record backs the view with its member's words.
+        view_layout, _ = reinterpret_source_layout(view_type_name, self.structs_by_name)
+        source_layout, source_member = reinterpret_source_layout(
+            source_type_name, self.structs_by_name
+        )
         target_layout = scalar_storage_layout(target_type_name)
         lane_gather = self.glsl_same_scalar_lane_gather_binding(
             binding,
@@ -28659,7 +28667,7 @@ class GLSLCodeGen(
                 source_location=getattr(expression, "source_location", None),
             )
 
-        if target_width == 1 and target_layout == view_layout:
+        if target_width == 1 and target_layout == view_layout and not source_member:
             return {
                 **binding,
                 "element_type": self.map_type(target_type_name),
@@ -28689,6 +28697,7 @@ class GLSLCodeGen(
                 "source_layout": source_layout,
                 "target_layout": target_layout,
                 "target_width": target_width,
+                "source_member": source_member,
             },
         }
 
@@ -30734,6 +30743,8 @@ class GLSLCodeGen(
         source_layout = reinterpretation["source_layout"]
         target_layout = reinterpretation["target_layout"]
         target_width = reinterpretation.get("target_width", 1)
+        source_member = reinterpretation.get("source_member")
+        member_suffix = f".{source_member}" if source_member else ""
         byte_offset = str(binding.get("byte_offset", "0"))
         element_bytes = str(element_index)
         target_byte_width = target_layout.byte_width * target_width
@@ -30756,7 +30767,7 @@ class GLSLCodeGen(
                         f"({byte_index} + {lane * target_layout.byte_width})"
                     )
                 source_index = f"int(({lane_byte_index}) / {source_layout.byte_width})"
-                source_value = f"{binding['root']}[{source_index}]"
+                source_value = f"{binding['root']}[{source_index}]{member_suffix}"
                 if lane_gather:
                     # Each widened array element holds one logical lane.
                     components.append(source_value)
@@ -30779,7 +30790,7 @@ class GLSLCodeGen(
             return f"{constructor}({', '.join(components)})"
 
         source_index = f"int(({byte_index}) / {source_layout.byte_width})"
-        source_value = f"{binding['root']}[{source_index}]"
+        source_value = f"{binding['root']}[{source_index}]{member_suffix}"
         if source_layout.kind == "floating":
             source_bits = f"floatBitsToUint({source_value})"
         elif source_layout.signed:
@@ -39357,6 +39368,11 @@ complex64_t crossgl_complex64_mod_assign(
             left = self.generate_glsl_buffer_block_mutation_target(left_node)
             return f"{left} = {storage_aggregate}"
         self.validate_glsl_private_pointer_byte_view_mutation(left_node)
+        word_store = generate_glsl_word_view_assignment(
+            self, node, left_node, right_node, op
+        )
+        if word_store is not None:
+            return word_store
         self.validate_glsl_storage_pointer_mutation_target(
             left_node, "write" if op == "=" else "read_write"
         )
@@ -47435,7 +47451,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
         return storage
 
-    def generate_glsl_expected_compare_call(self, args):
+    def generate_glsl_expected_compare_call(self, args, word_storage=None):
         if len(args) != 3:
             raise ValueError(
                 "OpenGL atomicCompareExchangeWeak requires target, expected and desired"
@@ -47448,8 +47464,14 @@ complex64_t crossgl_complex64_mod_assign(
             raise ValueError(
                 "OpenGL atomicCompareExchangeWeak requires matching integer target and expected"
             )
-        self.validate_glsl_storage_pointer_mutation_target(args[0])
-        storage = self.glsl_expected_compare_storage(args[0])
+        if word_storage is not None:
+            storage = {
+                "target": word_storage["target"],
+                "arguments": list(word_storage["arguments"]),
+            }
+        else:
+            self.validate_glsl_storage_pointer_mutation_target(args[0])
+            storage = self.glsl_expected_compare_storage(args[0])
         if storage is None:
             raise ValueError(
                 "OpenGL atomicCompareExchangeWeak requires a storage buffer or shared target"
@@ -47508,14 +47530,17 @@ complex64_t crossgl_complex64_mod_assign(
         float_atomic = self.float_atomic_storage.atomic(func_name, args)
         if float_atomic is not None:
             return float_atomic
+        word_storage = glsl_word_view_integer_storage(self, args[0])
         if func_name == "atomicCompareExchangeWeak":
             self.validate_glsl_buffer_block_atomic_call(func_name, args)
-            return self.generate_glsl_expected_compare_call(args)
+            return self.generate_glsl_expected_compare_call(
+                args, word_storage=word_storage
+            )
         if func_name == "atomicLoad" and len(args) != 1:
             raise ValueError("OpenGL atomicLoad requires exactly one target")
         if func_name == "atomicStore" and len(args) != 2:
             raise ValueError("OpenGL atomicStore requires a target and value")
-        if func_name == "atomicLoad":
+        if func_name == "atomicLoad" and word_storage is None:
             self.validate_glsl_storage_pointer_mutation_target(args[0])
             root = args[0]
             while True:
@@ -47570,7 +47595,11 @@ complex64_t crossgl_complex64_mod_assign(
                 source_target = self.glsl_atomic_operand_family(args[0])
                 if source_target in {"int", "uint"}:
                     target_type = source_target
-            target_expression = self.generate_expression(args[0])
+            target_expression = (
+                word_storage["lvalue"]
+                if word_storage is not None
+                else self.generate_expression(args[0])
+            )
         if func_name in {"atomicLoad", "atomicStore"} and target_type not in {
             "int",
             "uint",
