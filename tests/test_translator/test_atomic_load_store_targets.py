@@ -290,3 +290,36 @@ def test_directx_atomic_load_from_a_helper_reads_group_shared_memory(tmp_path):
     )
     assert re.search(r"InterlockedOr\(g, 0u, __crossgl_atomic_return_\d+\);", code)
     _dxc(tmp_path, code)
+
+
+def test_shared_variable_scan_accepts_statement_list_bodies_and_foreign_nodes():
+    """Group-shared discovery walks a bare statement-list body and ignores nodes from other ASTs."""
+    from types import SimpleNamespace
+
+    from crosstl.translator import ast as A
+    from crosstl.translator.semantics.atomic_forms import shared_variable_names
+
+    shared = A.VariableNode("tile", A.PrimitiveType("float"), qualifiers=["groupshared"])
+    plain = A.VariableNode("value", A.PrimitiveType("float"))
+    foreign = SimpleNamespace(name="ignored")
+    function = SimpleNamespace(name="main", body=[shared, plain, foreign])
+    program = SimpleNamespace(global_variables=[], stages={}, functions=[function])
+
+    assert shared_variable_names(program, frozenset({"groupshared"})) == {"tile"}
+
+
+def test_hlsl_codegen_accepts_a_native_metal_ast():
+    """The HLSL generator still accepts a Metal front-end AST whose nodes are not CrossGL nodes."""
+    from crosstl.backend.Metal.MetalLexer import MetalLexer
+    from crosstl.backend.Metal.MetalParser import MetalParser
+    from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void add(device float* a [[buffer(0)]], uint3 id [[thread_position_in_grid]]) {
+        a[id.x] = a[id.x] + 1.0;
+    }
+    """
+    ast = MetalParser(MetalLexer(code).tokenize()).parse()
+    assert "RWStructuredBuffer<float> a" in HLSLCodeGen().generate(ast)

@@ -165,6 +165,12 @@ def _walk(node):
     pending = [node]
     while pending:
         item = pending.pop()
+        if isinstance(item, (list, tuple)):
+            # Function bodies may be a bare statement list instead of a block node.
+            pending.extend(item)
+            continue
+        if not isinstance(item, A.ASTNode):
+            continue
         yield item
         pending.extend(get_child(item, field, key) for field, key in child_slots(item))
 
