@@ -115,6 +115,7 @@ from .metal_runtime_types import (
     MetalRuntimeTypeUnsupportedError,
     refuse_metal_runtime_types,
 )
+from .metal_vector_scalar_operands import convert_metal_vector_scalar_operands
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
@@ -429,6 +430,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
+    convert_metal_vector_scalar_operands(program, report.source)
     convert_struct_constructor_arguments(program)
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)

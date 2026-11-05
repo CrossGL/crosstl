@@ -79,6 +79,7 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .scalar_type_identity import canonical_scalar_type_spelling
 from .scoped_member_types import resolve_concrete_scoped_member_type
 from .simd_aliases import SIMD_TYPE_ALIASES
 from .sparse_color import (
@@ -2190,6 +2191,9 @@ class MetalToCrossGLConverter(
         ):
             return name
 
+        if "<" in str(name):
+            # ``f<uint>`` and ``f<uint32_t>`` name one specialization.
+            name = canonical_scalar_type_spelling(str(name))
         parts = []
         for index, char in enumerate(str(name)):
             valid = (
