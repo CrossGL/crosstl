@@ -29,6 +29,7 @@ from typing import (
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .concrete_free_operators import materialize_concrete_free_operators
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
 from .deduction_arguments import deduction_argument_type
@@ -10375,6 +10376,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         return self._apply_text_replacements(body, replacements)
 
     def _materialize_free_operator_overloads(self, code: str) -> str:
+        code = materialize_concrete_free_operators(self, code)
         if not self._materialized_struct_specializations or "operator" not in code:
             return code
         operators = self._find_free_operator_definitions(code)

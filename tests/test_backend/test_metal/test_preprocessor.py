@@ -2655,8 +2655,18 @@ def test_preprocessor_preserves_operator_comparison_overloads():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "operator<=(complex64_t a, complex64_t b)" in output
-    assert "return operator>(b, a);" in output
+    # Concrete operators become the named helpers the code generator binds
+    # `a <= b` to; the direct `operator>(b, a)` call names the `>` helper.
+    assert (
+        "inline bool crosstl_metal_operator_less_equal__complex64_t__complex64_t"
+        "(complex64_t a, complex64_t b)"
+    ) in output
+    assert (
+        "return crosstl_metal_operator_greater__complex64_t__complex64_t(b, a);"
+        in output
+    )
+    assert "operator>(" not in output
+    assert "operator<=(" not in output
     assert "operator_complex64_t_a_complex64_t_b" not in output
 
 
