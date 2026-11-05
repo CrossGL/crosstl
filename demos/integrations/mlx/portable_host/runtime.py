@@ -930,132 +930,147 @@ class HostRuntime:
         self.library = None
 
     def _entry_available(self, entry):
+        # Lazy package caches are built under the lock dispatches hold.
         with DISPATCH_LOCK:
-            return self._entry_available_locked(entry)
-
-    def _entry_available_locked(self, entry):
-        try:
-            name = entry.decode("ascii")
-            if name in self.descriptors:
-                return 1
-            if name in LAZY_COPY_ENTRIES and self.copies is not None:
-                return 1
-            if name in LAZY_ELEMENTWISE_ENTRIES and self.elementwise is not None:
-                return 1
-            if name in arange_packages.ENTRIES and self.aranges is not None:
-                return 1
-            if (
-                name in dynamic_offset_packages.ENTRIES
-                and self.dynamic_offsets is not None
-            ):
-                return 1
-            if (
-                name in masked_scatter_packages.ENTRIES
-                and self.masked_scatters is not None
-            ):
-                return 1
-            if name in arg_reduce_layout.ENTRIES and self.arg_reductions is not None:
-                return 1
-            if name in softmax_layout.ENTRIES and self.softmaxes is not None:
-                return 1
-            if name in sort_layout.ENTRIES and self.sorts is not None:
-                return 1
-            if name in searchsorted_layout.ENTRIES and self.searchsorted is not None:
-                return 1
-            if name in norm_layout.ENTRIES and self.norms is not None:
-                return 1
-            if (
-                name in cross_entropy_layout.ENTRIES
-                and self.cross_entropies is not None
-            ):
-                return 1
-            if (
-                name in wide_reduction_packages.ENTRIES
-                and self.wide_reductions is not None
-            ):
-                return 1
-            if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
-                scan_layout.signature(name)
-                return 1
-            if (
-                name.startswith(divmod_dispatch.ENTRY_PREFIXES)
-                and self.divmods is not None
-            ):
-                divmod_signature(name)
-                return 1
-            if name.startswith(block_masked_mm_dispatch.ENTRY_PREFIXES):
-                kind = block_masked_mm_layout.kind_of(name)
-                return int(block_masked_mm_dispatch.cache_for(self, kind) is not None)
-            if conv_dispatch.is_entry(name):
-                return int(self.convs is not None)
-            if fft_dispatch.is_entry(name):
-                return int(self.ffts is not None)
-            if sdpa_dispatch.is_entry(name):
-                return int(self.sdpas is not None)
-            if steel_attention_dispatch.is_entry(name):
-                return int(self.steel_attentions is not None)
-            if sdpa_vjp_dispatch.is_entry(name):
-                return int(self.sdpa_vjps is not None)
-            if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
-                kind = gather_mm_dispatch.family(name)
-                return int(gather_mm_dispatch.cache_for(self, kind) is not None)
-            if name.startswith(("gather", "scatter")) and self.gathers is not None:
-                gather_signature(name)
-                return 1
-            if (
-                name.startswith(matmul_layout.ENTRY_PREFIXES)
-                and self.quantized_matmuls is not None
-            ):
-                matmul_layout.signature(name)
-                return 1
-            if (
-                name.startswith(fp_matmul_layout.ENTRY_PREFIXES)
-                and self.fp_quantized_matmuls is not None
-            ):
-                fp_matmul_layout.signature(name)
-                return 1
-            if (
-                name.startswith(qmm_layout.ENTRY_PREFIXES)
-                and self.quantized_qmms is not None
-            ):
-                qmm_layout.signature(name)
-                return 1
-            if (
-                name.startswith(fp_qmm_layout.ENTRY_PREFIXES)
-                and self.fp_quantized_qmms is not None
-            ):
-                fp_qmm_layout.signature(name)
-                return 1
-            if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
-                gemv_layout.signature(name)
-                return 1
-            if name.startswith(dot_layout.ENTRY_PREFIXES) and self.dots is not None:
-                dot_layout.signature(name)
-                return 1
-            if (
-                name.startswith(compiled_layout.ENTRY_PREFIX)
-                and self.compiled is not None
-            ):
-                compiled_layout.variant(name)
-                return 1
-            if name.startswith(gemm_layout.ENTRY_PREFIXES) and self.gemms is not None:
-                gemm_layout.signature(name)
-                return 1
-            if (
-                name.startswith(gemm_splitk_layout.ENTRY_PREFIXES)
-                and self.splitk_gemms is not None
-            ):
-                gemm_splitk_layout.signature(name)
-                return 1
-            if (
-                name.startswith(quantization_layout.ENTRY_PREFIXES)
-                and self.quantization is not None
-            ):
-                quantization_layout.signature(name)
-                return 1
-            return 0
-        except (AttributeError, UnicodeDecodeError, ValueError):
-            return 0
+            try:
+                name = entry.decode("ascii")
+                if name in self.descriptors:
+                    return 1
+                if name in LAZY_COPY_ENTRIES and self.copies is not None:
+                    return 1
+                if name in LAZY_ELEMENTWISE_ENTRIES and self.elementwise is not None:
+                    return 1
+                if name in arange_packages.ENTRIES and self.aranges is not None:
+                    return 1
+                if (
+                    name in dynamic_offset_packages.ENTRIES
+                    and self.dynamic_offsets is not None
+                ):
+                    return 1
+                if (
+                    name in masked_scatter_packages.ENTRIES
+                    and self.masked_scatters is not None
+                ):
+                    return 1
+                if (
+                    name in arg_reduce_layout.ENTRIES
+                    and self.arg_reductions is not None
+                ):
+                    return 1
+                if name in softmax_layout.ENTRIES and self.softmaxes is not None:
+                    return 1
+                if name in sort_layout.ENTRIES and self.sorts is not None:
+                    return 1
+                if (
+                    name in searchsorted_layout.ENTRIES
+                    and self.searchsorted is not None
+                ):
+                    return 1
+                if name in norm_layout.ENTRIES and self.norms is not None:
+                    return 1
+                if (
+                    name in cross_entropy_layout.ENTRIES
+                    and self.cross_entropies is not None
+                ):
+                    return 1
+                if (
+                    name in wide_reduction_packages.ENTRIES
+                    and self.wide_reductions is not None
+                ):
+                    return 1
+                if (
+                    name.startswith(scan_layout.ENTRY_PREFIXES)
+                    and self.scans is not None
+                ):
+                    scan_layout.signature(name)
+                    return 1
+                if (
+                    name.startswith(divmod_dispatch.ENTRY_PREFIXES)
+                    and self.divmods is not None
+                ):
+                    divmod_signature(name)
+                    return 1
+                if name.startswith(block_masked_mm_dispatch.ENTRY_PREFIXES):
+                    kind = block_masked_mm_layout.kind_of(name)
+                    return int(
+                        block_masked_mm_dispatch.cache_for(self, kind) is not None
+                    )
+                if conv_dispatch.is_entry(name):
+                    return int(self.convs is not None)
+                if fft_dispatch.is_entry(name):
+                    return int(self.ffts is not None)
+                if sdpa_dispatch.is_entry(name):
+                    return int(self.sdpas is not None)
+                if steel_attention_dispatch.is_entry(name):
+                    return int(self.steel_attentions is not None)
+                if sdpa_vjp_dispatch.is_entry(name):
+                    return int(self.sdpa_vjps is not None)
+                if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
+                    kind = gather_mm_dispatch.family(name)
+                    return int(gather_mm_dispatch.cache_for(self, kind) is not None)
+                if name.startswith(("gather", "scatter")) and self.gathers is not None:
+                    gather_signature(name)
+                    return 1
+                if (
+                    name.startswith(matmul_layout.ENTRY_PREFIXES)
+                    and self.quantized_matmuls is not None
+                ):
+                    matmul_layout.signature(name)
+                    return 1
+                if (
+                    name.startswith(fp_matmul_layout.ENTRY_PREFIXES)
+                    and self.fp_quantized_matmuls is not None
+                ):
+                    fp_matmul_layout.signature(name)
+                    return 1
+                if (
+                    name.startswith(qmm_layout.ENTRY_PREFIXES)
+                    and self.quantized_qmms is not None
+                ):
+                    qmm_layout.signature(name)
+                    return 1
+                if (
+                    name.startswith(fp_qmm_layout.ENTRY_PREFIXES)
+                    and self.fp_quantized_qmms is not None
+                ):
+                    fp_qmm_layout.signature(name)
+                    return 1
+                if (
+                    name.startswith(gemv_layout.ENTRY_PREFIXES)
+                    and self.gemvs is not None
+                ):
+                    gemv_layout.signature(name)
+                    return 1
+                if name.startswith(dot_layout.ENTRY_PREFIXES) and self.dots is not None:
+                    dot_layout.signature(name)
+                    return 1
+                if (
+                    name.startswith(compiled_layout.ENTRY_PREFIX)
+                    and self.compiled is not None
+                ):
+                    compiled_layout.variant(name)
+                    return 1
+                if (
+                    name.startswith(gemm_layout.ENTRY_PREFIXES)
+                    and self.gemms is not None
+                ):
+                    gemm_layout.signature(name)
+                    return 1
+                if (
+                    name.startswith(gemm_splitk_layout.ENTRY_PREFIXES)
+                    and self.splitk_gemms is not None
+                ):
+                    gemm_splitk_layout.signature(name)
+                    return 1
+                if (
+                    name.startswith(quantization_layout.ENTRY_PREFIXES)
+                    and self.quantization is not None
+                ):
+                    quantization_layout.signature(name)
+                    return 1
+                return 0
+            except (AttributeError, UnicodeDecodeError, ValueError):
+                return 0
 
     def install(self):
         global _installed_runtime
