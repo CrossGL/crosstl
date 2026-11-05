@@ -21,6 +21,10 @@ This module maps the built-ins HLSL can express:
   stages (``WaveGetLaneCount()``, ``WaveGetLaneIndex()``; the compute path has its own), the lane masks
   ``gl_SubgroupEqMask`` to ``gl_SubgroupLtMask`` (built from ``WaveGetLaneIndex()``) and ``gl_NumSamples`` in a pixel
   shader (``GetRenderTargetSampleCount()``, which DXIL allows only there);
+* the draw parameters ``gl_BaseVertex`` and ``gl_BaseInstance`` take ``SV_StartVertexLocation`` and
+  ``SV_StartInstanceLocation`` (Shader Model 6.8, refused for the ``dx10`` and ``dx11`` profiles); DXC accepts
+  ``int`` and ``uint`` for both and lowers them to SPIR-V's ``BuiltIn BaseVertex`` and ``BaseInstance``.
+  ``gl_DrawID`` has no HLSL system value and stays refused;
 * ``gl_FragSizeEXT`` is derived from an ``SV_ShadingRate`` input, and ``gl_FullyCoveredEXT`` reads
   ``SV_InnerCoverage`` (conservative rasterization tier 3);
 * body reads of ``gl_SubgroupSize``, ``gl_SubgroupInvocationID`` and ``gl_NumSamples`` take the same intrinsics.
@@ -57,7 +61,15 @@ HLSL_GLSL_SYSTEM_VALUES = {
     "gl_BaryCoordNoPerspNV": "SV_Barycentrics1",
     "gl_ShadingRateEXT": "SV_ShadingRate",
     "gl_PrimitiveShadingRateEXT": "SV_ShadingRate",
+    "gl_BaseVertex": "SV_StartVertexLocation",
+    "gl_BaseInstance": "SV_StartInstanceLocation",
 }
+
+# Shader Model 6.8 draw parameters (DXC rejects them for earlier vertex-shader targets: "invalid semantic
+# 'SV_StartVertexLocation' for vs 6.6").
+_SHADER_MODEL_6_8_VALUES = frozenset(
+    {"sv_startvertexlocation", "sv_startinstancelocation"}
+)
 
 HLSL_NOPERSPECTIVE_BARYCENTRICS = frozenset(
     {"gl_BaryCoordNoPerspEXT", "gl_BaryCoordNoPerspNV"}
@@ -235,6 +247,15 @@ def hlsl_builtin_input_parameter(
 def refuse_unmapped_hlsl_builtin(codegen, semantic, mapped):
     """``mapped``, after refusing a CrossGL ``gl_`` built-in the HLSL semantic table left as a user semantic."""
     text = str(semantic or "").strip()
+    if str(mapped).lower() in _SHADER_MODEL_6_8_VALUES and codegen.target_profile in {
+        "dx10",
+        "dx11",
+    }:
+        return codegen.refuse_lowering(
+            f"@{text}: {mapped} requires Shader Model 6.8, which DirectX profile "
+            f"{codegen.target_profile} does not provide",
+            mapped,
+        )
     if not str(mapped).lower().startswith("gl_") or not is_crossgl_gl_builtin(text):
         return mapped
     if text.lower().startswith(_COLOUR_PREFIXES):

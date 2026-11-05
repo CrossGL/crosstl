@@ -1,4 +1,4 @@
-"""SPIR-V ray tracing and mesh shading instructions, imported as CrossGL intrinsic calls.
+"""SPIR-V ray tracing, mesh shading and geometry stream instructions, imported as CrossGL intrinsic calls.
 
 SPIR-V names a ray payload or callable data variable directly in ``OpTraceRayKHR`` and ``OpExecuteCallableKHR``;
 CrossGL, like GL_EXT_ray_tracing, names it by its ``location``. glslang does not decorate these variables with a
@@ -91,6 +91,9 @@ _STATEMENTS = {
     "OpSetMeshOutputsEXT": ("SetMeshOutputCounts", 2, None),
     # The optional payload operand is the stage's taskPayloadSharedEXT variable, which CrossGL declares instead.
     "OpEmitMeshTasksEXT": ("DispatchMesh", 3, None),
+    # A geometry stage's numbered vertex streams; the stream operand is a constant.
+    "OpEmitStreamVertex": ("EmitStreamVertex", 1, None),
+    "OpEndStreamPrimitive": ("EndStreamPrimitive", 1, None),
 }
 
 

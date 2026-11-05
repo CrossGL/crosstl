@@ -2420,6 +2420,11 @@ class MetalParser:
             else:
                 base_type = self.current_token[1]
                 self.eat(self.current_token[0])
+        elif self.current_token[0] == "MESH" and self.peek(1)[0] == "LESS_THAN":
+            # ``mesh<V, P, NV, NP, topology>`` after ``using namespace metal``: the
+            # lexer reads ``mesh`` as the stage keyword of ``[[mesh]]``.
+            base_type = self.current_token[1]
+            self.eat("MESH")
         elif self.current_token[0] not in TYPE_TOKENS:
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
         elif (

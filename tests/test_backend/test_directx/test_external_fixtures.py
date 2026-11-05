@@ -194,7 +194,7 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "vertex {",
-            "uint VertID @ gl_VertexID",
+            "uint VertID @ gl_RelativeVertexID",
             "out vec4 Pos @ gl_Position",
             "Tex = vec2(uvec2(VertID, VertID << 1) & 2);",
         ),
@@ -1546,7 +1546,7 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "static const vec4 FullScreenVertsPos[3] = {vec4(-1.0, 1.0, 1.0, 1.0), vec4(3.0, 1.0, 1.0, 1.0), vec4(-1.0, -3.0, 1.0, 1.0)};",
-            "VertexOut FullscreenVS(uint vertexId @ gl_VertexID)",
+            "VertexOut FullscreenVS(uint vertexId @ gl_RelativeVertexID)",
             "outVert.UVOut = FullScreenVertsUVs[vertexId];",
         ),
     ),

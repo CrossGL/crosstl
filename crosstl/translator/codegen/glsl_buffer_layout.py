@@ -88,16 +88,21 @@ GLSL_BUFFER_COMPOUND_BINARY_OPERATORS = {
 GLSL_BUFFER_FLOAT_COMPOUND_OPERATORS = {"+=", "-=", "*=", "/="}
 
 
+GLSL_BUFFER_FLOAT_COMPONENT_TYPES = frozenset({"float", "float16_t"})
+GLSL_BUFFER_INTEGER_COMPONENT_TYPES = frozenset(
+    {"int", "uint", "int16_t", "uint16_t", "int64_t", "uint64_t", "int8_t", "uint8_t"}
+)
+
+
 def glsl_buffer_compound_binary_operator(operator, component_type):
     binary_operator = GLSL_BUFFER_COMPOUND_BINARY_OPERATORS.get(operator)
     if binary_operator is None:
         return None
-    if (
-        component_type == "float"
-        and operator not in GLSL_BUFFER_FLOAT_COMPOUND_OPERATORS
-    ):
-        return None
-    if component_type in {"float", "int", "uint"}:
+    if component_type in GLSL_BUFFER_FLOAT_COMPONENT_TYPES:
+        if operator not in GLSL_BUFFER_FLOAT_COMPOUND_OPERATORS:
+            return None
+        return binary_operator
+    if component_type in GLSL_BUFFER_INTEGER_COMPONENT_TYPES:
         return binary_operator
     return None
 
@@ -108,6 +113,7 @@ def std430_scalar_type_info(component_type, component_size=4):
         "align": component_size,
         "components": 1,
         "component_type": component_type,
+        "component_size": component_size,
     }
 
 
@@ -117,6 +123,7 @@ def std430_vector_type_info(component_type, components, component_size=4):
         "align": component_size * (2 if components == 2 else 4),
         "components": components,
         "component_type": component_type,
+        "component_size": component_size,
     }
     if components == 3:
         info["array_stride"] = 4 * component_size
@@ -134,6 +141,7 @@ def std430_matrix_type_info(columns, rows):
         "matrix_rows": rows,
         "column_stride": column_stride,
         "component_type": "float",
+        "component_size": 4,
     }
 
 
@@ -146,6 +154,7 @@ def std140_matrix_type_info(columns, rows):
         "matrix_rows": rows,
         "column_stride": column_stride,
         "component_type": "float",
+        "component_size": 4,
     }
 
 
@@ -157,6 +166,13 @@ def std430_scalar_vector_type_entries():
         "uint": std430_scalar_type_info("uint"),
         "int64_t": std430_scalar_type_info("int64_t", 8),
         "uint64_t": std430_scalar_type_info("uint64_t", 8),
+        # GL_EXT_shader_16bit_storage and GL_EXT_shader_8bit_storage: the base
+        # alignment of a scalar is its size (GLSL 4.60 section 7.6.2.2 rule 1).
+        "int16_t": std430_scalar_type_info("int16_t", 2),
+        "uint16_t": std430_scalar_type_info("uint16_t", 2),
+        "float16_t": std430_scalar_type_info("float16_t", 2),
+        "int8_t": std430_scalar_type_info("int8_t", 1),
+        "uint8_t": std430_scalar_type_info("uint8_t", 1),
     }
     vector_prefixes = {
         "bool": (("bvec", "bool"), 4),
@@ -165,6 +181,11 @@ def std430_scalar_vector_type_entries():
         "uint": (("uvec", "uint"), 4),
         "int64_t": (("i64vec", "int64_t"), 8),
         "uint64_t": (("u64vec", "uint64_t"), 8),
+        "int16_t": (("i16vec",), 2),
+        "uint16_t": (("u16vec",), 2),
+        "float16_t": (("f16vec",), 2),
+        "int8_t": (("i8vec",), 1),
+        "uint8_t": (("u8vec",), 1),
     }
     for component_type, (prefixes, component_size) in vector_prefixes.items():
         for components in range(2, 5):
@@ -207,8 +228,9 @@ def std140_matrix_type_entries():
 
 
 STD430_SCALAR_TYPE_ALIASES = {
-    "int8_t": "int",
-    "int16_t": "int",
+    "int8": "int8_t",
+    "int16": "int16_t",
+    "short": "int16_t",
     "int32_t": "int",
     "i64": "int64_t",
     "int64": "int64_t",
@@ -216,8 +238,11 @@ STD430_SCALAR_TYPE_ALIASES = {
     "long": "int",
     "signed long": "int",
     "ptrdiff_t": "int",
-    "uint8_t": "uint",
-    "uint16_t": "uint",
+    "uint8": "uint8_t",
+    "uint16": "uint16_t",
+    "ushort": "uint16_t",
+    "float16": "float16_t",
+    "half": "float16_t",
     "uint32_t": "uint",
     "u64": "uint64_t",
     "uint64": "uint64_t",
@@ -451,6 +476,32 @@ def glsl_buffer_block_member_type(
     }
 
 
+# Component widths every byte-offset lowering reads and writes with its own types.
+DEFAULT_GLSL_BUFFER_COMPONENT_SIZES = frozenset({4, 8})
+
+
+def glsl_buffer_member_leaves(member_info):
+    """The scalar, vector and matrix layouts inside ``member_info``, in declaration order."""
+    nested = member_info.get("members")
+    if not nested:
+        yield member_info
+        return
+    for child in nested.values():
+        yield from glsl_buffer_member_leaves(child)
+
+
+def glsl_buffer_component_size_refusal(member_info, component_sizes):
+    """Why a lowering limited to ``component_sizes`` cannot hold ``member_info``, or ``None``."""
+    for leaf in glsl_buffer_member_leaves(member_info):
+        size = leaf.get("component_size", 4)
+        if size not in component_sizes:
+            return (
+                f"{size * 8}-bit {leaf.get('component_type')} components have no "
+                "lowering for this target"
+            )
+    return None
+
+
 def record_glsl_buffer_block_lowering_failure(
     var_failures, struct_failures, var_name, type_name, reason
 ):
@@ -472,7 +523,20 @@ def collect_lowered_glsl_buffer_blocks(
     map_type,
     target_type_key,
     unsupported_type_message,
+    component_refusal=None,
 ):
+    """Lay out each std140 or std430 buffer block in ``global_vars`` for byte-offset access.
+
+    ``component_refusal(member_info)`` names why the target cannot read or write a
+    member, or returns ``None``; by default only 32- and 64-bit components lower.
+    """
+    if component_refusal is None:
+
+        def component_refusal(member_info):
+            return glsl_buffer_component_size_refusal(
+                member_info, DEFAULT_GLSL_BUFFER_COMPONENT_SIZES
+            )
+
     blocks = {}
     var_failures = {}
     struct_failures = {}
@@ -519,6 +583,11 @@ def collect_lowered_glsl_buffer_blocks(
                 break
             if not member_name:
                 failure_reason = "unsupported unnamed buffer block member"
+                members = {}
+                break
+            refusal = component_refusal(member_info)
+            if refusal is not None:
+                failure_reason = f"unsupported member {member_name}: {refusal}"
                 members = {}
                 break
             if member_info["is_array"]:

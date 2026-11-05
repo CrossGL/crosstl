@@ -1,4 +1,4 @@
-"""SPIR-V input probes: the SPIR-V glslang compiles a feature's GLSL probe to, disassembled.
+"""SPIR-V input probes: the SPIR-V glslang compiles a feature's GLSL probe to, disassembled, or DXC its HLSL probe.
 
 SPIR-V has no source language of its own to write a probe in, and glslang is the reference GLSL compiler, so its
 output is the SPIR-V a GLSL project would hand to CrossTL. A function probe counts only when the module calls the
@@ -6,6 +6,10 @@ feature's own GLSL.std.450 instruction, or has its own core instruction, and the
 module still does, or calls what the specification defines it as: ``NClamp`` is ``NMin(NMax(x, minVal), maxVal)``. The NaN-aware
 instructions have no GLSL built-in; their probe is the one of the instruction with the same operands, renamed in the
 assembly.
+
+A construct GLSL cannot spell, such as a hull shader's spacing, winding or point mode, which GLSL declares only on the
+evaluation shader, or a generic function, is probed with the SPIR-V DXC compiles its HLSL probe to: the SPIR-V an HLSL
+project would hand to CrossTL. DXC keeps the resources the probe declares, as the execution harness has it do.
 
 The NaN-aware instructions and the ones they are renamed from agree on every input but NaN, and the inputs of
 :mod:`.execution` hold none, so a SPIR-V translation of one must also call it, or test an operand for NaN with
@@ -24,11 +28,13 @@ from __future__ import annotations
 import dataclasses
 import re
 
-from . import constructs, probes, semantic, validators
+from . import constructs, execution, probes, semantic, validators
 from .dialect import ProbeError
 from .features.spirv import NAN_AWARE, is_core
 from .model import Feature, Param, Signature, Type
 
+# The language whose probe, compiled by DXC, stands in for a construct GLSL has no spelling for.
+FALLBACK = "hlsl"
 _STAND_INS = {"NMin": "FMin", "NMax": "FMax", "NClamp": "FClamp"}
 _VEC3, _IVEC3 = Type("float", (3,)), Type("int", (3,))
 # Each struct form, with its GLSL call and the GLSL signature the pointer form's probe uses.
@@ -107,8 +113,51 @@ def _pointer_form(assembly: str, instruction: str) -> str:
     return rewritten
 
 
+def source_language(feature: Feature) -> str:
+    """The language whose probe of ``feature`` is compiled to its SPIR-V input probe: GLSL, or HLSL for a construct
+    GLSL has no spelling for (:data:`FALLBACK`)."""
+    if (
+        constructs.is_construct(feature)
+        and not constructs.spells(feature.name, "glsl")
+        and constructs.spells(feature.name, FALLBACK)
+    ):
+        return FALLBACK
+    return "glsl"
+
+
+def _lowered(feature: Feature, language: str) -> tuple[str, probes.Probe]:
+    """The disassembled SPIR-V of ``feature``'s probe in ``language``, and the probe; raises :class:`ProbeError`
+    when the reference compiler rejects it."""
+    probe = probes.build(feature, language)
+    # DXC drops the resources a shader never reads unless told to keep them, as the execution harness has it do.
+    assembly, log = validators.lower(
+        language,
+        probe.source,
+        probe.entry,
+        feature.stage,
+        raw_ids=False,
+        keep_bindings=language == FALLBACK,
+    )
+    if not assembly:
+        compiler = "glslang" if language == "glsl" else validators.TOOLS[language]
+        raise ProbeError(
+            f"{compiler} rejects the {language.upper()} probe: {validators.first_error(log)}"
+        )
+    if language == FALLBACK:
+        assembly = execution.without_unused_counters(assembly)
+    return assembly, probe
+
+
 def build(feature: Feature) -> probes.Probe:
     """The SPIR-V input probe of ``feature``; raises :class:`ProbeError` when there is none."""
+    language = source_language(feature)
+    if language == FALLBACK:
+        if not validators.can_lower(language):
+            raise ProbeError("dxc or spirv-dis is not installed")
+        assembly, probe = _lowered(
+            dataclasses.replace(feature, language=language), language
+        )
+        return probes.Probe("spirv", assembly, probe.entry, ".spvasm")
     if not validators.can_lower("glsl"):
         raise ProbeError("glslangValidator or spirv-dis is not installed")
     instruction = "" if constructs.is_construct(feature) else feature.name
@@ -126,14 +175,7 @@ def build(feature: Feature) -> probes.Probe:
             else feature.spelling or feature.crossgl
         )
         glsl = dataclasses.replace(glsl, spelling=spelling)
-    probe = probes.build(glsl, "glsl")
-    assembly, log = validators.lower(
-        "glsl", probe.source, probe.entry, feature.stage, raw_ids=False
-    )
-    if not assembly:
-        raise ProbeError(
-            f"glslang rejects the GLSL probe: {validators.first_error(log)}"
-        )
+    assembly, probe = _lowered(glsl, "glsl")
     if instruction and is_core(feature):
         if not _calls(feature, assembly):
             raise ProbeError(f"glslang does not lower {glsl.spelling} to {instruction}")

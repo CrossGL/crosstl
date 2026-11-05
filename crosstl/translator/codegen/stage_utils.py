@@ -360,7 +360,18 @@ def order_functions_by_dependencies(
     function_call_name,
     function_call_node_type,
     include_overloads=False,
+    keep_overload_family_order=False,
 ):
+    """Order ``functions`` so that callees precede their callers.
+
+    With ``include_overloads`` a call depends on every overload of its callee's
+    name; otherwise only on a callee whose name is unique. With
+    ``keep_overload_family_order`` a call from one overload to another of the
+    same name adds no dependency, so the overloads of one name keep their
+    source order relative to each other. Without resolving the call, a
+    dependency on the whole family could otherwise move an overload ahead of
+    the one it calls.
+    """
     ordered = []
     visiting = set()
     visited = set()
@@ -394,8 +405,13 @@ def order_functions_by_dependencies(
 
             dependencies = functions_by_name.get(function_call_name(node), ())
             for dependency in dependencies:
-                if dependency is not func:
-                    visit(dependency)
+                if dependency is func:
+                    continue
+                if keep_overload_family_order and dependency.name == getattr(
+                    func, "name", None
+                ):
+                    continue
+                visit(dependency)
 
         visiting.remove(func_id)
         visited.add(func_id)

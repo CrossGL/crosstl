@@ -772,7 +772,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "enum Mode {",
             "typedef Mode ModeTypedef;",
-            "const ModeTypedef mode = Mode::Add;",
+            "const ModeTypedef mode @constant_id(5) = Mode::Add;",
             "outputBuffer[id.x] = uint(mode);",
         ],
         "not_contains": ["typealias ModeTypedef = Mode;"],
@@ -1650,7 +1650,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "vec4 color @ ray_payload_read(caller) @ ray_payload_write(caller,closesthit,miss);",
             "ray_generation {",
-            "resultTexture[uvec2(0, 0)] = payload.color;",
+            "imageStore(resultTexture, uvec2(0, 0), payload.color);",
             "payload.color = vec4(0, 0, 0, 1);",
         ],
         "not_contains": ["@ read(caller):write"],
@@ -1690,7 +1690,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "import PixelStatsShared;",
             "sampler2D gStatsRayCount[uint(PixelStatsRayType::Count)];",
-            "image2D gStatsRayCountTotal;",
+            "uimage2D gStatsRayCountTotal @format(unknown) @texel(uint);",
             "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
             "totalRays += gStatsRayCount[i][pixel];",
         ],
@@ -1792,10 +1792,10 @@ EXTERNAL_FIXTURES = [
         ),
         "crossgl": True,
         "contains": [
-            "image2D texFrame;",
+            "image2D texFrame @format(unknown);",
             "bool mandelbrot(inout vec2 z, out int i)",
             "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
-            "texFrame[thread] = vec4(color, 1.0);",
+            "imageStore(texFrame, thread, vec4(color, 1.0));",
         ],
     },
     {
@@ -2410,7 +2410,7 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "image2DMS tex;",
-            "return imageLoad(tex, 0.xx, 0);",
+            "return imageLoad(tex, 0.xx, 0).x;",
         ],
         "not_contains": ["Expected COMMA or RPAREN"],
     },

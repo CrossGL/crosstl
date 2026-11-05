@@ -71,3 +71,30 @@ def test_component_writes_compile_with_dxc(tmp_path):
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_slang_component_writes_store_each_component(tmp_path):
+    path = tmp_path / "shader.comp"
+    path.write_text(COMPONENT_WRITES)
+    slang = crosstl.translate(str(path), backend="slang", format_output=False)
+
+    assert not re.search(r"Load\d?\([^;]*\)\)?(\.\w+|\[\w+\])\s*[-+*/]?=", slang), slang
+    assert (
+        "particles_2.Store((index * 32), "
+        "asuint((asfloat(particles_2.Load((index * 32))) + (0.5))));" in slang
+    ), slang
+    assert "particles_2.Store(((index * 32) + k * 4), asuint((3.0)));" in slang
+    swizzle = re.search(r"uint2 (\w+) = uint2\(index, 1u\);", slang)
+    assert swizzle, slang
+    assert f"single.Store(20, {swizzle.group(1)}.x);" in slang
+    assert f"single.Store(16, {swizzle.group(1)}.y);" in slang
+    slangc = shutil.which("slangc")
+    if slangc is not None:
+        source = tmp_path / "out.slang"
+        source.write_text(slang)
+        result = subprocess.run(
+            [slangc, str(source), "-target", "spirv", "-o", str(tmp_path / "out.spv")],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr

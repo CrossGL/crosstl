@@ -136,9 +136,9 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
         # checked by DXC.
         | ({"dxc"} if "slang" in languages else set())
         | ({"spirv-dis"} if set(languages) & set(validators.SPIRV_COMPILERS) else set())
-        # SPIR-V input probes are glslang's output.
+        # SPIR-V input probes are glslang's output, and DXC's for the constructs GLSL cannot spell.
         | (
-            {"glslangValidator", "spirv-dis"}
+            {"glslangValidator", "dxc", "spirv-dis"}
             if "spirv" in languages and "input" in directions
             else set()
         )

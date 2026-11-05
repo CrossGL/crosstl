@@ -14,7 +14,14 @@ from __future__ import annotations
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hlsl_ray_interfaces import _functions, _walk
-from .stage_varyings import literal_int, member_type, semantic, stage_name, stages
+from .stage_varyings import (
+    attribute_text,
+    literal_int,
+    member_type,
+    semantic,
+    stage_name,
+    stages,
+)
 
 __all__ = ["TessFactorUnsupportedError", "fit_tess_factors_to_domain"]
 
@@ -53,8 +60,7 @@ def _domain(program):
                 continue
             arguments = attribute.arguments or []
             if len(arguments) == 1:
-                value = getattr(arguments[0], "value", arguments[0])
-                found.add(str(value).strip().strip("\"'").lower())
+                found.add(attribute_text(arguments[0]).lower())
     return found.pop() if len(found) == 1 else None
 
 

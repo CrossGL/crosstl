@@ -784,7 +784,7 @@ def test_vertex_draw_metadata_builtins_emit_implicit_slang_parameters():
         "uint gl_InstanceID : SV_InstanceID, "
         "int gl_BaseVertex : SV_StartVertexLocation, "
         "uint gl_BaseInstance : SV_StartInstanceLocation, "
-        "uint gl_DrawID : SV_DrawID) : SV_Position" in generated_code
+        "uint gl_DrawID : SV_DrawIndex) : SV_Position" in generated_code
     )
     assert "int absoluteVertex = int(gl_VertexID) + gl_BaseVertex;" in generated_code
     assert "uint instance = gl_InstanceID + gl_BaseInstance;" in generated_code
@@ -813,10 +813,10 @@ def test_vertex_draw_metadata_uses_existing_semantic_parameter_aliases():
 
     assert "int baseVertex : SV_StartVertexLocation" in generated_code
     assert "uint baseInstance : SV_StartInstanceLocation" in generated_code
-    assert "uint drawIndex : SV_DrawID" in generated_code
+    assert "uint drawIndex : SV_DrawIndex" in generated_code
     assert "int gl_BaseVertex : SV_StartVertexLocation" not in generated_code
     assert "uint gl_BaseInstance : SV_StartInstanceLocation" not in generated_code
-    assert "uint gl_DrawID : SV_DrawID" not in generated_code
+    assert "uint gl_DrawID : SV_DrawIndex" not in generated_code
     assert "int absoluteVertex = baseVertex + baseVertex;" in generated_code
     assert "uint instance = baseInstance + baseInstance;" in generated_code
     assert "uint draw = drawIndex + drawIndex;" in generated_code
@@ -11664,7 +11664,7 @@ def test_resource_binding_metadata_emits_slang_vk_and_register_decorations(tmp_p
         ": register(s3, space2);" in generated_code
     )
     assert (
-        "[[vk::binding(8, 2)]] RWTexture2D<uint> counters "
+        '[[vk::binding(8, 2)]] [format("r32ui")] RWTexture2D<uint> counters '
         ": register(u8, space2);" in generated_code
     )
     assert (
@@ -11845,7 +11845,7 @@ def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
         ": register(s0);" in generated_code
     )
     assert (
-        "[[vk::binding(4, 0)]] RWTexture2D<uint> counters "
+        '[[vk::binding(4, 0)]] [format("r32ui")] RWTexture2D<uint> counters '
         ": register(u0);" in generated_code
     )
 
@@ -13349,8 +13349,9 @@ def test_unsized_slang_resource_arrays_preserve_bindless_declarations_and_operat
     assert "[[vk::binding(2, 0)]] SamplerState states[] : register(s1);" in (
         generated_code
     )
-    assert "[[vk::binding(3, 0)]] RWTexture2D<float4> images[] : register(u0);" in (
-        generated_code
+    assert (
+        '[[vk::binding(3, 0)]] [format("rgba16f")] RWTexture2D<float4> images[] : register(u0);'
+        in (generated_code)
     )
     assert (
         "[[vk::binding(0, 1)]] StructuredBuffer<float4> values[] "
@@ -21305,19 +21306,19 @@ def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "[[vk::binding(0, 0)]] globallycoherent RWTexture2D<uint> "
+        '[[vk::binding(0, 0)]] [format("r32ui")] globallycoherent RWTexture2D<uint> '
         "coherentCounters : register(u0);" in generated_code
     )
     assert (
-        "[[vk::binding(1, 0)]] globallycoherent RWTexture2D<uint> "
+        '[[vk::binding(1, 0)]] [format("r32ui")] globallycoherent RWTexture2D<uint> '
         "globalCounters : register(u1);" in generated_code
     )
     assert (
-        "[[vk::binding(2, 0)]] RWTexture2D<uint> volatileCounters "
+        '[[vk::binding(2, 0)]] [format("r32ui")] RWTexture2D<uint> volatileCounters '
         ": register(u2);" in generated_code
     )
     assert (
-        "[[vk::binding(3, 0)]] RWTexture2D<uint> restrictCounters "
+        '[[vk::binding(3, 0)]] [format("r32ui")] RWTexture2D<uint> restrictCounters '
         ": register(u3);" in generated_code
     )
     assert (
@@ -21423,7 +21424,7 @@ def test_explicit_image_formats_emit_slang_storage_element_types():
     assert "RWTexture2D<uint2> rgUnsigned : register(u2);" in generated_code
     assert "RWTexture3D<float4> rgbaVolume : register(u3);" in generated_code
     assert "RWTexture2DMS<uint> msCounter : register(u4);" in generated_code
-    assert "RWTexture2DMSArray<float4> msLayers : register(u5);" in generated_code
+    assert "RWTexture2DMSArray<unorm float4> msLayers : register(u5);" in generated_code
     assert (
         "float scalarLoad(RWTexture2D<float2> image, int2 pixel, float value)"
         in generated_code

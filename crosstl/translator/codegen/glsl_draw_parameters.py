@@ -6,8 +6,10 @@ GL_ARB_shader_draw_parameters ("New Built-in Variables"), with the same values. 
 ``#version 450 core`` by default and copied the 4.60 names into it, which glslang rejects as undeclared.
 
 :func:`vertex_builtin_spelling` gives the name a vertex shader at the emitted version declares: the core name from
-4.60 on, the suffixed name before it, whose extension :mod:`.glsl_builtin_extensions` then requires. GLSL ES has no
-draw parameters, so the name stays as written there and the GLSL ES emitters refuse it.
+4.60 on, the suffixed name before it, whose extension :mod:`.glsl_builtin_extensions` then requires. Other stages
+use :func:`draw_parameter_spelling`: mesh and task shaders read ``gl_DrawID`` too (Vulkan ``DrawIndex``), and
+before 4.60 glslang declares it there only as ``gl_DrawIDARB``. GLSL ES has no draw parameters, so the name stays
+as written there and the GLSL ES emitters refuse it.
 """
 
 from __future__ import annotations

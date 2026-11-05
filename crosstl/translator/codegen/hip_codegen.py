@@ -49,6 +49,7 @@ from .array_utils import (
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .c_float_literals import c_float_literal_text
+from .c_narrow_integer_vectors import generic_narrow_vector_spelling
 from .c_pointer_math import generate_pointer_math_call
 from .c_reference_parameters import (
     is_output_parameter,
@@ -3302,9 +3303,7 @@ class HipCodeGen(
             return None
         if len(components) == 1:
             return vector_info["component_type"]
-        return self.vector_type_for_components(
-            vector_info["component_type"], len(components)
-        )
+        return self.swizzle_vector_type(vector_info, len(components))
 
     def hip_stage_builtin_alias_expression(self, name, component=None):
         role = self.stage_builtin_aliases.get(name)
@@ -4012,9 +4011,7 @@ class HipCodeGen(
         )
         if object_info is None:
             return None
-        result_type = self.vector_type_for_components(
-            object_info["component_type"], len(components)
-        )
+        result_type = self.swizzle_vector_type(object_info, len(components))
         result_info = self.swizzle_result_vector_info(result_type)
         if result_info is None:
             return None
@@ -4411,6 +4408,7 @@ class HipCodeGen(
             # The structure has no constructor; aggregate initialization sets its members in order.
             return f"{self.map_type(func_name)}{{{', '.join(args)}}}"
 
+        func_name = generic_narrow_vector_spelling(func_name) or func_name
         mapped_name = wide_integer_vector_constructor(
             func_name
         ) or self.function_map.get(func_name, func_name)
@@ -6421,6 +6419,7 @@ class HipCodeGen(
             return None
 
         compact_type = "".join(str(type_text).split())
+        compact_type = generic_narrow_vector_spelling(compact_type) or compact_type
         if (
             len(compact_type) < 8
             or not compact_type.startswith("vec")
@@ -6448,6 +6447,7 @@ class HipCodeGen(
             "constructor": f"make_{vector_type}",
             "component_type": component_type,
             "components": components,
+            "vector_element": scalar_type,
         }
 
     def require_hip_half3_helper(self):
@@ -9285,9 +9285,7 @@ class HipCodeGen(
         if len(components) == 1:
             return f"{object_expr}.{components[0]}"
 
-        result_type = self.vector_type_for_components(
-            vector_info["component_type"], len(components)
-        )
+        result_type = self.swizzle_vector_type(vector_info, len(components))
         result_info = self.swizzle_result_vector_info(result_type)
         if result_info is None:
             return None
@@ -9555,6 +9553,7 @@ class HipCodeGen(
             type_str = self.convert_type_node_to_string(type_name)
         else:
             type_str = str(type_name)
+        type_str = generic_narrow_vector_spelling(type_str) or type_str
 
         generic_enum_type = generic_enum_specialized_type_name(self, type_str)
         if generic_enum_type is not None:

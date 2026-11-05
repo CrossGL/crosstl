@@ -106,6 +106,8 @@ class SlangParser:
         "triangleadj",
     }
     MESH_OUTPUT_PARAMETER_QUALIFIERS = {"indices", "vertices", "primitives"}
+    # ``in payload P payload``: a mesh entry point's task payload (Slang follows HLSL's mesh shader syntax).
+    MESH_PAYLOAD_PARAMETER_QUALIFIERS = {"payload"}
     STANDALONE_LAYOUT_DECLARATION_QUALIFIERS = {"buffer"}
     MODERN_VARIABLE_KEYWORDS = {"let", "var"}
     BUILTIN_IDENTIFIER_TYPES = {
@@ -868,7 +870,11 @@ class SlangParser:
         while self.is_geometry_input_primitive_qualifier_at(self.pos):
             qualifiers.append(self.current_token[1])
             self.eat("IDENTIFIER")
-        while self.is_mesh_output_parameter_qualifier_at(self.pos):
+        while self.is_mesh_output_parameter_qualifier_at(
+            self.pos
+        ) or self.is_parameter_role_qualifier_at(
+            self.pos, self.MESH_PAYLOAD_PARAMETER_QUALIFIERS
+        ):
             qualifiers.append(self.current_token[1])
             self.eat("IDENTIFIER")
         return qualifiers
@@ -1275,7 +1281,13 @@ class SlangParser:
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
-            members.extend(self.parse_struct_field_members())
+            # A member may carry attributes, such as the [[vk::offset(N)]] of a push-constant block's member.
+            member_attributes = []
+            while self.current_token[0] == "LBRACKET":
+                member_attributes.extend(self.parse_attribute_list())
+            members.extend(
+                self.parse_struct_field_members(attributes=member_attributes)
+            )
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -1630,6 +1642,11 @@ class SlangParser:
             self.eat("IDENTIFIER")
         else:
             self.eat("STRUCT")
+        # ``struct [raypayload] Payload``: shader model 6.7's payload marker, which the access qualifiers of the
+        # members carry for CrossGL (as the HLSL importer reads it).
+        struct_attributes = []
+        while self.current_token[0] == "LBRACKET":
+            struct_attributes.extend(self.parse_attribute_list())
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         generic_parameters = prefix_generic_parameters

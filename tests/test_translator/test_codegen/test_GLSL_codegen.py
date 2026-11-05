@@ -10234,11 +10234,18 @@ def test_glsl_private_pointer_view_rejects_unresolved_address_base():
 
         void dispatch() {
             float backing[2][3];
-            fill(&backing[1][0]);
+            fill(&backing[ROW][0]);
         }
     }
     """
 
+    # An element of an existing row is a view into that row's fixed array.
+    generated = GLSLCodeGen().generate(
+        crosstl.translator.parse(code.replace("ROW", "1"))
+    )
+    assert "fill(backing[1], int(0));" in generated
+    # A row outside the array has no fixed backing array to pass.
+    code = code.replace("ROW", "2")
     with pytest.raises(
         OpenGLPrivatePointerParameterError,
         match="private pointer view 'fill.values' has no concrete fixed backing array",
@@ -15682,6 +15689,7 @@ def test_glsl_repeated_struct_storage_resources_use_distinct_block_names(tmp_pat
 def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
     # OpenGL has no descriptor sets: set 0 keeps its bindings, and a resource of another set keeps its binding
     # when that is free in its class (uniform blocks, storage blocks, texture units), else takes the lowest free one.
+    # A resource of another set names its Vulkan set and binding and its OpenGL binding through CROSSGL_BINDING.
     code = """
     shader DescriptorSetFlatteningGLSL {
         struct Params {
@@ -15709,7 +15717,10 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
 
     assert "layout(std140, binding = 0) uniform Params {" in generated
     assert "} frameParams;" in generated
-    assert "layout(std140, binding = 1) uniform Params_materialParams {" in generated
+    assert (
+        "layout(std140, CROSSGL_BINDING(1, 0, 1)) uniform Params_materialParams {"
+        in generated
+    )
     assert "} materialParams;" in generated
     assert "layout(std140, binding = 1) uniform Params {" not in generated
     assert "frameParams.color" in generated
@@ -15719,11 +15730,15 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
         in generated
     )
     assert (
-        "layout(std430, binding = 0) buffer historyBuffer { float history[]; };"
-        in generated
+        "layout(std430, CROSSGL_BINDING(2, 1, 0)) buffer historyBuffer "
+        "{ float history[]; };" in generated
     )
     assert "layout(binding = 4) uniform sampler2D baseMap;" in generated
-    assert "layout(binding = 0) uniform sampler2D detailMap;" in generated
+    assert "layout(CROSSGL_BINDING(1, 4, 0)) uniform sampler2D detailMap;" in generated
+    assert (
+        "#ifdef VULKAN\n#define CROSSGL_BINDING(s, vulkan, opengl) set = s, "
+        "binding = vulkan\n" in generated
+    )
 
 
 def test_glsl_struct_uniform_derived_block_name_collision_uses_stable_suffix(
@@ -15870,7 +15885,7 @@ def test_glsl_descriptor_set_flattening_is_attribute_order_independent():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(binding = 2) uniform sampler2D tex;" in generated
+    assert "layout(CROSSGL_BINDING(1, 2, 2)) uniform sampler2D tex;" in generated
 
 
 def test_glsl_register_space_flattens_to_opengl_binding():
@@ -15888,7 +15903,7 @@ def test_glsl_register_space_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(rgba32f, binding = 3) uniform image2D img;" in generated
+    assert "layout(rgba32f, CROSSGL_BINDING(2, 3, 3)) uniform image2D img;" in generated
 
 
 def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
@@ -15910,7 +15925,7 @@ def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(std140, binding = 2) uniform Params {" in generated
+    assert "layout(std140, CROSSGL_BINDING(1, 2, 2)) uniform Params {" in generated
     assert "} materialParams;" in generated
 
 
@@ -15927,7 +15942,7 @@ def test_glsl_stage_resource_descriptor_set_flattens_to_opengl_binding():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-    assert "layout(binding = 2) uniform sampler2D tex;" in generated
+    assert "layout(CROSSGL_BINDING(1, 2, 2)) uniform sampler2D tex;" in generated
 
 
 @pytest.mark.parametrize(

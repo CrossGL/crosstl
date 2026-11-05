@@ -7109,24 +7109,24 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
 
     assert "device uchar* aliasBlock" in generated_code
     assert (
-        "uint word = uint(ushort((*reinterpret_cast<const device uint*>(aliasBlock + 4))));"
+        "uint word = uint(ushort((*reinterpret_cast<const device ushort*>(aliasBlock + 2))));"
         in generated_code
     )
     assert (
-        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (8 + index * 4))))"
+        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (4 + index * 4))))"
         in generated_code
     )
     assert "void writeAlias(uint index, uint word, uint64_t offset" in generated_code
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(uint(ushort(word)));"
+        "(*reinterpret_cast<device ushort*>(aliasBlock + 2)) = uint(ushort(word));"
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + (8 + index * 4))) = uint(offset);"
+        "(*reinterpret_cast<device uint*>(aliasBlock + (4 + index * 4))) = uint(offset);"
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(1u)))));"
+        "(*reinterpret_cast<device ushort*>(aliasBlock + 0)) = ((*reinterpret_cast<const device ushort*>(aliasBlock + 0)) + uint(ushort(uint(1u))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code
@@ -16507,7 +16507,13 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
 
     vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
     assert "uint vertexID [[vertex_id]]" in vertex_code
-    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "uint _crossglInstanceIndex [[instance_id]]" in vertex_code
+    assert "uint _crossglBaseInstance [[base_instance]]" in vertex_code
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in vertex_code
+    )
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
@@ -16541,7 +16547,13 @@ def test_graphics_hlsl_vertex_system_value_aliases_lower_to_metal_builtins():
     generated = MetalCodeGen().generate_stage(ast, "vertex")
 
     assert "uint vertexID [[vertex_id]]" in generated
-    assert "uint instanceID [[instance_id]]" in generated
+    assert "uint _crossglInstanceIndex [[instance_id]]" in generated
+    assert "uint _crossglBaseInstance [[base_instance]]" in generated
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in generated
+    )
     assert "SV_VertexID" not in generated
     assert "SV_InstanceID" not in generated
 
@@ -16578,7 +16590,13 @@ def test_graphics_hlsl_system_value_semantic_alias_variants_lower_to_metal_built
 
     vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
     assert "uint vertexID [[vertex_id]]" in vertex_code
-    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "uint _crossglInstanceIndex [[instance_id]]" in vertex_code
+    assert "uint _crossglBaseInstance [[base_instance]]" in vertex_code
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in vertex_code
+    )
     assert "sv_vertex_id" not in vertex_code
     assert "SV_InstanceId" not in vertex_code
 

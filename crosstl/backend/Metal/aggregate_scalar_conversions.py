@@ -12,6 +12,10 @@ the aggregate.
 
 from __future__ import annotations
 
+from ...translator.structure_conversions import (
+    registered_structure_conversion_for_identity,
+)
+
 _COMPOUND_SCALAR_OPERATORS = {
     "+=",
     "-=",
@@ -175,3 +179,84 @@ def refuse_aggregate_builtin_operation(codegen, expression, source_location=None
         "operator matches them, so the selected operator is unknown",
         source_location,
     )
+
+
+def _registered_structure_value(codegen, value_type) -> bool:
+    resolved = codegen.normalized_metal_type(codegen.resolve_type_alias(value_type))
+    return any(
+        registered_structure_conversion_for_identity(identity) is not None
+        for identity in (resolved, codegen.map_type(resolved))
+    )
+
+
+def render_explicit_aggregate_scalar_conversion(
+    codegen, target_type, arguments, is_main, source_location=None
+) -> str | None:
+    """Render an explicit conversion of an aggregate to a scalar through its conversion helper.
+
+    ``T(value)``, ``T{value}`` and ``(T)value`` with a scalar ``T`` and a class-typed ``value`` direct-initialize
+    ``T``, so the class's conversion functions are the candidates and the one whose result needs the best standard
+    conversion to ``T`` is selected ([dcl.init.general]/16.7, [over.match.conv], [over.ics.rank]). A conversion
+    reached only after member lowering, such as one in a function template first instantiated from a member of a
+    struct template, still names the source aggregate here, while its operator now exists only as the free helper
+    ``Struct__operator_<type>``. A helper returning exactly ``T`` is chosen; otherwise the single helper is called
+    and its result converted to ``T``. Several inexact helpers, or none, raise instead of emitting a scalar
+    constructor over a struct value, which no target accepts.
+
+    A value whose type is the representation of a registered structure conversion contract
+    (``crosstl.translator.structure_conversions``) and that has no lowered helper keeps the scalar constructor:
+    every code generator lowers that constructor through the contract's value conversion, as it did before this
+    lowering existed.
+    """
+    arguments = list(arguments or [])
+    if len(arguments) != 1 or arguments[0] is None:
+        return None
+    target_value = codegen.metal_source_overload_value_type(target_type)
+    if target_value is None or not _scalar_type(codegen, target_value):
+        return None
+    value = arguments[0]
+    try:
+        value_type = codegen.metal_source_overload_value_type(
+            codegen.expression_metal_type(value)
+        )
+    except ValueError:
+        # The regular expression path diagnoses an operand it cannot type.
+        return None
+    if value_type is None:
+        return None
+    if (
+        codegen.normalized_metal_type(codegen.resolve_type_alias(value_type))
+        not in codegen.struct_member_types
+    ):
+        return None
+    candidates = codegen.metal_lowered_readonly_scalar_conversions(value_type)
+    if not candidates and _registered_structure_value(codegen, value_type):
+        return None
+    target_identity = codegen.metal_source_overload_type_identity(target_value)
+    exact = [
+        candidate
+        for candidate in candidates
+        if codegen.metal_source_overload_type_identity(candidate[1]) == target_identity
+    ]
+    selected = exact or candidates
+    if len(selected) != 1:
+        from .MetalCrossGLCodeGen import MetalSourceOverloadResolutionError
+
+        raise MetalSourceOverloadResolutionError(
+            str(target_type),
+            [str(value_type)],
+            [str(getattr(function, "name", "")) for function, _result in candidates],
+            (
+                "the aggregate has several readonly scalar conversions and none "
+                "returns the target type exactly"
+                if selected
+                else "the aggregate has no readonly scalar conversion helper"
+            ),
+            source_location,
+        )
+    helper, converted_type = selected[0]
+    name = codegen.sanitize_identifier(codegen.function_output_name(helper))
+    rendered = f"{name}({codegen.generate_expression(value, is_main)})"
+    if codegen.metal_source_overload_type_identity(converted_type) != target_identity:
+        rendered = f"{codegen.map_type(target_value)}({rendered})"
+    return rendered

@@ -512,6 +512,7 @@ def _reverse_directx(
     trigonometric_reduction=None,
     floating_point_contraction=None,
     unorm_store_rounding=None,
+    zero_base_vertex=False,
 ):
     from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
@@ -520,6 +521,7 @@ def _reverse_directx(
         trigonometric_reduction=trigonometric_reduction,
         floating_point_contraction=floating_point_contraction,
         unorm_store_rounding=unorm_store_rounding,
+        zero_base_vertex=zero_base_vertex,
     )
 
 
@@ -669,10 +671,10 @@ def _glsl_shader_type_from_path(file_path: str) -> str | None:
     return _GLSL_EXTENSION_SHADER_TYPES.get(ext)
 
 
-def _reverse_slang():
+def _reverse_slang(zero_base_vertex=False):
     from crosstl.backend.slang.SlangCrossGLCodeGen import SlangToCrossGLConverter
 
-    return SlangToCrossGLConverter()
+    return SlangToCrossGLConverter(zero_base_vertex=zero_base_vertex)
 
 
 def _reverse_spirv():

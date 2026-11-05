@@ -68,12 +68,12 @@ MLX_RMS_NORM_VJP_DISPATCH_CONTRACT = (
 )
 MLX_RMS_NORM_VJP_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "45e296590cddf7685c3d4f6daa4720db44fa664024c6bcef56238e2cdd1f047d",
+        "sha256": "4ba74339ef10a7b19887ba883ff43ddf0ce63a4086d0df559a2094c0616dc5cd",
         "sizeBytes": 10398,
     },
     "opengl": {
-        "sha256": "d9cc8f4bf9d1ebaa82d0f68b742cc5ac018d0c871f1e827b2fc9fb19e8cb32c9",
-        "sizeBytes": 10414,
+        "sha256": "bb95a57eabbe9fe4f4868bae5183995730011b22c22ae7642c037d1c9059fb4f",
+        "sizeBytes": 10578,
     },
 }
 REQUIRE_DIRECTX_PROOF_ENV = "CROSTL_REQUIRE_MLX_RMS_NORM_VJP_DIRECTX_NATIVE_LOADER"
