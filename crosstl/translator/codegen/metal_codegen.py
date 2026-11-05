@@ -24048,6 +24048,14 @@ class MetalCodeGen(
         access, offset = self.glsl_buffer_block_atomic_access(target)
         if access is None:
             return None
+        if len(args) != expected_args:
+            # Extra operands used to be dropped unread.
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target,
+                func_name,
+                f"requires {expected_args} argument(s), got {len(args)}",
+                access,
+            )
         if access.get("readonly"):
             return self.unsupported_glsl_buffer_block_atomic_call(
                 target,
