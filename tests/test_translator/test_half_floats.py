@@ -717,8 +717,8 @@ void main(uint3 id : SV_DispatchThreadID) {
 
 
 def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_path):
-    # ``(l + s)`` becomes a rounding call. MSL converts the float scalar to the vector's half element type (MSL
-    # section 2.13), so the product is a rounded half4 too, and the compound assignment rounds the sum.
+    # ``(l + s)`` becomes a rounding call. MSL converts the float scalar ``w`` to the vector's ``half`` (MSL section
+    # 2.12), so the product is a rounded half4 too, and so is the compound assignment's sum.
     body = (
         "    half4 l = half4(a[i]);\n"
         "    half4 s = half4(a[i + 1]);\n"
@@ -729,8 +729,8 @@ def test_rewritten_half_operations_keep_their_type_in_enclosing_expressions(tmp_
     wgsl, names = helpers_in(tmp_path, metal, body)
     assert "cgl_half_round4" in names
     assert (
-        "l = cgl_half_round4((l + cgl_half_round4((cgl_half_round4((l + s))"
-        " * cgl_half_round(f32(w))))));" in wgsl
+        "l = cgl_half_round4((l + cgl_half_round4((cgl_half_round4((l + s)) "
+        "* cgl_half_round(f32(w))))));" in wgsl
     )
     assert "max(cgl_half_round4((l + s)), vec4<f32>(0.0))" in wgsl
 
