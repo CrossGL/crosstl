@@ -299,7 +299,9 @@ def test_shared_variable_scan_accepts_statement_list_bodies_and_foreign_nodes():
     from crosstl.translator import ast as A
     from crosstl.translator.semantics.atomic_forms import shared_variable_names
 
-    shared = A.VariableNode("tile", A.PrimitiveType("float"), qualifiers=["groupshared"])
+    shared = A.VariableNode(
+        "tile", A.PrimitiveType("float"), qualifiers=["groupshared"]
+    )
     plain = A.VariableNode("value", A.PrimitiveType("float"))
     foreign = SimpleNamespace(name="ignored")
     function = SimpleNamespace(name="main", body=[shared, plain, foreign])
