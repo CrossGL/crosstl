@@ -354,7 +354,9 @@ ATTENTION_3_TESTS = _tests(
 # cubic and antialiased upsampling sweeps. Only this group's job installs the
 # reference libraries, so no other group skips a test for want of them.
 REFERENCE_TESTS = (
-    _tests("test_bf16", "TestBF16", ("conversion", "conversion_ml_dtypes"))
+    # Cumulative max and min gradients through axis scatters.
+    _tests("test_autograd", "TestAutograd", ("cummax_cummin_grad_vs_torch",))
+    + _tests("test_bf16", "TestBF16", ("conversion", "conversion_ml_dtypes"))
     + _tests("test_fft", "TestFFT", ("fft_grads",))
     + _tests("test_nn", "TestLayers", ("batch_norm_matches_torch",))
     + _tests("test_optimizers", "TestOptimizers", ("adamw_matches_pytorch",))

@@ -2430,8 +2430,8 @@ and GGUF formats), `training` (19 `test_optimizers` methods, seven `test_random`
 samplers, four `test_bf16` sweeps, the device, stream, memory and constant
 tests and the copying `test_zero_copy` constructor), `rope` (the seven rotary
 embedding and fused transform methods of `test_fast` and the two antialiased
-`test_upsample` sweeps) and `references` (the nine methods that compare with
-PyTorch or ml_dtypes: both `test_bf16` conversions, `test_fft_grads`, batch
+`test_upsample` sweeps) and `references` (the ten methods that compare with
+PyTorch or ml_dtypes: the cumulative max and min gradients, both `test_bf16` conversions, `test_fft_grads`, batch
 normalization, AdamW and four `test_upsample` sweeps). Only the `references`,
 `conv-references` and `conv-transpose` jobs (`REFERENCE_LIBRARY_GROUPS`)
 install PyTorch 2.14.1
