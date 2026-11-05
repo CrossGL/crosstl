@@ -27,7 +27,7 @@ from typing import (
     Union,
 )
 
-from crosstl.backend.DirectX.macro_expansion import METAL_MACROS
+from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
@@ -1163,7 +1163,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # importer reads sources as MSL 3.1 unless the caller defines another version.
         for name, value in METAL_PREDEFINED_MACROS.items():
             self.macros.setdefault(name, Macro(name=name, replacement=value))
-        for name in CLANG_FEATURE_TEST_MACROS:
+        # __has_include and __has_include_next are the shared expander's built-ins (MacroDialect.has_include):
+        # #if looks the header up, and anywhere else they are refused, as Clang rejects them there.
+        for name in sorted(CLANG_FEATURE_TEST_MACROS - set(HAS_INCLUDE_MACROS)):
             self.macros.setdefault(name, Macro(name=name, replacement="0"))
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:

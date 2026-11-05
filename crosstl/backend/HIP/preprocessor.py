@@ -3,7 +3,7 @@
 from typing import Dict, List, Optional, Tuple
 
 from crosstl.backend.DirectX.macro_expansion import CPP_MACROS
-from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
+from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, LogicalLines
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_HIP_PRESERVED_INCLUDE__ "
 
@@ -62,9 +62,16 @@ class HipPreprocessor(HLSLPreprocessor):
         )
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
-        code = self._mask_comments(code)
         processed = super().preprocess(code, file_path=file_path)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
+
+    def _split_logical_lines(self, code: str) -> List[str]:
+        # Comments are blanked after the lines are spliced and joined, so a comment that a directive line
+        # opens stays part of that directive.
+        lines = super()._split_logical_lines(code)
+        return LogicalLines(
+            [self._mask_comments(line) for line in lines], lines.physical
+        )
 
     def _mask_comments(self, code: str) -> str:
         result = []

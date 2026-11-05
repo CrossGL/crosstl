@@ -11,6 +11,7 @@ from .macro_expansion import (
     HLSL_MACROS,
     MacroDialect,
     code_extent,
+    comments_to_spaces,
     evaluate_condition,
     expand_condition,
     expand_line,
@@ -90,11 +91,18 @@ class HLSLPreprocessor:
         )
 
     def _split_logical_lines(self, code: str) -> List[str]:
+        """Logical lines of ``code``: backslash-newline splices are removed ([lex.phases]/1.2), and a line that
+        opens a block comment continues to the line that closes it, because a comment is one space
+        ([lex.phases]/1.3): a directive goes on after its comment (which becomes a space) and a ``#`` inside a
+        comment starts no directive. A text line keeps the comment and its line breaks.
+        """
         lines = code.splitlines()
         logical_lines: List[str] = []
         physical: List[int] = []
         buffer = ""
         spliced = 0
+        comment_at = -1  # where the block comment that ``buffer`` leaves open starts
+        checked = 0  # ``buffer`` before this offset holds no comment end
         for line in lines:
             stripped = line.rstrip()
             if stripped.endswith("\\"):
@@ -102,14 +110,38 @@ class HLSLPreprocessor:
                 spliced += 1
                 continue
             buffer += line
+            if comment_at >= 0 and "*/" not in buffer[checked:]:
+                extent = comment_at
+            else:
+                start = max(comment_at, 0)
+                extent = start + code_extent(buffer[start:])
+            if extent < len(buffer):
+                comment_at = extent
+                buffer += "\n"
+                checked = len(buffer) - 1
+                spliced += 1
+                continue
+            if comment_at >= 0 and self._is_directive_line(buffer):
+                buffer = comments_to_spaces(buffer)
             logical_lines.append(buffer)
             physical.append(spliced + 1)
             buffer = ""
             spliced = 0
+            comment_at = -1
         if buffer:
+            if comment_at >= 0:
+                buffer = buffer[:-1]  # the source ends inside a block comment
             logical_lines.append(buffer)
             physical.append(spliced)
         return LogicalLines(logical_lines, physical)
+
+    def _is_directive_line(self, line: str) -> bool:
+        """Whether ``line`` starts with ``#``, or with its alternative token ``%:`` where the dialect has
+        digraphs ([lex.digraph])."""
+        stripped = line.lstrip()
+        return stripped.startswith("#") or (
+            self.macro_dialect.mode.digraphs and stripped.startswith("%:")
+        )
 
     def _paren_balance(self, text: str) -> int:
         balance = 0
@@ -157,7 +189,9 @@ class HLSLPreprocessor:
             active = is_active()
             consumed_lines = 1
 
-            if stripped.startswith("#"):
+            if self._is_directive_line(stripped):
+                if stripped.startswith("%:"):
+                    stripped = "#" + stripped[2:]
                 directive, rest = self._parse_directive(stripped)
                 if directive in ("if", "ifdef", "ifndef"):
                     # The condition of a group nested in a skipped group is not evaluated ([cpp.cond]/13).
@@ -250,6 +284,11 @@ class HLSLPreprocessor:
                 elif directive in ("error", "warning"):
                     if directive == "error" or self.strict:
                         raise SyntaxError(f"#{directive}: {rest.strip()}")
+                elif (
+                    not directive
+                    and not self._strip_macro_comments(stripped[1:]).strip()
+                ):
+                    pass  # the null directive ([cpp.null])
                 else:
                     if active:
                         output.append(line)
@@ -297,7 +336,7 @@ class HLSLPreprocessor:
                 expanded = self._expand_macros(line, line_num, False, file_path)
             except UnterminatedInvocation:
                 following = start + consumed
-                if following >= len(lines) or lines[following].lstrip().startswith("#"):
+                if following >= len(lines) or self._is_directive_line(lines[following]):
                     raise
                 line += "\n" + lines[following]
                 consumed += 1
@@ -334,7 +373,7 @@ class HLSLPreprocessor:
         index = start
         while index < len(lines):
             text = lines[index]
-            if text.lstrip().startswith("#") or code_extent(text) < len(text):
+            if self._is_directive_line(text) or code_extent(text) < len(text):
                 return 0
             code = self._strip_macro_comments(text).strip()
             if code:
@@ -478,22 +517,45 @@ class HLSLPreprocessor:
         delimiter = match.group(1)
         target = match.group(2)
 
-        search_paths: List[str] = []
-        if delimiter == '"' and file_path:
-            search_paths.append(os.path.dirname(file_path))
-        search_paths.extend(self.include_paths)
-
-        for base in search_paths:
-            candidate = os.path.join(base, target)
-            if os.path.isfile(candidate):
-                if self._canonical_path(candidate) in self.pragma_once_files:
-                    return "", candidate
-                return self._read_source_file(candidate), candidate
+        candidate = self._find_header(target, delimiter == '"', file_path)
+        if candidate is not None:
+            if self._canonical_path(candidate) in self.pragma_once_files:
+                return "", candidate
+            return self._read_source_file(candidate), candidate
 
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")
         if delimiter == "<":
             return f"{PRESERVED_SYSTEM_INCLUDE_SENTINEL}<{target}>", file_path or ""
+        return None
+
+    def _find_header(
+        self,
+        target: str,
+        quoted: bool,
+        file_path: Optional[str],
+        after_current: bool = False,
+    ) -> Optional[str]:
+        """The file that ``#include "target"`` (``quoted``) or ``#include <target>`` names: a quoted header is
+        looked for next to ``file_path`` first, then on the include path. ``after_current`` searches only the
+        include path entries after the one that holds ``file_path``, as ``#include_next`` does; in a file that no
+        entry holds it searches the whole include path, as Clang does."""
+        search_paths: List[str] = []
+        if quoted and file_path and not after_current:
+            search_paths.append(os.path.dirname(file_path))
+        paths = list(self.include_paths)
+        if after_current and file_path:
+            directory = self._canonical_path(os.path.dirname(file_path))
+            for index, base in enumerate(paths):
+                root = self._canonical_path(base)
+                if directory == root or directory.startswith(root + os.sep):
+                    paths = paths[index + 1 :]
+                    break
+        search_paths.extend(paths)
+        for base in search_paths:
+            candidate = os.path.join(base, target)
+            if os.path.isfile(candidate):
+                return candidate
         return None
 
     def _is_pragma_once(self, rest: str) -> bool:

@@ -53,6 +53,10 @@ MACRO_CASES = (
     "redefinition_and_undef",
     "builtin_macros",
     "line_in_multiline_invocations",
+    "pragma_operator_once",
+    "pragmas",
+    "digraphs_and_splices",
+    "includes_absent",
 )
 
 NOT_COMPARABLE = {
@@ -61,6 +65,16 @@ NOT_COMPARABLE = {
     ("metal", "rescan_with_following_tokens"),
     # The reference dialect is C++; OpenCL C has no 'and'/'or' operator names or u8 character literals.
     ("opencl", "if_arithmetic"),
+    # The Metal importer refuses '#pragma STDC FP_CONTRACT', whose lexical scope translation cannot keep.
+    ("metal", "pragmas"),
+    # The case leaves '# define NOT_A_DIRECTIVE 1' as text, which the Metal importer refuses as a directive
+    # it cannot carry; Clang would hand the same text to the parser, which rejects it.
+    ("metal", "digraphs_and_splices"),
+    # These compilers search system header directories of their own, so the importers refuse a
+    # __has_include(<header>) that the include path does not answer, where the reference takes it as absent.
+    ("cuda", "includes_absent"),
+    ("hip", "includes_absent"),
+    ("opencl", "includes_absent"),
 }
 
 

@@ -60,6 +60,8 @@ BUILTIN_MACROS = ("__LINE__", "__FILE__")
 # Clang's further built-in macros in C and C++, and the ones it would expand to the build time.
 CLANG_BUILTIN_MACROS = ("__COUNTER__", "__INCLUDE_LEVEL__", "__BASE_FILE__")
 NONDETERMINISTIC_MACROS = ("__DATE__", "__TIME__", "__TIMESTAMP__")
+HAS_INCLUDE_MACROS = ("__has_include", "__has_include_next")
+_PRAGMA_OPERATOR = frozenset({"_Pragma"})
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*")
 # A string or character literal, a comment, or the start of a block comment that the line does not close.
 _SKIPPED_RE = re.compile(
@@ -78,6 +80,11 @@ class MacroDialect:
     operators in ``#if`` ([lex.digraph]), and ``elifdef`` accepts ``#elifdef`` and ``#elifndef`` (C++23; Clang 13
     and later, GCC 12 and later, in every mode). ``clang_builtins`` adds ``__COUNTER__``, ``__INCLUDE_LEVEL__``
     and ``__BASE_FILE__`` and refuses the build-time macros; ``file_name_macro`` is ``__FILE_NAME__`` (Clang 9).
+    ``pragma_operator`` is the ``_Pragma`` operator (C99, C++11 [cpp.pragma.op]). ``has_include`` is
+    ``__has_include`` and ``__has_include_next`` in ``#if`` (C++17 [cpp.cond], a Clang extension in every mode);
+    ``system_headers`` says the compiler searches system header directories of its own after the include path,
+    so a ``<header>`` the include path does not have may still exist (DXC and Slang search only the include
+    path).
     """
 
     mode: LexMode = CPP_MODE
@@ -88,6 +95,9 @@ class MacroDialect:
     elifdef: bool = True
     clang_builtins: bool = True
     file_name_macro: bool = True
+    pragma_operator: bool = True
+    has_include: bool = True
+    system_headers: bool = True
 
     @property
     def builtins(self) -> frozenset[str]:
@@ -97,6 +107,8 @@ class MacroDialect:
             names.update(CLANG_BUILTIN_MACROS + NONDETERMINISTIC_MACROS)
         if self.file_name_macro:
             names.add("__FILE_NAME__")
+        if self.has_include:
+            names.update(HAS_INCLUDE_MACROS)
         return frozenset(names)
 
 
@@ -114,6 +126,7 @@ HLSL_MACROS = MacroDialect(
     operator_names=False,
     elifdef=False,
     file_name_macro=False,
+    system_headers=False,
 )
 # The Metal compiler is Clang in C++14 or C++17 mode without raw string literals; intmax_t is 128 bits on AIR.
 METAL_MACROS = MacroDialect(mode=replace(CPP_MODE, raw_strings=False), int_width=128)
@@ -134,6 +147,9 @@ GLSL_MACROS = MacroDialect(
     elifdef=False,
     clang_builtins=False,
     file_name_macro=False,
+    pragma_operator=False,
+    has_include=False,
+    system_headers=False,
 )
 
 _SPACE_CACHE: dict[tuple[str, str, LexMode], bool] = {}
@@ -208,6 +224,12 @@ class _SharedTable:
         if name == "__FILE_NAME__":
             leaf = re.split(r"[\\/]", self._file_path or "<stdin>")[-1]
             return [self._literal(STRING, _quote(leaf), token)]
+        if name in HAS_INCLUDE_MACROS:
+            raise PreprocessorError(
+                f"{name} can only be used in #if and #elif",
+                span=token.span(),
+                code=BUILTIN_CODE,
+            )
         raise PreprocessorError(
             f"{name} makes the output depend on the build time and is not supported",
             span=token.span(),
@@ -244,12 +266,18 @@ def code_extent(text: str) -> int:
     return len(text)
 
 
-def _names_a_macro(
-    text: str, macros: dict[str, Macro], builtins: frozenset[str]
-) -> bool:
-    return any(
-        name in macros or name in builtins for name in _IDENTIFIER_RE.findall(text)
-    )
+def comments_to_spaces(text: str) -> str:
+    """``text`` with each block comment that spans lines replaced by one space, as in a directive."""
+
+    def space(match: re.Match) -> str:
+        found = match.group(0)
+        return " " if found.startswith("/*") and "\n" in found else found
+
+    return _SKIPPED_RE.sub(space, text)
+
+
+def _names_a_macro(text: str, macros: dict[str, Macro], names: frozenset[str]) -> bool:
+    return any(name in macros or name in names for name in _IDENTIFIER_RE.findall(text))
 
 
 def _spell(
@@ -304,8 +332,10 @@ def expand_line(
     macros = preprocessor.macros
     preprocessor._invocation_continues = False
     dialect: MacroDialect = preprocessor.macro_dialect
-    builtins = dialect.builtins
-    if not _names_a_macro(text, macros, builtins):
+    names = dialect.builtins
+    if dialect.pragma_operator:
+        names = names | _PRAGMA_OPERATOR
+    if not _names_a_macro(text, macros, names):
         return text
     extent = code_extent(text)
     code, tail = text[:extent], text[extent:]
@@ -314,7 +344,7 @@ def expand_line(
         (
             index
             for index, token in enumerate(tokens)
-            if token.kind == IDENT and (token.text in macros or token.text in builtins)
+            if token.kind == IDENT and (token.text in macros or token.text in names)
         ),
         None,
     )
@@ -332,10 +362,80 @@ def expand_line(
     prefix = code[: tokens[first].offset]
     previous = tokens[first - 1] if first else None
     at_space = not prefix or prefix[-1].isspace()
-    spelled = _spell(expanded, dialect.mode, previous, at_space)
+    pieces = (
+        _pragma_operators(preprocessor, expanded, file_path)
+        if dialect.pragma_operator
+        else [expanded]
+    )
+    out = prefix
+    pragma_ends_line = False
+    for piece in pieces:
+        if isinstance(piece, str):
+            # A '#pragma' line of its own; text before or after it on the line goes to its own line.
+            if out[out.rfind("\n") + 1 :].strip():
+                out += "\n"
+            out += piece
+            pragma_ends_line = True
+            previous, at_space = None, True
+            continue
+        if not piece:
+            continue
+        if pragma_ends_line:
+            out += "\n"
+            pragma_ends_line = False
+        out += _spell(piece, dialect.mode, previous, at_space)
+        previous, at_space = piece[-1], False
+    if pragma_ends_line and tail:
+        out += "\n"
     # A joined multi-line invocation keeps its line count, so later lines keep their numbers.
     breaks = code.count("\n", tokens[first].offset)
-    return prefix + spelled + "\n" * breaks + tail
+    return out + "\n" * breaks + tail
+
+
+def _pragma_operators(
+    preprocessor: HLSLPreprocessor, tokens: list[Token], file_path: str | None
+) -> list[list[Token] | str]:
+    """[cpp.pragma.op]: ``tokens`` split at each ``_Pragma("...")`` into the text around it and the
+    ``#pragma`` line it stands for. ``_Pragma("once")`` applies to the current file like ``#pragma once`` and,
+    like it, leaves nothing in the output."""
+    mode = preprocessor.macro_dialect.mode
+    pieces: list[list[Token] | str] = []
+    current: list[Token] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.kind != IDENT or token.text != "_Pragma":
+            current.append(token)
+            index += 1
+            continue
+        window = tokens[index + 1 : index + 4]
+        if (
+            len(window) < 3
+            or window[0].text != "("
+            or window[1].kind != STRING
+            or window[2].text != ")"
+        ):
+            raise PreprocessorError(
+                "_Pragma takes a parenthesized string literal", span=token.span()
+            )
+        literal = window[1].text
+        body = (
+            literal[literal.index('"') + 1 : -1]
+            .replace('\\"', '"')
+            .replace("\\\\", "\\")
+        )
+        index += 4
+        if [part.text for part in lex_text(body, mode=mode)] == ["once"]:
+            if file_path:
+                preprocessor.pragma_once_files.add(
+                    preprocessor._canonical_path(file_path)
+                )
+            continue
+        pieces.append(current)
+        pieces.append("#pragma " + body.strip())
+        current = []
+    pieces.append(current)
+    return pieces
 
 
 def expand_condition(
@@ -356,6 +456,17 @@ def expand_condition(
     ]
 
     def defined(token: Token, stack: list[Token]):
+        if token.text in HAS_INCLUDE_MACROS and dialect.has_include:
+            found = has_include(preprocessor, token, stack, file_path)
+            return [
+                Token(
+                    NUMBER,
+                    "1" if found else "0",
+                    token.source,
+                    token.offset,
+                    token.space,
+                )
+            ]
         if token.text != "defined":
             return None
         parenthesized = bool(stack) and stack[-1].text == "("
@@ -381,6 +492,64 @@ def expand_condition(
         tokens, on_identifier=defined
     )
     return " ".join(token.text for token in expanded if token.text)
+
+
+def has_include(
+    preprocessor: HLSLPreprocessor,
+    token: Token,
+    stack: list[Token],
+    file_path: str | None,
+) -> bool:
+    """``__has_include(header)`` or ``__has_include_next(header)``; ``stack`` holds the tokens after ``token``,
+    the next one last.
+
+    The header is looked for as ``#include`` looks for it. A ``"header"`` or a ``<header>`` the include path does
+    not have is absent, except a ``<header>`` of a compiler with system header directories of its own
+    (``MacroDialect.system_headers``): that answer depends on the target toolchain, so it is refused, unless the
+    preprocessor is strict, which treats the include path as all the headers there are.
+    """
+    operand: list[Token] = []
+    if stack and stack[-1].text == "(":
+        stack.pop()
+        while stack and stack[-1].text != ")":
+            operand.append(stack.pop())
+        closed = bool(stack)
+        if closed:
+            stack.pop()
+    else:
+        closed = False
+    quoted = (
+        len(operand) == 1
+        and operand[0].kind == STRING
+        and operand[0].text.startswith('"')
+    )
+    bracketed = len(operand) >= 3 and operand[0].text == "<" and operand[-1].text == ">"
+    if not closed or not (quoted or bracketed):
+        raise PreprocessorError(
+            f'{token.text} takes a "header" or <header> operand',
+            span=token.span(),
+            code=BUILTIN_CODE,
+        )
+    if quoted:
+        header = operand[0].text[1:-1]
+    else:
+        header = "".join(
+            (" " if part.space and index else "") + part.text
+            for index, part in enumerate(operand[1:-1])
+        )
+    found = preprocessor._find_header(
+        header, quoted, file_path, after_current=token.text.endswith("_next")
+    )
+    if found is not None:
+        return True
+    if quoted or preprocessor.strict or not preprocessor.macro_dialect.system_headers:
+        return False
+    raise PreprocessorError(
+        f"{token.text}(<{header}>) depends on the target toolchain's system headers, which the include "
+        "path does not have",
+        span=token.span(),
+        code=BUILTIN_CODE,
+    )
 
 
 def evaluate_condition(preprocessor: HLSLPreprocessor, text: str) -> bool:
