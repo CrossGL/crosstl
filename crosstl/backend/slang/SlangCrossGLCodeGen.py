@@ -7,6 +7,12 @@ from crosstl.translator.integer_literals import crossgl_legacy_octal
 from crosstl.translator.stage_utils import normalize_stage_name
 
 from ..import_refusals import SlangImportRefused
+from ..storage_image_texels import (
+    IMAGE_FORMAT_ATTRIBUTES,
+    crossgl_image_format,
+    storage_image_element_type,
+    texel_attribute_arguments,
+)
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_specialization_import import (
     specialization_ids,
@@ -1868,6 +1874,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             elif name == "vk::push_constant":
                 append_metadata("push_constant", "@push_constant")
 
+        for text in self.storage_image_format_metadata(node):
+            append_metadata(text.split("(", 1)[0], text)
+
         specialization = getattr(self, "specialization_constant_ids", {}).get(id(node))
         if specialization is not None and specialization[0] is node:
             append_metadata("constant_id", f"@constant_id({specialization[1]})")
@@ -2351,6 +2360,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             )
             if packed_buffer_type:
                 return f"{packed_buffer_type}{pointer_suffix}"
+            storage_image_type = self.map_integer_storage_image_type(
+                slang_type, base_type
+            )
+            if storage_image_type:
+                return f"{storage_image_type}{pointer_suffix}"
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
@@ -2416,6 +2430,66 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         elif not text.startswith("value_"):
             text = f"value_{text}"
         return text
+
+    def map_integer_storage_image_type(self, slang_type, base_type):
+        """``uimage2D`` or ``iimage2D`` for a storage texture of integer texels."""
+        if base_type not in self.STORAGE_IMAGE_RESOURCE_TYPES:
+            return None
+        image_type = self.type_map.get(base_type)
+        element = " ".join(str(storage_image_element_type(slang_type) or "").split())
+        match = re.fullmatch(
+            r"(uint|dword|int)[1-4]?|vector\s*<\s*(uint|dword|int)\s*,\s*[1-4]\s*>",
+            element,
+        )
+        if not image_type or match is None:
+            return None
+        scalar = match.group(1) or match.group(2)
+        return f"{'i' if scalar == 'int' else 'u'}{image_type}"
+
+    # Typed storage textures whose format the bound view decides, as the HLSL
+    # importer reads them.
+    RUNTIME_FORMAT_STORAGE_TEXTURES = frozenset(
+        {
+            "RWTexture1D",
+            "RWTexture1DArray",
+            "RWTexture2D",
+            "RWTexture2DArray",
+            "RWTexture3D",
+        }
+    )
+
+    def storage_image_format_metadata(self, node):
+        """CrossGL ``@format`` (and ``@texel``) of a typed storage texture.
+
+        Slang's ``[format(F)]`` and ``[[vk::image_format(F)]]`` name the format.
+        Without them the view bound at run time decides it, so the declaration
+        carries ``@format(unknown)`` and ``@texel(...)`` keeps an element type
+        other than a four-component one, as the HLSL importer writes them.
+        """
+        vtype = str(getattr(node, "vtype", "") or "")
+        if vtype.split("<", 1)[0].strip() not in self.RUNTIME_FORMAT_STORAGE_TEXTURES:
+            return []
+        for attribute in getattr(node, "attributes", None) or []:
+            name = str(attribute.get("name", "")).lower()
+            if name not in IMAGE_FORMAT_ATTRIBUTES:
+                continue
+            arguments = attribute.get("arguments", []) or []
+            spelled = str(arguments[0]) if arguments else ""
+            image_format = crossgl_image_format(spelled) if arguments else None
+            if image_format is None:
+                raise SlangImportRefused(
+                    [
+                        f"Slang [{name}({spelled})] on '{node.name}': CrossGL has "
+                        "no such storage image format"
+                    ]
+                )
+            if image_format != "unknown":
+                return [f"@format({image_format})"]
+        metadata = ["@format(unknown)"]
+        texel = texel_attribute_arguments(storage_image_element_type(vtype))
+        if texel is not None:
+            metadata.append(f"@texel({texel})")
+        return metadata
 
     def map_pointer_element_buffer_type(self, slang_type, base_type):
         if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
