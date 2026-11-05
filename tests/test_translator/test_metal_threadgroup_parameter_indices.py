@@ -74,7 +74,9 @@ def crossgl(attributes):
 def kernel_parameters(metal):
     match = re.search(r"kernel void \w+\((.*?)\) \{", metal, re.S)
     assert match is not None, metal
-    return " ".join(match.group(1).split())
+    # clang-format, when installed, binds ``*`` to the name; without it the
+    # emitter binds it to the type. Compare one canonical spelling.
+    return re.sub(r"\s*\*\s*", " *", " ".join(match.group(1).split()))
 
 
 def metal_compiler():
