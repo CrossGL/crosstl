@@ -33,6 +33,7 @@ FRONT_ENDS = {
 }
 
 MACRO_CASES = (
+    "standard_example_3",
     "standard_example_4",
     "standard_example_5",
     "standard_example_7",
@@ -50,6 +51,8 @@ MACRO_CASES = (
     "conditionals",
     "if_arithmetic",
     "redefinition_and_undef",
+    "builtin_macros",
+    "line_in_multiline_invocations",
 )
 
 NOT_COMPARABLE = {

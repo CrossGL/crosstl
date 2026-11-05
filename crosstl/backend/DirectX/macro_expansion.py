@@ -19,6 +19,12 @@ preprocessor's typed diagnostic instead of being substituted loosely.
 The text before the first macro name of a line is kept verbatim; the rest of the line is spelled from its tokens
 with the original spacing reduced to single spaces, plus a space wherever two adjacent tokens would otherwise lex
 as one.
+
+The built-in macros are those of the compiler: ``__LINE__`` is the line where the outermost invocation that
+produced it ends, as in Clang and GCC; the C and C++ dialects add Clang's ``__COUNTER__``, ``__INCLUDE_LEVEL__``,
+``__BASE_FILE__`` and (Clang 9 and later) ``__FILE_NAME__``, and refuse ``__DATE__``, ``__TIME__`` and
+``__TIMESTAMP__``, which would make the translation depend on the build time. A definition in the source takes
+precedence over a built-in one, as it does in Clang after its redefinition warning.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+from crosstl.translator.preprocessor.engine import BUILTIN_CODE, PreprocessorError
 from crosstl.translator.preprocessor.expression import evaluate
 from crosstl.translator.preprocessor.lexer import (
     CPP_MODE,
@@ -50,6 +57,9 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime
     from .preprocessor import HLSLPreprocessor, Macro
 
 BUILTIN_MACROS = ("__LINE__", "__FILE__")
+# Clang's further built-in macros in C and C++, and the ones it would expand to the build time.
+CLANG_BUILTIN_MACROS = ("__COUNTER__", "__INCLUDE_LEVEL__", "__BASE_FILE__")
+NONDETERMINISTIC_MACROS = ("__DATE__", "__TIME__", "__TIMESTAMP__")
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*")
 # A string or character literal, a comment, or the start of a block comment that the line does not close.
 _SKIPPED_RE = re.compile(
@@ -66,7 +76,8 @@ class MacroDialect:
     ``, ## __VA_ARGS__`` comma elision, which Clang and GCC implement in every mode. ``int_width`` is the width
     of ``intmax_t`` that ``#if`` evaluates in, ``operator_names`` makes ``and``, ``or``, ``not`` and the rest
     operators in ``#if`` ([lex.digraph]), and ``elifdef`` accepts ``#elifdef`` and ``#elifndef`` (C++23; Clang 13
-    and later, GCC 12 and later, in every mode).
+    and later, GCC 12 and later, in every mode). ``clang_builtins`` adds ``__COUNTER__``, ``__INCLUDE_LEVEL__``
+    and ``__BASE_FILE__`` and refuses the build-time macros; ``file_name_macro`` is ``__FILE_NAME__`` (Clang 9).
     """
 
     mode: LexMode = CPP_MODE
@@ -75,6 +86,18 @@ class MacroDialect:
     int_width: int = 64
     operator_names: bool = True
     elifdef: bool = True
+    clang_builtins: bool = True
+    file_name_macro: bool = True
+
+    @property
+    def builtins(self) -> frozenset[str]:
+        """Names of the built-in macros, for ``defined`` and ``#ifdef``."""
+        names = set(BUILTIN_MACROS)
+        if self.clang_builtins:
+            names.update(CLANG_BUILTIN_MACROS + NONDETERMINISTIC_MACROS)
+        if self.file_name_macro:
+            names.add("__FILE_NAME__")
+        return frozenset(names)
 
 
 # DXC is Clang 3.7 in an HLSL mode: no digraphs, raw strings, digit separators, operator names or __VA_OPT__.
@@ -90,6 +113,7 @@ HLSL_MACROS = MacroDialect(
     va_opt=False,
     operator_names=False,
     elifdef=False,
+    file_name_macro=False,
 )
 # The Metal compiler is Clang in C++14 or C++17 mode without raw string literals; intmax_t is 128 bits on AIR.
 METAL_MACROS = MacroDialect(mode=replace(CPP_MODE, raw_strings=False), int_width=128)
@@ -108,6 +132,8 @@ GLSL_MACROS = MacroDialect(
     int_width=32,
     operator_names=False,
     elifdef=False,
+    clang_builtins=False,
+    file_name_macro=False,
 )
 
 _SPACE_CACHE: dict[tuple[str, str, LexMode], bool] = {}
@@ -124,33 +150,28 @@ def _needs_space(previous: Token, token: Token, mode: LexMode) -> bool:
 
 
 class _SharedTable:
-    """The shared expander's view of a text macro table, with ``__LINE__`` and ``__FILE__`` for one line."""
+    """The shared expander's view of a text macro table, with the dialect's built-in macros for one line."""
 
     def __init__(
         self,
-        macros: dict[str, Macro],
+        preprocessor: HLSLPreprocessor,
         cache: dict[str, tuple[tuple, SharedMacro]],
-        mode: LexMode,
         line_num: int,
-        file_text: str,
+        file_path: str | None,
     ):
-        self._macros = macros
+        self._preprocessor = preprocessor
+        self._macros = preprocessor.macros
         self._cache = cache
-        self._mode = mode
+        self._dialect: MacroDialect = preprocessor.macro_dialect
+        self._builtins = self._dialect.builtins
         self._line_num = line_num
-        self._file_text = file_text
+        self._file_path = file_path
 
     def get(self, name: str) -> SharedMacro | None:
-        if name == "__LINE__":
-            return SharedMacro(
-                name, builtin=lambda token: [self._literal(NUMBER, token)]
-            )
-        if name == "__FILE__":
-            return SharedMacro(
-                name, builtin=lambda token: [self._literal(STRING, token)]
-            )
         macro = self._macros.get(name)
         if macro is None:
+            if name in self._builtins:
+                return SharedMacro(name, builtin=self._builtin)
             return None
         params = tuple(macro.params) if macro.params is not None else None
         key = (params, macro.replacement, macro.is_variadic)
@@ -159,19 +180,61 @@ class _SharedTable:
             return cached[1]
         converted = SharedMacro(
             name,
-            body=lex_text(macro.replacement or "", mode=self._mode),
+            body=lex_text(macro.replacement or "", mode=self._dialect.mode),
             params=list(params) if params is not None else None,
             variadic=bool(macro.is_variadic and params),
         )
         self._cache[name] = (key, converted)
         return converted
 
-    def _literal(self, kind: str, origin: Token) -> Token:
-        text = str(self._line_num) if kind == NUMBER else self._file_text
+    def _builtin(self, token: Token) -> list[Token]:
+        name = token.text
+        preprocessor = self._preprocessor
+        if name == "__LINE__":
+            return [self._literal(NUMBER, str(self._line(token)), token)]
+        if name == "__FILE__":
+            text = preprocessor._stringize(self._file_path or "")
+            return [self._literal(STRING, text, token)]
+        if name == "__COUNTER__":
+            value = getattr(preprocessor, "_macro_counter", 0)
+            preprocessor._macro_counter = value + 1
+            return [self._literal(NUMBER, str(value), token)]
+        if name == "__INCLUDE_LEVEL__":
+            level = getattr(preprocessor, "_include_depth", 0)
+            return [self._literal(NUMBER, str(level), token)]
+        if name == "__BASE_FILE__":
+            base = getattr(preprocessor, "_base_file", None)
+            return [self._literal(STRING, _quote(base or "<stdin>"), token)]
+        if name == "__FILE_NAME__":
+            leaf = re.split(r"[\\/]", self._file_path or "<stdin>")[-1]
+            return [self._literal(STRING, _quote(leaf), token)]
+        raise PreprocessorError(
+            f"{name} makes the output depend on the build time and is not supported",
+            span=token.span(),
+            code=BUILTIN_CODE,
+        )
+
+    def _line(self, token: Token) -> int:
+        """The physical line where the outermost invocation containing ``token`` ends."""
+        source, offset = token.end_location()
+        if source is None:
+            return self._line_num
+        segment = source.position(offset)[0] - 1
+        joined = getattr(self._preprocessor, "_joined_line_numbers", None)
+        if joined and segment < len(joined):
+            return joined[segment]
+        return self._line_num + segment
+
+    @staticmethod
+    def _literal(kind: str, text: str, origin: Token) -> Token:
         return Token(kind, text, origin.source, origin.offset, origin.space)
 
 
-def _code_extent(text: str) -> int:
+def _quote(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def code_extent(text: str) -> int:
     """Where a block comment that ``text`` opens but does not close begins, or ``len(text)``."""
     if "/*" not in text:
         return len(text)
@@ -181,10 +244,11 @@ def _code_extent(text: str) -> int:
     return len(text)
 
 
-def _names_a_macro(text: str, macros: dict[str, Macro]) -> bool:
+def _names_a_macro(
+    text: str, macros: dict[str, Macro], builtins: frozenset[str]
+) -> bool:
     return any(
-        name in macros or name in BUILTIN_MACROS
-        for name in _IDENTIFIER_RE.findall(text)
+        name in macros or name in builtins for name in _IDENTIFIER_RE.findall(text)
     )
 
 
@@ -232,20 +296,25 @@ def expand_line(
     file_path: str | None,
     disabled_macros: set[str] | None = None,
 ) -> str:
-    """Replace the macros of one logical source line."""
+    """Replace the macros of one logical source line.
+
+    Sets ``preprocessor._invocation_continues`` when the replaced line ends in the name of a function-like macro
+    that may still be invoked by a ``(`` on a following line ([cpp.rescan]/1).
+    """
     macros = preprocessor.macros
-    if not _names_a_macro(text, macros):
-        return text
+    preprocessor._invocation_continues = False
     dialect: MacroDialect = preprocessor.macro_dialect
-    extent = _code_extent(text)
+    builtins = dialect.builtins
+    if not _names_a_macro(text, macros, builtins):
+        return text
+    extent = code_extent(text)
     code, tail = text[:extent], text[extent:]
     tokens = _lex_joined(code, dialect.mode)
     first = next(
         (
             index
             for index, token in enumerate(tokens)
-            if token.kind == IDENT
-            and (token.text in macros or token.text in BUILTIN_MACROS)
+            if token.kind == IDENT and (token.text in macros or token.text in builtins)
         ),
         None,
     )
@@ -254,6 +323,12 @@ def expand_line(
     hide = frozenset(disabled_macros or ())
     pending = [token.copy(hide=hide) if hide else token for token in tokens[first:]]
     expanded = _expander(preprocessor, line_num, file_path).expand(pending)
+    if expanded and not tail:
+        last = expanded[-1]
+        macro = macros.get(last.text) if last.kind == IDENT else None
+        preprocessor._invocation_continues = bool(
+            macro is not None and macro.is_function_like() and not last.noexpand
+        )
     prefix = code[: tokens[first].offset]
     previous = tokens[first - 1] if first else None
     at_space = not prefix or prefix[-1].isspace()
@@ -277,7 +352,7 @@ def expand_condition(
     hide = frozenset(disabled_macros or ())
     tokens = [
         token.copy(hide=hide) if hide else token
-        for token in lex_text(text[: _code_extent(text)], mode=dialect.mode)
+        for token in lex_text(text[: code_extent(text)], mode=dialect.mode)
     ]
 
     def defined(token: Token, stack: list[Token]):
@@ -290,7 +365,7 @@ def expand_condition(
         if parenthesized and stack and stack[-1].text == ")":
             stack.pop()
         is_defined = name is not None and (
-            name.text in macros or name.text in BUILTIN_MACROS
+            name.text in macros or name.text in dialect.builtins
         )
         return [
             Token(
@@ -330,13 +405,7 @@ def _expander(
 ) -> Expander:
     dialect: MacroDialect = preprocessor.macro_dialect
     cache = preprocessor.__dict__.setdefault("_shared_macro_cache", {})
-    table = _SharedTable(
-        preprocessor.macros,
-        cache,
-        dialect.mode,
-        line_num,
-        preprocessor._stringize(file_path or ""),
-    )
+    table = _SharedTable(preprocessor, cache, line_num, file_path)
     return Expander(
         table,  # type: ignore[arg-type]  # the expander only calls get()
         cpp=dialect.mode.cpp,
