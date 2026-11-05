@@ -132,7 +132,13 @@ from .hlsl_byteaddress_typed_access import (
     hlsl_byteaddress_typed_load,
     hlsl_byteaddress_typed_store,
 )
-from .hlsl_image_formats import normalized_texel_type, slang_image_format_prefix
+from .hlsl_image_formats import (
+    declared_texel_type,
+    normalized_texel_type,
+    slang_image_format_prefix,
+    texel_attribute,
+    texel_shape,
+)
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .image_access_contracts import numeric_expression_component_count
 from .lowering_refusals import LoweringRefusalMixin
@@ -157,12 +163,14 @@ from .slang_projected_compare import (
 )
 from .slang_refusals import SlangLoweringRefused
 from .slang_specialization_constants import plan_slang_specialization_constants
+from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_names
 from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
     normalize_stage_name,
 )
+from .storage_parameter_texels import StorageParameterTexels
 
 
 class SlangCodeGen(LoweringRefusalMixin):
@@ -257,6 +265,7 @@ class SlangCodeGen(LoweringRefusalMixin):
     def __init__(self):
         """Initialize Slang generation state and helper caches."""
         self.indent_level = 0
+        self.workgroup_atomics = SlangWorkgroupAtomics(self, ())
         self.indent_str = "    "
         self.variable_types = {}
         self.local_variable_types = self.variable_types
@@ -433,6 +442,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.buffer_resource_accesses = {}
             self.helper_functions = {}
             self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
+            self.storage_parameter_texels = StorageParameterTexels(
+                self.resource_base_type
+            )
+            self.storage_parameter_texels.prepare(ast)
+            self.workgroup_atomics = SlangWorkgroupAtomics(
+                self, workgroup_variable_names(ast)
+            )
             self.helper_name_aliases = {}
             self.user_symbol_names = self.collect_user_symbol_names(ast)
             self.current_function_return_type = None
@@ -9369,9 +9385,14 @@ class SlangCodeGen(LoweringRefusalMixin):
                     element_type = self.structured_buffer_element_type(buffer_type)
                     return element_type if element_type in {"int", "uint"} else "uint"
             if func_name == "imageLoad" and getattr(expr, "args", None):
-                return self.image_resource_element_type(
+                element_type = self.image_resource_element_type(
                     self.image_resource_type(expr.args[0])
                 )
+                shape = texel_shape(element_type)
+                if shape is not None and shape[1] < 4:
+                    # image_load_expression fills a narrower texel to four.
+                    return f"{shape[0]}4"
+                return element_type
             if func_name == "buffer_load" and getattr(expr, "args", None):
                 buffer_type = self.structured_buffer_resource_type(expr.args[0])
                 if self.is_byte_address_buffer_resource_type(buffer_type):
@@ -11719,6 +11740,10 @@ class SlangCodeGen(LoweringRefusalMixin):
     def map_image_base_type_with_format(self, type_name, node=None):
         base_type = self.resource_base_type(type_name)
         explicit_format = self.explicit_image_format(node) if node is not None else None
+        if explicit_format is None:
+            parameter_type = self.storage_parameter_type(node)
+            if parameter_type is not None:
+                return parameter_type
         component_type = self.scalar_image_format_components().get(
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
@@ -11752,10 +11777,43 @@ class SlangCodeGen(LoweringRefusalMixin):
             "uimage2DMSArray": "RWTexture2DMSArray",
         }
         texture_type = texture_types.get(base_type)
+        declared_texel = (
+            self.declared_storage_texel_type(node, base_type, explicit_format)
+            if texture_type
+            else None
+        )
         if component_type and texture_type:
             texel_type = normalized_texel_type(explicit_format, component_type)
             return f"{texture_type}<{texel_type}>"
+        if declared_texel:
+            return f"{texture_type}<{declared_texel}>"
         return self.convert_type(type_name)
+
+    def storage_parameter_type(self, node):
+        """The Slang type of the storage images a parameter receives, or ``None``."""
+        texels = getattr(self, "storage_parameter_texels", None)
+        if node is None or texels is None or texel_attribute(node) is not None:
+            return None
+        try:
+            return texels.parameter_type(
+                node,
+                lambda declaration: self.map_image_base_type_with_format(
+                    declaration.vtype, declaration
+                ),
+            )
+        except ValueError as error:
+            return self.refuse_lowering(f"Slang {error}", None)
+
+    def declared_storage_texel_type(self, node, image_type, explicit_format):
+        """The Slang texel type a storage image's ``@texel`` declares, or ``None``."""
+        if node is None:
+            return None
+        try:
+            return declared_texel_type(
+                node, image_type, explicit_format, self.attribute_value_to_string
+            )
+        except ValueError as error:
+            return self.refuse_lowering(f"Slang {error}", None)
 
     def map_buffer_base_type_with_access(self, type_name, node=None):
         access = self.explicit_resource_access(node)
@@ -11999,20 +12057,47 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.current_expression_expected_type
         ):
             return f"{load_expr}.x"
+        shape = texel_shape(element_type)
+        expected_type = self.current_expression_expected_type
+        expected_size = (
+            self.vector_size(self.convert_type(expected_type) or "")
+            if isinstance(expected_type, str)
+            else None
+        )
+        if (
+            shape is not None
+            and shape[1] < 4
+            and not self.is_scalar_value_type(self.current_expression_expected_type)
+            and not (expected_size and expected_size <= shape[1])
+        ):
+            # imageLoad returns four components; Slang returns the texel's own,
+            # so fill the missing ones as an image read does: zero, then one in w.
+            kind, count = shape
+            zero = self.vector_zero_value(kind)
+            one = {"float": "1.0", "int": "1", "uint": "1u"}[kind]
+            fill = ", ".join([zero] * (3 - count) + [one])
+            return f"{kind}4({load_expr}, {fill})"
         return load_expr
 
     def image_store_value_expression(self, image_arg, value_arg):
         value = self.generate_expression(value_arg)
         image_type = self.image_resource_type(image_arg)
         element_type = self.image_resource_element_type(image_type)
+        shape = texel_shape(element_type)
+        value_type = self.type_name_string(self.expression_result_type(value_arg))
+        value_size = self.vector_size(self.convert_type(value_type) or "")
+        if shape is not None and value_size and value_size > shape[1]:
+            # imageStore takes four components and writes the texel's own.
+            return f"({value}).{'xyzw'[: shape[1]]}"
         if not self.vector_size(element_type):
             return value
-        if not self.is_scalar_value_type(self.expression_result_type(value_arg)):
+        if not self.is_scalar_value_type(value_type):
             return value
 
+        texel_type = f"{shape[0]}{shape[1]}" if shape is not None else element_type
         if self.vector_size(element_type) == 2:
-            return f"{element_type}({value}, {self.vector_zero_value(element_type)})"
-        return f"{element_type}({value})"
+            return f"{texel_type}({value}, {self.vector_zero_value(texel_type)})"
+        return f"{texel_type}({value})"
 
     def image_store_expression(self, args):
         if len(args) < 3:
@@ -13789,6 +13874,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         if structured_buffer_atomic is not None:
             return structured_buffer_atomic
+
+        workgroup_atomic = self.workgroup_atomics.expression(
+            func_name, args, statement_context
+        )
+        if workgroup_atomic is not None:
+            return workgroup_atomic
 
         if func_name in {"texture", "textureLod", "textureGrad"}:
             sample_args = self.sampled_texture_operation_args(func_name, args)

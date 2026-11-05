@@ -295,8 +295,11 @@ from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlock
 from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_image_formats import (
+    declared_texel_type,
     dxc_vulkan_image_format_prefix,
     normalized_texel_type,
+    strip_texel_modifier,
+    texel_attribute,
 )
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
@@ -306,6 +309,7 @@ from .hlsl_narrow_system_values import (
     HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
     hlsl_narrow_compute_system_value_bridge,
 )
+from .hlsl_push_constants import hlsl_push_constant_block, is_push_constant
 from .hlsl_ray_queries import (
     hlsl_ray_query_expression,
     hlsl_ray_query_helpers,
@@ -591,6 +595,7 @@ from .storage_image_texels import (
     store_value_allowed,
     texel_vector_type,
 )
+from .storage_parameter_texels import StorageParameterTexels
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
@@ -2537,6 +2542,7 @@ class HLSLCodeGen(
         self.hlsl_buffer_length = HlslBufferLength()
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
+        self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
         self.hlsl_image_load_swizzle_extent = None
         self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
@@ -3957,6 +3963,7 @@ class HLSLCodeGen(
         self.hlsl_buffer_length = HlslBufferLength()
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
+        self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
         self.hlsl_image_load_swizzle_extent = None
         self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
         self.required_image_atomic_helpers = set()
@@ -4596,6 +4603,7 @@ class HLSLCodeGen(
         )
 
         self.hlsl_atomic_resources.prepare(ast)
+        self.storage_parameter_texels.prepare(ast)
         comparison_texture_names, comparison_sampler_names = (
             self.collect_comparison_resources(ast)
         )
@@ -5512,6 +5520,7 @@ class HLSLCodeGen(
                 getattr(function, "parameters", None) or [],
                 getattr(prototype, "parameters", None) or [],
             ):
+                self.storage_parameter_texels.copy_parameter(original, copied)
                 view = self.hlsl_view_storage_array_parameters.get(id(original))
                 if view is not None and view[0] is original:
                     self.hlsl_view_storage_array_parameters[id(copied)] = (
@@ -13324,7 +13333,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 packoffsets = self.hlsl_block_packoffsets(ast, node)
                 if isinstance(packoffsets, HlslRegisterBlockPlan):
-                    code += self.hlsl_glsl_block_register_buffer(
+                    block = self.hlsl_glsl_block_register_buffer(
                         ast,
                         node,
                         packoffsets.layout,
@@ -13332,14 +13341,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         buffer_keyword,
                         register,
                     )
-                    continue
-                code += f"{buffer_keyword} {node.name}{register} {{\n"
-                for member in getattr(node, "members", []) or []:
-                    declaration = self.generate_hlsl_cbuffer_member_declaration(
-                        member, packoffsets.get(getattr(member, "name", None))
-                    )
-                    code += f"    {declaration};\n"
-                code += "};\n"
+                else:
+                    block = f"{buffer_keyword} {node.name}{register} {{\n"
+                    for member in getattr(node, "members", []) or []:
+                        declaration = self.generate_hlsl_cbuffer_member_declaration(
+                            member, packoffsets.get(getattr(member, "name", None))
+                        )
+                        block += f"    {declaration};\n"
+                    block += "};\n"
+                if is_push_constant(node):
+                    block = hlsl_push_constant_block(self, ast, node, block)
+                code += block
         return code
 
     def hlsl_block_packoffsets(self, ast, node):
@@ -47977,7 +47989,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         image_type = self.resource_base_type(image_type)
         if "<" not in image_type or ">" not in image_type:
             return None
-        return image_type.split("<", 1)[1].split(">", 1)[0].strip()
+        # A unorm or snorm element has the shape of its float type.
+        return strip_texel_modifier(image_type.split("<", 1)[1].split(">", 1)[0])
 
     def hlsl_storage_image_component_kind(self, image_type):
         component_type = self.hlsl_storage_image_component_type(image_type)
@@ -54212,6 +54225,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         return self.map_image_base_type_with_format(vtype_str, node)
 
+    def storage_parameter_type(self, node):
+        """The HLSL type of the storage images a parameter receives, or ``None``."""
+        if node is None or texel_attribute(node) is not None:
+            return None
+        try:
+            return self.storage_parameter_texels.parameter_type(
+                node,
+                lambda declaration: self.map_image_base_type_with_format(
+                    declaration.vtype, declaration
+                ),
+            )
+        except ValueError as error:
+            return self.refuse_lowering(f"DirectX {error}", None)
+
+    def declared_storage_texel_type(self, node, image_type, explicit_format):
+        """The HLSL texel type a storage image's ``@texel`` declares, or ``None``."""
+        if node is None:
+            return None
+        try:
+            return declared_texel_type(
+                node, image_type, explicit_format, self.attribute_value_to_string
+            )
+        except ValueError as error:
+            return self.refuse_lowering(f"DirectX {error}", None)
+
     def map_image_base_type_with_format(self, vtype, node=None):
         base_type = self.resource_base_type(vtype)
         explicit_format = (
@@ -54219,6 +54257,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if node is not None
             else None
         )
+        if explicit_format is None:
+            parameter_type = self.storage_parameter_type(node)
+            if parameter_type is not None:
+                return parameter_type
         component_type = self.scalar_image_format_components().get(
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
@@ -54252,9 +54294,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "RWTexture3D": "RWTexture3D",
         }
         texture_type = texture_types.get(base_type)
+        declared_texel = (
+            self.declared_storage_texel_type(node, base_type, explicit_format)
+            if texture_type
+            else None
+        )
         if component_type and texture_type:
             texel_type = normalized_texel_type(explicit_format, component_type)
             mapped_type = f"{texture_type}<{texel_type}>"
+        elif declared_texel:
+            mapped_type = f"{texture_type}<{declared_texel}>"
         elif texture_type and base_type.startswith(("iimage", "uimage")):
             # An integer storage image without a format is as wide as its texels,
             # except as an image atomic's target, which needs a scalar element.

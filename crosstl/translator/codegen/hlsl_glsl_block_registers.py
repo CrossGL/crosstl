@@ -57,6 +57,23 @@ class HlslRegisterBlockPlan:
     layout_type: object
 
 
+@dataclass(frozen=True)
+class HlslRegisterBlockCode:
+    """The HLSL that reads a GLSL block from ``uint4`` registers, apart from the registers' declaration.
+
+    ``size`` is the block's size in bytes and ``first_offset`` the offset of its first member.
+    """
+
+    registers: str
+    register_count: int
+    size: int
+    first_offset: int
+    statics: str
+    word_reader: str
+    loader_name: str
+    loader_body: str
+
+
 @dataclass
 class HlslRegisterLoader:
     """Statements that assign every member of one block from its ``uint4`` registers."""
@@ -106,12 +123,11 @@ class HlslGlslBlockRegisters:
         self.hlsl_glsl_block_loaders: List[str] = []
         self.hlsl_glsl_block_patch_functions = set()
 
-    def hlsl_glsl_block_register_buffer(
-        self, ast, node, layout, layout_type, buffer_keyword, register
-    ):
-        """The constant buffer, ``static`` members and loader of a GLSL block HLSL packing cannot place."""
-        if not hasattr(self, "hlsl_glsl_block_loaders"):
-            self.reset_hlsl_glsl_block_registers()
+    def hlsl_glsl_block_register_code(self, node, layout, layout_type):
+        """The ``static`` members, word reader and loader of a GLSL block read from ``uint4`` registers.
+
+        The registers are named by :attr:`HlslRegisterBlockCode.registers`; the caller declares them.
+        """
         members = [
             member
             for member in getattr(node, "members", []) or []
@@ -125,8 +141,6 @@ class HlslGlslBlockRegisters:
             word_reader=f"{prefix}_word",
             layout=layout,
         )
-        loader_name = f"__crossgl_load_{node.name}"
-        register_count = max(1, align_to(size, CBUFFER_REGISTER_SIZE) // 16)
         declarations = ""
         for member, placement in zip(members, placements):
             declaration = self.generate_hlsl_cbuffer_member_declaration(member)
@@ -139,10 +153,6 @@ class HlslGlslBlockRegisters:
                 RegisterLocation(byte=placement.offset),
                 depth=1,
             )
-        self.hlsl_glsl_block_loaders.append(loader_name)
-        self.hlsl_glsl_block_patch_functions.update(
-            self.hlsl_patch_constant_function_names(ast)
-        )
         word_reader = ""
         if loader.uses_word_reader:
             word_reader = (
@@ -150,14 +160,35 @@ class HlslGlslBlockRegisters:
                 f"    return {loader.registers}[word >> 2][word & 3];\n"
                 "}\n"
             )
-        body = "".join(f"{line}\n" for line in loader.lines)
+        return HlslRegisterBlockCode(
+            registers=loader.registers,
+            register_count=max(1, align_to(size, CBUFFER_REGISTER_SIZE) // 16),
+            size=size,
+            first_offset=min((placement.offset for placement in placements), default=0),
+            statics=declarations,
+            word_reader=word_reader,
+            loader_name=f"__crossgl_load_{node.name}",
+            loader_body="".join(f"{line}\n" for line in loader.lines),
+        )
+
+    def hlsl_glsl_block_register_buffer(
+        self, ast, node, layout, layout_type, buffer_keyword, register
+    ):
+        """The constant buffer, ``static`` members and loader of a GLSL block HLSL packing cannot place."""
+        if not hasattr(self, "hlsl_glsl_block_loaders"):
+            self.reset_hlsl_glsl_block_registers()
+        code = self.hlsl_glsl_block_register_code(node, layout, layout_type)
+        self.hlsl_glsl_block_loaders.append(code.loader_name)
+        self.hlsl_glsl_block_patch_functions.update(
+            self.hlsl_patch_constant_function_names(ast)
+        )
         return (
             f"{buffer_keyword} {node.name}{register}\n{{\n"
-            f"    uint4 {loader.registers}[{register_count}];\n"
+            f"    uint4 {code.registers}[{code.register_count}];\n"
             "};\n"
-            f"{declarations}"
-            f"{word_reader}"
-            f"void {loader_name}()\n{{\n{body}}}\n"
+            f"{code.statics}"
+            f"{code.word_reader}"
+            f"void {code.loader_name}()\n{{\n{code.loader_body}}}\n"
         )
 
     def hlsl_patch_constant_function_names(self, ast):
