@@ -100,6 +100,7 @@ from ..metadata_preconditions import (
     with_metadata_precondition_header,
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
+from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
 from ..semantics.shader_records import (
     is_shader_record_buffer,
@@ -8808,6 +8809,7 @@ class GLSLCodeGen(
 
     def render_program_with_profile_builtins(self, ast, target_stage=None):
         """Render the program and refuse every built-in the target profile does not have."""
+        ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         code = self.render_program_at_required_version(ast, target_stage)
         for reason in unavailable_builtin_reasons(
