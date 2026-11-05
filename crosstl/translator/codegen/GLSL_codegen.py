@@ -240,6 +240,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .glsl_affine_relations import related_local_interval
 from .glsl_buffer_layout import (
     glsl_buffer_block_node_type,
     std430_array_stride,
@@ -45147,6 +45148,18 @@ complex64_t crossgl_complex64_mod_assign(
         else:
             key = self.expression_name(expression)
         interval = intervals.get(key) if key is not None else None
+        related = related_local_interval(
+            self,
+            getattr(self, "current_glsl_emitted_function", None),
+            expression,
+            intervals,
+        )
+        if related is not None:
+            interval = (
+                related
+                if interval is None
+                else (max(interval[0], related[0]), min(interval[1], related[1]))
+            )
         if interval is None:
             return None
 
