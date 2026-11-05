@@ -117,6 +117,7 @@ from .metal_runtime_types import (
 )
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
+from .narrow_arithmetic import wrap_narrow_arithmetic
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
@@ -378,7 +379,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
-    registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
+    registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
+    non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). The AST is
+    rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
     exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
     :class:`CudaWarpIntrinsicUnsupportedError` for a CUDA warp intrinsic it cannot compute with CUDA's lanes.
@@ -479,6 +482,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
+    wrap_narrow_arithmetic(program, report.source, report.target)
     Annotator(program, report.source, report).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)
