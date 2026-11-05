@@ -430,7 +430,14 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         "yield",
     }
 
-    def __init__(self):
+    def __init__(self, zero_base_vertex=False):
+        """Create a converter.
+
+        ``zero_base_vertex`` declares that every draw the shader runs in has a zero base vertex. ``SV_VertexID``
+        excludes the base vertex, which the vertex index of OpenGL, Vulkan and Metal includes, so by default it
+        imports as ``gl_RelativeVertexID`` (see ``crosstl.translator.semantics.relative_vertex_ids``); under the
+        declaration it imports as ``gl_VertexID``.
+        """
         self.vertex_inputs = []
         self.vertex_outputs = []
         self.fragment_inputs = []
@@ -616,8 +623,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             "FRONT_FACE": "gl_IsFrontFace",
             "PRIMITIVE_ID": "gl_PrimitiveID",
             "INSTANCE_ID": "gl_InstanceID",
-            "VERTEX_ID": "gl_VertexID",
-            "SV_VertexID": "gl_VertexID",
+            # SV_VertexID excludes the draw's base vertex, which gl_VertexID
+            # includes; see crosstl.translator.semantics.relative_vertex_ids.
+            "VERTEX_ID": "gl_RelativeVertexID",
+            "SV_VertexID": "gl_RelativeVertexID",
             "SV_InstanceID": "gl_InstanceID",
             # Draw parameters; slangc lowers them to SPIR-V's BuiltIn
             # BaseVertex, BaseInstance and DrawIndex.
@@ -673,6 +682,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             "SV_DispatchThreadID": "gl_GlobalInvocationID",
             "SV_GroupIndex": "gl_LocalInvocationIndex",
         }
+        if zero_base_vertex:
+            for semantic in ("VERTEX_ID", "SV_VertexID"):
+                self.semantic_map[semantic] = "gl_VertexID"
         self.hlsl_system_semantic_map = {
             semantic.lower(): mapped
             for semantic, mapped in self.semantic_map.items()

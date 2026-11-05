@@ -21,6 +21,8 @@ CROSSGL_BUILTIN_VARIABLE_TYPES = {
     "gl_DrawID": "int",
     "gl_BaseVertex": "int",
     "gl_BaseInstance": "int",
+    # CrossGL's Direct3D vertex ID (SV_VertexID), see semantics.relative_vertex_ids.
+    "gl_RelativeVertexID": "int",
     "gl_Position": "vec4",
     "gl_PointSize": "float",
     # Geometry and tessellation (sections 7.1.2 and 7.1.4).

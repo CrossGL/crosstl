@@ -110,6 +110,7 @@ class HLSLToCrossGLConverter(
         trigonometric_reduction=None,
         floating_point_contraction=None,
         unorm_store_rounding=None,
+        zero_base_vertex=False,
     ):
         """Create a converter.
 
@@ -149,6 +150,15 @@ class HLSLToCrossGLConverter(
         ``"single_precision"`` converts as Direct3D does, scaling in single
         precision and rounding halfway cases to even, with channel scales the
         host binds per view (see ``unorm_store_rounding``).
+
+        ``zero_base_vertex`` declares that every draw the shader runs in has
+        a zero base vertex (``StartVertexLocation`` and ``BaseVertexLocation``
+        0). ``SV_VertexID`` excludes the base vertex, which the vertex index
+        of OpenGL, Vulkan and Metal includes, so by default it imports as
+        ``gl_RelativeVertexID`` and other targets subtract their base vertex
+        from their index. Under the declaration both agree, and it imports as
+        ``gl_VertexID``, which targets without a base vertex (GLSL ES, WGSL)
+        can also express.
         """
         if matrix_packing is not None and matrix_packing not in self.MATRIX_PACKINGS:
             raise ValueError(
@@ -483,8 +493,10 @@ class HLSLToCrossGLConverter(
             "GetDimensions": "buffer_dimensions",
         }
         self.semantic_map = {
-            # System-value semantics - Vertex inputs
-            "SV_VertexID": "gl_VertexID",
+            # System-value semantics - Vertex inputs. SV_VertexID excludes the
+            # draw's base vertex, which gl_VertexID includes; see
+            # crosstl.translator.semantics.relative_vertex_ids.
+            "SV_VertexID": "gl_RelativeVertexID",
             "SV_InstanceID": "gl_InstanceID",
             # Shader Model 6.8 draw parameters; DXC lowers them to SPIR-V's
             # BuiltIn BaseVertex and BaseInstance.
@@ -560,7 +572,7 @@ class HLSLToCrossGLConverter(
             "FRONT_FACE": "gl_FrontFacing",
             "PRIMITIVE_ID": "gl_PrimitiveID",
             "INSTANCE_ID": "gl_InstanceID",
-            "VERTEX_ID": "gl_VertexID",
+            "VERTEX_ID": "gl_RelativeVertexID",
             # User-defined semantics
             "POSITION": "Position",
             "POSITION0": "Position",
@@ -587,6 +599,9 @@ class HLSLToCrossGLConverter(
             "PSIZE": "gl_PointSize",
             "FOG": "Fog",
         }
+        if zero_base_vertex:
+            for semantic in ("SV_VertexID", "VERTEX_ID"):
+                self.semantic_map[semantic] = "gl_VertexID"
         self.semantic_map_upper = {
             str(key).upper(): value for key, value in self.semantic_map.items()
         }

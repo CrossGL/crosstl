@@ -43,6 +43,28 @@ The backend is the primary path for DirectX shader integration:
 * HLSL-specific resource validation for duplicate constant-buffer names and
   resource/member shadowing
 
+Vertex IDs and the Base Vertex
+------------------------------
+
+``SV_VertexID`` excludes the draw's base vertex: a non-indexed draw numbers its
+vertices from zero whatever its ``StartVertexLocation``, and an indexed draw
+delivers the index buffer value without ``BaseVertexLocation``. The vertex
+index of OpenGL (``gl_VertexID``), Vulkan (``VertexIndex``) and Metal
+(``[[vertex_id]]``) includes it. HLSL and Slang input therefore imports
+``SV_VertexID`` as CrossGL's ``gl_RelativeVertexID``. Direct3D and Slang output
+writes it as ``SV_VertexID``; OpenGL, Vulkan and Metal output subtract the base
+vertex (``gl_BaseVertex``, ``BuiltIn BaseVertex``, ``[[base_vertex]]``) from
+their vertex index, as DXC's ``-fvk-support-nonzero-base-vertex`` does. Vulkan
+and Metal report the first vertex of a non-indexed draw as its base vertex, so
+their output matches Direct3D for every draw. OpenGL's ``gl_BaseVertex`` is zero
+for ``glDrawArrays``, so OpenGL output matches it for indexed draws and for
+non-indexed draws that start at vertex 0. WebGL and WGSL output, which cannot
+read the base vertex, refuse it.
+
+A shader whose draws all have a zero base vertex can declare so with
+``source_options={"zero_base_vertex": True}``. ``SV_VertexID`` then imports as
+``gl_VertexID``, which every target, WebGL and WGSL included, can express.
+
 Unsigned Binary32 Conversions
 -----------------------------
 
