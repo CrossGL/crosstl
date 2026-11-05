@@ -21893,7 +21893,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # ([dcl.type.auto.deduct]); `auto&` declarators are skipped.
         lexical_scopes = self._find_lexical_brace_scopes(code)
         pattern = re.compile(
-            r"(?:(?<=[;{}()])|^)\s*(?P<placeholder>auto(?=\s)|(?:const\s+)?auto\s*\*)"
+            r"(?:(?<=[;{}()])|^)\s*(?P<specifier>auto(?=\s)|(?:const\s+)?auto\s*\*)"
             r"\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)",
             re.MULTILINE,
         )
@@ -21935,8 +21935,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 inferred = self._concrete_type_alias_at(
                     inferred, position, type_aliases, local_integral_constants or {}
                 )
-            if match.group("placeholder") != "auto":
-                inferred = deduced_auto_type(match.group("placeholder"), inferred)
+            if match.group("specifier") != "auto":
+                inferred = deduced_auto_type(match.group("specifier"), inferred)
                 if inferred == "auto":
                     inferred = None
             normalized = self._normalize_inferred_expression_type(inferred or "")
