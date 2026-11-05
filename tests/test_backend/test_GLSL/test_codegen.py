@@ -1752,7 +1752,11 @@ def test_codegen_constant_expression_resource_binding_from_godot_scene_forward()
 
     shader_ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "layout(binding = 12) uniform sampler2D SAMPLER_NEAREST_CLAMP;" in glsl
+    # Set 1 keeps its Vulkan set and binding; OpenGL keeps binding 12, which no set-0 sampler takes.
+    assert (
+        "layout(CROSSGL_BINDING(1, 12, 12)) uniform sampler2D SAMPLER_NEAREST_CLAMP;"
+        in glsl
+    )
     GLSLParser(GLSLLexer(glsl).tokenize(), "fragment").parse()
 
 

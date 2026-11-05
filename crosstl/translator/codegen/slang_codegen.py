@@ -132,6 +132,7 @@ from .hlsl_byteaddress_typed_access import (
     hlsl_byteaddress_typed_load,
     hlsl_byteaddress_typed_store,
 )
+from .hlsl_image_formats import normalized_texel_type, slang_image_format_prefix
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .image_access_contracts import numeric_expression_component_count
 from .lowering_refusals import LoweringRefusalMixin
@@ -4008,6 +4009,16 @@ class SlangCodeGen(LoweringRefusalMixin):
             "writeonly",
         }
 
+    def slang_storage_image_format_prefix(self, mapped_type, node):
+        if node is None:
+            return ""
+        base_type = self.resource_base_type(mapped_type)
+        if not isinstance(base_type, str) or not base_type.startswith(
+            ("RWTexture", "RasterizerOrderedTexture")
+        ):
+            return ""
+        return slang_image_format_prefix(self.explicit_image_format(node))
+
     def slang_resource_memory_qualifier_prefix(self, mapped_type, node):
         if node is None:
             return ""
@@ -5966,7 +5977,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return ""
         declaration = self.format_declaration(vtype, node.name, node)
         declaration = (
-            self.slang_static_storage_prefix(node, mapped_type)
+            self.slang_storage_image_format_prefix(mapped_type, node)
+            + self.slang_static_storage_prefix(node, mapped_type)
             + self.slang_declaration_qualifier_prefix(node)
             + self.slang_resource_memory_qualifier_prefix(mapped_type, node)
             + declaration
@@ -11731,7 +11743,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         }
         texture_type = texture_types.get(base_type)
         if component_type and texture_type:
-            return f"{texture_type}<{component_type}>"
+            texel_type = normalized_texel_type(explicit_format, component_type)
+            return f"{texture_type}<{texel_type}>"
         return self.convert_type(type_name)
 
     def map_buffer_base_type_with_access(self, type_name, node=None):
