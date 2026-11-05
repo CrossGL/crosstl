@@ -256,6 +256,11 @@ from .glsl_draw_parameters import (
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
+from .glsl_guarded_offsets import (
+    call_offset_relation,
+    composed_offset_range,
+    guarded_rebased_subscript,
+)
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
     wrap_glsl_helper_stage_guard,
@@ -13484,6 +13489,10 @@ class GLSLCodeGen(
             if isinstance(node, (list, tuple, set)):
                 visit_sequence(list(node), visible_aliases)
                 return
+            # The emitter drops statements the interval proof refutes, so the
+            # calls in them need no helper specialization.
+            if getattr(node, "_glsl_checked_unreachable", False):
+                return
 
             if isinstance(node, VariableNode):
                 if self.is_glsl_type_alias_declaration(node):
@@ -17407,6 +17416,22 @@ class GLSLCodeGen(
                     and 0 <= offset_range.minimum <= offset_range.maximum < (1 << 31)
                     else None
                 )
+                # A base that may lie before the buffer keeps its relation to
+                # the callee's scalar arguments for guarded subscripts.
+                binding.pop("guarded_offset_relation", None)
+                if binding["source_offset_interval"] is None:
+                    with self.glsl_lexical_source_type_scope(lexical_source_types):
+                        relation = call_offset_relation(
+                            self,
+                            callee,
+                            params,
+                            args,
+                            index,
+                            binding,
+                            local_names=lexical_source_types,
+                        )
+                    if relation is not None:
+                        binding["guarded_offset_relation"] = relation
                 bindings[index] = (param_name, binding)
                 key_parts.append(
                     (
@@ -17419,6 +17444,11 @@ class GLSLCodeGen(
                         binding.get("source_offset_interval"),
                         binding.get("wide_offset", False),
                         self.glsl_storage_pointer_specialization_view_key(binding),
+                    )
+                    + (
+                        (binding["guarded_offset_relation"],)
+                        if "guarded_offset_relation" in binding
+                        else ()
                     )
                 )
                 continue
@@ -21703,6 +21733,8 @@ class GLSLCodeGen(
         self.current_glsl_storage_pointer_aliases = {
             name: dict(binding) for name, binding in storage_pointer_aliases.items()
         }
+        previous_emitted_function = getattr(self, "current_glsl_emitted_function", None)
+        self.current_glsl_emitted_function = func
         self.current_glsl_synthetic_local_names = set(
             self.collect_glsl_function_local_identifier_names(func)
         )
@@ -21826,6 +21858,7 @@ class GLSLCodeGen(
         self.current_resource_aliases = previous_resource_aliases
         self.current_glsl_workgroup_pointer_aliases = previous_workgroup_pointer_aliases
         self.current_glsl_storage_pointer_aliases = previous_storage_pointer_aliases
+        self.current_glsl_emitted_function = previous_emitted_function
         self.current_glsl_synthetic_local_names = previous_synthetic_local_names
         self.current_glsl_scalar_array_view_plans = previous_scalar_array_view_plans
         self.current_glsl_scalar_array_views = previous_scalar_array_views
@@ -29192,7 +29225,12 @@ class GLSLCodeGen(
                 return asserted
         offset = binding.get("offset", 0)
         intervals = getattr(expression, "_glsl_control_flow_intervals", {})
-        return self.glsl_index_value_range(offset, intervals=intervals)
+        offset_range = self.glsl_index_value_range(offset, intervals=intervals)
+        if offset_range is None:
+            # A composed offset is the exact sum of its deltas, also where a
+            # source-typed negation of one delta would wrap.
+            offset_range = composed_offset_range(self, offset)
+        return offset_range
 
     @staticmethod
     def glsl_storage_to_workgroup_copy_index(offset, index):
@@ -45475,6 +45513,27 @@ complex64_t crossgl_complex64_mod_assign(
             return self.glsl_target_index_literal(operand.minimum, "int")
         return f"int({rendered})"
 
+    def glsl_guarded_rebased_index_expression(
+        self, rendered, index_expr, indexed_expr, binding, index_info
+    ):
+        """Render a subscript whose dominating guards bound its complete offset."""
+        if not guarded_rebased_subscript(
+            self,
+            getattr(self, "current_glsl_emitted_function", None),
+            index_expr,
+            indexed_expr,
+            binding,
+        ):
+            return None
+        bits = (
+            index_info["narrow"]["bits"]
+            if index_info["narrow"] is not None
+            else index_info["bits"]
+        )
+        if index_info["family"] == "int" and bits <= 32:
+            return rendered
+        return f"int({rendered})"
+
     def glsl_index_expression(self, index_expr, indexed_expr=None, **options):
         """Render a subscript index, scoping assertions to the indexed storage."""
         previous = getattr(self, "current_glsl_indexed_storage", None)
@@ -45586,6 +45645,11 @@ complex64_t crossgl_complex64_mod_assign(
                     )
                 accepted = IntegerRange(0, (1 << 31) - 1)
                 if base is None:
+                    guarded = self.glsl_guarded_rebased_index_expression(
+                        rendered, index_expr, indexed_expr, binding, index_info
+                    )
+                    if guarded is not None:
+                        return guarded
                     asserted = asserted_rebased_subscript()
                     if asserted is not None:
                         return asserted
@@ -53394,6 +53458,27 @@ complex64_t crossgl_complex64_mod_assign(
                 return False if left is False and right is False else None
         return None
 
+    def glsl_guard_addend_operand(self, candidate, lower, upper, constants):
+        """Move constant addends of a compared operand to its bounds."""
+        while isinstance(candidate, BinaryOpNode) and self.map_operator(
+            candidate.op
+        ) in {"+", "-"}:
+            operator = self.map_operator(candidate.op)
+            right = self.literal_int_value(candidate.right, constants)
+            left = self.literal_int_value(candidate.left, constants)
+            if isinstance(right, int) and not isinstance(right, bool):
+                delta = right if operator == "+" else -right
+                candidate = candidate.left
+            elif (
+                operator == "+" and isinstance(left, int) and not isinstance(left, bool)
+            ):
+                delta = left
+                candidate = candidate.right
+            else:
+                break
+            lower, upper = lower - delta, upper - delta
+        return candidate, lower, upper
+
     def glsl_private_pointer_refined_condition_intervals(
         self,
         expression,
@@ -53594,6 +53679,12 @@ complex64_t crossgl_complex64_mod_assign(
                     return refined
 
         def narrow(candidate, lower, upper):
+            if check_source_types:
+                # The operands were checked not to wrap, so a bound on
+                # ``x + c`` or ``x - c`` is a bound on ``x``.
+                candidate, lower, upper = self.glsl_guard_addend_operand(
+                    candidate, lower, upper, constants
+                )
             name = self.glsl_private_pointer_interval_key(candidate, refined, constants)
             if name not in refined:
                 return True
