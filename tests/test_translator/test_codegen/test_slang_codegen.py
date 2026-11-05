@@ -25159,5 +25159,60 @@ def test_bare_block_is_emitted_with_its_own_scope():
     assert "    outp[i] = r * 100.0 + x;" in body
 
 
+def test_slang_nonuniform_index_uses_non_uniform_resource_index():
+    """Slang spells the qualifier NonUniformResourceIndex, as HLSL does (#3923)."""
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[2];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[i]) & 1;
+                outp[i] = textureLod(tex[nonuniformEXT(k)], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "tex[NonUniformResourceIndex(k)]" in generated_code
+    assert ".SampleLevel(float2(fin[i], 0.5), 0.0).x;" in generated_code
+    assert "nonuniformEXT" not in generated_code
+
+    hlsl_spelling = code.replace("nonuniformEXT(k)", "NonUniformResourceIndex(k)")
+    generated_code = generate_code(parse_code(tokenize_code(hlsl_spelling)))
+
+    assert "tex[NonUniformResourceIndex(k)]" in generated_code
+    assert "nonuniformEXT" not in generated_code
+
+
+def test_slang_keeps_user_nonuniform_ext_function():
+    code = """
+    shader UserNonuniform {
+        int nonuniformEXT(int x) {
+            return x + 1;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[2];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[i]) & 1;
+                outp[i] = textureLod(tex[nonuniformEXT(k)], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "tex[nonuniformEXT(k)]" in generated_code
+    assert "NonUniformResourceIndex" not in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()
