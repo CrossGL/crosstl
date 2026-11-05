@@ -13472,7 +13472,7 @@ class MetalToCrossGLConverter(
             if (
                 target_type is None
                 or expected_type is None
-                or self.map_type(target_type) not in {"int", "uint", "float"}
+                or not self.is_portable_atomic_scalar_type(self.map_type(target_type))
                 or self.map_type(expected_type) != self.map_type(target_type)
             ):
                 raise error(
@@ -13516,11 +13516,9 @@ class MetalToCrossGLConverter(
             pointee = self.metal_pointer_pointee_type_once(
                 self.expression_metal_type(args[0])
             )
-            if pointee is None or self.map_type(pointee) not in {
-                "int",
-                "uint",
-                "float",
-            }:
+            if pointee is None or not self.is_portable_atomic_scalar_type(
+                self.map_type(pointee)
+            ):
                 raise MetalAtomicLoadLoweringError(
                     "requires a scalar int, uint or float atomic target",
                     source_location,
@@ -21273,6 +21271,28 @@ float {scalar}(float value) {{
         return self.wide_vector_type_info(
             expression_type,
             getattr(expression, "source_location", None),
+        )
+
+    def is_portable_atomic_scalar_type(self, mapped_type):
+        """Whether an atomic target of ``mapped_type`` has a portable scalar contract.
+
+        A type parameter the enclosing generic function leaves open is accepted: every
+        backend monomorphizes generic functions and checks the bound scalar type of each
+        specialization's atomic target before it emits the operation.
+        """
+        mapped_type = str(mapped_type or "").strip()
+        if mapped_type in {"int", "uint", "float"}:
+            return True
+        func = self.current_function
+        if func is None or getattr(func, "qualifier", None):
+            return False
+        bound = self.current_function_materialization_bindings or {}
+        return any(
+            kind in {"typename", "class"}
+            and name
+            and name not in bound
+            and mapped_type in {name, self.sanitize_identifier(name)}
+            for kind, name in getattr(func, "template_parameters", None) or ()
         )
 
     def metal_pointer_pointee_type_once(self, metal_type):

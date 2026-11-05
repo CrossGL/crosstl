@@ -219,6 +219,7 @@ from .for_in_utils import (
 )
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
+from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -231,6 +232,7 @@ from .generic_function_utils import (
     reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
+from .generic_global_types import glsl_preliminary_global_variable_types
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -9306,6 +9308,11 @@ class GLSLCodeGen(
                 self.generic_struct_specializations,
             )
         )
+        # Generic calls bind type parameters from global arguments; the complete
+        # table, built once declarations are lowered, replaces this one.
+        self.global_variable_types = glsl_preliminary_global_variable_types(
+            self, ast, target_stage
+        )
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             functions,
@@ -10436,6 +10443,7 @@ class GLSLCodeGen(
                 continue
 
             if generic_function_parameters(func):
+                mark_generic_function_emitted(self, func)
                 specialized_code = ""
                 for specialized_func in generic_function_emission_list(self, func):
                     for (
@@ -10555,6 +10563,7 @@ class GLSLCodeGen(
                             )
 
                     if generic_function_parameters(func):
+                        mark_generic_function_emitted(self, func)
                         for specialized_func in generic_function_emission_list(
                             self,
                             func,

@@ -22736,8 +22736,21 @@ class VulkanSPIRVCodeGen(
             return storage_buffer_type
         inferred_type = self.infer_expression_result_type(arg)
         if inferred_type is None:
-            return None
+            return self.collected_global_argument_type_name(arg)
         return inferred_type.type.base_type
+
+    def collected_global_argument_type_name(self, arg) -> Optional[str]:
+        """The source type of a global argument while generic specializations are collected.
+
+        Collection runs before globals are declared, so a generic call such as ``twice(scale)``
+        on a uniform would otherwise leave its type parameter unbound.
+        """
+        if not getattr(self, "collecting_generic_function_specializations", False):
+            return None
+        name = getattr(arg, "name", None) if isinstance(arg, IdentifierNode) else None
+        if not name or name in (self.local_variable_types or {}):
+            return None
+        return self.source_variable_type_names.get(name)
 
     def call_argument_type_names(self, args):
         return [self.call_argument_type_name(arg) or "unknown" for arg in args]
