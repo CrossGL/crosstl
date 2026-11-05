@@ -1,3 +1,4 @@
+import random
 import re
 
 import pytest
@@ -15,6 +16,7 @@ from crosstl.backend.Metal.preprocessor import (
     MetalStructMethodError,
     MetalTemplateSpecializationError,
     MetalTypeTraitError,
+    _MetalAddressableValueType,
     _MetalIntegralConstantBinding,
     _MetalTemplateStruct,
 )
@@ -9294,6 +9296,51 @@ def test_preprocessor_does_not_resolve_types_from_future_declarations():
     assert preprocessor._resolve_declared_type_at(declarations, "value", 20) is None
     assert preprocessor._resolve_declared_type_at(declarations, "value", 60) == "float"
     assert preprocessor._resolve_declared_type_at(declarations, "value", 100) == "int"
+
+
+def reference_resolve_declared_type_at(declarations, name, position):
+    best = None
+    for decl_position, declared_type in declarations.get(name) or []:
+        if decl_position > position:
+            break
+        scope = getattr(declared_type, "scope", None)
+        if scope is not None and not scope[0] <= position < scope[1]:
+            continue
+        best = declared_type
+    return best
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_preprocessor_resolves_nearest_active_declaration_like_linear_scan(seed):
+    # Declarations are position-ordered, so the lookup bisects to the nearest
+    # preceding entry and walks back past bindings whose scope is inactive.
+    # Equal offsets, scoped and unscoped bindings, and positions before, on and
+    # after every declaration must resolve as the full linear scan resolves.
+    rng = random.Random(seed)
+    entries = []
+    for _ in range(rng.randint(0, 40)):
+        offset = rng.randint(0, 200)
+        if rng.random() < 0.6:
+            start = offset + rng.randint(0, 5)
+            declared = _MetalAddressableValueType(
+                rng.choice(["float", "int", "uint2"]),
+                scope=(start, start + rng.randint(0, 60)),
+            )
+        elif rng.random() < 0.5:
+            declared = _MetalAddressableValueType("half")
+        else:
+            declared = rng.choice(["float", "S", "S*"])
+        entries.append((offset, declared))
+    entries.sort(key=lambda item: item[0])
+    declarations = {"value": entries}
+    preprocessor = MetalPreprocessor()
+    for position in range(-1, 270):
+        resolved = preprocessor._resolve_declared_type_at(
+            declarations, "value", position
+        )
+        expected = reference_resolve_declared_type_at(declarations, "value", position)
+        assert resolved is expected
+    assert preprocessor._resolve_declared_type_at(declarations, "other", 50) is None
 
 
 def test_preprocessor_instantiates_template_operator_call_from_typed_local():
