@@ -46,6 +46,10 @@ from .identifier_rewrites import (
     unqualified_identifiers,
 )
 from .instantiation_memo import memoized_instantiations
+from .integral_binding_visibility import (
+    IntegralBindingTable,
+    indexed_visible_bindings,
+)
 from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
@@ -5397,7 +5401,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
 
         if not raw_declarations and not parameter_bindings:
             return {}
-        bindings: Dict[str, List[_MetalIntegralConstantBinding]] = {}
+        bindings = IntegralBindingTable()
         ordered_parameters = iter(sorted(parameter_bindings))
         pending_parameter = next(ordered_parameters, None)
 
@@ -5405,13 +5409,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             nonlocal pending_parameter
             while pending_parameter is not None and pending_parameter[0] <= position:
                 declaration_position, name, scope_start, scope_end = pending_parameter
-                bindings.setdefault(name, []).append(
+                bindings.add(
+                    name,
                     _MetalIntegralConstantBinding(
                         declaration_position=declaration_position,
                         scope_start=scope_start,
                         scope_end=scope_end,
                         value=None,
-                    )
+                    ),
                 )
                 pending_parameter = next(ordered_parameters, None)
 
@@ -5496,7 +5501,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 value = self._proven_integral_constant_value(
                     value_type_tokens[0], initializer
                 )
-            bindings.setdefault(name, []).append(
+            bindings.add(
+                name,
                 _MetalIntegralConstantBinding(
                     declaration_position=declaration_position,
                     scope_start=scope_start,
@@ -5511,7 +5517,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     ),
                     type_alias=bool(type_tokens)
                     and type_tokens[0] in {"using", "typedef"},
-                )
+                ),
             )
         record_parameters_through(len(code))
         return bindings
@@ -5676,6 +5682,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         *,
         names: Optional[Set[str]] = None,
     ) -> Dict[str, _MetalIntegralConstantBinding]:
+        indexed = indexed_visible_bindings(bindings, position, names)
+        if indexed is not None:
+            return indexed
         visible: Dict[str, _MetalIntegralConstantBinding] = {}
         binding_items = (
             bindings.items()
