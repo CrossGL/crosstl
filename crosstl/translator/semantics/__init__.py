@@ -120,6 +120,10 @@ from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .relative_vertex_ids import (
+    RelativeVertexIdUnsupportedError,
+    lower_relative_vertex_ids,
+)
 from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
@@ -218,6 +222,7 @@ __all__ = [
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
+    "RelativeVertexIdUnsupportedError",
     "RuleInexpressibleError",
     "RowMajorMemberError",
     "RuleReport",
@@ -275,6 +280,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     and the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` take their canonical names (:mod:`.builtin_names`).
     A ``gl_`` built-in used in a stage or direction GLSL does not declare it for is refused (:mod:`.builtin_stages`).
     So is one that a function body of the stage names directly (:mod:`.builtin_stage_identifiers`).
+    Direct3D's base-exclusive vertex ID ``gl_RelativeVertexID`` (HLSL ``SV_VertexID``) is then spelled for the
+    target: ``SV_VertexID`` on Direct3D and Slang, the vertex index minus the base vertex elsewhere
+    (:mod:`.relative_vertex_ids`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
@@ -384,6 +392,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)
+    lower_relative_vertex_ids(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
