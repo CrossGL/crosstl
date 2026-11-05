@@ -607,6 +607,7 @@ from .storage_image_texels import (
     texel_store_value,
     texel_vector_type,
 )
+from .storage_pointer_local_aliases import bind_local_storage_pointers
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
@@ -28005,20 +28006,17 @@ class GLSLCodeGen(
                 }
             }
             nodes = list(self.walk_ast(getattr(function, "body", [])))
-            changed = True
-            while changed:
-                changed = False
-                for node in nodes:
-                    if not isinstance(node, VariableNode):
-                        continue
-                    if not self.glsl_storage_pointer_declaration(node, aliases):
-                        continue
-                    binding = self.glsl_storage_pointer_binding(
-                        getattr(node, "initial_value", None), aliases
-                    )
-                    if binding is not None and aliases.get(node.name) != binding:
-                        aliases[node.name] = binding
-                        changed = True
+            if not bind_local_storage_pointers(
+                [node for node in nodes if isinstance(node, VariableNode)],
+                aliases,
+                self.glsl_storage_pointer_declaration,
+                self.glsl_storage_pointer_binding,
+                preferred_root=parameter_name,
+            ):
+                self.glsl_storage_pointer_access_requirement_cache[cache_key] = (
+                    "read_write"
+                )
+                return "read_write"
 
             for node in nodes:
                 if isinstance(node, AssignmentNode):
