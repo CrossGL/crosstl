@@ -441,3 +441,127 @@ def _functions(ast):
     from crosstl.translator.ast import FunctionNode
 
     return [node for node in _nodes(ast) if isinstance(node, FunctionNode)]
+
+
+# A record that holds a storage pointer makes DirectX and OpenGL lower every
+# storage pointer to a resource handle; word views keep their write access.
+_AGGREGATE_SOURCE = _PRELUDE + """
+struct Inputs {
+  const device float* values;
+};
+
+void add_lane(device Lanes* object, float value, uint offset) {
+  atomic_fetch_add_explicit(&(object[offset].val), value, memory_order_relaxed);
+}
+
+kernel void aggregate_views(device Words* words [[buffer(0)]],
+                            const device float* values [[buffer(1)]],
+                            device uint* bits [[buffer(2)]],
+                            device float* observed [[buffer(3)]],
+                            uint i [[thread_position_in_grid]]) {
+  Inputs inputs{values};
+  device Lanes* lanes = reinterpret_cast<device Lanes*>(words);
+  observed[2 * i] = atomic_fetch_add_explicit(
+      &(lanes[2 * i].val), inputs.values[2 * i], memory_order_relaxed);
+  add_lane(lanes, inputs.values[2 * i + 1], 2 * i + 1);
+  device float* plain = reinterpret_cast<device float*>(bits);
+  plain[i] = plain[i] + inputs.values[i];
+  observed[2 * i + 1] = plain[i];
+}
+"""
+
+
+def _aggregate_package(root, target):
+    assertions = ()
+    if target == "opengl":
+        assertions = (
+            {
+                "source": "products.metal",
+                "expression": "reference.offset + index",
+                "minimum": 0,
+                "maximum": 5,
+            },
+        )
+    return _package(
+        root,
+        target,
+        "float",
+        (1, 1, 1),
+        source=_AGGREGATE_SOURCE,
+        software_subgroups=False,
+        index_range_assertions=assertions,
+    )
+
+
+def _aggregate_workload():
+    values = [0.25, 4.0, -1.0, 0.5, 2.5, -3.75]
+    bits = (7.0, -0.5, 1.25)
+    words, observed = [], []
+    for thread in range(3):
+        for lane in range(2):
+            position = 2 * thread + lane
+            words.append(_bits(_f32(_INITIAL[position] + values[position])))
+        observed.append(_INITIAL[2 * thread])
+        observed.append(_f32(bits[thread] + values[thread]))
+    inputs = {
+        "words": {
+            "dtype": "uint32",
+            "shape": [6],
+            "values": [_bits(value) for value in _INITIAL],
+        },
+        "values": {"dtype": "float32", "shape": [6], "values": values},
+        "bits": {
+            "dtype": "uint32",
+            "shape": [3],
+            "values": [_bits(value) for value in bits],
+        },
+        "observed": {"dtype": "float32", "shape": [6], "values": [-99.0] * 6},
+    }
+    outputs = {
+        "words": {"dtype": "uint32", "shape": [6], "values": words},
+        "bits": {
+            "dtype": "uint32",
+            "shape": [3],
+            "values": [_bits(_f32(b + v)) for b, v in zip(bits, values)],
+        },
+        "observed": {"dtype": "float32", "shape": [6], "values": observed},
+    }
+    return inputs, outputs
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_aggregate_word_views_translate_and_compile(tmp_path, target):
+    _, descriptor, package = _aggregate_package(tmp_path, target)
+    generated = (package / descriptor["artifact"]["packagePath"]).read_text()
+    if target != "metal":
+        # Handles of the float view name the uint word storage.
+        assert "crosstl_resource_ref_float" in generated
+        assert "asfloat(" in generated or "uintBitsToFloat(" in generated
+    if shutil.which(TOOLS[target]):
+        _, module = _compile(generated, target, tmp_path)
+        assert module.is_file() and module.stat().st_size
+
+
+def test_aggregate_word_views_execute_natively(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required word-view execution")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    source, descriptor, package = _aggregate_package(tmp_path, target)
+    inputs, outputs = _aggregate_workload()
+    expected = _bound_values(descriptor, outputs)
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_values(descriptor, inputs),
+        expected,
+        {"workgroupCount": [3, 1, 1], "workgroupSize": [1, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source,
+        original_entry="aggregate_views",
+    )

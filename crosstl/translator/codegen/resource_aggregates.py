@@ -64,6 +64,13 @@ from .resource_storage_views import (
     storage_view,
     view_load,
 )
+from .resource_word_views import (
+    WordViewAtomicError,
+    word_atomic,
+    word_load,
+    word_store,
+    word_view,
+)
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 
@@ -541,6 +548,11 @@ class _Lowering:
         # (element, space) -> elements some view of its handles yields.
         self.view_targets = {}
         self.viewed_loads = set()
+        # (view element, space) -> storage elements a same-width word view of
+        # its handles names, and the (element, space) keys a helper has read.
+        self.word_views = {}
+        self.word_view_targets = {}
+        self.word_view_helpers = set()
         self.generated = []
         self.entry_handles = {
             param.name: self.fresh(f"crosstl_reference_{param.name}")
@@ -1210,6 +1222,14 @@ class _Lowering:
             )
         if source.space == "threadgroup":
             return None
+        if self.register_word_view(source, target, node):
+            # One view element per backing word: stores replace whole words.
+            return _Pointer(
+                target.element,
+                source.space,
+                source.writable and target.writable,
+                readable,
+            )
         space = source.space
         storages = self.storage_views.get((source.element, space), set())
         if storage_view(source.element, target.element) is None:
@@ -1225,6 +1245,47 @@ class _Lowering:
         for storage in sorted(storages):
             self.register_view(storage, target.element, space, node)
         return _Pointer(target.element, space, False, readable)
+
+    def register_word_view(self, source, target, node):
+        """Record a same-width word view of ``source`` handles, if it is one.
+
+        The view's handles name every storage the source handles name, so
+        word views compose. A source whose handles also name narrowing views
+        keeps the read-only narrowing rules.
+        """
+        space = source.space
+        if self.storage_views.get((source.element, space)):
+            return False
+        named = {source.element, *self.word_views.get((source.element, space), ())}
+        named.discard(target.element)
+        if not named or any(
+            word_view(storage, target.element, self.structs) is None
+            for storage in named
+        ):
+            return False
+        self.word_view_targets.setdefault((source.element, space), set()).add(
+            target.element
+        )
+        self.add_word_view_storages(target.element, space, named, node)
+        return True
+
+    def add_word_view_storages(self, element, space, storages, node):
+        key = element, space
+        known = self.word_views.setdefault(key, set())
+        added = set(storages) - known - {element}
+        if not added:
+            return
+        if key in self.word_view_helpers:
+            # A helper of this element no longer covers every word view.
+            raise ResourceAggregateError("late-storage-view", node)
+        known.update(added)
+        for target in sorted(self.word_view_targets.get(key, ())):
+            self.add_word_view_storages(target, space, added, node)
+
+    def word_view_storages(self, pointer):
+        key = pointer.element, pointer.space
+        self.word_view_helpers.add(key)
+        return self.word_views.get(key, set())
 
     def register_view(self, storage, element, space, node):
         """Record that ``element`` handles in ``space`` may name ``storage``.
@@ -1280,11 +1341,18 @@ class _Lowering:
         widening view divides the offset back into its wider elements.
         """
         view = storage_view(source.element, target.element)
+        ratio = view.ratio if view is not None else None
         if view is None:
             view = storage_view(target.element, source.element)
+            ratio = view.ratio if view is not None else None
             operator = "/"
         else:
             operator = "*"
+        if view is None and target.element in self.word_view_targets.get(
+            (source.element, source.space), set()
+        ):
+            # A word view counts the same elements as its source.
+            ratio = 1
         key = (source.element, target.element), "view", None
         if key in self.helpers:
             return self.helpers[key]
@@ -1298,9 +1366,7 @@ class _Lowering:
             AssignmentNode(_member(_id("view"), "identity"), reference),
             AssignmentNode(
                 _member(_id("view"), "offset"),
-                BinaryOpNode(
-                    offset, operator, _call("int64_t", [_integer(view.ratio)])
-                ),
+                BinaryOpNode(offset, operator, _call("int64_t", [_integer(ratio)])),
             ),
             ReturnNode(_id("view")),
         ]
@@ -1426,12 +1492,17 @@ class _Lowering:
             if operation == "load" and not pointer.writable:
                 self.viewed_loads.add((pointer.element, pointer.space))
                 viewed = self.storage_views.get((pointer.element, pointer.space), set())
+            words = self.word_view_storages(pointer)
             candidates = [
                 (index, resource_name, resource.element)
                 for index, (_param, resource, resource_name) in enumerate(
                     self.resources
                 )
-                if (resource.element == pointer.element or resource.element in viewed)
+                if (
+                    resource.element == pointer.element
+                    or resource.element in viewed
+                    or resource.element in words
+                )
                 and resource.space == pointer.space
                 and (operation != "store" or resource.writable)
                 and (operation != "load" or resource.readable)
@@ -1444,7 +1515,26 @@ class _Lowering:
                 position = BinaryOpNode(
                     _member(_id("reference"), "offset"), "+", _id("index")
                 )
-                if element == pointer.element:
+                word = (
+                    word_view(element, pointer.element, self.structs)
+                    if element != pointer.element and element in words
+                    else None
+                )
+                if word is not None:
+                    if members:
+                        # A scalar view element has no members.
+                        raise ResourceAggregateError(
+                            "member-write-through-storage-view"
+                        )
+                    access = ArrayAccessNode(_id(resource_name), position)
+                    if word[2]:
+                        access = _member(access, word[2])
+                    access = (
+                        word_load(access, word)
+                        if operation == "load"
+                        else ("word", access, word)
+                    )
+                elif element == pointer.element:
                     access = ArrayAccessNode(_id(resource_name), position)
                 elif members:
                     # A member of a storage view's element has no storage.
@@ -1465,14 +1555,19 @@ class _Lowering:
                 written = access
                 for member in members:
                     written = _member(written, member)
-                statements = (
-                    [ReturnNode(access)]
-                    if operation == "load"
-                    else [
-                        AssignmentNode(written, _id("value"), operator),
-                        ReturnNode(deepcopy(written) if members else _id("value")),
-                    ]
-                )
+                if isinstance(access, tuple):
+                    statements = word_store(
+                        access[1], _id("value"), operator, access[2]
+                    )
+                else:
+                    statements = (
+                        [ReturnNode(access)]
+                        if operation == "load"
+                        else [
+                            AssignmentNode(written, _id("value"), operator),
+                            ReturnNode(deepcopy(written) if members else _id("value")),
+                        ]
+                    )
                 # Every handle originates at one of these compatible bindings.
                 if index == candidates[-1][0]:
                     body.extend(statements)
@@ -1586,12 +1681,13 @@ class _Lowering:
                 ),
                 *self.resource_parameters(),
             ]
+            words = self.word_view_storages(pointer)
             candidates = [
-                (identity, resource_name)
+                (identity, resource_name, resource.element)
                 for identity, (_param, resource, resource_name) in enumerate(
                     self.resources
                 )
-                if resource.element == pointer.element
+                if (resource.element == pointer.element or resource.element in words)
                 and resource.space == pointer.space
                 and resource.writable
                 and (store or resource.readable)
@@ -1599,20 +1695,40 @@ class _Lowering:
             if not candidates:
                 raise ResourceAggregateError("missing-compatible-resource", node)
             body = []
-            for identity, resource_name in candidates:
+            for identity, resource_name, resource_element in candidates:
                 destination = ArrayAccessNode(
                     _id(resource_name),
                     BinaryOpNode(
                         _member(_id("reference"), "offset"), "+", _id("index")
                     ),
                 )
-                for member in members:
-                    destination = _member(destination, member)
-                call = _call(
-                    operation,
-                    [destination, *(_id(f"value{i}") for i in range(arity - 1))],
+                word = (
+                    word_view(resource_element, pointer.element, self.structs)
+                    if resource_element != pointer.element
+                    else None
                 )
-                statements = [call, ReturnNode()] if store else [ReturnNode(call)]
+                if word is not None:
+                    if members or compare_expected:
+                        raise ResourceAggregateError("atomic-resource-word-view", node)
+                    if word[2]:
+                        destination = _member(destination, word[2])
+                    try:
+                        statements = word_atomic(
+                            operation,
+                            destination,
+                            [_id(f"value{i}") for i in range(arity - 1)],
+                            word,
+                        )
+                    except WordViewAtomicError as error:
+                        raise ResourceAggregateError(error.reason, node) from None
+                else:
+                    for member in members:
+                        destination = _member(destination, member)
+                    call = _call(
+                        operation,
+                        [destination, *(_id(f"value{i}") for i in range(arity - 1))],
+                    )
+                    statements = [call, ReturnNode()] if store else [ReturnNode(call)]
                 if identity == candidates[-1][0]:
                     body.extend(statements)
                 else:
