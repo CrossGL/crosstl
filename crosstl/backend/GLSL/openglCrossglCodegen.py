@@ -42,6 +42,7 @@ from .OpenglAst import (
     VectorConstructorNode,
     WhileNode,
 )
+from .scoped_atomics import import_scoped_atomic_call
 from .shadow_textures import retype_shadow_textures
 from .sparse_textures import import_sparse_texture_call
 from .subgroup_import import import_subgroup_call
@@ -3791,6 +3792,10 @@ class GLSLToCrossGLConverter:
         sparse_call = import_sparse_texture_call(self, name, node.args)
         if sparse_call is not None:
             return sparse_call
+
+        scoped_atomic_call = import_scoped_atomic_call(self, name, node.args)
+        if scoped_atomic_call is not None:
+            return scoped_atomic_call
 
         if name in self.ARB_LOD_CLAMP_FUNCTIONS:
             return self.texture_lod_clamp_call(name, node.args)
