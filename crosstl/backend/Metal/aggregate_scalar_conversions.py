@@ -12,6 +12,10 @@ the aggregate.
 
 from __future__ import annotations
 
+from ...translator.structure_conversions import (
+    registered_structure_conversion_for_identity,
+)
+
 _COMPOUND_SCALAR_OPERATORS = {
     "+=",
     "-=",
@@ -177,6 +181,14 @@ def refuse_aggregate_builtin_operation(codegen, expression, source_location=None
     )
 
 
+def _registered_structure_value(codegen, value_type) -> bool:
+    resolved = codegen.normalized_metal_type(codegen.resolve_type_alias(value_type))
+    return any(
+        registered_structure_conversion_for_identity(identity) is not None
+        for identity in (resolved, codegen.map_type(resolved))
+    )
+
+
 def render_explicit_aggregate_scalar_conversion(
     codegen, target_type, arguments, is_main, source_location=None
 ) -> str | None:
@@ -190,6 +202,11 @@ def render_explicit_aggregate_scalar_conversion(
     ``Struct__operator_<type>``. A helper returning exactly ``T`` is chosen; otherwise the single helper is called
     and its result converted to ``T``. Several inexact helpers, or none, raise instead of emitting a scalar
     constructor over a struct value, which no target accepts.
+
+    A value whose type is the representation of a registered structure conversion contract
+    (``crosstl.translator.structure_conversions``) and that has no lowered helper keeps the scalar constructor:
+    every code generator lowers that constructor through the contract's value conversion, as it did before this
+    lowering existed.
     """
     arguments = list(arguments or [])
     if len(arguments) != 1 or arguments[0] is None:
@@ -213,6 +230,8 @@ def render_explicit_aggregate_scalar_conversion(
     ):
         return None
     candidates = codegen.metal_lowered_readonly_scalar_conversions(value_type)
+    if not candidates and _registered_structure_value(codegen, value_type):
+        return None
     target_identity = codegen.metal_source_overload_type_identity(target_value)
     exact = [
         candidate
