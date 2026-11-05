@@ -731,6 +731,11 @@ TARGET_EXCLUSIONS = {
         "test_ops.TestOps.test_argmin_argmax": "CrossGL/crosstl#2120",
         "test_reduce.TestReduce.test_arg_reduce": "CrossGL/crosstl#2120",
         "test_bf16.TestBF16.test_arg_reduction_ops": "CrossGL/crosstl#2120",
+        # On x86 hosts MLX's float16 NaN is the signaling NaN 0x7D00. The
+        # sorts move it through groupshared float16_t memory and private
+        # arrays, where WARP may change its payload.
+        "test_ops.TestOps.test_sort_nan": "CrossGL/crosstl#3962",
+        "test_ops.TestOps.test_median_nan": "CrossGL/crosstl#3962",
         **SORTED_GATHER_EXCLUSIONS,
     },
 }
@@ -851,6 +856,23 @@ GROUP_TESTS = {
     ),
     "blas-gather-blocks": ("test_blas.TestBlas.test_gather_mm_blocks",),
     "blas-masked": ("test_blas.TestBlas.test_block_masked_matmul",),
+    # The sort, partition, median, searchsorted and unique tests sort through
+    # the block and multi-block merge kernels; test_sort alone takes a quarter
+    # of an hour natively on OpenGL.
+    "sorting": tuple(
+        "test_ops.TestOps." + name
+        for name in (
+            "test_sort",
+            "test_partition",
+            "test_argpartition",
+            "test_sort_nan",
+            "test_argsort_nan",
+            "test_median",
+            "test_median_nan",
+            "test_searchsorted",
+            "test_unique",
+        )
+    ),
     # The module tests run in one job; the norm sweep is the longest of them.
     "modules": MODULE_TESTS,
     # The convolution tests translate their conv.metal, steel_conv and GEMM

@@ -214,6 +214,24 @@ def expected_outputs(entry, metadata, values, counts, logical_size):
     return _merge(entry, metadata, values, rows)
 
 
+def _order_mismatch(model, outputs):
+    """Name the first output word that differs from the model, and how many do."""
+    for name in sorted(model):
+        expected, actual = model[name], outputs.get(name)
+        if expected == actual:
+            continue
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            return f"Sort outputs differ from the stable LessThan order in {name}'s extent"
+        differing = [i for i, (e, a) in enumerate(zip(expected, actual)) if e != a]
+        first = differing[0]
+        return (
+            "Sort outputs differ from the stable LessThan order: "
+            f"{name}[{first}] is {actual[first]:#x}, not {expected[first]:#x} "
+            f"({len(differing)} of {len(expected)} words differ)"
+        )
+    return "Sort outputs differ from the stable LessThan order"
+
+
 def _extent(value):
     if isinstance(value, list):
         return len(value)
@@ -281,7 +299,8 @@ def audit_event(event, cache):
             "Sort host output hash changed",
         )
         model = expected_outputs(entry, metadata, values, output_counts, threads)
-        require(model == outputs, "Sort outputs differ from the stable LessThan order")
+        if model != outputs:
+            raise ValueError(_order_mismatch(model, outputs))
     else:
         require(
             DIGEST.fullmatch(str(event["outputHash"])), "Sort output hash is missing"

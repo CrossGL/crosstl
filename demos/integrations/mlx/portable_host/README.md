@@ -2229,9 +2229,11 @@ not skipped or reclassified by the required five-test profile above.
 
 A dedicated job then runs 126 more unchanged `test_ops`, `test_reduce`,
 `test_bf16` and `test_fast` tests on all three platforms (121 on OpenGL; see
-below). They run in five groups, each in its own job per platform with its
+below). They run in groups, each in its own job per platform with its
 own deadlines: `operations` (the `test_ops` and `test_bf16` tests, which also
-run the rejection check and must reach a gather or scatter), `normalization`
+run the rejection check and must reach a gather or scatter), `sorting` (the
+nine sort, partition, median, searchsorted and unique tests of `test_ops`,
+which move through the block and multi-block merge sorts), `normalization`
 (the nine `test_fast` tests, whose gradients move tens of millions of elements
 through the host), `reductions` (eight `test_reduce` tests), and
 `reduction-dtypes` and `reduction-permutations` (`test_dtypes` and

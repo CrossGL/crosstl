@@ -499,7 +499,9 @@ def test_dispatch_refuses_guard_damage_and_audit_refuses_wrong_values(
     with pytest.raises(ValueError, match="hash|stable"):
         audit(monkeypatch, event, "metal")
     event["outputHash"] = sort_dispatch.output_hash(entry, event["outputValues"])
-    with pytest.raises(ValueError, match="stable LessThan"):
+    with pytest.raises(
+        ValueError, match=r"stable LessThan order: out\[\d+\] is 0x[0-9a-f]+, not 0x"
+    ):
         audit(monkeypatch, event, "metal")
 
 

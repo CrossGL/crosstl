@@ -164,13 +164,14 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     # simdgroup yet, its reverse scans cannot prove their wrapped pointer
     # offsets yet, and its logarithms are not precise near one. Direct3D's
     # waves are numbered in arrival order, so its wide arg reductions can
-    # leave their result unwritten. Neither lowers the sorted gather's
+    # leave their result unwritten, and its sorts may change the payload of
+    # MLX's signaling float16 NaN. Neither lowers the sorted gather's
     # row-tile scheduling yet.
     assert set(ops.TARGET_EXCLUSIONS) == {"opengl", "directx"}
     excluded = ops.TARGET_EXCLUSIONS["opengl"]
     for target, issues in (
         ("opengl", {"2207", "2905", "2123", "2546"}),
-        ("directx", {"2120", "2546"}),
+        ("directx", {"2120", "3962", "2546"}),
     ):
         names = ops.TARGET_EXCLUSIONS[target]
         assert set(names) <= set(ops.UPSTREAM_TESTS)
@@ -187,7 +188,9 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
         "test_blas.TestBlas.test_gather_mm_sorted",
         "test_blas.TestBlas.test_gather_mm_sorted_vjp",
     ]
-    assert list(ops.TARGET_EXCLUSIONS["directx"]) == wide + sorted_gather
+    payloads = ["test_ops.TestOps.test_sort_nan", "test_ops.TestOps.test_median_nan"]
+    assert list(ops.TARGET_EXCLUSIONS["directx"]) == wide + payloads + sorted_gather
+    assert set(payloads) < set(ops.GROUPS["sorting"])
     for target in ("opengl", "directx"):
         names = ops.TARGET_EXCLUSIONS[target]
         assert [name for name in names if names[name].endswith("2546")] == (
@@ -199,7 +202,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
         )
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     directx = ops.upstream_tests("directx")
-    assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
+    assert len(directx) == len(ops.UPSTREAM_TESTS) - 7
     opengl = ops.upstream_tests("opengl")
     assert len(opengl) == 540 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
@@ -222,6 +225,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "blas-gather",
         "blas-gather-blocks",
         "blas-masked",
+        "sorting",
         "modules",
         "conv",
         "array",
@@ -441,6 +445,21 @@ def test_upstream_tests_replay_from_the_recorded_run_seed():
     for text in ("-1", str(1 << 64)):
         with pytest.raises(argparse.ArgumentTypeError):
             seeds.parse_seed(text)
+
+
+def test_fixed_input_tests_draw_the_inputs_of_one_run_seed():
+    seeds = upstream_test_seeds
+    assert seeds.FIXED_INPUT_TESTS == {"test_ops.TestOps.test_softmax"}
+    assert seeds.FIXED_INPUT_TESTS <= set(ops.upstream_tests("metal", "operations"))
+    for name in seeds.FIXED_INPUT_TESTS:
+        fixed = seeds.test_seed(seeds.FIXED_RUN_SEED, name)
+        assert fixed == 13239174713553859637
+        assert {seeds.test_seed(seed, name) for seed in (1, 7, (1 << 64) - 1)} == {
+            fixed
+        }
+    # Every other test still draws the inputs of the run seed.
+    other = "test_ops.TestOps.test_sort"
+    assert seeds.test_seed(7, other) != seeds.test_seed(seeds.FIXED_RUN_SEED, other)
 
 
 SHARDED_MODULE = """
