@@ -5,9 +5,12 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
+from crosstl.translator.preprocessor.macros import UnterminatedInvocation
+
 from .macro_expansion import (
     HLSL_MACROS,
     MacroDialect,
+    code_extent,
     evaluate_condition,
     expand_condition,
     expand_line,
@@ -29,6 +32,14 @@ class Macro:
 
     def is_function_like(self) -> bool:
         return self.params is not None
+
+
+class LogicalLines(list):
+    """Logical source lines; ``physical[i]`` is the number of physical lines that line ``i`` spans."""
+
+    def __init__(self, lines: List[str], physical: List[int]):
+        super().__init__(lines)
+        self.physical = physical
 
 
 class HLSLPreprocessor:
@@ -53,6 +64,14 @@ class HLSLPreprocessor:
         self.strict = strict
         self.max_expansion_depth = max_expansion_depth
         self.pragma_once_files: Set[str] = set()
+        # State of the built-in macros (macro_expansion): __COUNTER__, __INCLUDE_LEVEL__ and __BASE_FILE__,
+        # the physical line of each part of a joined line, and whether a replaced line ends in a
+        # function-like macro name that a '(' on a following line would still invoke.
+        self._macro_counter = 0
+        self._include_depth = 0
+        self._base_file: Optional[str] = None
+        self._joined_line_numbers: Optional[List[int]] = None
+        self._invocation_continues = False
 
         if defines:
             for name, value in defines.items():
@@ -61,6 +80,9 @@ class HLSLPreprocessor:
                 )
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
+        self._macro_counter = 0
+        self._include_depth = 0
+        self._base_file = file_path
         logical_lines = self._split_logical_lines(code)
         output_lines = self._process_lines(logical_lines, file_path)
         return "\n".join(output_lines).replace(
@@ -70,18 +92,24 @@ class HLSLPreprocessor:
     def _split_logical_lines(self, code: str) -> List[str]:
         lines = code.splitlines()
         logical_lines: List[str] = []
+        physical: List[int] = []
         buffer = ""
+        spliced = 0
         for line in lines:
             stripped = line.rstrip()
             if stripped.endswith("\\"):
                 buffer += stripped[:-1]
+                spliced += 1
                 continue
             buffer += line
             logical_lines.append(buffer)
+            physical.append(spliced + 1)
             buffer = ""
+            spliced = 0
         if buffer:
             logical_lines.append(buffer)
-        return logical_lines
+            physical.append(spliced)
+        return LogicalLines(logical_lines, physical)
 
     def _paren_balance(self, text: str) -> int:
         balance = 0
@@ -120,6 +148,7 @@ class HLSLPreprocessor:
         def is_active() -> bool:
             return all(frame["active"] for frame in conditional_stack)
 
+        physical = getattr(lines, "physical", None)
         idx = 0
         while idx < len(lines):
             raw_line = lines[idx]
@@ -199,7 +228,13 @@ class HLSLPreprocessor:
                             included_text = included
                             included_path = file_path
                         nested_lines = self._split_logical_lines(included_text)
-                        output.extend(self._process_lines(nested_lines, included_path))
+                        self._include_depth += 1
+                        try:
+                            output.extend(
+                                self._process_lines(nested_lines, included_path)
+                            )
+                        finally:
+                            self._include_depth -= 1
                 elif directive == "line":
                     line_info = self._handle_line_directive(rest)
                     if line_info is not None:
@@ -223,17 +258,89 @@ class HLSLPreprocessor:
                     line, consumed_lines = self._join_multiline_function_macro_call(
                         lines, idx
                     )
-                    expanded = self._expand_macros(
-                        line, current_line, False, current_file
+                    expanded, consumed_lines = self._expand_text_line(
+                        lines, idx, line, consumed_lines, current_line, current_file
                     )
                     output.append(expanded)
-            current_line += consumed_lines
+            if physical is not None:
+                current_line += sum(physical[idx : idx + consumed_lines])
+            else:
+                current_line += consumed_lines
             idx += consumed_lines
 
         if conditional_stack:
             raise SyntaxError("Unterminated #if block")
 
         return output
+
+    def _expand_text_line(
+        self,
+        lines: List[str],
+        start: int,
+        line: str,
+        consumed: int,
+        line_num: int,
+        file_path: Optional[str],
+    ) -> Tuple[str, int]:
+        """Replace the macros of the text line ``line`` (``lines[start:start + consumed]`` joined), joining
+        following lines while a macro invocation continues on them: its argument list is not terminated, or the
+        replaced line ends in a function-like macro name and the next line that is not blank starts with ``(``.
+        As in the shared preprocessor, a directive ends the text that an invocation can take in.
+        """
+        physical = getattr(lines, "physical", None)
+        while True:
+            self._invocation_continues = False
+            self._joined_line_numbers = self._physical_line_numbers(
+                physical, start, consumed, line_num
+            )
+            try:
+                expanded = self._expand_macros(line, line_num, False, file_path)
+            except UnterminatedInvocation:
+                following = start + consumed
+                if following >= len(lines) or lines[following].lstrip().startswith("#"):
+                    raise
+                line += "\n" + lines[following]
+                consumed += 1
+                continue
+            finally:
+                self._joined_line_numbers = None
+            more = (
+                self._lines_to_invocation_parenthesis(lines, start + consumed)
+                if self._invocation_continues
+                else 0
+            )
+            if not more:
+                return expanded, consumed
+            for following in range(start + consumed, start + consumed + more):
+                line += "\n" + lines[following]
+            consumed += more
+
+    @staticmethod
+    def _physical_line_numbers(
+        physical: Optional[List[int]], start: int, consumed: int, line_num: int
+    ) -> Optional[List[int]]:
+        if physical is None or consumed == 1:
+            return None
+        numbers = []
+        for count in physical[start : start + consumed]:
+            numbers.append(line_num)
+            line_num += count
+        return numbers
+
+    def _lines_to_invocation_parenthesis(self, lines: List[str], start: int) -> int:
+        """How many lines from ``start`` to take in so that the first token after blank lines, a ``(``, joins
+        the line before; 0 when that token is not ``(`` or a directive or an open block comment comes first.
+        """
+        index = start
+        while index < len(lines):
+            text = lines[index]
+            if text.lstrip().startswith("#") or code_extent(text) < len(text):
+                return 0
+            code = self._strip_macro_comments(text).strip()
+            if code:
+                return index - start + 1 if code.startswith("(") else 0
+            index += 1
+        return 0
 
     def _join_multiline_function_macro_call(
         self, lines: List[str], start: int
@@ -275,14 +382,11 @@ class HLSLPreprocessor:
         line_num: int,
         file_path: Optional[str],
     ) -> bool:
-        if directive == "ifdef":
+        if directive in ("ifdef", "ifndef"):
             parts = self._strip_macro_comments(rest).strip().split(maxsplit=1)
             name = parts[0] if parts else ""
-            return name in self.macros
-        if directive == "ifndef":
-            parts = self._strip_macro_comments(rest).strip().split(maxsplit=1)
-            name = parts[0] if parts else ""
-            return name not in self.macros
+            defined = name in self.macros or name in self.macro_dialect.builtins
+            return defined if directive == "ifdef" else not defined
         return bool(
             self._evaluate_expression(
                 self._expand_macros(rest, line_num, True, file_path)

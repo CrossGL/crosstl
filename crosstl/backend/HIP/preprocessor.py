@@ -130,7 +130,8 @@ class HipPreprocessor(HLSLPreprocessor):
             next_line = lines[start + consumed]
             if next_line.lstrip().startswith("#"):
                 break
-            line += " " + self._strip_macro_comments(next_line.lstrip())
+            # Keep the physical line break, so __LINE__ counts the lines the invocation spans.
+            line += "\n" + self._strip_macro_comments(next_line.lstrip())
             consumed += 1
 
         return line, consumed

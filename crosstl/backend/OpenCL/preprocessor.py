@@ -157,10 +157,13 @@ class OpenCLPreprocessor(HLSLPreprocessor):
                     frame["branch_taken"] = True
                 elif directive == "endif" and conditional_stack:
                     conditional_stack.pop()
+                line += "\n"
                 consumed += 1
                 continue
+            # One line break per physical line, so __LINE__ counts the lines the invocation spans.
+            line += "\n"
             if is_active():
-                line += " " + self._strip_macro_comments(stripped)
+                line += self._strip_macro_comments(stripped)
             consumed += 1
 
         return line, consumed
