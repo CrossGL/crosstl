@@ -221,7 +221,9 @@ def _order_mismatch(model, outputs):
         if expected == actual:
             continue
         if not isinstance(actual, list) or len(actual) != len(expected):
-            return f"Sort outputs differ from the stable LessThan order in {name}'s extent"
+            return (
+                f"Sort outputs differ from the stable LessThan order in {name}'s extent"
+            )
         differing = [i for i, (e, a) in enumerate(zip(expected, actual)) if e != a]
         first = differing[0]
         return (
