@@ -31,6 +31,7 @@ from crosstl.backend.DirectX.macro_expansion import METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .auto_placeholders import deduced_auto_type
 from .concrete_free_operators import materialize_concrete_free_operators
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
@@ -70,6 +71,7 @@ from .namespaced_specializations import (
 )
 from .overload_ranking import shared_template_parameter_positions
 from .pattern_cache import pattern as _cached_pattern
+from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .reference_alias_arguments import call_argument_designates
 from .source_analysis_cache import SourceAnalysisCache, memoized
@@ -22107,11 +22109,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # scalar/aggregate scanner cannot type because the declarator names no
         # type. Declarations are processed in source order and each inferred
         # binding is recorded immediately, so one `auto` local may depend on an
-        # earlier one. An unresolved initializer still shadows older bindings;
-        # `auto&` / `auto*` declarators are skipped.
+        # earlier one. An unresolved initializer still shadows older bindings.
+        # `auto*` and `const auto*` take a pointer initializer's type
+        # ([dcl.type.auto.deduct]); `auto&` declarators are skipped.
         lexical_scopes = self._find_lexical_brace_scopes(code)
         pattern = re.compile(
-            r"(?:(?<=[;{}()])|^)\s*auto\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)",
+            r"(?:(?<=[;{}()])|^)\s*(?P<specifier>auto(?=\s)|(?:const\s+)?auto\s*\*)"
+            r"\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)",
             re.MULTILINE,
         )
         for match in pattern.finditer(code):
@@ -22152,6 +22156,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 inferred = self._concrete_type_alias_at(
                     inferred, position, type_aliases, local_integral_constants or {}
                 )
+            if match.group("specifier") != "auto":
+                inferred = deduced_auto_type(match.group("specifier"), inferred)
+                if inferred == "auto":
+                    inferred = None
             normalized = self._normalize_inferred_expression_type(inferred or "")
             entries = local_variable_types.setdefault(match.group("name"), [])
             scope = self._innermost_lexical_scope(
@@ -22554,6 +22562,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         return self._normalize_inferred_expression_type(
                             expr[angle_start + 1 : angle_end]
                         )
+
+        # A pointer conversion has its target type ([expr.reinterpret.cast]/1,
+        # [expr.cast]/1): `reinterpret_cast<device T*>(p)` and `(device T*)p`
+        # are `device T*`, so a call or an `auto` local built from one deduces
+        # template arguments like an explicitly typed pointer. Only pointer
+        # targets naming exactly one Metal address space are admitted.
+        pointer_cast = pointer_conversion_type(self, expr)
+        if pointer_cast is not None:
+            return pointer_cast
 
         # Dereference of one explicit C-style pointer cast has the cast's
         # pointee type: `*(thread Value*)(&bits)` -> `Value`. A dereference of a
