@@ -8,6 +8,8 @@ printed verbatim, which MSL does not declare; a ``traceRayEXT`` naming a ``rayPa
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import crosstl
@@ -222,8 +224,8 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 }
 """
 
-TRIANGLE_ATTRIBUTES_STRUCT = (
-    "struct BuiltInTriangleIntersectionAttributes {\n  float2 barycentrics;\n};"
+TRIANGLE_ATTRIBUTES_STRUCT = re.compile(
+    r"struct BuiltInTriangleIntersectionAttributes\s*\{\s*float2 barycentrics;\s*\};"
 )
 
 
@@ -239,12 +241,11 @@ def test_triangle_hit_attributes_are_declared_for_a_visible_function(
     tmp_path, name, text
 ):
     # MSL has no BuiltInTriangleIntersectionAttributes; the HLSL name used to be printed undeclared.
-    code = crosstl.translate(
-        str(_write(tmp_path, name, text)), backend="metal", format_output=True
-    )
+    code = translate(tmp_path, name, text)
     assert code.count("struct BuiltInTriangleIntersectionAttributes") == 1
-    assert TRIANGLE_ATTRIBUTES_STRUCT in code
-    assert code.index(TRIANGLE_ATTRIBUTES_STRUCT) < code.index("[[visible]]")
+    declaration = TRIANGLE_ATTRIBUTES_STRUCT.search(code)
+    assert declaration is not None, code
+    assert declaration.start() < code.index("[[visible]]")
     assert "BuiltInTriangleIntersectionAttributes attr" in code
     artifact = tmp_path / "out.metal"
     artifact.write_text(code)
@@ -252,9 +253,3 @@ def test_triangle_hit_attributes_are_declared_for_a_visible_function(
     if verdict["verdict"] == "unavailable":
         pytest.skip("no metal checker installed")
     assert verdict["verdict"] == "accepted", verdict.get("log", "")
-
-
-def _write(tmp_path, name, text):
-    path = tmp_path / name
-    path.write_text(text)
-    return path
