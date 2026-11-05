@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 584
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 585
     assert all(
         name.startswith(
             (
@@ -116,6 +116,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_nn.TestLayers.test_",
                 "test_vmap.TestVmap.test_",
                 "test_eval.TestEval.test_",
+                "test_threads.TestThreads.test_",
                 "test_export_import.TestExportImport.test_",
                 "test_load.TestLoad.test_",
                 "test_optimizers.TestOptimizers.test_",
@@ -204,7 +205,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 577 and not set(opengl) & set(excluded)
+    assert len(opengl) == 578 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -326,7 +327,7 @@ def test_upstream_op_groups_partition_the_inventory():
     # a group of its own.
     for group, modules, count in (
         ("nn", ("test_nn.",), 41),
-        ("transforms", ("test_vmap.", "test_eval."), 36),
+        ("transforms", ("test_vmap.", "test_eval.", "test_threads."), 37),
         ("serialization", ("test_export_import.", "test_load."), 33),
         (
             "training",

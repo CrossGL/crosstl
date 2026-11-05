@@ -71,55 +71,65 @@ NN_TESTS = _tests(
     ),
 )
 
-# test_vmap and test_eval: vectorized maps of the composed ops, sorts,
-# partitions, scatters, factorizations and views, and synchronous,
-# asynchronous and multi-stream evaluation.
-TRANSFORM_TESTS = _tests(
-    "test_vmap",
-    "TestVmap",
-    (
-        "binary",
-        "broadcast_axes_vmap",
-        "tree",
-        "unary",
-        "vmap_argreduce",
-        "vmap_argsort",
-        "vmap_concatenate",
-        "vmap_const_func",
-        "vmap_conv",
-        "vmap_gather",
-        "vmap_indexing",
-        "vmap_inverse",
-        "vmap_masked_scatter",
-        "vmap_matmul",
-        "vmap_mean",
-        "vmap_pad",
-        "vmap_partition",
-        "vmap_reduce",
-        "vmap_scatter",
-        "vmap_sort",
-        "vmap_strided_slice_single_element",
-        "vmap_svd",
-        "vmap_topk",
-        "vmap_types",
-        "vmap_view",
-    ),
-) + _tests(
-    "test_eval",
-    "TestEval",
-    (
-        "async_eval",
-        "async_eval_into_eval",
-        "async_eval_into_eval_diff_stream",
-        "async_eval_twice",
-        "async_eval_with_multiple_streams",
-        "eval",
-        "eval_mixed",
-        "eval_slow_fast_multi_stream",
-        "multi_output_eval_during_transform",
-        "multistream_deadlock",
-        "retain_graph",
-    ),
+# test_vmap, test_eval and test_threads: vectorized maps of the composed ops,
+# sorts, partitions, scatters, factorizations and views, and synchronous,
+# asynchronous, multi-stream and per-thread stream evaluation.
+TRANSFORM_TESTS = (
+    _tests(
+        "test_vmap",
+        "TestVmap",
+        (
+            "binary",
+            "broadcast_axes_vmap",
+            "tree",
+            "unary",
+            "vmap_argreduce",
+            "vmap_argsort",
+            "vmap_concatenate",
+            "vmap_const_func",
+            "vmap_conv",
+            "vmap_gather",
+            "vmap_indexing",
+            "vmap_inverse",
+            "vmap_masked_scatter",
+            "vmap_matmul",
+            "vmap_mean",
+            "vmap_pad",
+            "vmap_partition",
+            "vmap_reduce",
+            "vmap_scatter",
+            "vmap_sort",
+            "vmap_strided_slice_single_element",
+            "vmap_svd",
+            "vmap_topk",
+            "vmap_types",
+            "vmap_view",
+        ),
+    )
+    + _tests(
+        "test_eval",
+        "TestEval",
+        (
+            "async_eval",
+            "async_eval_into_eval",
+            "async_eval_into_eval_diff_stream",
+            "async_eval_twice",
+            "async_eval_with_multiple_streams",
+            "eval",
+            "eval_mixed",
+            "eval_slow_fast_multi_stream",
+            "multi_output_eval_during_transform",
+            "multistream_deadlock",
+            "retain_graph",
+        ),
+    )
+    + _tests(
+        "test_threads",
+        "TestThreads",
+        # Each thread reaches only the streams it created. test_concurrent_transforms
+        # passes too, but its 18,000 iterations record 42,000 dispatches.
+        ("threadlocal_stream",),
+    )
 )
 
 # test_export_import and test_load: exported and imported functions, among
