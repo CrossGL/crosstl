@@ -30,6 +30,7 @@ from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
 from .conditional_types import select_conditional_type, select_nested_conditional_types
+from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
 from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
@@ -54,6 +55,7 @@ from .member_address_types import (
     merge_receiver_variable_types,
 )
 from .member_lowering_layers import lower_members_with_late_specializations
+from .pattern_cache import pattern as _cached_pattern
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
@@ -115,7 +117,7 @@ METAL_ANGLE_OPERATOR_RE = re.compile(
     r"(?:<<=|>>=|<=>|<<|>>|<=|>=|<|>)"
 )
 METAL_STATEMENT_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
-METAL_TEMPLATE_DELIMITER_RE = re.compile(r"[()\[\]<>{}\"'/]")
+METAL_TEMPLATE_DELIMITER_RE = re.compile(r"[()\[\]<>{};\"'/]")
 METAL_COMMENT_LITERAL_RE = re.compile(r"[\"'/]")
 METAL_SCOPE_DELIMITER_RE = re.compile(r"[{}\"'/]")
 METAL_NAMESPACE_DELIMITER_RE = re.compile(r"namespace|[{}\"'/]")
@@ -1102,6 +1104,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ] = {}
         self._materialized_function_names: Set[str] = set()
         self._materialized_function_templates: Set[Tuple[str, str]] = set()
+        # Explicit free-function template calls materialized by `preprocess`,
+        # shared by its passes so a call first reached after member lowering
+        # reuses the helper an earlier pass emitted instead of redefining it.
+        self._explicit_template_function_names: Dict[
+            Tuple[str, Tuple[str, ...]], str
+        ] = {}
         self._active_static_constexpr_functions: Dict[
             str, List[_MetalConstexprFunction]
         ] = {}
@@ -1151,6 +1159,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self._instantiated_template_member_calls.clear()
         self._materialized_function_names.clear()
         self._materialized_function_templates.clear()
+        self._explicit_template_function_names.clear()
         self._active_static_constexpr_functions.clear()
         self._source_type_alias_bindings.clear()
         self._integral_constant_binary_operators.clear()
@@ -1415,7 +1424,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         include_struct_members: bool = True,
     ) -> str:
         materialized_names = (
-            materialized_names if materialized_names is not None else {}
+            materialized_names
+            if materialized_names is not None
+            else self._explicit_template_function_names
         )
         excluded_template_names = set(excluded_template_names or ())
         working = code
@@ -4577,8 +4588,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             ignored_spans = self._find_comment_and_literal_spans(text)
             replacements: List[Tuple[int, int, str]] = []
             for alias, alias_template in templates.items():
+                if alias not in text:
+                    # Both patterns below need the alias spelled in the text.
+                    continue
                 patterns = [
-                    re.compile(
+                    _cached_pattern(
                         rf"(?<![A-Za-z0-9_])(?:typename\s+)?"
                         rf"(?:::)?(?:{owner_pattern})"
                         rf"(?:\s*<[^<>{{}}()]*>)?\s*::\s*"
@@ -4587,7 +4601,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 ]
                 if not qualified_only and alias not in (excluded_aliases or set()):
                     patterns.append(
-                        re.compile(rf"(?<![A-Za-z0-9_:]){re.escape(alias)}\s*<")
+                        _cached_pattern(rf"(?<![A-Za-z0-9_:]){re.escape(alias)}\s*<")
                     )
                 for pattern in patterns:
                     for match in pattern.finditer(text):
@@ -4629,18 +4643,23 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         structs: List[_MetalStructDefinition],
     ) -> str:
         rewritten = source
+        templated = [struct for struct in structs if struct.type_alias_templates]
+        if not templated:
+            return rewritten
         owner_name_counts: Dict[str, int] = {}
         for struct in structs:
             owner_name_counts[struct.name] = owner_name_counts.get(struct.name, 0) + 1
-        for struct in structs:
-            if struct.type_alias_templates:
-                rewritten = self._canonicalize_struct_scoped_alias_templates(
-                    rewritten,
-                    struct,
-                    qualified_only=True,
-                    preserve_formatting=True,
-                    allow_unqualified_owner=owner_name_counts[struct.name] == 1,
-                )
+        for struct in templated:
+            if not any(alias in rewritten for alias in struct.type_alias_templates):
+                # Every rewrite needs an alias template spelled in the text.
+                continue
+            rewritten = self._canonicalize_struct_scoped_alias_templates(
+                rewritten,
+                struct,
+                qualified_only=True,
+                preserve_formatting=True,
+                allow_unqualified_owner=owner_name_counts[struct.name] == 1,
+            )
         return rewritten
 
     def _canonicalize_struct_static_alias_owners(self, code: str) -> str:
@@ -4735,8 +4754,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 for part in parts
             )
 
-        rules: List[Tuple[re.Pattern[str], str]] = []
-        for struct in aliased_structs:
+        # Every rule rewrites ``Owner::alias``, so a rule can match only text that spells its alias. Rules are built
+        # in a fixed order as their aliases appear in the text; each owner's patterns and each alias's target are
+        # resolved at most once per call.
+        candidates: List[Tuple[_MetalStructDefinition, str]] = [
+            (struct, alias)
+            for struct in aliased_structs
+            for alias in struct.type_aliases
+            if alias not in struct.type_alias_templates
+        ]
+        if not candidates:
+            return source
+        owners_by_struct: Dict[int, List[str]] = {}
+        targets: Dict[int, Optional[str]] = {}
+
+        def owner_patterns_of(struct: _MetalStructDefinition) -> List[str]:
+            owners = owners_by_struct.get(id(struct))
+            if owners is not None:
+                return owners
             owner_patterns = (
                 {type_pattern(struct.qualified_name)}
                 if struct.qualified_name
@@ -4750,20 +4785,27 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 owner_patterns.add(
                     type_pattern(f"{source_name}<{', '.join(source_arguments)}>")
                 )
-            for alias in struct.type_aliases:
-                if alias in struct.type_alias_templates:
+            owners = owners_by_struct[id(struct)] = sorted(owner_patterns)
+            return owners
+
+        def rules_for(text: str) -> List[Tuple[re.Pattern[str], str]]:
+            rules: List[Tuple[re.Pattern[str], str]] = []
+            for index, (struct, alias) in enumerate(candidates):
+                if alias not in text:
                     continue
-                target = self._canonicalize_struct_scoped_type(
-                    alias,
-                    struct,
-                    structs_by_name,
-                )
+                if index not in targets:
+                    targets[index] = self._canonicalize_struct_scoped_type(
+                        alias,
+                        struct,
+                        structs_by_name,
+                    )
+                target = targets[index]
                 if not target or target == alias:
                     continue
-                for owner_pattern in owner_patterns:
+                for owner_pattern in owner_patterns_of(struct):
                     rules.append(
                         (
-                            re.compile(
+                            _cached_pattern(
                                 rf"(?<![A-Za-z0-9_:])(?:typename\s+)?"
                                 rf"(?:::)?{owner_pattern}\s*::\s*"
                                 rf"{re.escape(alias)}\b"
@@ -4771,11 +4813,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                             target,
                         )
                     )
-        if not rules:
-            return source
+            return rules
 
         rewritten = source
-        for _ in range(len(rules) + 1):
+        # A struct has at most three owner spellings, so this bounds the rule count.
+        for _ in range(3 * len(candidates) + 1):
+            rules = rules_for(rewritten)
+            if not rules:
+                break
             ignored_spans = self._find_comment_and_literal_spans(rewritten)
             replacements: List[Tuple[int, int, str]] = []
             for pattern, target in rules:
@@ -4833,7 +4878,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             re.escape(owner) for owner in sorted(owner_names, key=len, reverse=True)
         )
         for alias in sorted(all_type_aliases, key=len, reverse=True):
-            qualified_alias = re.compile(
+            if alias not in text:
+                continue
+            qualified_alias = _cached_pattern(
                 rf"(?<![A-Za-z0-9_])"
                 rf"(?:(?:[A-Za-z_]\w*)\s*::\s*)*"
                 rf"(?:{owner_pattern})(?:\s*<[^<>{{}}()]*>)?\s*::\s*"
@@ -4861,26 +4908,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         for _ in range(len(type_aliases) + 2):
             previous = text
             for alias in sorted(type_aliases, key=len, reverse=True):
+                if alias not in text:
+                    # Each rewrite below needs the alias spelled in the text.
+                    continue
                 owner = struct_alias_target(alias, set())
+                escaped = re.escape(alias)
                 if owner is not None:
-                    text = re.sub(
-                        rf"(?<![A-Za-z0-9_:]){re.escape(alias)}(?=::)",
-                        owner,
-                        text,
+                    text = _cached_pattern(rf"(?<![A-Za-z0-9_:]){escaped}(?=::)").sub(
+                        owner, text
                     )
-                text = re.sub(
-                    rf"(?<![A-Za-z0-9_:]){re.escape(alias)}(?=\s*<)",
-                    f"{struct.name}::{alias}",
-                    text,
+                text = _cached_pattern(rf"(?<![A-Za-z0-9_:]){escaped}(?=\s*<)").sub(
+                    f"{struct.name}::{alias}", text
                 )
                 target = type_aliases[alias]
                 target = re.sub(r"^typename\s+", "", target).strip()
                 target = re.sub(r"::template\s+", "::", target)
-                text = re.sub(
-                    rf"(?<![A-Za-z0-9_:]){re.escape(alias)}(?![A-Za-z0-9_<])",
-                    target,
-                    text,
-                )
+                text = _cached_pattern(
+                    rf"(?<![A-Za-z0-9_:]){escaped}(?![A-Za-z0-9_<])"
+                ).sub(target, text)
             if text == previous:
                 break
         text = self._canonicalize_qualified_struct_alias_templates(
@@ -11364,6 +11409,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         one lexically visible candidate and proves an integral result.  Calls
         that are overloaded, runtime-dependent, recursive, or otherwise
         unsupported remain untouched for the normal residual-template diagnostic.
+
+        Inside a concrete struct body, a call without a template argument list
+        folds too when every candidate is a template none of whose parameters
+        the call could deduce: such a call names the specialization formed from
+        the default template arguments ([temp.arg.explicit]/4).  Member
+        lowering leaves static data member initializers and constructor member
+        initializers there, where no later helper pass binds the call, so once
+        the template declaration is removed the call would name nothing.  Calls
+        in function bodies stay for the signature-aware helper materializer.
         """
 
         functions = self._materialization_constexpr_function_index(code)
@@ -11371,9 +11425,22 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return code
         excluded_spans = self._find_template_declaration_spans(code)
         replacements: List[Tuple[int, int, str]] = []
+        struct_spans: Optional[List[Tuple[int, int]]] = None
         for call in self._find_static_constexpr_calls(code, set(functions)):
             if call.template_arguments is None:
-                continue
+                if not all(
+                    function.is_template
+                    and not deducible_template_parameters(self, function)
+                    for function in functions.get(call.name, ())
+                ):
+                    continue
+                if struct_spans is None:
+                    struct_spans = [
+                        struct.span
+                        for struct in self._find_concrete_struct_definitions(code)
+                    ]
+                if self._containing_span(call.span[0], struct_spans) is None:
+                    continue
             if self._containing_span(call.span[0], excluded_spans) is not None:
                 continue
             value = self._evaluate_static_constexpr_call(
@@ -12323,6 +12390,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             ast.GtE,
             ast.Name,
             ast.Load,
+            ast.Call,
         )
         nodes = list(ast.walk(parsed))
         if len(nodes) > 128 or any(
@@ -12647,6 +12715,23 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     return True, 0
                 left = right
             return True, 1
+
+        if isinstance(node, ast.Call):
+            # Only Clang's bit-counting builtins, with one concrete operand.
+            if (
+                not isinstance(node.func, ast.Name)
+                or node.func.id not in BIT_BUILTIN_WIDTHS
+                or len(node.args) != 1
+                or node.keywords
+            ):
+                return False, None
+            valid, operand = self._evaluate_static_integral_node(node.args[0])
+            if not valid or operand is None:
+                return False, None
+            value = fold_bit_builtin(node.func.id, operand)
+            if value is None:
+                return False, None
+            return True, value
 
         return False, None
 
@@ -29379,6 +29464,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         nested in parentheses/brackets/braces cannot close an outer template-id.
         Any unmatched ``<`` opened inside a closing value-expression delimiter is
         a comparison and is discarded; a valid nested template-id closes first.
+
+        A template argument list is balanced, so a closing delimiter that has no
+        opener after ``start``, or a ``;`` outside braces, ends the search: the
+        ``<`` at ``start`` is a comparison, and scanning on would cost the rest
+        of the module for every comparison a caller probes.
         """
         if start < 0 or start >= len(code) or code[start] != "<":
             return None
@@ -29418,23 +29508,31 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if character == "(":
                 paren_depth += 1
             elif character == ")":
+                if paren_depth == 0:
+                    return None
                 while len(angle_contexts) > 1 and angle_contexts[-1][0] >= paren_depth:
                     angle_contexts.pop()
-                paren_depth = max(0, paren_depth - 1)
+                paren_depth -= 1
             elif character == "[":
                 bracket_depth += 1
             elif character == "]":
+                if bracket_depth == 0:
+                    return None
                 while (
                     len(angle_contexts) > 1 and angle_contexts[-1][1] >= bracket_depth
                 ):
                     angle_contexts.pop()
-                bracket_depth = max(0, bracket_depth - 1)
+                bracket_depth -= 1
             elif character == "{":
                 brace_depth += 1
             elif character == "}":
+                if brace_depth == 0:
+                    return None
                 while len(angle_contexts) > 1 and angle_contexts[-1][2] >= brace_depth:
                     angle_contexts.pop()
-                brace_depth = max(0, brace_depth - 1)
+                brace_depth -= 1
+            elif character == ";" and brace_depth == 0:
+                return None
             elif character == "<":
                 angle_contexts.append(context)
             elif character == ">" and angle_contexts[-1] == context:

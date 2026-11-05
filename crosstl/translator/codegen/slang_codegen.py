@@ -144,6 +144,8 @@ from .slang_projected_compare import (
     is_slang_projected_compare,
 )
 from .slang_refusals import SlangLoweringRefused
+from .slang_specialization_constants import plan_slang_specialization_constants
+from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_utils import (
     compute_local_size,
     is_fragment_output_parameter,
@@ -325,9 +327,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             "gl_InstanceID": "SV_InstanceID",
             "gl_BaseVertex": "SV_StartVertexLocation",
             "gl_BaseInstance": "SV_StartInstanceLocation",
-            "gl_DrawID": "SV_DrawID",
+            "gl_DrawID": "SV_DrawIndex",
             "gl_PrimitiveID": "SV_PrimitiveID",
             "gl_PrimitiveIDIn": "SV_PrimitiveID",
+            "gl_CullPrimitiveEXT": "SV_CullPrimitive",
             "gl_TessCoord": "SV_DomainLocation",
             "gl_TessLevelOuter": "SV_TessFactor",
             "gl_TessLevelInner": "SV_InsideTessFactor",
@@ -1924,6 +1927,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.slang_mesh_payload_parameter_types = (
             self.collect_slang_mesh_payload_parameter_types(stages)
         )
+        self.slang_program_has_mesh_stage = any(
+            str(getattr(stage_type, "value", stage_type)).lower() == "mesh"
+            for stage_type in stages
+        )
         self.slang_ray_payload_parameter_types = (
             self.collect_slang_ray_payload_parameter_types(stages)
         )
@@ -1960,7 +1967,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         return code
 
     def generate_constants(self, ast, constants=None):
-        """Emit CrossGL compile-time constants as Slang static constants."""
+        """Emit CrossGL compile-time constants as Slang static constants.
+
+        Specialization constants keep their id, and the constants that follow them are planned once per program by
+        :func:`plan_slang_specialization_constants`.
+        """
+        plan = self.slang_specialization_plan(ast)
         code = ""
         for node in (
             getattr(ast, "constants", []) or [] if constants is None else constants
@@ -1973,13 +1985,41 @@ class SlangCodeGen(LoweringRefusalMixin):
                 getattr(node, "const_type", getattr(node, "vtype", "float"))
             )
             self.register_variable_type(name, const_type_name, node)
-            value_code = self.generate_constant_expression(getattr(node, "value", None))
+            value = getattr(node, "value", None)
+            value_code = (
+                None if value is None else self.generate_constant_expression(value)
+            )
             declaration = format_c_style_array_declaration(
                 self.convert_type(const_type_name), name
             )
+            specialized = plan.declaration(name, declaration, value_code)
+            if specialized is not None:
+                code += f"{specialized}\n"
+                continue
             code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
+
+    def slang_interface_array_type(self, member):
+        """A stage-interface member's array type sized by its default, when a specialization constant sizes it."""
+        cached = getattr(self, "_slang_specialization_plan", None)
+        if cached is None:
+            return None
+        return cached[1].interface_array_type(getattr(member, "member_type", None))
+
+    def slang_specialization_plan(self, ast):
+        """The specialization plan of ``ast``, computed once for the program being generated."""
+        cached = getattr(self, "_slang_specialization_plan", None)
+        if cached is not None and cached[0] is ast:
+            return cached[1]
+        plan = plan_slang_specialization_constants(
+            ast,
+            lambda type_node: self.convert_type(
+                self.convert_type_node_to_string(type_node)
+            ),
+        )
+        self._slang_specialization_plan = (ast, plan)
+        return plan
 
     def generate_constant_expression(self, expr):
         value_code = self.generate_expression(expr)
@@ -5956,6 +5996,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             semantic = self.semantic_from_node(member)
             if semantic is None:
                 semantic = default_member_semantics.get(member.name)
+            interface_type = (
+                self.slang_interface_array_type(member) if semantic else None
+            )
+            if interface_type is not None:
+                member_type = self.convert_type(
+                    self.convert_type_node_to_string(interface_type)
+                )
             self.validate_slang_builtin_semantic_type(
                 semantic,
                 self.slang_tess_factor_member_type_name(member),
@@ -6353,8 +6400,21 @@ class SlangCodeGen(LoweringRefusalMixin):
         return result
 
     def generate_compute_numthreads(self, execution_config=None):
-        x, y, z = compute_local_size(execution_config)
-        return f"[numthreads({x}, {y}, {z})]\n"
+        sizes = list(compute_local_size(execution_config))
+        ids = workgroup_size_specialization_ids(execution_config, "Slang")
+        declarations = ""
+        for index, (axis, spec_id) in enumerate(zip("xyz", ids)):
+            if spec_id is None:
+                continue
+            # A specialized dimension is a vk::constant_id constant named in numthreads; Slang sizes SPIR-V
+            # with LocalSizeId and refuses it for targets without specialization constants. It is an int:
+            # WorkgroupSize() is an int3, and a uint constant makes slangc build an invalid composite.
+            name = f"crossgl_workgroup_size_{axis}"
+            declarations += (
+                f"[vk::constant_id({spec_id})] const int {name} = {sizes[index]};\n"
+            )
+            sizes[index] = name
+        return f"{declarations}[numthreads({', '.join(map(str, sizes))})]\n"
 
     def validate_slang_return_semantic(
         self, shader_type, semantic, stage_role, ret_type_name
@@ -6863,16 +6923,21 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return_type, intrinsic = candidates[node.name]
                 aliases[node.name] = intrinsic
                 self.register_variable_type(node.name, return_type)
-            elif node.name == "gl_NumWorkGroups":
-                # Slang declares no gl_NumWorkGroups, and the WorkgroupCount()
-                # alias above is only made for a compute entry point.
+            elif node.name in ("gl_NumWorkGroups", "gl_WorkGroupSize"):
+                # Slang declares neither, and the WorkgroupCount() and WorkgroupSize()
+                # aliases above are only made for a compute entry point.
                 where = (
                     f"a {shader_type} entry point"
                     if shader_type
                     else "a helper function"
                 )
+                intrinsic = (
+                    "WorkgroupCount()"
+                    if node.name == "gl_NumWorkGroups"
+                    else "WorkgroupSize()"
+                )
                 self.refuse_lowering(
-                    "Slang gl_NumWorkGroups: lowered to WorkgroupCount() only "
+                    f"Slang {node.name}: lowered to {intrinsic} only "
                     f"in a compute entry point, not in {where}"
                 )
         return aliases
@@ -7987,7 +8052,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         if shader_stage == "compute":
             # Slang has no SV_ system value for the dispatch size; it exposes
             # the number of workgroups through the WorkgroupCount() intrinsic.
-            return {"gl_NumWorkGroups": ("uvec3", "WorkgroupCount()")}
+            return {
+                "gl_NumWorkGroups": ("uvec3", "WorkgroupCount()"),
+                # Slang declares no gl_WorkGroupSize; WorkgroupSize() is the entry's numthreads as an int3.
+                "gl_WorkGroupSize": ("uvec3", "uint3(WorkgroupSize())"),
+            }
         if shader_stage not in self.slang_ray_stage_types():
             return {}
 
@@ -8026,7 +8095,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 "gl_InstanceID": ("uint", "SV_InstanceID"),
                 "gl_BaseVertex": ("int", "SV_StartVertexLocation"),
                 "gl_BaseInstance": ("uint", "SV_StartInstanceLocation"),
-                "gl_DrawID": ("uint", "SV_DrawID"),
+                "gl_DrawID": ("uint", "SV_DrawIndex"),
             }
         if shader_stage == "fragment":
             return {
@@ -10460,6 +10529,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
 
         payload_types = sorted(self.slang_mesh_payload_parameter_types)
+        if not payload_types and not getattr(
+            self, "slang_program_has_mesh_stage", True
+        ):
+            # A task stage built alone: the mesh stage it launches is another program.
+            return
         if not payload_types:
             raise ValueError(
                 "Slang DispatchMesh payload argument requires a mesh stage "

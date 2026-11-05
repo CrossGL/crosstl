@@ -8,6 +8,8 @@ printed verbatim, which MSL does not declare; a ``traceRayEXT`` naming a ``rayPa
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import crosstl
@@ -194,3 +196,60 @@ def test_ray_state_in_a_visible_function_is_refused(tmp_path, name, text, spelli
 def test_ray_state_keeps_its_spelling_on_hlsl(tmp_path):
     code = translate(tmp_path, "shader.hlsl", HLSL_CLOSEST_HIT_STATE, "directx")
     assert "WorldRayDirection()" in code and "RayTCurrent()" in code
+
+
+HLSL_CLOSEST_HIT_TRIANGLE = """struct [raypayload] Payload {
+    float4 color : read(caller) : write(closesthit, miss);
+};
+[shader("closesthit")]
+void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
+    payload.color = float4(attr.barycentrics, 0.0, 1.0);
+}
+"""
+
+HLSL_ANY_HIT_TRIANGLE = """struct Payload { float2 bary; };
+float2 weights(BuiltInTriangleIntersectionAttributes attr) {
+    return attr.barycentrics * 0.5;
+}
+[shader("anyhit")]
+void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
+    payload.bary = weights(attr);
+}
+"""
+
+SLANG_CLOSEST_HIT_TRIANGLE = """struct Payload { float4 color; };
+[shader("closesthit")]
+void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
+    payload.color = float4(attr.barycentrics, 0.0, 1.0);
+}
+"""
+
+TRIANGLE_ATTRIBUTES_STRUCT = re.compile(
+    r"struct BuiltInTriangleIntersectionAttributes\s*\{\s*float2 barycentrics;\s*\};"
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("shader.hlsl", HLSL_CLOSEST_HIT_TRIANGLE),
+        ("shader.hlsl", HLSL_ANY_HIT_TRIANGLE),
+        ("shader.slang", SLANG_CLOSEST_HIT_TRIANGLE),
+    ],
+)
+def test_triangle_hit_attributes_are_declared_for_a_visible_function(
+    tmp_path, name, text
+):
+    # MSL has no BuiltInTriangleIntersectionAttributes; the HLSL name used to be printed undeclared.
+    code = translate(tmp_path, name, text)
+    assert code.count("struct BuiltInTriangleIntersectionAttributes") == 1
+    declaration = TRIANGLE_ATTRIBUTES_STRUCT.search(code)
+    assert declaration is not None, code
+    assert declaration.start() < code.index("[[visible]]")
+    assert "BuiltInTriangleIntersectionAttributes attr" in code
+    artifact = tmp_path / "out.metal"
+    artifact.write_text(code)
+    verdict = checks.check(artifact, "metal", ["compute"])
+    if verdict["verdict"] == "unavailable":
+        pytest.skip("no metal checker installed")
+    assert verdict["verdict"] == "accepted", verdict.get("log", "")

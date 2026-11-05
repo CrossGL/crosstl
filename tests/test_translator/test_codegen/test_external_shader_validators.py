@@ -17,6 +17,7 @@ from crosstl.translator.codegen.buffer_block_diagnostics import (
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
@@ -2019,6 +2020,20 @@ def _glsl_specialization_constant_ast():
     return _mixed_glsl_ast(GLSL_SPECIALIZATION_CONSTANT_VERTEX_SHADER, "vertex")
 
 
+def _glsl_metal_expressible_specialization_constant_ast():
+    """The specialization fixture without what Metal cannot specialize.
+
+    Metal has no double type, and a function constant cannot size an array, so the double constants become
+    floats and ``arraySize``, which also sizes ``foo``'s parameter, becomes a plain constant. ``dupArraySize``
+    sizes only a stage input, which Metal flattens into one attribute per element, so it keeps its id like every
+    other specialization constant.
+    """
+    source = GLSL_SPECIALIZATION_CONSTANT_VERTEX_SHADER.replace(
+        "const double", "const float"
+    ).replace("layout(constant_id = 16) const int", "const int")
+    return _mixed_glsl_ast(source, "vertex")
+
+
 def _require_tool(name):
     path = shutil.which(name)
     if not path:
@@ -2122,15 +2137,45 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     assert glsl.index(foo_prototype) < glsl.index(foo_definition)
     assert "output." not in glsl
 
-    metal = MetalCodeGen().generate(shader_ast)
-    assert "constant_id" not in metal
-    assert (
-        "Metal source output cannot preserve GLSL specialization constant id" in metal
+    with pytest.raises(MetalLoweringRefused) as refusal:
+        MetalCodeGen().generate(shader_ast)
+    assert "array sized by specialization constant 'arraySize'" in str(refusal.value)
+    # ``dupUcol[dupArraySize]`` is a stage input that Metal declares one attribute per element.
+    assert "'dupArraySize'" not in str(refusal.value)
+    for name in ("spDouble", "spDupDouble"):
+        assert f"specialization constant '{name}'" in str(refusal.value)
+
+    metal = MetalCodeGen().generate(
+        _glsl_metal_expressible_specialization_constant_ast()
     )
-    assert "Metal does not support double specialization constant" in metal
-    assert "constant double spDouble" not in metal
+    assert "constant_id" not in metal
+    assert "cannot preserve" not in metal
+    for name, constant_id in (
+        ("spBool", 17),
+        ("spFloat", 18),
+        ("spDouble", 19),
+        ("scale", 22),
+        ("gl_MaxImageUnits", 24),
+        ("spDupBool", 117),
+        ("spDupFloat", 118),
+        ("spDupDouble", 119),
+        ("dupScale", 122),
+        ("dupArraySize", 116),
+    ):
+        raw = f"__crossgl_function_constant_{name}"
+        assert f" {raw} [[function_constant({constant_id})]];" in metal
+        assert f" {name} = is_function_constant_defined({raw}) ? {raw} : " in metal
+    assert metal.count("[[function_constant(") == 10
+    assert "constant int arraySize = 5;" in metal
     assert "thread VertexOutput& output" in metal
-    assert metal.count("constant int gl_MaxImageUnits = 8;") == 1
+    assert (
+        metal.count(
+            " gl_MaxImageUnits = is_function_constant_defined("
+            "__crossgl_function_constant_gl_MaxImageUnits) ? "
+            "__crossgl_function_constant_gl_MaxImageUnits : int(8);"
+        )
+        == 1
+    )
     assert "Metal vertex entry points require a position output" in metal
     assert "float4 __crossgl_position [[position]];" in metal
 
@@ -2187,7 +2232,7 @@ def test_mixed_glsl_specialization_constants_metal_output_compiles_with_xcrun_me
     output_path = tmp_path / "specialization_constants.air"
 
     shader_path.write_text(
-        MetalCodeGen().generate(_glsl_specialization_constant_ast()),
+        MetalCodeGen().generate(_glsl_metal_expressible_specialization_constant_ast()),
         encoding="utf-8",
     )
 

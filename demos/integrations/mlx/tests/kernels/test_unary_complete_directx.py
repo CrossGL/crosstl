@@ -39,13 +39,13 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "3c43ddb2bc5ea5749fad07201cc82c640b6dcf08c9ebb1e5af5396ab2e3a5977"
+    "f68f080af409684d990f52cee8bf448a40535d8e3f844384018fa42eea406ba3"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "74660b6f293a3a78bf766fba044f2164c4c780e68dac5389f63e61a733a5ff9c"
+    "e9cc999693b81abc0a9ed6e06e79eb71f1632986889fc7086fc70cd16638042b"
 )
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
@@ -260,7 +260,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5340547,
+        "generatedSizeBytesTotal": 5340837,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
@@ -299,7 +299,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5340547
+    assert sum(entry["sizeBytes"] for entry in entries) == 5340837
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3462,
         "v_Absint32int32",

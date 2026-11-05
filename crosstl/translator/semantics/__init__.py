@@ -29,6 +29,7 @@ from .builtin_output_writes import (
     convert_signed_builtin_outputs,
     declare_builtin_outputs,
 )
+from .builtin_stage_identifiers import refuse_misplaced_builtin_identifiers
 from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
@@ -135,6 +136,7 @@ from .shader_records import (
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
+from .slang_vertex_indices import spell_slang_vertex_indices
 from .stage_constant_blocks import (
     StageConstantBlockConflictError,
     hoist_stage_constant_blocks,
@@ -272,6 +274,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     A ``gl_`` built-in value attribute CrossGL does not define is refused with :class:`BuiltinValueUnsupportedError`,
     and the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` take their canonical names (:mod:`.builtin_names`).
     A ``gl_`` built-in used in a stage or direction GLSL does not declare it for is refused (:mod:`.builtin_stages`).
+    So is one that a function body of the stage names directly (:mod:`.builtin_stage_identifiers`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
@@ -380,6 +383,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_undeclared_types(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
+    refuse_misplaced_builtin_identifiers(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
@@ -413,6 +417,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_shading_rate_flags(program, report.target)
     refuse_mixed_metal_barycentrics(program, report.target)
     declare_builtin_outputs(program, report.target)
+    spell_slang_vertex_indices(program, report.target)
     pass_builtin_inputs(program, report.target)
     name_fragment_colour_outputs(program, report.target)
     attribute_vertex_input_positions(program, report.target)

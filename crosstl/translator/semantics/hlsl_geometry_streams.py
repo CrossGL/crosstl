@@ -33,15 +33,23 @@ rewrites a GLSL-style geometry stage into it:
 * ``gl_PrimitiveIDIn`` and ``gl_InvocationID`` read ``uint`` entry parameters carrying ``SV_PrimitiveID`` and
   ``SV_GSInstanceID``, converted to GLSL's ``int``;
 * helpers that use the interface, directly or through the helpers they call, take the input array, the output
-  structure and the stream as extra parameters.
+  structure and the stream as extra parameters;
+* a stage that writes several vertex streams (outputs declared ``@stream(N)``, ``EmitStreamVertex(N)`` and
+  ``EndStreamPrimitive(N)`` with constant ``N``; GLSL 4.60 sections 4.4.2.2 and 8.16) gets one structure, local and
+  ``PointStream`` parameter per stream, ``GeometryOutputN``, ``outputN`` and ``streamN``, in stream order, which is
+  how HLSL numbers them. The built-in outputs belong to stream 0. ``EmitStreamVertex(N)`` appends ``outputN`` to
+  ``streamN``, and ``EmitVertex()`` is ``EmitStreamVertex(0)``.
 
 Members keep their location, built-in and interpolation attributes, so a varying takes the semantic the neighbouring
-stages give the same location. Several output streams (``EmitStreamVertex``, ``layout(stream = N)``),
-``gl_PointSize``, clip and cull distances, interface blocks and helpers that another stage also calls are refused
-with :class:`HlslGeometryStreamUnsupportedError`.
+stages give the same location. Several streams with an output primitive other than points (which neither GLSL nor
+HLSL links), a default stream set by ``layout(stream = N) out``, ``gl_PointSize``, clip and cull distances,
+interface blocks and helpers that another stage also calls are refused with
+:class:`HlslGeometryStreamUnsupportedError`.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
@@ -58,7 +66,15 @@ from .stage_varyings import (
 from .stage_varyings import stage_name as _stage_name
 from .stage_varyings import stages as _stages
 
-__all__ = ["HlslGeometryStreamUnsupportedError", "raise_glsl_geometry_streams"]
+__all__ = [
+    "EMPTY_STREAM_VERTEX_ATTRIBUTE",
+    "HlslGeometryStreamUnsupportedError",
+    "raise_glsl_geometry_streams",
+]
+
+# Marks the vertex structure of a stream with no outputs. The DirectX emitter keeps it empty: a padding member would
+# need a semantic, since the structure is part of the entry's signature, and an empty one declares none.
+EMPTY_STREAM_VERTEX_ATTRIBUTE = "crossgl_empty_stream_vertex"
 
 _HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
 _INPUT_TOPOLOGIES = {
@@ -92,10 +108,17 @@ _REFUSED_BUILTINS = {
     "gl_ClipDistance": "clip-distance",
     "gl_CullDistance": "cull-distance",
 }
-_STREAM_METHODS = {"EmitVertex": "Append", "EndPrimitive": "RestartStrip"}
-_MULTI_STREAM_CALLS = frozenset({"EmitStreamVertex", "EndStreamPrimitive"})
+_STREAM_METHODS = {
+    "EmitVertex": "Append",
+    "EndPrimitive": "RestartStrip",
+    "EmitStreamVertex": "Append",
+    "EndStreamPrimitive": "RestartStrip",
+}
+_NUMBERED_STREAM_CALLS = frozenset({"EmitStreamVertex", "EndStreamPrimitive"})
+# D3D11_SO_STREAM_COUNT; GLSL's gl_MaxVertexStreams is at least 4.
+_MAX_STREAMS = 4
 _INTERPOLATION = frozenset({"flat", "noperspective", "centroid", "sample", "smooth"})
-_DROPPED_ATTRIBUTES = frozenset({"input", "output", "in", "out"})
+_DROPPED_ATTRIBUTES = frozenset({"input", "output", "in", "out", "stream"})
 _PER_VERTEX_BLOCK_MEMBERS = frozenset(
     {"gl_Position", "gl_PointSize", "gl_ClipDistance", "gl_CullDistance"}
 )
@@ -134,6 +157,29 @@ def raise_glsl_geometry_streams(program, target) -> int:
     return changed
 
 
+@dataclass(frozen=True)
+class _Stream:
+    """A vertex stream: its vertex structure, the local holding its outputs and its stream parameter."""
+
+    index: int
+    struct: str
+    output: str
+    stream: str
+    type: A.NamedType
+
+    @staticmethod
+    def key(kind, index):
+        return f"{kind}{index}"
+
+    @property
+    def output_key(self):
+        return self.key("output", self.index)
+
+    @property
+    def stream_key(self):
+        return self.key("stream", self.index)
+
+
 class _GeometryRaising:
     def __init__(self, program, stage, target):
         self.program = program
@@ -168,19 +214,19 @@ class _GeometryRaising:
             used |= _identifier_names(function.body)
         self.refuse_unsupported(reachable, used)
 
+        stream_of = self.output_streams(outputs)
+        streams = self.streams(reachable, stream_of, stream_kind)
         input_struct = self.fresh("GeometryInput")
-        output_struct = self.fresh("GeometryOutput")
-        input_name, stream_name = self.fresh("input"), self.fresh("stream")
-        output_name = self.fresh("output")
+        input_name = self.fresh("input")
         input_members, input_struct_node = self.input_structure(
             input_struct, inputs, used
         )
-        output_members, output_struct_node = self.output_structure(
-            output_struct, outputs, used
+        output_members, output_struct_nodes = self.output_structures(
+            streams, outputs, stream_of, used
         )
         self.program.structs = list(getattr(self.program, "structs", None) or []) + [
             input_struct_node,
-            output_struct_node,
+            *output_struct_nodes,
         ]
 
         builtin_parameters = {}
@@ -189,12 +235,18 @@ class _GeometryRaising:
             builtin_parameters[builtin] = (self.fresh(preferred), semantic)
 
         input_type = A.ArrayType(A.NamedType(input_struct), int_literal(count))
-        stream_type = A.NamedType(stream_kind, [A.NamedType(output_struct)])
-        tokens = [
-            (input_name, input_type, [], "input"),
-            (output_name, A.NamedType(output_struct), ["inout"], "output"),
-            (stream_name, stream_type, ["inout"], "stream"),
-        ] + [
+        tokens = [(input_name, input_type, [], "input")]
+        for stream in streams:
+            tokens += [
+                (
+                    stream.output,
+                    A.NamedType(stream.struct),
+                    ["inout"],
+                    stream.output_key,
+                ),
+                (stream.stream, stream.type, ["inout"], stream.stream_key),
+            ]
+        tokens += [
             (name, A.PrimitiveType("uint"), [], builtin)
             for builtin, (name, _semantic) in builtin_parameters.items()
         ]
@@ -208,9 +260,8 @@ class _GeometryRaising:
                 inputs,
                 input_name,
                 input_members,
-                output_name,
                 output_members,
-                stream_name,
+                streams,
                 builtin_parameters,
             )
         for helper in helpers:
@@ -231,7 +282,11 @@ class _GeometryRaising:
                 )
                 for name, semantic in builtin_parameters.values()
             ),
-            A.ParameterNode(stream_name, stream_type, qualifiers=["inout"]),
+            # HLSL numbers the streams in parameter order (D3D11 geometry shader ``dcl_stream``).
+            *(
+                A.ParameterNode(stream.stream, stream.type, qualifiers=["inout"])
+                for stream in streams
+            ),
         ]
         entry.attributes = list(getattr(entry, "attributes", None) or [])
         if invocations is not None:
@@ -242,7 +297,8 @@ class _GeometryRaising:
             A.AttributeNode("maxvertexcount", [int_literal(max_vertices)])
         )
         entry.body.statements[0:0] = [
-            A.VariableNode(name=output_name, var_type=A.NamedType(output_struct))
+            A.VariableNode(name=stream.output, var_type=A.NamedType(stream.struct))
+            for stream in streams
         ]
         self.stage.layout_qualifiers = []
         self.drop_interface_declarations(inputs, outputs)
@@ -264,9 +320,11 @@ class _GeometryRaising:
                 elif direction == "out" and name == "max_vertices":
                     max_vertices = self.layout_int(name, arguments)
                 elif direction == "out" and name == "stream":
+                    # The default stream applies to the outputs declared after it, an order CrossGL's stage
+                    # layouts do not keep; outputs name their stream with @stream(N) instead.
                     if self.layout_int(name, arguments) != 0:
                         self.refuse(
-                            "the geometry stage writes vertex stream "
+                            "the geometry stage sets the default vertex stream to "
                             f"{self.layout_int(name, arguments)}",
                             "multiple-streams",
                         )
@@ -375,26 +433,109 @@ class _GeometryRaising:
                 )
         for function in reachable:
             for parent, _field, _key, node in slots(function.body):
-                if isinstance(node, A.FunctionCallNode):
-                    name = call_name(node)
-                    if name in _MULTI_STREAM_CALLS:
-                        self.refuse(
-                            f"'{function.name}' calls {name}, which writes a numbered vertex stream",
-                            "multiple-streams",
-                        )
                 if isinstance(node, A.MemberAccessNode) and _is_gl_in(node.object_expr):
                     if node.member not in _GL_IN_MEMBERS:
                         reason = _REFUSED_BUILTINS.get(node.member, "input-builtin")
                         self.refuse(
                             f"the geometry stage reads gl_in[].{node.member}", reason
                         )
-        for variable in getattr(self.program, "global_variables", None) or []:
-            for attribute in getattr(variable, "attributes", None) or []:
-                if str(getattr(attribute, "name", "")).lower() == "stream":
-                    self.refuse(
-                        f"output '{variable.name}' is declared on a numbered vertex stream",
-                        "multiple-streams",
-                    )
+        for struct in getattr(self.program, "structs", None) or []:
+            if _is_per_vertex_block(struct) and self.declared_stream(
+                struct, f"block '{struct.name}'"
+            ):
+                self.refuse(
+                    "the gl_PerVertex block is redeclared on a numbered vertex stream",
+                    "per-vertex-stream",
+                )
+
+    # Vertex streams. GLSL associates each output with a stream (``@stream(N)``, else stream 0; the built-in
+    # outputs belong to stream 0) and EmitStreamVertex(N) emits the outputs of stream N (GLSL 4.60 sections
+    # 4.4.2.2 and 8.16). HLSL gives each stream its own vertex structure and stream object.
+
+    def declared_stream(self, node, what):
+        for attribute in getattr(node, "attributes", None) or []:
+            if str(getattr(attribute, "name", "")).lower() != "stream":
+                continue
+            arguments = list(getattr(attribute, "arguments", None) or [])
+            value = literal_int(arguments[0]) if len(arguments) == 1 else None
+            if value is None:
+                self.refuse(
+                    f"{what} names a vertex stream that is not a constant integer",
+                    "stream-index",
+                )
+            return self.stream_index(value, what)
+        return 0
+
+    def stream_index(self, value, what):
+        if not 0 <= value < _MAX_STREAMS:
+            self.refuse(
+                f"{what} names vertex stream {value}; HLSL geometry shaders write streams 0 to "
+                f"{_MAX_STREAMS - 1}",
+                "stream-index",
+            )
+        return value
+
+    def call_stream(self, function, node):
+        """The stream a call of ``EmitVertex``, ``EndPrimitive`` or their numbered forms writes."""
+        name = call_name(node)
+        arguments = list(node.arguments or [])
+        if name not in _NUMBERED_STREAM_CALLS:
+            if arguments:
+                self.refuse(f"{name} takes no arguments", "stream-call-arguments")
+            return 0
+        value = literal_int(arguments[0]) if len(arguments) == 1 else None
+        if value is None:
+            self.refuse(
+                f"'{function.name}' calls {name} without a constant integer stream",
+                "stream-index",
+            )
+        return self.stream_index(
+            value, f"'{function.name}' calls {name}({value}), which"
+        )
+
+    def output_streams(self, outputs):
+        return {
+            name: self.declared_stream(variable, f"output '{name}'")
+            for name, variable in outputs.items()
+        }
+
+    def streams(self, reachable, stream_of, stream_kind):
+        """One :class:`_Stream` per stream up to the highest the stage declares or writes."""
+        indices = {0, *stream_of.values()}
+        for function in reachable:
+            for _p, _f, _k, node in slots(function.body):
+                if (
+                    isinstance(node, A.FunctionCallNode)
+                    and call_name(node) in _STREAM_METHODS
+                ):
+                    indices.add(self.call_stream(function, node))
+        count = max(indices) + 1
+        if count == 1:
+            names = [("GeometryOutput", "output", "stream")]
+        else:
+            # GLSL links a program that writes several streams only with points output (OpenGL 4.6 section
+            # 11.3.4.2), and HLSL writes several streams only to PointStream objects.
+            if stream_kind != "PointStream":
+                self.refuse(
+                    f"the geometry stage writes vertex streams 0 to {count - 1} with a {stream_kind}",
+                    "multiple-streams-topology",
+                )
+            names = [
+                (f"GeometryOutput{k}", f"output{k}", f"stream{k}") for k in range(count)
+            ]
+        streams = []
+        for index, (struct, output, stream) in enumerate(names):
+            struct = self.fresh(struct)
+            streams.append(
+                _Stream(
+                    index,
+                    struct,
+                    self.fresh(output),
+                    self.fresh(stream),
+                    A.NamedType(stream_kind, [A.NamedType(struct)]),
+                )
+            )
+        return streams
 
     def input_structure(self, name, inputs, used):
         members, nodes, taken = {}, [], set()
@@ -422,48 +563,65 @@ class _GeometryRaising:
             )
         return members, A.StructNode(name, nodes)
 
-    def output_structure(self, name, outputs, used):
-        members, nodes, taken = {}, [], set()
+    def output_structures(self, streams, outputs, stream_of, used):
+        """Each stream's vertex structure, and ``{output: (stream, member, HLSL type or None)}``."""
+        members = {}
+        nodes = {stream.index: [] for stream in streams}
+        taken = {stream.index: set() for stream in streams}
         for variable in outputs.values():
-            member = _unique(variable.name, taken)
-            members[variable.name] = (member, None)
-            nodes.append(
+            index = stream_of[variable.name]
+            member = _unique(variable.name, taken[index])
+            members[variable.name] = (index, member, None)
+            nodes[index].append(
                 _member(member, variable.var_type, variable, interpolation=True)
             )
         for builtin, (preferred, type_name) in _OUTPUT_BUILTINS.items():
             if builtin not in used:
                 continue
-            member = _unique(preferred, taken)
-            members[builtin] = (member, type_name)
+            member = _unique(preferred, taken[0])
+            members[builtin] = (0, member, type_name)
             type_node = (
                 A.VectorType(A.PrimitiveType("float"), 4)
                 if type_name == "vec4"
                 else A.PrimitiveType(type_name)
             )
-            nodes.append(
+            nodes[0].append(
                 A.StructMemberNode(
                     member, type_node, attributes=[A.AttributeNode(builtin)]
                 )
             )
-        return members, A.StructNode(name, nodes)
+        return members, [
+            A.StructNode(
+                stream.struct,
+                nodes[stream.index],
+                attributes=(
+                    []
+                    if nodes[stream.index]
+                    else [A.AttributeNode(EMPTY_STREAM_VERTEX_ATTRIBUTE)]
+                ),
+            )
+            for stream in streams
+        ]
 
     def needs(self, reachable, inputs, output_members, builtin_parameters):
         """Which of the input, output, stream and built-in parameters each function needs."""
         needs = {}
         for function in reachable:
             names = _identifier_names(function.body)
-            calls = {
-                call_name(node)
-                for _p, _f, _k, node in slots(function.body)
-                if isinstance(node, A.FunctionCallNode)
-            }
             direct = set()
             if names & (set(inputs) | {"gl_in"}):
                 direct.add("input")
-            if names & set(output_members) or "EmitVertex" in calls:
-                direct.add("output")
-            if calls & set(_STREAM_METHODS):
-                direct.add("stream")
+            for name in names & set(output_members):
+                direct.add(_Stream.key("output", output_members[name][0]))
+            for _p, _f, _k, node in slots(function.body):
+                if (
+                    isinstance(node, A.FunctionCallNode)
+                    and call_name(node) in _STREAM_METHODS
+                ):
+                    index = self.call_stream(function, node)
+                    direct.add(_Stream.key("stream", index))
+                    if _STREAM_METHODS[call_name(node)] == "Append":
+                        direct.add(_Stream.key("output", index))
             direct |= names & set(builtin_parameters)
             needs[function.name] = direct
         changed = True
@@ -495,9 +653,8 @@ class _GeometryRaising:
         inputs,
         input_name,
         input_members,
-        output_name,
         output_members,
-        stream_name,
+        streams,
         builtin_parameters,
     ):
         body = function.body
@@ -528,47 +685,32 @@ class _GeometryRaising:
             if get_child(parent, field, key) is not node:
                 continue  # replaced together with its parent
             replacement = self.replacement(
-                parent,
-                node,
-                output_name,
-                output_members,
-                stream_name,
-                builtin_parameters,
+                function, parent, node, output_members, streams, builtin_parameters
             )
             if replacement is not None:
                 set_child(parent, field, key, replacement)
         body.statements[0:0] = prologue
 
-    def replacement(
-        self, parent, node, output_name, output_members, stream_name, builtins
-    ):
+    def replacement(self, function, parent, node, output_members, streams, builtins):
         if isinstance(node, A.FunctionCallNode) and call_name(node) in _STREAM_METHODS:
-            if node.arguments:
-                self.refuse(
-                    f"{call_name(node)} takes no arguments", "stream-call-arguments"
-                )
+            stream = streams[self.call_stream(function, node)]
             method = _STREAM_METHODS[call_name(node)]
-            arguments = [A.IdentifierNode(output_name)] if method == "Append" else []
+            arguments = [A.IdentifierNode(stream.output)] if method == "Append" else []
             return A.FunctionCallNode(
-                A.MemberAccessNode(A.IdentifierNode(stream_name), method), arguments
+                A.MemberAccessNode(A.IdentifierNode(stream.stream), method), arguments
             )
         if isinstance(node, A.AssignmentNode) and isinstance(
             node.target, A.IdentifierNode
         ):
             found = output_members.get(node.target.name)
-            if found is not None and found[1] == "uint":
+            if found is not None and found[2] == "uint":
                 if node.operator != "=":
                     self.refuse(
                         f"compound assignment to {node.target.name}", "builtin-update"
                     )
-                node.target = _output_member(output_name, found[0])
+                node.target = _output_member(streams[found[0]].output, found[1])
                 value = self.replacement(
-                    node,
-                    node.value,
-                    output_name,
-                    output_members,
-                    stream_name,
-                    builtins,
+                    function, node, node.value, output_members, streams, builtins
                 )
                 # The value's own slot is stale once wrapped, so its root is rewritten here; the nodes below
                 # it keep their parents and are rewritten by the caller's walk.
@@ -581,11 +723,12 @@ class _GeometryRaising:
         found = output_members.get(node.name)
         if found is None:
             return None
-        if found[1] == "uint":
+        member = _output_member(streams[found[0]].output, found[1])
+        if found[2] == "uint":
             if isinstance(parent, A.UnaryOpNode) and parent.operator in ("++", "--"):
                 self.refuse(f"increment of {node.name}", "builtin-update")
-            return _convert("int", _output_member(output_name, found[0]))
-        return _output_member(output_name, found[0])
+            return _convert("int", member)
+        return member
 
     def thread_arguments(self, reachable, needs, tokens):
         for function in reachable:

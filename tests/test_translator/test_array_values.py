@@ -13,6 +13,7 @@ import pytest
 import crosstl
 from crosstl.translator import ast as A
 from crosstl.translator import parse
+from crosstl.translator.codegen.GLSL_codegen import OpenGLAggregateInitializerError
 from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 from crosstl.translator.semantics.array_values import (
     ArrayConstructorUnsupportedError,
@@ -301,6 +302,115 @@ def test_glsl_pads_short_array_of_arrays_constructors_wherever_they_stand(tmp_pa
     )
     assert "s = S[2][2](S[2](S(x, 1), S(2.0, 3)), S[2](S(0.0, 0), S(0.0, 0)));" in flat
     _validate_glsl(tmp_path, code, "comp")
+
+
+NAMED_SIZE_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    const int N = 3;
+    const int R = 2;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            const int K = N - 1;
+            uint i = gl_GlobalInvocationID.x;
+            float x = outp[i];
+            float a[N];
+            a = float[N](x);
+            float b[N] = float[N](x);
+            float c[R][2];
+            c = float[R][2](float[2](x, 1.0));
+            float d[K];
+            d = float[K](x);
+            outp[i] = a[2] + b[2] + c[1][1] + d[1];
+        }
+    }
+}
+"""
+
+
+def test_glsl_pads_short_array_constructors_sized_by_named_constants(tmp_path):
+    # GLSL 4.60 section 5.4.4 needs one argument per element whether the size
+    # is a literal or a constant; the extent keeps its name (#3811).
+    code = _translate(tmp_path, NAMED_SIZE_CONSTRUCTOR_CGL, ".cgl", "opengl")
+    flat = " ".join(code.split())
+
+    assert "a = float[N](x, 0.0, 0.0);" in flat
+    assert "float b[N] = float[N](x, 0.0, 0.0);" in flat
+    assert "c = float[R][2](float[2](x, 1.0), float[2](0.0, 0.0));" in flat
+    assert "d = float[K](x, 0.0);" in flat
+    _validate_glsl(tmp_path, code, "comp")
+
+
+SPECIALIZED_SIZE_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    layout(constant_id = 0) const int N = 1;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float a[N];
+            a = float[N](outp[i]);
+            outp[i] = a[0];
+        }
+    }
+}
+"""
+
+
+def test_glsl_keeps_array_constructors_sized_by_specialization_constants(tmp_path):
+    # A specialization constant's value is chosen at pipeline creation, so its
+    # default cannot decide how many elements to pad.
+    code = _translate(tmp_path, SPECIALIZED_SIZE_CONSTRUCTOR_CGL, ".cgl", "opengl")
+
+    assert "a = float[N](outp[i]);" in " ".join(code.split())
+
+
+EXTRA_ARGUMENT_CONSTRUCTOR_CGL = """
+shader Probe {
+    struct F { float m[1]; float w; };
+    buffer float values[];
+    const int M = 1;
+    float first(float v[1]) { return v[0]; }
+    HELPER
+    compute {
+        layout(local_size_x = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = values[i];
+            float a[1];
+            float c[2][1];
+            BODY
+            values[i] += a[0] + c[1][0];
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("helper", "body"),
+    [
+        ("", "a = float[1](x, 1.0);"),
+        ("", "a = float[M](x, 1.0);"),
+        ("float[1] make(float x) { return float[1](x, 1.0); }", "a = make(x);"),
+        ("", "F f = F(float[1](x, 1.0), 2.0); a[0] = f.w;"),
+        ("", "a[0] = first(float[1](x, 1.0));"),
+        ("", "c = float[2][1](float[1](x), float[1](x), float[1](x));"),
+        ("", "c = float[2][M](float[1](x, x));"),
+    ],
+)
+def test_glsl_refuses_array_constructors_with_extra_arguments(tmp_path, helper, body):
+    # GLSL 4.60 section 5.4.4 allows no argument beyond the array size, in a
+    # declaration or anywhere else (#3710).
+    source = EXTRA_ARGUMENT_CONSTRUCTOR_CGL.replace("HELPER", helper).replace(
+        "BODY", body
+    )
+    with pytest.raises(OpenGLAggregateInitializerError) as caught:
+        _translate(tmp_path, source, ".cgl", "opengl")
+
+    assert caught.value.reason == "element-count-mismatch"
 
 
 @pytest.mark.parametrize(

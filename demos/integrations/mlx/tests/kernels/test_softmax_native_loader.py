@@ -81,15 +81,15 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
     "directx": {
         32: {
             "sha256": (
-                "2da9311be17e763b0c422fe07a677efeb4ae21e3a87f2fe54a08acf933b353f7"
+                "be13f6dfb2952b8f25e09a1b34d1b41be90eb3396525bf4e5906d7df49890d00"
             ),
-            "sizeBytes": 4655,
+            "sizeBytes": 4654,
         },
         544: {
             "sha256": (
-                "f7d69880528cb189ccc81a3a4913230e84aef798b85d59f4aed482e2f442c14c"
+                "9ddf84ddc3c09fe75f7749165f5913fb75fb8db871dc52a401450e67204004e7"
             ),
-            "sizeBytes": 5226,
+            "sizeBytes": 5225,
         },
     },
     "opengl": {
@@ -109,12 +109,12 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
 }
 MLX_SOFTMAX_SOFTWARE_OPENGL_ARTIFACTS = {
     32: {
-        "sha256": "c77ddf1ad3c364b6e1898232f7d4ce99e2d5f859cc515089368044eb80667573",
-        "sizeBytes": 5755,
+        "sha256": "22bde8523e9531e3b71a9be804f7060d2315fb10a385fe7e14a02d97039ebd32",
+        "sizeBytes": 5754,
     },
     544: {
-        "sha256": "1ea2c58cd8588b9a61ce3b1414b02cd578ec8b16fe77f9d0a2637c706a087174",
-        "sizeBytes": 7399,
+        "sha256": "cccbddbfb5b99abde9edd333fbac134785c8bd52eac1ad24a0bc68a8acffff61",
+        "sizeBytes": 7398,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_SOFTMAX_DIRECTX_NATIVE_LOADER"

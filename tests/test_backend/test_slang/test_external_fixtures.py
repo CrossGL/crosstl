@@ -772,7 +772,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "enum Mode {",
             "typedef Mode ModeTypedef;",
-            "const ModeTypedef mode = Mode::Add;",
+            "const ModeTypedef mode @constant_id(5) = Mode::Add;",
             "outputBuffer[id.x] = uint(mode);",
         ],
         "not_contains": ["typealias ModeTypedef = Mode;"],
