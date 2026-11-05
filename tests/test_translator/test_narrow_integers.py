@@ -308,3 +308,17 @@ def test_initializers_outside_function_bodies_are_legalized(tmp_path, target):
         )
     else:
         assert "OpTypeInt 8" not in output
+
+
+def test_for_header_declaring_several_narrow_variables(tmp_path):
+    # WGSL has no for-header declaring several variables, whatever their type.
+    body = """    int result = 0;
+    for (short j = 0, step = 3; j < a[i]; ++j) {
+        result += j * step;
+    }
+    o[i] = result;"""
+    output = translate(
+        tmp_path, METAL_KERNEL.format(helpers="", body=body), "vulkan", ".metal"
+    )
+    assert "OpTypeInt 16" not in output
+    assert "OpBitwiseAnd" in output
