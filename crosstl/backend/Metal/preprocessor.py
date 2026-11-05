@@ -66,6 +66,7 @@ from .namespaced_specializations import (
     specialization_namespaces,
     specialization_reference,
 )
+from .overload_ranking import shared_template_parameter_positions
 from .pattern_cache import pattern as _cached_pattern
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .source_analysis_cache import SourceAnalysisCache, memoized
@@ -14644,6 +14645,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     field_variable_types,
                     field_structs_by_name,
                     allow_template_fallback=bool(template_overloads),
+                    template_overloads=template_overloads,
                     require_static=True,
                     type_alias_fallback_position=type_alias_fallback_position,
                 )
@@ -14755,6 +14757,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 field_variable_types,
                 field_structs_by_name,
                 allow_template_fallback=bool(template_overloads),
+                template_overloads=template_overloads,
                 require_static=False,
                 type_alias_fallback_position=type_alias_fallback_position,
                 receiver_contract=_MetalReceiverContract(
@@ -14956,6 +14959,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     field_variable_types,
                     field_structs_by_name,
                     allow_template_fallback=bool(template_overloads),
+                    template_overloads=template_overloads,
                     require_static=False,
                     type_alias_fallback_position=type_alias_fallback_position,
                     receiver_contract=receiver_contract,
@@ -14980,6 +14984,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     field_variable_types,
                     field_structs_by_name,
                     allow_template_fallback=bool(template_overloads),
+                    template_overloads=template_overloads,
                     require_static=True,
                     type_alias_fallback_position=type_alias_fallback_position,
                     call_start=ident_start,
@@ -15042,6 +15047,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     field_variable_types,
                     field_structs_by_name,
                     allow_template_fallback=bool(template_overloads),
+                    template_overloads=template_overloads,
                     require_static=False,
                     type_alias_fallback_position=type_alias_fallback_position,
                     receiver_contract=receiver_contract,
@@ -15241,6 +15247,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         field_variable_types,
                         field_structs_by_name,
                         allow_template_fallback=bool(template_overloads),
+                        template_overloads=template_overloads,
                         require_static=False,
                         type_alias_fallback_position=type_alias_fallback_position,
                         receiver_contract=current_receiver_contract,
@@ -15650,6 +15657,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
         type_alias_fallback_position: Optional[int] = None,
+        shared_positions: Optional[Set[int]] = None,
     ) -> bool:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -15698,7 +15706,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             arg_open,
         )
         inferred_types = []
-        for argument in call_arguments:
+        for position, argument in enumerate(call_arguments):
+            if shared_positions and position in shared_positions:
+                # Every competing template converts this argument to the same
+                # declared type, so the conversion does not rank candidates.
+                inferred_types.append(declared_types[position])
+                continue
             inferred = self._infer_argument_type(
                 argument,
                 buffer_view,
@@ -15745,6 +15758,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         structs_by_name: Dict[str, _MetalStructDefinition],
         *,
         allow_template_fallback: bool,
+        template_overloads: Optional[Sequence[_MetalStructMethod]] = None,
         require_static: Optional[bool] = None,
         type_alias_fallback_position: Optional[int] = None,
         receiver_contract: Optional[_MetalReceiverContract] = None,
@@ -15780,6 +15794,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 variable_types,
                 structs_by_name,
                 type_alias_fallback_position,
+                shared_positions=(
+                    shared_template_parameter_positions(
+                        self, method, template_overloads, argument_count
+                    )
+                    if len(candidates) == 1
+                    else None
+                ),
             )
             for method in candidates
         }
@@ -19084,6 +19105,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             positioned_local_types,
             {struct.name: struct},
             allow_template_fallback=bool(template_overloads),
+            template_overloads=template_overloads,
             require_static=False,
             type_alias_fallback_position=method.span[0],
             receiver_contract=self._method_body_receiver_contract(struct, method),
