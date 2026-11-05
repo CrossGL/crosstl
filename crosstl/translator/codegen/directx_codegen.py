@@ -277,6 +277,12 @@ from .hlsl_bfloat16_vectors import (
 )
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
+from .hlsl_byteaddress_typed_access import (
+    hlsl_byteaddress_component_refusal,
+    hlsl_byteaddress_is_typed_access,
+    hlsl_byteaddress_typed_load,
+    hlsl_byteaddress_typed_store,
+)
 from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
 from .hlsl_extension_builtins import (
     HLSL_GLSL_SYSTEM_VALUES,
@@ -4371,6 +4377,9 @@ class HLSLCodeGen(
             target_type_key="hlsl_type",
             unsupported_type_message=(
                 "type is not supported by ByteAddressBuffer lowering"
+            ),
+            component_refusal=lambda info: hlsl_byteaddress_component_refusal(
+                self, info
             ),
         )
         self.record_unsupported_glsl_buffer_block_layout_failures(
@@ -54380,6 +54389,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             unsupported_type_message=(
                 "type is not supported by ByteAddressBuffer lowering"
             ),
+            component_refusal=lambda info: hlsl_byteaddress_component_refusal(
+                self, info
+            ),
         )
         self.record_unsupported_glsl_buffer_block_layout_failures(
             parameters, blocks, var_failures, struct_failures
@@ -54575,6 +54587,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"x{access['matrix_rows']}"
             )
             return f"transpose({transposed_type}({', '.join(columns)}))"
+
+        if hlsl_byteaddress_is_typed_access(access):
+            return hlsl_byteaddress_typed_load(self, buffer_name, offset, access)
 
         if access["component_type"] == "bool" and access["components"] > 1:
             values = []
@@ -54791,6 +54806,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if access.get("matrix_columns"):
             return self.hlsl_byteaddress_matrix_store(
                 buffer_name, offset, value, access
+            )
+        if hlsl_byteaddress_is_typed_access(access):
+            return hlsl_byteaddress_typed_store(
+                self, buffer_name, offset, value, access
             )
         if access["component_type"] == "bool" and access["components"] > 1:
             return self.hlsl_byteaddress_bool_vector_store(

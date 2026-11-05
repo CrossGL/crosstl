@@ -481,8 +481,8 @@ class TypeScope:
         texel = self._infer_texel_call(name, arguments)
         if texel is not None:
             return texel
-        if name == "buffer_load" and len(arguments) == 2:
-            # ``buffer_load(b, i)`` reads one element of a storage buffer, as ``b[i]`` does.
+        if name == "buffer_load" and arguments and name not in self.functions:
+            # CrossGL's read of a buffer element: ``buffer_load(buffer, index)`` has the element's type.
             element = element_type_node(self.node_type(arguments[0]))
             return type_from_node(element) if element is not None else None
         if name in self.functions:
