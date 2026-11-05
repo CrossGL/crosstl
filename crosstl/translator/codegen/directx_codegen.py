@@ -271,11 +271,6 @@ from .glsl_buffer_layout import (
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_array_list_assignment import generate_hlsl_array_list_assignment
-from .hlsl_atomic_resources import HLSLAtomicResources
-from .hlsl_bfloat16_vectors import (
-    HLSLBfloat16Vectors,
-    hlsl_bfloat16_vector_helper_sources,
-)
 from .hlsl_atomic_conditions import (
     condition_has_hlsl_atomic,
     generate_hlsl_atomic_condition_do_while,
@@ -283,6 +278,11 @@ from .hlsl_atomic_conditions import (
     generate_hlsl_atomic_condition_switch,
     generate_hlsl_atomic_condition_while,
     hlsl_atomic_condition_loop_guard,
+)
+from .hlsl_atomic_resources import HLSLAtomicResources
+from .hlsl_bfloat16_vectors import (
+    HLSLBfloat16Vectors,
+    hlsl_bfloat16_vector_helper_sources,
 )
 from .hlsl_buffer_block_atomic_values import (
     generate_hlsl_buffer_block_atomic_value_assignment,
