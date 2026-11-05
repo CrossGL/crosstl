@@ -604,3 +604,56 @@ def test_half_conversion_executes_on_each_native_target(tmp_path):
         original_entry="half_conversion",
         validate=_validate_half,
     )
+
+
+def _workgroup_copy(root, target):
+    from crosstl.project import build_native_loader_dispatch_request
+    from tests.test_translator.test_directx_half_private_storage import TILE_COPY
+
+    _, descriptor, package = _package(
+        root, target, "uint", (32, 1, 1), source=TILE_COPY, software_subgroups=False
+    )
+    # Every infinity and NaN, so signaling payloads travel through workgroup
+    # memory, a private array and a selection.
+    words = [*range(0x7C00, 0x8000), *range(0xFC00, 0x10000)]
+
+    def payload(values):
+        return {
+            "dtype": "float16",
+            "shape": [len(values)],
+            "encoding": FLOAT16_BITS,
+            "values": values,
+        }
+
+    inputs = {"values": payload(words), "results": payload([0x3555] * len(words))}
+    outputs = {"results": payload(words)}
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        _bound_values(descriptor, inputs),
+        _bound_values(descriptor, outputs),
+        {"workgroupCount": [len(words) // 32, 1, 1], "workgroupSize": [32, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return request, _bound_values(descriptor, outputs)
+
+
+@pytest.mark.parametrize("target", ["metal", "directx"])
+def test_half_workgroup_copy_packages_two_byte_storage(tmp_path, target):
+    request, _ = _workgroup_copy(tmp_path, target)
+    if target == "directx":
+        buffers = _directx_buffers(request)
+        assert {buffer.dtype for buffer in buffers} == {"float16"}
+        assert {len(buffer.payload) for buffer in buffers} == {4096}
+
+
+def test_half_workgroup_copy_executes_bit_exact_payloads(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required half storage")
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
+    if target == "opengl":
+        test_half_payload_cannot_bind_widened_opengl_storage(tmp_path)
+        return
+    request, expected = _workgroup_copy(tmp_path, target)
+    _execute(request, expected, tmp_path, validate=_validate_half)
