@@ -339,6 +339,10 @@ from .glsl_vertex_inputs import (
     vertex_input_layouts,
     vertex_parameter_layouts,
 )
+from .glsl_vulkan_descriptor_sets import (
+    descriptor_binding_macro_definition,
+    descriptor_binding_qualifier,
+)
 from .glsl_wave_extended import (
     GLSL_CLUSTERED_BITWISE_OPERATIONS,
     GLSL_CLUSTERED_NUMERIC_OPERATIONS,
@@ -4045,17 +4049,30 @@ class GLSLCodeGen(
             True,
         )
 
-    def glsl_resource_layout_prefix(self, *layout_parts, binding=None):
+    def glsl_resource_layout_prefix(self, *layout_parts, binding=None, node=None):
         parts = [
             str(part).strip()
             for part in layout_parts
             if part is not None and str(part).strip()
         ]
         if binding is not None and self.should_emit_resource_binding_layouts():
-            parts.append(f"binding = {binding}")
+            parts.append(self.glsl_binding_qualifier(binding, node))
         if not parts:
             return ""
         return f"layout({', '.join(parts)})"
+
+    def glsl_binding_qualifier(self, binding, node=None):
+        """``binding = N``, or the Vulkan/OpenGL binding macro for a declaration in a descriptor set other than 0."""
+        descriptor_set = (
+            self.resource_descriptor_set_index(node) if node is not None else 0
+        )
+        vulkan_binding = (
+            self.raw_descriptor_binding_index(node) if descriptor_set else None
+        )
+        if vulkan_binding is None:
+            return f"binding = {binding}"
+        self.glsl_descriptor_binding_macro_used = True
+        return descriptor_binding_qualifier(descriptor_set, vulkan_binding, binding)
 
     def glsl_preprocessor_extensions(self, ast):
         extensions = set()
@@ -9441,6 +9458,7 @@ class GLSLCodeGen(
             version_line = required_version_line
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
+        self.glsl_descriptor_binding_macro_used = False
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -9957,7 +9975,9 @@ class GLSLCodeGen(
                     declaration = format_c_style_array_declaration(
                         f"{mapped_type}{array_suffix}", var_name
                     )
-                    layout = self.glsl_resource_layout_prefix(binding=resource_binding)
+                    layout = self.glsl_resource_layout_prefix(
+                        binding=resource_binding, node=node
+                    )
                     prefix = f"{layout} " if layout else ""
                     code += f"{prefix}uniform {declaration};\n"
                     self.advance_resource_binding(
@@ -10602,6 +10622,12 @@ class GLSLCodeGen(
             code = (
                 code[:cooperative_matrix_support_insertion_index]
                 + cooperative_matrix_support
+                + code[cooperative_matrix_support_insertion_index:]
+            )
+        if self.glsl_descriptor_binding_macro_used:
+            code = (
+                code[:cooperative_matrix_support_insertion_index]
+                + descriptor_binding_macro_definition()
                 + code[cooperative_matrix_support_insertion_index:]
             )
         code = self.finish_generic_resource_helper_refusals(code)
@@ -19274,7 +19300,7 @@ class GLSLCodeGen(
                 1,
             )
             layout = self.glsl_resource_layout_prefix(
-                "std140", binding=resource_binding
+                "std140", binding=resource_binding, node=node
             )
             block_name = self.glsl_module_identifier_name(node.name)
             member_names = {
@@ -56605,7 +56631,7 @@ complex64_t crossgl_complex64_mod_assign(
         definitions = self.float_atomic_storage.take_definitions()
         memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
-        layout = self.glsl_resource_layout_prefix("std430", binding=binding)
+        layout = self.glsl_resource_layout_prefix("std430", binding=binding, node=node)
         block_name = self.glsl_generated_module_identifier(
             ("structured-buffer-block", name),
             f"{name}Buffer",
@@ -56905,7 +56931,9 @@ complex64_t crossgl_complex64_mod_assign(
         layout = self.glsl_buffer_block_layout(node)
         memory_qualifiers = self.resource_memory_qualifiers(node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
-        layout_prefix = self.glsl_resource_layout_prefix(layout, binding=binding)
+        layout_prefix = self.glsl_resource_layout_prefix(
+            layout, binding=binding, node=node
+        )
         code = f"{layout_prefix} {qualifier_prefix}buffer {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
@@ -57049,7 +57077,7 @@ complex64_t crossgl_complex64_mod_assign(
         block_name = self.unique_glsl_interface_block_name(
             "uniform", struct_name, var_name
         )
-        layout = self.glsl_resource_layout_prefix("std140", binding=binding)
+        layout = self.glsl_resource_layout_prefix("std140", binding=binding, node=node)
         code = resource_identity_marker(node, var_name)
         code += f"{layout} uniform {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
@@ -58729,7 +58757,9 @@ complex64_t crossgl_complex64_mod_assign(
 
     def opaque_resource_layout(self, vtype, binding, node=None):
         image_format = self.image_format_qualifier(vtype, node)
-        return self.glsl_resource_layout_prefix(image_format, binding=binding)
+        return self.glsl_resource_layout_prefix(
+            image_format, binding=binding, node=node
+        )
 
     def resource_precision_qualifiers(self, node):
         qualifiers = [
