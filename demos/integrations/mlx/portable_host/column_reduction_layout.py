@@ -30,8 +30,9 @@ METADATA_TYPES = {
 ARRAYS = {"shape", "strides", "reduce_shape", "reduce_strides"}
 # The largest input, output or logical size a column launch binds: the bound
 # the host's matrix products use, far below the INT32_MAX at which reduce.cpp
-# switches to 64-bit indexing. Each shape axis stays below 65536, each stride
-# inside that bound, and each launch axis at most 65535 workgroups.
+# switches to 64-bit indexing. Each shape axis stays below 65536, except a
+# long-column plan's reduced axes, each stride inside that bound, and each
+# launch axis at most 65535 workgroups.
 MAX_ELEMENTS = 2**28 - 1
 MAX_GROUPS = 65535
 
@@ -57,6 +58,7 @@ def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
     ):
         raise ValueError("Native column reduction metadata does not match")
     output_type = (outputs or {}).get(entry, entries[entry])
+    long_column = entry.startswith("col_reduce_longcolumn_")
     for name, buffer in buffers.items():
         maximum = MAX_ELEMENTS if name in {"in", "out"} else 64 if name in ARRAYS else 1
         element_type = output_type if name == "out" else entries[entry]
@@ -93,10 +95,13 @@ def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
             raise ValueError("Native column reduction rank does not match its arrays")
         shape, strides = read(prefix + "shape"), read(prefix + "strides")
         metadata.update({prefix + "shape": shape, prefix + "strides": strides})
+        # A long-column plan's reduced axes ride no launch axis: its blocks
+        # stride through every reduced row.
+        largest = MAX_ELEMENTS if prefix and long_column else MAX_GROUPS
         if rank == 0:
             if shape != [0] or strides != [0]:
                 raise ValueError("Native column reduction empty metadata must be zero")
-        elif any(not 1 <= size <= 65535 for size in shape) or any(
+        elif any(not 1 <= size <= largest for size in shape) or any(
             not 0 <= stride <= MAX_ELEMENTS for stride in strides
         ):
             raise ValueError(
@@ -110,7 +115,7 @@ def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
     total = size * non_columns
     output_size = outer * stride
     if (
-        not 1 <= size <= 65535
+        not 1 <= size <= (MAX_ELEMENTS if long_column else MAX_GROUPS)
         or not 1 <= stride <= MAX_ELEMENTS
         or reductions[-1] != size
         or metadata["non_col_reductions"] != [non_columns]

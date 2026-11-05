@@ -56,6 +56,9 @@ LONG_SHAPES = {
 LONG_SUM_ENTRY = "col_reduce_longcolumn_1_reduce_sumfloat32"
 LONG_SUM_SHAPES = ((1025, 7), (1057, 31))
 LONG_WIDE_SHAPE = (32768, 3)
+# More reduced rows than 65,535, the mean of test_random's multivariate
+# normal samples.
+LONG_TALL_SHAPE = (100000, 2)
 
 
 def _small_cases():
@@ -129,6 +132,7 @@ def _long_cases():
         if dimension == 1:
             if entry.endswith(WIDE_OPERATIONS):
                 yield case | {"id": f"{entry}-wide", "shape": LONG_WIDE_SHAPE}
+                yield case | {"id": f"{entry}-tall", "shape": LONG_TALL_SHAPE}
         if dimension == 2:
             yield case | {"id": f"{entry}-slice", "layout": "slice"}
         if dtype == "float32" and dimension == 1:

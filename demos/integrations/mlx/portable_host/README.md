@@ -1888,10 +1888,13 @@ the second native dispatch consumes those actual results without host reduction
 arithmetic. Inputs, outputs and source spans hold at most 2^28 - 1 elements, far
 below the `INT32_MAX` at which MLX selects 64-bit index kernels; every shape axis
 and stride stays below 65,536 and every launch axis at most 65,535 workgroups.
-Row plans share this element bound. The workloads
-include small, looped and two-pass plans over 76,800 to 131,072 elements, and
-long-column plans of every 32-bit and Boolean entry, whose partial blocks are
-checked against an independent model of the kernel's row assignment.
+A long-column plan's reduced axes are the exception: no launch axis carries
+them, and each block strides through all of their rows, so only their product
+is bounded, by the element bound. Row plans share this element bound. The
+workloads include small, looped and two-pass plans over 76,800 to 131,072
+elements, and long-column plans of every 32-bit and Boolean entry, among them
+100,000 reduced rows, whose partial blocks are checked against an independent
+model of the kernel's row assignment.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.reduction_packages --mlx-root mlx-upstream --target opengl --family column --jobs 2 --output-dir column-packages
@@ -2415,7 +2418,7 @@ more groups run the GPU methods of whole modules (`upstream_module_groups`):
 per-thread streams; the runtime runs callbacks from several threads one at a
 time), `serialization` (16
 `test_export_import` and 14 `test_load` methods, with the NumPy, safetensors
-and GGUF formats), `training` (19 `test_optimizers` methods, six `test_random`
+and GGUF formats), `training` (19 `test_optimizers` methods, seven `test_random`
 samplers, four `test_bf16` sweeps and the device, stream, memory and constant
 tests) and `rope` (the seven rotary embedding and fused transform methods of
 `test_fast` and the two antialiased `test_upsample` sweeps). A module's other

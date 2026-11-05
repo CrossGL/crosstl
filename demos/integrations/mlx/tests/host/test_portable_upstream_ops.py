@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 555
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 556
     assert all(
         name.startswith(
             (
@@ -200,7 +200,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 548 and not set(opengl) & set(excluded)
+    assert len(opengl) == 549 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -320,7 +320,7 @@ def test_upstream_op_groups_partition_the_inventory():
                 "test_memory.",
                 "test_constants.",
             ),
-            35,
+            36,
         ),
         ("rope", ("test_fast.", "test_upsample."), 9),
         ("fft", ("test_fft.",), 11),
