@@ -9,7 +9,9 @@ are raw binary32 words; OpenGL keeps them in uint32 atomics
 Storage follows the general gather's bound. Each launch keeps the portable
 per-axis workgroup limit: MLX's grid is [post, index axis, pre], and the host
 splits the index axis and the leading extents into launches whose views start
-at the launch's first element (``launch_plan``).
+at the launch's first element (``launch_plan``). A float32 sum that some
+update order would round runs in index order instead
+(``ordered_launch_plan``).
 """
 
 import ctypes
@@ -49,25 +51,50 @@ def signature(entry):
     return dtype, index_dtype, operation, update == "c", index == "c"
 
 
-def launch_plan(index_shape, axis):
+def launch_plan(index_shape, axis, one_leading=False):
     """Return the host's launches as (leading slices, index-row slice) pairs.
 
     The kernel strides its output by the launch's x extent, so the trailing
     extent must fit one launch axis. Leading extents split into rectangular
     slabs of at most MAX_ELEMENTS positions; a launch that splits the index
     axis covers one leading position, because the contiguous specializations
-    stride leading positions by the launch's y extent. This mirrors
-    ``axis_launch_tiles`` in backend.cpp.
+    stride leading positions by the launch's y extent. ``one_leading`` asks
+    for that split whatever the row count. This mirrors ``axis_launch_tiles``
+    in backend.cpp.
     """
     leading, rows = list(index_shape[:axis]), index_shape[axis]
     if math.prod(index_shape[axis + 1 :]) > MAX_ELEMENTS:
         raise ValueError("Native axis-scatter launch exceeds per-axis workgroup limits")
-    limit = 1 if rows > MAX_ELEMENTS else MAX_ELEMENTS
+    limit = 1 if rows > MAX_ELEMENTS or one_leading else MAX_ELEMENTS
     return [
         (slab, slice(row, min(rows, row + MAX_ELEMENTS)))
         for slab in slabs(leading, limit)
         for row in range(0, rows, MAX_ELEMENTS)
     ]
+
+
+def ordered_launch_plan(indices, axis):
+    """Return the launches of a float32 sum that some update order would round.
+
+    ``indices`` holds the index values, normalized into the scattered axis.
+    Each launch of one leading position splits into maximal runs of
+    consecutive index rows whose destinations are disjoint, so every
+    destination receives its updates in index order. One row's destinations
+    differ in their trailing coordinates, so only rows can share one. This
+    mirrors ``axis_sum_runs`` in scatter.inc.
+    """
+    plan = []
+    for slab, rows in launch_plan(list(indices.shape), axis, one_leading=True):
+        lines = indices[slab + (rows,)].reshape(rows.stop - rows.start, -1).tolist()
+        first, touched = 0, set()
+        for row, line in enumerate(lines):
+            destinations = set(enumerate(line))
+            if row > first and touched & destinations:
+                plan.append((slab, slice(rows.start + first, rows.start + row)))
+                first, touched = row, set()
+            touched |= destinations
+        plan.append((slab, slice(rows.start + first, rows.stop)))
+    return plan
 
 
 def validate(entry, buffers, logical_size, execution):

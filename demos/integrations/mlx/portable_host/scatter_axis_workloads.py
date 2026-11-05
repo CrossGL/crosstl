@@ -29,6 +29,14 @@ WIDE = {
     "wide-slab": ((300, 300, 2), 2, 1, True),
     "wide-split": ((3, 2), 1, 70000, False),
 }
+# Float32 sums that some update order would round: each maps to its output
+# shape and scattered axis. Every destination receives three of the nine
+# index rows, so the host runs them as three index-order launches per leading
+# position.
+ROUNDING = {
+    "rounding": ((3, 4), 0),
+    "rounding-leading": ((2, 3, 4), 1),
+}
 
 
 def cases():
@@ -56,6 +64,7 @@ def cases():
     yield from signed
     yield from float_cases()
     yield from wide_cases()
+    yield from rounding_cases()
 
 
 def wide_cases():
@@ -103,6 +112,47 @@ def wide_arrays(xp, np, case):
     return source, xp.array(indices), xp.array(updates)
 
 
+def rounding_cases():
+    """Float32 sums whose result depends on the order of their updates."""
+    for layout, index_dtype in zip(ROUNDING, ("int32", "int64")):
+        yield {
+            "id": f"float32-sum-{layout}",
+            "dtype": "float32",
+            "operation": "sum",
+            "layout": layout,
+            "axis": ROUNDING[layout][1],
+            "index_dtype": index_dtype,
+        }
+
+
+def rounding_arrays(xp, np, case):
+    """A large term, then two unit terms, for each destination.
+
+    Each unit term lands halfway between two float32 values and rounds to the
+    even one. In index order a large term of 2^24 keeps 2^24, while adding the
+    unit terms first gives 2^24 + 2; a large term of 2^24 + 2 gives 2^24 + 4
+    in either order. Each trailing coordinate scales its destinations by a
+    signed power of two.
+    """
+    shape, axis = ROUNDING[case["layout"]]
+    size = shape[axis]
+    source = xp.array(
+        (np.arange(math.prod(shape)).reshape(shape) / 4 - 2).astype("float32")
+    )
+    index_shape = list(shape)
+    index_shape[axis] = 3 * size
+    raw = np.arange(math.prod(index_shape)).reshape(index_shape)
+    row = np.indices(index_shape)[axis]
+    indices = row % size
+    large = 2.0**24 + 2 * (indices % 2)
+    scale = np.indices(index_shape)[-1]
+    scale = np.where(scale % 2, -1.0, 1.0) * 2.0 ** (scale % 3 - 1)
+    updates = (np.where(row < size, large, 1.0) * scale).astype("float32")
+    if case["index_dtype"].startswith("int"):
+        indices = np.where(raw % 2, indices - size, indices)
+    return source, xp.array(indices.astype(case["index_dtype"])), xp.array(updates)
+
+
 def float_cases():
     """Float32 replacements and sums of quarter-step values.
 
@@ -128,6 +178,8 @@ def float_cases():
 def arrays(xp, np, case):
     if case["layout"] in WIDE:
         return wide_arrays(xp, np, case)
+    if case["layout"] in ROUNDING:
+        return rounding_arrays(xp, np, case)
     signed = case.get("values") == "signed"
     floating = case["dtype"] == "float32"
     values = np.arange(48).reshape(4, 3, 4) - (24 if signed or floating else 0)

@@ -23,9 +23,15 @@ from demos.integrations.mlx.portable_host import scatter_layout, verify_scatter_
 from demos.integrations.mlx.portable_host.gather_workloads import words
 from tests.ci_helpers import assert_paths_covered
 
-# Workloads that fit one launch; the wide workloads split into several.
-SINGLE = [case for case in workloads.cases() if case["layout"] not in workloads.WIDE]
+# Workloads that fit one launch; the wide workloads split into several, and
+# the rounding sums run as index-order launches.
+SINGLE = [
+    case
+    for case in workloads.cases()
+    if case["layout"] not in workloads.WIDE and case["layout"] not in workloads.ROUNDING
+]
 WIDE = list(workloads.wide_cases())
+ROUNDING = list(workloads.rounding_cases())
 
 
 def test_axis_scatter_retains_existing_workloads_and_adds_signed_layouts():
@@ -41,10 +47,11 @@ def test_axis_scatter_retains_existing_workloads_and_adds_signed_layouts():
     assert digest.hexdigest() == (
         "b45dd7465484e9604282442e9ce6ef87902be69d3a2a541c51d34c7a4020a64d"
     )
-    signed, floating, wide = cases[56:84], cases[84:112], cases[112:]
-    assert len(cases) == len({case["id"] for case in cases}) == 132
+    signed, floating = cases[56:84], cases[84:112]
+    wide, rounding = cases[112:132], cases[132:]
+    assert len(cases) == len({case["id"] for case in cases}) == 134
     assert floating == list(workloads.float_cases())
-    assert wide == WIDE and SINGLE == cases[:112]
+    assert wide == WIDE and rounding == ROUNDING and SINGLE == cases[:112]
     assert {(case["operation"], case["layout"]) for case in floating} == {
         (operation, layout)
         for operation in ("none", "sum")
@@ -88,11 +95,21 @@ def test_axis_scatter_reference_matches_independent_indexed_updates(case):
         np.add.at(independent, tuple(coordinates), updates)
         bounds = np.zeros_like(source, dtype=object)
         np.add.at(bounds, tuple(coordinates), np.abs(updates.astype(object)))
-        if case["dtype"] == "float32":
+        if case["layout"] in workloads.ROUNDING:
+            # np.add.at, too, adds each destination's updates in index order.
+            assert not scatter_axis_evidence.order_independent_sums(
+                np,
+                np.zeros_like(source),
+                indices,
+                updates,
+                axis,
+                source.shape[axis],
+            )
+        elif case["dtype"] == "float32":
             # Quarter steps far below 2^24 sum exactly in any order.
             assert np.all(bounds * 4 < 2**24)
             assert np.all(np.asarray(updates) * 4 == np.round(np.asarray(updates) * 4))
-            assert scatter_axis_evidence.exact_float_sums(
+            assert scatter_axis_evidence.order_independent_sums(
                 np,
                 np.zeros_like(source),
                 indices,
@@ -651,24 +668,25 @@ def test_axis_scatter_audit_reconstructs_every_workload(tmp_path, target, case):
     assert actual == words(np, expected)
 
 
-def test_axis_scatter_float_sums_are_exact_only_without_rounding():
+def test_axis_scatter_float_sums_are_order_independent_only_without_rounding():
+    independent = scatter_axis_evidence.order_independent_sums
     zeros = np.zeros((2,), dtype=np.float32)
     indices = np.array([0, 0, 0, 1], dtype=np.int32)
     exact = np.array([0.25, -1.5, 3.0, -0.0], dtype=np.float32)
-    assert scatter_axis_evidence.exact_float_sums(np, zeros, indices, exact, 0, 2)
+    assert independent(np, zeros, indices, exact, 0, 2)
     # 2^24 + 1 - 1 rounds in one order and not in the other.
     rounding = np.array([2.0**24, 1.0, -1.0, 0.0], dtype=np.float32)
-    assert not scatter_axis_evidence.exact_float_sums(
-        np, zeros, indices, rounding, 0, 2
-    )
+    assert not independent(np, zeros, indices, rounding, 0, 2)
     for value in (np.inf, np.nan):
         special = np.array([value, 0.0, 0.0, 0.0], dtype=np.float32)
-        assert not scatter_axis_evidence.exact_float_sums(
-            np, zeros, indices, special, 0, 2
-        )
+        assert not independent(np, zeros, indices, special, 0, 2)
     # Tiny steps are exact while their magnitudes fit in 24 bits of the step.
     tiny = np.array([2.0**-140, 2.0**-149, -(2.0**-149), 0.0], dtype=np.float32)
-    assert scatter_axis_evidence.exact_float_sums(np, zeros, indices, tiny, 0, 2)
+    assert independent(np, zeros, indices, tiny, 0, 2)
+    # One update per destination rounds once, in any order.
+    single = np.array([0, 1], dtype=np.int32)
+    initial = np.array([2.0**24, np.inf], dtype=np.float32)
+    assert independent(np, initial, single, np.ones(2, dtype=np.float32), 0, 2)
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
@@ -952,10 +970,20 @@ def test_axis_scatter_ci_requires_native_execution_on_all_targets():
         )
 
 
-def launches(case):
-    """Per-launch buffers as backend.cpp's ScatterAxis::eval_gpu supplies them."""
+def launches(case, ordered=None):
+    """Per-launch buffers as scatter.inc's ScatterAxis::eval_gpu supplies them.
+
+    ``ordered`` overrides whether a float32 sum runs in index order.
+    """
     source, indices, updates, expected = workloads.reference(np, case)
     axis = case["axis"] % source.ndim
+    if ordered is None:
+        ordered = scatter_axis_evidence.ordered(np, case, source, indices, updates)
+    plan = (
+        layout.ordered_launch_plan(indices.astype(np.int64) % source.shape[axis], axis)
+        if ordered
+        else layout.launch_plan(list(indices.shape), axis)
+    )
     out = (
         source.copy(order="C")
         if case["operation"] == "none"
@@ -980,7 +1008,7 @@ def launches(case):
     )
     post = math.prod(indices.shape[axis + 1 :])
     keep = [i for i in range(source.ndim) if i != axis]
-    for slab, rows in layout.launch_plan(list(indices.shape), axis):
+    for slab, rows in plan:
         start = [part.start or 0 for part in slab]
         lead = [
             len(range(*part.indices(indices.shape[i]))) for i, part in enumerate(slab)
@@ -1182,3 +1210,81 @@ def test_axis_scatter_audit_composes_split_launches(tmp_path, monkeypatch):
             scatter_axis_evidence.validate(
                 np, [dict(record, dispatchCount=len(events))], events
             )
+
+
+def test_axis_scatter_ordered_plan_splits_rows_that_share_destinations():
+    plan = layout.ordered_launch_plan
+    # Rows 0 and 1 are disjoint; row 2 shares row 0's destination in column 0.
+    indices = np.array([[0, 1], [1, 0], [0, 2]])
+    assert plan(indices, 0) == [((), slice(0, 2)), ((), slice(2, 3))]
+    # Each leading position runs on its own; rows that all share one
+    # destination run one at a time.
+    leading = np.zeros((2, 3, 1), dtype=np.int64)
+    assert plan(leading, 1) == [
+        ((slice(i, i + 1),), slice(row, row + 1)) for i in range(2) for row in range(3)
+    ]
+    # Disjoint rows still split at the launch axis limit.
+    distinct = np.arange(65537).reshape(1, 65537, 1)
+    assert plan(distinct, 1) == [
+        ((slice(0, 1),), slice(0, 65535)),
+        ((slice(0, 1),), slice(65535, 65537)),
+    ]
+
+
+@pytest.mark.parametrize("case", ROUNDING, ids=lambda case: case["id"])
+def test_axis_scatter_rounding_sums_run_in_index_order(tmp_path, case, monkeypatch):
+    from demos.integrations.mlx.portable_host import verify_bitwise
+
+    source, indices, updates, expected = workloads.reference(np, case)
+    axis = case["axis"]
+    coordinates = list(np.indices(indices.shape))
+    coordinates[axis] = indices.astype(np.int64) % source.shape[axis]
+    exact = np.zeros(source.shape, dtype=np.float64)
+    np.add.at(exact, tuple(coordinates), updates.astype(np.float64))
+    # The index-order sums round where the exact ones do not.
+    assert np.any(exact != expected)
+    assert scatter_axis_evidence.ordered(np, case, source, indices, updates)
+    *tiles, (out, _) = launches(case)
+    leading = math.prod(source.shape[:axis])
+    assert len(tiles) == 3 * leading
+    monkeypatch.setattr(workloads, "cases", lambda: iter([case]))
+    monkeypatch.setattr(verify_bitwise, "verify_native_identity", lambda *_: None)
+    trace = []
+    for entry, supplied, arrays, execution, outputs in tiles:
+        assert execution["workgroupCount"] == [
+            math.prod(source.shape[axis + 1 :]),
+            source.shape[axis],
+            1,
+        ]
+        layout.validate(entry, supplied, outputs, execution)
+        trace.append(
+            scatter_event(
+                tmp_path, case, launch=(entry, supplied, arrays, execution, outputs)
+            )
+        )
+        run_kernel(entry, arrays, execution)
+    assert words(np, out) == words(np, expected)
+    record = {
+        **case,
+        "actual": words(np, expected),
+        "shape": list(expected.shape),
+        "resultDtype": "mlx.core.float32",
+        "inputUnchanged": True,
+        "dispatchStart": 0,
+        "dispatchCount": len(trace),
+    }
+    assert scatter_axis_evidence.validate(np, [record], trace) == {
+        "target": "metal",
+        "scatterDispatchCount": 3 * leading,
+    }
+    events = json.loads(json.dumps(trace))
+    events[0], events[1] = events[1], events[0]
+    with pytest.raises(ValueError):
+        scatter_axis_evidence.validate(np, [record], events)
+    # MLX's single launch per slab contends on every destination.
+    (entry, supplied, arrays, execution, outputs), *_ = launches(case, ordered=False)
+    event = scatter_event(
+        tmp_path, case, launch=(entry, supplied, arrays, execution, outputs)
+    )
+    with pytest.raises(ValueError, match="update order"):
+        scatter_axis_evidence.audit_event(np, event)

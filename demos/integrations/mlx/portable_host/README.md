@@ -1426,7 +1426,10 @@ position, because the contiguous specializations stride leading positions by
 the row count. Each launch's views start at its first element and are checked
 against their allocations. Every reachable index and allocation span is
 validated before dispatch. Empty updates retain the copied source and do not
-submit a scatter kernel.
+submit a scatter kernel. A float32 sum that some update order would round
+runs, as the general scatter's does, in index order: one leading position per
+launch, in maximal runs of consecutive index rows whose destinations are
+disjoint.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
@@ -1434,7 +1437,7 @@ python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
   --integer64 integer64-packages --output-dir scatter-axis-evidence
 ```
 
-The required three-OS CI step runs 132 workloads in separate CPU and native
+The required three-OS CI step runs 134 workloads in separate CPU and native
 processes. They cover both operations and storage types, all four index types,
 dense and transposed sources, strided and broadcast views, reversed views,
 negative indices, flattened inputs, aliasing updates and empty updates. Twenty
@@ -1453,13 +1456,17 @@ numeric values; the verifier checks their declared storage range before deriving
 bit patterns for comparison. Unsigned substitutions, floating-point values,
 Booleans and incomplete readbacks are rejected.
 
-The last 28 workloads repeat both operations and every layout in float32 with
+Another 28 workloads repeat both operations and every layout in float32 with
 negative and fractional quarter-step values. Native atomic additions land in
 an unspecified order and round after each one, so the verifier reconstructs a
-float32 sum only when no order can round: every destination's terms share a
-power-of-two step and their magnitudes sum to fewer than 2^24 of it. Any other
-float32 sum, and any non-finite term, fails verification instead of being
-compared approximately.
+launch's float32 sum only when no order can change it: each destination
+receives at most one update, or its terms share a power-of-two step and their
+magnitudes sum to fewer than 2^24 of it. Any other float32 sum, and any
+non-finite term among contending ones, fails verification instead of being
+compared approximately. The last two workloads sum terms that round
+differently in different orders, without and with a leading axis; the host
+runs them in index order, three launches per leading position, and the audit
+replays that plan.
 
 The verifier reconstructs each result from retained uploads and checks the
 native readback against the final MLX result. It also checks source preservation,
@@ -2405,7 +2412,7 @@ tests that compare with PyTorch (`CONV_TRANSPOSE_TESTS`): the 1-D, 2-D and 3-D
 transposed convolutions, their gradients and their output padding;
 `test_conv_transpose_unfold_tiling` requires Metal itself.
 The `array`, `autograd` and `compile` groups run the `test_array` (42),
-`test_autograd` (45) and `test_compile` (56) methods that reach the GPU. A
+`test_autograd` (46) and `test_compile` (56) methods that reach the GPU. A
 compiled tape runs the variant `Compiled::eval_gpu` selects, from the source
 the host generates with MLX's `build_kernel`; an input with a negative stride
 is copied densely first, because MLX's `int64_t` variants index it before its
