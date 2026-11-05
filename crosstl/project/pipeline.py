@@ -87,6 +87,11 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
+from crosstl.project.namespace_alias_scopes import (
+    alias_visible_at,
+    alias_visible_in_scope,
+    reopened_namespace_scopes,
+)
 from crosstl.project.source_closure_memo import (
     memoized_entry_discovery,
     memoized_preprocessor_run,
@@ -20783,7 +20788,7 @@ def _inline_metal_concrete_using_template_aliases(
         scoped_aliases = {
             str(alias["name"]): str(alias["type"])
             for alias in aliases
-            if int(alias["end"]) <= i and int(alias["scope_end"]) >= scope_end
+            if alias_visible_in_scope(alias, i, scope_end)
         }
         scoped_constants = _metal_local_integer_constants_before(
             source,
@@ -20815,6 +20820,9 @@ def _inline_metal_concrete_using_template_aliases(
                 "start": i,
                 "end": semicolon + 1,
                 "scope_end": scope_end,
+                "reopened_scopes": reopened_namespace_scopes(
+                    scope_span, semicolon + 1, namespace_spans
+                ),
             }
         )
         alias_spans.append((i, semicolon + 1))
@@ -20856,7 +20864,7 @@ def _inline_metal_concrete_using_template_aliases(
         qualified_candidates = [
             alias
             for alias in aliases
-            if alias["name"] == ident and alias["end"] <= i and i < alias["scope_end"]
+            if alias["name"] == ident and alias_visible_at(alias, i)
         ]
         qualified = None
         if qualified_candidates and source[i + consumed : i + consumed + 2] == "::":
@@ -20889,7 +20897,7 @@ def _inline_metal_concrete_using_template_aliases(
                 scoped_aliases = {
                     str(alias["name"]): str(alias["type"])
                     for alias in aliases
-                    if int(alias["end"]) <= i and int(alias["scope_end"]) >= scope_end
+                    if alias_visible_in_scope(alias, i, scope_end)
                 }
                 scoped_constants = _metal_local_integer_constants_before(
                     source,
