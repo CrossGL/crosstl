@@ -317,9 +317,7 @@ class VectorArithmeticMixin:
             if len(member) == 1:
                 return vector_info["component_type"]
             if all(component in "xyzwrgba" for component in member):
-                return self.vector_type_for_components(
-                    vector_info["component_type"], len(member)
-                )
+                return self.swizzle_vector_type(vector_info, len(member))
         return None
 
     def array_access_element_type(self, type_name):
@@ -909,6 +907,19 @@ class VectorArithmeticMixin:
 
     def sanitize_helper_name(self, value):
         return "".join(character if character.isalnum() else "_" for character in value)
+
+    def swizzle_vector_type(self, vector_info, component_count):
+        """The type of a ``component_count``-component swizzle of a vector ``vector_info`` describes.
+
+        A vector of 8- or 16-bit integers reads its components as ``int`` or ``uint``, but a swizzle of it is a
+        vector of the same element (``vec4<i16>``), not an ``int4``.
+        """
+        element = vector_info.get("vector_element")
+        if element is not None and 2 <= component_count <= 4:
+            return f"vec{component_count}<{element}>"
+        return self.vector_type_for_components(
+            vector_info["component_type"], component_count
+        )
 
     def vector_type_for_components(self, component_type, component_count):
         """Return a vector type name for a component type/count pair."""

@@ -186,7 +186,10 @@ def test_system_values_keep_their_metal_builtins(tmp_path):
     outputs = struct_body(code, "VSOut")
     assert "uint layer [[render_target_array_index]];" in outputs
     assert "uint id [[user(BLENDINDICES0)]] [[flat]];" in outputs
-    assert "uint vid [[vertex_id]]" in entry_parameters(code, "vertex", "VSMain")
+    # SV_VertexID leaves out the base vertex that [[vertex_id]] includes.
+    parameters = entry_parameters(code, "vertex", "VSMain")
+    assert "uint vid_index [[vertex_id]]" in parameters
+    assert "[[base_vertex]]" in parameters
     assert "VSMain_Input" not in code, "[[vertex_id]] must stay a parameter"
     assert "bool front [[front_facing]]" in entry_parameters(code, "fragment", "PSMain")
     assert "is_front_facing" not in code

@@ -1,6 +1,13 @@
 #version 400
 out vec4 color;
 // Constant Buffers
+#ifdef VULKAN
+layout(push_constant) uniform Material {
+    int kind;
+    float fa[3];
+};
+void crossgl_load_Material() {}
+#else
 layout(std140) uniform Material {
     uvec4 crossgl_cbuffer_registers[1];
 };
@@ -15,6 +22,7 @@ void crossgl_load_Material() {
         fa[crossgl_index] = uintBitsToFloat(crossgl_Material_word((crossgl_index) + 1));
     }
 }
+#endif
 // Vertex Shader
 void main() {
     crossgl_load_Material();

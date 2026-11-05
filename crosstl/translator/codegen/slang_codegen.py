@@ -144,6 +144,10 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .matrix_compound_assignment import matrix_product_assignment
+from .push_constant_blocks import (
+    slang_push_constant_cbuffer,
+    slang_push_constant_declaration,
+)
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
 from .slang_projected_compare import (
@@ -5819,6 +5823,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         forced_register_prefix=None,
         auto_assign=False,
     ):
+        push_constant = slang_push_constant_declaration(node, declaration)
+        if push_constant is not None:
+            return push_constant
         prefix, suffix = self.slang_resource_binding_decorations(
             node, type_name, forced_register_prefix, auto_assign
         )
@@ -5828,6 +5835,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         name = getattr(node, "name", None)
         if not name or not hasattr(node, "members"):
             return ""
+        push_constant = slang_push_constant_cbuffer(self, node)
+        if push_constant is not None:
+            return push_constant
         declaration = self.apply_slang_resource_binding_decorations(
             f"cbuffer {name}",
             node,

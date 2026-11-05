@@ -25,14 +25,16 @@ void main(uint id : SV_DispatchThreadID, int2 gt : SV_GroupThreadID, uint3 g : S
 """
 
 
-def translate(tmp_path, source, suffix):
+def translate(tmp_path, source, suffix, source_options=None):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
+    if suffix == ".metal":
+        source_options = {"threadgroup_size": (64, 1, 1)}
     output = crosstl.translate(
         str(path),
         backend="wgsl",
         format_output=False,
-        source_options={"threadgroup_size": (64, 1, 1)} if suffix == ".metal" else None,
+        source_options=source_options,
     )
     if shutil.which("naga"):
         (tmp_path / "out.wgsl").write_text(output)
@@ -87,8 +89,9 @@ def test_unsigned_metal_vertex_and_instance_indices(tmp_path):
 
 
 def test_signed_vertex_and_instance_indices(tmp_path):
-    # An int parameter (HLSL accepts int SV_VertexID for SPIR-V) is received as u32 and converted.
-    wgsl = translate(tmp_path, SIGNED_VERTEX, ".vert.hlsl")
+    # An int parameter (HLSL accepts int SV_VertexID for SPIR-V) is received as u32 and converted. WGSL has no base
+    # vertex, so SV_VertexID reaches it only under a declared zero base vertex.
+    wgsl = translate(tmp_path, SIGNED_VERTEX, ".vert.hlsl", {"zero_base_vertex": True})
     assert "@builtin(vertex_index) vid_vertex_index: u32" in wgsl
     assert "@builtin(instance_index) iid_instance_index: u32" in wgsl
     assert "var vid: i32 = i32(vid_vertex_index);" in wgsl

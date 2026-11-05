@@ -292,6 +292,7 @@ from .hlsl_extension_builtins import (
     refuse_unmapped_hlsl_builtin,
 )
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
+from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_image_formats import (
     dxc_vulkan_image_format_prefix,
@@ -3897,6 +3898,8 @@ class HLSLCodeGen(
             if getattr(node, "is_type_alias", False)
             and node.name not in self.METAL_TYPE_ALIAS_GLOBALS
         }
+        # Typed binary16 loads, stores and selections may change NaN payloads.
+        ast = lower_half_private_storage(ast, self.map_type)
         target_stage = normalize_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False

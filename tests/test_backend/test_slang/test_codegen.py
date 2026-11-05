@@ -888,7 +888,7 @@ def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_inse
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "uint vertexId @ gl_VertexID" in generated_code
+    assert "uint vertexId @ gl_RelativeVertexID" in generated_code
     assert "uint instanceId @ gl_InstanceID" in generated_code
     assert "bool frontFace @ gl_FrontFacing" in generated_code
     assert "uint sampleIndex @ gl_SampleID" in generated_code
