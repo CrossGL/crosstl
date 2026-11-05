@@ -49,12 +49,26 @@ _METAL_COMPONENT_TYPES = {
     "int64_t": "long",
     "uint64_t": "ulong",
 }
+_METAL_NATIVE_COMPONENT_TYPES = frozenset({"float", "int", "uint", "bool"})
 _WORD_TYPES = frozenset({"float", "int", "uint", *_METAL_COMPONENT_TYPES})
 
 
 def metal_buffer_component_type(component_type):
-    """The MSL scalar a buffer block member's ``component_type`` is read and written as."""
-    return _METAL_COMPONENT_TYPES.get(component_type, component_type)
+    """The MSL scalar a buffer block member's ``component_type`` is read and written as.
+
+    MSL has no 64-bit floating-point type (MSL section 2.1), so a ``double`` component, like any other type
+    without an MSL scalar, is refused.
+    """
+    mapped = _METAL_COMPONENT_TYPES.get(component_type)
+    if mapped is not None:
+        return mapped
+    if component_type in _METAL_NATIVE_COMPONENT_TYPES:
+        return component_type
+    raise BufferBlockUnsupportedError(
+        "metal",
+        "component type",
+        f"MSL has no buffer scalar for a {component_type} component",
+    )
 
 
 def metal_glsl_buffer_component_refusal(member_info):
