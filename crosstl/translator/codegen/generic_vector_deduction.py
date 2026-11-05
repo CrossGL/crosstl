@@ -17,6 +17,7 @@ import re
 from ..ast import PrimitiveType, VectorType
 from .crossgl_vector_names import crossgl_named_vector_type
 from .enum_utils import substitute_generic_type_name
+from .generic_pointer_deduction import concrete_generic_pointer_type
 
 __all__ = [
     "bind_generic_vector_parameter",
@@ -191,9 +192,23 @@ def substituted_generic_type(generator, type_value, substitutions):
     concrete = concrete_generic_vector_type(type_value, substitutions)
     if concrete is not None:
         return concrete
+    concrete = concrete_generic_pointer_type(
+        type_value,
+        lambda pointee: _changed_generic_type(generator, pointee, substitutions),
+    )
+    if concrete is not None:
+        return concrete
     return substitute_generic_type_name(
         generator.type_name_string(type_value), substitutions
     )
+
+
+def _changed_generic_type(generator, type_value, substitutions):
+    """:func:`substituted_generic_type` of ``type_value``, or ``None`` when no type parameter changed."""
+    concrete = substituted_generic_type(generator, type_value, substitutions)
+    if isinstance(concrete, str) and concrete == generator.type_name_string(type_value):
+        return None
+    return concrete
 
 
 def substituted_generic_type_name(generator, type_value, substitutions):

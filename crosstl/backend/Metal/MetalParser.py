@@ -5,6 +5,10 @@ import sys
 
 from ..switch_clauses import record_default_position
 from .floating_point import reject_contraction_tokens
+from .local_aggregate_declarators import (
+    split_block_aggregate_declaration,
+    unnamed_aggregate_name,
+)
 from .MetalAst import *
 from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
@@ -2821,7 +2825,7 @@ class MetalParser:
 
         return array_sizes
 
-    def parse_struct(self, pre_alignas=None):
+    def parse_struct(self, pre_alignas=None, allow_unnamed=False):
         start_token = self.current_token
         alignas_specs = (
             list(pre_alignas)
@@ -2832,11 +2836,15 @@ class MetalParser:
         struct_attributes = self.parse_attributes()
         alignas_specs.extend(self.parse_alignas_specifiers())
         self.skip_aggregate_alignment_macros()
-        if not self.is_current_name_token():
+        unnamed = allow_unnamed and self.current_token[0] == "LBRACE"
+        if unnamed:
+            name = self.reserve_unnamed_aggregate_name("struct")
+        elif not self.is_current_name_token():
             raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
-        name = self.current_token[1]
-        self.eat(self.current_token[0])
-        self.register_known_type(name)
+        else:
+            name = self.current_token[1]
+            self.eat(self.current_token[0])
+            self.register_known_type(name)
         if self.current_token[0] == "LESS_THAN":
             template_args = self.parse_template_argument_suffix()
             name = f"{name}<{self.format_generic_type_tokens(template_args)}>"
@@ -2873,6 +2881,8 @@ class MetalParser:
         struct_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
         )
+        if unnamed:
+            self.require_unnamed_aggregate_declarators(struct_node, "struct")
         struct_node.declaration_source_location = self.source_span_from_tokens(
             start_token, self.tokens[self.pos - 1]
         )
@@ -2974,7 +2984,7 @@ class MetalParser:
             bases.append(self.format_generic_type_tokens(parts))
         return bases
 
-    def parse_union(self):
+    def parse_union(self, allow_unnamed=False):
         start_token = self.current_token
         self.skip_gnu_extension_prefix_tokens()
         self.eat("IDENTIFIER")
@@ -2985,6 +2995,9 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        unnamed = not name and allow_unnamed and self.current_token[0] == "LBRACE"
+        if unnamed:
+            name = self.reserve_unnamed_aggregate_name("union")
         if not name:
             raise SyntaxError("Expected union name")
         self.push_declaration_context(f"union {name}")
@@ -3011,11 +3024,29 @@ class MetalParser:
         union_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
         )
+        if unnamed:
+            self.require_unnamed_aggregate_declarators(union_node, "union")
         union_node.declaration_source_location = self.source_span_from_tokens(
             start_token, self.tokens[self.pos - 1]
         )
         self.pop_declaration_context()
         return union_node
+
+    def reserve_unnamed_aggregate_name(self, kind):
+        self.unnamed_aggregate_count = getattr(self, "unnamed_aggregate_count", 0) + 1
+        name = unnamed_aggregate_name(kind, self.unnamed_aggregate_count)
+        self.register_known_type(name)
+        return name
+
+    def require_unnamed_aggregate_declarators(self, aggregate, kind):
+        aggregate.unnamed_aggregate_kind = kind
+        if not aggregate.trailing_declarations:
+            # [class.union.anon]: the members of an anonymous union join the
+            # enclosing scope, which hoisting cannot represent.
+            raise SyntaxError(
+                f"An unnamed block-scope {kind} must declare an object; "
+                f"anonymous {kind} members of a block are not supported"
+            )
 
     def parse_trailing_aggregate_declarations(self, aggregate_type):
         declarations = []
@@ -4220,12 +4251,18 @@ class MetalParser:
             alias = self.parse_typedef()
             return alias if isinstance(alias, (TypeAliasNode, StructNode)) else None
         if self.is_nested_aggregate_declaration_start():
+            # A block-scope class definition may also declare objects of it; the
+            # importer hoists the class, so its objects become later statements.
             if self.current_token[0] == "STRUCT":
-                return self.parse_struct()
+                return split_block_aggregate_declaration(
+                    self.parse_struct(allow_unnamed=True)
+                )
             if self.current_token[0] == "CLASS":
                 return self.parse_class()
             if self.is_union_alias_start():
-                return self.parse_union()
+                return split_block_aggregate_declaration(
+                    self.parse_union(allow_unnamed=True)
+                )
             self.skip_nested_aggregate_declaration()
             return None
         if self.current_token[0] == "LBRACE":

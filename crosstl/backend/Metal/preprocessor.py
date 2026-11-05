@@ -15,6 +15,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Iterable,
     Iterator,
     List,
     Mapping,
@@ -60,6 +61,11 @@ from .member_address_types import (
     merge_receiver_variable_types,
 )
 from .member_lowering_layers import lower_members_with_late_specializations
+from .namespaced_specializations import (
+    place_in_namespace,
+    specialization_namespaces,
+    specialization_reference,
+)
 from .pattern_cache import pattern as _cached_pattern
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .source_analysis_cache import SourceAnalysisCache, memoized
@@ -1485,6 +1491,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if not calls:
                 return working
 
+            placements = self._template_specialization_placements(
+                working, templates_by_name.values()
+            )
             replacements: List[Tuple[int, int, str]] = []
             new_materializations: List[str] = []
             for (
@@ -1508,11 +1517,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     # A defaulted parameter the call can deduce takes the
                     # deduced type, not its default; argument deduction decides.
                     continue
+                placement = placements.get(template.span, "")
                 specialized_name = materialized_names.get(key)
                 if specialized_name is not None:
-                    replacements.extend(
-                        (span[0], span[1], specialized_name) for span in spans
-                    )
+                    reference = specialization_reference(placement, specialized_name)
+                    replacements.extend((span[0], span[1], reference) for span in spans)
                     continue
                 unique_count = len(materialized_names) + 1
                 if len(materialized_names) >= self.max_template_specializations:
@@ -1568,11 +1577,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     host_name=None,
                 )
                 if materialized:
-                    replacements.extend(
-                        (span[0], span[1], specialized_name) for span in spans
-                    )
+                    reference = specialization_reference(placement, specialized_name)
+                    replacements.extend((span[0], span[1], reference) for span in spans)
                     materialized_names[key] = specialized_name
-                    new_materializations.append(materialized)
+                    new_materializations.append(
+                        place_in_namespace(placement, materialized)[0]
+                    )
 
             if not replacements and not new_materializations:
                 return working
@@ -2018,8 +2028,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 reserved_identifiers.add(specialized_name)
                 generated_name_owners[preferred_name] = key
                 materialized_names[key] = specialized_name
-                materialization_start = len(code) + 2
-                code += "\n\n" + materialized
+                placed, declaration_offset = place_in_namespace(
+                    template.namespace, materialized
+                )
+                materialization_start = len(code) + 2 + declaration_offset
+                code += "\n\n" + placed
                 body_start = self._find_next_top_level_char(materialized, 0, "{")
                 owner_position = (
                     specialization["span"][0]
@@ -2057,7 +2070,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         )
                     )
 
-            replacements.append((call.span[0], call.argument_open, specialized_name))
+            replacements.append(
+                (
+                    call.span[0],
+                    call.argument_open,
+                    specialization_reference(template.namespace, specialized_name),
+                )
+            )
 
         if not handled_template_spans:
             return code
@@ -23959,6 +23978,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             function_identifier,
             host_name=instantiation.host_name,
         )
+
+    def _template_specialization_placements(
+        self, code: str, templates: Iterable[_MetalTemplateFunction]
+    ) -> Mapping[Tuple[int, int], str]:
+        templates = list(templates)
+        if not any(template.namespace for template in templates):
+            return {}
+        struct_spans = [
+            struct.span for struct in self._find_concrete_struct_definitions(code)
+        ] + [struct.span for struct in self._find_template_structs(code)]
+        return specialization_namespaces(templates, struct_spans)
 
     def _materialize_template_function_with_name(
         self,

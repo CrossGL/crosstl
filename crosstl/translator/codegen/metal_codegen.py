@@ -170,6 +170,7 @@ from .extended_arithmetic_builtins import (
 from .float_remainder_assignment import float_remainder_assignment
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
+from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -180,6 +181,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import metal_generic_global_types
 from .generic_struct_utils import (
     build_generic_struct_specialization,
     collect_generic_struct_definitions,
@@ -426,8 +428,9 @@ from .metal_specialization_constants import (
     block_member_array_types,
     flattened_stage_io_array_types,
     metal_function_constant_type_refusal,
-    refuse_specialization_sized_arrays,
     render_metal_specialization_constant,
+    render_metal_specialization_macro,
+    specialization_constants_sizing_arrays,
 )
 from .metal_stage_input_builtins import split_metal_stage_input_builtins
 from .metal_stage_refusals import refuse_metal_stages
@@ -437,6 +440,7 @@ from .metal_texel_buffers import (
     MetalTexelBuffers,
     texel_buffer_component_type,
 )
+from .metal_threadgroup_parameters import metal_threadgroup_parameter_attribute
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
 from .metal_wave_extended import (
@@ -1045,6 +1049,7 @@ class MetalCodeGen(
         self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
         self.program_scope_sampler_constants = set()
+        self.metal_specialization_macro_constants = set()
         self.metal_type_aliases = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
@@ -2118,6 +2123,7 @@ class MetalCodeGen(
         self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
         self.program_scope_sampler_constants = set()
+        self.metal_specialization_macro_constants = set()
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -2511,20 +2517,21 @@ class MetalCodeGen(
         self.lowered_glsl_buffer_block_struct_names = {
             block["type_name"] for block in self.lowered_glsl_buffer_blocks.values()
         }
-        refuse_specialization_sized_arrays(
-            ast,
-            lambda node: self.metal_specialization_constant_id(node) is not None,
-            self.refuse_lowering,
-            flattened_stage_io_array_types(
-                structs,
-                self.metal_stage_io_struct_names,
-                self.metal_stage_io_member_array_info,
+        self.metal_specialization_macro_constants = (
+            specialization_constants_sizing_arrays(
+                ast,
+                lambda node: self.metal_specialization_constant_id(node) is not None,
+                flattened_stage_io_array_types(
+                    structs,
+                    self.metal_stage_io_struct_names,
+                    self.metal_stage_io_member_array_info,
+                )
+                + block_member_array_types(
+                    self.cbuffer_variables,
+                    structs,
+                    self.lowered_glsl_buffer_block_struct_names,
+                ),
             )
-            + block_member_array_types(
-                self.cbuffer_variables,
-                structs,
-                self.lowered_glsl_buffer_block_struct_names,
-            ),
         )
         self.unsupported_glsl_buffer_block_struct_names = set(
             self.glsl_buffer_block_struct_lowering_failures
@@ -2564,6 +2571,7 @@ class MetalCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
+            metal_generic_global_types(self, global_vars),
         )
         self.function_return_types.update(
             {
@@ -3284,6 +3292,7 @@ class MetalCodeGen(
                 continue
 
             if generic_function_parameters(func):
+                mark_generic_function_emitted(self, func)
                 for specialized_func in generic_function_emission_list(self, func):
                     functions_code += self.generate_function(specialized_func)
                 continue
@@ -3328,6 +3337,7 @@ class MetalCodeGen(
                     FunctionCallNode,
                 ):
                     if generic_function_parameters(func):
+                        mark_generic_function_emitted(self, func)
                         for specialized_func in generic_function_emission_list(
                             self,
                             func,
@@ -3502,6 +3512,18 @@ class MetalCodeGen(
                     mapped_type,
                     self.is_metal_function_constant_value_type,
                 )
+                if (
+                    refusal is None
+                    and name in self.metal_specialization_macro_constants
+                ):
+                    code += render_metal_specialization_macro(
+                        self.metal_unused_declaration_qualifier("constant"),
+                        mapped_type,
+                        declaration,
+                        specialization_id,
+                        value_code,
+                    )
+                    continue
                 if refusal is None:
                     code += render_metal_specialization_constant(
                         self.metal_unused_declaration_qualifier("constant"),
@@ -17464,6 +17486,9 @@ class MetalCodeGen(
             "amplification",
             "mesh",
         }:
+            threadgroup_attr = metal_threadgroup_parameter_attribute(self, node)
+            if threadgroup_attr:
+                return threadgroup_attr
             resource_attr = self.resource_parameter_attribute(raw_param_type, node)
             if resource_attr:
                 return resource_attr

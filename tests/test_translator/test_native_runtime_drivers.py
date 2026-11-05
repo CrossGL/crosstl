@@ -32,6 +32,7 @@ from crosstl.project.native_runtime_drivers import (
     _prepare_vulkan_buffers,
     _read_mapped_memory,
     _validate_directx_register_layout,
+    _VulkanDispatchContext,
     _write_mapped_memory,
 )
 from crosstl.project.runtime_verification import (
@@ -5257,6 +5258,170 @@ def test_vulkan_compute_runtime_reports_missing_python_binding(tmp_path):
     assert availability.details["missingPythonModules"] == ["vulkan"]
 
 
+def _fake_vulkan_module(*, instance_extensions, create_error=None):
+    vk = SimpleNamespace(
+        VK_STRUCTURE_TYPE_APPLICATION_INFO=0,
+        VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO=1,
+        VK_API_VERSION_1_0=1,
+        VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR=0x1,
+        VK_QUEUE_COMPUTE_BIT=0x2,
+        created=[],
+    )
+    vk.VkApplicationInfo = lambda **kwargs: kwargs
+    vk.VkInstanceCreateInfo = lambda **kwargs: kwargs
+
+    def create_instance(create_info, allocator):
+        vk.created.append(create_info)
+        if create_error is not None:
+            raise create_error
+        return "instance"
+
+    vk.vkCreateInstance = create_instance
+    vk.vkDestroyInstance = lambda instance, allocator: None
+    vk.vkEnumerateInstanceExtensionProperties = lambda layer: [
+        SimpleNamespace(extensionName=name) for name in instance_extensions
+    ]
+    vk.vkEnumeratePhysicalDevices = lambda instance: ["device"]
+    vk.vkGetPhysicalDeviceQueueFamilyProperties = lambda device: [
+        SimpleNamespace(queueFlags=0x2)
+    ]
+    vk.vkGetPhysicalDeviceProperties = lambda device: SimpleNamespace(
+        deviceName="Fake GPU"
+    )
+    return vk
+
+
+def test_vulkan_compute_runtime_enables_portability_enumeration(tmp_path):
+    vk = _fake_vulkan_module(instance_extensions=["VK_KHR_portability_enumeration"])
+    runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is True
+    assert availability.details["physicalDevice"] == "Fake GPU"
+    assert availability.details["portabilityEnumeration"] is True
+    assert vk.created[0]["flags"] == 0x1
+    assert vk.created[0]["ppEnabledExtensionNames"] == [
+        "VK_KHR_portability_enumeration"
+    ]
+
+
+def test_vulkan_compute_runtime_skips_portability_enumeration_when_absent(tmp_path):
+    vk = _fake_vulkan_module(instance_extensions=["VK_EXT_debug_utils"])
+    runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is True
+    assert availability.details["portabilityEnumeration"] is False
+    assert "flags" not in vk.created[0]
+    assert "ppEnabledExtensionNames" not in vk.created[0]
+
+
+@pytest.mark.parametrize(
+    ("instance_extensions", "error_name", "reason_kind"),
+    [
+        (
+            ["VK_KHR_portability_enumeration"],
+            "VkErrorExtensionNotPresent",
+            "portability-enumeration-failed",
+        ),
+        # No driver at all, portability drivers included: not a portability failure.
+        (
+            ["VK_KHR_portability_enumeration"],
+            "VkErrorIncompatibleDriver",
+            "vulkan-runtime-unavailable",
+        ),
+        ([], "VkErrorIncompatibleDriver", "vulkan-runtime-unavailable"),
+    ],
+)
+def test_vulkan_compute_runtime_reports_instance_creation_failure(
+    tmp_path, instance_extensions, error_name, reason_kind
+):
+    error_type = type(error_name, (Exception,), {})
+    vk = _fake_vulkan_module(
+        instance_extensions=instance_extensions,
+        create_error=error_type(),
+    )
+    setattr(vk, error_name, error_type)
+    runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == reason_kind
+    assert availability.details["error"] == error_name
+
+
+@pytest.mark.parametrize(
+    ("instance_extensions", "enabled"),
+    [
+        (
+            [
+                "VK_KHR_portability_enumeration",
+                "VK_KHR_get_physical_device_properties2",
+            ],
+            [
+                "VK_KHR_portability_enumeration",
+                "VK_KHR_get_physical_device_properties2",
+            ],
+        ),
+        (["VK_KHR_get_physical_device_properties2"], None),
+    ],
+)
+def test_vulkan_compute_runtime_enables_properties2_for_portability_drivers(
+    instance_extensions, enabled
+):
+    vk = _fake_vulkan_module(instance_extensions=instance_extensions)
+    runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
+
+    runtime._create_instance(vk)
+
+    assert vk.created[0].get("ppEnabledExtensionNames") == enabled
+
+
+@pytest.mark.parametrize(
+    "device_extensions",
+    [["VK_KHR_portability_subset", "VK_KHR_shader_float16_int8"], []],
+)
+def test_vulkan_dispatch_enables_portability_subset_when_the_device_lists_it(
+    device_extensions,
+):
+    vk = _fake_vulkan_module(instance_extensions=[])
+    limits = SimpleNamespace(
+        maxComputeWorkGroupCount=[65535, 65535, 65535],
+        maxComputeWorkGroupSize=[1024, 1024, 64],
+        maxComputeWorkGroupInvocations=1024,
+    )
+    vk.vkGetPhysicalDeviceProperties = lambda device: SimpleNamespace(
+        deviceName="Fake GPU", limits=limits
+    )
+    vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO = 2
+    vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO = 3
+    vk.VkDeviceQueueCreateInfo = lambda **kwargs: kwargs
+    vk.VkDeviceCreateInfo = lambda **kwargs: kwargs
+    vk.vkEnumerateDeviceExtensionProperties = lambda device, layer: [
+        SimpleNamespace(extensionName=name) for name in device_extensions
+    ]
+    device_infos = []
+    vk.vkCreateDevice = lambda device, info, allocator: device_infos.append(info)
+    vk.vkGetDeviceQueue = lambda device, family, index: "queue"
+    context = _VulkanDispatchContext(
+        vk=vk,
+        runtime=VulkanComputeRuntime(module_loader=lambda _name: vk),
+        shader_code=b"",
+        entry_point="main",
+        buffers=(),
+        workgroup_count=(1, 1, 1),
+    )
+
+    context._create_device_context()
+
+    enabled = [name for name in device_extensions if name.endswith("_subset")]
+    assert device_infos[0]["ppEnabledExtensionNames"] == enabled
+    assert device_infos[0]["enabledExtensionCount"] == len(enabled)
+
+
 def test_vulkan_compute_runtime_reports_unavailable_through_native_adapter(tmp_path):
     artifact_path = tmp_path / "out" / "vulkan" / "add.spv"
     artifact_path.parent.mkdir(parents=True)
@@ -5587,9 +5752,8 @@ void main() {
     instance = runtime._create_instance(vk)
     try:
         device, _ = runtime._select_compute_device(vk, instance)
-        limit = vk.vkGetPhysicalDeviceProperties(
-            device
-        ).limits.maxComputeWorkGroupCount[axis]
+        properties = vk.vkGetPhysicalDeviceProperties(device)
+        limit = properties.limits.maxComputeWorkGroupCount[axis]
     finally:
         runtime._destroy_instance(vk, instance)
     counts = [1, 1, 1]

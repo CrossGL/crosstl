@@ -204,6 +204,26 @@ class TestCudaCodeGen:
         assert "return fallback_zero(value, false);" not in cuda_code
         assert "T::zero" not in cuda_code
 
+    def test_generic_function_array_parameter_is_specialized_for_cuda_codegen(self):
+        source_code = """
+        shader GenericArrayParameter {
+            buffer float* results;
+            T first<T>(in T v[2]) { return v[0] + v[1]; }
+            compute {
+                @ numthreads(1, 1, 1)
+                void main() {
+                    float a[2] = {1.0, 2.0};
+                    results[0] = first<float>(a);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "float first_float(float v[2])" in cuda_code
+        assert "T v[2]" not in cuda_code
+
     def test_simple_function_generation(self):
         source_code = """
         shader TestShader {
