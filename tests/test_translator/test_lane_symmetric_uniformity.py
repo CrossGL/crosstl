@@ -88,16 +88,21 @@ METAL_FUNC bool schedule_row_tile(const device int* offsets, const int num_group
     return;
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  out[tid.y * 64 + lid] = row * 1000 + group * 10 + rows;
+  int total = 0;
+  CONSUMER
+  out[tid.y * 64 + lid] = row * 1000 + group * 10 + rows + total;
 }
 """
 
 
 OWNER = "ushort(simd_sum(int(tiles_through <= tile)))"
+# Collectives in a loop the helper's reference results bound: every
+# invocation must receive the same row count. total ends as zero.
+ROWS_LOOP = "for (int r = 0; r < rows; r++) { total += simd_sum(1) - 32; }"
 
 
-def _kernel(owner=OWNER):
-    return SCHEDULE.replace("OWNER", owner)
+def _kernel(owner=OWNER, consumer=""):
+    return SCHEDULE.replace("OWNER", owner).replace("CONSUMER", consumer)
 
 
 def _report(
@@ -190,6 +195,34 @@ def test_directx_schedules_tiles_from_lane_symmetric_reductions(tmp_path):
 )
 def test_directx_refuses_exits_on_values_that_are_not_uniform(tmp_path, owner, options):
     report = _report(tmp_path, "directx", _kernel(owner), **options)
+    assert _codes(report) == ["project.translate.directx-software-subgroup-invalid"]
+
+
+def test_directx_receives_uniform_results_through_reference_parameters(tmp_path):
+    # rows comes from a broadcast at owner_lane, a uniform unsigned local the
+    # helper's condition bounds below the subgroup width.
+    report = _report(tmp_path, "directx", _kernel(consumer=ROWS_LOOP))
+    assert _codes(report) == [], report.to_json()["diagnostics"]
+    (artifact,) = report.to_json()["artifacts"]
+    _compile((tmp_path / artifact["path"]).read_text(), "directx", tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("owner", "lane_type"),
+    [
+        # A signed lane could be negative, so its broadcast stays per lane.
+        ("int(simd_sum(int(tiles_through <= tile)))", "int"),
+        # Without a full-subgroup sum the lane is lane-symmetric only.
+        ("ushort(simd_shuffle(int(tiles_through <= tile), simd_lane_id))", "ushort"),
+    ],
+)
+def test_directx_refuses_reference_results_from_unproven_lanes(
+    tmp_path, owner, lane_type
+):
+    source = _kernel(owner, ROWS_LOOP).replace(
+        "const ushort owner_lane", f"const {lane_type} owner_lane"
+    )
+    report = _report(tmp_path, "directx", source)
     assert _codes(report) == ["project.translate.directx-software-subgroup-invalid"]
 
 
@@ -317,7 +350,8 @@ def test_expected_tiles_cover_every_branch():
     )
 
 
-def test_lane_symmetric_schedule_executes(tmp_path):
+@pytest.mark.parametrize("consumer", ["", ROWS_LOOP])
+def test_lane_symmetric_schedule_executes(tmp_path, consumer):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required lane-symmetric execution")
     target = {"darwin": "metal", "win32": "directx"}.get(sys.platform)
@@ -325,7 +359,7 @@ def test_lane_symmetric_schedule_executes(tmp_path):
         pytest.skip(
             "OpenGL software subgroups refuse this helper (CrossGL/crosstl#2546)"
         )
-    source = _kernel()
+    source = _kernel(consumer=consumer)
     report = _report(tmp_path, target, source)
     assert _codes(report) == []
     descriptor, package = _prepare_native_package(report, tmp_path)

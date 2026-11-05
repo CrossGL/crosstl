@@ -14,19 +14,23 @@ modulo ``width``. Values then have one of three levels:
 When every subgroup is full and enters a function with the same lanes, every
 subgroup runs the same lane-symmetric computation. A reduction or vote of a
 lane-symmetric value then gives one result to the whole workgroup, as does a
-broadcast from a constant in-range lane. A prefix scan, a relative shuffle or
-a broadcast from a lane-symmetric lane of one stays lane-symmetric. A loop
-that leaves, or a helper that returns, on such a result therefore branches
-the same way in every invocation.
+broadcast from a constant in-range lane or from a uniform unsigned local that
+an enclosing condition bounds below the width. A prefix scan, a relative
+shuffle or a broadcast from a lane-symmetric lane of one stays
+lane-symmetric. A loop that leaves, or a helper that returns, on such a
+result therefore branches the same way in every invocation.
 
 The analysis is flow-insensitive and starts optimistic, then lowers levels
 to a fixpoint. A local has a level when every write to it, its initializer
-included, has that level and runs under control of that level. Control has
-a level when every enclosing condition, and every exit that may precede it,
-has that level. Collective results require full subgroups, a function every
-subgroup enters with the same lanes and lane-symmetric control at the
-collective. Unknown statements, labelled exits, address escapes, unresolved
-calls and recursion fail closed to varying.
+included, has that level and runs under control of that level. A local
+declared without a value holds only what its writes store, since reading an
+indeterminate value is undefined in the source. A local passed alone to a
+private reference parameter receives the level of the helper's writes to
+it. Control has a level when every enclosing condition, and every exit that
+may precede it, has that level. Collective results require full subgroups,
+a function every subgroup enters with the same lanes and lane-symmetric
+control at the collective. Unknown statements, labelled exits, address
+escapes, unresolved calls and recursion fail closed to varying.
 """
 
 from dataclasses import dataclass
@@ -109,6 +113,8 @@ class SymmetryRules:
     carries over. ``volatile(declaration)`` marks a local whose reads need not
     return its last write, and ``storage_parameter(parameter)`` a parameter
     whose writes reach storage rather than a value the function owns.
+    ``private_reference(parameter)`` marks an ``out``/``inout`` or private
+    reference parameter, whose writes a caller receives in its argument.
     """
 
     walk: Callable[[Any], Any]
@@ -123,6 +129,7 @@ class SymmetryRules:
     seeded_parameter: Callable[[Any], bool]
     volatile: Callable[[Any], bool]
     storage_parameter: Callable[[Any], bool]
+    private_reference: Callable[[Any], bool]
     width: int
     full_subgroups: bool
     reductions: frozenset
@@ -187,6 +194,7 @@ class FunctionSymmetry:
         self.exits = []
         self.returns = []
         self.declared = set()
+        self.declared_types = {}
         # Writes to storage, or to names the function neither declares nor
         # receives by value or by private reference.
         self.effects = False
@@ -310,6 +318,7 @@ class FunctionSymmetry:
         if not isinstance(name, str):
             raise _Unsupported
         self.declared.add(name)
+        self.declared_types[name] = getattr(node, "var_type", None)
         value = getattr(node, "initial_value", None)
         self._expression(value, site)
         if self.rules.volatile(node):
@@ -322,8 +331,8 @@ class FunctionSymmetry:
                 self.writes.append((alias, "varying", (), site))
             return
         if value is None:
-            # An indeterminate value until a later write.
-            self.writes.append((name, "varying", (), site))
+            # Reading an indeterminate value is undefined in the source, so
+            # the local holds only what its later writes store.
             return
         self.writes.append((name, "set", (value,), site))
 
@@ -361,10 +370,39 @@ class FunctionSymmetry:
                 for name in self._identifier_names(node.operand):
                     self.writes.append((name, "varying", (), site))
         elif isinstance(node, FunctionCallNode):
+            received = self._out_writes(node, site)
             for name in self.rules.call_writes(node) or ():
-                self.writes.append((name, "varying", (), site))
+                if name not in received:
+                    self.writes.append((name, "varying", (), site))
         for child in node.child_nodes():
             self._expression(child, site)
+
+    def _out_writes(self, call, site):
+        """Record the locals a helper writes through reference parameters.
+
+        A local passed alone, as the whole argument, to a private reference
+        receives the helper's writes to that parameter; any other mention of
+        it among the arguments keeps the call's conservative writes.
+        """
+        target = self.rules.call_target(call)
+        arguments = list(call.arguments or [])
+        parameters = list(getattr(target, "parameters", None) or [])
+        if target is None or len(parameters) != len(arguments):
+            return set()
+        mentions = {}
+        for argument in arguments:
+            for name in self._identifier_names(argument):
+                mentions[name] = mentions.get(name, 0) + 1
+        received = set()
+        for index, (parameter, argument) in enumerate(zip(parameters, arguments)):
+            if (
+                self.rules.private_reference(parameter)
+                and isinstance(argument, IdentifierNode)
+                and mentions.get(argument.name) == 1
+            ):
+                self.writes.append((argument.name, "out", (call, index), site))
+                received.add(argument.name)
+        return received
 
     def _assignment(self, node, site):
         target = node.target
@@ -473,6 +511,8 @@ class FunctionSymmetry:
                     continue
                 if mode == "varying":
                     level = VARYING
+                elif mode == "out":
+                    level = min(self._site_level(site), self._out_level(*values))
                 else:
                     level = min(
                         [self._site_level(site), *(self._level(v) for v in values)]
@@ -490,7 +530,9 @@ class FunctionSymmetry:
             changed = False
             for name, _mode, values, _site in self.writes:
                 if name not in self.collective_names and any(
-                    self.collective_derived(value) for value in values
+                    self.collective_derived(value)
+                    for value in values
+                    if isinstance(value, ASTNode)
                 ):
                     self.collective_names.add(name)
                     changed = True
@@ -577,10 +619,101 @@ class FunctionSymmetry:
             lane = self._constant_lane(arguments[1])
             if lane is not None and 0 <= lane < self.rules.width:
                 return UNIFORM
+            if levels[1] == UNIFORM and self._guarded_lane(arguments[1], site):
+                return UNIFORM
             return SYMMETRIC
         if operation in self.rules.lane_preserving:
             return SYMMETRIC
         return VARYING
+
+    def _guarded_lane(self, node, site):
+        """Whether a uniform lane index is in range wherever ``site`` runs.
+
+        The index must be an unsigned local written once, at its declaration,
+        that an enclosing condition bounds below the subgroup width; integer
+        conversions and masks that keep values below the width may wrap it.
+        """
+        width = self.rules.width
+        name = self._lane_name(node)
+        if name is None or name not in self.declared:
+            return False
+        type_name = str(
+            getattr(
+                self.declared_types.get(name), "name", self.declared_types.get(name)
+            )
+        )
+        if not type_name.startswith("u") and type_name != "size_t":
+            return False
+        if [write for write in self.writes if write[0] == name] != [
+            write for write in self.writes if write[0] == name and write[1] == "set"
+        ] or sum(write[0] == name for write in self.writes) != 1:
+            return False
+        for guard in site.guards:
+            if not isinstance(guard, BinaryOpNode):
+                continue
+            operator = self.rules.map_operator(
+                getattr(guard, "op", getattr(guard, "operator", None))
+            )
+            left, right = guard.left, guard.right
+            if operator in {">", ">="}:
+                left, right = right, left
+                operator = "<" if operator == ">" else "<="
+            if operator not in {"<", "<="} or self._lane_name(left) != name:
+                continue
+            bound = self._constant_lane(right)
+            if bound is not None and bound - (operator == "<") < width:
+                return True
+        return False
+
+    def _lane_name(self, node):
+        """The local a lane expression reads through value-keeping wrappers."""
+        mask = self.rules.width - 1
+        while True:
+            if isinstance(node, IdentifierNode):
+                return node.name
+            if isinstance(node, CastNode):
+                node = node.expression
+                continue
+            if (
+                isinstance(node, FunctionCallNode)
+                and str(getattr(node.name, "name", node.name)) in _INTEGER_RANGES
+                and len(node.arguments or []) == 1
+            ):
+                node = node.arguments[0]
+                continue
+            if (
+                isinstance(node, BinaryOpNode)
+                and self.rules.map_operator(
+                    getattr(node, "op", getattr(node, "operator", None))
+                )
+                == "&"
+            ):
+                value = self._constant_lane(node.right)
+                if value is not None and value & mask == mask:
+                    node = node.left
+                    continue
+            return None
+
+    def _out_level(self, call, index):
+        """The level of what a helper writes to its reference parameter ``index``."""
+        arguments = list(call.arguments or [])
+        if not all(self._effect_free(argument) for argument in arguments):
+            return VARYING
+        target = self.rules.call_target(call)
+        parameters = list(getattr(target, "parameters", None) or [])
+        seeds = {
+            parameter.name: self._level(argument)
+            for parameter, argument in zip(parameters, arguments)
+            if self.rules.seeded_parameter(parameter)
+            or self.rules.private_reference(parameter)
+        }
+        site = self.sites.get(id(call))
+        entered = (
+            self.symmetric_entry
+            and site is not None
+            and self._site_level(site) >= SYMMETRIC
+        )
+        return self.analysis.out_level(target, seeds, entered, parameters[index].name)
 
     def _effect_free(self, node):
         """Whether evaluating ``node`` writes nothing and calls only known helpers."""
@@ -776,6 +909,18 @@ class LaneSymmetryAnalysis:
         active.discard(key)
         self.collectives[key] = found
         return found
+
+    def out_level(self, function, seeds, symmetric_entry, name):
+        if id(function) in self.visiting:
+            return VARYING
+        self.visiting.add(id(function))
+        try:
+            facts = self.analyze(function, seeds, symmetric_entry)
+            if facts.unsupported or facts.effects:
+                return VARYING
+            return facts.levels.get(name, VARYING)
+        finally:
+            self.visiting.discard(id(function))
 
     def return_level(self, function, seeds, symmetric_entry):
         if id(function) in self.visiting:

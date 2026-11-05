@@ -5649,6 +5649,14 @@ class HLSLCodeGen(
                 analysis.resource_type(parameter_type, parameter, read_only=False)
             )
 
+        def private_reference(parameter):
+            parameter_type = getattr(parameter, "param_type", None)
+            if isinstance(parameter_type, ReferenceType):
+                return not storage_parameter(parameter)
+            return bool(
+                set(self.hlsl_parameter_qualifiers(parameter)) & {"out", "inout"}
+            ) and bool(analysis.value_type(parameter_type))
+
         def seeded_parameter(parameter):
             parameter_type = getattr(parameter, "param_type", None)
             return (
@@ -5675,6 +5683,7 @@ class HLSLCodeGen(
                     for node in (declaration, getattr(declaration, "var_type", None))
                 ),
                 storage_parameter=storage_parameter,
+                private_reference=private_reference,
                 storage_load=analysis.storage_load,
                 constant_int=lambda expression: evaluate_literal_int_expression(
                     expression, self.literal_int_constants
@@ -8621,12 +8630,25 @@ class HLSLCodeGen(
                 symmetric_entries[target] = symmetric_entries.get(
                     target, True
                 ) and symmetry.entered_symmetrically(call)
-                facts = uniform_call_arguments.get(id(call), set()) | {
-                    index
-                    for index, level in enumerate(levels)
-                    if level == UNIFORM
-                    and symmetry.collective_derived(call.arguments[index])
-                }
+                # A uniformly reached call also passes the uniform values the
+                # lane facts prove: collective results, and names the checks
+                # below accept where the existing call-site proof stops, such
+                # as the right operand of a uniform short-circuit condition.
+                facts = uniform_call_arguments.get(id(call), set())
+                if symmetry.reach(call) == UNIFORM:
+                    facts = facts | {
+                        index
+                        for index, level in enumerate(levels)
+                        if level == UNIFORM
+                        and (
+                            symmetry.collective_derived(call.arguments[index])
+                            or self.hlsl_software_subgroup_uniform_expression(
+                                call.arguments[index],
+                                uniform_names,
+                                uniform_components,
+                            )
+                        )
+                    }
                 if target not in uniform_parameters:
                     uniform_parameters[target] = set(facts)
                 else:
