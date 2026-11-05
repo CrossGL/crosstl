@@ -171,8 +171,8 @@ SERIALIZATION_TESTS = _tests(
 )
 
 # test_optimizers, the random samplers no other verifier runs, the bfloat16
-# operator sweeps and ml_dtypes conversions, the device, stream, memory and
-# constant tests, and the copying device array of NumPy storage.
+# operator sweeps, the device, stream, memory and constant tests, and the
+# copying device array of NumPy storage.
 TRAINING_TESTS = (
     _tests(
         "test_optimizers",
@@ -220,13 +220,7 @@ TRAINING_TESTS = (
     + _tests(
         "test_bf16",
         "TestBF16",
-        (
-            "binary_ops",
-            "blas_ops",
-            "conversion_ml_dtypes",
-            "reduction_ops",
-            "unary_ops",
-        ),
+        ("binary_ops", "blas_ops", "reduction_ops", "unary_ops"),
     )
     + _tests("test_device", "TestDevice", ("op_on_device",))
     + _tests(
@@ -265,7 +259,7 @@ ROPE_TESTS = _tests(
 # points in batches of 1, 3 and 32; four-step powers of two up to 2**24
 # points; and multi-upload Bluestein sizes up to 18,247 points. The
 # frequency and shift tests run with the operations; test_fft_grads compares
-# against PyTorch, which the host environment does not install.
+# against PyTorch and runs with REFERENCE_TESTS.
 FFT_TESTS = _tests(
     "test_fft",
     "TestFFT",
@@ -341,6 +335,26 @@ ATTENTION_2_TESTS = _tests(
 ATTENTION_3_TESTS = _tests(
     "test_fast_sdpa", "TestFastSDPA", ("sdpa_attention_sinks", "sdpa_sliced")
 )
+# The tests that compare the device results with PyTorch or ml_dtypes: bfloat16
+# conversions, FFT gradients, batch normalization, AdamW, and the linear,
+# cubic and antialiased upsampling sweeps. Only this group's job installs the
+# reference libraries, so no other group skips a test for want of them.
+REFERENCE_TESTS = (
+    _tests("test_bf16", "TestBF16", ("conversion", "conversion_ml_dtypes"))
+    + _tests("test_fft", "TestFFT", ("fft_grads",))
+    + _tests("test_nn", "TestLayers", ("batch_norm_matches_torch",))
+    + _tests("test_optimizers", "TestOptimizers", ("adamw_matches_pytorch",))
+    + _tests(
+        "test_upsample",
+        "TestUpsample",
+        (
+            "antialias_upscale_cubic_matches_pytorch",
+            "antialias_upscale_linear_is_noop",
+            "torch_upsample",
+            "torch_upsample_antialias",
+        ),
+    )
+)
 SWEEP_SHARDS = 3
 ATTENTION_SWEEP_TESTS = upstream_subtest_shards.shard_names(
     "test_fast_sdpa.TestFastSDPA.test_sdpa", SWEEP_SHARDS
@@ -362,4 +376,5 @@ GROUPS = {
         f"attention-sweep-{index}": (name,)
         for index, name in enumerate(ATTENTION_SWEEP_TESTS, start=1)
     },
+    "references": REFERENCE_TESTS,
 }

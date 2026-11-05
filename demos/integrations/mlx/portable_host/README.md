@@ -2368,7 +2368,7 @@ Bluestein's twiddle-table plans (batches of 1,024 or more complex Bluestein
 transforms of 1,025 to 2,048 points) first run the translated
 `generate_bluestein_twiddles` kernel into the table past `w_q`'s spectrum,
 which the host checks with the other Bluestein tables. `test_fft_grads`
-compares against PyTorch, which the host environment does not install, and
+compares against PyTorch and runs in the `references` group, and
 `test_batched_bluestein_twiddle_table` and `test_fft_too_large` run only where
 `mx.metal.is_available()`, which the portable host is not. The
 Metal runtime binds up to 1 GiB per dispatch, for the 128 MiB operands of a
@@ -2396,16 +2396,21 @@ GEMM, depthwise, padded-channel and implicit GEMM routes of the convolution
 port (see "Convolution") and its gradients, and translate their kernels on
 demand. The other `test_conv` and `test_conv_transpose` tests need PyTorch or
 the general implicit GEMM and small-depth 3-D routes.
-The `array`, `autograd` and `compile` groups run the `test_array` (41),
-`test_autograd` (45) and `test_compile` (51) methods that reach the GPU. Five
+The `array`, `autograd` and `compile` groups run the `test_array` (42),
+`test_autograd` (45) and `test_compile` (55) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
-`nn` (39 `test_nn` methods: module state, weight files and the layers),
-`transforms` (24 `test_vmap` and 11 `test_eval` methods), `serialization` (16
-`test_export_import` and 14 `test_load` methods, with the NumPy, safetensors
+`nn` (41 `test_nn` methods: module state, weight files and the layers),
+`transforms` (25 `test_vmap` and 11 `test_eval` methods), `serialization` (18
+`test_export_import` and 15 `test_load` methods, with the NumPy, safetensors
 and GGUF formats), `training` (19 `test_optimizers` methods, six `test_random`
-samplers, four `test_bf16` sweeps and the device, stream, memory and constant
-tests) and `rope` (the seven rotary embedding and fused transform methods of
-`test_fast` and the two antialiased `test_upsample` sweeps). A module's other
+samplers, four `test_bf16` sweeps, the device, stream, memory and constant
+tests and the copying `test_zero_copy` constructor), `rope` (the seven rotary
+embedding and fused transform methods of `test_fast` and the two antialiased
+`test_upsample` sweeps) and `references` (the nine methods that compare with
+PyTorch or ml_dtypes: both `test_bf16` conversions, `test_fft_grads`, batch
+normalization, AdamW and four `test_upsample` sweeps). Only the `references`
+job installs PyTorch 2.14.1 (the CPU build on Linux) and ml_dtypes 0.6.0, so no
+other group skips a test for want of them. A module's other
 methods dispatch nothing or need a kernel family the host does not port yet.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every

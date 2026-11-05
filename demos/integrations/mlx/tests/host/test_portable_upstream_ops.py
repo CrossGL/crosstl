@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 555
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 563
     assert all(
         name.startswith(
             (
@@ -148,6 +148,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + upstream_module_groups.ATTENTION_2_TESTS
         + upstream_module_groups.ATTENTION_3_TESTS
         + upstream_module_groups.ATTENTION_SWEEP_TESTS
+        + upstream_module_groups.REFERENCE_TESTS
     )
     assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
@@ -200,7 +201,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 548 and not set(opengl) & set(excluded)
+    assert len(opengl) == 556 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -240,6 +241,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "attention-sweep-1",
         "attention-sweep-2",
         "attention-sweep-3",
+        "references",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -321,7 +323,7 @@ def test_upstream_op_groups_partition_the_inventory():
                 "test_constants.",
                 "test_zero_copy.",
             ),
-            37,
+            36,
         ),
         ("rope", ("test_fast.", "test_upsample."), 9),
         ("fft", ("test_fft.",), 11),
@@ -332,6 +334,17 @@ def test_upstream_op_groups_partition_the_inventory():
         ("attention-sweep-1", ("test_fast_sdpa.",), 1),
         ("attention-sweep-2", ("test_fast_sdpa.",), 1),
         ("attention-sweep-3", ("test_fast_sdpa.",), 1),
+        (
+            "references",
+            (
+                "test_bf16.",
+                "test_fft.",
+                "test_nn.",
+                "test_optimizers.",
+                "test_upsample.",
+            ),
+            9,
+        ),
     ):
         tests = upstream_module_groups.GROUPS[group]
         assert ops.GROUPS[group] == tests and len(tests) == count
