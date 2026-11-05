@@ -6,6 +6,8 @@ import shlex
 import shutil
 import struct
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1402,6 +1404,13 @@ def test_unary_adapter_definitions_match_packages():
         "void dispatch_copy_into(", 1
     )[0]
     assert "in.data_size() > 65535" not in unary
+    # A copy of the input would hold a second reference, so set_unary_output_data
+    # could never donate it (test_eval.TestEval.test_donation_for_noops).
+    assert "auto in = inputs[0]" not in unary
+    assert "const mlx::core::array& in = dense ? *dense : inputs[0];" in unary
+    assert unary.index("dispatch_copy(inputs[0], *dense)") < unary.index(
+        "set_unary_output_data(in, out)"
+    )
     assert "first < in.data_size()" in unary
     assert "first * in.itemsize()" in unary
     assert "first * out.itemsize()" in unary
@@ -1470,6 +1479,33 @@ def test_view_adapter_preserves_upstream_shared_buffer_operations():
     assert "slice(inputs[0], out, start_indices_, strides_)" in source
     assert "dispatch_copy(in, out)" in source
     assert "eval_cpu" not in source
+
+
+def test_gpu_streams_follow_upstream_thread_ownership():
+    # metal/device.cpp and metal/eval.cpp: a thread reaches the streams it
+    # created (the main thread's are shared) and the thread-unsafe ones, and
+    # evaluating on any other stream raises (test_threads.TestThreads.
+    # test_threadlocal_stream). A tracer keeps its inputs from being donated.
+    source = (prepare.HERE / "backend.cpp").read_text()
+    gpu = source.split("namespace mlx::core::gpu {", 1)[1].split(
+        "} // namespace mlx::core::gpu", 1
+    )[0]
+    assert "if (is_main_thread())" in gpu
+    assert "static thread_local std::unordered_set<int> streams;" in gpu
+    assert '"There is no Stream(gpu, "' in gpu
+    for name in ("new_stream", "new_thread_unsafe_stream"):
+        body = gpu.split(f"void {name}(Stream s) {{", 1)[1].split("\n}\n", 1)[0]
+        target = "thread_streams()" if name == "new_stream" else "global_streams()"
+        assert f"{target}.insert(s.index)" in body
+    clear = gpu.split("void clear_streams() {", 1)[1].split("\n}\n", 1)[0]
+    assert clear.index("thread_streams().clear()") < clear.index("is_main_thread()")
+    for name in ("eval(array& value)", "finalize(Stream s)", "synchronize(Stream s)"):
+        body = gpu.split(f"void {name} {{", 1)[1].split("\n}\n", 1)[0]
+        assert body.lstrip().startswith("require_stream(")
+    evaluation = gpu.split("void eval(array& value) {", 1)[1].split("\n}\n", 1)[0]
+    assert evaluation.index("if (value.is_tracer())") < evaluation.index(
+        "value.primitive().eval_gpu(value.inputs(), outputs)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1708,6 +1744,55 @@ def test_native_callback_preserves_multidimensional_launch(monkeypatch, count, s
         ("reduce", 0, 513, {"workgroupCount": list(count), "workgroupSize": list(size)})
     ]
     assert error.value == b""
+
+
+def test_native_callbacks_from_several_threads_run_one_at_a_time(monkeypatch):
+    host = runtime.HostRuntime.__new__(runtime.HostRuntime)
+    state = {"active": 0, "peak": 0, "nested": 0}
+    start = threading.Barrier(3)
+
+    def dispatch(entry, buffers, buffer_count, threads, *, launch):
+        state["active"] += 1
+        state["peak"] = max(state["peak"], state["active"])
+        if entry == "outer":
+            # A dispatch that issues a further launch re-enters the lock.
+            nested = runtime.Launch((1, 1, 1), (1, 1, 1))
+            assert (
+                host._dispatch(b"inner", None, 0, 1, ctypes.pointer(nested), None, 0)
+                == 0
+            )
+        elif entry == "inner":
+            state["nested"] += 1
+            state["active"] -= 1
+            return
+        time.sleep(0.02)
+        state["active"] -= 1
+
+    monkeypatch.setattr(host, "dispatch", dispatch)
+    callback = runtime.CALLBACK(host._dispatch)
+    statuses = []
+
+    def launch_from_thread(entry):
+        launch = runtime.Launch((1, 1, 1), (1, 1, 1))
+        error = ctypes.create_string_buffer(128)
+        start.wait()
+        for _ in range(5):
+            statuses.append(
+                callback(entry, None, 0, 1, ctypes.byref(launch), error, 128)
+            )
+
+    workers = [
+        threading.Thread(target=launch_from_thread, args=(entry,))
+        for entry in (b"outer", b"plain", b"plain")
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=30)
+    assert not any(worker.is_alive() for worker in workers)
+    assert statuses == [0] * 15
+    # The nested launch runs inside its outer dispatch, so only it overlaps.
+    assert state == {"active": 0, "peak": 2, "nested": 5}
 
 
 def test_native_callback_requires_launch_pointer(monkeypatch):

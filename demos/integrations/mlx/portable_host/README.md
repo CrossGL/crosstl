@@ -2404,7 +2404,9 @@ is copied densely first, because MLX's `int64_t` variants index it before its
 data pointer, where a host upload does not reach. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (39 `test_nn` methods: module state, weight files and the layers),
-`transforms` (24 `test_vmap` and 11 `test_eval` methods), `serialization` (16
+`transforms` (24 `test_vmap` and 11 `test_eval` methods, and `test_threads`'
+per-thread streams; the runtime runs callbacks from several threads one at a
+time), `serialization` (16
 `test_export_import` and 14 `test_load` methods, with the NumPy, safetensors
 and GGUF formats), `training` (19 `test_optimizers` methods, six `test_random`
 samplers, four `test_bf16` sweeps and the device, stream, memory and constant

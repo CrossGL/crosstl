@@ -7,6 +7,7 @@ import json
 import math
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 from crosstl.project import build_native_loader_dispatch_request
@@ -338,6 +339,12 @@ class Launch(ctypes.Structure):
             execution["threadGridSize"] = exact
         return execution
 
+
+# MLX evaluates each thread's streams on that thread, so callbacks can arrive
+# from several threads at once. One native worker session, its retained
+# modules and its trace serve them all, so dispatches run one at a time; a
+# dispatch that issues further launches re-enters the lock.
+DISPATCH_LOCK = threading.RLock()
 
 CALLBACK = ctypes.CFUNCTYPE(
     ctypes.c_int,
@@ -923,6 +930,10 @@ class HostRuntime:
         self.library = None
 
     def _entry_available(self, entry):
+        with DISPATCH_LOCK:
+            return self._entry_available_locked(entry)
+
+    def _entry_available_locked(self, entry):
         try:
             name = entry.decode("ascii")
             if name in self.descriptors:
@@ -1080,9 +1091,14 @@ class HostRuntime:
         try:
             if not launch:
                 raise ValueError("Native launch geometry is missing")
-            self.dispatch(
-                entry.decode("ascii"), buffers, count, threads, launch=launch.contents
-            )
+            with DISPATCH_LOCK:
+                self.dispatch(
+                    entry.decode("ascii"),
+                    buffers,
+                    count,
+                    threads,
+                    launch=launch.contents,
+                )
             return 0
         except Exception as exception:
             message = str(exception).encode("utf-8")

@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_set>
 
 #include "mlx/allocator.h"
 #include "mlx/backend/common/binary.h"
@@ -156,19 +157,23 @@ void dispatch_unary(
         "bfloat16, float32 or complex64 arrays.");
   }
   const char* out_type = cast_type(out.dtype());
-  auto in = inputs[0];
-  if (in.shape() != out.shape()) {
+  // Refer to the input, as unary.cpp does, rather than copy it: a copy holds a
+  // second reference, so set_unary_output_data could never donate the input.
+  if (inputs[0].shape() != out.shape()) {
     throw std::invalid_argument("CrossTL unary input must match output shape.");
   }
-  if (in.size() == 0) {
-    mlx::core::set_unary_output_data(in, out);
+  if (inputs[0].size() == 0) {
+    mlx::core::set_unary_output_data(inputs[0], out);
     return;
   }
-  if (!in.flags().contiguous) {
-    mlx::core::array dense(in.shape(), in.dtype(), nullptr, {});
-    dispatch_copy(in, dense);
-    in = std::move(dense);
+  // A strided input is copied densely first; that temporary is donated.
+  std::optional<mlx::core::array> dense;
+  if (!inputs[0].flags().contiguous) {
+    dense.emplace(
+        inputs[0].shape(), inputs[0].dtype(), nullptr, std::vector<mlx::core::array>{});
+    dispatch_copy(inputs[0], *dense);
   }
+  const mlx::core::array& in = dense ? *dense : inputs[0];
   if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
       in.data_size() >
           (in.buffer_size() - uint64_t(in.offset())) / in.itemsize()) {
@@ -182,7 +187,7 @@ void dispatch_unary(
     uint32_t size = static_cast<uint32_t>(
         std::min<uint64_t>(65535, in.data_size() - first));
     CrosstlMlxBuffer buffers[] = {
-        {"in", dtype, in.data<char>() + first * in.itemsize(), size, 0},
+        {"in", dtype, const_cast<char*>(in.data<char>()) + first * in.itemsize(), size, 0},
         {"out", out_type, out.data<char>() + first * out.itemsize(), size, 1},
         {"size", "uint32", &size, 1, 0},
     };
@@ -1535,14 +1540,58 @@ extern "C" MLX_API int crosstl_mlx_register_runtime(
 }
 
 namespace mlx::core::gpu {
+namespace {
+// metal/device.cpp keeps each thread's streams apart, and the main thread's in
+// one shared map; thread-unsafe streams sit in a global map that every thread
+// reaches. A stream the current thread cannot reach raises, as
+// get_command_encoder does.
+std::unordered_set<int>& thread_streams() {
+  if (is_main_thread()) {
+    static auto* streams = new std::unordered_set<int>();
+    return *streams;
+  }
+  static thread_local std::unordered_set<int> streams;
+  return streams;
+}
+
+std::mutex global_streams_mutex;
+std::unordered_set<int>& global_streams() {
+  static auto* streams = new std::unordered_set<int>();
+  return *streams;
+}
+
+void require_stream(Stream s) {
+  require_runtime();
+  if (thread_streams().count(s.index)) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(global_streams_mutex);
+  if (!global_streams().count(s.index)) {
+    throw std::runtime_error(
+        "There is no Stream(gpu, " + std::to_string(s.index) + ") in current thread.");
+  }
+}
+} // namespace
+
 void init() {}
-void new_stream(Stream) {
+void new_stream(Stream s) {
   require_runtime();
+  thread_streams().insert(s.index);
 }
-void new_thread_unsafe_stream(Stream) {
+void new_thread_unsafe_stream(Stream s) {
   require_runtime();
+  std::lock_guard<std::mutex> lock(global_streams_mutex);
+  global_streams().insert(s.index);
 }
-void clear_streams() {}
+// metal/eval.cpp: the current thread's streams, and the global ones from the
+// main thread.
+void clear_streams() {
+  thread_streams().clear();
+  if (is_main_thread()) {
+    std::lock_guard<std::mutex> lock(global_streams_mutex);
+    global_streams().clear();
+  }
+}
 
 bool is_available() {
   return dispatch_callback.load() != nullptr;
@@ -1570,17 +1619,23 @@ device_info(int index) {
 }
 
 void eval(array& value) {
-  require_runtime();
+  require_stream(value.primitive().stream());
   auto outputs = value.outputs();
+  // metal/eval.cpp: a tracer holds a reference to its inputs, so none of them
+  // is donated to an output.
+  std::vector<array> inputs;
+  if (value.is_tracer()) {
+    inputs = value.inputs();
+  }
   value.primitive().eval_gpu(value.inputs(), outputs);
 }
 
 // The callback returns only after device readback, so no work remains queued.
-void finalize(Stream) {
-  require_runtime();
+void finalize(Stream s) {
+  require_stream(s);
 }
-void synchronize(Stream) {
-  require_runtime();
+void synchronize(Stream s) {
+  require_stream(s);
 }
 } // namespace mlx::core::gpu
 
