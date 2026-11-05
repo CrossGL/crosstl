@@ -5083,6 +5083,14 @@ class HLSLCodeGen(
                     node.initial_value, node.var_type
                 )
                 declaration += f" = {initializer}"
+            image_format = self.image_variable_formats.get(var_name)
+            if image_format and any(
+                qualifier in mapped_type for qualifier in ("<unorm ", "<snorm ")
+            ):
+                qualifier = (
+                    f'#ifdef __spirv__\n[[vk::image_format("{image_format}")]]\n'
+                    f"#endif\n{qualifier}"
+                )
             code += f"{qualifier}{declaration}{register};\n"
             if (
                 mapped_type == "SamplerState"
@@ -54173,6 +54181,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         component_type = self.scalar_image_format_components().get(
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
+        if component_type and explicit_format in {
+            "r8",
+            "rg8",
+            "rgba8",
+            "r16",
+            "rg16",
+            "rgba16",
+            "r8_snorm",
+            "rg8_snorm",
+            "rgba8_snorm",
+            "r16_snorm",
+            "rg16_snorm",
+            "rgba16_snorm",
+        }:
+            qualifier = "snorm" if explicit_format.endswith("_snorm") else "unorm"
+            component_type = f"{qualifier} {component_type}"
         texture_types = {
             "image1D": "RWTexture1D",
             "iimage1D": "RWTexture1D",

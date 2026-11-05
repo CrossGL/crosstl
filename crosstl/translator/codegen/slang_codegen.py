@@ -11636,6 +11636,22 @@ class SlangCodeGen(LoweringRefusalMixin):
         component_type = self.scalar_image_format_components().get(
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
+        if component_type and explicit_format in {
+            "r8",
+            "rg8",
+            "rgba8",
+            "r16",
+            "rg16",
+            "rgba16",
+            "r8_snorm",
+            "rg8_snorm",
+            "rgba8_snorm",
+            "r16_snorm",
+            "rg16_snorm",
+            "rgba16_snorm",
+        }:
+            qualifier = "snorm" if explicit_format.endswith("_snorm") else "unorm"
+            component_type = f"{qualifier} {component_type}"
         texture_types = {
             "image1D": "RWTexture1D",
             "iimage1D": "RWTexture1D",
