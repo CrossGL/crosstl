@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .glsl_vulkan_descriptor_sets import DESCRIPTOR_BINDING_MACRO
+
 __all__ = [
     "ARRAYS_OF_ARRAYS",
     "GLSLRequirement",
@@ -506,6 +508,9 @@ def _split_layout(stripped):
                     for part in inner.split(",")
                     if part.strip()
                 }
+                if any(part.startswith(f"{DESCRIPTOR_BINDING_MACRO}(") for part in ids):
+                    # The Vulkan/OpenGL binding macro expands to a binding qualifier.
+                    ids.add("binding")
                 return ids, stripped[index + 1 :].strip()
     return None, None
 

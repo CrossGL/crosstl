@@ -16,6 +16,7 @@ from ..ast import IdentifierNode
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ..semantics.fixed_samplers import ANNOTATION, fixed_sampler_header
 from ..semantics.rewrite import child_slots, get_child
+from .glsl_vulkan_descriptor_sets import opengl_binding_pattern, opengl_binding_value
 
 __all__ = [
     "FixedSamplerBindingError",
@@ -100,8 +101,10 @@ def with_glsl_fixed_samplers(code, records, pairs, ast):
                 entry["uniform"] for entry in uniforms
             ):
                 continue
+            # The layout may name the unit through the Vulkan/OpenGL binding macro of a non-zero descriptor set.
             match = re.search(
-                rf"layout\([^)]*\bbinding\s*=\s*(\d+)[^)]*\)\s*uniform\s+\w+\s+"
+                rf"layout\((?:[^()]|\([^()]*\))*?{opengl_binding_pattern()}"
+                rf"(?:[^()]|\([^()]*\))*\)\s*uniform\s+\w+\s+"
                 rf"{re.escape(pair['uniform'])}\b",
                 code,
             )
@@ -109,7 +112,7 @@ def with_glsl_fixed_samplers(code, records, pairs, ast):
                 {
                     "uniform": pair["uniform"],
                     "texture": pair["texture"],
-                    "unit": int(match.group(1)) if match else None,
+                    "unit": opengl_binding_value(match) if match else None,
                 }
             )
         if not uniforms:
