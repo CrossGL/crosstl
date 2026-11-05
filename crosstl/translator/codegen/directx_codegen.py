@@ -306,6 +306,7 @@ from .hlsl_narrow_system_values import (
     HLSL_NARROW_UNSIGNED_SYSTEM_VALUE_TYPES,
     hlsl_narrow_compute_system_value_bridge,
 )
+from .hlsl_push_constants import hlsl_push_constant_block, is_push_constant
 from .hlsl_ray_queries import (
     hlsl_ray_query_expression,
     hlsl_ray_query_helpers,
@@ -13318,7 +13319,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 packoffsets = self.hlsl_block_packoffsets(ast, node)
                 if isinstance(packoffsets, HlslRegisterBlockPlan):
-                    code += self.hlsl_glsl_block_register_buffer(
+                    block = self.hlsl_glsl_block_register_buffer(
                         ast,
                         node,
                         packoffsets.layout,
@@ -13326,14 +13327,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         buffer_keyword,
                         register,
                     )
-                    continue
-                code += f"{buffer_keyword} {node.name}{register} {{\n"
-                for member in getattr(node, "members", []) or []:
-                    declaration = self.generate_hlsl_cbuffer_member_declaration(
-                        member, packoffsets.get(getattr(member, "name", None))
-                    )
-                    code += f"    {declaration};\n"
-                code += "};\n"
+                else:
+                    block = f"{buffer_keyword} {node.name}{register} {{\n"
+                    for member in getattr(node, "members", []) or []:
+                        declaration = self.generate_hlsl_cbuffer_member_declaration(
+                            member, packoffsets.get(getattr(member, "name", None))
+                        )
+                        block += f"    {declaration};\n"
+                    block += "};\n"
+                if is_push_constant(node):
+                    block = hlsl_push_constant_block(self, ast, node, block)
+                code += block
         return code
 
     def hlsl_block_packoffsets(self, ast, node):
