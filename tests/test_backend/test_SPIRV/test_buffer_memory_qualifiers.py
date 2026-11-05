@@ -16,6 +16,7 @@ import crosstl
 from crosstl.backend.SPIRV.buffer_memory_qualifiers import (
     storage_block_memory_qualifiers,
 )
+from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 
 # Four storage blocks of one runtime float array each, and one two-member block:
 #   %src  binding 0: NonWritable and Restrict on the member only (CrossTL's own output form);
@@ -208,8 +209,14 @@ def test_glsl_output_declares_the_memory_qualifiers(module, tmp_path):
     _validate_glsl(tmp_path, glsl)
 
 
-def test_hlsl_output_keeps_coherence_and_read_only_registers(module):
-    hlsl = crosstl.translate(module, backend="directx")
+def test_hlsl_output_keeps_coherence_and_read_only_registers(module, tmp_path):
+    # HLSL has no volatile resource, so the module's volatile buffer is refused ...
+    with pytest.raises(DirectXLoweringRefused, match="resource 'vol' is volatile"):
+        crosstl.translate(module, backend="directx")
+    # ... and without it the other qualifiers carry over.
+    path = tmp_path / "no_volatile.spvasm"
+    path.write_text(MODULE.replace("OpDecorate %vol Volatile\n", ""))
+    hlsl = crosstl.translate(str(path), backend="directx")
     assert re.search(r"\bStructuredBuffer<float> src : register\(t0\)", hlsl), hlsl
     assert re.search(
         r"globallycoherent RWStructuredBuffer<float> dst : register\(u1\)", hlsl

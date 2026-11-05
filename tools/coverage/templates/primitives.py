@@ -15,6 +15,8 @@ have no geometry stage, and the kernel languages have no graphics stages.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .base import ABSENT, Template
 
 # Each input primitive as its GLSL layout, HLSL array prefix, rust-gpu execution mode and vertex count.
@@ -160,6 +162,9 @@ def _hlsl(stage: str = "") -> dict[str, Template]:
 
 HLSL = _hlsl()
 SLANG = _hlsl('[shader("geometry")]\n')
+# slangc aborts with an internal error when it writes a second stream as SPIR-V, so the Slang probe of streams is
+# checked as the HLSL slangc writes for it, which DXC compiles.
+SLANG["geometry-streams"] = replace(SLANG["geometry-streams"], target="hlsl")
 
 _RUST_EMIT = "    unsafe {\n        spirv_std::arch::emit_vertex();\n    }\n"
 _RUST_END = "    unsafe {\n        spirv_std::arch::end_primitive();\n    }\n"

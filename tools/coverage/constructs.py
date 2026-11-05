@@ -754,6 +754,115 @@ def _curated() -> list[Construct]:
             "Capability.GeometryStreams",
             stage="geometry",
         ),
+        *(
+            c("graphics", name, *anchors, stage="tessellation-evaluation")
+            for name, *anchors in (
+                ("tessellation-domain-quads", "ExecutionMode.Quads"),
+                ("tessellation-domain-isolines", "ExecutionMode.Isolines"),
+                (
+                    "tessellation-level-input",
+                    "BuiltIn.TessLevelOuter",
+                    "BuiltIn.TessLevelInner",
+                ),
+                ("tessellation-patch-input", "Decoration.Patch"),
+                (
+                    "tessellation-spacing-fractional-odd",
+                    "ExecutionMode.SpacingFractionalOdd",
+                ),
+                (
+                    "tessellation-spacing-fractional-even",
+                    "ExecutionMode.SpacingFractionalEven",
+                ),
+                ("tessellation-winding-cw", "ExecutionMode.VertexOrderCw"),
+                ("tessellation-point-mode", "ExecutionMode.PointMode"),
+            )
+        ),
+        *(
+            c("graphics", name, anchor, stage="tessellation-control")
+            for name, anchor in (
+                (
+                    "tessellation-control-spacing-fractional-odd",
+                    "ExecutionMode.SpacingFractionalOdd",
+                ),
+                (
+                    "tessellation-control-spacing-fractional-even",
+                    "ExecutionMode.SpacingFractionalEven",
+                ),
+                ("tessellation-control-winding-ccw", "ExecutionMode.VertexOrderCcw"),
+                ("tessellation-control-point-mode", "ExecutionMode.PointMode"),
+                ("tessellation-patch-output", "Decoration.Patch"),
+                ("tessellation-patch-vertices", "BuiltIn.PatchVertices"),
+            )
+        ),
+        *(
+            c("graphics", name, *anchors, stage="mesh")
+            for name, *anchors in (
+                (
+                    "mesh-output-points",
+                    "ExecutionMode.OutputPoints",
+                    "BuiltIn.PrimitivePointIndicesEXT",
+                ),
+                (
+                    "mesh-output-lines",
+                    "ExecutionMode.OutputLinesEXT",
+                    "BuiltIn.PrimitiveLineIndicesEXT",
+                ),
+                ("mesh-per-primitive-output", "Decoration.PerPrimitiveEXT"),
+                ("mesh-cull-primitive", "BuiltIn.CullPrimitiveEXT"),
+                ("mesh-primitive-id", "BuiltIn.PrimitiveId"),
+                ("mesh-layer", "BuiltIn.Layer"),
+                ("mesh-viewport-index", "BuiltIn.ViewportIndex"),
+                ("mesh-task-payload", "StorageClass.TaskPayloadWorkgroupEXT"),
+                ("mesh-workgroup-id", "BuiltIn.WorkgroupId"),
+                ("mesh-local-invocation-index", "BuiltIn.LocalInvocationIndex"),
+            )
+        ),
+        *(
+            c("graphics", name, *anchors, stage="task")
+            for name, *anchors in (
+                (
+                    "task-payload-array",
+                    "StorageClass.TaskPayloadWorkgroupEXT",
+                    "OpTypeArray",
+                ),
+                ("task-workgroup-id", "BuiltIn.WorkgroupId"),
+                (
+                    "task-local-invocation-index",
+                    "BuiltIn.LocalInvocationIndex",
+                    "OpTypeArray",
+                ),
+            )
+        ),
+        *(
+            c("graphics", name, *anchors, stage=stage)
+            for name, stage, *anchors in (
+                (
+                    "ray-payload",
+                    "ray-generation",
+                    "StorageClass.RayPayloadKHR",
+                    "OpTraceRayKHR",
+                ),
+                (
+                    "ray-callable-data",
+                    "ray-generation",
+                    "StorageClass.CallableDataKHR",
+                    "OpExecuteCallableKHR",
+                ),
+                (
+                    "ray-reported-attributes",
+                    "intersection",
+                    "StorageClass.HitAttributeKHR",
+                    "OpReportIntersectionKHR",
+                ),
+                (
+                    "ray-custom-attributes",
+                    "closest-hit",
+                    "StorageClass.HitAttributeKHR",
+                    "OpTypeStruct",
+                ),
+                ("ray-shader-record", "miss", "StorageClass.ShaderRecordBufferKHR"),
+            )
+        ),
         c(
             "resource",
             "uniform-struct",
@@ -887,6 +996,14 @@ def _curated() -> list[Construct]:
             "Decoration.RowMajor",
             "Decoration.ArrayStride",
         ),
+        c("resource", "push-constant", "StorageClass.PushConstant"),
+        c(
+            "resource",
+            "push-constant-offset",
+            "StorageClass.PushConstant",
+            "Decoration.Offset",
+        ),
+        c("resource", "descriptor-set", "Decoration.DescriptorSet"),
     ]
 
 
@@ -963,6 +1080,12 @@ def features(language: str, grammar_text: str) -> list[Feature]:
 
 def is_construct(feature: Feature) -> bool:
     return feature.category in CATEGORIES
+
+
+def spells(name: str, language: str) -> bool:
+    """Whether ``language`` has a spelling for the construct ``name``: a probe template, or none yet but not
+    :data:`ABSENT` either."""
+    return _template(name, language) is not ABSENT
 
 
 def semantic_id(feature: Feature) -> str:

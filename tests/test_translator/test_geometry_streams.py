@@ -369,7 +369,31 @@ struct V { float4 Pos : SV_POSITION; };
 [maxvertexcount(1)]
 void main(point V input[1], inout PointStream<V> a, inout PointStream<V> b) { a.Append(input[0]); b.Append(input[0]); }
 """,
-            "multiple-streams",
+            "stream-builtin",
+        ),
+        (
+            """
+struct V { float4 Pos : SV_POSITION; };
+struct W { float4 A : TEXCOORD0; };
+[maxvertexcount(2)]
+void main(point V input[1], inout TriangleStream<V> a, inout PointStream<W> b) { a.Append(input[0]); }
+""",
+            "multiple-streams-topology",
+        ),
+        (
+            """
+struct V { float4 Pos : SV_POSITION; };
+struct W { float4 A : TEXCOORD0; };
+void Put(inout PointStream<W> s) { W w = (W)0; s.Append(w); }
+[maxvertexcount(3)]
+void main(point V input[1], inout PointStream<V> a, inout PointStream<W> b, inout PointStream<W> c)
+{
+    a.Append(input[0]);
+    Put(b);
+    Put(c);
+}
+""",
+            "helper-stream",
         ),
     ],
 )
@@ -392,3 +416,171 @@ VSOutput main(float3 p : POSITION0) { VSOutput o = (VSOutput)0; o.Pos = float4(p
     # COLOR0 on a vertex output is a user varying at its GLSL location, not colour attachment 0.
     assert _spirv_locations(spirv, "Output") == [8, 13]
     _spirv_val(tmp_path, spirv)
+
+
+# Two vertex streams: stream 0 is drawn, stream 1 only feeds stream output. Both structures put a member at
+# TEXCOORD0 (GLSL location 5), which GLSL refuses even in different streams.
+TWO_STREAMS_HLSL = """
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+struct GSOut0 { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+struct GSOut1 { float4 data : TEXCOORD0; uint tag : TEXCOORD1; };
+[maxvertexcount(2)]
+void main(point VSOut input[1], inout PointStream<GSOut0> s0, inout PointStream<GSOut1> s1) {
+    GSOut0 a;
+    a.pos = input[0].pos;
+    a.uv = input[0].uv;
+    s0.Append(a);
+    s0.RestartStrip();
+    GSOut1 b;
+    b.data = input[0].pos * 2.0;
+    b.tag = 3;
+    s1.Append(b);
+}
+"""
+
+
+def test_hlsl_point_streams_lower_to_glsl_vertex_streams(tmp_path):
+    code = _translate(tmp_path, TWO_STREAMS_HLSL, "s.geom.hlsl", "opengl")
+
+    assert "layout(points, max_vertices = 2) out;" in code
+    # Stream 0 keeps the semantic location the fragment stage reads; stream 1's TEXCOORD0 moves off it.
+    assert re.search(r"layout\(location = 5\) out vec2 out_uv;", code)
+    assert re.search(r"layout\(location = 0, stream = 1\) out vec4 out1_data;", code)
+    assert re.search(r"layout\(location = 6, stream = 1\) out uint out1_tag;", code)
+    body = code.split("void main() {", 1)[1]
+    assert re.search(
+        r"gl_Position = a\.pos;\s+out_uv = a\.uv;\s+EmitStreamVertex\(0\);\s+EndStreamPrimitive\(0\);",
+        body,
+    )
+    assert re.search(
+        r"out1_data = b\.data;\s+out1_tag = b\.tag;\s+EmitStreamVertex\(1\);", body
+    )
+    assert "EmitVertex()" not in code and "PointStream" not in code
+    _glslang(tmp_path, code, "geom")
+
+
+MULTI_STREAM_CGL = """
+shader main {
+    struct VSOutput {
+        vec4 Pos @ gl_Position;
+        vec3 Normal @ Normal;
+    }
+    struct Drawn {
+        vec4 Pos @ gl_Position;
+        vec3 Color @ Color0;
+    }
+    struct Captured {
+        vec3 Color @ Color0;
+        mat2 Basis @ TexCoord2;
+    }
+    struct FSOutput {
+        vec4 color @ gl_FragColor;
+    }
+    vertex {
+        VSOutput main(vec3 position @ Position) {
+            VSOutput o;
+            o.Pos = vec4(position, 1.0);
+            o.Normal = position;
+            return o;
+        }
+    }
+    void Capture(vec3 color, inout PointStream<Captured> sink) {
+        Captured c;
+        c.Color = color;
+        c.Basis = mat2(1.0);
+        sink.Append(c);
+        sink.RestartStrip();
+    }
+    geometry {
+        @maxvertexcount(2)
+        void main(point VSOutput input[1], inout PointStream<Drawn> drawn, inout PointStream<Captured> captured) {
+            Drawn o;
+            o.Pos = input[0].Pos;
+            o.Color = input[0].Normal;
+            drawn.Append(o);
+            Capture(input[0].Normal * 2.0, captured);
+        }
+    }
+    fragment {
+        FSOutput main(Drawn input) {
+            FSOutput o;
+            o.color = vec4(input.Color, 1.0);
+            return o;
+        }
+    }
+}
+"""
+
+
+def test_only_stream_zero_links_to_the_fragment_stage(tmp_path):
+    code = _translate(
+        tmp_path, MULTI_STREAM_CGL, "m.cgl", "opengl", source_backend="cgl"
+    )
+
+    # The fragment stage reads COLOR0 at location 13, which stream 0 writes; stream 1's COLOR0 is not linked.
+    assert re.search(r"layout\(location = 13\) in vec3 Color;", code)
+    assert re.search(r"layout\(location = 13\) out vec3 out_Color;", code)
+    assert re.search(r"layout\(location = 0, stream = 1\) out vec3 out1_Color;", code)
+    assert re.search(r"layout\(location = 7, stream = 1\) out mat2 out1_Basis;", code)
+    # The helper takes stream 1 by its vertex structure and emits to it.
+    assert re.search(
+        r"void Capture\(vec3 color\) \{[^}]*EmitStreamVertex\(1\);\s+EndStreamPrimitive\(1\);",
+        code,
+    )
+    assert re.search(r"EmitStreamVertex\(0\);\s+Capture\(", code)
+    for stage in ("vert", "geom", "frag"):
+        _glslang(tmp_path, code, stage)
+
+
+_STREAMS_CGL = """
+shader main {
+    struct V { vec4 Pos @ gl_Position; }
+    struct W { vec4 A @location(%d); }
+    geometry {
+        @maxvertexcount(1)
+        void main(point V input[1], inout PointStream<V> a, %s) { a.Append(input[0]); }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("location", "streams", "reason"),
+    [
+        # An explicit location an earlier stream uses is the author's, so it is not moved.
+        (0, "inout PointStream<W> b, inout PointStream<W> c", "stream-location"),
+        (
+            0,
+            ", ".join(f"inout PointStream<W> s{k}" for k in range(4)),
+            "stream-count",
+        ),
+    ],
+)
+def test_crossgl_vertex_streams_glsl_cannot_declare_are_refused(
+    tmp_path, location, streams, reason
+):
+    with pytest.raises(GeometryStreamUnsupportedError) as error:
+        _translate(
+            tmp_path,
+            _STREAMS_CGL % (location, streams),
+            "r.cgl",
+            "opengl",
+            source_backend="cgl",
+        )
+    assert error.value.reason_code == reason
+
+
+def test_a_stream_layout_is_not_a_semantic():
+    from crosstl.translator import ast as A
+    from crosstl.translator.semantics.stage_varyings import int_literal, semantic
+
+    one = int_literal(1)
+    variable = A.VariableNode(
+        name="v",
+        var_type=A.NamedType("vec4"),
+        attributes=[
+            A.AttributeNode("location", [one]),
+            A.AttributeNode("stream", [one]),
+        ],
+    )
+    assert semantic(variable) is None

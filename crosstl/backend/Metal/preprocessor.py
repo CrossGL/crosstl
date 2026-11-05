@@ -1104,6 +1104,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ] = {}
         self._materialized_function_names: Set[str] = set()
         self._materialized_function_templates: Set[Tuple[str, str]] = set()
+        # Explicit free-function template calls materialized by `preprocess`,
+        # shared by its passes so a call first reached after member lowering
+        # reuses the helper an earlier pass emitted instead of redefining it.
+        self._explicit_template_function_names: Dict[
+            Tuple[str, Tuple[str, ...]], str
+        ] = {}
         self._active_static_constexpr_functions: Dict[
             str, List[_MetalConstexprFunction]
         ] = {}
@@ -1153,6 +1159,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self._instantiated_template_member_calls.clear()
         self._materialized_function_names.clear()
         self._materialized_function_templates.clear()
+        self._explicit_template_function_names.clear()
         self._active_static_constexpr_functions.clear()
         self._source_type_alias_bindings.clear()
         self._integral_constant_binary_operators.clear()
@@ -1417,7 +1424,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         include_struct_members: bool = True,
     ) -> str:
         materialized_names = (
-            materialized_names if materialized_names is not None else {}
+            materialized_names
+            if materialized_names is not None
+            else self._explicit_template_function_names
         )
         excluded_template_names = set(excluded_template_names or ())
         working = code
@@ -11400,6 +11409,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         one lexically visible candidate and proves an integral result.  Calls
         that are overloaded, runtime-dependent, recursive, or otherwise
         unsupported remain untouched for the normal residual-template diagnostic.
+
+        Inside a concrete struct body, a call without a template argument list
+        folds too when every candidate is a template none of whose parameters
+        the call could deduce: such a call names the specialization formed from
+        the default template arguments ([temp.arg.explicit]/4).  Member
+        lowering leaves static data member initializers and constructor member
+        initializers there, where no later helper pass binds the call, so once
+        the template declaration is removed the call would name nothing.  Calls
+        in function bodies stay for the signature-aware helper materializer.
         """
 
         functions = self._materialization_constexpr_function_index(code)
@@ -11407,9 +11425,22 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return code
         excluded_spans = self._find_template_declaration_spans(code)
         replacements: List[Tuple[int, int, str]] = []
+        struct_spans: Optional[List[Tuple[int, int]]] = None
         for call in self._find_static_constexpr_calls(code, set(functions)):
             if call.template_arguments is None:
-                continue
+                if not all(
+                    function.is_template
+                    and not deducible_template_parameters(self, function)
+                    for function in functions.get(call.name, ())
+                ):
+                    continue
+                if struct_spans is None:
+                    struct_spans = [
+                        struct.span
+                        for struct in self._find_concrete_struct_definitions(code)
+                    ]
+                if self._containing_span(call.span[0], struct_spans) is None:
+                    continue
             if self._containing_span(call.span[0], excluded_spans) is not None:
                 continue
             value = self._evaluate_static_constexpr_call(

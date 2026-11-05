@@ -84,6 +84,7 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import resource_identity_marker
 from ..semantics.constant_buffers import constant_buffer_element
+from ..semantics.hlsl_geometry_streams import EMPTY_STREAM_VERTEX_ATTRIBUTE
 from ..semantics.hlsl_ray_payloads import (
     PAYLOAD_ACCESS_ATTRIBUTES,
     PAYLOAD_STAGES,
@@ -319,6 +320,7 @@ from .hlsl_texture_residency import (
     hlsl_texture_resident_call,
 )
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
+from .hlsl_unrepresentable_memory import hlsl_unrepresentable_memory_qualifier
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_subgroup_lane_mask_expression,
@@ -528,6 +530,10 @@ from .pointer_reinterpret import (
 )
 from .private_array_rows import aliased_row_view, array_row_shape, array_row_view
 from .private_member_views import hlsl_aliased_scalar_view, hlsl_member_view_root
+from .private_pointer_alias_views import (
+    hlsl_aliased_writable_view,
+    hlsl_writable_pointer_parameters,
+)
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases, references_provably_disjoint
 from .relational_builtins import lower_relational_builtins
@@ -3030,6 +3036,7 @@ class HLSLCodeGen(
             "gl_IsFrontFace": "SV_IsFrontFace",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_PrimitiveID": "SV_PrimitiveID",
+            "gl_CullPrimitiveEXT": "SV_CullPrimitive",
             "gl_ViewIndex": "SV_ViewID",
             "gl_Layer": "SV_RenderTargetArrayIndex",
             "gl_ViewportIndex": "SV_ViewportArrayIndex",
@@ -10821,7 +10828,9 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
             for member in getattr(node, "members", [])
             if not self.hlsl_static_struct_member(member)
         ]
-        if not members:
+        if not members and not self.hlsl_union_attribute(
+            node, EMPTY_STREAM_VERTEX_ATTRIBUTE
+        ):
             code += "    int _crossgl_empty;\n"
         default_member_semantics = self.hlsl_default_struct_member_semantics(node)
         for member in members:
@@ -43665,6 +43674,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         aliased = hlsl_aliased_scalar_view(
             view_calls, scalar_parameters
         ) or aliased_row_view(view_calls)
+        if aliased is None:
+            aliased = hlsl_aliased_writable_view(
+                view_calls,
+                hlsl_writable_pointer_parameters(self, pointer_parameters),
+            )
         if aliased is not None:
             call, first, second, root = aliased
             raise DirectXPrivatePointerParameterError(
@@ -53677,6 +53691,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def resource_memory_qualifier(self, mapped_type, node):
+        unrepresentable = hlsl_unrepresentable_memory_qualifier(node)
+        if unrepresentable is not None:
+            return self.refuse_lowering(unrepresentable)
         if not (
             self.is_hlsl_rw_texture_type(mapped_type)
             or str(mapped_type).startswith("RWBuffer")

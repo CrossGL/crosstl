@@ -151,6 +151,11 @@ from .spirv_extension_builtins import (
     unmapped_builtin_reason,
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
+from .spirv_geometry_streams import (
+    STREAM_FUNCTIONS,
+    geometry_output_streams,
+    stream_decorations,
+)
 from .spirv_hlsl_registers import reserve_exact_binding, reserve_hlsl_descriptor_slots
 from .spirv_image_texels import (
     SHADER_IMAGE_FORMATS,
@@ -201,6 +206,7 @@ from .spirv_ray_builtins import (
     ray_constant_value,
     transposed_ray_builtin,
 )
+from .spirv_ray_locations import ray_location_variable, ray_variable_location
 from .spirv_refusals import SpirvRefusals
 from .spirv_separate_textures import separate_texture_type_info
 from .spirv_shading_rate import (
@@ -583,7 +589,11 @@ class VulkanSPIRVCodeGen(
         self.glsl_buffer_block_type_names = set()
 
         self.required_capabilities = set()
+        self.geometry_streams_used = False
+        self.geometry_output_streams = {}
         self.global_variables = {}
+        # (ray tracing storage class, location) -> variable names, for payloads named by location.
+        self.ray_storage_locations = {}
         self.stage_global_variables = {}
         self.local_variables = {}
         self.named_constants = {}
@@ -8236,6 +8246,12 @@ class VulkanSPIRVCodeGen(
             direction_expr, "TraceRay", "direction"
         )
         tmax = self.ray_tracing_float_operand(tmax_expr, "TraceRay", "Tmax")
+        payload_expr = (
+            ray_location_variable(
+                payload_expr, self.ray_storage_locations, "RayPayloadKHR"
+            )
+            or payload_expr
+        )
         payload, payload_destination = self.ray_tracing_storage_pointer(
             payload_expr, "RayPayloadKHR", "TraceRay", "payload"
         )
@@ -8268,8 +8284,14 @@ class VulkanSPIRVCodeGen(
         shader_index = self.ray_tracing_uint_operand(
             arguments[0], "CallShader", "shader index"
         )
+        callable_expr = (
+            ray_location_variable(
+                arguments[1], self.ray_storage_locations, "CallableDataKHR"
+            )
+            or arguments[1]
+        )
         callable_data, callable_destination = self.ray_tracing_storage_pointer(
-            arguments[1], "CallableDataKHR", "CallShader", "callable data"
+            callable_expr, "CallableDataKHR", "CallShader", "callable data"
         )
         if shader_index is None or callable_data is None:
             return self.ray_tracing_default_value("CallShader")
@@ -9270,6 +9292,23 @@ class VulkanSPIRVCodeGen(
             )
             return None
 
+        if function_name in STREAM_FUNCTIONS:
+            # The stream operand must be a constant instruction (SPIR-V OpEmitStreamVertex).
+            stream = self.literal_int_argument(args[0]) if len(args) == 1 else None
+            if stream is None or stream < 0:
+                self.refuse_lowering(
+                    f"SPIR-V geometry {function_name} requires one constant, "
+                    "non-negative stream number"
+                )
+                return None
+            self.require_capability("GeometryStreams")
+            self.geometry_streams_used = True
+            stream_id = self.register_constant(
+                stream, self.register_primitive_type("int")
+            )
+            self.emit(f"{STREAM_FUNCTIONS[function_name]} %{stream_id.id}")
+            return None
+
         if args:
             self.refuse_lowering(
                 f"SPIR-V geometry {function_name} requires no arguments"
@@ -9527,6 +9566,7 @@ class VulkanSPIRVCodeGen(
             "gl_Position": "gl_Position",
             "gl_PrimitiveID": "gl_PrimitiveID",
             "SV_PrimitiveID": "gl_PrimitiveID",
+            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             "gl_Layer": "gl_Layer",
             "gl_ViewportIndex": "gl_ViewportIndex",
             "gl_CullPrimitiveEXT": "gl_CullPrimitiveEXT",
@@ -10458,6 +10498,18 @@ class VulkanSPIRVCodeGen(
                     "taskPayloadSharedEXT storage"
                 )
                 return self.register_constant(0, uint_type)
+        elif self.task_payload_shared_variables:
+            # GL_EXT_mesh_shader's EmitMeshTasksEXT(x, y, z) passes the stage's one taskPayloadSharedEXT variable,
+            # which OpEmitMeshTasksEXT names; without it the mesh workgroups would read no payload.
+            if len(self.task_payload_shared_variables) > 1:
+                names = ", ".join(sorted(self.task_payload_shared_variables))
+                self.refuse_lowering(
+                    "SPIR-V mesh DispatchMesh without a payload argument is "
+                    f"ambiguous between task payload variables: {names}"
+                )
+                return self.register_constant(0, uint_type)
+            payload_pointer = next(iter(self.task_payload_shared_variables.values()))
+            self.record_task_payload_interface(payload_pointer)
 
         self.require_capability("MeshShadingEXT")
         self.require_extension("SPV_EXT_mesh_shader")
@@ -18474,6 +18526,19 @@ class VulkanSPIRVCodeGen(
             if qualifier in supported:
                 qualifiers.add(aliases.get(qualifier, qualifier))
 
+        if {"coherent(system)", "coherent(host)"} & {
+            memory_qualifier_name(qualifier)
+            for qualifier in [
+                *(getattr(node, "qualifiers", []) or []),
+                *(getattr(node, "resource_qualifiers", []) or []),
+            ]
+        }:
+            # Vulkan's Coherent reaches the device at most; the CrossDevice scope is not allowed.
+            self.refuse_lowering(
+                f"resource '{getattr(node, 'name', '<unnamed>')}' is coherent at system "
+                "scope: Vulkan SPIR-V has no coherence wider than the device"
+            )
+
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
@@ -22116,6 +22181,13 @@ class VulkanSPIRVCodeGen(
             return "TaskPayloadWorkgroupEXT"
         ray_storage = ray_storage_class(attribute_names | qualifiers)
         if ray_storage is not None:
+            location = ray_variable_location(node)
+            if location is not None:
+                names = self.ray_storage_locations.setdefault(
+                    (ray_storage, location), []
+                )
+                if node.name not in names:
+                    names.append(node.name)
             if getattr(node, "initial_value", None) is not None:
                 raise UnsupportedSPIRVFeatureError(
                     "ray tracing variable initializer",
@@ -30216,7 +30288,7 @@ class VulkanSPIRVCodeGen(
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
 
-            if callee_name in {"EmitVertex", "EndPrimitive"}:
+            if callee_name in {"EmitVertex", "EndPrimitive", *STREAM_FUNCTIONS}:
                 return self.process_geometry_stream_function_call(
                     callee_name, expr.args
                 )
@@ -32165,6 +32237,16 @@ class VulkanSPIRVCodeGen(
             )
 
         annotations.extend(self.decorations)
+        if getattr(self, "geometry_streams_used", False):
+            stream_annotations, unplaced = stream_decorations(
+                global_variables, debug_names, self.geometry_output_streams
+            )
+            annotations.extend(stream_annotations)
+            for name in unplaced:
+                self.refuse_lowering(
+                    f"SPIR-V geometry output '{name}' names a vertex stream, but no "
+                    "output variable of that name was declared"
+                )
 
         def unique(lines: List[str]) -> List[str]:
             seen = set()
@@ -32357,6 +32439,7 @@ class VulkanSPIRVCodeGen(
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
+        self.geometry_output_streams = geometry_output_streams(ast)
         ast = lower_constant_buffer_resources(
             ast,
             lambda name: self.refuse_lowering(

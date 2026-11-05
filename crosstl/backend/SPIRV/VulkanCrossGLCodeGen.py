@@ -1352,7 +1352,7 @@ class VulkanToCrossGLConverter:
             if qualifier_name in suppressed_qualifiers:
                 continue
             if (
-                qualifier_name in {"location", "component", "index"}
+                qualifier_name in {"location", "component", "index", "stream"}
                 and value is not None
             ):
                 attributes.append(f"@{qualifier_name}({value})")

@@ -52,7 +52,7 @@ __all__ = [
 GLSL_TARGETS = frozenset({"opengl", "glsl"})
 SPIRV_TARGETS = frozenset({"vulkan", "spirv"})
 INTERPOLATION = frozenset({"flat", "noperspective", "centroid", "sample", "smooth"})
-_LAYOUT_ATTRIBUTES = frozenset({"location", "component"})
+_LAYOUT_ATTRIBUTES = frozenset({"location", "component", "stream"})
 
 
 def stages(program):

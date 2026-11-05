@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+import pytest
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
@@ -11,6 +12,7 @@ import crosstl.translator.codegen as codegen
 from crosstl.translator.ast import PointerType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 
@@ -39,7 +41,7 @@ NUMERIC_CASES = (
 @dataclass(frozen=True)
 class ResourceMemoryQualifierCase:
     attribute: str
-    hlsl_prefix: str
+    hlsl_prefix: str | None  # None: HLSL cannot declare it and refuses the resource.
     glsl_qualifier: str
     metal_access: str
 
@@ -51,7 +53,8 @@ RESOURCE_MEMORY_QUALIFIER_CASES = (
     ResourceMemoryQualifierCase(
         "globallycoherent", "globallycoherent ", "coherent", "read_write"
     ),
-    ResourceMemoryQualifierCase("volatile", "", "volatile", "read_write"),
+    # HLSL has no volatile resources: DXC rejects 'volatile' on a global.
+    ResourceMemoryQualifierCase("volatile", None, "volatile", "read_write"),
     ResourceMemoryQualifierCase("restrict", "", "restrict", "read_write"),
     ResourceMemoryQualifierCase("readonly", "", "readonly", "read"),
     ResourceMemoryQualifierCase("writeonly", "", "writeonly", "write"),
@@ -612,24 +615,25 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
 
     ast = crosstl.translator.parse(shader)
 
-    hlsl = HLSLCodeGen().generate(ast)
     glsl_codegen = GLSLCodeGen()
     glsl = glsl_codegen.generate(ast)
     metal = MetalCodeGen().generate(ast)
+    outputs = [("opengl", glsl), ("metal", metal)]
+    if qualifier_case.hlsl_prefix is None:
+        with pytest.raises(DirectXLoweringRefused, match=qualifier_case.attribute):
+            HLSLCodeGen().generate(ast)
+    else:
+        hlsl = HLSLCodeGen().generate(ast)
+        outputs.append(("directx", hlsl))
+        assert (
+            f"{qualifier_case.hlsl_prefix}RWTexture2D<uint> {image_name} : register(u0);"
+            in hlsl
+        )
+        assert f": {qualifier_case.attribute}" not in hlsl
+        assert f"@{qualifier_case.attribute}" not in hlsl
 
-    for backend, generated in (
-        ("directx", hlsl),
-        ("opengl", glsl),
-        ("metal", metal),
-    ):
+    for backend, generated in outputs:
         _assert_codegen_output_is_usable(backend, generated)
-
-    assert (
-        f"{qualifier_case.hlsl_prefix}RWTexture2D<uint> {image_name} : register(u0);"
-        in hlsl
-    )
-    assert f": {qualifier_case.attribute}" not in hlsl
-    assert f"@{qualifier_case.attribute}" not in hlsl
 
     glsl_image_name = glsl_codegen.glsl_sanitized_identifier_base(image_name)
     assert (
