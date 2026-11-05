@@ -54,7 +54,11 @@ from .hlsl_ray_interfaces import (
 )
 from .stage_varyings import GLSL_TARGETS, SPIRV_TARGETS
 
-__all__ = ["DxrRayInterfaceUnsupportedError", "lower_dxr_ray_interfaces"]
+__all__ = [
+    "DxrRayInterfaceUnsupportedError",
+    "declare_dxr_builtin_structs",
+    "lower_dxr_ray_interfaces",
+]
 
 S = A.ShaderStage
 # Entry parameter attribute -> (GLSL storage qualifier of its variable, whether it has a location).
@@ -437,38 +441,12 @@ class _Lowering:
             else value
         )
 
-    def add_builtin_structs(self):
-        """Declare the DXR built-in structs the program uses and does not declare itself, in a fixed order."""
-        used = set()
-        for function in _functions(self.program):
-            used.add(_type_name(getattr(function, "return_type", None)))
-            used.update(
-                _type_name(parameter.param_type)
-                for parameter in function.parameters or []
-            )
-            for node in _walk(function):
-                if isinstance(node, A.VariableNode):
-                    used.add(_type_name(node.var_type))
-        used.update(
-            _type_name(getattr(variable, "var_type", None))
-            for variable in self.program.global_variables or []
-        )
-        declared = {struct.name for struct in self.program.structs or []}
-        for name in reversed(tuple(_BUILTIN_STRUCTS)):
-            if name not in used or name in declared:
-                continue
-            members = [
-                A.StructMemberNode(member, copy.deepcopy(kind))
-                for member, kind in _BUILTIN_STRUCTS[name]
-            ]
-            self.program.structs.insert(0, A.StructNode(name, members))
-
     def run(self):
         self.lower_entry(self.stage.entry_point)
         for function in list(_functions(self.program)):
             _transform(function, self.rewrite_statement)
             _transform(function, self.rewrite_expression)
-        self.add_builtin_structs()
+        declare_dxr_builtin_structs(self.program)
         for function in _functions(self.program):
             for node in _walk(function):
                 if (
@@ -480,6 +458,43 @@ class _Lowering:
                         "ray-call-position",
                         f"{node.operation} is not a statement of its own or an operand of one",
                     )
+
+
+def declare_dxr_builtin_structs(program, names=tuple(_BUILTIN_STRUCTS)) -> list[str]:
+    """Declare the DXR built-in structs among ``names`` that ``program`` uses and does not declare itself.
+
+    The structs go first, in the fixed order of ``_BUILTIN_STRUCTS``; returns the names declared.
+    """
+    used = set()
+    for function in _functions(program):
+        used.add(_type_name(getattr(function, "return_type", None)))
+        used.update(
+            _type_name(parameter.param_type) for parameter in function.parameters or []
+        )
+        for node in _walk(function):
+            if isinstance(node, A.VariableNode):
+                used.add(_type_name(node.var_type))
+    used.update(
+        _type_name(getattr(variable, "var_type", None))
+        for variable in program.global_variables or []
+    )
+    for struct in program.structs or []:
+        used.update(
+            _type_name(getattr(member, "member_type", None))
+            for member in getattr(struct, "members", None) or []
+        )
+    declared = {struct.name for struct in program.structs or []}
+    added = []
+    for name in reversed(tuple(_BUILTIN_STRUCTS)):
+        if name not in names or name not in used or name in declared:
+            continue
+        members = [
+            A.StructMemberNode(member, copy.deepcopy(kind))
+            for member, kind in _BUILTIN_STRUCTS[name]
+        ]
+        program.structs.insert(0, A.StructNode(name, members))
+        added.insert(0, name)
+    return added
 
 
 def lower_dxr_ray_interfaces(program, target) -> int:
