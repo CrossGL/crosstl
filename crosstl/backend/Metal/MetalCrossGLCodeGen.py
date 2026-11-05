@@ -79,6 +79,7 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .scalar_type_identity import canonical_scalar_type_spelling
 from .scoped_member_types import resolve_concrete_scoped_member_type
 from .simd_aliases import SIMD_TYPE_ALIASES
 from .sparse_color import (
@@ -2067,6 +2068,7 @@ class MetalToCrossGLConverter(
         self.cooperative_matrix_fragment_type_replacements = {}
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
+        self.template_name_spellings = {}
         self.texture_method_functions = {
             "read": "textureLoad",
             "write": "textureStore",
@@ -2190,6 +2192,12 @@ class MetalToCrossGLConverter(
         ):
             return name
 
+        if "<" in str(name):
+            # ``f<uint>`` and ``f<uint32_t>`` name one specialization; the first spelling met names it.
+            spellings = self.__dict__.setdefault("template_name_spellings", {})
+            name = spellings.setdefault(
+                canonical_scalar_type_spelling(str(name)), str(name)
+            )
         parts = []
         for index, char in enumerate(str(name)):
             valid = (
@@ -8942,6 +8950,7 @@ class MetalToCrossGLConverter(
         self.suppressed_out_of_line_call_operator_ids = set()
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
+        self.template_name_spellings = {}
         self.storage_texture_declaration_ids = (
             self.collect_storage_texture_declaration_ids(ast)
         )
