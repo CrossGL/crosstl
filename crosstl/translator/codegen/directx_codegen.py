@@ -276,6 +276,10 @@ from .hlsl_bfloat16_vectors import (
     HLSLBfloat16Vectors,
     hlsl_bfloat16_vector_helper_sources,
 )
+from .hlsl_buffer_block_atomic_values import (
+    generate_hlsl_buffer_block_atomic_value_assignment,
+    generate_hlsl_buffer_block_interlocked_statement,
+)
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
 from .hlsl_byteaddress_typed_access import (
@@ -293,6 +297,10 @@ from .hlsl_extension_builtins import (
     refuse_unmapped_hlsl_builtin,
 )
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
+from .hlsl_groupshared_atomics import (
+    hlsl_groupshared_variable_names,
+    is_hlsl_groupshared_atomic_target,
+)
 from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_image_formats import (
@@ -3907,6 +3915,7 @@ class HLSLCodeGen(
         }
         # Typed binary16 loads, stores and selections may change NaN payloads.
         ast = lower_half_private_storage(ast, self.map_type)
+        self.hlsl_groupshared_variable_names = hlsl_groupshared_variable_names(ast)
         target_stage = normalize_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False
@@ -5279,6 +5288,13 @@ class HLSLCodeGen(
         )
         for node, alias in self.hlsl_groupshared_declarations_to_emit(groupshared_vars):
             code += self.generate_hlsl_hoisted_groupshared_declaration(node, alias)
+        for node in groupshared_vars:
+            # Stage-scope group-shared variables are visible to every function of the stage.
+            declared_type = self.type_name_string(
+                self.hlsl_groupshared_declaration_type(node)
+            )
+            if getattr(node, "name", None) and declared_type:
+                self.global_variable_types.setdefault(node.name, declared_type)
 
         if cbuffers:
             code += "// Constant Buffers\n"
@@ -15422,6 +15438,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.hlsl_record_generated_statement_int_constants(
                     stmt, aggregate_assignment
                 )
+            block_atomic_assignment = (
+                generate_hlsl_buffer_block_atomic_value_assignment(self, stmt, indent)
+            )
+            if block_atomic_assignment is not None:
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, block_atomic_assignment
+                )
             ternary_assignment = (
                 self.generate_hlsl_typed_buffer_atomic_ternary_assignment_statement(
                     stmt, indent
@@ -15610,6 +15633,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         return self.hlsl_record_generated_statement_int_constants(
                             stmt, aggregate_assignment
                         )
+                    block_atomic_assignment = (
+                        generate_hlsl_buffer_block_atomic_value_assignment(
+                            self, stmt.expression, indent
+                        )
+                    )
+                    if block_atomic_assignment is not None:
+                        return self.hlsl_record_generated_statement_int_constants(
+                            stmt, block_atomic_assignment
+                        )
                     ternary_assignment = self.generate_hlsl_typed_buffer_atomic_ternary_assignment_statement(
                         stmt.expression, indent
                     )
@@ -15644,6 +15676,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if aggregate_value is not None:
                     aggregate_code, expression = aggregate_value
                     return f"{aggregate_code}{indent_str}{expression};\n"
+                interlocked_block = generate_hlsl_buffer_block_interlocked_statement(
+                    self, stmt.expression, indent
+                )
+                if interlocked_block is not None:
+                    return interlocked_block
                 atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
                     stmt.expression
                 )
@@ -50658,7 +50695,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             shared = self.hlsl_static_workgroup_pointer_binding(
                 target, self.current_hlsl_resource_pointer_aliases
             )
-            if shared is not None:
+            if shared is not None or is_hlsl_groupshared_atomic_target(self, target):
                 resource_type = "groupshared"
         if resource_type is None:
             readonly_resource_type = self.hlsl_typed_buffer_atomic_target_resource_type(
@@ -50669,7 +50706,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"DirectX typed buffer atomic '{func_name}' cannot write "
                     f"readonly {self.resource_base_type(readonly_resource_type)}"
                 )
-            if func_name == "atomicLoad":
+            if (
+                func_name == "atomicLoad"
+                and self.glsl_buffer_block_atomic_access(target)[0] is None
+            ):
                 raise ValueError(
                     "DirectX atomicLoad requires writable buffer or groupshared storage"
                 )
@@ -53215,6 +53255,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def byteaddress_atomic_operations(self):
         return {
+            # A relaxed atomic read is an OR with zero; a relaxed atomic write is an exchange.
+            "atomicLoad": ("or", "InterlockedOr", 1),
+            "atomicStore": ("exchange", "InterlockedExchange", 2),
             "atomicAdd": ("add", "InterlockedAdd", 2),
             "atomicMin": ("min", "InterlockedMin", 2),
             "atomicMax": ("max", "InterlockedMax", 2),
@@ -55099,7 +55142,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.unsupported_glsl_buffer_block_atomic_call(
                 target,
                 func_name,
-                "cannot write readonly ByteAddressBuffer",
+                (
+                    "cannot read readonly ByteAddressBuffer through an interlocked operation"
+                    if func_name == "atomicLoad"
+                    else "cannot write readonly ByteAddressBuffer"
+                ),
                 access,
             )
         if access.get("components") != 1 or access.get("matrix_columns"):
@@ -55117,9 +55164,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 access,
             )
 
-        self.validate_hlsl_byteaddress_atomic_value_arguments(
-            func_name, args, access, operation
-        )
+        if func_name != "atomicLoad":
+            self.validate_hlsl_byteaddress_atomic_value_arguments(
+                func_name, args, access, operation
+            )
         self.validate_hlsl_byteaddress_atomic_result_context(func_name, access)
 
         component_type = access["component_type"]
@@ -55136,7 +55184,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"{compare_value}, {replacement})"
             )
 
-        value = self.hlsl_byteaddress_atomic_value(args[1], access)
+        if func_name == "atomicLoad":
+            value = "0u" if component_type == "uint" else "0"
+        else:
+            value = self.hlsl_byteaddress_atomic_value(args[1], access)
         return f"{helper_name}({access['buffer']}, {offset}, {value})"
 
     def hlsl_byteaddress_atomic_value(self, arg, access):

@@ -44,6 +44,7 @@ __all__ = [
     "TARGETS",
     "canonicalize_atomic_calls",
     "hlsl_out_argument_atomics",
+    "shared_variable_names",
 ]
 
 _RETURNING_OUT_ORIGINAL = frozenset(
@@ -135,8 +136,11 @@ def _root_name(expression):
     return expression.name if isinstance(expression, A.IdentifierNode) else None
 
 
-def _shared_names(program):
-    """Names declared ``shared`` or ``groupshared`` at program or stage scope, or in a function body."""
+_SHARED_QUALIFIERS = frozenset({"shared", "groupshared"})
+
+
+def shared_variable_names(program, qualifiers=_SHARED_QUALIFIERS):
+    """Names declared with one of ``qualifiers`` at program or stage scope, or in a function body."""
     declarations = list(getattr(program, "global_variables", None) or [])
     stages = getattr(program, "stages", None) or {}
     for stage in stages.values() if isinstance(stages, dict) else stages:
@@ -150,8 +154,8 @@ def _shared_names(program):
     return {
         declaration.name
         for declaration in declarations
-        if {"shared", "groupshared"}
-        & set(getattr(declaration, "qualifiers", None) or [])
+        if qualifiers
+        & {str(value) for value in getattr(declaration, "qualifiers", None) or []}
     }
 
 
@@ -161,6 +165,12 @@ def _walk(node):
     pending = [node]
     while pending:
         item = pending.pop()
+        if isinstance(item, (list, tuple)):
+            # Function bodies may be a bare statement list instead of a block node.
+            pending.extend(item)
+            continue
+        if not isinstance(item, A.ASTNode):
+            continue
         yield item
         pending.extend(get_child(item, field, key) for field, key in child_slots(item))
 
@@ -268,6 +278,6 @@ def hlsl_out_argument_atomics(program, target) -> int:
         for function in iter_functions(program)
         if isinstance(getattr(function, "name", None), str)
     }
-    walker = _OutArgumentWalker(program, defined, _shared_names(program))
+    walker = _OutArgumentWalker(program, defined, shared_variable_names(program))
     walker.run_program()
     return walker.rewritten
