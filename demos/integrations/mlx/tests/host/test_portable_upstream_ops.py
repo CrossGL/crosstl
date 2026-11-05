@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 581
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 583
     assert all(
         name.startswith(
             (
@@ -204,7 +204,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 574 and not set(opengl) & set(excluded)
+    assert len(opengl) == 576 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -292,7 +292,7 @@ def test_upstream_op_groups_partition_the_inventory():
     )
     # The module tests run together, and only they run in their group.
     assert ops.GROUPS["modules"] == ops.MODULE_TESTS
-    assert len(ops.MODULE_TESTS) == 53
+    assert len(ops.MODULE_TESTS) == 55
     assert [name for name in ops.MODULE_TESTS if "cross_entropy" in name] == [
         "test_losses.TestLosses.test_binary_cross_entropy",
         "test_losses.TestLosses.test_cross_entropy",
