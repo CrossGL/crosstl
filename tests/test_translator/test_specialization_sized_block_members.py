@@ -3,7 +3,7 @@
 GL_KHR_vulkan_glsl, "Specialization Constants": an array inside a block may be sized with a specialization
 constant, "but the block will have a static layout ... the layout will be based on the default size of the array".
 Metal lays such a block out from the default, so it is lowered rather than refused, while ``length()`` and every
-other value use read the specialized count. ``length()`` of any array sized by program constants becomes
+other value use read the specialized count. An array outside a block reads its size from a compile-time macro. ``length()`` of any array sized by program constants becomes
 ``int(<size>)`` instead of the default's literal.
 """
 
@@ -16,7 +16,6 @@ import subprocess
 import pytest
 
 import crosstl
-from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 from crosstl.translator.semantics.array_length import ArrayLengthUnresolvedError
 
 UNIFORM_BLOCK = """#version 450
@@ -116,11 +115,48 @@ def test_storage_block_member_lowers_with_the_specialized_length(tmp_path):
     _assert_metal_compiles(tmp_path, metal)
 
 
-def test_local_array_sized_by_a_specialization_constant_is_still_refused(tmp_path):
-    with pytest.raises(
-        MetalLoweringRefused, match="array sized by specialization constant 'COUNT'"
-    ):
-        _translate(tmp_path, LOCAL_ARRAY, "metal", "local.comp")
+def test_local_array_sized_by_a_specialization_constant_reads_a_compile_time_macro(
+    tmp_path,
+):
+    # Unlike a block member, a function-scope array needs a constant-expression size, which a function constant
+    # is not, so ``COUNT`` is specialized when the source is compiled.
+    metal = _translate(tmp_path, LOCAL_ARRAY, "metal", "local.comp")
+    assert "#define CROSSGL_SPECIALIZATION_CONSTANT_ID_0 4\n" in metal, metal
+    assert "float scratch[COUNT];" in metal, metal
+    assert "[[function_constant(0)]]" not in metal, metal
+    _assert_metal_compiles(tmp_path, metal)
+
+
+SHARED_ARRAY = """#version 450
+layout (local_size_x = 64) in;
+layout (constant_id = 1) const int SHARED_DATA_SIZE = 64;
+layout (constant_id = 2) const float GRAVITY = 0.002;
+layout (binding = 0) buffer Pos { vec4 pos[]; } p;
+shared vec4 sharedData[SHARED_DATA_SIZE];
+void main() {
+    sharedData[gl_LocalInvocationIndex] = p.pos[gl_GlobalInvocationID.x];
+    barrier();
+    vec4 acc = vec4(0.0);
+    for (int j = 0; j < sharedData.length(); j++) {
+        acc += sharedData[j] * GRAVITY;
+    }
+    p.pos[gl_GlobalInvocationID.x] = acc;
+}
+"""
+
+
+def test_shared_array_sized_by_a_specialization_constant_reads_a_compile_time_macro(
+    tmp_path,
+):
+    metal = _translate(tmp_path, SHARED_ARRAY, "metal", "shared.comp")
+    assert (
+        " SHARED_DATA_SIZE = int(CROSSGL_SPECIALIZATION_CONSTANT_ID_1);" in metal
+    ), metal
+    assert "threadgroup float4 sharedData[SHARED_DATA_SIZE];" in metal, metal
+    assert "j < int(SHARED_DATA_SIZE)" in metal, metal
+    # ``GRAVITY`` sizes nothing, so it stays a function constant.
+    assert "[[function_constant(2)]];" in metal, metal
+    _assert_metal_compiles(tmp_path, metal)
 
 
 @pytest.mark.parametrize("backend", ["directx", "metal"])

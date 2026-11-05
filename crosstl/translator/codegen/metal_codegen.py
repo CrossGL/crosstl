@@ -426,8 +426,9 @@ from .metal_specialization_constants import (
     block_member_array_types,
     flattened_stage_io_array_types,
     metal_function_constant_type_refusal,
-    refuse_specialization_sized_arrays,
     render_metal_specialization_constant,
+    render_metal_specialization_macro,
+    specialization_constants_sizing_arrays,
 )
 from .metal_stage_input_builtins import split_metal_stage_input_builtins
 from .metal_stage_refusals import refuse_metal_stages
@@ -1045,6 +1046,7 @@ class MetalCodeGen(
         self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
         self.program_scope_sampler_constants = set()
+        self.metal_specialization_macro_constants = set()
         self.metal_type_aliases = {}
         self.cbuffer_variables = []
         self.cbuffer_binding_indices = {}
@@ -2118,6 +2120,7 @@ class MetalCodeGen(
         self.metal_forwarded_thread_private_globals = {}
         self.metal_program_scope_value_global_types = {}
         self.program_scope_sampler_constants = set()
+        self.metal_specialization_macro_constants = set()
         self.glsl_buffer_block_variables = []
         self.lowered_glsl_buffer_blocks = {}
         self.lowered_glsl_buffer_block_struct_names = set()
@@ -2511,20 +2514,21 @@ class MetalCodeGen(
         self.lowered_glsl_buffer_block_struct_names = {
             block["type_name"] for block in self.lowered_glsl_buffer_blocks.values()
         }
-        refuse_specialization_sized_arrays(
-            ast,
-            lambda node: self.metal_specialization_constant_id(node) is not None,
-            self.refuse_lowering,
-            flattened_stage_io_array_types(
-                structs,
-                self.metal_stage_io_struct_names,
-                self.metal_stage_io_member_array_info,
+        self.metal_specialization_macro_constants = (
+            specialization_constants_sizing_arrays(
+                ast,
+                lambda node: self.metal_specialization_constant_id(node) is not None,
+                flattened_stage_io_array_types(
+                    structs,
+                    self.metal_stage_io_struct_names,
+                    self.metal_stage_io_member_array_info,
+                )
+                + block_member_array_types(
+                    self.cbuffer_variables,
+                    structs,
+                    self.lowered_glsl_buffer_block_struct_names,
+                ),
             )
-            + block_member_array_types(
-                self.cbuffer_variables,
-                structs,
-                self.lowered_glsl_buffer_block_struct_names,
-            ),
         )
         self.unsupported_glsl_buffer_block_struct_names = set(
             self.glsl_buffer_block_struct_lowering_failures
@@ -3502,6 +3506,18 @@ class MetalCodeGen(
                     mapped_type,
                     self.is_metal_function_constant_value_type,
                 )
+                if (
+                    refusal is None
+                    and name in self.metal_specialization_macro_constants
+                ):
+                    code += render_metal_specialization_macro(
+                        self.metal_unused_declaration_qualifier("constant"),
+                        mapped_type,
+                        declaration,
+                        specialization_id,
+                        value_code,
+                    )
+                    continue
                 if refusal is None:
                     code += render_metal_specialization_constant(
                         self.metal_unused_declaration_qualifier("constant"),
