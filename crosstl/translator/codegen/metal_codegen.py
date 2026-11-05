@@ -170,6 +170,7 @@ from .extended_arithmetic_builtins import (
 from .float_remainder_assignment import float_remainder_assignment
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
+from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -180,6 +181,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import metal_generic_global_types
 from .generic_struct_utils import (
     build_generic_struct_specialization,
     collect_generic_struct_definitions,
@@ -2569,6 +2571,7 @@ class MetalCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
+            metal_generic_global_types(self, global_vars),
         )
         self.function_return_types.update(
             {
@@ -3289,6 +3292,7 @@ class MetalCodeGen(
                 continue
 
             if generic_function_parameters(func):
+                mark_generic_function_emitted(self, func)
                 for specialized_func in generic_function_emission_list(self, func):
                     functions_code += self.generate_function(specialized_func)
                 continue
@@ -3333,6 +3337,7 @@ class MetalCodeGen(
                     FunctionCallNode,
                 ):
                     if generic_function_parameters(func):
+                        mark_generic_function_emitted(self, func)
                         for specialized_func in generic_function_emission_list(
                             self,
                             func,
