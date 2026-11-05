@@ -287,6 +287,41 @@ uint64_t compiled_span(const array& x, const Shape& shape, const Strides& stride
   return span;
 }
 
+// compiled.cpp runs views with a negative stride through its int64_t
+// variants, which index before the data pointer; a host upload starts at
+// that pointer, so the host copies those inputs densely first, as it does
+// for its other primitives. Other inputs are passed through unchanged.
+bool compiled_has_negative_strides(
+    const std::vector<array>& inputs,
+    const std::function<bool(size_t)>& is_constant) {
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (is_constant(i) || is_scalar(inputs[i])) {
+      continue;
+    }
+    for (auto stride : inputs[i].strides()) {
+      if (stride < 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+std::vector<array> compiled_dense_inputs(
+    const std::vector<array>& inputs,
+    const std::function<bool(size_t)>& is_constant) {
+  std::vector<array> dense;
+  dense.reserve(inputs.size());
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    const auto& x = inputs[i];
+    const bool negative = !is_constant(i) && !is_scalar(x) &&
+        std::any_of(x.strides().begin(), x.strides().end(),
+                    [](int64_t stride) { return stride < 0; });
+    dense.push_back(negative ? dense_input(x) : x);
+  }
+  return dense;
+}
+
 void launch_compiled(
     const std::string& entry,
     const std::string& source,
@@ -309,9 +344,14 @@ void launch_compiled(
 } // namespace
 
 void Compiled::eval_gpu(
-    const std::vector<array>& inputs,
+    const std::vector<array>& given,
     std::vector<array>& outputs) {
   require_runtime();
+  // Only a negative stride replaces the inputs, so donation is otherwise kept.
+  const std::vector<array> dense = compiled_has_negative_strides(given, is_constant_)
+      ? compiled_dense_inputs(given, is_constant_)
+      : std::vector<array>{};
+  const auto& inputs = dense.empty() ? given : dense;
   for (const auto& x : inputs) {
     if (!cast_type(x.dtype())) {
       throw std::invalid_argument("CrossTL compiled kernels do not support this dtype.");
@@ -325,8 +365,8 @@ void Compiled::eval_gpu(
   auto [contiguous, negative_strides, shape, strides] =
       compiled_collapse_contiguous_dims(inputs, outputs[0], is_constant_);
   if (negative_strides || compiled_use_large_index(inputs, outputs, contiguous)) {
-    // MLX's large variants index with int64_t from the data pointer, which a
-    // host upload starting at that pointer cannot hold for negative offsets.
+    // The dense copies above leave no negative stride; MLX's int64_t
+    // variants for more than 2^31 elements are not ported.
     throw std::invalid_argument(
         "CrossTL compiled kernels require non-negative strides and 32-bit indices.");
   }

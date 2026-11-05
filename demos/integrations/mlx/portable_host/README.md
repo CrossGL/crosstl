@@ -2405,7 +2405,11 @@ tests that compare with PyTorch (`CONV_TRANSPOSE_TESTS`): the 1-D, 2-D and 3-D
 transposed convolutions, their gradients and their output padding;
 `test_conv_transpose_unfold_tiling` requires Metal itself.
 The `array`, `autograd` and `compile` groups run the `test_array` (42),
-`test_autograd` (45) and `test_compile` (55) methods that reach the GPU. Five
+`test_autograd` (45) and `test_compile` (56) methods that reach the GPU. A
+compiled tape runs the variant `Compiled::eval_gpu` selects, from the source
+the host generates with MLX's `build_kernel`; an input with a negative stride
+is copied densely first, because MLX's `int64_t` variants index it before its
+data pointer, where a host upload does not reach. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (41 `test_nn` methods: module state, weight files and the layers),
 `transforms` (25 `test_vmap` and 11 `test_eval` methods), `serialization` (18
