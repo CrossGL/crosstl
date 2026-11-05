@@ -13130,6 +13130,18 @@ class MetalToCrossGLConverter(
                     )
                     if qualifier in qualifier_set
                 ]
+                if (
+                    not self.preserve_pointer_pointee_const
+                    and "threadgroup" in pointer_qualifiers
+                ):
+                    # Threadgroup pointer parameters and locals drop pointee
+                    # const under this policy, so a cast to `const threadgroup
+                    # T*` must too, or it cannot initialize those declarations.
+                    pointer_qualifiers = [
+                        qualifier
+                        for qualifier in pointer_qualifiers
+                        if qualifier != "const"
+                    ]
                 if pointer_qualifiers:
                     mapped_type = f"{' '.join(pointer_qualifiers)} {mapped_type}"
             value = self.generate_expression(expr.expression, is_main)

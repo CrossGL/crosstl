@@ -1552,6 +1552,10 @@ def test_codegen_const_threadgroup_pointer_local_follows_parameter_pointee_polic
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
     assert f"{qualifier}threadgroup float* view = tile + 2;" in metal
+    _compile_metal_for_test(metal, tmp_path)
+
+
+def _compile_metal_for_test(metal, tmp_path):
     if shutil.which("xcrun") is None:
         return
     source = tmp_path / "partitions.metal"
@@ -1575,6 +1579,49 @@ def test_codegen_const_threadgroup_pointer_local_follows_parameter_pointee_polic
     if "unable to find utility" in result.stderr:
         return
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+CONST_THREADGROUP_CAST_SOURCE = """
+#include <metal_stdlib>
+using namespace metal;
+float first_and_fourth(const threadgroup float* view) { return view[0] + view[3]; }
+kernel void scalars(device float* output [[buffer(0)]],
+                    uint i [[thread_position_in_grid]]) {
+  threadgroup float2 tile[4];
+  tile[0] = float2(1.0f, 2.0f);
+  tile[1] = float2(3.0f, 4.0f);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const threadgroup float2* pairs = tile;
+  threadgroup const float* values = reinterpret_cast<threadgroup const float*>(pairs);
+  output[i] = first_and_fourth(values)
+      + first_and_fourth(reinterpret_cast<const threadgroup float*>(pairs));
+}
+"""
+
+
+@pytest.mark.parametrize("preserve", [False, True], ids=["dropped", "preserved"])
+def test_codegen_const_threadgroup_pointer_cast_follows_pointee_policy(
+    tmp_path, preserve
+):
+    # A cast to `const threadgroup T*` initializes a local and feeds a helper
+    # parameter; it must drop or keep pointee const exactly as they do, or the
+    # generated Metal assigns a const pointer to a non-const one.
+    ast = MetalParser(MetalLexer(CONST_THREADGROUP_CAST_SOURCE).tokenize()).parse()
+    crossgl = MetalToCrossGLConverter(preserve_pointer_pointee_const=preserve).generate(
+        ast
+    )
+
+    qualifier = "const " if preserve else ""
+    assert (
+        f"{qualifier}threadgroup float* values = ({qualifier}threadgroup float*)pairs;"
+        in crossgl
+    ), crossgl
+    assert f"first_and_fourth(({qualifier}threadgroup float*)pairs)" in crossgl
+    if not preserve:
+        assert "const threadgroup" not in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    _compile_metal_for_test(metal, tmp_path)
 
 
 REFERENCE_TO_ARRAY_SORT_SOURCE = """#include <metal_stdlib>
