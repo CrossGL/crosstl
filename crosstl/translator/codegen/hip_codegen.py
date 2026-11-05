@@ -899,6 +899,7 @@ class HipCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(node)),
+            shader_ast=node,
         )
         self.function_return_types.update(
             {

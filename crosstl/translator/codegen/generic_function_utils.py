@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 from ..ast import (
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
@@ -188,8 +189,33 @@ def _generic_member_expression_text(value):
     return str(value)
 
 
-def prepare_generic_function_specializations(generator, functions):
-    """Collect concrete generic function instantiations used by ``functions``."""
+def program_scope_variable_types(generator, shader_ast):
+    """``{name: type string}`` for the shader-scope variables of ``shader_ast``.
+
+    Specialization collection runs before most backends populate their
+    global-variable type maps, so a generic call whose argument reads a
+    program-scope variable (e.g. an element of a ``buffer float*``) would
+    otherwise deduce nothing. These types seed the collection walk only;
+    function parameters and locals still override them.
+    """
+    types = {}
+    if shader_ast is None:
+        return types
+    for variable in getattr(shader_ast, "global_variables", []) or []:
+        name = getattr(variable, "name", None)
+        raw_type = getattr(variable, "var_type", getattr(variable, "vtype", None))
+        type_text = generator.type_name_string(raw_type)
+        if name and type_text:
+            types.setdefault(name, type_text)
+    return types
+
+
+def prepare_generic_function_specializations(generator, functions, shader_ast=None):
+    """Collect concrete generic function instantiations used by ``functions``.
+
+    ``shader_ast`` supplies the shader-scope variable types the collection
+    walk needs to deduce generic arguments that read program-scope values.
+    """
     definitions = {}
     definition_ordinals = {}
     for func in functions or []:
@@ -218,11 +244,14 @@ def prepare_generic_function_specializations(generator, functions):
 
     pending = []
     generator.collecting_generic_function_specializations = True
+    program_scope_types = program_scope_variable_types(generator, shader_ast)
     try:
         for func in functions or []:
             if getattr(func, "name", None) in definitions:
                 continue
-            pending.extend(_collect_from_function(generator, func, {}))
+            pending.extend(
+                _collect_from_function(generator, func, {}, program_scope_types)
+            )
 
         seen_analysis = set()
         while pending:
@@ -232,7 +261,11 @@ def prepare_generic_function_specializations(generator, functions):
                 continue
             seen_analysis.add(key)
             substitutions = dict(getattr(clone, "_generic_substitutions", {}) or {})
-            pending.extend(_collect_from_function(generator, clone, substitutions))
+            pending.extend(
+                _collect_from_function(
+                    generator, clone, substitutions, program_scope_types
+                )
+            )
     finally:
         generator.collecting_generic_function_specializations = False
 
@@ -882,7 +915,7 @@ def generate_static_generic_numeric_call(generator, func_name):
     return str(value)
 
 
-def _collect_from_function(generator, func, substitutions):
+def _collect_from_function(generator, func, substitutions, program_scope_types=None):
     previous_local_variable_types = getattr(generator, "local_variable_types", {})
     previous_expected_type = getattr(
         generator, "current_expression_expected_type", None
@@ -892,7 +925,7 @@ def _collect_from_function(generator, func, substitutions):
         "current_generic_function_substitutions",
         {},
     )
-    generator.local_variable_types = {}
+    generator.local_variable_types = dict(program_scope_types or {})
     generator.current_expression_expected_type = None
     generator.current_generic_function_substitutions = substitutions
     try:
@@ -1165,6 +1198,49 @@ def _fallback_expression_result_type(generator, expr):
 
     if isinstance(expr, BinaryOpNode):
         return _binary_expression_result_type(generator, expr)
+
+    if isinstance(expr, ArrayAccessNode):
+        return _array_access_element_type(generator, expr)
+
+    return None
+
+
+def _array_access_element_type(generator, expr):
+    """Element type of one indexing operation, for generic-arg deduction.
+
+    Indexing a ``buffer float*`` (or any ``T*``) yields ``T``; indexing a
+    ``T[N]`` array yields ``T`` (dropping one extent); indexing a typed
+    buffer ``Buffer<T>`` yields ``T``. Backends whose own expression typing
+    already covers the access never reach this fallback.
+    """
+    array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+    # Prefer the side-effect-free map lookup: some backends record lowering
+    # refusals while answering a type query, and collection runs before any
+    # lowering state exists. Fall back to the generator query when the maps
+    # do not know the base.
+    array_type = generator.type_name_string(
+        _fallback_expression_result_type(generator, array_expr)
+    )
+    if not array_type:
+        array_type = generator.type_name_string(
+            _safe_expression_result_type(generator, array_expr)
+        )
+    if not array_type:
+        return None
+
+    pointee_type = _pointer_pointee_type(array_type)
+    if pointee_type is not None:
+        return pointee_type
+
+    if "[" in array_type and "]" in array_type:
+        open_bracket = array_type.find("[")
+        close_bracket = array_type.find("]", open_bracket)
+        if close_bracket != -1:
+            return (array_type[:open_bracket] + array_type[close_bracket + 1 :]) or None
+
+    buffer_base, buffer_args = generic_type_parts(array_type)
+    if buffer_base in TYPED_BUFFER_TYPE_NAMES and len(buffer_args) == 1:
+        return buffer_args[0]
 
     return None
 

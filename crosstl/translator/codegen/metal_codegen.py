@@ -2552,6 +2552,7 @@ class MetalCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
+            shader_ast=ast,
         )
         self.function_return_types.update(
             {

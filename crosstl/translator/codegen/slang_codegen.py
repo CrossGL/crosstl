@@ -517,6 +517,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             generic_function_specializations = prepare_generic_function_specializations(
                 self,
                 list(iter_function_nodes(ast)),
+                shader_ast=ast,
             )
             if generic_function_specializations:
                 specialized_functions = list(generic_function_specializations.values())

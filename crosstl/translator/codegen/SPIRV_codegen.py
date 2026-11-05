@@ -776,6 +776,12 @@ class VulkanSPIRVCodeGen(
         The caller may still return a placeholder so that generation can reach every other refusal in the
         module, but no module is returned while a refusal is pending.
         """
+        if getattr(self, "collecting_generic_function_specializations", False):
+            # Generic specialization collection is a speculative type-query
+            # walk that runs before any lowering state exists; its queries
+            # must not poison the real lowering with refusals for constructs
+            # that resolve fine once generation runs.
+            return
         self.refusals.record(reason)
 
     def require_capability(self, capability: str):
@@ -32590,6 +32596,7 @@ class VulkanSPIRVCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
+            shader_ast=ast,
         )
         if generic_function_specializations:
             all_functions = all_functions + list(
