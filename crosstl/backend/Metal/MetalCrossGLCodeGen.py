@@ -2195,7 +2195,9 @@ class MetalToCrossGLConverter(
         if "<" in str(name):
             # ``f<uint>`` and ``f<uint32_t>`` name one specialization; the first spelling met names it.
             spellings = self.__dict__.setdefault("template_name_spellings", {})
-            name = spellings.setdefault(canonical_scalar_type_spelling(str(name)), str(name))
+            name = spellings.setdefault(
+                canonical_scalar_type_spelling(str(name)), str(name)
+            )
         parts = []
         for index, char in enumerate(str(name)):
             valid = (
