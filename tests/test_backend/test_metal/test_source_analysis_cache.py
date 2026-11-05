@@ -1,4 +1,5 @@
 import collections
+import collections.abc
 
 import pytest
 
@@ -36,6 +37,20 @@ def test_each_tier_keeps_its_most_recent_entries():
     assert cache.get(fragments[0], dict) is not oldest
     cache.clear()
     assert len(cache) == 0
+
+
+def test_cache_reads_as_a_mapping_of_both_tiers():
+    # Project memoization fingerprints and copies a preprocessor's state, which holds this cache.
+    cache = SourceAnalysisCache(source_limit=2)
+    unit = "u" * FRAGMENT_LENGTH_LIMIT
+    unit_analysis = cache.get(unit, dict)
+    fragment_analysis = cache.get("fragment", dict)
+    assert isinstance(cache, collections.abc.Mapping)
+    assert list(cache) == [unit, "fragment"]
+    assert cache[unit] is unit_analysis and cache["fragment"] is fragment_analysis
+    assert dict(cache) == {unit: {}, "fragment": {}}
+    with pytest.raises(KeyError):
+        cache["absent"]
 
 
 def test_memoized_computes_once_and_does_not_store_a_failure():

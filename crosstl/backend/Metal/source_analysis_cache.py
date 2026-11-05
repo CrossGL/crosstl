@@ -12,7 +12,8 @@ input.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Generic, Hashable, MutableMapping, TypeVar
+from collections.abc import Iterator, Mapping
+from typing import Callable, Generic, Hashable, MutableMapping, TypeVar
 
 #: Sources shorter than this many characters are fragments and use the fragment LRU.
 FRAGMENT_LENGTH_LIMIT = 16384
@@ -23,14 +24,18 @@ AnalysisT = TypeVar("AnalysisT")
 ValueT = TypeVar("ValueT")
 
 
-class SourceAnalysisCache(Generic[AnalysisT]):
-    """Two LRUs of analyses keyed by source text: one for translation units and one for fragments."""
+class SourceAnalysisCache(Mapping[str, AnalysisT], Generic[AnalysisT]):
+    """Two LRUs of analyses keyed by source text: one for translation units and one for fragments.
+
+    It reads as a mapping from source text to analysis, so code that fingerprints or copies a preprocessor's state
+    (``crosstl.project.source_closure_memo``) treats it like the plain dict it replaces.
+    """
 
     __slots__ = ("_sources", "_fragments", "_source_limit")
 
     def __init__(self, source_limit: int) -> None:
-        self._sources: Dict[str, AnalysisT] = {}
-        self._fragments: Dict[str, AnalysisT] = {}
+        self._sources: dict[str, AnalysisT] = {}
+        self._fragments: dict[str, AnalysisT] = {}
         self._source_limit = source_limit
 
     def get(self, code: str, factory: Callable[[], AnalysisT]) -> AnalysisT:
@@ -53,6 +58,16 @@ class SourceAnalysisCache(Generic[AnalysisT]):
 
     def __contains__(self, code: object) -> bool:
         return code in self._sources or code in self._fragments
+
+    def __getitem__(self, code: str) -> AnalysisT:
+        try:
+            return self._sources[code]
+        except KeyError:
+            return self._fragments[code]
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self._sources
+        yield from self._fragments
 
     def __len__(self) -> int:
         return len(self._sources) + len(self._fragments)
