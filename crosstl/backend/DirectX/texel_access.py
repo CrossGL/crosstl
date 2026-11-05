@@ -18,6 +18,12 @@ from ..common_ast import (
     VariableNode,
     VectorConstructorNode,
 )
+from ..storage_image_texels import (
+    IMAGE_FORMAT_ATTRIBUTES,
+    crossgl_image_format,
+    storage_image_element_type,
+    texel_attribute_arguments,
+)
 
 
 class HLSLTexelAccessMixin:
@@ -271,23 +277,42 @@ class HLSLTexelAccessMixin:
         "RasterizerOrderedBuffer",
     )
 
-    def is_runtime_format_storage_texture(self, node):
-        """True for typed storage textures, whose format the runtime chooses.
+    def format_storage_image_format_attributes(self, node, indent):
+        """CrossGL ``@ format`` (and ``@ texel``) lines of a typed storage texture.
 
         HLSL declares only the element type of a typed UAV; the bound view
-        decides the storage format. Unless the source names a format (for
-        example ``[[vk::image_format]]``), the declaration carries
-        ``@ format(unknown)`` so targets that need a format do not guess one.
+        decides the storage format. DXC's ``[[vk::image_format(F)]]`` names
+        the format for Vulkan, and becomes ``@ format(F)``. Otherwise the
+        declaration carries ``@ format(unknown)``, so targets that need a
+        format do not guess one, and ``@ texel(...)`` keeps an element type
+        other than a four-component one (see ``storage_image_texels``).
         """
         if self.raw_type_base(getattr(node, "vtype", None)) not in (
             self.RUNTIME_FORMAT_STORAGE_TEXTURES
         ):
-            return False
+            return ""
+        prefix = "    " * indent
         for attribute in getattr(node, "attributes", None) or []:
             name = str(getattr(attribute, "name", "") or "").lower()
-            if name == "format" or "image_format" in name:
-                return False
-        return True
+            if name not in IMAGE_FORMAT_ATTRIBUTES:
+                continue
+            arguments = getattr(attribute, "args", None) or []
+            spelled = str(arguments[0]) if arguments else ""
+            image_format = crossgl_image_format(spelled) if arguments else None
+            if image_format is None:
+                return self.refuse_import(
+                    f"DirectX [[{name}({spelled})]] on '{node.name}': CrossGL has "
+                    "no such storage image format"
+                )
+            if image_format != "unknown":
+                return f"{prefix}@ format({image_format})\n"
+        lines = f"{prefix}@ format(unknown)\n"
+        element = storage_image_element_type(getattr(node, "vtype", None))
+        if element is not None:
+            texel = texel_attribute_arguments(self.canonical_composite_type(element))
+            if texel is not None:
+                lines += f"{prefix}@ texel({texel})\n"
+        return lines
 
     SAMPLED_TEXTURE_TYPES = {
         "Texture1D": "texture1D",

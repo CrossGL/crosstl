@@ -154,8 +154,9 @@ def test_hlsl_unformatted_integer_uavs_keep_their_width(tmp_path):
     assert "uimage2D wide;" in crossgl and "iimage2D pairs;" in crossgl
     hlsl = _translate(tmp_path, HLSL_TYPED_UAVS, ".hlsl", "directx")
     assert "RWTexture2D<uint4> wide" in hlsl
-    assert "RWTexture2D<int4> pairs" in hlsl
-    assert "RWTexture2D<float4> scalars" in hlsl
+    # @texel keeps the element types the source declared.
+    assert "RWTexture2D<int2> pairs" in hlsl
+    assert "RWTexture2D<float> scalars" in hlsl
     # An image atomic needs a single-component element.
     assert "RWTexture2D<uint> counters" in hlsl
     assert _statement(hlsl, "uint4 v") == "wide[id.xy]"

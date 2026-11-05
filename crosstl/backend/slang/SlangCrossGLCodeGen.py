@@ -7,6 +7,12 @@ from crosstl.translator.integer_literals import crossgl_legacy_octal
 from crosstl.translator.stage_utils import normalize_stage_name
 
 from ..import_refusals import SlangImportRefused
+from ..storage_image_texels import (
+    IMAGE_FORMAT_ATTRIBUTES,
+    crossgl_image_format,
+    storage_image_element_type,
+    texel_attribute_arguments,
+)
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_specialization_import import (
     specialization_ids,
@@ -16,6 +22,10 @@ from .slang_stage_roles import (
     slang_mesh_parameter_role,
     slang_mesh_stage_attributes,
     slang_ray_parameter_role,
+)
+from .slang_storage_image_access import (
+    SlangStorageImageAccessMixin,
+    texel_element_shape,
 )
 from .SlangAst import *
 from .SlangLexer import *
@@ -42,7 +52,7 @@ class UnsupportedSlangConformanceError(ValueError):
         )
 
 
-class SlangToCrossGLConverter(SlangMatrixImportMixin):
+class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMixin):
     """Serialize Slang backend AST nodes back into CrossGL source."""
 
     BINARY_PRECEDENCE = {
@@ -1446,6 +1456,13 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             if lowered_sequence is not None:
                 code += lowered_sequence
                 continue
+            texel_statement = self.generate_storage_image_statement(
+                stmt, indent, is_main
+            )
+            if texel_statement is not None:
+                code += self.generate_statement_label(stmt, indent)
+                code += "    " * indent + texel_statement
+                continue
             if isinstance(stmt, ReturnNode):
                 code += self.generate_statement_label(stmt, indent)
                 code += self.generate_deferred_scope_exits(
@@ -1719,6 +1736,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         lowered = self.matrix_assignment_expression(node, is_main)
         if lowered is not None:
             return lowered
+        texel_store = self.generate_storage_image_texel_store(node, is_main)
+        if texel_store is not None:
+            return texel_store
+        self.refuse_storage_image_texel_write(node.left)
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_expression(node.right, is_main)
         op = node.operator
@@ -1892,6 +1913,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
                 append_metadata("index", f"@index({arguments[0]})")
             elif name == "vk::push_constant":
                 append_metadata("push_constant", "@push_constant")
+
+        for text in self.storage_image_format_metadata(node):
+            append_metadata(text.split("(", 1)[0], text)
 
         specialization = getattr(self, "specialization_constant_ids", {}).get(id(node))
         if specialization is not None and specialization[0] is node:
@@ -2106,6 +2130,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             lowered = self.matrix_assignment_expression(expr, is_main)
             if lowered is not None:
                 return lowered
+            self.refuse_storage_image_texel_write(expr.left)
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             return f"{left} {expr.operator} {right}"
@@ -2122,6 +2147,13 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             return f"{self.map_type(expr.target_type)}({value})"
         elif isinstance(expr, UnaryOpNode):
             self.refuse_matrix_row_update(expr)
+            if expr.op in {
+                "POST_INCREMENT",
+                "POST_DECREMENT",
+                "PRE_INCREMENT",
+                "PRE_DECREMENT",
+            }:
+                self.refuse_storage_image_texel_write(expr.operand)
             operand = self.generate_expression(expr.operand, is_main)
             if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)):
                 operand = f"({operand})"
@@ -2143,6 +2175,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             )
             if matrix_value is not None:
                 return matrix_value
+            interlocked = self.generate_interlocked_call(expr, function_name, is_main)
+            if interlocked is not None:
+                return interlocked
             mul_call = self.generate_hlsl_mul_call(expr, is_main, function_name)
             if mul_call is not None:
                 return mul_call
@@ -2197,6 +2232,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             if image_call is not None:
                 return image_call
 
+            byte_address_atomic = self.generate_byte_address_interlocked_call(
+                expr, obj, is_main
+            )
+            if byte_address_atomic is not None:
+                return byte_address_atomic
             byte_address_buffer_call = self.generate_byte_address_buffer_method_call(
                 expr, obj, is_main
             )
@@ -2229,6 +2269,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             matrix_member = self.matrix_member_expression(expr, is_main)
             if matrix_member is not None:
                 return matrix_member
+            texel_swizzle = self.generate_storage_image_texel_swizzle(expr, is_main)
+            if texel_swizzle is not None:
+                return texel_swizzle
             obj = self.generate_expression(expr.object, is_main)
             if isinstance(
                 expr.object, (AssignmentNode, BinaryOpNode, TernaryOpNode, UnaryOpNode)
@@ -2239,6 +2282,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             matrix_index = self.matrix_index_expression(expr, is_main)
             if matrix_index is not None:
                 return matrix_index
+            texel_load = self.generate_storage_image_texel_load(expr, is_main)
+            if texel_load is not None:
+                return texel_load
             array = self.generate_expression(expr.array, is_main)
             index = self.generate_subscript_index(expr.index, is_main)
             return f"{array}[{index}]"
@@ -2376,6 +2422,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
             )
             if packed_buffer_type:
                 return f"{packed_buffer_type}{pointer_suffix}"
+            storage_image_type = self.map_integer_storage_image_type(
+                slang_type, base_type
+            )
+            if storage_image_type:
+                return f"{storage_image_type}{pointer_suffix}"
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
@@ -2441,6 +2492,66 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         elif not text.startswith("value_"):
             text = f"value_{text}"
         return text
+
+    def map_integer_storage_image_type(self, slang_type, base_type):
+        """``uimage2D`` or ``iimage2D`` for a storage texture of integer texels."""
+        if base_type not in self.STORAGE_IMAGE_RESOURCE_TYPES:
+            return None
+        image_type = self.type_map.get(base_type)
+        element = " ".join(str(storage_image_element_type(slang_type) or "").split())
+        match = re.fullmatch(
+            r"(uint|dword|int)[1-4]?|vector\s*<\s*(uint|dword|int)\s*,\s*[1-4]\s*>",
+            element,
+        )
+        if not image_type or match is None:
+            return None
+        scalar = match.group(1) or match.group(2)
+        return f"{'i' if scalar == 'int' else 'u'}{image_type}"
+
+    # Typed storage textures whose format the bound view decides, as the HLSL
+    # importer reads them.
+    RUNTIME_FORMAT_STORAGE_TEXTURES = frozenset(
+        {
+            "RWTexture1D",
+            "RWTexture1DArray",
+            "RWTexture2D",
+            "RWTexture2DArray",
+            "RWTexture3D",
+        }
+    )
+
+    def storage_image_format_metadata(self, node):
+        """CrossGL ``@format`` (and ``@texel``) of a typed storage texture.
+
+        Slang's ``[format(F)]`` and ``[[vk::image_format(F)]]`` name the format.
+        Without them the view bound at run time decides it, so the declaration
+        carries ``@format(unknown)`` and ``@texel(...)`` keeps an element type
+        other than a four-component one, as the HLSL importer writes them.
+        """
+        vtype = str(getattr(node, "vtype", "") or "")
+        if vtype.split("<", 1)[0].strip() not in self.RUNTIME_FORMAT_STORAGE_TEXTURES:
+            return []
+        for attribute in getattr(node, "attributes", None) or []:
+            name = str(attribute.get("name", "")).lower()
+            if name not in IMAGE_FORMAT_ATTRIBUTES:
+                continue
+            arguments = attribute.get("arguments", []) or []
+            spelled = str(arguments[0]) if arguments else ""
+            image_format = crossgl_image_format(spelled) if arguments else None
+            if image_format is None:
+                raise SlangImportRefused(
+                    [
+                        f"Slang [{name}({spelled})] on '{node.name}': CrossGL has "
+                        "no such storage image format"
+                    ]
+                )
+            if image_format != "unknown":
+                return [f"@format({image_format})"]
+        metadata = ["@format(unknown)"]
+        texel = texel_attribute_arguments(storage_image_element_type(vtype))
+        if texel is not None:
+            metadata.append(f"@texel({texel})")
+        return metadata
 
     def map_pointer_element_buffer_type(self, slang_type, base_type):
         if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
@@ -2941,14 +3052,27 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
         resource_type = self.storage_image_resource_expression_type(expr.object)
         resource_base = self.resource_type_base(resource_type)
         args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
+        shape = texel_element_shape(storage_image_element_type(resource_type))
+        if shape is None:
+            raise SlangImportRefused(
+                [
+                    f"Slang {obj}.{expr.method}: CrossGL images have no texels of "
+                    f"type '{resource_type}'"
+                ]
+            )
         if expr.method == "Load":
-            return f"imageLoad({', '.join([obj] + args)})"
+            # CrossGL image loads return four components; Load returns the element type.
+            narrowing = {1: ".x", 2: ".xy", 3: ".xyz", 4: ""}[shape[1]]
+            return f"imageLoad({', '.join([obj] + args)}){narrowing}"
         if (
             expr.method == "Store"
             and len(args) == 2
             and not self.is_multisample_resource_base(resource_base)
         ):
-            return f"imageStore({', '.join([obj] + args)})"
+            value = self.widen_storage_image_texel(
+                resource_type, self.storage_image_value_shape(expr.args[1]), args[1]
+            )
+            return f"imageStore({obj}, {args[0]}, {value})"
         return None
 
     def generate_byte_address_buffer_method_call(self, expr, obj, is_main=False):
