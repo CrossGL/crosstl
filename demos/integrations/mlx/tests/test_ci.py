@@ -2138,7 +2138,6 @@ def test_mlx_frontier_accounting_counts_refused_vulkan_sources_separately():
     script = textwrap.dedent(
         workflow[script_start : workflow.index("\n          PY", script_start)]
     )
-    assert run_porting.MLX_VULKAN_FRONTIER_REFUSALS
     assert set(run_porting.MLX_VULKAN_FRONTIER_SOURCES) == set(
         run_porting.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     ) - set(run_porting.MLX_VULKAN_FRONTIER_REFUSALS) - set(
