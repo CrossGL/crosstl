@@ -1927,6 +1927,15 @@ def _vulkan_extension_names(properties: Any) -> set[str]:
     return {str(item.extensionName) for item in properties or ()}
 
 
+def _vulkan_driver_missing(vk: Any, exc: Exception) -> bool:
+    # The loader reports VK_ERROR_INCOMPATIBLE_DRIVER when it finds no driver at all,
+    # portability drivers included once portability enumeration is requested.
+    incompatible_driver = getattr(vk, "VkErrorIncompatibleDriver", None)
+    return isinstance(incompatible_driver, type) and isinstance(
+        exc, incompatible_driver
+    )
+
+
 def _vulkan_device_name(vk: Any, physical_device: Any) -> str | None:
     get_properties = getattr(vk, "vkGetPhysicalDeviceProperties", None)
     if not callable(get_properties):
@@ -1984,10 +1993,9 @@ class VulkanComputeRuntime:
             device_name = _vulkan_device_name(vk, physical_device)
         except Exception as exc:
             error = str(exc) or type(exc).__name__
-            if portability and instance is None:
+            reason_kind = "vulkan-runtime-unavailable"
+            if portability and instance is None and not _vulkan_driver_missing(vk, exc):
                 reason_kind = "portability-enumeration-failed"
-            else:
-                reason_kind = "vulkan-runtime-unavailable"
             return RuntimeExecutorAvailability(
                 False,
                 reason=f"Vulkan runtime is unavailable: {error}",

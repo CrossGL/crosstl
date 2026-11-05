@@ -5319,29 +5319,38 @@ def test_vulkan_compute_runtime_skips_portability_enumeration_when_absent(tmp_pa
 
 
 @pytest.mark.parametrize(
-    ("instance_extensions", "reason_kind"),
+    ("instance_extensions", "error_name", "reason_kind"),
     [
-        (["VK_KHR_portability_enumeration"], "portability-enumeration-failed"),
-        ([], "vulkan-runtime-unavailable"),
+        (
+            ["VK_KHR_portability_enumeration"],
+            "VkErrorExtensionNotPresent",
+            "portability-enumeration-failed",
+        ),
+        # No driver at all, portability drivers included: not a portability failure.
+        (
+            ["VK_KHR_portability_enumeration"],
+            "VkErrorIncompatibleDriver",
+            "vulkan-runtime-unavailable",
+        ),
+        ([], "VkErrorIncompatibleDriver", "vulkan-runtime-unavailable"),
     ],
 )
 def test_vulkan_compute_runtime_reports_instance_creation_failure(
-    tmp_path, instance_extensions, reason_kind
+    tmp_path, instance_extensions, error_name, reason_kind
 ):
-    class VkErrorIncompatibleDriver(Exception):
-        pass
-
+    error_type = type(error_name, (Exception,), {})
     vk = _fake_vulkan_module(
         instance_extensions=instance_extensions,
-        create_error=VkErrorIncompatibleDriver(),
+        create_error=error_type(),
     )
+    setattr(vk, error_name, error_type)
     runtime = VulkanComputeRuntime(module_loader=lambda _name: vk)
 
     availability = runtime.is_available(None, _runtime_request(tmp_path))
 
     assert availability.available is False
     assert availability.details["reasonKind"] == reason_kind
-    assert availability.details["error"] == "VkErrorIncompatibleDriver"
+    assert availability.details["error"] == error_name
 
 
 @pytest.mark.parametrize(
