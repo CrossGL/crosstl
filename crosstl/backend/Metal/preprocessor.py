@@ -27,6 +27,7 @@ from typing import (
     Union,
 )
 
+from crosstl.backend.DirectX.macro_expansion import METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
@@ -1048,6 +1049,8 @@ _CONSTEXPR_CALL_SCAN_STOPS = re.compile(r"[\"'/]|[^\W\d]")
 
 class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     """Small Metal preprocessor used before lexing imported source files."""
+
+    macro_dialect = METAL_MACROS
 
     def __init__(
         self,
