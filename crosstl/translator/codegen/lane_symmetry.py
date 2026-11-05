@@ -27,7 +27,8 @@ declared without a value holds only what its writes store, since reading an
 indeterminate value is undefined in the source. A local passed alone to a
 private reference parameter receives the level of the helper's writes to
 it. Control has a level when every enclosing condition, and every exit that
-may precede it, has that level. Collective results require full subgroups,
+may precede it, has that level. A read-only view of storage holds the
+address it starts from and cannot write its referent. Collective results require full subgroups,
 a function every subgroup enters with the same lanes and lane-symmetric
 control at the collective. Unknown statements, labelled exits, address
 escapes, unresolved calls and recursion fail closed to varying.
@@ -324,7 +325,18 @@ class FunctionSymmetry:
         if self.rules.volatile(node):
             self.writes.append((name, "varying", (), site))
             return
-        if isinstance(getattr(node, "var_type", None), (PointerType, ReferenceType)):
+        var_type = getattr(node, "var_type", None)
+        if (
+            isinstance(var_type, PointerType)
+            and not var_type.is_mutable
+            and var_type.access_mode in {None, "read"}
+            and var_type.address_space not in {None, "", "thread"}
+        ):
+            # A read-only view of storage writes nothing: it holds the address
+            # it starts from, and what it reads is its referent's level.
+            self.writes.append((name, "set", (value,), site))
+            return
+        if isinstance(var_type, (PointerType, ReferenceType)):
             # An alias may write its referent, and its own value is an address.
             self.writes.append((name, "varying", (), site))
             for alias in self._identifier_names(value):
@@ -484,6 +496,14 @@ class FunctionSymmetry:
                 if level < self.exit_levels[id(node)]:
                     self.exit_levels[id(node)] = level
                     changed = True
+
+    def _local_names(self):
+        names = set(getattr(self, "declared", ()))
+        function = getattr(self, "function", None)
+        for parameter in getattr(function, "parameters", None) or []:
+            if isinstance(getattr(parameter, "name", None), str):
+                names.add(parameter.name)
+        return names
 
     def _owned_names(self):
         owned = set(self.declared)
@@ -738,7 +758,11 @@ class FunctionSymmetry:
 
         Conversions apply only to values they keep unchanged, so a folded
         index is the one every invocation passes; anything else is None.
+        Names this function declares or receives shadow module constants.
         """
+        local_names = self._local_names()
+        if local_names and self._identifier_names(node) & local_names:
+            return None
         value = self.rules.constant_int(node)
         if value is not None:
             return value
