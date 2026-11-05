@@ -1920,6 +1920,7 @@ class OpenGLComputeRuntime:
 
 _VK_PORTABILITY_ENUMERATION = "VK_KHR_portability_enumeration"
 _VK_PORTABILITY_SUBSET = "VK_KHR_portability_subset"
+_VK_GET_PHYSICAL_DEVICE_PROPERTIES_2 = "VK_KHR_get_physical_device_properties2"
 
 
 def _vulkan_extension_names(properties: Any) -> set[str]:
@@ -2086,12 +2087,17 @@ class VulkanComputeRuntime:
             apiVersion=getattr(vk, "VK_API_VERSION_1_1", vk.VK_API_VERSION_1_0),
         )
         options: dict[str, Any] = {}
-        if self._portability_enumeration_available(vk):
+        instance_extensions = self._instance_extension_names(vk)
+        if _VK_PORTABILITY_ENUMERATION in instance_extensions:
             # Portability drivers such as MoltenVK are only enumerated on request.
+            extensions = [_VK_PORTABILITY_ENUMERATION]
+            if _VK_GET_PHYSICAL_DEVICE_PROPERTIES_2 in instance_extensions:
+                # VK_KHR_portability_subset requires it on a Vulkan 1.0 instance.
+                extensions.append(_VK_GET_PHYSICAL_DEVICE_PROPERTIES_2)
             options = {
                 "flags": vk.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,
-                "enabledExtensionCount": 1,
-                "ppEnabledExtensionNames": [_VK_PORTABILITY_ENUMERATION],
+                "enabledExtensionCount": len(extensions),
+                "ppEnabledExtensionNames": extensions,
             }
         create_info = vk.VkInstanceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
@@ -2101,14 +2107,15 @@ class VulkanComputeRuntime:
         return vk.vkCreateInstance(create_info, None)
 
     def _portability_enumeration_available(self, vk: Any) -> bool:
+        return _VK_PORTABILITY_ENUMERATION in self._instance_extension_names(vk)
+
+    def _instance_extension_names(self, vk: Any) -> set[str]:
         enumerate_extensions = getattr(
             vk, "vkEnumerateInstanceExtensionProperties", None
         )
         if not callable(enumerate_extensions):
-            return False
-        return _VK_PORTABILITY_ENUMERATION in _vulkan_extension_names(
-            enumerate_extensions(None)
-        )
+            return set()
+        return _vulkan_extension_names(enumerate_extensions(None))
 
     def _destroy_instance(self, vk: Any, instance: Any) -> None:
         destroy = getattr(vk, "vkDestroyInstance", None)
