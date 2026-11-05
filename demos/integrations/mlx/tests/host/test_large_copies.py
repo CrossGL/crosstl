@@ -15,7 +15,7 @@ from demos.integrations.mlx.portable_host import copy_layout, runtime
 from demos.integrations.mlx.portable_host import verify_large_copies as verifier
 
 
-def layout_buffers(shape, strides, region=None, preserve=False):
+def layout_buffers(shape, strides, region=None, preserve=False, split=False):
     padding = max(0, 2 - len(shape))
     destination_strides = [0] * padding + [
         math.prod(shape[i + 1 :]) for i in range(len(shape))
@@ -24,7 +24,10 @@ def layout_buffers(shape, strides, region=None, preserve=False):
     strides = [0] * padding + list(strides)
     strides = [0 if size == 1 else step for size, step in zip(shape, strides)]
     count = math.prod(shape)
-    part, origin, destination_offset = region or (shape, 0, 0)
+    part, origin, destination_offset = region = region or (shape, 0, 0)
+    window_low, window_high = copy_layout.destination_window(
+        region, destination_strides, count, split
+    )
     extents = [(size - 1) * step for size, step in zip(part, strides)]
     low = origin + sum(min(value, 0) for value in extents)
     high = origin + sum(max(value, 0) for value in extents)
@@ -34,7 +37,7 @@ def layout_buffers(shape, strides, region=None, preserve=False):
         "dst_strides": destination_strides,
         "ndim": [len(part)],
         "src_offset": [origin - low],
-        "dst_offset": [destination_offset],
+        "dst_offset": [destination_offset - window_low],
     }
     memory = {
         name: (runtime.TYPES[copy_layout.DTYPES[name]] * len(data))(*data)
@@ -53,7 +56,11 @@ def layout_buffers(shape, strides, region=None, preserve=False):
     # Layout validation reads metadata only, never these synthetic storage addresses.
     buffers["src"] = runtime.Buffer(b"src", b"uint32", 2**40, high - low + 1, 0)
     buffers["dst"] = runtime.Buffer(
-        b"dst", b"uint32", 2**42, count, copy_layout.INOUT if preserve else 1
+        b"dst",
+        b"uint32",
+        2**42,
+        window_high - window_low + 1,
+        copy_layout.INOUT if preserve else 1,
     )
     return buffers, memory
 
@@ -72,14 +79,27 @@ def test_copy_inventory_preserves_exact_source_storage_and_axis_limits():
         assert np.shares_memory(expected, expected.base)
         assert expected.base.tobytes() == source.tobytes()
         regions, written = [], []
-        for index, region in enumerate(verifier.copy_regions(case)):
+        planned = verifier.copy_regions(case)
+        for index, region in enumerate(planned):
             buffers, memory = layout_buffers(
-                case["shape"], case["strides"], region, preserve=index > 0
+                case["shape"],
+                case["strides"],
+                region,
+                preserve=index > 0,
+                split=len(planned) > 1,
             )
             metadata = copy_layout.validate(buffers, math.prod(region[0]))
             assert len(memory) == 6
             assert metadata["preserveDestination"] is (index > 0)
-            written.extend(copy_layout.destination_indices(metadata))
+            # A split copy's region binds exactly the destination span it writes.
+            start = region[2] - metadata["destinationOffset"]
+            indices = list(copy_layout.destination_indices(metadata))
+            if len(planned) > 1:
+                assert min(indices) == 0
+                assert max(indices) == metadata["destinationCount"] - 1
+            else:
+                assert start == 0 and metadata["destinationCount"] == expected.size
+            written.extend(start + position for position in indices)
             regions.append(metadata)
         # Regions run in ascending destination order and write each element once.
         assert written == list(range(expected.size))
@@ -275,18 +295,25 @@ def synthetic_events(tmp_path, target, dtype, case):
     state, events = [0] * len(result), []
     for index, region in enumerate(regions):
         buffers, memory = layout_buffers(
-            case["shape"], case["strides"], region, preserve=index > 0
+            case["shape"],
+            case["strides"],
+            region,
+            preserve=index > 0,
+            split=len(regions) > 1,
         )
         threads = math.prod(region[0])
         metadata = copy_layout.validate(buffers, threads)
         first = region[1] - memory["src_offset"][0] - low
+        window = region[2] - metadata["destinationOffset"]
+        window = slice(window, window + metadata["destinationCount"])
         values = {
             "src": source[first : first + metadata["sourceCount"]],
-            "dst": state + guard,
+            "dst": state[window] + guard,
             **{name: list(value) for name, value in memory.items()},
         }
         state = list(state)
         for position in copy_layout.destination_indices(metadata):
+            position += window.start
             state[position] = result[position]
         dtypes = {**copy_layout.DTYPES, "src": physical, "dst": physical}
         inputs = {
@@ -324,7 +351,9 @@ def synthetic_events(tmp_path, target, dtype, case):
                 "workgroupSize": [1, 1, 1],
                 "inputs": inputs,
                 "copyValues": (
-                    [bool(v) for v in state] if physical == "bool" else list(state)
+                    [bool(v) for v in state[window]]
+                    if physical == "bool"
+                    else state[window]
                 ),
                 "copyGuardWords": list(guard),
                 "details": {
@@ -362,17 +391,26 @@ def test_copy_audit_follows_preserved_launch_regions(
     # A two-group axis limit splits this small copy into the host's regions.
     monkeypatch.setattr(copy_layout, "MAX_GROUPS", 2)
     case = {"id": "split", "dtype": dtype, "shape": [5, 3], "strides": [7, -2]}
+    if fault == "overwrite":
+        # Column chunks interleave, so the second region's span holds results
+        # of the first: elements 5 to 8 lie between its writes 4 and 9.
+        case.update(shape=[2, 5], strides=[11, -2])
     case, item, events = synthetic_events(tmp_path, target, dtype, case)
-    assert [event["copyMetadata"]["shape"] for event in events] == [[2, 3]] * 2 + [
-        [1, 3]
-    ]
+    shapes = [event["copyMetadata"]["shape"] for event in events]
+    spans = [event["copyMetadata"]["destinationCount"] for event in events]
+    if fault == "overwrite":
+        assert shapes == [[2, 4], [2, 1]] and spans == [9, 6]
+    else:
+        # Row chunks bind disjoint destination spans.
+        assert shapes == [[2, 3]] * 2 + [[1, 3]] and spans == [6, 6, 3]
     audited = []
     monkeypatch.setattr(verifier, "audit_native_execution", audited.append)
     if fault == "overwrite":
-        # A later region that discarded earlier results uploads zeros.
-        events[1]["inputs"]["dst"]["values"] = list(
-            events[0]["inputs"]["dst"]["values"]
-        )
+        # A later region whose span lost the results of earlier regions.
+        upload = events[1]["inputs"]["dst"]["values"]
+        upload[1:5] = [
+            not value if type(value) is bool else value ^ 1 for value in upload[1:5]
+        ]
     elif fault == "unpreserved":
         events[2]["copyMetadata"]["preserveDestination"] = False
     elif fault == "missing":

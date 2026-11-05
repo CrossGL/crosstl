@@ -107,6 +107,23 @@ def launch_regions(shape, source_strides, destination_strides, destination_offse
     return regions
 
 
+def destination_window(region, destination_strides, count, split):
+    """Mirror the destination span the host binds for one launch region.
+
+    A launch of a split copy binds only the elements from the lowest to the
+    highest destination index it writes; an unsplit copy binds all ``count``.
+    Returns ``(low, high)``, inclusive, in elements of the destination.
+    """
+    shape, _, offset = region
+    if not split:
+        return 0, count - 1
+    extents = [(size - 1) * step for size, step in zip(shape, destination_strides)]
+    return (
+        offset + sum(min(value, 0) for value in extents),
+        offset + sum(max(value, 0) for value in extents),
+    )
+
+
 def validate(buffers, logical_size, *, dtype="uint32"):
     if (
         type(logical_size) is not int

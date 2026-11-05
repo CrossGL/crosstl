@@ -219,11 +219,14 @@ def audit_case(np, case, item, events, directory):
         source, expected = source.view(np.uint32), expected.view(np.uint32)
         guard = COPY_GUARD
     source, expected = source.tolist(), expected.tolist()
-    # Regions after the first preserve the elements earlier regions wrote.
+    # Regions after the first preserve the elements earlier regions wrote, and
+    # each region of a split copy binds only the destination span it writes.
     state = [0] * count
-    for index, (event, (part, origin, destination_offset)) in enumerate(
-        zip(events, regions)
-    ):
+    for index, (event, region) in enumerate(zip(events, regions)):
+        part, origin, destination_offset = region
+        window_low, window_high = copy_layout.destination_window(
+            region, destination_strides, count, len(regions) > 1
+        )
         extents = [(size - 1) * step for size, step in zip(part, strides)]
         part_low = origin + sum(min(value, 0) for value in extents)
         part_high = origin + sum(max(value, 0) for value in extents)
@@ -232,9 +235,9 @@ def audit_case(np, case, item, events, directory):
             "sourceStrides": strides,
             "destinationStrides": destination_strides,
             "sourceOffset": origin - part_low,
-            "destinationOffset": destination_offset,
+            "destinationOffset": destination_offset - window_low,
             "sourceCount": part_high - part_low + 1,
-            "destinationCount": count,
+            "destinationCount": window_high - window_low + 1,
             "preserveDestination": index > 0,
             "workgroupCount": [(part[-1] + 1) // 2, part[-2], math.prod(part[:-2])],
         }
@@ -272,13 +275,13 @@ def audit_case(np, case, item, events, directory):
             inputs[member] = value
         values = {
             "src": source[part_low - low : part_high - low + 1],
-            "dst": state + guard,
+            "dst": state[window_low : window_high + 1] + guard,
             "src_shape": part,
             "src_strides": strides,
             "dst_strides": destination_strides,
             "ndim": [len(part)],
             "src_offset": [origin - part_low],
-            "dst_offset": [destination_offset],
+            "dst_offset": [destination_offset - window_low],
         }
         require(set(inputs) == set(values), "Copy native inputs are incomplete")
         for name, expected_values in values.items():
@@ -291,8 +294,10 @@ def audit_case(np, case, item, events, directory):
         )
         state = list(state)
         for position in copy_layout.destination_indices(metadata):
-            state[position] = expected[position]
-        require_values(np, event["copyValues"], state, physical)
+            state[window_low + position] = expected[window_low + position]
+        require_values(
+            np, event["copyValues"], state[window_low : window_high + 1], physical
+        )
         require_values(np, event["copyGuardWords"], guard, physical)
         audit_native_execution(event)
     require(state == expected, "Copy regions do not cover the destination")
@@ -390,9 +395,10 @@ def run_bounded(root, packages, output):
         "--output-dir",
         str(output),
     ]
-    with output.with_suffix(".stdout").open("w") as stdout, output.with_suffix(
-        ".stderr"
-    ).open("w") as stderr:
+    with (
+        output.with_suffix(".stdout").open("w") as stdout,
+        output.with_suffix(".stderr").open("w") as stderr,
+    ):
         process = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
     output.with_suffix(".command.json").write_text(
         json.dumps({"command": command, "returncode": process.returncode}, indent=2)

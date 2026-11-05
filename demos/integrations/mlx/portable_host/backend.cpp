@@ -2,6 +2,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -264,23 +265,36 @@ void launch_copy_region(
     std::vector<int64_t> src_strides,
     std::vector<int64_t> dst_strides,
     const char* dtype,
-    uint32_t destination_mode) {
+    uint32_t destination_mode,
+    bool window) {
   std::vector<int32_t> shape = region.shape;
   int64_t low = region.source_origin, high = region.source_origin;
+  int64_t destination_low = region.destination_offset;
+  int64_t destination_high = region.destination_offset;
   uint64_t count = 1;
   for (size_t axis = 0; axis < shape.size(); ++axis) {
     const int64_t extent = (int64_t(shape[axis]) - 1) * src_strides[axis];
     low += std::min<int64_t>(extent, 0);
     high += std::max<int64_t>(extent, 0);
+    const int64_t written = (int64_t(shape[axis]) - 1) * dst_strides[axis];
+    destination_low += std::min<int64_t>(written, 0);
+    destination_high += std::max<int64_t>(written, 0);
     count *= uint64_t(shape[axis]);
+  }
+  // A launch of a split copy binds only the destination span it writes, so
+  // the launches of a large copy do not each move the whole destination.
+  if (!window) {
+    destination_low = 0;
+    destination_high = int64_t(out.size()) - 1;
   }
   int32_t ndim = static_cast<int32_t>(shape.size());
   int64_t src_offset = region.source_origin - low;
-  int64_t dst_offset = region.destination_offset;
+  int64_t dst_offset = region.destination_offset - destination_low;
   CrosstlMlxBuffer buffers[] = {
       {"src", dtype, const_cast<uint8_t*>(in.data<uint8_t>() + low * in.itemsize()),
        uint64_t(high - low + 1), 0},
-      {"dst", dtype, out.data<void>(), out.size(), destination_mode},
+      {"dst", dtype, out.data<uint8_t>() + destination_low * out.itemsize(),
+       uint64_t(destination_high - destination_low + 1), destination_mode},
       {"src_shape", "int32", shape.data(), uint64_t(ndim), 0},
       {"src_strides", "int64", src_strides.data(), uint64_t(ndim), 0},
       {"dst_strides", "int64", dst_strides.data(), uint64_t(ndim), 0},
@@ -419,11 +433,18 @@ void dispatch_strided_copy(
   std::vector<CopyRegion> regions;
   append_copy_regions(
       {shape, src_offset, dst_offset}, src_strides, dst_strides, regions);
+  const bool window = regions.size() > 1;
+  if (window && !preserve) {
+    // A fresh destination reads as zeros outside the elements a launch writes,
+    // as the first launch of an unsplit copy leaves it.
+    std::memset(out.data<void>(), 0, out.size() * out.itemsize());
+  }
   for (size_t index = 0; index < regions.size(); ++index) {
     // Later regions keep the elements that earlier regions already wrote.
     launch_copy_region(
         in, out, regions[index], src_strides, dst_strides, dtype,
-        preserve || index > 0 ? CROSTL_MLX_BUFFER_INOUT : uint32_t(1));
+        preserve || index > 0 ? CROSTL_MLX_BUFFER_INOUT : uint32_t(1),
+        window);
   }
 }
 
