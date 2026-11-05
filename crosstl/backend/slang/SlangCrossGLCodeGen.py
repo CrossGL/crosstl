@@ -1195,10 +1195,23 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin):
                     code += self.matrix_layout_attributes(member, 2)
                     code += (
                         f"        {self.map_type(member.vtype)} {member_name}"
-                        f"{self.format_array_suffixes(member)};\n"
+                        f"{self.format_array_suffixes(member)}"
+                        f"{self.format_member_offset(member)};\n"
                     )
                 code += "    }\n"
         return code
+
+    @staticmethod
+    def format_member_offset(member):
+        """`` @offset(N)`` for a block member placed with ``[[vk::offset(N)]]``, else an empty string."""
+        for attribute in getattr(member, "attributes", None) or []:
+            if not isinstance(attribute, dict):
+                continue
+            name = str(attribute.get("name", "")).lower()
+            arguments = attribute.get("arguments") or []
+            if name == "vk::offset" and len(arguments) == 1:
+                return f" @offset({arguments[0]})"
+        return ""
 
     def is_glsl_storage_block(self, node):
         return getattr(node, "glsl_block_kind", None) == "buffer"

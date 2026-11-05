@@ -544,6 +544,11 @@ from .private_member_views import (
     member_view_chain,
 )
 from .private_vector_views import lower_private_vector_views
+from .push_constant_blocks import (
+    glsl_push_constant_cbuffer,
+    glsl_push_constant_struct_block,
+    is_push_constant,
+)
 from .reference_aliases import lower_reference_aliases
 from .relational_builtins import glsl_vector_logical_not
 from .resource_aggregates import lower_resource_aggregates
@@ -19300,6 +19305,10 @@ class GLSLCodeGen(
                 resource_binding,
             )
             code += resource_identity_marker(node, block_name)
+            push_constant = glsl_push_constant_cbuffer(self, node, layout, block_name)
+            if push_constant is not None:
+                code += push_constant
+                continue
             register_block = self.glsl_hlsl_cbuffer_block(node, layout, block_name)
             if register_block is not None:
                 code += register_block
@@ -57025,9 +57034,9 @@ complex64_t crossgl_complex64_mod_assign(
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if "uniform" not in qualifiers:
             return False
-        return (
-            str(self.resource_base_type(vtype)) in self.structs_by_name
-            and self.explicit_resource_binding_index(node) is not None
+        return str(self.resource_base_type(vtype)) in self.structs_by_name and (
+            self.explicit_resource_binding_index(node) is not None
+            or is_push_constant(node)
         )
 
     def glsl_constant_buffer_block_declaration(
@@ -57063,7 +57072,16 @@ complex64_t crossgl_complex64_mod_assign(
                 preserve_unsized_arrays=True,
             )
         code += f"}} {var_name}{array_suffix};\n"
-        return code
+        return glsl_push_constant_struct_block(
+            self,
+            node,
+            struct,
+            block_name,
+            var_name,
+            array_suffix,
+            code,
+            resource_identity_marker(node, var_name),
+        )
 
     def pointer_buffer_structured_type(self, node, node_type):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
