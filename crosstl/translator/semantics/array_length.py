@@ -10,21 +10,70 @@ callee expression. This pass replaces the call, for every target but GLSL, with 
 The object's type is found with lexical scopes (:class:`.hub_types.TypeScope`): globals, constants, stage variables,
 parameters and block-scoped locals, through element and member access; a vector's width is inferred from any
 expression whose value type is known (a swizzle, a call, arithmetic). An array size that is a literal or a constant
-with a literal value is used; any other ``length()`` (a runtime-sized array, a buffer, a size that is a
-specialization constant) is left for the emitters, which lower or refuse it.
+with a literal value is used.
+
+A specialization constant's literal is only its default: the host replaces it when it builds the pipeline, and
+``length()`` of an array it sizes is that specialized count (GL_KHR_vulkan_glsl, "Specialization Constants"; an
+``OpTypeArray`` whose length is an ``OpSpecConstant`` in SPIR-V). So an array sized by an expression over program
+constants, specialization constants among them, has its ``length()`` replaced by ``int(<that expression>)``, which
+every target evaluates with the specialized values. The expression is copied to the call only when each name in it
+still means the program constant there; where a local, parameter or member shadows one, the call is refused with
+:class:`ArrayLengthUnresolvedError`. Any other ``length()`` (a runtime-sized array, a buffer) is left for the
+emitters, which lower or refuse it.
 """
 
 from __future__ import annotations
 
+import copy
+
 from .. import ast as A
+from ..codegen.specialization_constants import declares_specialization_id
+from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import TypeScope
 from .rewrite import child_slots, get_child, set_child
 
-__all__ = ["fold_array_lengths"]
+__all__ = ["ArrayLengthUnresolvedError", "fold_array_lengths"]
 
 # Targets whose arrays have a native ``length()`` method.
 _NATIVE = frozenset({"opengl", "glsl", "webgl", "essl", "gles", "cgl", "crossgl"})
 _SCOPES = (A.BlockNode, A.ForNode, A.ForInNode, A.FunctionNode)
+# Operators a constant integral expression may apply; none has a side effect.
+_CONSTANT_BINARY_OPERATORS = frozenset(
+    {
+        "+",
+        "-",
+        "*",
+        "/",
+        "%",
+        "<<",
+        ">>",
+        "&",
+        "|",
+        "^",
+        "&&",
+        "||",
+        "==",
+        "!=",
+        "<",
+        ">",
+        "<=",
+        ">=",
+    }
+)
+_CONSTANT_UNARY_OPERATORS = frozenset({"+", "-", "~", "!"})
+
+
+class ArrayLengthUnresolvedError(TranslationDiagnostic):
+    """``length()`` of an array whose size names a program constant that a declaration shadows at the call."""
+
+    def __init__(self, target, name):
+        self.missing_capabilities = (f"{target}.array-length-shadowed-size",)
+        super().__init__(
+            f"length() of an array sized by '{name}' is called where another declaration named '{name}' hides "
+            "the program constant, so the count cannot be written there; rename the declaration",
+            target=target,
+            code=f"{CODE_PREFIX}{target}-array-length-shadowed-size",
+        )
 
 
 def _literal_int(node):
@@ -38,10 +87,12 @@ def _literal_int(node):
 
 
 class _Folder:
-    def __init__(self, program):
+    def __init__(self, program, target):
         self.program = program
+        self.target = target
         self.scope = TypeScope(program)
         self.constants = {}
+        self.program_constant_types = {}
         self.folded = 0
 
     def size(self, array_type):
@@ -55,9 +106,55 @@ class _Folder:
             value = self.constants.get(size.name)
         return value
 
+    def symbolic_size(self, array_type):
+        """``int(size)`` for an array sized by an expression over program constants visible here, else ``None``."""
+        if not isinstance(array_type, A.ArrayType) or array_type.size is None:
+            return None
+        size = array_type.size
+        if isinstance(size, str):
+            size = A.IdentifierNode(size)
+        names = self.constant_names(size)
+        if names is None:
+            return None
+        for name in sorted(names):
+            if self.scope.lookup(name) is not self.program_constant_types[name]:
+                raise ArrayLengthUnresolvedError(self.target, name)
+        return A.FunctionCallNode(A.IdentifierNode("int"), [copy.deepcopy(size)])
+
+    def constant_names(self, node):
+        """The program constants ``node`` reads when it reads nothing but literals and those, else ``None``."""
+        if isinstance(node, A.LiteralNode):
+            return None if isinstance(node.value, bool) else set()
+        if isinstance(node, A.IdentifierNode):
+            return {node.name} if node.name in self.program_constant_types else None
+        if isinstance(node, A.BinaryOpNode):
+            if str(node.operator) not in _CONSTANT_BINARY_OPERATORS:
+                return None
+            parts = (node.left, node.right)
+        elif isinstance(node, A.UnaryOpNode):
+            if node.is_postfix or str(node.operator) not in _CONSTANT_UNARY_OPERATORS:
+                return None
+            parts = (node.operand,)
+        elif isinstance(node, A.TernaryOpNode):
+            parts = (node.condition, node.true_expr, node.false_expr)
+        else:
+            return None
+        names = set()
+        for part in parts:
+            found = self.constant_names(part)
+            if found is None:
+                return None
+            names |= found
+        return names
+
     def run(self):
         for constant in getattr(self.program, "constants", None) or []:
             self.scope.declare(constant.name, constant.const_type)
+            if constant.const_type is not None:
+                self.program_constant_types[constant.name] = constant.const_type
+            if declares_specialization_id(constant):
+                # The host replaces the default when it builds the pipeline, so the count is not this literal.
+                continue
             value = _literal_int(getattr(constant, "value", None))
             if value is not None:
                 self.constants[constant.name] = value
@@ -83,13 +180,15 @@ class _Folder:
         for variable in variables:
             if isinstance(variable, A.VariableNode):
                 self.scope.declare(variable.name, variable.var_type)
-                if "const" in {str(q) for q in variable.qualifiers or []}:
+                if "const" in {
+                    str(q) for q in variable.qualifiers or []
+                } and not declares_specialization_id(variable):
                     value = _literal_int(getattr(variable, "initial_value", None))
                     if value is not None:
                         self.constants[variable.name] = value
 
     def length(self, node):
-        """The constant count ``node`` (a ``length()`` call) evaluates to, or ``None``."""
+        """The count ``node`` (a ``length()`` call) evaluates to: an ``int``, an ``int(size)`` call, or ``None``."""
         if not isinstance(node, A.FunctionCallNode) or node.arguments:
             return None
         callee = node.function
@@ -98,7 +197,8 @@ class _Folder:
         receiver = callee.object_expr
         declared = self.scope.node_type(receiver)
         if isinstance(declared, A.ArrayType):
-            return self.size(declared)
+            count = self.size(declared)
+            return count if count is not None else self.symbolic_size(declared)
         if isinstance(declared, A.MatrixType):
             # A matrix's length() is its column count (GLSL 4.60 section 5.6).
             return int(declared.cols) if str(declared.cols).isdigit() else None
@@ -130,9 +230,9 @@ class _Folder:
             child = get_child(node, field, key)
             count = self.length(child)
             if count is not None:
-                set_child(
-                    node, field, key, A.LiteralNode(count, A.PrimitiveType("int"))
-                )
+                if isinstance(count, int):
+                    count = A.LiteralNode(count, A.PrimitiveType("int"))
+                set_child(node, field, key, count)
                 self.folded += 1
                 continue
             self.visit(child)
@@ -142,4 +242,4 @@ def fold_array_lengths(program, target) -> int:
     """Replace ``x.length()`` of constant-size arrays, vectors and matrices by the count; returns how many."""
     if not isinstance(program, A.ShaderNode) or str(target or "").lower() in _NATIVE:
         return 0
-    return _Folder(program).run()
+    return _Folder(program, str(target or "").lower()).run()
