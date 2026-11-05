@@ -22,7 +22,8 @@ the CUDA and HIP generators replaced them with a comment and ``0``, so the opera
 * any remaining three-argument ``atomicCompareExchange`` call into ``atomicCompSwap``.
 
 HLSL assigns ``original`` after the operation, as the rewritten assignment does. A call whose name a function of the
-program defines is left alone.
+program defines is left alone, and so is a call on a byte-address buffer: ``atomicOp(buffer, address, value)`` is the
+byte-address form, which already returns the previous value.
 
 HLSL output keeps the interlocked argument lists, which are its native form. For HLSL targets,
 :func:`hlsl_out_argument_atomics` does the opposite rewrite where the destination is not a buffer, because the
@@ -35,6 +36,7 @@ for ``atomicCompSwap(dest, compare, value)``.
 from __future__ import annotations
 
 from .. import ast as A
+from .byte_address_buffers import BYTE_ADDRESS_BUFFER_KINDS
 from .hub_types import call_name, iter_functions
 from .rewrite import call, child_slots, get_child, set_child
 from .scoped_walk import ScopedWalker
@@ -93,6 +95,9 @@ class _AtomicWalker(ScopedWalker):
         if name in self.defined:
             return None
         arguments = list(expression.arguments or [])
+        if arguments and self.is_byte_address_buffer(arguments[0]):
+            # ``atomicOp(buffer, address, value)`` is the byte-address form, which returns the previous value.
+            return None
         if name in _RETURNING_OUT_ORIGINAL and len(arguments) == 3:
             return A.AssignmentNode(arguments[2], call(name, arguments[:2]))
         if name in (_COMPARE_SWAP, _COMPARE_EXCHANGE) and len(arguments) == 4:
@@ -100,6 +105,14 @@ class _AtomicWalker(ScopedWalker):
         if name == _COMPARE_STORE and len(arguments) == 3:
             return call(_COMPARE_SWAP, arguments)
         return None
+
+    def is_byte_address_buffer(self, expression):
+        declared = self.scope.node_type(expression)
+        return (
+            isinstance(declared, A.NamedType)
+            and not declared.generic_args
+            and declared.name in BYTE_ADDRESS_BUFFER_KINDS
+        )
 
 
 def _rename(node, name):
