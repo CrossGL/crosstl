@@ -392,6 +392,11 @@ from .metal_buffer_component_stores import (
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
+from .metal_constant_initializers import (
+    folded_helper_is_unused,
+    metal_constant_initializer,
+    restore_static_initializer_helpers,
+)
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
@@ -1786,6 +1791,7 @@ class MetalCodeGen(
         scoped_ast.metal_constant_conversion_operators = (
             self.collect_metal_constant_conversion_operators(self.all_functions(ast))
         )
+        restore_static_initializer_helpers(self, ast, scoped_ast)
         return scoped_ast
 
     def entry_scoped_functions(self, ast, entry_function):
@@ -3321,7 +3327,7 @@ class MetalCodeGen(
                         func
                     ),
                 )
-            else:
+            elif not folded_helper_is_unused(self, func):
                 functions_code += self.generate_function(func)
 
         if hasattr(ast, "stages") and ast.stages:
@@ -4784,7 +4790,10 @@ class MetalCodeGen(
                 source_location=getattr(member, "source_location", None),
             )
 
-        initializer = self.generate_expression_with_expected(default_value, raw_type)
+        # A member-wise constructor helper is not a constant expression.
+        initializer = metal_constant_initializer(
+            self, default_value, raw_type
+        ) or self.generate_expression_with_expected(default_value, raw_type)
         dependencies = self.metal_struct_type_dependencies(mapped_type)
         return (
             f"    static constant constexpr {mapped_type} {member_name} = "
