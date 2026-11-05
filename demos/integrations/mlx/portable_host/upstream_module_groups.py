@@ -86,6 +86,7 @@ TRANSFORM_TESTS = _tests(
         "vmap_argsort",
         "vmap_concatenate",
         "vmap_const_func",
+        "vmap_conv",
         "vmap_gather",
         "vmap_indexing",
         "vmap_inverse",
@@ -131,6 +132,7 @@ SERIALIZATION_TESTS = _tests(
         "basic_export_import",
         "export_control_flow",
         "export_conv",
+        "export_conv_shapeless",
         "export_import_metadata",
         "export_import_multi_with_constants",
         "export_import_scatter_sum",
@@ -169,7 +171,8 @@ SERIALIZATION_TESTS = _tests(
 )
 
 # test_optimizers, the random samplers no other verifier runs, the bfloat16
-# operator sweeps, and the device, stream, memory and constant tests.
+# operator sweeps and ml_dtypes conversions, the device, stream, memory and
+# constant tests, and the copying device array of NumPy storage.
 TRAINING_TESTS = (
     _tests(
         "test_optimizers",
@@ -217,7 +220,13 @@ TRAINING_TESTS = (
     + _tests(
         "test_bf16",
         "TestBF16",
-        ("binary_ops", "blas_ops", "reduction_ops", "unary_ops"),
+        (
+            "binary_ops",
+            "blas_ops",
+            "conversion_ml_dtypes",
+            "reduction_ops",
+            "unary_ops",
+        ),
     )
     + _tests("test_device", "TestDevice", ("op_on_device",))
     + _tests(
@@ -227,6 +236,7 @@ TRAINING_TESTS = (
     )
     + _tests("test_memory", "TestMemory", ("active_memory_count", "memory_info"))
     + _tests("test_constants", "TestConstants", ("newaxis_for_reshaping_arrays",))
+    + _tests("test_zero_copy", "TestZeroCopy", ("copy_true_copies",))
 )
 
 # test_fast's rotary embeddings and fused transforms, and the antialiased
