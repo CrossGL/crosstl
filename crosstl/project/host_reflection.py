@@ -622,6 +622,17 @@ METAL_FUNCTION_CONSTANT_RE = re.compile(
     r"(?P<name>[A-Za-z_]\w*)\s*"
     r"\[\[\s*function_constant\s*\(\s*(?P<id>\d+)\s*\)\s*\]\]\s*;"
 )
+# A specialization constant that sizes an array cannot be a function constant, so the Metal generator reads it from
+# a preprocessor macro named after its id; the host specializes it through MTLCompileOptions.preprocessorMacros.
+METAL_SPECIALIZATION_MACRO_RE = re.compile(
+    r"^[ \t]*#[ \t]*ifndef[ \t]+(?P<macro>CROSSGL_SPECIALIZATION_CONSTANT_ID_(?P<id>\d+))[ \t]*\n"
+    r"[ \t]*#[ \t]*define[ \t]+(?P=macro)[ \t]+(?P<default>[^\n]*?)[ \t]*\n"
+    r"[ \t]*#[ \t]*endif[ \t]*\n"
+    r"(?:[ \t]*__attribute__\s*\(\(\s*unused\s*\)\)\s*)?[ \t]*constant\s+"
+    r"(?P<type>[A-Za-z_]\w*)\s+(?P<name>[A-Za-z_]\w*)\s*=\s*"
+    r"(?P=type)\s*\(\s*(?P=macro)\s*\)\s*;",
+    re.MULTILINE,
+)
 
 
 def _metal_matching_parenthesis(source: str, start: int) -> int | None:
@@ -778,6 +789,25 @@ def _reflect_metal_source(
                 "overrideStatus": "not-overridden",
                 "status": "required",
                 "source": "metal.function_constant",
+            }
+        )
+    for match in METAL_SPECIALIZATION_MACRO_RE.finditer(source):
+        default_value = _literal_value(match.group("default"))
+        specialization_constants.append(
+            {
+                "name": match.group("name"),
+                "kind": "preprocessor-macro",
+                "id": _int_value(match.group("id")),
+                "macro": match.group("macro"),
+                "dtype": match.group("type"),
+                "sourceType": match.group("type"),
+                "default": default_value,
+                "defaultValue": default_value,
+                "required": False,
+                "overridden": False,
+                "overrideStatus": "not-overridden",
+                "status": "defaulted",
+                "source": "metal.preprocessor_macro",
             }
         )
 
