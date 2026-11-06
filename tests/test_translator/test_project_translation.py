@@ -58731,7 +58731,7 @@ def test_translate_project_reports_non_bitcast_compile_time_global_contract(
         textwrap.dedent("""
             shader RuntimeCompileTimeCall {
                 float buildValue() {
-                    return 2.0;
+                    return sin(2.0);
                 }
 
                 constant float invalidValue = buildValue();
