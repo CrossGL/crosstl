@@ -60,8 +60,9 @@ def test_changed_pointer_is_substituted():
 def test_metal_specialization_keeps_the_pointer_parameter(tmp_path):
     source = tmp_path / "widen.cgl"
     source.write_text(PROGRAM, encoding="utf-8")
-    code = crosstl.translate(str(source), backend="metal")
-    assert "widen_float(const device half *src, thread float &out_)" in code
+    # Unformatted, so the spelling does not depend on whether clang-format is installed.
+    code = crosstl.translate(str(source), backend="metal", format_output=False)
+    assert "widen_float(const device half* src, thread float& out_)" in code
     assert "*&" not in code
     if shutil.which("xcrun") is None:
         pytest.skip("xcrun not installed")
