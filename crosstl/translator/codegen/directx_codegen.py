@@ -271,6 +271,14 @@ from .glsl_buffer_layout import (
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
 from .hlsl_array_list_assignment import generate_hlsl_array_list_assignment
+from .hlsl_atomic_conditions import (
+    condition_has_hlsl_atomic,
+    generate_hlsl_atomic_condition_do_while,
+    generate_hlsl_atomic_condition_if,
+    generate_hlsl_atomic_condition_switch,
+    generate_hlsl_atomic_condition_while,
+    hlsl_atomic_condition_loop_guard,
+)
 from .hlsl_atomic_resources import HLSLAtomicResources
 from .hlsl_bfloat16_vectors import (
     HLSLBfloat16Vectors,
@@ -324,7 +332,7 @@ from .hlsl_ray_queries import (
     hlsl_ray_query_helpers,
     hlsl_ray_query_type,
 )
-from .hlsl_refusals import DirectXLoweringRefused
+from .hlsl_refusals import DirectXBufferLayoutError, DirectXLoweringRefused
 from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
 from .hlsl_storage_array_views import (
@@ -13410,10 +13418,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_constant_int_value,
             )
         except HlslLayoutError as exc:
-            raise ValueError(
-                f"Cannot reproduce the {layout} layout of block '{node.name}' "
-                f"in HLSL: {exc}"
-            ) from exc
+            raise DirectXBufferLayoutError(node.name, layout, exc) from exc
         try:
             offsets = hlsl_packoffsets_for_block(layout_type, layout)
         except HlslLayoutError:
@@ -13501,10 +13506,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 for (name, _member_type), offset in zip(layout_type.members, offsets)
             }
         except HlslLayoutError as exc:
-            raise ValueError(
-                f"Cannot reproduce the explicit member offsets of constant buffer "
-                f"'{node.name}' in HLSL: {exc}"
-            ) from exc
+            raise DirectXBufferLayoutError(node.name, "explicit-offset", exc) from exc
 
     def hlsl_block_member(self, member):
         """``(name, type, row_major, offset, alignment, packed)`` of a uniform-block or struct member."""
@@ -26060,6 +26062,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if id(node) in getattr(self, "hlsl_software_subgroup_masked_if_plans", {}):
             return self.generate_hlsl_software_subgroup_masked_if(node, indent)
 
+        atomic_chain = generate_hlsl_atomic_condition_if(
+            self, node, condition, then_body, else_body, indent
+        )
+        if atomic_chain is not None:
+            return atomic_chain
+
         code = f"{indent_str}if ({self.hlsl_condition_expression(condition)}) {{\n"
 
         code += self.generate_scoped_statement_body(then_body, indent + 1)
@@ -26125,6 +26133,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             init = ""
             condition = ""
             update = ""
+            condition_guard = ""
 
             if hasattr(node, "init") and node.init:
                 if isinstance(node.init, str):
@@ -26135,6 +26144,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if hasattr(node, "condition") and node.condition:
                 if isinstance(node.condition, str):
                     condition = node.condition
+                elif condition_has_hlsl_atomic(self, node.condition):
+                    condition_guard = hlsl_atomic_condition_loop_guard(
+                        self, node.condition, indent + 1
+                    )
                 else:
                     condition = (
                         self.generate_expression(node.condition).strip().rstrip(";")
@@ -26152,6 +26165,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     update = self.generate_hlsl_discarded_update(node.update)
 
             code = f"{indent_str}for ({init}; {condition}; {update}) {{\n"
+            code += condition_guard
 
             body = getattr(node, "body", [])
             code += self.generate_scoped_statement_body(body, indent + 1)
@@ -26521,6 +26535,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def generate_while(self, node, indent):
+        atomic_loop = generate_hlsl_atomic_condition_while(self, node, indent)
+        if atomic_loop is not None:
+            return atomic_loop
         indent_str = "    " * indent
         condition = self.generate_expression(getattr(node, "condition", ""))
 
@@ -26532,6 +26549,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return code
 
     def generate_do_while(self, node, indent):
+        atomic_loop = generate_hlsl_atomic_condition_do_while(self, node, indent)
+        if atomic_loop is not None:
+            return atomic_loop
         indent_str = "    " * indent
         condition = self.generate_expression(getattr(node, "condition", ""))
 
@@ -26554,9 +26574,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def generate_switch(self, node, indent):
         indent_str = "    " * indent
-        expression = self.generate_expression(getattr(node, "expression", ""))
+        code = ""
+        atomic_selector = generate_hlsl_atomic_condition_switch(self, node, indent)
+        if atomic_selector is not None:
+            code, expression = atomic_selector
+        else:
+            expression = self.generate_expression(getattr(node, "expression", ""))
 
-        code = f"{indent_str}switch ({expression}) {{\n"
+        code += f"{indent_str}switch ({expression}) {{\n"
         for case in getattr(node, "cases", []) or []:
             value = getattr(case, "value", None)
             if value is None:

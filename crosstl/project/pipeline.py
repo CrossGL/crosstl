@@ -30,6 +30,10 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.backend.Metal.auto_placeholders import (
+    deduced_auto_type,
+    is_auto_placeholder,
+)
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_declared_type_and_name,
@@ -41,6 +45,7 @@ from crosstl.backend.Metal.function_specialization import (
 from crosstl.backend.Metal.member_lowering_layers import (
     lower_members_with_late_specializations,
 )
+from crosstl.backend.Metal.pointer_conversions import pointer_conversion_type
 from crosstl.backend.Metal.template_overloads import (
     declared_type_names,
     select_instantiated_overload,
@@ -16763,15 +16768,18 @@ def _metal_local_variable_declaration(
     type_text, name = parsed
     if "." in type_text or "->" in type_text:
         return None
-    if type_text == "auto" and initializer is not None:
-        inferred = _metal_expression_type(
-            preprocessor,
-            initializer,
-            type_environment,
-            return_types,
+    if is_auto_placeholder(type_text):
+        inferred = (
+            _metal_expression_type(
+                preprocessor,
+                initializer,
+                type_environment,
+                return_types,
+            )
+            if initializer is not None
+            else None
         )
-        if inferred:
-            type_text = inferred
+        type_text = deduced_auto_type(type_text, inferred)
     return name, _normalize_metal_type_text(type_text)
 
 
@@ -17856,6 +17864,13 @@ def _metal_expression_type(
     literal_type = _metal_literal_type(text)
     if literal_type is not None:
         return literal_type
+
+    # `reinterpret_cast<device T*>(p)` and `(device T*)p` have the target
+    # pointer type, so an `auto` local initialized from one deduces like an
+    # explicitly typed pointer ([dcl.type.auto.deduct]).
+    pointer_conversion = pointer_conversion_type(preprocessor, text)
+    if pointer_conversion is not None:
+        return _normalize_metal_type_text(pointer_conversion)
 
     static_cast = re.match(r"(?:static_cast|as_type)\s*<(?P<type>[^>]+)>\s*\(", text)
     if static_cast is not None:

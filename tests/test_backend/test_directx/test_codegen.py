@@ -2416,7 +2416,8 @@ def test_codegen_template_method_arguments_closed_by_shift_right_token_from_dxc(
 
     output = generate_crossgl(hlsl)
 
-    assert "return buffer_load(BAB, offset);" in output
+    # Load<T> moves sizeof(T) bytes as they are: four words, reinterpreted as floats.
+    assert "return uintBitsToFloat(buffer_load4(BAB, offset));" in output
     parse_crossgl(output)
 
 

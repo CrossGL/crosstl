@@ -5152,18 +5152,24 @@ class MetalParser:
         if idx >= len(self.tokens) or self.tokens[idx][0] != "LESS_THAN":
             return False
         depth = 0
+        grouped_depth = 0
         saw_value_token = False
         while idx < len(self.tokens):
             token_type, token_value = self.tokens[idx]
             if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
                 return False
-            if token_type == "LESS_THAN":
+            grouping = self.template_argument_grouping(token_type, depth, grouped_depth)
+            if grouping is None:
+                return False
+            nested = grouping or grouped_depth
+            grouped_depth = grouping
+            if not nested and token_type == "LESS_THAN":
                 depth += 1
-            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+            elif not nested and token_type == "SHIFT_RIGHT" and depth >= 2:
                 depth -= 2
                 if depth == 0:
                     return saw_value_token
-            elif token_type == "GREATER_THAN":
+            elif not nested and token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     return saw_value_token
@@ -5179,6 +5185,22 @@ class MetalParser:
             idx += 1
         return False
 
+    @staticmethod
+    def template_argument_grouping(token_type, depth, grouped_depth):
+        """Return the parenthesis depth after ``token_type`` inside a template argument list.
+
+        A ``<`` or ``>`` nested in parentheses or brackets neither opens nor closes the list (C++
+        [temp.names]), and a closer with no opener inside the list means the ``<`` was a comparison, as in
+        ``i < ((a) > (b) ? (a) : (b))``; that case returns ``None``.
+        """
+        if depth == 0:
+            return grouped_depth
+        if token_type in {"LPAREN", "LBRACKET"}:
+            return grouped_depth + 1
+        if token_type in {"RPAREN", "RBRACKET"}:
+            return grouped_depth - 1 if grouped_depth else None
+        return grouped_depth
+
     def is_variable_template_name(self, name):
         if not isinstance(name, str):
             return False
@@ -5192,14 +5214,20 @@ class MetalParser:
         follow_token_types = follow_token_types or {"LPAREN"}
         idx = self.pos
         depth = 0
+        grouped_depth = 0
         saw_type_like = False
         while idx < len(self.tokens):
             token_type = self.tokens[idx][0]
             if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
                 return False
-            if token_type == "LESS_THAN":
+            grouping = self.template_argument_grouping(token_type, depth, grouped_depth)
+            if grouping is None:
+                return False
+            nested = grouping or grouped_depth
+            grouped_depth = grouping
+            if not nested and token_type == "LESS_THAN":
                 depth += 1
-            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+            elif not nested and token_type == "SHIFT_RIGHT" and depth >= 2:
                 depth -= 2
                 if depth == 0:
                     if require_type_like_argument and not saw_type_like:
@@ -5208,7 +5236,7 @@ class MetalParser:
                         idx + 1 < len(self.tokens)
                         and self.tokens[idx + 1][0] in follow_token_types
                     )
-            elif token_type == "GREATER_THAN":
+            elif not nested and token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     if require_type_like_argument and not saw_type_like:

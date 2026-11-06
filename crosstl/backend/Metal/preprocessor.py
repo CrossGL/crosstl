@@ -27,12 +27,15 @@ from typing import (
     Union,
 )
 
+from crosstl.backend.DirectX.macro_expansion import METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .auto_placeholders import deduced_auto_type
 from .concrete_free_operators import materialize_concrete_free_operators
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
+from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
@@ -40,6 +43,7 @@ from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
     deducible_template_parameters,
+    unique_specialization_identifier,
 )
 from .identifier_rewrites import (
     qualified_identifiers,
@@ -66,8 +70,11 @@ from .namespaced_specializations import (
     specialization_namespaces,
     specialization_reference,
 )
+from .overload_ranking import shared_template_parameter_positions
 from .pattern_cache import pattern as _cached_pattern
+from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
+from .reference_alias_arguments import call_argument_designates
 from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
@@ -1055,6 +1062,8 @@ _CONSTEXPR_CALL_SCAN_STOPS = re.compile(r"[\"'/]|[^\W\d]")
 class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     """Small Metal preprocessor used before lexing imported source files."""
 
+    macro_dialect = METAL_MACROS
+
     def __init__(
         self,
         include_paths: Optional[List[str]] = None,
@@ -1136,6 +1145,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             str, List[_MetalConstexprFunction]
         ] = {}
         self._source_type_alias_bindings: Dict[str, List[_MetalTypeAliasBinding]] = {}
+        # The source whose aggregates give `sizeof(S)` its value in integral
+        # constant initializers evaluated without a position-aware resolver,
+        # and the structs, file-scope aliases and templates parsed from it.
+        self._active_sizeof_source = ""
+        self._sizeof_context_cache: Dict[str, Tuple[object, ...]] = {}
         self._integral_constant_binary_operators: Set[str] = set()
         self._integral_constant_contract_verified = False
         self._integral_constant_conversion_contract_verified = False
@@ -1186,6 +1200,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self._explicit_template_function_names.clear()
         self._active_static_constexpr_functions.clear()
         self._source_type_alias_bindings.clear()
+        self._active_sizeof_source = ""
+        self._sizeof_context_cache = {}
         self._integral_constant_binary_operators.clear()
         self._integral_constant_contract_verified = False
         self._integral_constant_conversion_contract_verified = False
@@ -1502,6 +1518,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
             replacements: List[Tuple[int, int, str]] = []
             new_materializations: List[str] = []
+            source_identifiers = None
             for (
                 function_name,
                 template_arguments,
@@ -1573,8 +1590,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                             length=max(spans[0][1] - spans[0][0], 0),
                             context=context,
                         )
-                specialized_name = self._template_specialization_identifier(
-                    function_name, list(key[1])
+                if source_identifiers is None:
+                    source_identifiers = set(
+                        IDENTIFIER_RE.findall(self._mask_comments_and_literals(working))
+                    )
+                specialized_name = unique_specialization_identifier(
+                    self._template_specialization_identifier(
+                        function_name, list(key[1])
+                    ),
+                    source_identifiers,
+                    materialized_names.values(),
                 )
                 materialized = self._materialize_template_function_with_name(
                     template,
@@ -2390,6 +2415,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # any failure returns the unmodified source, so a kernel that previously
         # reached the template-materialization diagnostic is left unchanged rather
         # than emitting a half-rewritten translation.
+        previous_sizeof_source = self._enter_sizeof_source(code)
         try:
             return self._materialize_explicit_template_struct_instantiations_impl(
                 code,
@@ -2402,6 +2428,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             raise
         except Exception:
             return code
+        finally:
+            self._active_sizeof_source = previous_sizeof_source
 
     def _materialize_explicit_template_struct_instantiations_impl(
         self,
@@ -3646,6 +3674,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self._active_static_constexpr_functions = (
             self._materialization_constexpr_function_index(evaluated)
         )
+        previous_sizeof_source = self._enter_sizeof_source(evaluated)
         try:
             try:
                 return self._lower_struct_member_functions_impl(evaluated)
@@ -3655,6 +3684,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 return evaluated
         finally:
             self._active_static_constexpr_functions = previous_constexpr_functions
+            self._active_sizeof_source = previous_sizeof_source
 
     def _lower_struct_member_functions_impl(self, code: str) -> str:
         code = self._prune_unreferenced_call_operator_definitions(code)
@@ -3665,6 +3695,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             skip_spans=template_declaration_spans,
         )
         structs = self._find_concrete_struct_definitions(code)
+        split_code = split_struct_declarator_lists(
+            code,
+            (struct.name for struct in structs),
+            self._find_comment_and_literal_spans(code),
+        )
+        if split_code != code:
+            # Every receiver of a declarator list now has its own declaration.
+            return self._lower_struct_member_functions_impl(split_code)
         resolved_code = resolve_qualified_struct_member_types(
             self,
             code,
@@ -5353,6 +5391,33 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         constexpr_position_offset: int = 0,
         include_file_scope: bool = False,
         static_member_constants: Optional[Callable[[str, Dict[str, str]], str]] = None,
+    ) -> Dict[str, List[_MetalIntegralConstantBinding]]:
+        # Initializers such as `16 / sizeof(S)` fold only when the concrete
+        # struct `S` of this source is visible to the sizeof evaluator. A source
+        # fragment without struct definitions keeps the enclosing context.
+        previous_sizeof_source = self._enter_sizeof_source(code)
+        try:
+            return self._collect_local_integral_constant_bindings_impl(
+                code,
+                owner_spans,
+                type_aliases,
+                constexpr_functions,
+                constexpr_position_offset,
+                include_file_scope,
+                static_member_constants,
+            )
+        finally:
+            self._active_sizeof_source = previous_sizeof_source
+
+    def _collect_local_integral_constant_bindings_impl(
+        self,
+        code: str,
+        owner_spans: List[Tuple[int, int]],
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
+        constexpr_functions: Optional[Dict[str, List[_MetalConstexprFunction]]],
+        constexpr_position_offset: int,
+        include_file_scope: bool,
+        static_member_constants: Optional[Callable[[str, Dict[str, str]], str]],
     ) -> Dict[str, List[_MetalIntegralConstantBinding]]:
         raw_declarations: List[Tuple[int, str, _MetalDataMember, bool]] = []
         parameter_bindings: List[Tuple[int, str, int, int]] = []
@@ -12359,6 +12424,47 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     def _align_concrete_aggregate_offset(offset: int, alignment: int) -> int:
         return ((offset + alignment - 1) // alignment) * alignment
 
+    def _enter_sizeof_source(self, code: str) -> str:
+        """Make ``code`` the active sizeof source if it defines aggregates.
+
+        Returns the previous source for the caller to restore. A fragment
+        without aggregate definitions keeps the enclosing source.
+        """
+        previous = self._active_sizeof_source
+        if "sizeof" in code and re.search(r"\b(?:struct|class|union)\b", code):
+            self._active_sizeof_source = code
+        return previous
+
+    def _active_sizeof_layout(self, type_text: str) -> Optional[Tuple[int, int]]:
+        # [expr.sizeof]/2: a class operand yields its object size. Only names
+        # visible at file scope of the active source are resolved, and the
+        # lookup fails closed on ambiguous or unsupported layouts.
+        source = self._active_sizeof_source
+        if not source:
+            return None
+        context = self._sizeof_context_cache.get(source)
+        if context is None:
+            template_spans = self._find_template_declaration_spans(source)
+            context = (
+                self._find_concrete_struct_definitions(source),
+                self._collect_local_type_alias_bindings(
+                    source,
+                    [(0, len(source))],
+                    skip_spans=template_spans,
+                ),
+                self._find_template_structs(source),
+            )
+            self._sizeof_context_cache = {source: context}
+        structs, type_aliases, template_structs = context
+        # The last offset lies in the file scope, after every declaration.
+        return self._concrete_aggregate_type_layout(
+            type_text,
+            list(structs),
+            type_aliases,
+            len(source) - 1,
+            template_structs=template_structs,
+        )
+
     def _replace_concrete_sizeof_expressions(
         self,
         expression: str,
@@ -12375,6 +12481,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 if layout_resolver is not None
                 else metal_type_layout(resolved_operand)
             )
+            if layout is None and layout_resolver is None:
+                layout = self._active_sizeof_layout(resolved_operand)
             size = layout[0] if layout is not None else None
             return str(size) if size is not None else match.group(0)
 
@@ -14665,6 +14773,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     field_variable_types,
                     field_structs_by_name,
                     allow_template_fallback=bool(template_overloads),
+                    template_overloads=template_overloads,
                     require_static=True,
                     type_alias_fallback_position=type_alias_fallback_position,
                 )
@@ -14776,6 +14885,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 field_variable_types,
                 field_structs_by_name,
                 allow_template_fallback=bool(template_overloads),
+                template_overloads=template_overloads,
                 require_static=False,
                 type_alias_fallback_position=type_alias_fallback_position,
                 receiver_contract=_MetalReceiverContract(
@@ -14977,6 +15087,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     field_variable_types,
                     field_structs_by_name,
                     allow_template_fallback=bool(template_overloads),
+                    template_overloads=template_overloads,
                     require_static=False,
                     type_alias_fallback_position=type_alias_fallback_position,
                     receiver_contract=receiver_contract,
@@ -15001,6 +15112,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     field_variable_types,
                     field_structs_by_name,
                     allow_template_fallback=bool(template_overloads),
+                    template_overloads=template_overloads,
                     require_static=True,
                     type_alias_fallback_position=type_alias_fallback_position,
                     call_start=ident_start,
@@ -15063,6 +15175,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     field_variable_types,
                     field_structs_by_name,
                     allow_template_fallback=bool(template_overloads),
+                    template_overloads=template_overloads,
                     require_static=False,
                     type_alias_fallback_position=type_alias_fallback_position,
                     receiver_contract=receiver_contract,
@@ -15262,6 +15375,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         field_variable_types,
                         field_structs_by_name,
                         allow_template_fallback=bool(template_overloads),
+                        template_overloads=template_overloads,
                         require_static=False,
                         type_alias_fallback_position=type_alias_fallback_position,
                         receiver_contract=current_receiver_contract,
@@ -15671,6 +15785,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
         type_alias_fallback_position: Optional[int] = None,
+        shared_positions: Optional[Set[int]] = None,
     ) -> bool:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -15719,7 +15834,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             arg_open,
         )
         inferred_types = []
-        for argument in call_arguments:
+        for position, argument in enumerate(call_arguments):
+            if shared_positions and position in shared_positions:
+                # Every competing template converts this argument to the same
+                # declared type, so the conversion does not rank candidates.
+                inferred_types.append(declared_types[position])
+                continue
             inferred = self._infer_argument_type(
                 argument,
                 buffer_view,
@@ -15766,6 +15886,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         structs_by_name: Dict[str, _MetalStructDefinition],
         *,
         allow_template_fallback: bool,
+        template_overloads: Optional[Sequence[_MetalStructMethod]] = None,
         require_static: Optional[bool] = None,
         type_alias_fallback_position: Optional[int] = None,
         receiver_contract: Optional[_MetalReceiverContract] = None,
@@ -15801,6 +15922,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 variable_types,
                 structs_by_name,
                 type_alias_fallback_position,
+                shared_positions=(
+                    shared_template_parameter_positions(
+                        self, method, template_overloads, argument_count
+                    )
+                    if len(candidates) == 1
+                    else None
+                ),
             )
             for method in candidates
         }
@@ -18260,6 +18388,30 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 for receiver in {"self", *contextual_receiver_names}
             )
         )
+        if not has_external_member_call and (
+            methods_by_struct or template_methods_by_struct
+        ):
+            # A body-local object of a method-bearing struct is a receiver
+            # too: a method that only calls `tile.fill(x)` on its own local
+            # must not keep that call once the local's struct is lowered to a
+            # data-only carrier.
+            has_external_member_call = any(
+                re.search(
+                    rf"\b{re.escape(receiver)}\s*(?:\.|->)\s*"
+                    r"(?:template\s+)?[A-Za-z_]\w*\s*[<(]",
+                    instantiated_body,
+                )
+                for receiver in sorted(
+                    self._method_body_struct_receiver_locals(
+                        struct,
+                        instantiated_body,
+                        methods_by_struct,
+                        template_methods_by_struct,
+                        operator_call_structs,
+                        rewrite_structs_by_name,
+                    )
+                )
+            )
         has_concrete_sibling_call = any(
             re.search(
                 rf"(?<![\w.:>]){re.escape(sibling.name)}\s*\(",
@@ -18308,6 +18460,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     element_type, struct, rewrite_structs_by_name
                 )
                 local_view.setdefault(name, element_type)
+        # Body-local pointers (`threadgroup const float* view = ...;`) are
+        # subscriptable like pointer parameters, so a template member call that
+        # receives `view + 1` deduces its element type the same way.
+        for name, subscriptable in self._method_body_local_pointer_types(
+            instantiated_body
+        ).items():
+            buffer_view.setdefault(name, subscriptable)
         local_view["self"] = struct.name
         positioned_buffer_types = {
             name: [(0, value)] for name, value in buffer_view.items()
@@ -18442,6 +18601,70 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             result.append(ch)
             i += 1
         return "".join(result)
+
+    def _method_body_local_pointer_types(
+        self, body: str
+    ) -> Dict[str, _MetalSubscriptableType]:
+        """Element types of the single-declarator pointer locals of a method body.
+
+        Only a declaration whose one declarator is ``[qualifiers] T* name`` with an
+        explicit Metal address space is typed; arrays, references, multiple
+        declarators and pointers without an address space stay untyped, so call
+        argument inference keeps refusing them.
+        """
+        pointers: Dict[str, _MetalSubscriptableType] = {}
+        for statement in self._iter_simple_declarations(body):
+            name = self._declared_local_name(statement)
+            if not name or name in pointers:
+                continue
+            declarator = self._strip_top_level_default_value(statement).strip()
+            declarator = declarator.rstrip(";").strip()
+            if len(self._split_top_level_commas(declarator)) != 1 or not re.fullmatch(
+                r"(?:(?:const|volatile)\s+)*"
+                r"(?:device|constant|threadgroup|thread)\b[^;=\[\](){}&]*\*\s*"
+                + re.escape(name),
+                declarator,
+            ):
+                continue
+            subscriptable = self._pointer_or_array_parameter_type(declarator)
+            if subscriptable is not None:
+                pointers[name] = subscriptable
+        return pointers
+
+    def _method_body_struct_receiver_locals(
+        self,
+        struct: _MetalStructDefinition,
+        body: str,
+        methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
+        operator_call_structs: Set[str],
+        rewrite_structs_by_name: Dict[str, _MetalStructDefinition],
+    ) -> Set[str]:
+        """Names of body-local objects whose struct declares member functions."""
+        method_structs = set(operator_call_structs)
+        method_structs.update(
+            name for name, methods in methods_by_struct.items() if methods
+        )
+        method_structs.update(
+            name for name, methods in template_methods_by_struct.items() if methods
+        )
+        if not method_structs:
+            return set()
+        receivers: Set[str] = set()
+        for statement in self._iter_simple_declarations(body):
+            name = self._declared_local_name(statement)
+            if not name:
+                continue
+            declared_type = self._declared_local_type(statement, name)
+            if not declared_type:
+                continue
+            declared_type = self._canonicalize_struct_scoped_type(
+                declared_type, struct, rewrite_structs_by_name
+            )
+            words = IDENTIFIER_RE.findall(declared_type)
+            if words and words[-1] in method_structs:
+                receivers.add(name)
+        return receivers
 
     def _rewrite_internal_direct_reference_accessor_calls(
         self,
@@ -19105,6 +19328,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             positioned_local_types,
             {struct.name: struct},
             allow_template_fallback=bool(template_overloads),
+            template_overloads=template_overloads,
             require_static=False,
             type_alias_fallback_position=method.span[0],
             receiver_contract=self._method_body_receiver_contract(struct, method),
@@ -19860,8 +20084,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 ] in {"++", "--"}:
                     return False
                 if name in argument_captures and any(
-                    lifetime_start <= start < match.start() < end <= lifetime_end
+                    call_argument_designates(
+                        masked,
+                        (start, end),
+                        match.start(),
+                        match.end(),
+                        lambda access_start, limit: self._reference_capture_access_end(
+                            code, masked, access_start, limit
+                        ),
+                    )
                     for start, end in call_argument_spans
+                    if lifetime_start <= start < match.start() < end <= lifetime_end
                 ):
                     return False
                 cursor = self._reference_capture_access_end(
@@ -21907,11 +22140,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # scalar/aggregate scanner cannot type because the declarator names no
         # type. Declarations are processed in source order and each inferred
         # binding is recorded immediately, so one `auto` local may depend on an
-        # earlier one. An unresolved initializer still shadows older bindings;
-        # `auto&` / `auto*` declarators are skipped.
+        # earlier one. An unresolved initializer still shadows older bindings.
+        # `auto*` and `const auto*` take a pointer initializer's type
+        # ([dcl.type.auto.deduct]); `auto&` declarators are skipped.
         lexical_scopes = self._find_lexical_brace_scopes(code)
         pattern = re.compile(
-            r"(?:(?<=[;{}()])|^)\s*auto\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)",
+            r"(?:(?<=[;{}()])|^)\s*(?P<specifier>auto(?=\s)|(?:const\s+)?auto\s*\*)"
+            r"\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)",
             re.MULTILINE,
         )
         for match in pattern.finditer(code):
@@ -21952,6 +22187,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 inferred = self._concrete_type_alias_at(
                     inferred, position, type_aliases, local_integral_constants or {}
                 )
+            if match.group("specifier") != "auto":
+                inferred = deduced_auto_type(match.group("specifier"), inferred)
+                if inferred == "auto":
+                    inferred = None
             normalized = self._normalize_inferred_expression_type(inferred or "")
             entries = local_variable_types.setdefault(match.group("name"), [])
             scope = self._innermost_lexical_scope(
@@ -22354,6 +22593,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         return self._normalize_inferred_expression_type(
                             expr[angle_start + 1 : angle_end]
                         )
+
+        # A pointer conversion has its target type ([expr.reinterpret.cast]/1,
+        # [expr.cast]/1): `reinterpret_cast<device T*>(p)` and `(device T*)p`
+        # are `device T*`, so a call or an `auto` local built from one deduces
+        # template arguments like an explicitly typed pointer. Only pointer
+        # targets naming exactly one Metal address space are admitted.
+        pointer_cast = pointer_conversion_type(self, expr)
+        if pointer_cast is not None:
+            return pointer_cast
 
         # Dereference of one explicit C-style pointer cast has the cast's
         # pointee type: `*(thread Value*)(&bits)` -> `Value`. A dereference of a
@@ -25011,15 +25259,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     self._containing_span(i, context[1]) is not None
                     for context in containing_contexts
                 ):
-                    for owner, _method_spans, _context_constants in sorted(
+                    for owner, _method_spans, context_constants in sorted(
                         containing_contexts,
                         key=lambda context: (context[0].span[1] - context[0].span[0]),
                     ):
                         shadowed: Set[str] = set()
+                        member_template_parameters: Set[str] = set()
                         for method in [*owner.methods, *owner.template_methods]:
                             if method.span[0] <= i < method.span[1]:
                                 shadowed.update(method.parameter_names)
                                 shadowed.update(self._local_variable_names(method.body))
+                                member_template_parameters.update(
+                                    method.template_parameters
+                                )
                         for constructor in owner.constructors:
                             if (
                                 constructor.span is not None
@@ -25029,6 +25281,25 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                                 shadowed.update(
                                     self._local_variable_names(constructor.body)
                                 )
+                        # A member function body sees the class's constant
+                        # static data members unless a parameter or local
+                        # declaration hides them ([basic.scope.class]), so a
+                        # local `Tile<float, TM>` names the owner's `TM`.
+                        # Innermost owners are visited first and replace the
+                        # names they declare before an enclosing owner can.
+                        visible_constants = {
+                            name: value
+                            for name, value in context_constants.items()
+                            if name not in shadowed
+                            and name not in member_template_parameters
+                        }
+                        if visible_constants:
+                            template_arguments = [
+                                self._substitute_template_argument_static_constants(
+                                    argument, visible_constants
+                                )
+                                for argument in template_arguments
+                            ]
                         visible_aliases = set(owner.type_aliases) - shadowed
                         if not visible_aliases:
                             continue
