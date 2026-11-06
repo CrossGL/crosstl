@@ -14765,7 +14765,8 @@ class TestVulkanSPIRVCodeGen:
             "assignable scalar uint target"
         ) in spv_code_refused
         assert (
-            "RWByteAddressBuffer.InterlockedMax original operand must be " "scalar uint"
+            "RWByteAddressBuffer.InterlockedMax original operand must be "
+            "scalar int or uint"
         ) in spv_code_refused
         assert (
             "RWByteAddressBuffer.InterlockedCompareExchange requires byte "
