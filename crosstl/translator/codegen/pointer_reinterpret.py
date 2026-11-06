@@ -564,6 +564,13 @@ def _metal_storage_pointer_reinterpret_contract(
 def validate_pointer_reinterpretation_target(ast, target):
     """Reject targets that cannot preserve the shared pointer-view contract."""
 
+    if target in {"metal", "directx", "opengl", "vulkan"}:
+        from .lane_records import lower_record_byte_copies
+
+        # Byte-view copies between lane-record elements become element copies
+        # on every target, which need no alignment proof.
+        lower_record_byte_copies(ast)
+
     if target in {"directx", "opengl", "vulkan"}:
         return
 
