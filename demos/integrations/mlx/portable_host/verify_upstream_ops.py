@@ -698,6 +698,11 @@ UPSTREAM_TESTS = (
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
+    ) + (
+        # This reaches GatherQMM's affine gathered matrix kernels,
+        # affine_gather_qmm_t and affine_gather_qmm_n, through the product and
+        # the gradient of its input, against GatherMM's steel kernels.
+        "test_quantized.TestQuantized.test_gather_matmul_grad",
     ) + MODULE_TESTS + CONV_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS + tuple(
         name for tests in MODULE_GROUPS.values() for name in tests
     )
@@ -848,7 +853,8 @@ GROUP_TESTS = {
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
-    ),
+    )
+    + ("test_quantized.TestQuantized.test_gather_matmul_grad",),
     "blas-gather-blocks": ("test_blas.TestBlas.test_gather_mm_blocks",),
     "blas-masked": ("test_blas.TestBlas.test_block_masked_matmul",),
     # The sort, partition, median, searchsorted and unique tests sort through

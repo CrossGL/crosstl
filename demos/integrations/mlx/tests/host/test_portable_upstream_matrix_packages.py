@@ -19,7 +19,7 @@ OFFSETS = "gather_mm_offsets"
 
 def test_recorded_entries_are_sorted_matrix_entries_of_known_groups(tmp_path):
     assert set(warm.ENTRIES) <= set(ops.GROUPS)
-    assert set(warm.ORDER) == set(lazy.MATRIX_FAMILIES)
+    assert set(warm.ORDER) == set(lazy.MATRIX_FAMILIES) | {"gather-quantized"}
     caches = lazy.LazyPackages(tmp_path / "mlx", tmp_path / "packages", "metal").caches
     for entries in warm.ENTRIES.values():
         assert entries and list(entries) == sorted(set(entries))
