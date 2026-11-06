@@ -127,6 +127,7 @@ def adapted_sources(original, primitives, events):
         "BlockMaskedMM",
         "Convolution",
         "FFT",
+        "Hadamard",
         "Reduce",
         "BitwiseBinary",
         "BitwiseInvert",
@@ -225,6 +226,7 @@ else()
         "crosstl_cross_entropy.inc": (HERE / "cross_entropy.inc").read_bytes(),
         "crosstl_fft.inc": (HERE / "fft.inc").read_bytes(),
         "crosstl_sdpa.inc": (HERE / "sdpa.inc").read_bytes(),
+        "crosstl_hadamard.inc": (HERE / "hadamard.inc").read_bytes(),
     }
 
 

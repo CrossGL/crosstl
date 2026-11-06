@@ -46,6 +46,7 @@ family fails the trace instead of passing on an unchecked package.
 """
 
 import argparse
+import importlib
 import json
 import os
 import subprocess
@@ -67,6 +68,9 @@ from demos.integrations.mlx.portable_host import (
     dynamic_offset_packages,
     elementwise_evidence,
     gather_evidence,
+    hadamard_evidence,
+    hadamard_layout,
+    hadamard_packages,
     lazy_package_evidence,
     masked_scatter_evidence,
     masked_scatter_packages,
@@ -759,6 +763,7 @@ RETAINED_VALUES = (
     searchsorted_dispatch.PREFIX,
     *norm_layout.PREFIXES,
     cross_entropy_layout.PREFIX,
+    *hadamard_layout.PREFIXES,
     *INDEXING_PREFIXES,
     *DIVMOD_PREFIXES,
     # Masked scatter audits recompute the output from the mask and source.
@@ -781,6 +786,11 @@ NO_DISPATCH_TESTS = frozenset(
         "test_fft.TestFFT.test_fft_throws",
     )
 )
+# Tests the pinned suite skips when CI is set, as too slow on its Metal
+# runners, that the native workers run: the worker imports their modules with
+# CI cleared (import_ci_cleared). test_hadamard is test_ops' only CI-gated
+# method, so no other test of the module changes.
+CI_CLEARED_TESTS = frozenset(("test_ops.TestOps.test_hadamard",))
 # Tests that skip on the MLX CPU because they need a GPU: the CPU worker must
 # skip each of them and the native worker must run them. They compare the
 # products with NumPy's or the CPU stream's, so the CPU run is not their
@@ -1026,6 +1036,7 @@ def worker(args):
     os.environ["CI"] = "1"
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     tests = upstream_tests(package_target(args.packages), args.group)
+    import_ci_cleared(tests)
     records = []
     for name in tests:
         start = host.dispatch_count if host else 0
@@ -1058,6 +1069,29 @@ def worker(args):
     validate_upstream({"tests": records}, native=host is not None, inventory=tests)
     if audit is not None and audit.error is not None:
         raise RuntimeError(f"The native trace audit failed: {audit.error}")
+
+
+def import_ci_cleared(tests):
+    """Import the modules of ``CI_CLEARED_TESTS`` among ``tests`` without CI.
+
+    ``unittest.skipIf`` reads the environment when the module is imported,
+    so each such module is imported first with CI cleared, and every other
+    CI-gated method stays skipped only if its module has none.
+    """
+    for name in tests:
+        if name not in CI_CLEARED_TESTS:
+            continue
+        module, case, method = name.split(".")
+        if module not in sys.modules:
+            saved = os.environ.pop("CI", None)
+            try:
+                importlib.import_module(module)
+            finally:
+                if saved is not None:
+                    os.environ["CI"] = saved
+        function = getattr(getattr(sys.modules[module], case), method)
+        if getattr(function, "__unittest_skip__", False):
+            raise RuntimeError(f"{name} was imported with CI set")
 
 
 def run_upstream_test(name):
@@ -1279,6 +1313,14 @@ def event_audits(np, args, target, installed, modules=None):
             "cross-entropy",
             cross_entropy_evidence.audit_event,
             CrossEntropyPackageCache(root, packages / CROSS_ENTROPY_CACHE, target),
+        ),
+        owned(
+            hadamard_packages.ENTRIES,
+            "Hadamard",
+            hadamard_evidence.audit_event,
+            hadamard_packages.HadamardPackageCache(
+                root, packages / hadamard_packages.CACHE, target
+            ),
         ),
         (
             lambda entry, event: lazy_package_evidence.family(entry) is not None,

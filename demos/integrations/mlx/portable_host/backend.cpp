@@ -4875,6 +4875,8 @@ void Quantize::eval_gpu(
 
 } // namespace mlx::core::fast
 
+// The Hadamard port uses this translation unit's dispatch helpers and copy.
+#include "mlx/backend/no_gpu/crosstl_hadamard.inc"
 // The normalization ports use this translation unit's dispatch helpers.
 #include "mlx/backend/no_gpu/crosstl_normalization.inc"
 // So does the port of the compiled elementwise kernels.

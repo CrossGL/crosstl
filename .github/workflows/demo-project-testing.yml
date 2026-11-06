@@ -3013,6 +3013,19 @@ jobs:
               --target "${{ matrix.target }}" --packages .mlx-portable-upstream-ops/base/packages --group "${{ matrix.group }}" \
               --jobs ${{ matrix.target == 'metal' && 3 || 4 }} --budget-seconds 1800 \
               2>&1 | tee .mlx-portable-upstream-ops/matrix-translation.log
+      - name: Translate the upstream Hadamard stages
+        # The fft group's Hadamard tests launch 114 generated stages, which
+        # translated in about 200 s six at a time locally; translating them
+        # ahead leaves the native worker its deadline for the tests. Stages
+        # outside the budget translate on demand.
+        if: matrix.group == 'fft'
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX upstream Hadamard translation" -- \
+            python -m demos.integrations.mlx.portable_host.hadamard_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-upstream-ops/base/packages --verification \
+              --jobs ${{ matrix.target == 'metal' && 3 || 4 }} --budget-seconds 480 \
+              2>&1 | tee .mlx-portable-upstream-ops/hadamard-translation.log
       - name: Execute unchanged upstream op tests
         env:
           EGL_PLATFORM: surfaceless

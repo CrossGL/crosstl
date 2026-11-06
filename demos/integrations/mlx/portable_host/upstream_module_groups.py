@@ -274,6 +274,13 @@ FFT_TESTS = _tests(
     ),
 )
 
+# test_ops: Walsh-Hadamard transforms of 2**k, 12 * 2**k, 20 * 2**k and
+# 28 * 2**k points (hadamard.inc) in float32, float16 and bfloat16, strided
+# inputs through the copy, the strided two-pass split above 8,192 points, and
+# the transform's gradient under nested vmaps. test_hadamard skips itself
+# when CI is set, so the worker clears it for that test (CI_CLEARED_TESTS).
+HADAMARD_TESTS = _tests("test_ops", "TestOps", ("hadamard", "hadamard_grad_vmap"))
+
 # test_fast_sdpa: queries of at most eight positions, which
 # scaled_dot_product_attention.cpp runs through the vector kernels in one pass
 # or, for long grouped queries, in two (sdpa.inc), and the inf-score test,
@@ -343,7 +350,7 @@ GROUPS = {
     "serialization": SERIALIZATION_TESTS,
     "training": TRAINING_TESTS,
     "rope": ROPE_TESTS,
-    "fft": FFT_TESTS,
+    "fft": FFT_TESTS + HADAMARD_TESTS,
     "sdpa": SDPA_TESTS,
     "attention": ATTENTION_TESTS,
     "attention-2": ATTENTION_2_TESTS,
