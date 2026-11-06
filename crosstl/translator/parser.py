@@ -91,7 +91,11 @@ from .integer_literals import integer_literal_parts
 from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespace
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
-from .static_assertion_syntax import parse_static_assertion, starts_static_assertion
+from .static_assertion_syntax import (
+    mark_template_assertions,
+    parse_static_assertion,
+    starts_static_assertion,
+)
 from .validation import validate_shader_cbuffers
 from .wave_operations import GLSL_SUBGROUP_FUNCTIONS, WAVE_EXTENDED_OPERATIONS
 
@@ -1516,6 +1520,7 @@ class Parser:
         self.eat("LBRACE")
         members = []
         methods = []
+        first_assertion = len(self.static_assertions)
 
         previous_scope = self.enter_generic_parameter_scope(generic_params)
         try:
@@ -1532,6 +1537,9 @@ class Parser:
                 self.append_parsed_nodes(members, member)
         finally:
             self.restore_generic_parameter_scope(previous_scope)
+        mark_template_assertions(
+            self.static_assertions[first_assertion:], name, generic_params
+        )
 
         if self.current_token[0] == "EOF":
             return None
@@ -6786,9 +6794,15 @@ class Parser:
         previous_scope = self.enter_generic_parameter_scope(generic_params)
         try:
             if self.current_token[0] == "STRUCT":
+                first_assertion = len(self.static_assertions)
                 struct_node = self.parse_struct()
                 if struct_node:
                     struct_node.generic_params = generic_params
+                    mark_template_assertions(
+                        self.static_assertions[first_assertion:],
+                        struct_node.name,
+                        generic_params,
+                    )
                 return struct_node
             if self.current_token[0] == "ENUM":
                 enum_node = self.parse_enum()
