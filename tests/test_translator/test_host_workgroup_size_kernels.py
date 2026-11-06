@@ -13,6 +13,7 @@ from crosstl.translator.host_workgroup_size import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.spirv_friendly_names import translate_spirv
 
 SIZES = {
     "vulkan": r"OpExecutionMode %\S+ LocalSize (\d+) (\d+) (\d+)",
@@ -76,6 +77,9 @@ OPENCL_REQUIRED = (
 def _translate(tmp_path, source, suffix, backend, **options):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
+    if backend == "vulkan":
+        # Friendly ids whether or not SPIRV-Tools reformat the module.
+        return translate_spirv(path, source_options=options or None)
     return crosstl.translate(str(path), backend=backend, source_options=options or None)
 
 

@@ -6,8 +6,8 @@ import subprocess
 
 import pytest
 
-import crosstl
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+from tests.spirv_friendly_names import translate_spirv
 
 HEADER = "#include <metal_stdlib>\nusing namespace metal;\n"
 
@@ -96,7 +96,7 @@ shader main {
 def _translate(tmp_path, source, suffix=".metal"):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend="vulkan")
+    return translate_spirv(path)
 
 
 def _lines(code, pattern):
@@ -243,6 +243,6 @@ def test_narrower_size_parameters_take_the_leading_components(
         if threadgroup_size
         else {}
     )
-    code = crosstl.translate(str(path), backend="vulkan", **options)
+    code = translate_spirv(path, **options)
     assert "OpStore %t2 %gl_WorkGroupSize" not in code
     _validate(tmp_path, code)
