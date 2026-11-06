@@ -1,10 +1,19 @@
-"""Reconstruct general-scatter results from retained uploads and native readbacks."""
+"""Reconstruct general-scatter results from retained uploads and native readbacks.
+
+A complex64 sum uploads its updates as ``element_storage`` float32 lane pairs
+and its output as two raw 32-bit atomic words per element, which the audit
+reads back as complex64 values.
+"""
 
 import hashlib
 import math
 
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from demos.integrations.mlx.portable_host import scatter_workloads as workloads
+from demos.integrations.mlx.portable_host.element_storage import (
+    COMPLEX,
+    reflected_layout_matches,
+)
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_input_bindings,
     audit_native_execution,
@@ -14,11 +23,19 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
 from demos.integrations.mlx.portable_host.gather_workloads import words
 from demos.integrations.mlx.portable_host.runtime import COPY_GUARD
 from demos.integrations.mlx.portable_host.scatter_layout import (
+    ATOMIC_LANES,
     ATOMIC_TYPES,
     METADATA,
     atomic_storage_dtype,
     signature,
 )
+
+
+def raw_words(value):
+    """Whether ``value`` holds only raw 32-bit words."""
+    return isinstance(value["values"], list) and all(
+        type(word) is int and 0 <= word <= 0xFFFFFFFF for word in value["values"]
+    )
 
 
 def audit_event(np, event):
@@ -34,6 +51,16 @@ def audit_event(np, event):
         member = layout.get("memberName", name).removeprefix(event["entry"] + "_")
         member = "out" if member == "out_" else member
         require(member not in inputs, "Duplicate scatter binding")
+        if dtype == COMPLEX and member == "updates":
+            require(
+                binding["dtype"] == value["dtype"]
+                and binding["shape"] == value["shape"] == [len(value["values"])]
+                and binding.get("encoding") == FLOAT32_BITS
+                and reflected_layout_matches(layout, value, COMPLEX),
+                "Scatter binding layout changed",
+            )
+            inputs[member] = value
+            continue
         require(
             binding["dtype"] == value["dtype"] == layout["elementType"]
             and binding["shape"] == value["shape"]
@@ -71,9 +98,11 @@ def audit_event(np, event):
                 "Scatter atomic storage layout changed",
             )
         inputs[member] = value
+    lanes = ATOMIC_LANES[dtype]
     dtypes = {
         **METADATA,
-        "updates": dtype,
+        # complex64 updates travel as float32 lane pairs.
+        "updates": "float32" if dtype == COMPLEX else dtype,
         "out": atomic_storage_dtype(dtype, target),
         **{f"idx{i}": index_dtype for i in range(count)},
     }
@@ -87,16 +116,16 @@ def audit_event(np, event):
     )
     arrays = {}
     for name, value in inputs.items():
-        if dtype == "float32" and name in {"out", "updates"}:
+        if dtype in {"float32", COMPLEX} and name in {"out", "updates"}:
             require(
-                isinstance(value["values"], list)
-                and all(
-                    type(word) is int and 0 <= word <= 0xFFFFFFFF
-                    for word in value["values"]
-                ),
-                "Scatter float upload is not raw binary32 storage",
+                raw_words(value), "Scatter float upload is not raw binary32 storage"
             )
-            arrays[name] = np.array(value["values"], dtype=np.uint32).view(np.float32)
+            arrays[name] = np.array(value["values"], dtype=np.uint32)
+            # The output keeps its words so its trailing guard stays exact.
+            if name == "updates" or dtype == "float32":
+                arrays[name] = arrays[name].view(
+                    np.complex64 if dtype == COMPLEX else np.float32
+                )
         else:
             arrays[name] = np.array(value["values"], dtype=value["dtype"])
     scalar_names = ("upd_ndim", "upd_size", "out_ndim", "idx_ndim", "idx_size")
@@ -162,9 +191,13 @@ def audit_event(np, event):
         "Scatter output strides changed",
     )
     require(
-        arrays["out"].size == size + len(COPY_GUARD), "Scatter output extent changed"
+        arrays["out"].size == lanes * size + len(COPY_GUARD),
+        "Scatter output extent changed",
     )
-    initial = arrays["out"][:size].reshape(shape).copy()
+    initial = arrays["out"][: lanes * size]
+    if dtype == COMPLEX:
+        initial = initial.view(np.complex64)
+    initial = initial.reshape(shape).copy()
     expected = initial.copy()
     updates = view(np, arrays["updates"], update_shape, update_steps)
     require(
@@ -234,29 +267,36 @@ def audit_event(np, event):
         "workPerThread": work,
         "updateCount": index_size * slice_size,
         "outputCount": size,
+        # The output's atomic words are its largest index space.
         "maximumIndex": (
-            max(value.size if name != "out" else size for name, value in arrays.items())
+            max(
+                value.size if name != "out" else lanes * size
+                for name, value in arrays.items()
+            )
             - 1
         ),
     }
     readback = event["scatterValues"]
-    limits = np.iinfo("uint32" if dtype == "float32" else dtype)
+    storage = "uint32" if dtype in {"float32", COMPLEX} else dtype
+    limits = np.iinfo(storage)
     require(
         isinstance(readback, list)
-        and len(readback) == size
+        and len(readback) == lanes * size
         and all(
             type(value) is int and limits.min <= value <= limits.max
             for value in readback
         ),
         "Scatter readback is outside its storage type",
     )
-    raw = np.array(readback, dtype="uint32" if dtype == "float32" else dtype)
-    actual = words(np, raw)
+    raw = np.array(readback, dtype=storage)
+    actual = words(np, raw.view(np.complex64) if dtype == COMPLEX else raw)
     require(
         actual == words(np, expected), "Scatter native readback disagrees with uploads"
     )
     require(
-        event["scatterGuardValues"] == words(np, arrays["out"][size:]) == COPY_GUARD,
+        event["scatterGuardValues"]
+        == words(np, arrays["out"][lanes * size :])
+        == COPY_GUARD,
         "Scatter output guards changed",
     )
     require(

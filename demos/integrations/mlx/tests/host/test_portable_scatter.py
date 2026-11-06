@@ -460,14 +460,26 @@ def test_scatter_audit_accounts_for_generated_dispatch_input(tmp_path):
     scatter_evidence.audit_event(np, event)
 
 
-def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
+def scatter_event(
+    tmp_path, case, target="metal", *, normalize_scalar=False, launch=None
+):
+    """A retained scatter event for ``case``, or for a prebuilt ``launch``.
+
+    A complex64 sum uploads its updates as ``element_storage`` lane pairs and
+    its output, like its readback, as two raw atomic words per element.
+    """
+    from demos.integrations.mlx.portable_host.element_storage import (
+        COMPLEX_LAYOUT,
+        buffer_words,
+        packet,
+    )
     from demos.integrations.mlx.tests.host.test_portable_gather import evidence_event
 
     event = evidence_event(tmp_path)
     for key in list(event):
         if key.startswith("gather"):
             del event[key]
-    entry, supplied, arrays, expected, execution = buffers(
+    entry, supplied, arrays, expected, execution = launch or buffers(
         case, normalize_scalar=normalize_scalar
     )
     event.update(entry=entry, target=target, threads=expected.size, **execution)
@@ -476,7 +488,11 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         scatterValues=(
             words(np, expected)
             if case["dtype"] == "float32"
-            else expected.reshape(-1).tolist()
+            else (
+                expected.reshape(-1).view(np.uint32).tolist()
+                if case["dtype"] == "complex64"
+                else expected.reshape(-1).tolist()
+            )
         ),
         scatterGuardValues=runtime.COPY_GUARD.copy(),
         scatterStorageType=case["dtype"],
@@ -501,13 +517,23 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         storage = runtime.physical_dtype(kind, target)
         if name == "out":
             storage = layout.atomic_storage_dtype(kind, target)
+        if kind == "complex64" and name == "updates":
+            value = packet(kind, target, buffer_words(buffer, kind))
+            event["inputs"][name] = value
+            request["buffers"][name] = {
+                **{key: item for key, item in value.items() if key != "values"},
+                "binding": {"metadata": {"scalarLayout": dict(COMPLEX_LAYOUT)}},
+            }
+            continue
+        lanes = layout.ATOMIC_LANES.get(kind, 1) if name == "out" else 1
         values = (
             list(
                 ctypes.cast(
-                    buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
+                    buffer.data,
+                    ctypes.POINTER(ctypes.c_uint32 * (buffer.count * lanes)),
                 ).contents
             )
-            if kind == "float32"
+            if kind == "float32" or lanes > 1
             else layout.values(buffer)
         )
         if name == "idx_contigs":

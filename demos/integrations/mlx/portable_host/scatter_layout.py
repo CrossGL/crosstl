@@ -4,6 +4,11 @@ Storage follows the general gather's bound. Each launch keeps the per-axis
 workgroup limit: the update slice runs along x and the host splits index rows
 into launches of at most 65535 rows, each with MLX's work-per-thread choice
 for its own rows.
+
+As in MLX's ``Scatter::eval_gpu``, complex64 is accepted only for sums.
+``Sum::atomic_update`` adds each element's real and imaginary float32 lanes
+through a float view of the output, so the output binds as two 32-bit atomic
+words per element and its word count must stay within the storage bound.
 """
 
 import ctypes
@@ -34,22 +39,33 @@ METADATA = {
     "idx_size": "uint64",
 }
 ATOMIC_TYPES = {"int32": "int", "uint32": "uint", "float32": "float"}
+# 32-bit atomic words per output element.
+ATOMIC_LANES = {"int32": 1, "uint32": 1, "float32": 1, "complex64": 2}
 
 
 def atomic_storage_dtype(dtype, target):
-    """Return the reflected physical type of the output atomic allocation."""
-    return "uint32" if dtype == "float32" and target == "opengl" else dtype
+    """Return the reflected physical type of the output atomic allocation.
+
+    ``mlx_atomic<complex64_t>`` is MLX's generic ``atomic<uint>`` wrapper on
+    every target.
+    """
+    if dtype == "complex64" or dtype == "float32" and target == "opengl":
+        return "uint32"
+    return dtype
 
 
 def signature(entry):
     match = re.fullmatch(
-        r"scatter(int32|uint32|float32)(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"
+        r"scatter(?:(int32|uint32|float32)(int32|uint32|int64|uint64)_"
+        r"(none|sum|prod|min|max)|(complex64)(int32|uint32|int64|uint64)_(sum))_"
         r"([1-9]|10)_updc_(true|false)_nwork(1|4|8|16|32)_int",
         entry,
     )
     if match is None:
         raise ValueError("Unsupported native general-scatter entry")
-    dtype, index_dtype, operation, count, contiguous, work = match.groups()
+    groups = match.groups()
+    dtype, index_dtype, operation = groups[0:3] if groups[0] else groups[3:6]
+    count, contiguous, work = groups[6:]
     return dtype, index_dtype, int(count), operation, contiguous == "true", int(work)
 
 
@@ -68,7 +84,11 @@ def validate(entry, buffers, logical_size, execution):
         "out": dtype,
         **{f"idx{i}": index_dtype for i in range(count)},
     }
-    if set(buffers) != set(dtypes) or not 0 < logical_size <= MAX_STORAGE_ELEMENTS:
+    lanes = ATOMIC_LANES[dtype]
+    if (
+        set(buffers) != set(dtypes)
+        or not 0 < logical_size * lanes <= MAX_STORAGE_ELEMENTS
+    ):
         raise ValueError("Native scatter buffers or output size do not match")
     for name, buffer in buffers.items():
         if (
@@ -208,5 +228,12 @@ def validate(entry, buffers, logical_size, execution):
         "workPerThread": work,
         "updateCount": index_size * slice_size,
         "outputCount": logical_size,
-        "maximumIndex": max(buffer.count for buffer in buffers.values()) - 1,
+        # The atomic words of the output are its largest index space.
+        "maximumIndex": (
+            max(
+                buffer.count * (lanes if name == "out" else 1)
+                for name, buffer in buffers.items()
+            )
+            - 1
+        ),
     }
