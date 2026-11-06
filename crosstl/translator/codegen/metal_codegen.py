@@ -9877,6 +9877,10 @@ class MetalCodeGen(
     def record_readonly_metal_local_alias(self, node):
         reason = self.readonly_metal_local_alias_reason(node)
         if reason is None:
+            # A writable declaration hides a read-only one of the same name, such as a
+            # ``const`` local of an earlier loop body.
+            self.current_readonly_metal_parameters.discard(node.name)
+            self.current_readonly_metal_parameter_reasons.pop(node.name, None)
             return
         self.current_readonly_metal_parameters.add(node.name)
         self.current_readonly_metal_parameter_reasons[node.name] = reason
@@ -11794,6 +11798,10 @@ class MetalCodeGen(
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
+        # Read-only locals end with their block, so an outer variable of the same name
+        # is writable again after it.
+        previous_readonly = set(self.current_readonly_metal_parameters)
+        previous_readonly_reasons = dict(self.current_readonly_metal_parameter_reasons)
         try:
             return self.generate_statement_body(body, indent)
         finally:
@@ -11801,6 +11809,8 @@ class MetalCodeGen(
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+            self.current_readonly_metal_parameters = previous_readonly
+            self.current_readonly_metal_parameter_reasons = previous_readonly_reasons
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
