@@ -170,12 +170,8 @@ def test_opengl_binds_uint_word_buffers(tmp_path):
             "buffer_load2 on a byte-address buffer with a byte address that has side effects",
         ),
         (
-            "dst.InterlockedMax(0, -1);",
-            "atomicMax on a byte-address buffer with a value that is not uint",
-        ),
-        (
-            "int low = -2; dst.InterlockedMin(0, low);",
-            "atomicMin on a byte-address buffer with a value that is not uint",
+            "dst.InterlockedMin(0, 1.5f);",
+            "atomicMin on a byte-address buffer with a value that is neither int nor uint",
         ),
     ],
 )
@@ -187,7 +183,7 @@ def test_unlowerable_accesses_are_refused(tmp_path, backend, body, message):
     assert "passed to" not in str(raised.value)
 
 
-def _run_metal(source, buffers):
+def _run_metal(source, buffers, threads=1):
     Metal = pytest.importorskip("Metal")
     device = Metal.MTLCreateSystemDefaultDevice()
     if device is None:
@@ -217,7 +213,7 @@ def _run_metal(source, buffers):
     for name, buffer in native.items():
         encoder.setBuffer_offset_atIndex_(buffer, 0, indices[name])
     encoder.dispatchThreads_threadsPerThreadgroup_(
-        Metal.MTLSizeMake(1, 1, 1), Metal.MTLSizeMake(1, 1, 1)
+        Metal.MTLSizeMake(threads, 1, 1), Metal.MTLSizeMake(threads, 1, 1)
     )
     encoder.endEncoding()
     command.commit()
@@ -266,3 +262,133 @@ def test_metal_moves_typed_words_on_the_gpu(tmp_path):
         0,
         0,
     ], metal
+
+
+SIGNED_ORDERED = """
+RWByteAddressBuffer dst : register(u0);
+
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+    int lane = int(id.x);
+    dst.InterlockedMax(0, lane - 40);
+    dst.InterlockedMin(4, 20 - lane);
+    if (lane == 0) {
+        int low = -2;
+        dst.InterlockedMin(8, low);
+        int before;
+        dst.InterlockedMax(12, low, before);
+        dst.Store(16, before);
+        uint word;
+        dst.InterlockedMax(20, -9, word);
+        dst.Store(24, word);
+        float converted;
+        dst.InterlockedMin(28, -1, converted);
+        dst.Store(32, asuint(converted));
+    }
+}
+"""
+
+
+def _cgl_kernel(body):
+    return (
+        "shader main {\n    @ register(u0)\n    RWByteAddressBuffer dst;\n    compute {\n"
+        "    @ numthreads(1, 1, 1)\n    void main(uvec3 id @ gl_GlobalInvocationID) {\n"
+        f"{body}\n    }}\n    }}\n}}\n"
+    )
+
+
+def _translate_cgl(tmp_path, source, backend):
+    path = tmp_path / "shader.cgl"
+    path.write_text(source, encoding="utf-8")
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+def test_signed_min_max_become_compare_exchange_loops(tmp_path):
+    glsl = _translate(tmp_path, SIGNED_ORDERED, "opengl")
+
+    assert "atomicMin(" not in glsl and "atomicMax(" not in glsl
+    assert (
+        "uint(max(int(crosstl_byte_address_expected), crosstl_byte_address_value))"
+        in glsl
+    )
+    assert (
+        "uint(min(int(crosstl_byte_address_expected_1), crosstl_byte_address_value_1))"
+        in glsl
+    )
+    assert "before = int(crosstl_byte_address_expected_3);" in glsl
+    assert "word = crosstl_byte_address_expected_4;" in glsl
+    # The signed overload's original value is an int, so -1 converts to -1.0 rather than 4294967295.0.
+    assert "converted = float(int(crosstl_byte_address_expected_5));" in glsl
+    _validate_glsl(tmp_path, glsl)
+
+
+def test_metal_signed_min_max_compare_as_signed_on_the_gpu(tmp_path):
+    metal = _translate(tmp_path, SIGNED_ORDERED, "metal")
+    initial = [(-100) & 0xFFFFFFFF, 100, 5, (-7) & 0xFFFFFFFF, 0, 3, 0, 0xFFFFFFFF, 0]
+
+    results = _run_metal(
+        metal,
+        {"dst": struct.pack("<9I", *initial)},
+        threads=64,
+    )
+
+    # An unsigned comparison would keep 0xFFFFFF9C in word 0, 100 in word 1, 5 in word 2 and choose 0xFFFFFFF7
+    # for word 5; word 7 already holds the value, so the first exchange succeeds and leaves it.
+    assert list(struct.unpack("<9i", results["dst"])) == [
+        23,
+        20 - 63,
+        -2,
+        -2,
+        -7,
+        3,
+        3,
+        -1,
+        _signed(_bits(-1.0)),
+    ], metal
+
+
+def _signed(word):
+    return struct.unpack("<i", struct.pack("<I", word))[0]
+
+
+@pytest.mark.parametrize("backend", ["opengl", "metal"])
+def test_signed_min_max_declarations_splice_the_loop_into_their_block(
+    tmp_path, backend
+):
+    body = (
+        "        int base = 4;\n"
+        "        const int first = atomicMax(dst, base, -3);\n"
+        "        int second = atomicMin(dst, base + 4, first);\n"
+        "        buffer_store(dst, 16, first + second);"
+    )
+
+    code = _translate_cgl(tmp_path, _cgl_kernel(body), backend)
+
+    assert "atomicMax" not in code and "atomicMin" not in code
+    assert re.search(r"const int first = int\(crosstl_byte_address_expected\);", code)
+    assert re.search(r"int second = int\(crosstl_byte_address_expected_1\);", code)
+    assert re.search(r"crosstl_byte_address_word = \(?uint\(base\) >> 2u\)?;", code)
+    if backend == "opengl":
+        _validate_glsl(tmp_path, code)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            "        int total = 1 + atomicMin(dst, 0, -2);",
+            "atomicMin on a byte-address buffer with an int value inside an expression",
+        ),
+        (
+            "        for (int seen = atomicMax(dst, 0, -2); seen < 0; seen++) { }",
+            "atomicMax on a byte-address buffer with an int value inside an expression",
+        ),
+    ],
+)
+@pytest.mark.parametrize("backend", ["opengl", "metal"])
+def test_signed_min_max_outside_a_statement_are_refused(
+    tmp_path, backend, body, message
+):
+    with pytest.raises(TranslationDiagnostic, match=re.escape(message)):
+        _translate_cgl(tmp_path, _cgl_kernel(body), backend)

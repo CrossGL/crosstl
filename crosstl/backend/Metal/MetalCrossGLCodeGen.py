@@ -48,6 +48,7 @@ from .aggregate_scalar_conversions import (
     render_aggregate_scalar_conversion,
     render_explicit_aggregate_scalar_conversion,
 )
+from .alignment_specifiers import MetalAlignmentSpecifiers
 from .barrier_import import metal_barrier_statements
 from .bit_scan_import import lower_scan as lower_bit_scan
 from .bit_scan_import import scan_function as bit_scan_function
@@ -62,6 +63,7 @@ from .conditional_types import split_template_arguments
 from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
+    dependent_access,
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
@@ -1039,7 +1041,10 @@ class MetalConstexprBranchLoweringError(ValueError):
 
 
 class MetalToCrossGLConverter(
-    ImportRefusalMixin, MetalBufferLayoutImport, MetalMeshImport
+    ImportRefusalMixin,
+    MetalAlignmentSpecifiers,
+    MetalBufferLayoutImport,
+    MetalMeshImport,
 ):
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -2566,8 +2571,11 @@ class MetalToCrossGLConverter(
         struct_node = self.struct_declarations.get(struct_name)
         if struct_node is None:
             return None
-        if (
+        alignas_alignment = self.metal_alignment_specifier_value(
             getattr(struct_node, "alignas", None)
+        )
+        if (
+            alignas_alignment is None
             or getattr(struct_node, "attributes", None)
             or getattr(struct_node, "template_parameters", None)
             or getattr(struct_node, "generics", None)
@@ -2616,6 +2624,7 @@ class MetalToCrossGLConverter(
                 offset += member_size
             aggregate_alignment = max(aggregate_alignment, member_alignment)
 
+        aggregate_alignment = max(aggregate_alignment, alignas_alignment)
         aggregate_size = self.align_metal_layout_offset(offset, aggregate_alignment)
         if aggregate_size == 0:
             aggregate_size = 1
@@ -3707,26 +3716,10 @@ class MetalToCrossGLConverter(
                     code += f"    cbuffer {self.map_struct_name(struct_node.name)} {{\n"
                 else:
                     code += "    // Structs\n"
-                    struct_alignas = ""
-                    if hasattr(struct_node, "alignas") and struct_node.alignas:
-                        parts = []
-                        for item in struct_node.alignas:
-                            if isinstance(item, tuple) and item[0] == "type":
-                                parts.append(self.map_type(item[1]))
-                            else:
-                                parts.append(self.generate_expression(item, False))
-                        if (
-                            getattr(struct_node, "nested_owner_name", None)
-                            and len(parts) == 1
-                        ):
-                            code += f"    @metal_alignas({parts[0]})\n"
-                        else:
-                            struct_alignas = (
-                                " ".join(f"alignas({part})" for part in parts) + " "
-                            )
+                    code += self.metal_struct_alignment_attributes(struct_node)
                     code += (
                         f"    {self.format_generic_prefix(struct_node)}"
-                        f"{struct_alignas}struct "
+                        "struct "
                         f"{self.map_struct_name(struct_node.name)} {{\n"
                     )
                 static_member_types = {
@@ -4016,6 +4009,16 @@ class MetalToCrossGLConverter(
         specialization_key=None,
     ):
         qualifier = getattr(function, "qualifier", None)
+        if qualifier in {"vertex", "fragment", "kernel", "mesh", "object"} and (
+            self.unbound_template_parameter_names(
+                function, template_value_bindings, template_type_bindings
+            )
+        ):
+            # A stage function template is only an entry point through an
+            # instantiation, and every instantiation the source names has
+            # already become a concrete function. One that is left has no
+            # entry point in the Metal library, so it emits nothing.
+            return ""
         if qualifier == "vertex":
             return (
                 "    // Vertex Shader\n"
@@ -7460,6 +7463,20 @@ class MetalToCrossGLConverter(
         indirection = str(getattr(alias, "indirection", "") or "")
         declarator = f"({indirection}{alias_name})" if indirection else alias_name
         return f"{return_type} {declarator}({parameter_text})"
+
+    def unbound_template_parameter_names(
+        self, function, value_bindings=None, type_bindings=None
+    ):
+        """Named template parameters of ``function`` that no binding gives a value."""
+        bound = {*(value_bindings or {}), *(type_bindings or {})}
+        return [
+            entry[1]
+            for entry in getattr(function, "template_parameters", None) or []
+            if isinstance(entry, (tuple, list))
+            and len(entry) >= 2
+            and entry[1]
+            and entry[1] not in bound
+        ]
 
     def value_template_parameter_names(self, function):
         return [
@@ -15284,15 +15301,49 @@ class MetalToCrossGLConverter(
         prefix = f"{self.metal_free_operator_helper_prefix}{label}__"
         candidates = []
         overloads_by_name = getattr(self, "user_function_overloads_by_name", {})
-        for function_name, overloads in overloads_by_name.items():
-            if not str(function_name).startswith(prefix):
-                continue
+        for function_name in self.metal_free_operator_helper_names(
+            overloads_by_name, prefix
+        ):
             candidates.extend(
                 function
-                for function in overloads
+                for function in overloads_by_name[function_name]
                 if len(getattr(function, "params", []) or []) == arity
             )
         return candidates
+
+    def metal_free_operator_helper_names(self, overloads_by_name, prefix):
+        """Return the overload names that start with ``prefix``, in mapping order.
+
+        Every binary and unary operator asks for its helper candidates, and a
+        large translation unit has thousands of functions, so scanning every
+        name per operator dominated code generation. Names are only ever added
+        to the overload mapping (or the mapping is replaced), so the mapping's
+        identity and size identify its key set and key the cached lists.
+        """
+        cache = getattr(self, "_metal_free_operator_helper_name_cache", None)
+        if (
+            cache is None
+            or cache[0] is not overloads_by_name
+            or cache[1] != len(overloads_by_name)
+        ):
+            helper_prefix = self.metal_free_operator_helper_prefix
+            cache = (
+                overloads_by_name,
+                len(overloads_by_name),
+                [
+                    name
+                    for name in overloads_by_name
+                    if str(name).startswith(helper_prefix)
+                ],
+                {},
+            )
+            self._metal_free_operator_helper_name_cache = cache
+        names = cache[3].get(prefix)
+        if names is None:
+            names = cache[3][prefix] = [
+                name for name in cache[2] if str(name).startswith(prefix)
+            ]
+        return names
 
     def resolve_metal_free_operator(
         self, operator, arguments, source_location=None, argument_metal_types=None
@@ -18679,12 +18730,20 @@ float {scalar}(float value) {{
             self.metal_source_overload_value_type(self.expression_metal_type(argument))
             for argument in expression.args
         ]
+        unbound_names = unbound_template_type_names(
+            self.current_function,
+            set(self.type_aliases).union(*self.template_type_bindings),
+        )
         dependent = dependent_builtin_result_type(
             result_kind,
             argument_types,
-            unbound_template_type_names(
-                self.current_function,
-                set(self.type_aliases).union(*self.template_type_bindings),
+            unbound_names,
+            dependent_unknown=any(
+                argument_type is None
+                and dependent_access(
+                    argument, self.expression_metal_type, unbound_names
+                )
+                for argument, argument_type in zip(expression.args, argument_types)
             ),
         )
         if dependent is not NOT_DEPENDENT:

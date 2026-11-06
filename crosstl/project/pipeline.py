@@ -53,6 +53,7 @@ from crosstl.backend.Metal.template_overloads import (
 from crosstl.backend.Metal.text_scanners import (
     brace_block_spans,
     mask_comments_and_literals,
+    strip_comments_outside_strings,
 )
 from crosstl.backend.Metal.variable_templates import (
     materialize_value_variable_templates,
@@ -16674,9 +16675,12 @@ def _metal_scoped_statement_spans(
         elif ch == "]":
             bracket_depth = max(0, bracket_depth - 1)
         elif ch == "{" and paren_depth == bracket_depth == 0:
-            prefix = source[
-                _metal_statement_start(source, statement_start, i) : i
-            ].strip()
+            # A comment before a nested block is not a statement prefix, and
+            # neither is a preserved directive line that precedes it.
+            prefix = strip_comments_outside_strings(
+                source[_metal_statement_start(source, statement_start, i) : i],
+                _read_metal_string_for_project,
+            ).strip()
             # Direct-list initializers share brace syntax with statement blocks.
             # Only statement blocks reset the declaration scan boundary.
             opens_statement_scope = (

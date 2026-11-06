@@ -129,6 +129,10 @@ from .spirv_atomic_load_store import (
 )
 from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
+from .spirv_byte_address_atomics import (
+    process_byte_address_atomic_call,
+    process_byte_address_member_min_max,
+)
 from .spirv_constant_folding import (
     spirv_evaluated_scalar_initializer,
     spirv_folded_constant,
@@ -26706,6 +26710,11 @@ class VulkanSPIRVCodeGen(
             )
 
         if interlocked_info is not None:
+            handled, result = process_byte_address_member_min_max(
+                self, buffer_pointer, metadata, method_name, args
+            )
+            if handled:
+                return True, result
             return True, self.process_byte_address_buffer_interlocked_call(
                 buffer_pointer, metadata, method_name, args
             )
@@ -30216,6 +30225,11 @@ class VulkanSPIRVCodeGen(
 
             handled_byte_address_call, byte_address_result = (
                 self.process_byte_address_buffer_method_call(expr)
+            )
+            if handled_byte_address_call:
+                return byte_address_result
+            handled_byte_address_call, byte_address_result = (
+                process_byte_address_atomic_call(self, expr)
             )
             if handled_byte_address_call:
                 return byte_address_result

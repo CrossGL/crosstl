@@ -91,6 +91,7 @@ from .integer_literals import integer_literal_parts
 from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespace
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
+from .static_assertion_syntax import parse_static_assertion, starts_static_assertion
 from .validation import validate_shader_cbuffers
 from .wave_operations import GLSL_SUBGROUP_FUNCTIONS, WAVE_EXTENDED_OPERATIONS
 
@@ -345,6 +346,8 @@ class Parser:
         self.token_edits = []
         self.strict_function_bodies = strict_function_bodies
         self.anonymous_buffer_blocks = []
+        # static_assert declarations outside blocks, attached to the ShaderNode by finalize_shader.
+        self.static_assertions = []
         self.active_generic_parameter_names = set()
         self.value_type_scopes = [{}]
         # Declared values with their own parameters, which `name[...]` specializes.
@@ -443,6 +446,7 @@ class Parser:
 
     def finalize_shader(self, shader):
         bind_anonymous_buffer_block_members(shader, self.anonymous_buffer_blocks)
+        shader.static_assertions = list(self.static_assertions)
         return resolve_host_workgroup_sizes(
             validate_shader_cbuffers(shader), self.layout_argument_to_string
         )
@@ -555,6 +559,8 @@ class Parser:
         shader_node = None
 
         while self.current_token[0] != "EOF":
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] in ["IMPORT", "USE", "FROM"]:
                 imports.append(self.parse_import())
             elif self.current_token[0] == "PREPROCESSOR":
@@ -669,6 +675,8 @@ class Parser:
 
         while self.current_token[0] != "RBRACE":
             self.reject_end_of_input(f"shader declaration {name!r}")
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] == "PREPROCESSOR":
                 preprocessors.append(self.parse_preprocessor_directive())
             elif self.current_token[0] == "PRECISION":
@@ -829,6 +837,8 @@ class Parser:
 
         while self.current_token[0] != "RBRACE":
             self.reject_end_of_input(f"{stage_type} stage block")
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] == "LAYOUT" and self.is_stage_layout_qualifier():
                 layout = self.parse_stage_layout_qualifier()
                 layout_qualifiers.append(layout)
@@ -1443,10 +1453,18 @@ class Parser:
 
     def parse_attributed_struct(self):
         attributes = self.parse_attribute_annotations()
+        if self.is_generic_declaration():
+            struct_node = self.parse_generic_declaration()
+            if not isinstance(struct_node, StructNode):
+                raise SyntaxError(
+                    "Attributes before a generic declaration must precede a struct"
+                )
+            struct_node.attributes = attributes + list(struct_node.attributes or [])
+            return struct_node
         return self.parse_struct(attributes)
 
     def current_token_starts_attributed_struct_declaration(self):
-        """Return whether leading attributes are followed by ``struct``."""
+        """Return whether leading attributes are followed by ``struct`` or ``generic<...> struct``."""
         if not (
             self.current_token[0] in ["AT", "ATTRIBUTE"]
             or self.current_token_starts_square_attribute()
@@ -1457,6 +1475,11 @@ class Parser:
         saved_token = self.current_token
         try:
             attributes = self.parse_attribute_annotations()
+            if attributes and self.is_generic_declaration():
+                self.eat("IDENTIFIER")
+                if self.current_token[0] != "LESS_THAN":
+                    return False
+                self.parse_generic_parameters()
             return bool(attributes and self.current_token[0] == "STRUCT")
         finally:
             self.pos = saved_pos
@@ -1529,6 +1552,9 @@ class Parser:
     def parse_struct_member(self):
         """Parse one struct member declaration."""
         if self.current_token[0] == "EOF":
+            return None
+
+        if self.parse_scope_static_assertion():
             return None
 
         if self.current_token[0] == "PREPROCESSOR":
@@ -2272,7 +2298,9 @@ class Parser:
         )
 
         parsed_qualifiers = (
-            [] if is_colon_style_var else self.parse_variable_qualifiers()
+            []
+            if is_colon_style_var
+            else self.parse_variable_qualifiers(layout_attributes=attributes)
         )
         qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
             parsed_qualifiers
@@ -2418,10 +2446,25 @@ class Parser:
         """Parse one or more non-attribute array suffixes after a type/name."""
         return self.wrap_array_dimensions(type_node, self.parse_array_suffix_sizes())
 
-    def parse_variable_qualifiers(self):
-        """Parse declaration qualifiers that precede a variable type."""
+    def parse_variable_qualifiers(self, layout_attributes=None):
+        """Parse declaration qualifiers that precede a variable type.
+
+        GLSL 4.20 accepts the qualifiers of a declaration in any order, so ``uniform layout(rgba16f) image2D x;``
+        is the same declaration as ``layout(rgba16f) uniform image2D x;``. When ``layout_attributes`` is a list, a
+        ``layout(...)`` qualifier that follows another qualifier is parsed into it instead of ending the sequence.
+        """
         qualifiers = []
-        while self.current_token_is_variable_qualifier():
+        while True:
+            if (
+                layout_attributes is not None
+                and qualifiers
+                and self.current_token[0] == "LAYOUT"
+                and self.peek()[0] == "LPAREN"
+            ):
+                layout_attributes.extend(self.parse_layout_attributes())
+                continue
+            if not self.current_token_is_variable_qualifier():
+                break
             token_type, token_value = self.current_token
             if str(token_value).lower() in RESOURCE_MEMORY_QUALIFIER_NAMES:
                 qualifiers.append(self.parse_resource_memory_qualifier())
@@ -2477,7 +2520,7 @@ class Parser:
             if self.current_token_starts_var_address_space_declaration():
                 return True
 
-            self.parse_variable_qualifiers()
+            self.parse_variable_qualifiers(layout_attributes=[])
 
             if not self.is_type_token():
                 return False
@@ -4327,6 +4370,8 @@ class Parser:
             # braceless body made of one becomes an empty block through parse_substatement.
             self.eat("SEMICOLON")
             return []
+        if starts_static_assertion(self):
+            return parse_static_assertion(self)
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -6540,6 +6585,13 @@ class Parser:
 
         return self.format_raw_lambda_tokens(payload_tokens)
 
+    def parse_scope_static_assertion(self):
+        """Parse a ``static_assert`` outside a block into ``self.static_assertions``; False if none starts here."""
+        if not starts_static_assertion(self):
+            return False
+        self.static_assertions.append(parse_static_assertion(self))
+        return True
+
     def skip_unknown_token(self):
         """Consume one token when recovering from unsupported syntax."""
         if self.current_token[0] != "EOF":
@@ -6640,6 +6692,9 @@ class Parser:
         if self.current_token[0] == "EOF":
             return None
 
+        if self.parse_scope_static_assertion():
+            return None
+
         if self.current_token[0] == "PREPROCESSOR":
             return self.parse_preprocessor_directive()
 
@@ -6714,32 +6769,20 @@ class Parser:
         return None
 
     def parse_generic_declaration(self):
-        """Parse legacy generic declarations that wrap structs/enums/functions."""
-        if self.current_token[0] == "EOF":
-            return None
+        """Parse a ``generic<...>`` wrapper around a struct, enum, function or trait.
 
-        start_pos = self.pos
-        start_token = self.current_token
-
-        try:
-            return self.parse_generic_declaration_inner()
-        except SyntaxError:
-            self.pos = start_pos
-            self.current_token = start_token
-            self.skip_balanced_declaration()
-            return None
-
-    def parse_generic_declaration_inner(self):
-        """Parse a generic wrapper after recovery state has been captured."""
+        A malformed wrapper raises ``SyntaxError``; skipping it would drop the declaration from the program.
+        """
         self.eat("IDENTIFIER")
 
         if self.current_token[0] != "LESS_THAN":
-            return None
+            raise SyntaxError(
+                f"Expected '<' after 'generic', got {self.current_token[1]!r}"
+            )
 
         generic_params = self.parse_generic_parameters()
 
-        if self.current_token[0] == "EOF":
-            return None
+        self.reject_end_of_input("generic declaration")
         previous_scope = self.enter_generic_parameter_scope(generic_params)
         try:
             if self.current_token[0] == "STRUCT":
@@ -6762,8 +6805,10 @@ class Parser:
                 if trait_node:
                     trait_node.generic_params = generic_params
                 return trait_node
-            self.skip_balanced_declaration()
-            return None
+            raise SyntaxError(
+                "Expected a struct, enum, function or trait after the generic parameters, got "
+                f"{self.current_token[1]!r}"
+            )
         finally:
             self.restore_generic_parameter_scope(previous_scope)
 

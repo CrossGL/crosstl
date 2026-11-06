@@ -76,6 +76,7 @@ from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .reference_alias_arguments import call_argument_designates
 from .source_analysis_cache import SourceAnalysisCache, memoized
+from .static_assertion_sources import concrete_static_assertion_conditions
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
     discarded_instantiated_branch_spans,
@@ -87,6 +88,7 @@ from .static_member_constants import (
 )
 from .template_argument_text import normalize_template_argument_text
 from .template_constants import unresolved_constant_references
+from .template_function_parameters import template_function_pointer_parameter
 from .template_overloads import declared_type_names, select_instantiated_overload
 from .text_scanners import (
     find_named_type_declarations,
@@ -95,6 +97,11 @@ from .text_scanners import (
     split_top_level_commas,
     strip_comments_outside_strings,
     strip_top_level_default_value,
+)
+from .trait_operand_types import (
+    METAL_MATRIX_TYPE_NAMES,
+    canonical_matrix_type,
+    typedef_aggregate_names,
 )
 from .type_layout import metal_type_layout, metal_type_size
 from .unused_specialization_members import prune_unreferenced_specialization_members
@@ -239,6 +246,10 @@ _GLOBAL_METAL_QUALIFIER = re.compile(r"(?<![\w:])::\s*(?=metal\s*::)")
 def _strip_global_metal_qualifiers(text: str) -> str:
     """Spell `::metal::name` as `metal::name`; both name the same declaration."""
     return _GLOBAL_METAL_QUALIFIER.sub("", text)
+
+
+# Sort key of one `(source offset, declared type)` entry of a declaration map.
+_declaration_position = operator.itemgetter(0)
 
 
 def _keyword_before(text: str, start: int, end: int, keyword: str) -> Optional[int]:
@@ -1254,8 +1265,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
         # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
-        # bound) as for the source's own concrete code.
-        processed = self._fold_concrete_type_trait_values(processed)
+        # bound) as for the source's own concrete code. No later stage folds a trait, so one left in concrete
+        # code is refused for every target rather than reaching the parser as an identifier.
+        processed = self._fold_concrete_type_trait_values(
+            processed, require_resolution=True
+        )
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def preprocess_for_entry_discovery(
@@ -7021,6 +7035,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 normalized = base if width == 1 else f"{base}{width}"
                 if qualifiers:
                     normalized = " ".join((*sorted(qualifiers), normalized))
+            else:
+                matrix = canonical_matrix_type(unqualified)
+                if matrix is not None:
+                    normalized = " ".join((*sorted(qualifiers), matrix))
         return normalized or None
 
     def _type_trait_operand_is_concrete(
@@ -7195,9 +7213,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if struct.qualified_name:
                 names.add(struct.qualified_name)
         names.update(template.name for template in self._find_template_structs(code))
+        names.update(METAL_MATRIX_TYPE_NAMES)
         template_spans = self._find_template_declaration_spans(code)
         ignored_spans = sorted(
             [*template_spans, *self._find_comment_and_literal_spans(code)]
+        )
+        names.update(
+            typedef_aggregate_names(
+                code,
+                lambda text, start: self._find_matching_delimiter(
+                    text, start, "{", "}"
+                ),
+                lambda position: self._containing_span(position, ignored_spans)
+                is not None,
+            )
         )
         for match in re.finditer(
             r"\benum(?:\s+class)?\s+(?P<name>[A-Za-z_]\w*)",
@@ -7269,7 +7298,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return initializer
         return self._apply_text_replacements(initializer, replacements)
 
-    def _fold_concrete_type_trait_values(self, code: str) -> str:
+    def _fold_concrete_type_trait_values(
+        self, code: str, *, require_resolution: bool = False
+    ) -> str:
         if not any(name in code for name in self._METAL_TYPE_TRAIT_ARITIES):
             return code
         template_spans = self._find_template_declaration_spans(code)
@@ -7347,7 +7378,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     (match.start(), expression_end, "true" if value else "false")
                 )
                 continue
-            if not self._fail_closed_static_assertions:
+            if not (require_resolution or self._fail_closed_static_assertions):
                 continue
             expression = re.sub(
                 r"\s+", " ", code[match.start() : expression_end]
@@ -10490,11 +10521,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         reachable_source = (
             "\n".join(
-                code[function.span[0] : function.span[1]]
-                for function in concrete_functions
-            )
-            if concrete_functions
-            else None
+                [
+                    code[function.span[0] : function.span[1]]
+                    for function in concrete_functions
+                ]
+                # Concrete static assertions are emitted and lowered too.
+                + concrete_static_assertion_conditions(self, code, template_spans)
+            ) if concrete_functions else None
         )
         source_aliases = self._collect_local_type_alias_bindings(
             code,
@@ -21743,20 +21776,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         entries = declarations.get(name)
         if not entries:
             return None
-        best: Optional[_DeclaredTypeT] = None
-        for decl_position, declared_type in entries:
-            if decl_position <= position:
-                if (
-                    isinstance(declared_type, _MetalAddressableValueType)
-                    and declared_type.scope is not None
-                    and not declared_type.scope[0] <= position < declared_type.scope[1]
-                ):
-                    continue
-                best = declared_type
-            else:
-                break
-        if best is not None:
-            return best
+        # Every declaration list is position-ordered, so the candidates are the
+        # prefix up to ``position``; scanning it backwards stops at the nearest
+        # active binding instead of visiting every earlier declaration of a
+        # name that recurs in each function of a large translation unit.
+        for index in range(
+            bisect_right(entries, position, key=_declaration_position) - 1, -1, -1
+        ):
+            declared_type = entries[index][1]
+            if (
+                isinstance(declared_type, _MetalAddressableValueType)
+                and declared_type.scope is not None
+                and not declared_type.scope[0] <= position < declared_type.scope[1]
+            ):
+                continue
+            return declared_type
         return None
 
     def _flatten_types_at(
@@ -28576,6 +28610,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         is_type_parameter=True,
                         is_variadic=is_variadic,
                         default=default,
+                    )
+                )
+                continue
+            # A function pointer or reference parameter,
+            # `void (*load)(device const T *, short, thread U &)`, names itself
+            # inside its declarator, not at the end of it.
+            function_declarator = template_function_pointer_parameter(
+                declarator_no_pack
+            )
+            if function_declarator is not None:
+                name, declared_type = function_declarator
+                records.append(
+                    _TemplateParameter(
+                        name=name,
+                        is_type_parameter=False,
+                        is_variadic=is_variadic,
+                        default=default,
+                        declared_type=declared_type,
                     )
                 )
                 continue

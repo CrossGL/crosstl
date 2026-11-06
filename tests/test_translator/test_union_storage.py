@@ -164,6 +164,25 @@ CASES = {
         ],
         [0x3C003800, 8, 2],
     ),
+    "bfloat_lanes": (
+        "BfLanes value; value.word = 0x3F80C000u; uint count = 0u; value.floats[next_index(count)] = bfloat(0.5f); uint before = uint(float(value.floats[count]) * 4.0f); value.floats[count] = value.floats[0] + bfloat(0.25f);",
+        ["value.word", "before", "count"],
+        [0x3F403F00, 4, 1],
+        "union BfLanes { uint word; bfloat floats[2]; };\n",
+    ),
+    # 1 + 3/256 and 1 + 1/256 need eight mantissa bits; stores round to nearest even.
+    "bfloat_lane_rounding": (
+        "BfLanes value; value.word = 0u; uint count = 0u; uint first = next_index(count); value.floats[count] = bfloat(1.0f) + bfloat(0.01171875f); value.floats[first] = bfloat(1.0f) + bfloat(0.00390625f);",
+        ["value.word", "count"],
+        [0x3F823F80, 1],
+        "union BfLanes { uint word; bfloat floats[2]; };\n",
+    ),
+    "bool_lanes": (
+        "BoolLanes value; value.word = 0x00010001u; uint count = 0u; value.flags[next_index(count) + 1u] = true; uint lane2 = uint(value.flags[count + 1u]); value.flags[count + 1u] = false;",
+        ["value.word", "lane2", "uint(value.flags[3])"],
+        [0x00000101, 1, 0],
+        "union BoolLanes { uint word; bool flags[4]; };\n",
+    ),
     "wide_lanes": (
         "WideLanes value; value.words = uint2(0x04030201u, 0x08070605u); value.bytes[6] = 0xAAu; uint selected = value.bytes[4];",
         ["value.words.x", "value.words.y", "selected"],

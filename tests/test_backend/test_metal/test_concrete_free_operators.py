@@ -154,3 +154,38 @@ device s& operator+=(device s& a, s b) {
     output = materialize_concrete_free_operators(MetalPreprocessor(), source)
 
     assert output == source
+
+
+def test_free_operator_candidates_follow_overloads_added_after_a_lookup():
+    # Operator candidates are listed from a cache of the helper names. A helper
+    # specialized after the first lookup, and a replaced overload mapping, must
+    # both be seen by the next lookup, in mapping order.
+    from types import SimpleNamespace
+
+    from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+
+    def function(*params):
+        return SimpleNamespace(params=list(params))
+
+    converter = MetalToCrossGLConverter.__new__(MetalToCrossGLConverter)
+    prefix = converter.metal_free_operator_helper_prefix
+    first, unary, other = function("a", "b"), function("a"), function("a", "b")
+    converter.user_function_overloads_by_name = {
+        f"{prefix}add__cplx": [first, unary],
+        "unrelated": [function("x", "y")],
+        f"{prefix}multiply__cplx": [other],
+    }
+    assert converter.metal_free_operator_candidates("+", 2) == [first]
+    assert converter.metal_free_operator_candidates("-", 1) == []
+
+    added = function("a", "b")
+    converter.user_function_overloads_by_name.setdefault(
+        f"{prefix}add__float2", []
+    ).append(added)
+    assert converter.metal_free_operator_candidates("+", 2) == [first, added]
+    assert converter.metal_free_operator_candidates("*", 2) == [other]
+
+    negate = function("a")
+    converter.user_function_overloads_by_name = {f"{prefix}negate__cplx": [negate]}
+    assert converter.metal_free_operator_candidates("+", 2) == []
+    assert converter.metal_free_operator_candidates("-", 1) == [negate]
