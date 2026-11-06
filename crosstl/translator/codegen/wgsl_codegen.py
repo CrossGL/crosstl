@@ -67,6 +67,7 @@ from .enum_utils import (
 )
 from .fragment_output_targets import frag_data_attribute_index
 from .generic_struct_utils import named_struct_constructor_arguments
+from .host_workgroup_size_ids import is_host_sized_workgroup
 from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
@@ -138,7 +139,10 @@ from .wgsl_specialization_constants import (
     WGSLSpecializationPlan,
     plan_wgsl_specialization_constants,
 )
-from .wgsl_specialized_workgroup_size import specialized_workgroup_size
+from .wgsl_specialized_workgroup_size import (
+    WorkgroupSizeOverrides,
+    specialized_workgroup_size,
+)
 from .wgsl_stage_io import (
     entry_parameter_locations,
     interpolation_qualifiers,
@@ -160,6 +164,8 @@ from .wgsl_vector_initializers import (
     wgsl_vector_array_initializer,
     wgsl_vector_initializer,
 )
+from .wgsl_workgroup_locals import WORKGROUP_QUALIFIERS, hoist_workgroup_locals
+from .wgsl_workgroup_size_inputs import lower_workgroup_size_inputs
 
 
 class WGSLAggregateInitializerError(ValueError):
@@ -817,6 +823,7 @@ class WGSLCodeGen(
     def __init__(self):
         self._current_stage_name = None
         self._current_workgroup_size = None
+        self._workgroup_size_overrides = WorkgroupSizeOverrides(None)
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
         self._next_implicit_binding_by_group = {}
         self._cbuffer_member_accesses = {}
@@ -892,11 +899,14 @@ class WGSLCodeGen(
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
         ast = canonicalize_separate_textures(ast)
         lower_relational_builtins(ast)
+        lower_workgroup_size_inputs(ast)
+        hoist_workgroup_locals(ast, self._function_stage_name)
         lower_integer_builtin_inputs(
             ast, lambda name: self.BUILTIN_SEMANTICS.get(self.semantic_key(name))
         )
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
+        self._workgroup_size_overrides = WorkgroupSizeOverrides(ast)
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
         self._next_implicit_binding_by_group = {}
         self._identifier_scopes = []
@@ -1734,23 +1744,30 @@ class WGSLCodeGen(
             + ")"
         )
 
-    def stage_workgroup_size_values(self, stage_node):
+    def stage_workgroup_size_config(self, stage_node):
+        """The stage's execution metadata, specialized through overrides when the host chooses its size."""
         config = getattr(stage_node, "execution_config", {}) or {}
+        return self._workgroup_size_overrides.effective_config(config)
+
+    def stage_workgroup_size_values(self, stage_node):
         arguments, _ = specialized_workgroup_size(
-            config, self.stage_workgroup_size_defaults(stage_node)
+            self.stage_workgroup_size_config(stage_node),
+            self.stage_workgroup_size_defaults(stage_node),
         )
         return arguments
 
     def stage_workgroup_size_overrides(self, stage_node):
-        """Module-scope overrides of the workgroup dimensions the stage specializes."""
-        config = getattr(stage_node, "execution_config", {}) or {}
-        _, declarations = specialized_workgroup_size(
-            config, self.stage_workgroup_size_defaults(stage_node)
+        """Module-scope overrides of the workgroup dimensions the stage specializes that no entry declared yet."""
+        return self._workgroup_size_overrides.new_declarations(
+            self.stage_workgroup_size_config(stage_node),
+            self.stage_workgroup_size_defaults(stage_node),
         )
-        return declarations
 
     def stage_workgroup_size_defaults(self, stage_node):
         config = getattr(stage_node, "execution_config", {}) or {}
+        if is_host_sized_workgroup(config):
+            # The pipeline must set every dimension: its overrides have no initializer.
+            return (None, None, None)
         require_static_workgroup_size(config)
         values = config.get("numthreads") or [
             config.get("local_size_x", "1"),
@@ -2651,7 +2668,7 @@ class WGSLCodeGen(
             attributes = (
                 self.explicit_binding_attributes(node) or self.next_binding_attributes()
             )
-        elif "workgroup" in qualifier_names or "shared" in qualifier_names:
+        elif qualifier_names & WORKGROUP_QUALIFIERS:
             address_space = "workgroup"
 
         initializer = ""

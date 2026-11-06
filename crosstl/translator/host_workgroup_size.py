@@ -486,12 +486,12 @@ def resolve_host_workgroup_sizes(shader: Any, render=str) -> Any:
     return shader
 
 
-# Targets that fix a workgroup's size in the shader: HLSL and Slang ``[numthreads]`` and WGSL ``@workgroup_size``.
-# Their generators call :func:`require_static_workgroup_size` for every compute, mesh and task entry they emit.
-# SPIR-V for Vulkan and GLSL let the pipeline specialize the size instead, and GLSL source compiled by a driver reads
-# it from macros the host defines (crosstl/translator/codegen/host_workgroup_size_ids.py), so the host sets it when
-# it creates the pipeline.
-STATIC_WORKGROUP_SIZE_TARGETS = frozenset({"directx", "wgsl", "slang"})
+# Targets that fix a workgroup's size in the shader: HLSL and Slang ``[numthreads]``. Their generators call
+# :func:`require_static_workgroup_size` for every compute, mesh and task entry they emit. SPIR-V for Vulkan, GLSL
+# and WGSL let the pipeline specialize the size instead (specialization constants and WGSL overrides), and GLSL
+# source compiled by a driver reads it from macros the host defines (crosstl/translator/codegen/
+# host_workgroup_size_ids.py), so the host sets it when it creates the pipeline.
+STATIC_WORKGROUP_SIZE_TARGETS = frozenset({"directx", "slang"})
 
 
 def refuse_host_defined_workgroup_sizes(shader: Any, target: str) -> None:

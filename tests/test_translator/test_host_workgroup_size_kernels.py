@@ -85,14 +85,12 @@ def _size(code, backend):
     return tuple(int(value) for value in match.groups())
 
 
-# SPIR-V and GLSL specialize a size the host chooses instead (test_spirv_entry_workgroup_sizes.py,
-# test_glsl_host_workgroup_size.py).
-SPECIALIZING_BACKENDS = {"vulkan", "opengl"}
+# SPIR-V, GLSL and WGSL specialize a size the host chooses instead (test_spirv_entry_workgroup_sizes.py,
+# test_glsl_host_workgroup_size.py, test_wgsl_host_workgroup_size.py).
+SPECIALIZING_BACKENDS = {"vulkan", "opengl", "wgsl"}
 
 
-@pytest.mark.parametrize(
-    "backend", sorted(set(SIZES) - SPECIALIZING_BACKENDS) + ["wgsl"]
-)
+@pytest.mark.parametrize("backend", sorted(set(SIZES) - SPECIALIZING_BACKENDS))
 @pytest.mark.parametrize(
     "source, suffix, reason",
     [
