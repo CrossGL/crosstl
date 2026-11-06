@@ -29832,7 +29832,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         previous = previous_code_character(index)
         if previous < 0:
             return False
-        if text[previous] == ".":
+        # ``...`` ends a GNU range designator, ``[0 ... N - 1]``, or opens a fold, ``(... + xs)``: the
+        # identifier after it is no member.
+        if text[previous] == "." and text[max(0, previous - 2) : previous + 1] != "...":
             return True
         if previous >= 1 and text[previous - 1 : previous + 1] in {"::", "->"}:
             return True
