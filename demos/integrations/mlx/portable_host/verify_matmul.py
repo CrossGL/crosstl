@@ -7,7 +7,8 @@ whole-array sum of its float32 partial sums and the copy to the output type,
 and checks each output bit against an exact float64 reference: inputs lie on
 dyadic grids that keep every float32 partial sum exact, whatever its order.
 complex64 products take ``gemv`` or ``gemv_t`` even for a single dot product,
-with both parts of every operand on such grids.
+and ``steel_gemm_fused`` for matrix products, with both parts of every operand
+on such grids.
 """
 
 import argparse
@@ -124,6 +125,15 @@ CASES = (
         ((32, 70), ("strided", (3, 32, 70), (0, 70, 1))),
     ),
     ("gemm-copied-operand", "float32", ((20, 64), "step"), ((32, 9), "dense")),
+    # complex64 steel GEMM: upstream test_complex_gemm's partial tiles, and
+    # whole tiles of a transposed batch.
+    ("complex-gemm-nn-partial", "complex64", ((16, 50), "dense"), ((50, 32), "dense")),
+    (
+        "complex-gemm-tn-batched",
+        "complex64",
+        ((2, 64, 128), "swap"),
+        ((2, 64, 64), "dense"),
+    ),
     # Split-K: every transposition, type and tile, aligned and unaligned M x N
     # and K, 4 to 32 partitions, partitions without a whole K tile, a batch
     # folded into M and a copied operand.
@@ -459,7 +469,7 @@ def _gemm_covered(records):
     return (
         {(info["transposeA"], info["transposeB"]) for info in signatures}
         == {(False, False), (False, True), (True, False), (True, True)}
-        and {info["dtype"] for info in signatures} == set(gemm_layout.DTYPES)
+        and {info["dtype"] for info in signatures} == set(gemm_layout.ELEMENT_DTYPES)
         and all(
             {values[name] for values in constants} == {False, True}
             for name in ("has_batch", "align_M", "align_N", "align_K")

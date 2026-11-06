@@ -4446,6 +4446,11 @@ void dispatch_steel_gemm(
     const AddmmEpilogue* epilogue = nullptr) {
   const int64_t split_tiles = int64_t((M + 16 - 1) / 16) * ((N + 16 - 1) / 16);
   if (batch_size_out == 1 && split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)) {
+    // The host does not translate steel_gemm_splitk's complex64 entries yet.
+    if (out.dtype() == complex64) {
+      throw std::invalid_argument(
+          "CrossTL complex64 matmul does not support split-K products yet.");
+    }
     dispatch_steel_gemm_splitk(
         a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);
     return;
@@ -4679,12 +4684,6 @@ void Matmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   // MLX takes gemv_wide only from Apple GPU generation 15, which the host
   // does not report.
   if (std::min(M, N) != 1) {
-    // Steel GEMM's complex64 BlockMMA specialization does not translate yet
-    // (#2261).
-    if (dtype == complex64) {
-      throw std::invalid_argument(
-          "CrossTL complex64 matmul supports matrix-vector products only.");
-    }
     out.set_data(allocator::malloc(out.nbytes()));
     dispatch_steel_gemm(
         a, b, out, M, N, K, batch_size_out, a_cols, b_cols, a_transposed, b_transposed,

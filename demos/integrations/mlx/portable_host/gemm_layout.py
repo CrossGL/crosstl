@@ -11,7 +11,8 @@ with 2x2 simdgroups. ``Matmul`` never reads ``C``, so ``use_out_source`` and
 ``alpha == 0`` and ``beta == 1`` and ``do_axpby`` with it unless both are 1, and
 then binds ``C`` and ``GEMMAddMMParams`` (``addmm_layout``). The entry names
 carry the function constants as matmul.cpp's hash name does. Split-K products
-take ``gemm_splitk_layout``'s route.
+take ``gemm_splitk_layout``'s route. complex64 products take the same tile:
+GEMM_TPARAM_MACRO gives complex64 its own tile only on small devices.
 """
 
 import ctypes
@@ -19,7 +20,6 @@ import math
 import re
 
 from demos.integrations.mlx.portable_host import gemv_layout
-from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
 from demos.integrations.mlx.tests.kernels import gemm_fused_model as model
 
 SOURCE = "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_fused.metal"
@@ -29,6 +29,10 @@ SIGNED_MAX = gemv_layout.SIGNED_MAX
 MAX_GROUPS = gemv_layout.MAX_GROUPS
 MAX_BATCH_DIMENSIONS = gemv_layout.MAX_BATCH_DIMENSIONS
 DTYPES = gemv_layout.DTYPES
+COMPLEX = gemv_layout.COMPLEX
+# steel_gemm_fused.metal instantiates every float type and complex64.
+ELEMENT_DTYPES = (*DTYPES, COMPLEX)
+ELEMENT_SIZES = gemv_layout.ELEMENT_SIZES
 # GEMM_TPARAM_MACRO's medium-device (bm, bn, bk, wm, wn).
 HOST_TILE = (64, 64, 16, 2, 2)
 # steel_matmul_axpby's min_tmn_threshold for devices other than 's' and 'd'.
@@ -36,7 +40,7 @@ SPLIT_K_TILES = 1024
 CONSTANTS = ("has_batch", "use_out_source", "do_axpby", "align_M", "align_N", "align_K")
 CONSTANT_IDS = dict(zip(CONSTANTS, (10, 100, 110, 200, 201, 202)))
 PATTERN = re.compile(
-    r"(steel_gemm_fused_(nn|nt|tn|tt)_(float32|float16|bfloat16)_\3"
+    r"(steel_gemm_fused_(nn|nt|tn|tt)_(float32|float16|bfloat16|complex64)_\3"
     r"_bm(\d+)_bn(\d+)_bk(\d+)_wm(\d+)_wn(\d+))"
     r"_has_batch_([tn])_use_out_source_([tn])_do_axpby_([tn])"
     r"_align_M_([tn])_align_N_([tn])_align_K_([tn])"
@@ -155,8 +159,10 @@ def workgroup_size(entry):
 
 def select(dtype, transpose_a, transpose_b, m, n, k, batch_ndim, alpha=None, beta=None):
     """steel_matmul_regular_axpby's hash name for one product."""
-    if dtype not in DTYPES:
-        raise ValueError("Steel GEMM products support float32, float16 and bfloat16")
+    if dtype not in ELEMENT_DTYPES:
+        raise ValueError(
+            "Steel GEMM products support float32, float16, bfloat16 and complex64"
+        )
     bm, bn, bk, wm, wn = HOST_TILE
     transpose = ("t" if transpose_a else "n") + ("t" if transpose_b else "n")
     use_out_source, do_axpby = epilogue(alpha, beta)
@@ -229,11 +235,11 @@ def matmul_route(dtype, a_shape, a_strides, b_shape, b_strides):
         return "dot", dot_layout.route(*operands)
     if min(m, n) == 1:
         return "gemv", gemv_layout.route(*operands)
-    if dtype == gemv_layout.COMPLEX:
-        # The steel BlockMMA complex64 specialization does not translate yet
-        # (#2261), so the host refuses these products.
-        raise ValueError("complex64 matrix-matrix products are not translated yet")
     if split_k(m, n, k, prepared["batches"]):
+        if dtype == COMPLEX:
+            # The host does not translate steel_gemm_splitk's complex64
+            # entries yet, so it refuses these products.
+            raise ValueError("complex64 split-K matrix products are not translated yet")
         return "splitk", gemm_splitk_layout.route(*operands)
     return "gemm", route(*operands)
 
@@ -263,7 +269,7 @@ def read_storage(entry, buffers):
         itemsize = (
             1
             if name == "addmm_params"
-            else ITEM_SIZES.get(dtype) or ctypes.sizeof(INTEGER_TYPES[dtype])
+            else ELEMENT_SIZES.get(dtype) or ctypes.sizeof(INTEGER_TYPES[dtype])
         )
         count = buffer.count
         limit = {
@@ -540,9 +546,14 @@ def index_assertions(entry):
     view reaches only the slots its loader writes.
     """
     info = signature(entry)
-    element = {"float32": "float", "float16": "float16", "bfloat16": "bfloat16"}[
-        info["dtype"]
-    ]
+    # complex64_t is steel's complex_t<float>, whose resource helpers carry
+    # the specialization's name.
+    element = {
+        "float32": "float",
+        "float16": "float16",
+        "bfloat16": "bfloat16",
+        COMPLEX: "complex_t_float",
+    }[info["dtype"]]
     reads = max(loader.reads for loader in info["model"].loaders)
     device = [
         {"expression": f"source.offset + {offset}", "maximum": SIGNED_MAX}

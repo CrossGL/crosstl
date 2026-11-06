@@ -97,11 +97,11 @@ def test_signature_accepts_exactly_the_host_tile_entries():
     entries = {
         host_entry(transpose, dtype, flags, epilogue)
         for transpose in ("nn", "nt", "tn", "tt")
-        for dtype in layout.DTYPES
+        for dtype in layout.ELEMENT_DTYPES
         for flags in itertools.product((False, True), repeat=4)
         for epilogue in ("nn", "tn", "tt")
     }
-    assert len(entries) == 576
+    assert len(entries) == 768
     for entry in entries:
         info = layout.signature(entry)
         assert info["source"] in model.BY_NAME
@@ -119,7 +119,7 @@ def test_signature_accepts_exactly_the_host_tile_entries():
     for entry in (
         base.replace("_bm64_bn64_bk16_wm2_wn2", "_bm32_bn32_bk16_wm2_wn2"),
         base.replace("_bm64_bn64_bk16_wm2_wn2", "_bm64_bn64_bk16_wm1_wn2"),
-        base.replace("float32_float32", "complex64_complex64"),
+        base.replace("float32_float32", "complex64_float32"),
         base.replace("float32_float32", "float32_float16"),
         # steel_matmul_regular_axpby scales C only when it reads C.
         base.replace("do_axpby_n", "do_axpby_t"),
@@ -153,8 +153,12 @@ def test_selection_names_matmul_cpp_hash():
     entry = layout.select("bfloat16", False, True, 128, 70, 48, 2)
     assert entry == host_entry("nt", "bfloat16", (True, True, False, True))
     assert layout.signature(entry)["transposeB"]
+    # GEMM_TPARAM_MACRO gives complex64 the medium-device tile too.
+    assert layout.select("complex64", False, False, 16, 32, 50, 1) == host_entry(
+        "nn", "complex64", (False,) * 4
+    )
     with pytest.raises(ValueError):
-        layout.select("complex64", False, False, 64, 64, 64, 1)
+        layout.select("float64", False, False, 64, 64, 64, 1)
 
 
 def test_routes_mirror_matmul_eval_gpu():
@@ -395,7 +399,9 @@ def struct_layout(name):
     "fault",
     (None, "guard", "missing", "shape", "trace", "unbound", "readonly", "duplicate"),
 )
-@pytest.mark.parametrize("name", ("gemm-two-batch-axes", "gemm-tn"))
+@pytest.mark.parametrize(
+    "name", ("gemm-two-batch-axes", "gemm-tn", "complex-gemm-tn-batched")
+)
 def test_dispatch_commits_the_output_only_after_validation(
     tmp_path, monkeypatch, target, fault, name
 ):
@@ -442,13 +448,20 @@ def test_dispatch_commits_the_output_only_after_validation(
         "pack_storage_records",
         lambda layout_, records: [len(layout_["structMembers"])] + [0] * 5,
     )
-    one = {"float32": 0x3F800000, "float16": 0x3C00, "bfloat16": 0x3F80}[dtype]
+    # complex64 (1, 0.5): the real part in the low word.
+    one = {
+        "float32": 0x3F800000,
+        "float16": 0x3C00,
+        "bfloat16": 0x3F80,
+        "complex64": 0x3F000000_3F800000,
+    }[dtype]
+    parts = 2 if dtype == "complex64" else 1
 
     def execute(host, outputs):
         outputs = json.loads(json.dumps(outputs))
         value = outputs["binding_D"]
         count = len(memory["D"])
-        value["values"][:count] = dispatch.encode_binding(
+        value["values"][: count * parts] = dispatch.encode_binding(
             dtype, [one] * count, target, physical_layout(target, dtype), "buffer"
         )["values"]
         if fault == "guard":
@@ -482,11 +495,11 @@ def test_dispatch_commits_the_output_only_after_validation(
     assert kwargs["expected_target"] == target
     assert set(kwargs["observe_inputs"]) == set(inputs) - {"binding_D"}
     for parameter in ("A", "B"):
-        assert len(inputs[f"binding_{parameter}"]["values"]) == (
+        assert len(inputs[f"binding_{parameter}"]["values"]) == parts * (
             len(memory[parameter]) + dispatch.GUARD_COUNT
         )
     # C is never read without use_out_source, so it holds only poison.
-    assert len(inputs["binding_C"]["values"]) == dispatch.GUARD_COUNT
+    assert len(inputs["binding_C"]["values"]) == parts * dispatch.GUARD_COUNT
     assert inputs["binding_params"]["dtype"] == "uint32"
     assert inputs["binding_params"]["values"][0] == len(layout.PARAMS_FIELDS)
     assert inputs["binding_addmm_params"]["values"][0] == 5
@@ -554,7 +567,7 @@ def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
             + [record["entry"] for record in addmm if record["family"] == "gemm"]
         )
     )
-    assert len(entries) == 16
+    assert len(entries) == 18
     calls = []
 
     def build(root, directory, target, entry):

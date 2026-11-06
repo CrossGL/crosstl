@@ -79,6 +79,7 @@ ENTRIES = {
         "gemv_t_float32_bm1_bn4_sm8_sn4_tm4_tn4_nc0_axpby0",
         "steel_gemm_fused_nn_bfloat16_bfloat16_bm64_bn64_bk16_wm2_wn2_has_batch_n_use_out_source_n_do_axpby_n_align_M_n_align_N_n_align_K_t",
         "steel_gemm_fused_nn_bfloat16_bfloat16_bm64_bn64_bk16_wm2_wn2_has_batch_n_use_out_source_t_do_axpby_t_align_M_n_align_N_n_align_K_t",
+        "steel_gemm_fused_nn_complex64_complex64_bm64_bn64_bk16_wm2_wn2_has_batch_n_use_out_source_n_do_axpby_n_align_M_n_align_N_n_align_K_n",
         "steel_gemm_fused_nn_float16_float16_bm64_bn64_bk16_wm2_wn2_has_batch_n_use_out_source_n_do_axpby_n_align_M_n_align_N_n_align_K_n",
         "steel_gemm_fused_nn_float16_float16_bm64_bn64_bk16_wm2_wn2_has_batch_n_use_out_source_n_do_axpby_n_align_M_n_align_N_n_align_K_t",
         "steel_gemm_fused_nn_float16_float16_bm64_bn64_bk16_wm2_wn2_has_batch_n_use_out_source_n_do_axpby_n_align_M_n_align_N_t_align_K_t",

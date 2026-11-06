@@ -213,8 +213,16 @@ def test_routes_mirror_matmul_eval_gpu():
         "complex64", [1, 72], [72, 1], [72, 1], [1, 1]
     )
     assert family == "gemv" and route == dot
-    with pytest.raises(ValueError, match="complex64 matrix-matrix"):
-        gemm_layout.matmul_route("complex64", [4, 8], [8, 1], [8, 5], [5, 1])
+    # complex64 matrix products take steel GEMM unless they would split K,
+    # whose complex64 entries the host does not translate.
+    family, route = gemm_layout.matmul_route(
+        "complex64", [16, 50], [50, 1], [50, 32], [32, 1]
+    )
+    assert family == "gemm" and route["entry"].startswith(
+        "steel_gemm_fused_nn_complex64_complex64_"
+    )
+    with pytest.raises(ValueError, match="complex64 split-K"):
+        gemm_layout.matmul_route("complex64", [16, 256], [256, 1], [256, 16], [16, 1])
     for a, b, message in (
         (([4, 8], [8, 1]), ([8, 5], [5, 1]), "steel GEMM"),
         # test_qmv's unbatched reference folds three vectors into M.

@@ -713,6 +713,17 @@ every transposition and element type, partial and whole tiles, several tiles
 per axis, batches with and without `has_batch`, a batch folded into `M` and a
 copied operand, with the same exact references.
 
+complex64 products take the same tile: `GEMM_TPARAM_MACRO` gives complex64 a
+tile of its own only on small devices. The translated `steel_gemm_fused`
+complex64 entries load and store `complex64_t` tiles element-wise through
+lane-record views, and the host binds each element as its packed
+`{real, imag}` float32 pair, as for complex64 GEMV. `verify_matmul.py` runs
+upstream `test_complex_gemm`'s partial-tile product and a transposed batch of
+whole tiles, both parts on the exact grids. `mx.addmm` decomposes complex64
+into a matmul, multiplies and an add, so it never reaches `AddMM`. The host
+refuses complex64 products that would take the split-K route, whose complex64
+entries it does not translate yet.
+
 A single product whose `M x N` output has at most 1,024 tiles of 16, with
 `K / 16 >= 8` and `K >= max(M, N)`, follows `steel_gemm_splitk_axpby`: the
 host allocates the float32 `C_split` temporary of matmul.cpp's partition
