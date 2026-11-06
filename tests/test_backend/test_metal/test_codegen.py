@@ -6939,8 +6939,8 @@ def test_codegen_sizeof_and_cast():
 
 def test_codegen_rejects_sizeof_known_aggregate_without_layout_contract():
     code = """
-    struct alignas(16) Payload {
-        float value;
+    struct Payload {
+        alignas(16) float value;
     };
 
     int payload_size() {
