@@ -237,6 +237,17 @@ def _spirv(tmp_path, source):
     return code
 
 
+def _uint_ops(code, opcode):
+    """Instructions ``opcode`` whose result type is the 32-bit unsigned integer.
+
+    The emitter names IDs numerically; ``spirv-dis``, when installed, renames them (``%uint``), so resolve the type.
+    """
+    uint_ids = set(re.findall(r"(%\w+) = OpTypeInt 32 0\b", code))
+    return [
+        match for match in re.findall(rf"= {opcode} (%\w+) ", code) if match in uint_ids
+    ]
+
+
 @pytest.mark.parametrize(
     "call, opcode",
     [
@@ -254,7 +265,7 @@ def _spirv(tmp_path, source):
 def test_spirv_atomic_on_the_word(tmp_path, call, opcode):
     body = f"        uint previous = {call};\n        {call};\n        buffer_store(dst, 0u, previous);"
     code = _spirv(tmp_path, _cgl(body))
-    assert len(re.findall(rf"= {opcode} %uint ", code)) == 2, code
+    assert len(_uint_ops(code, opcode)) == 2, code
 
 
 @pytest.mark.parametrize(
@@ -267,7 +278,7 @@ def test_spirv_int_value_is_the_signed_min_and_max(tmp_path, name, opcode):
         "        buffer_store(dst, 0u, uint(previous));"
     )
     code = _spirv(tmp_path, _cgl(body))
-    assert re.search(rf"= {opcode} %uint ", code), code
+    assert _uint_ops(code, opcode), code
     assert "OpAtomicU" not in code
 
 
@@ -312,8 +323,8 @@ def test_spirv_method_form_with_int_value_is_signed(tmp_path, method, opcode):
         "        buffer_store(dst, 0u, uint(previous) + seen);"
     )
     code = _spirv(tmp_path, _cgl(body))
-    assert len(re.findall(rf"= {opcode} %uint ", code)) == 2, code
-    assert len(re.findall(rf"= OpAtomicU{opcode[-3:]} %uint ", code)) == 1, code
+    assert len(_uint_ops(code, opcode)) == 2, code
+    assert len(_uint_ops(code, f"OpAtomicU{opcode[-3:]}")) == 1, code
 
 
 def test_spirv_atomic_on_a_buffer_element_evaluates_it_once(tmp_path):
