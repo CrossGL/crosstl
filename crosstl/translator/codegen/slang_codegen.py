@@ -4954,7 +4954,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         return " ".join(qualifiers) + " "
 
     def slang_static_storage_prefix(self, node, mapped_type=None):
-        """``static`` for a module-scope value with one copy per invocation.
+        """``static`` for a module-scope value with one copy per invocation, ``static const`` for a constant.
 
         As in HLSL, a Slang global without ``static`` is a uniform, so CrossGL's module-scope ``static`` values
         (SPIR-V ``Private`` storage) keep the keyword. Groupshared, uniform and resource declarations do not.
@@ -4963,8 +4963,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
         }
-        if "static" not in qualifiers or qualifiers & {
-            "const",
+        constant = bool(qualifiers & {"const", "constant"})
+        if not (constant or "static" in qualifiers) or qualifiers & {
             "uniform",
             "groupshared",
             "shared",
@@ -4977,7 +4977,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             and self.slang_register_prefix_for_type(mapped_type, node, None) is not None
         ):
             return ""
-        return "static "
+        # A module-scope constant (``const``, ``static const`` or MSL's ``constant``) is a compile-time value;
+        # without ``static`` Slang would make it a uniform parameter and drop its initializer.
+        return "static const " if constant else "static "
 
     def slang_parameter_qualifier_prefix(self, node):
         qualifiers = []

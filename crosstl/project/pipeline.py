@@ -16542,17 +16542,27 @@ def _metal_concrete_function_definition_fingerprints(
     return fingerprints
 
 
+def _metal_at_line_start(source: str, position: int) -> bool:
+    line_start = source.rfind("\n", 0, position) + 1
+    return not source[line_start:position].strip()
+
+
 def _metal_statement_start(source: str, start: int, end: int) -> int:
     """Return where the statement in ``source[start:end]`` begins.
 
     A statement span runs from the previous ``;``, so it can begin with the
     trailing comment of the line before (``int n = 8; // size``).  Comments are
-    not part of the statement ([lex.comment]), so skip them and whitespace.
+    not part of the statement ([lex.comment]), so skip them and whitespace, and
+    so is a preserved directive line such as ``#pragma clang loop``, which ends
+    without a semicolon.
     """
     position = start
     while position < end:
         if source[position].isspace():
             position += 1
+        elif source[position] == "#" and _metal_at_line_start(source, position):
+            line_end = source.find("\n", position, end)
+            position = end if line_end == -1 else line_end + 1
         elif source.startswith("//", position):
             line_end = source.find("\n", position, end)
             position = end if line_end == -1 else line_end + 1
@@ -16665,9 +16675,11 @@ def _metal_scoped_statement_spans(
         elif ch == "]":
             bracket_depth = max(0, bracket_depth - 1)
         elif ch == "{" and paren_depth == bracket_depth == 0:
-            # A comment before a nested block is not a statement prefix.
+            # A comment before a nested block is not a statement prefix, and
+            # neither is a preserved directive line that precedes it.
             prefix = strip_comments_outside_strings(
-                source[statement_start:i], _read_metal_string_for_project
+                source[_metal_statement_start(source, statement_start, i) : i],
+                _read_metal_string_for_project,
             ).strip()
             # Direct-list initializers share brace syntax with statement blocks.
             # Only statement blocks reset the declaration scan boundary.

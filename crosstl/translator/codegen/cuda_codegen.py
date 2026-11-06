@@ -82,6 +82,7 @@ from .gpu_device_globals import (
     at_file_scope,
     constant_in_device_memory,
     file_scope_placement,
+    is_constant_value_declaration,
 )
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
@@ -1801,8 +1802,16 @@ class CudaCodeGen(
             if hasattr(node, "qualifiers"):
                 for qualifier in node.qualifiers:
                     qualifier = str(qualifier).lower()
-                    if qualifier == "const":
-                        qualifiers.append("const")
+                    if qualifier == "const" or (
+                        qualifier == "constant"
+                        and is_constant_value_declaration(node)
+                        and self.cuda_pointer_or_reference_type_info(
+                            self.type_name_string(var_type)
+                        )
+                        is None
+                    ):
+                        if "const" not in qualifiers:
+                            qualifiers.append("const")
                     elif qualifier == "static":
                         qualifiers.append("static")
                     elif "workgroup" in qualifier or "shared" in qualifier:

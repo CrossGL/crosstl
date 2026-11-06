@@ -11,6 +11,7 @@ from .block_arrays import SpirvBlockArrayUnsupportedError, block_array_element
 from .block_layout_import import spirv_block_layout
 from .buffer_memory_qualifiers import storage_block_memory_qualifiers
 from .function_structure import SpirvFunctionStructure
+from .image_texel_atomics import fold_image_texel_atomic
 from .integer_signedness_import import (
     spirv_integer_binary_expression,
     spirv_integer_conversion_expression,
@@ -22,6 +23,11 @@ from .ray_tracing_import import (
     ray_statement,
     ray_variable_locations,
     refuse_untranslated_statement,
+)
+from .sampled_images import (
+    sampled_image_arguments,
+    sampled_image_call,
+    sampled_image_image,
 )
 from .select_import import spirv_select_expression
 from .struct_result_import import (
@@ -1209,6 +1215,9 @@ class VulkanParser:
         self.spirv_apply_decoration_groups(
             decorations, member_decorations, group_decorates, group_member_decorates
         )
+        self.spirv_geometry_module = any(
+            entry_point["execution_model"] == "Geometry" for entry_point in entry_points
+        )
         self.spirv_register_struct_type_names(types, names, member_names)
         self.spirv_name_struct_constants(constants, types)
         self.spirv_assign_flattened_resource_block_member_aliases(
@@ -1624,12 +1633,14 @@ class VulkanParser:
                 record_expression(
                     result_id,
                     operands[0],
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                    sampled_image_image(
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
                     ),
                 )
                 continue
@@ -1638,24 +1649,23 @@ class VulkanParser:
                 record_expression(
                     result_id,
                     operands[0],
-                    FunctionCallNode(
+                    sampled_image_call(
+                        FunctionCallNode,
                         self.spirv_type_name(operands[0], types) or operands[0],
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operands[1],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                            self.spirv_assembly_operand_expression(
-                                operands[2],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                        ],
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                     ),
                 )
                 continue
@@ -2342,7 +2352,7 @@ class VulkanParser:
                 "OpAtomicIDecrement",
             }:
                 if len(operands) >= 4:
-                    expressions[result_id] = (
+                    expressions[result_id] = fold_image_texel_atomic(
                         self.spirv_assembly_atomic_increment_expression(
                             opcode,
                             operands[1],
@@ -2350,7 +2360,9 @@ class VulkanParser:
                             names,
                             decorations,
                             constants,
-                        )
+                        ),
+                        opcode,
+                        self.spirv_type_name(operands[0], types),
                     )
                     expression_type_ids[result_id] = operands[0]
                     if result_id not in used_result_ids:
@@ -2359,14 +2371,18 @@ class VulkanParser:
 
             if result_id and opcode in self.SPIRV_ATOMIC_RMW_FUNCTIONS:
                 if len(operands) >= 5:
-                    expressions[result_id] = self.spirv_assembly_atomic_expression(
+                    expressions[result_id] = fold_image_texel_atomic(
+                        self.spirv_assembly_atomic_expression(
+                            opcode,
+                            operands[1],
+                            operands[4],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                         opcode,
-                        operands[1],
-                        operands[4],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                        self.spirv_type_name(operands[0], types),
                     )
                     expression_type_ids[result_id] = operands[0]
                     if result_id not in used_result_ids:
@@ -2398,7 +2414,7 @@ class VulkanParser:
                 "OpAtomicCompareExchangeWeak",
             }:
                 if len(operands) >= 7:
-                    expressions[result_id] = (
+                    expressions[result_id] = fold_image_texel_atomic(
                         self.spirv_assembly_atomic_compare_exchange_expression(
                             operands[1],
                             operands[5],
@@ -2407,7 +2423,9 @@ class VulkanParser:
                             names,
                             decorations,
                             constants,
-                        )
+                        ),
+                        opcode,
+                        self.spirv_type_name(operands[0], types),
                     )
                     expression_type_ids[result_id] = operands[0]
                     if result_id not in used_result_ids:
@@ -3578,7 +3596,7 @@ class VulkanParser:
         parsed_operands = self.spirv_assembly_image_operands(
             image_operands, expressions, names, decorations, constants
         )
-        base_args = [image, coordinate]
+        base_args = [*sampled_image_arguments(image), coordinate]
         if dref is not None:
             base_args.append(dref)
         offset = self.spirv_assembly_image_offset_operand(parsed_operands)
@@ -3885,7 +3903,7 @@ class VulkanParser:
         offsets = self.spirv_assembly_image_const_offsets_operand(parsed_operands)
 
         if opcode == "OpImageDrefGather":
-            base_args = [image, coordinate, gathered]
+            base_args = [*sampled_image_arguments(image), coordinate, gathered]
             if offsets is not None:
                 return FunctionCallNode(
                     "textureGatherCompareOffsets", [*base_args, offsets]
@@ -3896,7 +3914,7 @@ class VulkanParser:
                 )
             return FunctionCallNode("textureGatherCompare", base_args)
 
-        base_args = [image, coordinate]
+        base_args = [*sampled_image_arguments(image), coordinate]
         if offsets is not None:
             return FunctionCallNode(
                 "textureGatherOffsets", [*base_args, offsets, gathered]
@@ -5482,8 +5500,10 @@ class VulkanParser:
             if data_type is None:
                 continue
 
+            # Private storage is the invocation's own, as CrossGL's static module-scope variable is; a plain one is
+            # read-only uniform data in HLSL and constant data in Metal (SPIR-V 1.6 section 3.7, Private).
             declaration = VariableNode(
-                data_type,
+                f"static {data_type}",
                 f"{self.spirv_assembly_value_name(variable['id'], names, decorations)}"
                 f"{array_suffix}",
                 spirv_id=variable["id"],
@@ -6506,6 +6526,14 @@ class VulkanParser:
                 )
                 if storage_builtin_name:
                     return storage_builtin_name
+                if (
+                    value == "PrimitiveId"
+                    and storage_class == "Input"
+                    and getattr(self, "spirv_geometry_module", False)
+                ):
+                    # A geometry stage reads the incoming primitive's ID as gl_PrimitiveIDIn and writes the one it
+                    # passes on as gl_PrimitiveID (GLSL 4.60 section 7.1.4); both are BuiltIn PrimitiveId.
+                    return "gl_PrimitiveIDIn"
                 return self.SPIRV_BUILTIN_VARIABLE_NAMES.get(value, value)
         return fallback_name
 

@@ -12,7 +12,11 @@ from __future__ import annotations
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .lowering_refusals import LoweringRefused
 
-__all__ = ["DirectXBufferLayoutError", "DirectXLoweringRefused"]
+__all__ = [
+    "DirectXBufferLayoutError",
+    "DirectXLoweringRefused",
+    "DirectXStageAttributesMissingError",
+]
 
 
 class DirectXLoweringRefused(LoweringRefused):
@@ -35,5 +39,30 @@ class DirectXBufferLayoutError(TranslationDiagnostic):
         self.missing_capabilities = (f"directx.buffer-layout.{layout}",)
         super().__init__(
             f"Cannot reproduce the {layout} layout of block '{block}' in HLSL: {reason}",
+            target="directx",
+        )
+
+
+class DirectXStageAttributesMissingError(TranslationDiagnostic):
+    """A geometry, hull or domain entry whose HLSL attributes the program does not give.
+
+    HLSL fixes a hull shader's ``domain``, ``partitioning``, ``outputtopology``, ``outputcontrolpoints`` and
+    ``patchconstantfunc``, a domain shader's ``domain`` and a geometry shader's ``maxvertexcount`` on the entry
+    point. GLSL and SPIR-V spread the tessellation ones over the control and evaluation stages, so a stage translated
+    on its own may not carry them.
+    """
+
+    code = f"{CODE_PREFIX}directx-stage-attributes-missing"
+
+    def __init__(self, stage, missing):
+        self.stage = stage
+        self.missing = tuple(missing)
+        self.missing_capabilities = tuple(
+            f"directx.stage-attribute.{name}" for name in self.missing
+        )
+        super().__init__(
+            f"DirectX {stage} stage requires HLSL attribute(s): {', '.join(self.missing)}; HLSL fixes them on "
+            "the entry point, which carries them as @-attributes, and a GLSL or SPIR-V tessellation stage holds "
+            "only part of them",
             target="directx",
         )

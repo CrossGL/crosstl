@@ -104,6 +104,7 @@ from .wgsl_frexp_modf import (
     wgsl_frexp_modf_helpers,
 )
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_image_atomics import WGSLImageAtomicUnsupportedError, is_image_atomic_name
 from .wgsl_integer_builtins import lower_integer_builtin_inputs
 from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
@@ -2660,13 +2661,22 @@ class WGSLCodeGen(
             initializer = f" = {value}"
         prefix = f"{attributes}\n" if attributes else ""
         variable_name = self.module_identifier_name(node.name)
-        declaration = (
-            f"{prefix}var<{address_space}{access}> {variable_name}: "
-            f"{self.type_name_string(node.var_type, allow_storage_resources=True)}"
-            f"{initializer};"
-        )
+        type_name = self.type_name_string(node.var_type, allow_storage_resources=True)
         resource_declarations = self.generate_resource_member_global_variables(
             node.name, node.var_type
+        )
+        if (
+            initializer
+            and not resource_declarations
+            and qualifier_names & {"const", "constant"}
+        ):
+            # A module-scope constant is a WGSL ``const``: a ``var<private>`` initializer cannot read another
+            # module-scope variable, so ``constant int B = A + 1;`` must not make ``A`` a variable.
+            return f"const {variable_name}: {type_name}{initializer};"
+        declaration = (
+            f"{prefix}var<{address_space}{access}> {variable_name}: "
+            f"{type_name}"
+            f"{initializer};"
         )
         if resource_declarations:
             declaration += "\n" + "\n".join(resource_declarations)
@@ -3894,6 +3904,10 @@ class WGSLCodeGen(
             return self.generate_image_load_call(node, function_name)
         if normalized_name == "imagestore":
             return self.generate_image_store_call(node, function_name)
+        if is_image_atomic_name(normalized_name) and node.arguments:
+            raise WGSLImageAtomicUnsupportedError(
+                function_name, self.generate_expression(node.arguments[0])
+            )
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
         derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)
