@@ -1453,10 +1453,18 @@ class Parser:
 
     def parse_attributed_struct(self):
         attributes = self.parse_attribute_annotations()
+        if self.is_generic_declaration():
+            struct_node = self.parse_generic_declaration()
+            if not isinstance(struct_node, StructNode):
+                raise SyntaxError(
+                    "Attributes before a generic declaration must precede a struct"
+                )
+            struct_node.attributes = attributes + list(struct_node.attributes or [])
+            return struct_node
         return self.parse_struct(attributes)
 
     def current_token_starts_attributed_struct_declaration(self):
-        """Return whether leading attributes are followed by ``struct``."""
+        """Return whether leading attributes are followed by ``struct`` or ``generic<...> struct``."""
         if not (
             self.current_token[0] in ["AT", "ATTRIBUTE"]
             or self.current_token_starts_square_attribute()
@@ -1467,6 +1475,11 @@ class Parser:
         saved_token = self.current_token
         try:
             attributes = self.parse_attribute_annotations()
+            if attributes and self.is_generic_declaration():
+                self.eat("IDENTIFIER")
+                if self.current_token[0] != "LESS_THAN":
+                    return False
+                self.parse_generic_parameters()
             return bool(attributes and self.current_token[0] == "STRUCT")
         finally:
             self.pos = saved_pos
