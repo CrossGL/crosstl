@@ -4016,6 +4016,16 @@ class MetalToCrossGLConverter(
         specialization_key=None,
     ):
         qualifier = getattr(function, "qualifier", None)
+        if qualifier in {"vertex", "fragment", "kernel", "mesh", "object"} and (
+            self.unbound_template_parameter_names(
+                function, template_value_bindings, template_type_bindings
+            )
+        ):
+            # A stage function template is only an entry point through an
+            # instantiation, and every instantiation the source names has
+            # already become a concrete function. One that is left has no
+            # entry point in the Metal library, so it emits nothing.
+            return ""
         if qualifier == "vertex":
             return (
                 "    // Vertex Shader\n"
@@ -7460,6 +7470,20 @@ class MetalToCrossGLConverter(
         indirection = str(getattr(alias, "indirection", "") or "")
         declarator = f"({indirection}{alias_name})" if indirection else alias_name
         return f"{return_type} {declarator}({parameter_text})"
+
+    def unbound_template_parameter_names(
+        self, function, value_bindings=None, type_bindings=None
+    ):
+        """Named template parameters of ``function`` that no binding gives a value."""
+        bound = {*(value_bindings or {}), *(type_bindings or {})}
+        return [
+            entry[1]
+            for entry in getattr(function, "template_parameters", None) or []
+            if isinstance(entry, (tuple, list))
+            and len(entry) >= 2
+            and entry[1]
+            and entry[1] not in bound
+        ]
 
     def value_template_parameter_names(self, function):
         return [
