@@ -106,7 +106,9 @@ def test_base_file_names_the_main_file_in_an_included_file(tmp_path):
     (tmp_path / "base.h").write_text("__BASE_FILE__ __FILE_NAME__\n")
     main = tmp_path / "main.metal"
     output = expand('#include "base.h"\n', MetalPreprocessor, file_path=str(main))
-    assert output == [f'"{main}"', '"base.h"']
+    # The path is a string literal, so a Windows path has its backslashes escaped, as Clang spells it.
+    literal = str(main).replace("\\", "\\\\").replace('"', '\\"')
+    assert output == [f'"{literal}"', '"base.h"']
 
 
 def test_file_name_exists_only_where_the_compiler_has_it():
