@@ -96,7 +96,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 583
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 598
     assert all(
         name.startswith(
             (
@@ -158,6 +158,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + upstream_module_groups.ATTENTION_2_TESTS
         + upstream_module_groups.ATTENTION_3_TESTS
         + upstream_module_groups.ATTENTION_SWEEP_TESTS
+        + upstream_module_groups.CUSTOM_KERNEL_TESTS
         + upstream_module_groups.TORCH_CONV_TESTS
         + upstream_module_groups.TORCH_LAYER_TESTS
         + upstream_module_groups.TORCH_UPSAMPLE_TESTS
@@ -213,7 +214,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 576 and not set(opengl) & set(excluded)
+    assert len(opengl) == 591 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -255,6 +256,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "attention-sweep-1",
         "attention-sweep-2",
         "attention-sweep-3",
+        "custom-kernels",
         "torch-conv",
         "torch-layers",
         "torch-upsample",
@@ -321,9 +323,9 @@ def test_upstream_op_groups_partition_the_inventory():
     assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
     # The array, autograd and compile modules each run alone in their group.
     for group, tests, module, count in (
-        ("array", ops.ARRAY_TESTS, "test_array.", 41),
+        ("array", ops.ARRAY_TESTS, "test_array.", 42),
         ("autograd", ops.AUTOGRAD_TESTS, "test_autograd.", 45),
-        ("compile", ops.COMPILE_TESTS, "test_compile.", 54),
+        ("compile", ops.COMPILE_TESTS, "test_compile.", 55),
     ):
         assert ops.GROUPS[group] == tests and len(tests) == count
         assert all(name.startswith(module) for name in tests)
@@ -358,6 +360,11 @@ def test_upstream_op_groups_partition_the_inventory():
         ("attention-sweep-1", ("test_fast_sdpa.",), 1),
         ("attention-sweep-2", ("test_fast_sdpa.",), 1),
         ("attention-sweep-3", ("test_fast_sdpa.",), 1),
+        (
+            "custom-kernels",
+            ("test_fast.", "test_eval.", "test_export_import."),
+            13,
+        ),
         ("torch-conv", ("test_conv.", "test_conv_transpose."), 18),
         (
             "torch-layers",

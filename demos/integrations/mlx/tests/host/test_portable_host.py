@@ -113,12 +113,23 @@ def checkout(root, monkeypatch, newline=b"\n"):
     # Git blobs retain LF even when the checkout uses converted line endings.
     for name, data in originals.items():
         (backend / name).write_bytes(data.replace(b"\n", newline))
+    # metal_kernel.cpp's stream check, which the adapted copy extends.
+    metal_kernel = (
+        b"Stream resolve_metal_kernel_stream(StreamOrDevice s) {\n"
+        + prepare.METAL_KERNEL_STREAM.encode()
+        + b"    return default_stream(Device::gpu);\n  }\n}\n"
+    )
+    (root / prepare.METAL_KERNEL_SOURCE).parent.mkdir(parents=True)
+    (root / prepare.METAL_KERNEL_SOURCE).write_bytes(
+        metal_kernel.replace(b"\n", newline)
+    )
+    blobs = {**originals, "metal_kernel.cpp": metal_kernel}
 
     def git(command, **kwargs):
         if "rev-parse" in command:
             return prepare.COMMIT
         if "show" in command:
-            return originals[command[-1].rsplit("/", 1)[-1]]
+            return blobs[command[-1].rsplit("/", 1)[-1]]
         if "diff" in command:
             return b"mlx/backend/no_gpu/CMakeLists.txt\0"
         return ""
@@ -133,7 +144,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
 ):
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
-    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 17
+    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 19
     for name in prepare.FAST_PRIMITIVES:
         declared = f"{declaration_macro(name)}({name})"
         assert declared not in (backend / "crosstl_primitives.cpp").read_text()
@@ -170,6 +181,18 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     )
     assert (backend / "crosstl_gated_delta.inc").read_bytes() == (
         Path(prepare.__file__).with_name("gated_delta.inc").read_bytes()
+    )
+    assert (backend / "crosstl_custom_kernel.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("custom_kernel.inc").read_bytes()
+    )
+    # The adapted metal_kernel.cpp also accepts the runtime's GPU stream, and
+    # the build takes it in place of the original.
+    adapted = (backend / "crosstl_metal_kernel.cpp").read_text()
+    assert prepare.METAL_KERNEL_HOST_STREAM in adapted
+    assert prepare.METAL_KERNEL_STREAM not in adapted
+    assert (
+        adapted.replace(prepare.METAL_KERNEL_HOST_STREAM, prepare.METAL_KERNEL_STREAM)
+        == (tmp_path / prepare.METAL_KERNEL_SOURCE).read_text()
     )
     assert "NO_GPU(FFT)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert (
@@ -232,6 +255,9 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     assert "cpu_wait()" in events and "cpu_signal()" in events
     cmake = (backend / "CMakeLists.txt").read_text()
     assert 'host backend" OFF)' in cmake
+    assert "list(REMOVE_ITEM CROSTL_MLX_SOURCES ${CROSTL_METAL_KERNEL})" in cmake
+    assert "message(FATAL_ERROR" in cmake
+    assert "${CMAKE_CURRENT_SOURCE_DIR}/crosstl_metal_kernel.cpp" in cmake
     assert "else()\ntarget_sources(mlx PRIVATE primitives.cpp)" in cmake
     for name, digest in record["files"].items():
         assert (

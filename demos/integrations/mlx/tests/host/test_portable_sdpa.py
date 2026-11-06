@@ -439,7 +439,7 @@ def test_the_host_routes_audits_and_prepares_the_vector_attention():
     original = prepare.replace_once
     try:
         prepare.replace_once = record
-        sources = prepare.adapted_sources("", "", "")
+        sources = prepare.adapted_sources("", "", "", "")
     finally:
         prepare.replace_once = original
     assert "NO_GPU_MULTI(ScaledDotProductAttention)" in replaced

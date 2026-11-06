@@ -46,6 +46,7 @@ family fails the trace instead of passing on an unchecked package.
 """
 
 import argparse
+import contextlib
 import importlib
 import importlib.util
 import json
@@ -64,6 +65,7 @@ from demos.integrations.mlx.portable_host import (
     copy_evidence,
     cross_entropy_evidence,
     cross_entropy_layout,
+    custom_kernel_evidence,
     divmod_evidence,
     dynamic_offset_evidence,
     dynamic_offset_packages,
@@ -176,6 +178,12 @@ from demos.integrations.mlx.portable_host.upstream_module_groups import (
 )
 from demos.integrations.mlx.portable_host.upstream_module_groups import (
     METAL_PATH_TESTS as MODULE_METAL_PATH_TESTS,
+)
+from demos.integrations.mlx.portable_host.upstream_module_groups import (
+    METAL_SOURCE_CPU_TESTS,
+)
+from demos.integrations.mlx.portable_host.upstream_module_groups import (
+    METAL_SOURCE_TESTS as MODULE_METAL_SOURCE_TESTS,
 )
 from demos.integrations.mlx.portable_host.upstream_module_groups import TORCH_GROUPS
 from demos.integrations.mlx.portable_host.upstream_trace_audit import TraceAudit
@@ -321,6 +329,7 @@ ARRAY_TESTS = (
             "buffer_protocol_eval_error",
             "buffer_protocol_ref_counting",
             "construction_from_lists",
+            "construction_from_lists_of_mlx_arrays",
             "construction_from_lists_wide_ints",
             "dlpack",
             "dlpack_cpu_dtype_mapping",
@@ -467,6 +476,7 @@ COMPILE_TESTS = (
             "shapeless_compile_gather_qmm",
             "shapeless_compile_matmul",
             "shapeless_compile_reduce_after_gather",
+            "shapeless_compile_scan",
             "shapeless_compile_slice_update",
             "shapeless_compile_with_broadcasts",
             "shapeless_compile_with_reduction",
@@ -809,6 +819,11 @@ CI_CLEARED_TESTS = frozenset(("test_ops.TestOps.test_hadamard",))
 # native worker imports their modules with is_available reporting the host's
 # GPU (import_metal_path); the CPU worker skips them (GPU_ONLY_TESTS).
 METAL_PATH_TESTS = frozenset(MODULE_METAL_PATH_TESTS)
+# Tests whose bodies select their kernel's Metal source where
+# mx.metal.is_available(): the native worker runs each while is_available
+# reports the host's GPU (metal_source), and the CPU worker runs them
+# unchanged. All but METAL_SOURCE_CPU_TESTS skip there for want of a GPU.
+METAL_SOURCE_TESTS = frozenset(MODULE_METAL_SOURCE_TESTS)
 # Tests that skip on the MLX CPU because they need a GPU: the CPU worker must
 # skip each of them and the native worker must run them. They compare the
 # products with NumPy's or the CPU stream's, so the CPU run is not their
@@ -841,6 +856,7 @@ GPU_ONLY_TESTS = frozenset(
         ),
         *ATTENTION_SWEEP_TESTS,
         *METAL_PATH_TESTS,
+        *METAL_SOURCE_TESTS.difference(METAL_SOURCE_CPU_TESTS),
     )
 )
 # CI runs each group in its own job. The normalization gradients move tens of
@@ -1084,7 +1100,8 @@ def worker(args):
         if seed is not None:
             mx.random.seed(seed)
             np.random.seed(seed % (1 << 32))
-        result, subtests = run_upstream_test(name)
+        with metal_source(mx, name, native=host is not None):
+            result, subtests = run_upstream_test(name)
         records.append(
             {
                 "test": name,
@@ -1162,6 +1179,27 @@ def import_gated_modules(mx, tests, *, native):
         function = getattr(getattr(sys.modules[module], case), method)
         if getattr(function, "__unittest_skip__", False):
             raise RuntimeError(f"{name} was imported without its Metal path")
+
+
+@contextlib.contextmanager
+def metal_source(mx, name, *, native):
+    """Report the host's GPU as Metal while a native ``METAL_SOURCE_TESTS`` runs.
+
+    Their bodies write the kernel's source in Metal only where
+    mx.metal.is_available(), which the native host executes translated; every
+    other test, and the CPU worker, sees MLX's own value.
+    """
+    if not native or name not in METAL_SOURCE_TESTS:
+        yield
+        return
+    if not mx.is_available(mx.gpu):
+        raise RuntimeError("Metal-source upstream tests need the native host")
+    original = mx.metal.is_available
+    mx.metal.is_available = lambda: True
+    try:
+        yield
+    finally:
+        mx.metal.is_available = original
 
 
 def run_upstream_test(name):
@@ -1266,6 +1304,7 @@ def event_audits(np, args, target, installed, modules=None):
 
     scans = lazy_package_evidence.LazyPackages(root, packages, target)
     compiled = compiled_evidence.cache(root, packages, target)
+    kernels = custom_kernel_evidence.cache(root, packages, target)
     quantizations = quantization_evidence.cache(root, packages, target)
 
     return (
@@ -1406,6 +1445,13 @@ def event_audits(np, args, target, installed, modules=None):
             # Derives the package again and checks scans' native modules.
             lambda event: lazy_package_evidence.audit_event(event, scans, modules),
             "scan",
+        ),
+        (
+            lambda entry, event: custom_kernel_evidence.is_custom_kernel(event),
+            None,
+            # Finds the packages of the traced source and launch again.
+            lambda event: custom_kernel_evidence.audit_event(event, kernels, modules),
+            "owned",
         ),
         (
             lambda entry, event: compiled_evidence.is_compiled(event),

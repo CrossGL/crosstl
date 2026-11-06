@@ -304,11 +304,70 @@ GATED_DELTA_TESTS = _tests(
 GATED_DELTA_VJP_TESTS = _tests(
     "test_fast_gated_delta", "TestGatedDelta", ("gated_delta_vjp",)
 )
+# The kernels mx.fast.metal_kernel builds from Metal source
+# (custom_kernel.inc): plain, templated, strided and helper-calling kernels,
+# thread attributes, a source changed under the same name, in one evaluation
+# or two, both math modes, inputs of two dtypes, a kernel that does not
+# compile, whose failure must leave the arrays evaluated before it intact, and
+# custom kernels in exported functions, evaluated or only traced.
+CUSTOM_KERNEL_TESTS = (
+    _tests(
+        "test_fast",
+        "TestFast",
+        (
+            "custom_kernel_args",
+            "custom_kernel_attributes",
+            "custom_kernel_basic",
+            "custom_kernel_caching",
+            "custom_kernel_helper",
+            "custom_kernel_mixed_dtypes",
+            "custom_kernel_same_name_different_source_one_eval",
+            "custom_kernel_strides",
+            "custom_metal_kernel_math_mode",
+        ),
+    )
+    + _tests("test_eval", "TestEval", ("eval_exception_does_not_corrupt_state",))
+    + _tests(
+        "test_export_import",
+        "TestExportImport",
+        (
+            "export_custom_metal_kernel_with_math_mode",
+            "export_custom_metal_kernel_without_evaluation",
+            "export_import_custom_kernel",
+        ),
+    )
+)
 # Tests the pinned suite runs only where mx.metal.is_available().
 METAL_PATH_TESTS = (
     "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",
     "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
     "test_ops.TestOps.test_hadamard_m_only",
+    *(
+        name
+        for name in CUSTOM_KERNEL_TESTS
+        if name.rsplit(".", 1)[1]
+        in {
+            "test_custom_kernel_caching",
+            "test_custom_kernel_mixed_dtypes",
+            "test_custom_kernel_same_name_different_source_one_eval",
+            "test_custom_metal_kernel_math_mode",
+            "test_eval_exception_does_not_corrupt_state",
+        }
+    ),
+)
+# Tests whose bodies write their kernel's source in Metal only where
+# mx.metal.is_available(), and in CUDA otherwise; the native host executes
+# Metal sources translated, so the native worker runs them while
+# is_available reports the host's GPU. The export tests take the path that
+# evaluates their kernel there and, on the CPU worker, check MLX's refusal
+# without a Metal back end (METAL_SOURCE_CPU_TESTS); the others need a GPU.
+METAL_SOURCE_TESTS = tuple(
+    name for name in CUSTOM_KERNEL_TESTS if name not in METAL_PATH_TESTS
+)
+METAL_SOURCE_CPU_TESTS = tuple(
+    name
+    for name in METAL_SOURCE_TESTS
+    if name.rsplit(".", 1)[1].startswith("test_export_custom_metal_kernel_")
 )
 
 # test_fast_sdpa: queries of at most eight positions, which
@@ -448,6 +507,7 @@ GROUPS = {
         f"attention-sweep-{index}": (name,)
         for index, name in enumerate(ATTENTION_SWEEP_TESTS, start=1)
     },
+    "custom-kernels": CUSTOM_KERNEL_TESTS,
     "torch-conv": TORCH_CONV_TESTS,
     "torch-layers": TORCH_LAYER_TESTS,
     "torch-upsample": TORCH_UPSAMPLE_TESTS,

@@ -626,7 +626,7 @@ def test_preparation_replaces_the_matmul_stub(monkeypatch):
         return text
 
     monkeypatch.setattr(prepare, "replace_once", record)
-    prepare.adapted_sources("", "", "")
+    prepare.adapted_sources("", "", "", "")
     assert "NO_GPU(Matmul)" in replaced and "NO_GPU(AddMM)" in replaced
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert "void Matmul::eval_gpu(" in backend

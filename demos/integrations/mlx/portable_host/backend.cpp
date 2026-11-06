@@ -4899,3 +4899,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_sdpa.inc"
 // And the port of the gated-delta recurrences, whose fills take the copy.
 #include "mlx/backend/no_gpu/crosstl_gated_delta.inc"
+// And the port of mx.fast.metal_kernel's kernels, whose inputs take the copy.
+#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"

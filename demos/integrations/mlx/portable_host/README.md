@@ -2410,6 +2410,29 @@ kernels only where `mx.metal.is_available()` (`METAL_PATH_TESTS`), and
 dispatches nothing (`NO_DISPATCH_TESTS`). Its composed reference takes
 about twenty-six thousand launches, half an hour natively on Metal, so the
 `gated-delta-vjp` group runs it in a job of its own.
+The `custom-kernels` group runs the kernels `mx.fast.metal_kernel` builds:
+the nine `test_fast` custom-kernel tests, `test_eval`'s
+`test_eval_exception_does_not_corrupt_state` (a source that does not
+compile) and three `test_export_import` tests that export custom kernels.
+`custom_kernel.inc` ports custom_kernel.cpp's `CustomKernel::eval_gpu`: it
+binds each input, the shape, strides and rank the source names and every
+output in the slots `write_signature` gives them, fills outputs with the
+kernel's initial value, and launches the exact grid with
+`min(threadgroup, grid)` groups, as `dispatch_threads` does. The host builds
+an adapted `metal_kernel.cpp` (`crosstl_metal_kernel.cpp`) in place of the
+original, whose one change is that `mx.fast.metal_kernel` also accepts the
+registered runtime's GPU stream. `custom_kernel_layout` reads the signature
+back from the source, and `custom_kernel_packages` translates each source,
+math mode and threadgroup shape on first use. A `fast` kernel is translated
+with `__FAST_MATH__` defined, as Metal's compiler defines it under fast math.
+Metal runs a grid's partial edge groups and the kernels index by their grid
+position unchecked, so Direct3D and OpenGL run each launch as the dispatch
+regions of its exact grid, a package each, and lower simdgroup operations to
+32-lane software subgroups. The tests write their kernels in Metal only where
+`mx.metal.is_available()`: five of them are `METAL_PATH_TESTS`, and the
+native worker runs the others while `is_available` reports the host's GPU
+(`METAL_SOURCE_TESTS`). On the CPU worker the two export-only tests check
+MLX's refusal without a Metal back end, and the rest skip.
 `nn.losses.cross_entropy` with class indices on the GPU, `test_losses`'
 `test_cross_entropy` and `test_fast`'s `test_cross_entropy` reach
 `cross_entropy.metal`:
@@ -2447,8 +2470,8 @@ cubic upsampling sweeps with and without antialiasing (about 36,000
 launches). Only the jobs of these three groups (`TORCH_GROUPS`) install
 PyTorch, the pinned 2.14.1 CPU wheel, and the workers refuse to run them where
 torch cannot be imported, because the tests would skip themselves.
-The `array`, `autograd` and `compile` groups run the `test_array` (41),
-`test_autograd` (45) and `test_compile` (54) methods that reach the GPU. Five
+The `array`, `autograd` and `compile` groups run the `test_array` (42),
+`test_autograd` (45) and `test_compile` (55) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (41 `test_nn` methods: module state, weight files and the layers),
 `transforms` (25 `test_vmap` methods, among them the vectorized convolution,

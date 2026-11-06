@@ -1553,7 +1553,7 @@ def test_preparation_replaces_the_convolution_stub(monkeypatch):
         return text
 
     monkeypatch.setattr(prepare, "replace_once", record)
-    sources = prepare.adapted_sources("", "", "")
+    sources = prepare.adapted_sources("", "", "", "")
     assert "NO_GPU(Convolution)" in replaced
     assert sources["crosstl_conv.inc"] == (HOST / "conv.inc").read_bytes()
 

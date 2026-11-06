@@ -552,13 +552,18 @@ def test_runtime_host_port_and_inventory_route_gated_delta():
     vjp = upstream_module_groups.GATED_DELTA_VJP_TESTS
     assert verify_upstream_ops.GROUPS["gated-delta-vjp"] == vjp
     tests += vjp
-    assert set(upstream_module_groups.METAL_PATH_TESTS) == {
+    assert set(upstream_module_groups.METAL_PATH_TESTS) - set(
+        upstream_module_groups.CUSTOM_KERNEL_TESTS
+    ) == {
         "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",
         "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
         "test_ops.TestOps.test_hadamard_m_only",
     }
     assert set(upstream_module_groups.METAL_PATH_TESTS) <= set(
-        tests + upstream_module_groups.HADAMARD_TESTS + verify_upstream_ops.CONV_TESTS
+        tests
+        + upstream_module_groups.HADAMARD_TESTS
+        + verify_upstream_ops.CONV_TESTS
+        + upstream_module_groups.CUSTOM_KERNEL_TESTS
     )
     assert verify_upstream_ops.METAL_PATH_TESTS <= verify_upstream_ops.GPU_ONLY_TESTS
 
