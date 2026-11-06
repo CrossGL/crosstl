@@ -62,6 +62,7 @@ from .conditional_types import split_template_arguments
 from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
+    dependent_access,
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
@@ -18679,12 +18680,20 @@ float {scalar}(float value) {{
             self.metal_source_overload_value_type(self.expression_metal_type(argument))
             for argument in expression.args
         ]
+        unbound_names = unbound_template_type_names(
+            self.current_function,
+            set(self.type_aliases).union(*self.template_type_bindings),
+        )
         dependent = dependent_builtin_result_type(
             result_kind,
             argument_types,
-            unbound_template_type_names(
-                self.current_function,
-                set(self.type_aliases).union(*self.template_type_bindings),
+            unbound_names,
+            dependent_unknown=any(
+                argument_type is None
+                and dependent_access(
+                    argument, self.expression_metal_type, unbound_names
+                )
+                for argument, argument_type in zip(expression.args, argument_types)
             ),
         )
         if dependent is not NOT_DEPENDENT:
