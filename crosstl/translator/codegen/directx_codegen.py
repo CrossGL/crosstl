@@ -8260,6 +8260,12 @@ class HLSLCodeGen(
                 (name in {"min", "max"} and len(node.arguments) == 2)
                 or (name == "clamp" and len(node.arguments) == 3)
                 or self.directx_compile_time_constructor_type(name) is not None
+                # A bit reinterpretation, such as the binary16 storage
+                # lowering's, writes nothing and keeps its operand's value.
+                or (
+                    len(node.arguments) == 1
+                    and self.hlsl_metal_as_type_target_type(name) is not None
+                )
             ):
                 self.hlsl_software_subgroup_uniform_calls.add(id(node))
             elif storage_load_call(name, node.arguments):
