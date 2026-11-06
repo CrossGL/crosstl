@@ -539,7 +539,7 @@ EXTERNAL_FIXTURES = [
         ),
         "roundtrip": True,
         "contains": [
-            "alignas(8) struct AtomicVisibilityBuffer",
+            "@metal_alignas(8)\n    struct AtomicVisibilityBuffer",
             "atomicAdd(dst.count, src.count);",
         ],
         "source": (
