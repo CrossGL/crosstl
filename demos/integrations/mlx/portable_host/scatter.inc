@@ -13,6 +13,11 @@
 // whose rows never share a destination, so every destination receives its
 // updates in index order, as the CPU reference applies them. Every other
 // contention keeps MLX's single launch.
+//
+// As in indexing.cpp, complex64 is the one eight-byte element a scatter
+// accepts, and only for Sum: Sum::atomic_update adds the real and imaginary
+// float32 lanes of each element separately, so each lane follows the float32
+// rule above and the output binds as two 32-bit atomic words per element.
 
 #include <cstring>
 #include <unordered_map>
@@ -139,17 +144,19 @@ class ScatterDestinations {
 };
 
 // Whether native contention could land a float32 sum differently from the
-// index-order reference.
+// index-order reference. Each element holds ``lanes`` float32 lanes (two for
+// complex64), and every lane is summed on its own.
 bool scatter_order_dependent(
     const ScatterDestinations& destinations,
     const array& updates,
     const array& out,
     uint64_t rows,
-    uint64_t slice_size) {
+    uint64_t slice_size,
+    int lanes) {
   std::unordered_map<int64_t, std::vector<float>> terms;
   bool contended = false;
-  const float* initial = out.data<float>();
-  const float* data = updates.data<float>();
+  const float* initial = static_cast<const float*>(out.data<void>());
+  const float* data = static_cast<const float*>(updates.data<void>());
   for (uint64_t row = 0; row < rows; ++row) {
     const int64_t base = destinations.base(row);
     for (uint64_t element = 0; element < slice_size; ++element) {
@@ -158,10 +165,6 @@ bool scatter_order_dependent(
         // The runtime rejects the index; keep MLX's launch for that check.
         return false;
       }
-      auto [slot, inserted] = terms.try_emplace(destination);
-      if (inserted) {
-        slot->second.push_back(initial[destination]);
-      }
       // elem_to_loc of the flat update element over the update view.
       uint64_t flat = row * slice_size + element;
       int64_t location = 0;
@@ -169,8 +172,14 @@ bool scatter_order_dependent(
         location += int64_t(flat % updates.shape(axis)) * updates.strides()[axis];
         flat /= updates.shape(axis);
       }
-      slot->second.push_back(data[location]);
-      contended = contended || slot->second.size() > 2;
+      for (int lane = 0; lane < lanes; ++lane) {
+        auto [slot, inserted] = terms.try_emplace(destination * lanes + lane);
+        if (inserted) {
+          slot->second.push_back(initial[destination * lanes + lane]);
+        }
+        slot->second.push_back(data[location * lanes + lane]);
+        contended = contended || slot->second.size() > 2;
+      }
     }
   }
   if (!contended) {
@@ -240,14 +249,21 @@ std::vector<ScatterTile> scatter_runs(
 
 void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
+  const bool complex_sum = out.dtype() == complex64 && reduce_type_ == Sum;
+  // Each complex64 element is two 32-bit atomic words of the output binding.
+  const int lanes = complex_sum ? 2 : 1;
   if (inputs.size() < 3 || inputs.size() > 12 || axes_.size() != inputs.size() - 2 ||
-      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32) ||
+      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32 &&
+       !complex_sum) ||
       inputs[0].dtype() != out.dtype() || inputs.back().dtype() != out.dtype() ||
       inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
-      out.size() > max_scatter_storage || inputs.back().size() > max_scatter_storage ||
+      out.size() * lanes > max_scatter_storage ||
+      inputs.back().size() > max_scatter_storage ||
       (reduce_type_ != None && reduce_type_ != Sum && reduce_type_ != Prod &&
        reduce_type_ != Min && reduce_type_ != Max)) {
-    throw std::invalid_argument("CrossTL scatter requires bounded int32, uint32 or float32 indexed updates.");
+    throw std::invalid_argument(
+        "CrossTL scatter requires bounded int32, uint32 or float32 indexed updates, "
+        "or a bounded complex64 sum.");
   }
   const auto index_dtype = inputs[1].dtype();
   if (index_dtype != int32 && index_dtype != uint32 &&
@@ -317,16 +333,16 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   const std::vector<int> index_shape(inputs[1].shape().begin(), inputs[1].shape().end());
   const std::vector<int32_t> slices(update_shape.begin() + index_rank, update_shape.end());
   const ScatterDestinations destinations(indices, axes_, out, slices);
-  const bool ordered = index_rank > 0 && idx_size > 1 && out.dtype() == float32 &&
-      reduce_type_ == Sum &&
-      scatter_order_dependent(destinations, upd, out, idx_size, upd_size);
+  const bool ordered = index_rank > 0 && idx_size > 1 &&
+      (out.dtype() == float32 || complex_sum) && reduce_type_ == Sum &&
+      scatter_order_dependent(destinations, upd, out, idx_size, upd_size, lanes);
   const auto tiles = ordered ? scatter_runs(destinations, index_shape, idx_size, upd_size)
                              : scatter_slabs(index_shape, idx_size);
   int32_t idx_ndim = index_rank;
   uint64_t tile_size = idx_size;
   std::vector<CrosstlMlxBuffer> buffers = {
-      {"updates", storage_type(upd.dtype()), const_cast<void*>(upd.data<void>()), update_span, 0},
-      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
+      {"updates", cast_type(upd.dtype()), const_cast<void*>(upd.data<void>()), update_span, 0},
+      {"out", cast_type(out.dtype()), out.data<void>(), out.size(), 1},
       {"upd_shape", "int32", update_shape.data(), update_shape.size(), 0},
       {"upd_strides", "int64", update_strides.data(), update_strides.size(), 0},
       {"upd_ndim", "uint64", &upd_ndim, 1, 0},
@@ -398,7 +414,7 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
       buffers[0].count = span;
     }
     const int work = scatter_work(index_rank, tile_size, out.size());
-    const std::string entry = std::string("scatter") + storage_type(out.dtype()) +
+    const std::string entry = std::string("scatter") + cast_type(out.dtype()) +
         storage_type(index_dtype) + "_" + operation + "_" + std::to_string(count) +
         "_updc_" + (upd.flags().row_contiguous ? "true" : "false") +
         "_nwork" + std::to_string(work) + "_int";

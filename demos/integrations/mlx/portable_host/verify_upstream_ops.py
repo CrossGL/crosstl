@@ -315,6 +315,7 @@ ARRAY_TESTS = (
             "add_numpy",
             "api",
             "array_at",
+            "array_at_complex_add_gpu",
             "array_comparison",
             "array_copy",
             "array_from_noncontiguous_np",
@@ -839,6 +840,8 @@ GPU_ONLY_TESTS = frozenset(
                 "test_gather_mm_blocks",
             )
         ),
+        # Scatter-adds complex64 on the GPU stream against literal sums.
+        "test_array.TestArray.test_array_at_complex_add_gpu",
         # Evaluates GPU and CPU streams that wait on each other.
         "test_eval.TestEval.test_multistream_deadlock",
         # Overrides the two-pass vector kernels' block count (sdpa.inc).

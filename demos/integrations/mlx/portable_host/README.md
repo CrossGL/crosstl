@@ -1212,6 +1212,17 @@ unspecified order, so a float32 sum that some order would round, which the host
 checks with the same power-of-two step test as the axis-scatter audit, launches
 runs of rows that never share a destination. Every destination then receives its
 updates in index order, as the audit's replay applies them.
+As in MLX, complex64 is the one eight-byte element the scatter accepts, and
+only for sums: `Sum::atomic_update` adds each element's real and imaginary
+float32 lanes through a float view of `mlx_atomic<complex64_t>` storage. The
+output therefore binds as two 32-bit atomic words per element, within the same
+bound in words, and each lane follows the float32 ordering rule. The
+translation needs same-width word views of the atomic wrapper records
+([#4029](https://github.com/CrossGL/crosstl/issues/4029)) and constant
+constructor initializers in the Metal round trip
+([#4028](https://github.com/CrossGL/crosstl/issues/4028)).
+`test_array.TestArray.test_array_at_complex_add_gpu` runs in the `array`
+group; the MLX CPU skips it, so it is GPU-only.
 `scatter.inc` holds this port.
 Negative storage strides are materialized by translated copies. Output slice
 bounds, index values, buffer spans and contiguity are checked before translation
@@ -2470,13 +2481,15 @@ cubic upsampling sweeps with and without antialiasing (about 36,000
 launches). Only the jobs of these three groups (`TORCH_GROUPS`) install
 PyTorch, the pinned 2.14.1 CPU wheel, and the workers refuse to run them where
 torch cannot be imported, because the tests would skip themselves.
-The `array`, `autograd` and `compile` groups run the `test_array` (42),
+The `array`, `autograd` and `compile` groups run the `test_array` (43),
 `test_autograd` (45) and `test_compile` (55) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (41 `test_nn` methods: module state, weight files and the layers),
 `transforms` (25 `test_vmap` methods, among them the vectorized convolution,
-and 11 `test_eval` methods), `serialization` (18 `test_export_import` methods,
-among them the shapeless convolution, and 15 `test_load` methods, with the
+11 `test_eval` methods and the two `test_threads` methods: thread-local
+streams and transforms traced on three threads at once), `serialization` (18
+`test_export_import` methods, among them the shapeless convolution, and 15
+`test_load` methods, with the
 NumPy, safetensors and GGUF formats), `training` (19 `test_optimizers`
 methods, six `test_random` samplers, four `test_bf16` sweeps and the device,
 stream, memory and constant tests) and `rope` (the seven rotary embedding and
