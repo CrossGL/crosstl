@@ -96,7 +96,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 596
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 598
     assert all(
         name.startswith(
             (
@@ -214,7 +214,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 589 and not set(opengl) & set(excluded)
+    assert len(opengl) == 591 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -323,9 +323,9 @@ def test_upstream_op_groups_partition_the_inventory():
     assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
     # The array, autograd and compile modules each run alone in their group.
     for group, tests, module, count in (
-        ("array", ops.ARRAY_TESTS, "test_array.", 41),
+        ("array", ops.ARRAY_TESTS, "test_array.", 42),
         ("autograd", ops.AUTOGRAD_TESTS, "test_autograd.", 45),
-        ("compile", ops.COMPILE_TESTS, "test_compile.", 54),
+        ("compile", ops.COMPILE_TESTS, "test_compile.", 55),
     ):
         assert ops.GROUPS[group] == tests and len(tests) == count
         assert all(name.startswith(module) for name in tests)

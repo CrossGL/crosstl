@@ -2470,8 +2470,8 @@ cubic upsampling sweeps with and without antialiasing (about 36,000
 launches). Only the jobs of these three groups (`TORCH_GROUPS`) install
 PyTorch, the pinned 2.14.1 CPU wheel, and the workers refuse to run them where
 torch cannot be imported, because the tests would skip themselves.
-The `array`, `autograd` and `compile` groups run the `test_array` (41),
-`test_autograd` (45) and `test_compile` (54) methods that reach the GPU. Five
+The `array`, `autograd` and `compile` groups run the `test_array` (42),
+`test_autograd` (45) and `test_compile` (55) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (41 `test_nn` methods: module state, weight files and the layers),
 `transforms` (25 `test_vmap` methods, among them the vectorized convolution,
