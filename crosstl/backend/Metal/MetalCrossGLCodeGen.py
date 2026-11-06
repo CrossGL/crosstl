@@ -14919,6 +14919,20 @@ class MetalToCrossGLConverter(
         visit(root)
         return calls
 
+    def metal_library_function_names(self):
+        """Unqualified names of the Metal library functions the importer lowers.
+
+        User overloads of these names extend the library overload set (``metal::simd_shuffle_down(bfloat, ushort)``
+        next to the library template), so a call that no user overload matches still binds to the library function.
+        Splitting them per namespace would hide the library candidates, so they keep the library-collision path.
+        """
+        return (
+            set(self.metal_math_intrinsics)
+            | set(self.metal_bit_intrinsics)
+            | set(self.metal_wave_intrinsics)
+            | set(self.metal_atomic_intrinsics)
+        )
+
     def prepare_metal_source_overload_transport(self, ast):
         """Assign internal names where portable target ABIs erase source identity."""
         self.metal_source_overload_groups = {}
@@ -14941,7 +14955,8 @@ class MetalToCrossGLConverter(
                     not self.is_materialized_metal_stdlib_wrapper(function)
                     for function in overloads
                 )
-                or declared_in_several_namespaces(overloads)
+                or function_name not in self.metal_library_function_names()
+                and declared_in_several_namespaces(overloads)
             )
             if builtin_collision:
                 self.metal_builtin_name_collision_groups.add(function_name)

@@ -47,6 +47,29 @@ kernel void k(device float* out [[buffer(0)]], uint tid [[thread_position_in_gri
 """
 
 
+# User overloads of a Metal library function in ``metal`` and in the global namespace extend the library overload
+# set: ``simd_shuffle_down(v, 1)`` and ``metal::simd_shuffle_down(uint2, 1)`` still bind to the library function.
+LIBRARY_OVERLOADS = HEADER + """
+struct pair2 { float a; float b; };
+struct wide { uint lo; uint hi; };
+namespace metal {
+inline pair2 simd_shuffle_down(pair2 data, ushort delta) {
+    return pair2{simd_shuffle_down(data.a, delta), simd_shuffle_down(data.b, delta)};
+}
+}
+inline wide simd_shuffle_down(wide data, ushort delta) {
+    uint2 bits = metal::simd_shuffle_down(uint2(data.lo, data.hi), delta);
+    return wide{bits.x, bits.y};
+}
+kernel void k(device float* out [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    float v = float(tid);
+    pair2 p = simd_shuffle_down(pair2{v, v * 2.0f}, ushort(1));
+    wide w = simd_shuffle_down(wide{tid, tid + 7u}, ushort(1));
+    out[tid] = simd_shuffle_down(v, ushort(1)) + p.a + p.b + float(w.lo) + float(w.hi);
+}
+"""
+
+
 def _translate(tmp_path, source, backend):
     path = tmp_path / "unit.metal"
     path.write_text(source, encoding="utf-8")
@@ -78,7 +101,7 @@ def _run(tool, *args):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def _run_metal_kernel(source, count):
+def _run_metal_kernel(source, count, group=1):
     metal = pytest.importorskip("Metal")
     device = metal.MTLCreateSystemDefaultDevice()
     if device is None:
@@ -95,7 +118,7 @@ def _run_metal_kernel(source, count):
     encoder.setComputePipelineState_(pipeline)
     encoder.setBuffer_offset_atIndex_(buffer, 0, 0)
     encoder.dispatchThreads_threadsPerThreadgroup_(
-        metal.MTLSizeMake(count, 1, 1), metal.MTLSizeMake(1, 1, 1)
+        metal.MTLSizeMake(count, 1, 1), metal.MTLSizeMake(group, 1, 1)
     )
     encoder.endEncoding()
     commands.commit()
@@ -174,3 +197,37 @@ def test_using_directive_members_appear_in_nearest_common_namespace():
     # A directive of ``outer::b`` plays no part in lookups from other namespaces.
     assert nominated_namespaces_in_scope("outer", "outer", nominated) == []
     assert nominated_namespaces_in_scope("", "", nominated) == ["metal"]
+
+
+def test_library_function_overloads_in_several_namespaces_keep_library_calls(tmp_path):
+    crossgl = _translate(tmp_path, LIBRARY_OVERLOADS, "cgl")
+    assert "WaveShuffleDown(v, " in crossgl
+    assert "WaveShuffleDown(uvec2(data.lo, data.hi), " in crossgl
+    assert re.search(r"pair2 p = \w+\(pair2\(v, v \* 2\.0f\)", crossgl)
+    assert re.search(r"wide w = \w+\(wide\(tid, tid \+ 7u\)", crossgl)
+    shader = tmp_path / "unit.comp"
+    shader.write_text(
+        crosstl.translate(
+            str(tmp_path / "unit.metal"),
+            backend="opengl",
+            format_output=False,
+            source_options={"threadgroup_size": (32, 1, 1)},
+        ),
+        encoding="utf-8",
+    )
+    _run(
+        "glslangValidator",
+        "--target-env",
+        "vulkan1.1",
+        "-S",
+        "comp",
+        "-o",
+        str(tmp_path / "unit.spv"),
+        str(shader),
+    )
+
+
+def test_library_function_overloads_round_trip_through_metal(tmp_path):
+    expected = _run_metal_kernel(LIBRARY_OVERLOADS, 32, group=32)
+    translated = _translate(tmp_path, LIBRARY_OVERLOADS, "metal")
+    assert _run_metal_kernel(translated, 32, group=32) == expected
