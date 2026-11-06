@@ -121,6 +121,7 @@ from .pointer_reinterpret import (
 )
 from .relational_builtins import lower_relational_builtins
 from .resource_aggregates import lower_resource_aggregates
+from .specialized_workgroup_size import has_specialized_workgroup_size
 from .spirv_argument_tables import plan_entry_descriptor_slots
 from .spirv_atomic_load_store import (
     SPIRV_ATOMIC_LOAD_STORE_FUNCTIONS,
@@ -146,6 +147,12 @@ from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage
 from .spirv_entry_locations import (
     interface_location_state,
     restore_interface_location_state,
+)
+from .spirv_entry_workgroup_sizes import (
+    effective_workgroup_config,
+    emit_entry_local_size_id,
+    entry_workgroup_size_value,
+    plan_entry_workgroup_sizes,
 )
 from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
@@ -235,13 +242,6 @@ from .spirv_single_evaluation import (
     evaluate_subscript_index,
     recording_subscript_indices,
     subscript_index_scope,
-)
-from .specialized_workgroup_size import has_specialized_workgroup_size
-from .spirv_entry_workgroup_sizes import (
-    effective_workgroup_config,
-    emit_entry_local_size_id,
-    entry_workgroup_size_value,
-    plan_entry_workgroup_sizes,
 )
 from .spirv_specialized_workgroup_size import (
     declare_specialized_workgroup_size,
