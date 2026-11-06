@@ -5,10 +5,18 @@ binding search replaced a rescan-until-stable loop. The references below are the
 previous implementations, kept verbatim.
 """
 
+import enum
 import random
+from collections import OrderedDict, defaultdict
 
 import pytest
 
+from crosstl.translator.ast import (
+    AST_CHILD_FIELD_EXCLUSIONS,
+    ASTNode,
+    IdentifierNode,
+    iter_ast_child_nodes,
+)
 from crosstl.translator.codegen.ast_walk import walk_ast_values
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
@@ -44,6 +52,31 @@ def reference_walk(root):
                 yield from walk(child)
 
     yield from walk(root)
+
+
+def reference_iter_ast_child_nodes(value):
+    if isinstance(value, ASTNode):
+        yield value
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from reference_iter_ast_child_nodes(item)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from reference_iter_ast_child_nodes(item)
+
+
+def reference_child_nodes(node):
+    yielded_fields = []
+    for field_name, value in vars(node).items():
+        if field_name in AST_CHILD_FIELD_EXCLUSIONS:
+            continue
+        if isinstance(value, (ASTNode, list, tuple, dict, set)):
+            if any(value is earlier for earlier in yielded_fields):
+                continue
+            yielded_fields.append(value)
+        yield from reference_iter_ast_child_nodes(value)
 
 
 def reference_next_binding(used_bindings, namespace, binding, count):
@@ -106,6 +139,70 @@ def test_walk_matches_recursive_reference(seed):
     assert [id(value) for value in walk_ast_values(root)] == [
         id(value) for value in reference_walk(root)
     ]
+
+
+class Flavor(enum.IntEnum):
+    PLAIN = 1
+
+
+class Label(str):
+    pass
+
+
+class Hybrid:
+    __slots__ = ("child", "__dict__")
+
+    def __init__(self, child):
+        self.child = child
+
+
+def test_walk_classifies_container_and_scalar_subclasses_like_reference():
+    # The walk decides per type whether a value is skipped, unpacked or yielded.
+    # Subclasses of the scalar and container types, values without a
+    # ``__dict__`` and values of types first met deep inside a graph must still
+    # be treated exactly as the instance checks of the reference treat them.
+    shared = Node("shared")
+    tail = defaultdict(list, {"a": [shared, Flavor.PLAIN]})
+    root = Node("root")
+    root.fields = OrderedDict(
+        [
+            ("enum", Flavor.PLAIN),
+            ("label", Label("text")),
+            ("bytes", b"raw"),
+            ("frozen", frozenset({shared})),
+            ("slotted", Slotted(Node("hidden"))),
+            ("hybrid", Hybrid(Node("hybrid-child"))),
+            ("tail", tail),
+            ("again", [shared, (Label("x"), shared)]),
+        ]
+    )
+    root.method = Node.__init__
+    assert [id(value) for value in walk_ast_values(root)] == [
+        id(value) for value in reference_walk(root)
+    ]
+
+
+def test_child_nodes_match_generator_reference():
+    ast = Parser(Lexer(SHADER).get_tokens()).parse()
+    nodes = list(ast.walk())
+    assert len(nodes) > 20
+    first, second = IdentifierNode("a"), IdentifierNode("b")
+    synthetic = IdentifierNode("synthetic")
+    shared_list = [first, {"nested": (second, [first])}, "text", None]
+    synthetic.left = shared_list
+    synthetic.right = shared_list
+    synthetic.target = first
+    synthetic.lookup = {"x": {second}, "y": OrderedDict(z=[synthetic])}
+    synthetic.annotations = {"skip": second}
+    nodes.append(synthetic)
+    for node in nodes:
+        assert [id(child) for child in node.child_nodes()] == [
+            id(child) for child in reference_child_nodes(node)
+        ]
+    for value in (shared_list, synthetic.lookup, first, "text", None, 3):
+        assert [id(child) for child in iter_ast_child_nodes(value)] == [
+            id(child) for child in reference_iter_ast_child_nodes(value)
+        ]
 
 
 def test_walk_reads_children_after_resuming():

@@ -2,6 +2,7 @@
 
 from typing import Dict, List, Optional
 
+from crosstl.backend.DirectX.macro_expansion import CPP_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_CUDA_PRESERVED_INCLUDE__ "
@@ -9,6 +10,8 @@ PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_CUDA_PRESERVED_INCLUDE__ "
 
 class CudaPreprocessor(HLSLPreprocessor):
     """Small CUDA preprocessor used before lexing imported source files."""
+
+    macro_dialect = CPP_MACROS
 
     DEFAULT_PLATFORM_DEFINES = {
         "__linux__": "1",

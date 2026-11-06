@@ -2145,7 +2145,6 @@ def test_mlx_frontier_accounting_counts_refused_vulkan_sources_separately():
     from demos.integrations.mlx import run_porting
 
     script = _frontier_accounting_script(_workflow_texts()["demo-project-testing.yml"])
-    assert run_porting.MLX_VULKAN_FRONTIER_REFUSALS
     assert set(run_porting.MLX_VULKAN_FRONTIER_SOURCES) == set(
         run_porting.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     ) - set(run_porting.MLX_VULKAN_FRONTIER_REFUSALS) - set(

@@ -254,22 +254,22 @@
       },
       "block_softmax_float16": {
         "32": {
-          "sha256": "0824693e238a509bcefee436dc7f52b0eab91e185b85ff6f5d29b77242bc7062",
-          "sizeBytes": 9154
+          "sha256": "9035b91afb5b76cf3208a780abcc00ea428325c860c5eff22d09505f476e1581",
+          "sizeBytes": 9353
         },
         "288": {
-          "sha256": "f5a24493b2dca20fcef69853d12039a4fa3fe7e6670250352ae245a9f89250fa",
-          "sizeBytes": 9156
+          "sha256": "292d8338c606321fca911a586e88265b2c3bc6badc3ccd8a4e4bfa175cd62127",
+          "sizeBytes": 9355
         },
         "1024": {
-          "sha256": "31b1c9c59a36a1aec27fdbf93dff14f4959a7da97557c9269b840af3f6ae4118",
-          "sizeBytes": 9158
+          "sha256": "87768deee51fd57f1615e077f4a95f9a590c63713717cdb8101a7b00533313a3",
+          "sizeBytes": 9357
         }
       },
       "looped_softmax_float16": {
         "1024": {
-          "sha256": "a633eeb28e5a68542e9d380aa9242333a317a642d9ac92f9de06bdeafe58ed34",
-          "sizeBytes": 8751
+          "sha256": "fbffce6c337146503e9bdcab1d77daab3f16d5dd44ae4dd8c9cf8e8ec621bc97",
+          "sizeBytes": 8864
         }
       },
       "block_softmax_bfloat16": {

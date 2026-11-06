@@ -32,6 +32,7 @@ from ..common_ast import (
 from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
 from ..storage_image_texels import IMAGE_FORMAT_ATTRIBUTES
 from ..switch_clauses import ordered_switch_clauses
+from .byte_address_methods import byte_address_method_expression
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
@@ -5304,6 +5305,11 @@ class HLSLToCrossGLConverter(
                 args = ", ".join(rendered_args)
                 resource_type = self.expression_raw_type(expr.name.object)
                 resource_base = self.raw_type_base(resource_type)
+                byte_address_access = byte_address_method_expression(
+                    self, member, obj, rendered_args, expr.args, resource_type
+                )
+                if byte_address_access is not None:
+                    return byte_address_access
                 if (
                     method_member == "GatherCmpRed"
                     and len(rendered_args) in {7, 8}

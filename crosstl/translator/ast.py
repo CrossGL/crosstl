@@ -39,15 +39,25 @@ class ASTNode:
         ``AssignmentNode.target`` and ``left``). Such a child is yielded once, so a visitor that acts on every child
         does not evaluate it twice: ``vals[k++]`` increments ``k`` once.
         """
-        yielded_fields = []
+        children = []
+        yielded_fields = set()
         for field_name, value in vars(self).items():
             if field_name in AST_CHILD_FIELD_EXCLUSIONS:
                 continue
-            if isinstance(value, (ASTNode, list, tuple, dict, set)):
-                if any(value is earlier for earlier in yielded_fields):
-                    continue
-                yielded_fields.append(value)
-            yield from iter_ast_child_nodes(value)
+            if isinstance(value, ASTNode):
+                value_id = id(value)
+                if value_id not in yielded_fields:
+                    yielded_fields.add(value_id)
+                    children.append(value)
+            elif isinstance(value, _AST_CHILD_CONTAINERS):
+                value_id = id(value)
+                if value_id not in yielded_fields:
+                    yielded_fields.add(value_id)
+                    _append_ast_child_nodes(value, children)
+        # The children are collected eagerly into one list: nested ``yield from``
+        # generators made every child pass through one frame per container level,
+        # and this method runs for every node of every structural walk.
+        return iter(children)
 
     def walk(self):
         """Yield this node and all structural descendants once."""
@@ -63,7 +73,8 @@ class ASTNode:
             yield node
 
             children = list(node.child_nodes())
-            stack.extend(reversed(children))
+            children.reverse()
+            stack.extend(children)
 
     def bind_parent_links(self, parent=None):
         """Set parent links for this structural subtree and return ``self``."""
@@ -87,20 +98,30 @@ class ASTNode:
 AST_CHILD_FIELD_EXCLUSIONS = frozenset({"annotations", "parent", "source_location"})
 
 
+_AST_CHILD_CONTAINERS = (list, tuple, dict, set)
+
+
+def _append_ast_child_nodes(value, children):
+    """Append the ASTNode children of a nested structural field value, in order."""
+    if isinstance(value, ASTNode):
+        children.append(value)
+        return
+    if isinstance(value, dict):
+        value = value.values()
+    elif not isinstance(value, (list, tuple, set)):
+        return
+    for item in value:
+        if isinstance(item, ASTNode):
+            children.append(item)
+        elif isinstance(item, _AST_CHILD_CONTAINERS):
+            _append_ast_child_nodes(item, children)
+
+
 def iter_ast_child_nodes(value):
     """Yield ASTNode children from a nested structural field value."""
-    if isinstance(value, ASTNode):
-        yield value
-        return
-
-    if isinstance(value, dict):
-        for item in value.values():
-            yield from iter_ast_child_nodes(item)
-        return
-
-    if isinstance(value, (list, tuple, set)):
-        for item in value:
-            yield from iter_ast_child_nodes(item)
+    children = []
+    _append_ast_child_nodes(value, children)
+    return iter(children)
 
 
 class TypeNode(ASTNode):
@@ -490,6 +511,7 @@ class ShaderNode(ASTNode):
         cbuffers: List["StructNode"] = None,
         imports: List["ImportNode"] = None,
         preprocessors: List["PreprocessorNode"] = None,
+        static_assertions: List["StaticAssertNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -503,6 +525,8 @@ class ShaderNode(ASTNode):
         self.cbuffers = cbuffers or []
         self.imports = imports or []
         self.preprocessors = preprocessors or []
+        # Shader-, stage- and structure-scope static_assert declarations, in source order.
+        self.static_assertions = static_assertions or []
 
     def __repr__(self):
         return f"ShaderNode(name={self.name}, execution_model={self.execution_model})"
@@ -1137,6 +1161,28 @@ class ReturnNode(StatementNode):
 
     def __repr__(self):
         return f"ReturnNode(value={self.value})"
+
+
+class StaticAssertNode(StatementNode):
+    """``static_assert(condition[, message])``: a constant condition checked at translation time.
+
+    It declares nothing and has no run-time effect. One written in a block is a statement; the parser collects one
+    at shader, stage or structure scope in ``ShaderNode.static_assertions``. ``message`` is the text of the string
+    literal, or None. :mod:`.semantics.static_assertions` checks and removes every one before code generation.
+    """
+
+    def __init__(
+        self,
+        condition: "ExpressionNode",
+        message: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.condition = condition
+        self.message = message
+
+    def __repr__(self):
+        return f"StaticAssertNode(condition={self.condition}, message={self.message!r})"
 
 
 class BreakNode(StatementNode):

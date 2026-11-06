@@ -62,6 +62,7 @@ from .conditional_types import split_template_arguments
 from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
+    dependent_access,
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
@@ -4016,6 +4017,16 @@ class MetalToCrossGLConverter(
         specialization_key=None,
     ):
         qualifier = getattr(function, "qualifier", None)
+        if qualifier in {"vertex", "fragment", "kernel", "mesh", "object"} and (
+            self.unbound_template_parameter_names(
+                function, template_value_bindings, template_type_bindings
+            )
+        ):
+            # A stage function template is only an entry point through an
+            # instantiation, and every instantiation the source names has
+            # already become a concrete function. One that is left has no
+            # entry point in the Metal library, so it emits nothing.
+            return ""
         if qualifier == "vertex":
             return (
                 "    // Vertex Shader\n"
@@ -7460,6 +7471,20 @@ class MetalToCrossGLConverter(
         indirection = str(getattr(alias, "indirection", "") or "")
         declarator = f"({indirection}{alias_name})" if indirection else alias_name
         return f"{return_type} {declarator}({parameter_text})"
+
+    def unbound_template_parameter_names(
+        self, function, value_bindings=None, type_bindings=None
+    ):
+        """Named template parameters of ``function`` that no binding gives a value."""
+        bound = {*(value_bindings or {}), *(type_bindings or {})}
+        return [
+            entry[1]
+            for entry in getattr(function, "template_parameters", None) or []
+            if isinstance(entry, (tuple, list))
+            and len(entry) >= 2
+            and entry[1]
+            and entry[1] not in bound
+        ]
 
     def value_template_parameter_names(self, function):
         return [
@@ -13130,6 +13155,18 @@ class MetalToCrossGLConverter(
                     )
                     if qualifier in qualifier_set
                 ]
+                if (
+                    not self.preserve_pointer_pointee_const
+                    and "threadgroup" in pointer_qualifiers
+                ):
+                    # Threadgroup pointer parameters and locals drop pointee
+                    # const under this policy, so a cast to `const threadgroup
+                    # T*` must too, or it cannot initialize those declarations.
+                    pointer_qualifiers = [
+                        qualifier
+                        for qualifier in pointer_qualifiers
+                        if qualifier != "const"
+                    ]
                 if pointer_qualifiers:
                     mapped_type = f"{' '.join(pointer_qualifiers)} {mapped_type}"
             value = self.generate_expression(expr.expression, is_main)
@@ -15272,15 +15309,49 @@ class MetalToCrossGLConverter(
         prefix = f"{self.metal_free_operator_helper_prefix}{label}__"
         candidates = []
         overloads_by_name = getattr(self, "user_function_overloads_by_name", {})
-        for function_name, overloads in overloads_by_name.items():
-            if not str(function_name).startswith(prefix):
-                continue
+        for function_name in self.metal_free_operator_helper_names(
+            overloads_by_name, prefix
+        ):
             candidates.extend(
                 function
-                for function in overloads
+                for function in overloads_by_name[function_name]
                 if len(getattr(function, "params", []) or []) == arity
             )
         return candidates
+
+    def metal_free_operator_helper_names(self, overloads_by_name, prefix):
+        """Return the overload names that start with ``prefix``, in mapping order.
+
+        Every binary and unary operator asks for its helper candidates, and a
+        large translation unit has thousands of functions, so scanning every
+        name per operator dominated code generation. Names are only ever added
+        to the overload mapping (or the mapping is replaced), so the mapping's
+        identity and size identify its key set and key the cached lists.
+        """
+        cache = getattr(self, "_metal_free_operator_helper_name_cache", None)
+        if (
+            cache is None
+            or cache[0] is not overloads_by_name
+            or cache[1] != len(overloads_by_name)
+        ):
+            helper_prefix = self.metal_free_operator_helper_prefix
+            cache = (
+                overloads_by_name,
+                len(overloads_by_name),
+                [
+                    name
+                    for name in overloads_by_name
+                    if str(name).startswith(helper_prefix)
+                ],
+                {},
+            )
+            self._metal_free_operator_helper_name_cache = cache
+        names = cache[3].get(prefix)
+        if names is None:
+            names = cache[3][prefix] = [
+                name for name in cache[2] if str(name).startswith(prefix)
+            ]
+        return names
 
     def resolve_metal_free_operator(
         self, operator, arguments, source_location=None, argument_metal_types=None
@@ -18667,12 +18738,20 @@ float {scalar}(float value) {{
             self.metal_source_overload_value_type(self.expression_metal_type(argument))
             for argument in expression.args
         ]
+        unbound_names = unbound_template_type_names(
+            self.current_function,
+            set(self.type_aliases).union(*self.template_type_bindings),
+        )
         dependent = dependent_builtin_result_type(
             result_kind,
             argument_types,
-            unbound_template_type_names(
-                self.current_function,
-                set(self.type_aliases).union(*self.template_type_bindings),
+            unbound_names,
+            dependent_unknown=any(
+                argument_type is None
+                and dependent_access(
+                    argument, self.expression_metal_type, unbound_names
+                )
+                for argument, argument_type in zip(expression.args, argument_types)
             ),
         )
         if dependent is not NOT_DEPENDENT:
