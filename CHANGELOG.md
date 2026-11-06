@@ -4,6 +4,10 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Fixed
+
+- Rust output writes an empty brace initializer of a plain enumeration, such as `Mode m = {};` for `enum Mode { First, Second }`, as the variant whose discriminant is 0: `let m: Mode = Mode::First;`. An enumeration with no zero-valued variant, such as `enum Mode { First = 3, Second = 5 }`, is refused with `RustEnumEmptyBraceError` (`project.translate.rust-enum-empty-brace-unsupported`). It used to write `let m: Mode = [];`, which rustc rejects (#3820).
+
 ### Breaking Changes
 
 - CrossGL refuses non-square `floatNxM` and `doubleNxM` matrix spellings, such as `float2x3`, with `AmbiguousMatrixSpellingError` (`project.translate.ambiguous-matrix-spelling`): MSL reads `float2x3` as 2 columns of 3 rows and HLSL as 2 rows of 3 columns, and the Metal, GLSL, HLSL and SPIR-V generators each took a different one. Write `matCxR` or `dmatCxR`. The SPIR-V importer now writes non-square matrices as `matCxR`. Square `float3x3(...)` and `float3x3(s)` now fill columns and build a diagonal matrix in HLSL output, as `mat3` does; HLSL output filled rows and repeated `s`.

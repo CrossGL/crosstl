@@ -9,10 +9,10 @@ program. Every such site now records its reason through
 
 from __future__ import annotations
 
-from ..diagnostics import CODE_PREFIX
+from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .lowering_refusals import LoweringRefused
 
-__all__ = ["RustLoweringRefused"]
+__all__ = ["RustEnumEmptyBraceError", "RustLoweringRefused"]
 
 
 class RustLoweringRefused(LoweringRefused):
@@ -21,3 +21,17 @@ class RustLoweringRefused(LoweringRefused):
     target_name = "rust"
     label = "Rust"
     code = f"{CODE_PREFIX}rust-lowering-unsupported"
+
+
+class RustEnumEmptyBraceError(TranslationDiagnostic):
+    """An empty brace initializer of a plain enumeration with no zero-valued variant."""
+
+    def __init__(self, enum_name):
+        self.enum_name = enum_name
+        self.missing_capabilities = ("rust.enum-empty-brace",)
+        super().__init__(
+            f"Rust target cannot write the empty brace initializer of enumeration "
+            f"'{enum_name}': no variant has the value 0",
+            target="rust",
+            code=f"{CODE_PREFIX}rust-enum-empty-brace-unsupported",
+        )

@@ -59,7 +59,7 @@ from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_output_parameters import RustOutputParameterMixin
-from .rust_refusals import RustLoweringRefused
+from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import (
     is_fragment_output_parameter,
@@ -628,6 +628,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.enum_variant_field_types = {}
         self.enum_variant_payload_type_map = {}
         self.enum_generic_params = {}
+        self.plain_enum_nodes = {}
         self.non_copy_type_names = set()
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
@@ -697,6 +698,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             ast
         )
         self.enum_generic_params = self.collect_enum_generic_params(ast)
+        self.plain_enum_nodes = self.collect_plain_enum_nodes(ast)
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.register_constant_types(ast)
         self.current_mutated_names = set()
@@ -2443,6 +2445,43 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         collect(node)
         return variants
+
+    def collect_plain_enum_nodes(self, node):
+        """Map each plain enumeration name to its AST node for empty brace initializers."""
+        enums = {}
+
+        def add_enum(name, enum_node):
+            if not name or enum_node is None:
+                return
+            variants = getattr(enum_node, "variants", []) or []
+            if any(self.enum_variant_data(variant) for variant in variants):
+                return
+            enums[name] = enum_node
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, EnumNode):
+                add_enum(current.name, current)
+            elif isinstance(current, StructNode):
+                for member in getattr(current, "members", []) or []:
+                    if isinstance(member, EnumNode):
+                        collect(member)
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for struct in getattr(current, "local_structs", []):
+                collect(struct)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return enums
 
     def collect_enum_variant_field_types(self, node):
         """Collect named payload fields for struct-like enum variants."""
@@ -8237,6 +8276,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def generate_array_literal_expression(
         self, expr, target_type=None, static_context=False
     ):
+        if not (getattr(expr, "elements", None) or []):
+            enum_initializer = self.rust_empty_brace_enum_initializer(target_type)
+            if enum_initializer is not None:
+                return enum_initializer
+
         element_target_type = None
         target_size = None
 
@@ -10966,6 +11010,34 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return None
 
         return enum_type, variant_name, field_types
+
+    def rust_empty_brace_enum_initializer(self, target_type):
+        """``Mode::First`` for ``Mode m = {};`` when a plain variant's discriminant is 0.
+
+        Returns ``None`` when ``target_type`` is not a plain enumeration. Raises
+        :class:`RustEnumEmptyBraceError` when none of the variants is the value 0.
+        """
+        type_name = self.type_name_string(target_type)
+        if not type_name:
+            return None
+        base_name = type_name.split("<", 1)[0].strip()
+        enum_node = self.plain_enum_nodes.get(base_name)
+        if enum_node is None:
+            return None
+
+        next_value = 0
+        for variant in getattr(enum_node, "variants", []) or []:
+            value = next_value
+            if getattr(variant, "value", None) is not None:
+                value = self.literal_int_value(variant.value)
+                if value is None:
+                    next_value = None
+                    continue
+            if value == 0:
+                return self.enum_variant_call_path(enum_node.name, variant.name)
+            next_value = None if next_value is None else value + 1
+
+        raise RustEnumEmptyBraceError(enum_node.name)
 
     def enum_variant_call_path(self, enum_type, variant_name):
         rust_type = self.map_type(enum_type)
