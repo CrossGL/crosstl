@@ -290,6 +290,11 @@ from .hlsl_buffer_block_atomic_values import (
 )
 from .hlsl_buffer_component_stores import buffer_component_store
 from .hlsl_buffer_layout import HlslLayoutError, cbuffer_placement
+from .hlsl_byte_address_atomics import (
+    emit_hlsl_byte_address_atomic_helpers,
+    hlsl_byte_address_atomic_expression,
+    hlsl_byte_address_atomic_statement,
+)
 from .hlsl_byteaddress_typed_access import (
     hlsl_byteaddress_component_refusal,
     hlsl_byteaddress_is_typed_access,
@@ -2707,6 +2712,7 @@ class HLSLCodeGen(
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_wave_extension_helpers = {}
         self.hlsl_pack_helpers = {}
+        self.hlsl_byte_address_atomic_helpers = {}
         self.hlsl_bitfield_helpers = {}
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
@@ -4124,6 +4130,7 @@ class HLSLCodeGen(
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_wave_extension_helpers = {}
         self.hlsl_pack_helpers = {}
+        self.hlsl_byte_address_atomic_helpers = {}
         self.hlsl_bitfield_helpers = {}
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
         self.hlsl_defined_relative_wave_shuffle_helper_names = {}
@@ -5483,6 +5490,7 @@ class HLSLCodeGen(
         code += self.hlsl_buffer_length.code()
         code += self.generate_image_atomic_helpers()
         code += self.generate_byteaddress_atomic_helpers()
+        code += emit_hlsl_byte_address_atomic_helpers(self)
         code += self.generate_hlsl_float_atomic_helpers()
         code += self.generate_hlsl_expected_compare_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
@@ -15694,6 +15702,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 if atomic_statement is not None:
                     return self.generate_statement_code(atomic_statement, indent)
+                byte_address_atomic = hlsl_byte_address_atomic_statement(
+                    self, stmt.expression
+                )
+                if byte_address_atomic is not None:
+                    return f"{indent_str}{byte_address_atomic};\n"
                 if (
                     self.hlsl_byteaddress_interlocked_member_call_parts(stmt.expression)
                     is not None
@@ -15755,6 +15768,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(stmt)
             if atomic_statement is not None:
                 return self.generate_statement_code(atomic_statement, indent)
+            byte_address_atomic = hlsl_byte_address_atomic_statement(self, stmt)
+            if byte_address_atomic is not None:
+                return f"{indent_str}{byte_address_atomic};\n"
             if self.hlsl_byteaddress_interlocked_member_call_parts(stmt) is not None:
                 expression = (
                     self.generate_hlsl_byteaddress_interlocked_statement_expression(
@@ -28544,6 +28560,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if glsl_block_atomic_call is not None:
                 return glsl_block_atomic_call
+
+            byte_address_atomic_call = hlsl_byte_address_atomic_expression(
+                self, func_name, args
+            )
+            if byte_address_atomic_call is not None:
+                return byte_address_atomic_call
 
             typed_buffer_atomic_call = (
                 self.generate_hlsl_typed_buffer_atomic_expression(func_name, args)
