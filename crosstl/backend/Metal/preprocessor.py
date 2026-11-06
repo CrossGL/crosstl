@@ -80,6 +80,7 @@ from .static_member_constants import (
 )
 from .template_argument_text import normalize_template_argument_text
 from .template_constants import unresolved_constant_references
+from .template_function_parameters import template_function_pointer_parameter
 from .template_overloads import declared_type_names, select_instantiated_overload
 from .text_scanners import (
     find_named_type_declarations,
@@ -88,6 +89,11 @@ from .text_scanners import (
     split_top_level_commas,
     strip_comments_outside_strings,
     strip_top_level_default_value,
+)
+from .trait_operand_types import (
+    METAL_MATRIX_TYPE_NAMES,
+    canonical_matrix_type,
+    typedef_aggregate_names,
 )
 from .type_layout import metal_type_layout, metal_type_size
 from .unused_specialization_members import prune_unreferenced_specialization_members
@@ -6954,6 +6960,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 normalized = base if width == 1 else f"{base}{width}"
                 if qualifiers:
                     normalized = " ".join((*sorted(qualifiers), normalized))
+            else:
+                matrix = canonical_matrix_type(unqualified)
+                if matrix is not None:
+                    normalized = " ".join((*sorted(qualifiers), matrix))
         return normalized or None
 
     def _type_trait_operand_is_concrete(
@@ -7128,9 +7138,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if struct.qualified_name:
                 names.add(struct.qualified_name)
         names.update(template.name for template in self._find_template_structs(code))
+        names.update(METAL_MATRIX_TYPE_NAMES)
         template_spans = self._find_template_declaration_spans(code)
         ignored_spans = sorted(
             [*template_spans, *self._find_comment_and_literal_spans(code)]
+        )
+        names.update(
+            typedef_aggregate_names(
+                code,
+                lambda text, start: self._find_matching_delimiter(
+                    text, start, "{", "}"
+                ),
+                lambda position: self._containing_span(position, ignored_spans)
+                is not None,
+            )
         )
         for match in re.finditer(
             r"\benum(?:\s+class)?\s+(?P<name>[A-Za-z_]\w*)",
@@ -28303,6 +28324,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         is_type_parameter=True,
                         is_variadic=is_variadic,
                         default=default,
+                    )
+                )
+                continue
+            # A function pointer or reference parameter,
+            # `void (*load)(device const T *, short, thread U &)`, names itself
+            # inside its declarator, not at the end of it.
+            function_declarator = template_function_pointer_parameter(
+                declarator_no_pack
+            )
+            if function_declarator is not None:
+                name, declared_type = function_declarator
+                records.append(
+                    _TemplateParameter(
+                        name=name,
+                        is_type_parameter=False,
+                        is_variadic=is_variadic,
+                        default=default,
+                        declared_type=declared_type,
                     )
                 )
                 continue
