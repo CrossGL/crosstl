@@ -1,4 +1,8 @@
-"""Verify integer axis-scatter through MLX replacement and gather gradients."""
+"""Verify int32, uint32 and float32 axis-scatter.
+
+Replacements come from ``put_along_axis`` and additions from gradients of
+``take_along_axis``.
+"""
 
 import argparse
 import json

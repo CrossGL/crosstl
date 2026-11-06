@@ -68,13 +68,16 @@ class MetalWorkerServer:
         stdin = self.process.stdin.fileno()
         stdout = self.process.stdout.fileno()
         written = 0
+        # Bytes before ``searched`` hold no newline, so each read is searched once.
+        searched = 0
         with selectors.DefaultSelector() as selector:
             selector.register(stdin, selectors.EVENT_WRITE)
             selector.register(stdout, selectors.EVENT_READ)
             while True:
-                newline = self._buffer.find(b"\n")
+                newline = self._buffer.find(b"\n", searched)
                 if newline >= 0:
                     break
+                searched = len(self._buffer)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     self._expire(timeout_seconds)
@@ -156,6 +159,13 @@ class MetalWorkerServer:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # macOS refuses to signal a group whose leader has exited but
+                # is not yet reaped; signal the worker itself instead.
+                try:
+                    self.process.kill()
+                except (ProcessLookupError, PermissionError):
+                    pass
 
     def terminate(self):
         """Stop the worker; a worker started by another process is left alone."""

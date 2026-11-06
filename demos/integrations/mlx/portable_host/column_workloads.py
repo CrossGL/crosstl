@@ -3,11 +3,14 @@
 import math
 import struct
 
-from demos.integrations.mlx.portable_host import column_small_layout
+from demos.integrations.mlx.portable_host import column_long_layout, column_small_layout
 from demos.integrations.mlx.portable_host.column_small_layout import (
     SMALL_COLUMN_ENTRIES,
 )
-from demos.integrations.mlx.portable_host.reduction_packages import COLUMN_ENTRIES
+from demos.integrations.mlx.portable_host.reduction_packages import (
+    COLUMN_ENTRIES,
+    ENTRIES,
+)
 from demos.integrations.mlx.portable_host.row_workloads import values_match, wire_values
 
 # Fewer than 32 reduced elements per output. Each template's reduction rank,
@@ -34,6 +37,25 @@ SMALL_SUM_SHAPES = (
 WIDE_OPERATIONS = ("sumfloat32", "maxuint32")
 WIDE_SHAPES = {"looped": (40, 2048), "2pass": (300, 256)}
 SMALL_SUM_ENTRY = "col_reduce_small_1_reduce_sumfloat32"
+# The long-column instantiations of the 32-bit and Boolean reductions.
+LONG_COLUMN_ENTRIES = {
+    entry: dtype
+    for entry, dtype in column_long_layout.LONG_COLUMN_ENTRIES.items()
+    if entry.rsplit("_reduce_", 1)[1]
+    in {name.removeprefix("all_reduce_") for name in ENTRIES}
+}
+# Strides below 32 over at least 1,024 reduced elements per output, for each
+# template's reduction rank.
+LONG_SHAPES = {
+    1: ((1024, 3), (0,)),
+    2: ((2, 2, 512, 3), (0, 2)),
+    5: ((2, 2, 2, 2, 256, 3), (0, 2, 4)),
+}
+# Further sum geometries: a narrow stride, and the widest stride with a
+# partial last row block; and 128 partial blocks from 32,768 reduced rows.
+LONG_SUM_ENTRY = "col_reduce_longcolumn_1_reduce_sumfloat32"
+LONG_SUM_SHAPES = ((1025, 7), (1057, 31))
+LONG_WIDE_SHAPE = (32768, 3)
 
 
 def _small_cases():
@@ -84,9 +106,55 @@ def small_plan(case):
     return total, columns, math.prod(shape) // total // columns
 
 
+def _long_cases():
+    for entry, dtype in LONG_COLUMN_ENTRIES.items():
+        dimension = int(entry.split("_")[3])
+        shape, axes = LONG_SHAPES[dimension]
+        case = {
+            "id": f"{entry}-long",
+            "entry": entry,
+            "dtype": dtype,
+            "operation": entry.rsplit("reduce_", 1)[1].removesuffix(dtype),
+            "shape": shape,
+            "axes": axes,
+            "layout": "dense",
+        }
+        yield case
+        if entry == LONG_SUM_ENTRY:
+            for extra in LONG_SUM_SHAPES:
+                yield case | {
+                    "id": f"{entry}-{'x'.join(map(str, extra))}",
+                    "shape": extra,
+                }
+        if dimension == 1:
+            if entry.endswith(WIDE_OPERATIONS):
+                yield case | {"id": f"{entry}-wide", "shape": LONG_WIDE_SHAPE}
+        if dimension == 2:
+            yield case | {"id": f"{entry}-slice", "layout": "slice"}
+        if dtype == "float32" and dimension == 1:
+            for profile in (
+                "early-nan",
+                "late-nan",
+                "positive-infinity",
+                "negative-zero",
+            ):
+                yield case | {"id": f"{entry}-{profile}", "profile": profile}
+
+
+def long_variants():
+    """The long column variants the workloads launch, as cache keys."""
+    keys = set()
+    for case in _long_cases():
+        total, stride, _ = small_plan(case)
+        workgroup = (*column_long_layout.geometry(stride, total), 1)
+        keys.add(column_long_layout.variant(case["entry"], workgroup))
+    return keys
+
+
 def cases():
     yield from _looped_cases()
     yield from _small_cases()
+    yield from _long_cases()
 
 
 def _looped_cases():
@@ -180,17 +248,26 @@ def reference(np, case):
     logical = base[1::2] if case["layout"] == "slice" else np.broadcast_to(base, shape)
     expected = reduce(np, logical, operation, case["axes"])
     partials = None
-    if "2pass" in case["entry"]:
+    long_column = case["entry"] in column_long_layout.LONG_COLUMN_ENTRIES
+    if "2pass" in case["entry"] or long_column:
         remaining = tuple(
             axis for axis in range(logical.ndim) if axis not in case["axes"]
         )
         rows = np.transpose(logical, case["axes"] + remaining).reshape(
             (-1, *expected.shape)
         )
-        # Each native block reduces 32-row tiles, revisiting every 1024 rows.
-        partitions = (np.arange(len(rows)) // 32) % 32
+        # Each native block reduces tiles of 32 rows, or of the long-column
+        # threadgroup's rows, revisiting them once every block has one.
+        tile, blocks = 32, 32
+        if long_column:
+            blocks = column_long_layout.outer_blocks(len(rows))
+            tile = column_long_layout.geometry(column_stride(case), len(rows))[1]
+        partitions = (np.arange(len(rows)) // tile) % blocks
         partials = np.stack(
-            [reduce(np, rows[partitions == block], operation, 0) for block in range(32)]
+            [
+                reduce(np, rows[partitions == block], operation, 0)
+                for block in range(blocks)
+            ]
         )
     return base, logical, expected, partials
 
@@ -283,6 +360,10 @@ def validate(records, *, trace=None):
                 1,
             ]
             size = [256, 1, 1]
+            if entry in LONG_COLUMN_ENTRIES:
+                total = logical.size // expected.size
+                groups = [outer, 1, column_long_layout.outer_blocks(total)]
+                size = [*column_long_layout.geometry(stride, total), 1]
             if entry in SMALL_COLUMN_ENTRIES:
                 total = logical.size // expected.size
                 lanes, rows = column_small_layout.geometry(stride, total)

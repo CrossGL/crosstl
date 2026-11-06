@@ -124,15 +124,19 @@ def build_entries(root, packages, target, entries, jobs):
 
 
 def verification_entries():
-    from demos.integrations.mlx.portable_host import verify_matmul
+    """The entries verify_matmul's and then verify_addmm's cases dispatch."""
+    from demos.integrations.mlx.portable_host import verify_addmm, verify_matmul
 
-    records = (verify_matmul.case_record(case) for case in verify_matmul.CASES)
-    return [
+    records = [verify_matmul.case_record(case) for case in verify_matmul.CASES] + [
+        verify_addmm.case_record(case) for case in verify_addmm.CASES
+    ]
+    entries = [
         name
         for record in records
         if record["family"] == "splitk"
         for name in (record["entry"], record["route"]["accum"])
     ]
+    return list(dict.fromkeys(entries))
 
 
 def main(argv=None):

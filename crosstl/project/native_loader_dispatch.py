@@ -20,7 +20,13 @@ from crosstl.project.native_loader_abi import (
     _validate_descriptor,
 )
 from crosstl.project.runtime_value_encoding import validate_value_encoding
-from crosstl.project.runtime_values import copy_values, flatten_values, scalars_fit
+from crosstl.project.runtime_values import (
+    copy_values,
+    flatten_scalars,
+    flatten_values,
+    scalar_types,
+    scalars_fit,
+)
 from crosstl.project.runtime_verification import (
     RuntimeAdapterContract,
     RuntimeAllocationView,
@@ -847,7 +853,15 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             path=f"{path}.kind",
             details={"name": runtime_value.name, "kind": runtime_value.kind},
         )
-    runtime_value = replace(runtime_value, values=copy_values(runtime_value.values))
+    # One scan of a flat value list serves the copy, flattening and checks.
+    types = (
+        scalar_types(runtime_value.values)
+        if type(runtime_value.values) is list
+        else None
+    )
+    runtime_value = replace(
+        runtime_value, values=copy_values(runtime_value.values, types=types)
+    )
     metadata = runtime_value.metadata
     if not isinstance(metadata, Mapping):
         raise NativeLoaderDispatchError(
@@ -897,7 +911,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             details={"name": runtime_value.name},
         )
     if runtime_value.values is not None:
-        flattened_values = _flatten_values(runtime_value.values)
+        flattened_values, types = flatten_scalars(runtime_value.values, types=types)
         actual_count = len(flattened_values)
         expected_count = math.prod(shape)
         if actual_count != expected_count:
@@ -918,6 +932,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
                 path=f"{path}.values",
                 name=runtime_value.name,
                 role=role,
+                types=types,
             )
     return RuntimeValue(
         name=runtime_value.name,
@@ -1008,9 +1023,15 @@ _flatten_values = flatten_values
 
 
 def _validate_buffer_values(
-    values: Sequence[Any], *, dtype: str, path: str, name: str, role: str
+    values: Sequence[Any],
+    *,
+    dtype: str,
+    path: str,
+    name: str,
+    role: str,
+    types: frozenset[type] | None = None,
 ) -> None:
-    if scalars_fit(values, dtype):
+    if scalars_fit(values, dtype, types=types):
         return
     for index, value in enumerate(values):
         valid = False

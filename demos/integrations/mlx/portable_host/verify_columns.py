@@ -7,7 +7,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import column_small_layout, column_workloads
+from demos.integrations.mlx.portable_host import (
+    column_long_layout,
+    column_small_layout,
+    column_workloads,
+)
+from demos.integrations.mlx.portable_host.column_long_packages import (
+    CACHE_DIRECTORY as LONG_CACHE_DIRECTORY,
+)
+from demos.integrations.mlx.portable_host.column_long_packages import (
+    LongColumnPackageCache,
+)
 from demos.integrations.mlx.portable_host.column_small_layout import (
     SMALL_COLUMN_ENTRIES,
 )
@@ -25,19 +35,21 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
 NEGATIVE_CHECKS = {
     "allocation": "column reduction source view exceeds its bounds",
-    "long": "long-column reduction plans are not implemented",
     "limit": "column reduction inner shape exceeds its bounds",
 }
 
 
-def verify_small_artifacts(trace, root, packages, target):
-    """Each small column dispatch names its cached package's unchanged artifact."""
-    cache = SmallColumnPackageCache(root, packages / CACHE_DIRECTORY, target)
+def verify_small_artifacts(trace, root, packages, target, long_column=False):
+    """Each small or long column dispatch names its cached unchanged artifact."""
+    cache = (
+        LongColumnPackageCache(root, packages / LONG_CACHE_DIRECTORY, target)
+        if long_column
+        else SmallColumnPackageCache(root, packages / CACHE_DIRECTORY, target)
+    )
+    layout = column_long_layout if long_column else column_small_layout
     checked = {}
     for record in trace:
-        key = column_small_layout.variant(
-            record["entry"], tuple(record["workgroupSize"])
-        )
+        key = layout.variant(record["entry"], tuple(record["workgroupSize"]))
         if key not in checked:
             descriptor, package = cache.get(key)
             artifact = descriptor["artifact"]
@@ -64,8 +76,7 @@ def reject_invalid_plan(mx, np, mode, runtime):
             )
         else:
             # An axis of 65,536 columns exceeds the bound on one shape axis.
-            shape = {"long": (1024, 2), "limit": (2, 65536)}[mode]
-            source = mx.array(np.ones(shape, dtype=np.float32))
+            source = mx.array(np.ones((2, 65536), dtype=np.float32))
         mx.eval(mx.sum(source, axis=0))
     except (ValueError, RuntimeError) as error:
         if NEGATIVE_CHECKS[mode] not in str(error) or runtime.dispatch_count != 0:
@@ -174,10 +185,18 @@ def verify(args):
     column_workloads.validate(results["cpu"])
     column_workloads.validate(results["native"], trace=trace)
     small = [record for record in trace if record["entry"] in SMALL_COLUMN_ENTRIES]
+    long = [
+        record
+        for record in trace
+        if record["entry"] in column_long_layout.LONG_COLUMN_ENTRIES
+    ]
     verify_artifacts(
-        [record for record in trace if record not in small], args.reductions, index
+        [record for record in trace if record not in small and record not in long],
+        args.reductions,
+        index,
     )
     verify_small_artifacts(small, args.mlx_root, args.packages, target)
+    verify_small_artifacts(long, args.mlx_root, args.packages, target, True)
     if [record["actual"] for record in results["cpu"]] != [
         record["actual"] for record in results["native"]
     ]:
@@ -201,6 +220,7 @@ def verify(args):
         "widths": index["widths"],
         "entries": sorted(COLUMN_ENTRIES),
         "smallEntries": sorted(SMALL_COLUMN_ENTRIES),
+        "longEntries": sorted(column_workloads.LONG_COLUMN_ENTRIES),
         "casesPerPath": len(results["native"]),
         "dispatchCount": len(trace),
         "fullTranslatedBackend": False,

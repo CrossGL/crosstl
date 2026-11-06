@@ -1,4 +1,4 @@
-"""Floating-point matrix-vector host routing, launch contracts and guarded commits."""
+"""Floating-point and complex64 matrix-vector host routing, launch contracts and guarded commits."""
 
 import ctypes
 import json
@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.portable_host import element_storage, gemm_layout
 from demos.integrations.mlx.portable_host import gemv_dispatch as dispatch
 from demos.integrations.mlx.portable_host import gemv_layout as layout
 from demos.integrations.mlx.portable_host import gemv_packages, prepare, runtime
@@ -19,6 +20,7 @@ CTYPES = {
     "float32": ctypes.c_uint32,
     "float16": ctypes.c_uint16,
     "bfloat16": ctypes.c_uint16,
+    "complex64": ctypes.c_uint64,
     "int32": ctypes.c_int32,
     "int64": ctypes.c_int64,
 }
@@ -99,19 +101,25 @@ def native_buffers(record, data=None):
 
 def test_signature_accepts_exactly_the_instantiated_matmul_entries():
     entries = {
-        f"{kind}_{dtype}_bm{bm}_bn{bn}_sm{sm}_sn{sn}_tm{tm}_tn{tn}_nc{nc}_axpby0"
+        f"{kind}_{dtype}_bm{bm}_bn{bn}_sm{sm}_sn{sn}_tm{tm}_tn{tn}_nc{nc}_axpby{axpby}"
         for kind, blocks in layout.BLOCKS.items()
-        for dtype in layout.DTYPES
+        for dtype in layout.ELEMENT_DTYPES
         for bm, bn, sm, sn, tm, tn in blocks
         for nc in (0, 1)
+        for axpby in (0, 1)
     }
-    assert len(entries) == 72
+    assert len(entries) == 192
     for entry in entries:
         info = layout.signature(entry)
         assert layout.workgroup_size(entry) == (32, info["bn"], info["bm"])
+        assert info["axpby"] == entry.endswith("axpby1")
+        expected = layout.HOST_PARAMETERS + (
+            layout.AXPBY_PARAMETERS if info["axpby"] else ()
+        )
+        assert set(layout.host_parameters(entry)) == set(expected)
     for entry in (
-        "gemv_float32_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby1",
-        "gemv_complex64_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby0",
+        "gemv_float32_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby2",
+        "gemv_float64_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby0",
         "gemv_gather_float32_bm4_bn1_sm1_sn32_tm4_tn4",
         "gemv_t_float32_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby0",
         "gemv_float32_bm2_bn1_sm1_sn32_tm4_tn4_nc0_axpby0",
@@ -151,8 +159,16 @@ def test_selection_follows_gemv_axbpy_and_stays_instantiated(transpose):
     # Matmul reaches every instantiated tile but gemv's (4, 1, 1, 32, 1, 4):
     # fewer than 4 outputs over K > 64 always satisfies K >= 16 * outputs.
     assert len(seen) == (5 if transpose else 6)
-    with pytest.raises(ValueError):
-        layout.select("complex64", transpose, 8, 8, 1)
+    # gemv_axbpy picks complex64 tiles as it picks every other type's.
+    for k in (1, 64, 65, 1600, 8192):
+        for out in (1, 3, 100, 2048, 4096):
+            entry = layout.select("float32", transpose, k, out, 2, True)
+            assert layout.select("complex64", transpose, k, out, 2, True) == (
+                entry.replace("float32", "complex64")
+            )
+    for dtype in ("float64", "int32", "bool_"):
+        with pytest.raises(ValueError):
+            layout.select(dtype, transpose, 8, 8, 1)
 
 
 def test_collapse_contiguous_dims_matches_mlx():
@@ -189,6 +205,16 @@ def test_routes_mirror_matmul_eval_gpu():
     # Negative strides are copied before routing.
     flipped = layout.route("float32", [1, 8], [8, -1], [8, 4], [4, 1])
     assert flipped["copies"]["a"] and flipped["entry"].startswith("gemv_t_")
+    # matmul.cpp sends a complex64 dot product to gemv, with one output.
+    dot = layout.route("complex64", [1, 72], [72, 1], [72, 1], [1, 1])
+    assert dot["entry"] == "gemv_complex64_bm1_bn8_sm1_sn32_tm1_tn4_nc0_axpby0"
+    assert (dot["outVecSize"], dot["matrixLd"]) == (1, 72)
+    family, route = gemm_layout.matmul_route(
+        "complex64", [1, 72], [72, 1], [72, 1], [1, 1]
+    )
+    assert family == "gemv" and route == dot
+    with pytest.raises(ValueError, match="complex64 matrix-matrix"):
+        gemm_layout.matmul_route("complex64", [4, 8], [8, 1], [8, 5], [5, 1])
     for a, b, message in (
         (([4, 8], [8, 1]), ([8, 5], [5, 1]), "steel GEMM"),
         # test_qmv's unbatched reference folds three vectors into M.
@@ -343,6 +369,8 @@ def test_storage_rejects_outputs_that_alias_inputs():
 
 
 def physical_layout(target, dtype):
+    if dtype == "complex64":
+        return dict(element_storage.COMPLEX_LAYOUT)
     if dtype in ("float16", "bfloat16") and target != "metal":
         physical = "uint16" if target == "directx" else "float32"
     else:
@@ -366,7 +394,13 @@ def physical_layout(target, dtype):
     (None, "guard", "missing", "shape", "trace", "unbound", "readonly", "duplicate"),
 )
 @pytest.mark.parametrize(
-    "name", ("vector-matrix-two-batch-axes", "transposed-weights-short-k")
+    "name",
+    (
+        "vector-matrix-two-batch-axes",
+        "transposed-weights-short-k",
+        "complex-vector-matrix-batched",
+        "complex-dot-product",
+    ),
 )
 def test_dispatch_commits_the_output_only_after_validation(
     tmp_path, monkeypatch, target, fault, name
@@ -407,15 +441,22 @@ def test_dispatch_commits_the_output_only_after_validation(
         return outputs
 
     monkeypatch.setattr(dispatch, "build_native_loader_dispatch_request", request)
-    one = {"float32": 0x3F800000, "float16": 0x3C00, "bfloat16": 0x3F80}[dtype]
+    # complex64 (1, 0.5): the real part in the low word.
+    one = {
+        "float32": 0x3F800000,
+        "float16": 0x3C00,
+        "bfloat16": 0x3F80,
+        "complex64": 0x3F000000_3F800000,
+    }[dtype]
+    parts = 2 if dtype == "complex64" else 1
 
     def execute(host, outputs):
         outputs = json.loads(json.dumps(outputs))
         value = outputs["binding_out_vec"]
-        count = len(memory["out_vec"])
+        count = len(memory["out_vec"]) * parts
         value["values"][:count] = dispatch.encode_binding(
             dtype,
-            [one] * count,
+            [one] * (count // parts),
             target,
             physical_layout(target, dtype),
             "buffer",
@@ -451,11 +492,11 @@ def test_dispatch_commits_the_output_only_after_validation(
     assert kwargs["expected_target"] == target
     assert set(kwargs["observe_inputs"]) == set(inputs) - {"binding_out_vec"}
     for parameter in ("mat", "in_vec"):
-        assert len(inputs[f"binding_{parameter}"]["values"]) == (
+        assert len(inputs[f"binding_{parameter}"]["values"]) == parts * (
             len(memory[parameter]) + dispatch.GUARD_COUNT
         )
     # The bindings gemv_axbpy leaves unbound get inert values.
-    assert len(inputs["binding_bias"]["values"]) == dispatch.GUARD_COUNT
+    assert len(inputs["binding_bias"]["values"]) == parts * dispatch.GUARD_COUNT
     assert inputs["binding_bias_stride"]["values"] == [0]
     assert inputs["binding_bias_batch_stride"]["values"] == [0] * len(
         record["route"]["batchShape"]
@@ -466,6 +507,29 @@ def test_dispatch_commits_the_output_only_after_validation(
     assert event["entry"] == entry
     assert event["gemvMetadata"]["outVecSize"] == record["route"]["outVecSize"]
     assert event["boundParameters"] == sorted(layout.PARAMETERS)
+
+
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_complex_bindings_carry_packed_parts_exactly(target):
+    words = [0x3F000000_3F800000, 0xC0800000_00000000]
+    layout_ = dict(element_storage.COMPLEX_LAYOUT)
+    value = dispatch.encode_binding("complex64", words, target, layout_, "buffer")
+    assert value["dtype"] == "float32" and value["shape"] == [4]
+    assert value["values"] == [0x3F800000, 0x3F000000, 0, 0xC0800000]
+    assert dispatch._decode(value, "complex64", target, "float32") == words
+    # complex64 binds only the packed {real, imag} float32 struct.
+    for scalar in (
+        physical_layout(target, "float32"),
+        dict(layout_, elementStrideBytes=16),
+        dict(layout_, structMembers=layout_["structMembers"][::-1]),
+    ):
+        with pytest.raises(ValueError, match="complex layout"):
+            dispatch.encode_binding("complex64", words, target, scalar, "buffer")
+    for fault in ({"values": value["values"][:3]}, {"values": [1 << 32, 0, 0, 0]}):
+        with pytest.raises((ValueError, RuntimeError)):
+            dispatch._decode({**value, **fault}, "complex64", target, "float32")
+    with pytest.raises(RuntimeError, match="differs"):
+        dispatch._decode({**value, "shape": [2]}, "complex64", target, "float32")
 
 
 def test_package_configs_scope_target_options_and_assertions(tmp_path):
@@ -494,10 +558,16 @@ def test_package_configs_scope_target_options_and_assertions(tmp_path):
 def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
     import concurrent.futures
 
-    from demos.integrations.mlx.portable_host import matmul_packages
+    from demos.integrations.mlx.portable_host import matmul_packages, verify_addmm
 
     entries = gemv_packages.verification_entries()
-    assert entries == [record["entry"] for record in RECORDS]
+    addmm = [verify_addmm.case_record(case) for case in verify_addmm.CASES]
+    assert entries == list(
+        dict.fromkeys(
+            [record["entry"] for record in RECORDS]
+            + [record["entry"] for record in addmm if record["family"] == "gemv"]
+        )
+    )
     calls = []
 
     def build(root, directory, target, entry):
@@ -536,7 +606,9 @@ def test_runtime_routes_gemv_entries(monkeypatch):
     assert host._entry_available(entry.encode()) == 0
     host.gemvs = object()
     assert host._entry_available(entry.encode()) == 1
-    assert host._entry_available(entry.replace("axpby0", "axpby1").encode()) == 0
+    # AddMM's axpby entries take the same route.
+    assert host._entry_available(entry.replace("axpby0", "axpby1").encode()) == 1
+    assert host._entry_available(entry.replace("axpby0", "axpby2").encode()) == 0
     assert host._entry_available(b"gemv_gather_float32_bm4_bn1_sm1_sn32_tm4_tn4") == 0
     calls = []
     monkeypatch.setattr(
@@ -555,7 +627,7 @@ def test_preparation_replaces_the_matmul_stub(monkeypatch):
 
     monkeypatch.setattr(prepare, "replace_once", record)
     prepare.adapted_sources("", "", "")
-    assert "NO_GPU(Matmul)" in replaced and "NO_GPU(AddMM)" not in replaced
+    assert "NO_GPU(Matmul)" in replaced and "NO_GPU(AddMM)" in replaced
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert "void Matmul::eval_gpu(" in backend
     for text in (
@@ -566,10 +638,10 @@ def test_preparation_replaces_the_matmul_stub(monkeypatch):
         "out_vector_len >= 2048 ? 16 : out_vector_len >= 512 ? 4 : 2",
         "bm = out_vector_len >= 4096 ? 8 : 4;",
         "} else if (K >= 16 * out_vector_len) {",
-        '(batch_shape.size() == 1 ? "0" : "1") + "_axpby0"',
+        '(batch_shape.size() == 1 ? "0" : "1") + "_axpby" + (do_axpby ? "1" : "0")',
         "{32, uint32_t(bn), uint32_t(bm)}",
-        "dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);",
-        "does not route single dot products yet",
+        "a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);",
+        "dispatch_dot_product(a, b, out, K);",
     ):
         assert text in backend, text
     for name in layout.HOST_PARAMETERS:
@@ -611,6 +683,16 @@ def trace_events(record, target):
                 "parameters": dict(route["accumParams"]),
                 "inputHashes": {"C_split": f"partitions-{record['name']}"},
             },
+        ]
+    if record["family"] == "dot":
+        passes = route["reductionPasses"]
+        return [
+            {
+                "entry": record["entry"],
+                "target": target,
+                "dotMetadata": {"K": route["K"], "partials": route["partials"]},
+            },
+            *[{"entry": "all_reduce_sumfloat32", "target": target}] * passes,
         ]
     return [trace_event(record, target)]
 
@@ -683,7 +765,22 @@ def test_trace_validation_requires_the_routed_entries():
     with pytest.raises(RuntimeError, match="routed entries"):
         verify.validate_trace(trace[:accum] + trace[accum + 1 :], ALL_RECORDS, "opengl")
     # Each family must cover its routes on its own.
-    for family in ("gemv", "gemm", "splitk"):
+    # A dot product's partials must reach the whole-array sum next.
+    dot = next(
+        index
+        for index, event in enumerate(trace)
+        if event["entry"].startswith("dot_product_")
+    )
+    trace[dot + 1]["entry"] = "all_reduce_sumfloat16"
+    with pytest.raises(RuntimeError, match="reach their sum"):
+        verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    trace[dot + 1]["entry"] = "all_reduce_sumfloat32"
+    trace[dot]["dotMetadata"]["partials"] += 1
+    with pytest.raises(RuntimeError, match="launch differs"):
+        verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    trace[dot]["dotMetadata"]["partials"] -= 1
+    verify.validate_trace(trace, ALL_RECORDS, "opengl")
+    for family in ("gemv", "gemm", "splitk", "dot"):
         kept = [record for record in ALL_RECORDS if record["family"] != family] + [
             record for record in ALL_RECORDS if record["family"] == family
         ][:3]
@@ -716,6 +813,13 @@ def test_ci_runs_the_matmul_route_on_every_quantized_host_platform():
         assert "set -euo pipefail" in item["run"]
         assert "--packages .mlx-portable-quantized/base/packages" in item["run"]
     assert "portable_host.gemv_packages" in translate["run"]
+    # Dot products sum their partials through the on-demand whole-array sums.
+    assert "portable_host.dot_packages" in translate["run"]
+    assert (
+        "--family all --on-demand --output-dir .mlx-portable-quantized/all-reductions"
+        in translate["run"]
+    )
+    assert "--reductions .mlx-portable-quantized/all-reductions" in execute["run"]
     assert "portable_host.gemm_packages" in gemm["run"]
     assert "portable_host.gemm_splitk_packages" in splitk["run"]
     for item in (translate, gemm, splitk):

@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import json
 import math
 import shutil
 import sys
 from pathlib import Path
 
-from crosstl.project import (
-    build_native_loader_dispatch_request,
-    prepare_native_loader_dispatch_regions,
-)
+from crosstl.project import build_native_loader_dispatch_request
 from crosstl.project.metal_runtime import MetalComputeRuntime
 from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
@@ -25,20 +21,41 @@ from crosstl.project.runtime_verification import (
     DirectXRuntimeParityAdapter,
     MetalRuntimeParityAdapter,
     OpenGLRuntimeParityAdapter,
-    RuntimeExecutorResult,
     RuntimeParityExecutor,
     RuntimeTestAdapterSpec,
 )
 from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
+    arange_dispatch,
+    arange_packages,
+    arg_reduce_dispatch,
+    arg_reduce_layout,
     bfloat_storage,
+    block_masked_mm_dispatch,
+    block_masked_mm_layout,
+    column_long_layout,
     column_reduction_layout,
     column_small_layout,
+    compiled_dispatch,
+    compiled_layout,
+    conv_dispatch,
+    copy_dispatch,
     copy_layout,
+    cross_entropy_dispatch,
+    cross_entropy_layout,
     divmod_dispatch,
+    dot_dispatch,
+    dot_layout,
+    dynamic_offset_dispatch,
+    dynamic_offset_packages,
+    element_storage,
+    elementwise_dispatch,
+    fft_dispatch,
+    fft_packages,
     fp_matmul_layout,
     fp_qmm_layout,
     gather_dispatch,
+    gather_mm_dispatch,
     gemm_dispatch,
     gemm_layout,
     gemm_splitk_dispatch,
@@ -46,17 +63,56 @@ from demos.integrations.mlx.portable_host import (
     gemv_dispatch,
     gemv_layout,
     half_storage,
+    masked_scatter_dispatch,
+    masked_scatter_packages,
     matmul_dispatch,
     matmul_layout,
+    norm_dispatch,
+    norm_layout,
     qmm_layout,
     quantization_dispatch,
     quantization_layout,
     random_dispatch,
     reduction_layout,
+    region_dispatch,
     row_reduction_layout,
     scan_dispatch,
     scan_layout,
+    sdpa_dispatch,
+    sdpa_packages,
+    sdpa_vjp_dispatch,
+    sdpa_vjp_packages,
+    searchsorted_dispatch,
+    searchsorted_layout,
     slice_update_layout,
+    softmax_dispatch,
+    softmax_layout,
+    sort_dispatch,
+    sort_layout,
+    steel_attention_dispatch,
+    steel_attention_packages,
+    wide_column_dispatch,
+    wide_reduction_dispatch,
+    wide_reduction_packages,
+    wide_row_dispatch,
+)
+from demos.integrations.mlx.portable_host.arg_reduce_packages import (
+    CACHE_DIRECTORY as ARG_REDUCE_CACHE,
+)
+from demos.integrations.mlx.portable_host.arg_reduce_packages import (
+    ArgReducePackageCache,
+)
+from demos.integrations.mlx.portable_host.block_masked_mm_packages import (
+    MASKED_MM_CACHE,
+    MASKED_MV_CACHE,
+    MaskedMmPackageCache,
+    MaskedMvPackageCache,
+)
+from demos.integrations.mlx.portable_host.column_long_packages import (
+    CACHE_DIRECTORY as LONG_COLUMN_CACHE,
+)
+from demos.integrations.mlx.portable_host.column_long_packages import (
+    LongColumnPackageCache,
 )
 from demos.integrations.mlx.portable_host.column_small_packages import (
     CACHE_DIRECTORY as SMALL_COLUMN_CACHE,
@@ -64,10 +120,42 @@ from demos.integrations.mlx.portable_host.column_small_packages import (
 from demos.integrations.mlx.portable_host.column_small_packages import (
     SmallColumnPackageCache,
 )
+from demos.integrations.mlx.portable_host.compiled_packages import (
+    CACHE_DIRECTORY as COMPILED_CACHE,
+)
+from demos.integrations.mlx.portable_host.compiled_packages import CompiledPackageCache
+from demos.integrations.mlx.portable_host.conv_packages import (
+    CACHE_DIRECTORY as CONV_CACHE,
+)
+from demos.integrations.mlx.portable_host.conv_packages import ConvPackageCache
+from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
+from demos.integrations.mlx.portable_host.copy_packages import (
+    ENTRIES as LAZY_COPY_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.copy_packages import CopyPackageCache
+from demos.integrations.mlx.portable_host.cross_entropy_packages import (
+    CACHE_DIRECTORY as CROSS_ENTROPY_CACHE,
+)
+from demos.integrations.mlx.portable_host.cross_entropy_packages import (
+    CrossEntropyPackageCache,
+)
 from demos.integrations.mlx.portable_host.divmod_packages import CACHE as DIVMOD_CACHE
 from demos.integrations.mlx.portable_host.divmod_packages import DivModPackageCache
 from demos.integrations.mlx.portable_host.divmod_packages import (
     signature as divmod_signature,
+)
+from demos.integrations.mlx.portable_host.dot_packages import (
+    CACHE_DIRECTORY as DOT_CACHE,
+)
+from demos.integrations.mlx.portable_host.dot_packages import DotPackageCache
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    CACHE as ELEMENTWISE_CACHE,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    ENTRIES as LAZY_ELEMENTWISE_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.elementwise_packages import (
+    ElementwisePackageCache,
 )
 from demos.integrations.mlx.portable_host.fp_matmul_packages import (
     CACHE_DIRECTORY as FP_QUANTIZED_MATMUL_CACHE,
@@ -80,6 +168,14 @@ from demos.integrations.mlx.portable_host.fp_qmm_packages import (
 )
 from demos.integrations.mlx.portable_host.fp_qmm_packages import (
     FpQuantizedQmmPackageCache,
+)
+from demos.integrations.mlx.portable_host.gather_mm_packages import (
+    GATHER_MM_CACHE,
+    GATHER_MV_CACHE,
+    GATHER_OFFSETS_CACHE,
+    GatherMmPackageCache,
+    GatherMvPackageCache,
+    GatherOffsetsPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     GatherPackageCache,
@@ -105,6 +201,10 @@ from demos.integrations.mlx.portable_host.matmul_packages import (
 from demos.integrations.mlx.portable_host.matmul_packages import (
     QuantizedMatmulPackageCache,
 )
+from demos.integrations.mlx.portable_host.norm_packages import (
+    CACHE_DIRECTORY as NORM_CACHE,
+)
+from demos.integrations.mlx.portable_host.norm_packages import NormPackageCache
 from demos.integrations.mlx.portable_host.packages import (
     ABSOLUTE_ENTRIES,
     ARANGE_ENTRIES,
@@ -161,20 +261,38 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     ALL_ENTRIES as REDUCTION_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
+    ALL_ROW_ENTRIES,
     COLUMN_ENTRIES,
+    HALF_COLUMN_ENTRIES,
     INIT_ENTRIES,
-    PARTITION_SUM_ENTRIES,
-    ROW_ENTRIES,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import (
     load_index as load_reduction_index,
 )
 from demos.integrations.mlx.portable_host.reduction_packages import variant_keys
 from demos.integrations.mlx.portable_host.scan_packages import ScanPackageCache
+from demos.integrations.mlx.portable_host.searchsorted_packages import (
+    CACHE_DIRECTORY as SEARCHSORTED_CACHE,
+)
+from demos.integrations.mlx.portable_host.searchsorted_packages import (
+    SearchSortedPackageCache,
+)
+from demos.integrations.mlx.portable_host.segmented_mm_packages import (
+    SEGMENTED_MM_CACHE,
+    SegmentedMmPackageCache,
+)
 from demos.integrations.mlx.portable_host.small_row_packages import (
     SMALL_ROW_ENTRIES,
     SmallRowPackageCache,
 )
+from demos.integrations.mlx.portable_host.softmax_packages import (
+    CACHE_DIRECTORY as SOFTMAX_CACHE,
+)
+from demos.integrations.mlx.portable_host.softmax_packages import SoftmaxPackageCache
+from demos.integrations.mlx.portable_host.sort_packages import (
+    CACHE_DIRECTORY as SORT_CACHE,
+)
+from demos.integrations.mlx.portable_host.sort_packages import SortPackageCache
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
@@ -189,6 +307,9 @@ class Buffer(ctypes.Structure):
 
 
 DISPATCH_VERSION = 3
+# The bytes one Metal dispatch may bind: two 128 MiB passes of MLX's largest
+# four-step FFT, with their guards, fit.
+METAL_BUFFER_BYTES = 1 << 30
 
 
 class Launch(ctypes.Structure):
@@ -245,6 +366,20 @@ INT_TYPES = frozenset({int})
 BOOL_TYPES = frozenset({bool})
 INTEGRAL_TYPES = frozenset({bool, int})
 FLOAT_TYPES = frozenset({float})
+_FLOAT_CTYPES = frozenset({ctypes.c_float, ctypes.c_double})
+_INTEGRAL_CTYPES = frozenset(
+    {
+        ctypes.c_bool,
+        ctypes.c_int8,
+        ctypes.c_uint8,
+        ctypes.c_int16,
+        ctypes.c_uint16,
+        ctypes.c_int32,
+        ctypes.c_uint32,
+        ctypes.c_int64,
+        ctypes.c_uint64,
+    }
+)
 COPY_GUARD = [0x6A15BEEF] * 32
 BOOLEAN_GUARD = [index % 2 == 0 for index in range(32)]
 ALL_CAST_ENTRIES = {
@@ -311,6 +446,16 @@ def wire_value(value):
 
 def wire_values(values):
     """``[wire_value(value) for value in values]``, in bulk for exact scalars."""
+    if isinstance(values, ctypes.Array) and values._type_ in _FLOAT_CTYPES:
+        values = element_storage.array_values(values)
+        # A finite sum has no NaN or infinite term; an overflowing one only
+        # takes the element-wise path, which leaves finite values unchanged.
+        if math.isfinite(sum(values)):
+            return values
+        return [wire_value(value) for value in values]
+    if isinstance(values, ctypes.Array) and values._type_ in _INTEGRAL_CTYPES:
+        # Integral storage reads as exact ints (or bools), already wire values.
+        return element_storage.array_values(values)
     values = list(values)
     if exact_types_within(values, INTEGRAL_TYPES) or (
         exact_types_within(values, FLOAT_TYPES) and all(map(math.isfinite, values))
@@ -341,11 +486,21 @@ class HostRuntime:
     ):
         if type(retain_native_modules) is not bool:
             raise ValueError("Native module retention must be a Boolean")
-        if type(trace_values) is not bool:
-            raise ValueError("Trace value retention must be a Boolean")
+        if type(trace_values) is not bool and not (
+            type(trace_values) is tuple
+            and trace_values
+            and all(type(prefix) is str and prefix for prefix in trace_values)
+        ):
+            raise ValueError(
+                "Trace value retention must be a Boolean or entry prefixes"
+            )
         self.retain_native_modules = retain_native_modules
-        # False keeps each long scalar array as its length and SHA-256 only.
+        # False keeps each long scalar array as its length and SHA-256 only;
+        # a tuple keeps the values of the entries that start with its prefixes.
         self.trace_values = trace_values
+        # A callable ``(record, line) -> line`` that checks each dispatch
+        # record whole before its returned line is written (write_trace).
+        self.trace_audit = None
         self.directory = Path(directory).resolve()
         self.trace = Path(trace).resolve()
         index = json.loads((self.directory / "index.json").read_text(encoding="utf-8"))
@@ -358,6 +513,55 @@ class HostRuntime:
         self.small_columns = (
             SmallColumnPackageCache(
                 mlx_root, self.directory / SMALL_COLUMN_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.long_columns = (
+            LongColumnPackageCache(
+                mlx_root, self.directory / LONG_COLUMN_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # Arg reductions translate each entry at its threadgroup width.
+        self.arg_reductions = (
+            ArgReducePackageCache(
+                mlx_root, self.directory / ARG_REDUCE_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # Softmax and logsumexp rows translate each entry at its width.
+        self.softmaxes = (
+            SoftmaxPackageCache(mlx_root, self.directory / SOFTMAX_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # Merge-sort stages translate each entry at its launch width.
+        self.sorts = (
+            SortPackageCache(mlx_root, self.directory / SORT_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # Binary searches translate each entry at its pass size.
+        self.searchsorted = (
+            SearchSortedPackageCache(
+                mlx_root, self.directory / SEARCHSORTED_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # RMS and layer normalization rows translate each entry at its width.
+        self.norms = (
+            NormPackageCache(mlx_root, self.directory / NORM_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # Fused cross-entropy rows translate each entry at its width.
+        self.cross_entropies = (
+            CrossEntropyPackageCache(
+                mlx_root, self.directory / CROSS_ENTROPY_CACHE, self.target
             )
             if mlx_root is not None
             else None
@@ -407,6 +611,17 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.dots = (
+            DotPackageCache(mlx_root, self.directory / DOT_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # Kernels MLX generates for fused tapes translate on first use.
+        self.compiled = (
+            CompiledPackageCache(mlx_root, self.directory / COMPILED_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
         self.gemms = (
             GemmPackageCache(mlx_root, self.directory / GEMM_CACHE, self.target)
             if mlx_root is not None
@@ -419,6 +634,94 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # GatherMM's gathered gemv, steel gather and group offset kernels.
+        self.gather_mvs = (
+            GatherMvPackageCache(
+                mlx_root, self.directory / GATHER_MV_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.gather_mms = (
+            GatherMmPackageCache(
+                mlx_root, self.directory / GATHER_MM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.gather_offsets = (
+            GatherOffsetsPackageCache(
+                mlx_root, self.directory / GATHER_OFFSETS_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # SegmentedMM's segmented steel GEMM kernels.
+        self.segmented_mms = (
+            SegmentedMmPackageCache(
+                mlx_root, self.directory / SEGMENTED_MM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # BlockMaskedMM's masked gemv and masked steel GEMM kernels.
+        self.masked_mvs = (
+            MaskedMvPackageCache(
+                mlx_root, self.directory / MASKED_MV_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        self.masked_mms = (
+            MaskedMmPackageCache(
+                mlx_root, self.directory / MASKED_MM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # Convolution's unfold and separable depthwise kernels.
+        self.convs = (
+            ConvPackageCache(mlx_root, self.directory / CONV_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # FFT's Stockham kernels, one per fft.cpp pipeline hash name.
+        self.ffts = (
+            fft_packages.FftPackageCache(
+                mlx_root, self.directory / fft_packages.CACHE_DIRECTORY, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # The vector attention kernels, one per sdpa_vector pipeline hash name.
+        self.sdpas = (
+            sdpa_packages.SdpaPackageCache(
+                mlx_root, self.directory / sdpa_packages.CACHE_DIRECTORY, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # The full-attention kernel, one per steel_attention pipeline hash name.
+        self.steel_attentions = (
+            steel_attention_packages.SteelAttentionPackageCache(
+                mlx_root,
+                self.directory / steel_attention_packages.CACHE_DIRECTORY,
+                self.target,
+            )
+            if mlx_root is not None
+            else None
+        )
+        # The fused attention VJP's row products, block gradients and
+        # reductions, one per pipeline name.
+        self.sdpa_vjps = (
+            sdpa_vjp_packages.SdpaVjpPackageCache(
+                mlx_root,
+                self.directory / sdpa_vjp_packages.CACHE_DIRECTORY,
+                self.target,
+            )
+            if mlx_root is not None
+            else None
+        )
         self.scans = (
             ScanPackageCache(mlx_root, self.directory / "scans", self.target)
             if mlx_root is not None
@@ -426,6 +729,52 @@ class HostRuntime:
         )
         self.divmods = (
             DivModPackageCache(mlx_root, self.directory / DIVMOD_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # Casts and copies that no installed family covers translate on first use.
+        self.copies = (
+            CopyPackageCache(mlx_root, self.directory / COPY_CACHE, self.target)
+            if mlx_root is not None
+            else None
+        )
+        # So do the unary and binary vectors of every other real dtype.
+        self.elementwise = (
+            ElementwisePackageCache(
+                mlx_root, self.directory / ELEMENTWISE_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # So do the aranges of the 8- and 16-bit integers and 16-bit floats.
+        self.aranges = (
+            arange_packages.cache(
+                mlx_root, self.directory / arange_packages.CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # So do the start-offset kernels MLX generates for dynamic slices.
+        self.dynamic_offsets = (
+            dynamic_offset_packages.DynamicOffsetPackageCache(
+                mlx_root, self.directory / dynamic_offset_packages.CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # So do the masked_assign kernels MLX generates for masked scatters.
+        self.masked_scatters = (
+            masked_scatter_packages.MaskedScatterPackageCache(
+                mlx_root, self.directory / masked_scatter_packages.CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # So do whole-array reductions of the 8-byte and 16-bit float types.
+        self.wide_reductions = (
+            wide_reduction_packages.cache(
+                mlx_root, self.directory / wide_reduction_packages.CACHE, self.target
+            )
             if mlx_root is not None
             else None
         )
@@ -547,9 +896,15 @@ class HostRuntime:
         elif self.target == "metal":
             # An explicit resolver gives this session its own helper, built
             # once, instead of re-keying the shared helper on the toolchain
-            # with three xcrun lookups before every dispatch.
+            # with three xcrun lookups before every dispatch. The largest
+            # launches MLX makes, the two passes of a 2**24-point four-step
+            # FFT, bind 128 MiB inputs and outputs, past the runtime's
+            # default 256 MiB limit; MLX's own Metal allocations are bounded
+            # by the device instead.
             adapter = MetalRuntimeParityAdapter(
-                runtime=MetalComputeRuntime(tool_resolver=shutil.which),
+                runtime=MetalComputeRuntime(
+                    tool_resolver=shutil.which, max_buffer_bytes=METAL_BUFFER_BYTES
+                ),
                 reuse_validated_modules=True,
             )
         else:
@@ -572,6 +927,42 @@ class HostRuntime:
             name = entry.decode("ascii")
             if name in self.descriptors:
                 return 1
+            if name in LAZY_COPY_ENTRIES and self.copies is not None:
+                return 1
+            if name in LAZY_ELEMENTWISE_ENTRIES and self.elementwise is not None:
+                return 1
+            if name in arange_packages.ENTRIES and self.aranges is not None:
+                return 1
+            if (
+                name in dynamic_offset_packages.ENTRIES
+                and self.dynamic_offsets is not None
+            ):
+                return 1
+            if (
+                name in masked_scatter_packages.ENTRIES
+                and self.masked_scatters is not None
+            ):
+                return 1
+            if name in arg_reduce_layout.ENTRIES and self.arg_reductions is not None:
+                return 1
+            if name in softmax_layout.ENTRIES and self.softmaxes is not None:
+                return 1
+            if name in sort_layout.ENTRIES and self.sorts is not None:
+                return 1
+            if name in searchsorted_layout.ENTRIES and self.searchsorted is not None:
+                return 1
+            if name in norm_layout.ENTRIES and self.norms is not None:
+                return 1
+            if (
+                name in cross_entropy_layout.ENTRIES
+                and self.cross_entropies is not None
+            ):
+                return 1
+            if (
+                name in wide_reduction_packages.ENTRIES
+                and self.wide_reductions is not None
+            ):
+                return 1
             if name.startswith(scan_layout.ENTRY_PREFIXES) and self.scans is not None:
                 scan_layout.signature(name)
                 return 1
@@ -581,6 +972,22 @@ class HostRuntime:
             ):
                 divmod_signature(name)
                 return 1
+            if name.startswith(block_masked_mm_dispatch.ENTRY_PREFIXES):
+                kind = block_masked_mm_layout.kind_of(name)
+                return int(block_masked_mm_dispatch.cache_for(self, kind) is not None)
+            if conv_dispatch.is_entry(name):
+                return int(self.convs is not None)
+            if fft_dispatch.is_entry(name):
+                return int(self.ffts is not None)
+            if sdpa_dispatch.is_entry(name):
+                return int(self.sdpas is not None)
+            if steel_attention_dispatch.is_entry(name):
+                return int(self.steel_attentions is not None)
+            if sdpa_vjp_dispatch.is_entry(name):
+                return int(self.sdpa_vjps is not None)
+            if name.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
+                kind = gather_mm_dispatch.family(name)
+                return int(gather_mm_dispatch.cache_for(self, kind) is not None)
             if name.startswith(("gather", "scatter")) and self.gathers is not None:
                 gather_signature(name)
                 return 1
@@ -610,6 +1017,15 @@ class HostRuntime:
                 return 1
             if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
                 gemv_layout.signature(name)
+                return 1
+            if name.startswith(dot_layout.ENTRY_PREFIXES) and self.dots is not None:
+                dot_layout.signature(name)
+                return 1
+            if (
+                name.startswith(compiled_layout.ENTRY_PREFIX)
+                and self.compiled is not None
+            ):
+                compiled_layout.variant(name)
                 return 1
             if name.startswith(gemm_layout.ENTRY_PREFIXES) and self.gemms is not None:
                 gemm_layout.signature(name)
@@ -642,6 +1058,13 @@ class HostRuntime:
             else Path(mx.__file__)
         )
         self.library = ctypes.CDLL(str(library))
+        # mx.device_info reports the native target as the GPU architecture.
+        architecture = self.library.crosstl_mlx_set_device_architecture
+        architecture.argtypes = [ctypes.c_char_p]
+        architecture.restype = ctypes.c_int
+        result = architecture(self.target.encode("ascii"))
+        if result:
+            raise RuntimeError(f"MLX rejected the device architecture: {result}")
         register = self.library.crosstl_mlx_register_runtime
         register.argtypes = [ctypes.c_uint32, CALLBACK, ENTRY_AVAILABLE]
         register.restype = ctypes.c_int
@@ -668,7 +1091,92 @@ class HostRuntime:
                 ctypes.memmove(error, payload, len(payload))
             return 1
 
+    def lazy_copy(self, entry):
+        """Whether ``entry`` runs from the lazy copy cache, not a package family."""
+        return (
+            entry in LAZY_COPY_ENTRIES
+            and entry not in self.descriptors
+            and self.copies is not None
+        )
+
+    def lazy_elementwise(self, entry):
+        """Whether ``entry`` runs from the lazy unary or binary cache."""
+        return (
+            entry in LAZY_ELEMENTWISE_ENTRIES
+            and entry not in self.descriptors
+            and self.elementwise is not None
+        )
+
+    def lazy_arange(self, entry):
+        """Whether ``entry`` runs from the lazy arange cache."""
+        return (
+            entry in arange_packages.ENTRIES
+            and entry not in self.descriptors
+            and self.aranges is not None
+        )
+
+    def lazy_wide_reduction(self, entry):
+        """Whether ``entry`` runs from the wide whole-array reduction cache."""
+        return (
+            entry in wide_reduction_packages.ENTRIES
+            and self.wide_reductions is not None
+        )
+
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
+        if entry.startswith(compiled_layout.ENTRY_PREFIX):
+            return compiled_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if self.lazy_wide_reduction(entry):
+            return wide_reduction_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in wide_row_dispatch.ENTRIES:
+            return wide_row_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in wide_column_dispatch.ENTRIES:
+            return wide_column_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if self.lazy_arange(entry):
+            return arange_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in dynamic_offset_packages.ENTRIES:
+            return dynamic_offset_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in masked_scatter_packages.ENTRIES:
+            return masked_scatter_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in arg_reduce_layout.ENTRIES:
+            return arg_reduce_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in softmax_layout.ENTRIES:
+            return softmax_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in sort_layout.ENTRIES:
+            return sort_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry in searchsorted_layout.ENTRIES:
+            return searchsorted_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in norm_layout.ENTRIES:
+            return norm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry in cross_entropy_layout.ENTRIES:
+            return cross_entropy_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if self.lazy_copy(entry):
+            return copy_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if self.lazy_elementwise(entry):
+            return elementwise_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(scan_layout.ENTRY_PREFIXES):
             return scan_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(divmod_dispatch.ENTRY_PREFIXES):
@@ -712,8 +1220,32 @@ class HostRuntime:
                 threads,
                 launch,
             )
+        if entry.startswith(block_masked_mm_dispatch.ENTRY_PREFIXES):
+            return block_masked_mm_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if conv_dispatch.is_entry(entry):
+            return conv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if fft_dispatch.is_entry(entry):
+            return fft_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if sdpa_dispatch.is_entry(entry):
+            return sdpa_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if steel_attention_dispatch.is_entry(entry):
+            return steel_attention_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if sdpa_vjp_dispatch.is_entry(entry):
+            return sdpa_vjp_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry.startswith(gather_mm_dispatch.ENTRY_PREFIXES):
+            return gather_mm_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
         if entry.startswith(gemv_layout.ENTRY_PREFIXES):
             return gemv_dispatch.dispatch(self, entry, buffers, count, threads, launch)
+        if entry.startswith(dot_layout.ENTRY_PREFIXES):
+            return dot_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(gemm_layout.ENTRY_PREFIXES):
             return gemm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry.startswith(gemm_splitk_layout.ENTRY_PREFIXES):
@@ -734,14 +1266,22 @@ class HostRuntime:
             )
         initialization = entry in INIT_ENTRIES
         small_row = entry in SMALL_ROW_ENTRIES
-        row_reduction = entry in ROW_ENTRIES or small_row
-        small_column = entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES
+        row_reduction = entry in ALL_ROW_ENTRIES or small_row
+        long_column = entry in column_long_layout.LONG_COLUMN_ENTRIES
+        # Small and long column passes translate each threadgroup size on use.
+        small_column = (
+            entry in column_small_layout.ALL_SMALL_COLUMN_ENTRIES or long_column
+        )
         column_reduction = (
-            entry in COLUMN_ENTRIES or entry in PARTITION_SUM_ENTRIES or small_column
+            entry in COLUMN_ENTRIES or entry in HALF_COLUMN_ENTRIES or small_column
         )
         shaped_reduction = row_reduction or column_reduction
         layout_module = (
-            (column_small_layout if small_column else column_reduction_layout)
+            (
+                column_long_layout
+                if long_column
+                else column_small_layout if small_column else column_reduction_layout
+            )
             if column_reduction
             else row_reduction_layout
         )
@@ -790,7 +1330,11 @@ class HostRuntime:
                     else (
                         column_reduction_layout.MAX_ELEMENTS
                         if column_reduction
-                        else 65535
+                        else (
+                            row_reduction_layout.MAX_ELEMENTS
+                            if row_reduction
+                            else 65535
+                        )
                     )
                 )
             )
@@ -981,14 +1525,13 @@ class HostRuntime:
                 entry, supplied, threads, execution
             )
             if small_column:
-                if self.small_columns is None:
+                cache = self.long_columns if long_column else self.small_columns
+                if cache is None:
                     raise ValueError(
                         "Small column dispatch requires the pinned MLX source root"
                     )
-                descriptor, package_directory = self.small_columns.get(
-                    column_small_layout.variant(
-                        entry, tuple(execution["workgroupSize"])
-                    )
+                descriptor, package_directory = cache.get(
+                    layout_module.variant(entry, tuple(execution["workgroupSize"]))
                 )
             if checked_reduction is not None:
                 descriptor, package_directory = checked_reduction.get(
@@ -1162,7 +1705,7 @@ class HostRuntime:
                         f"{self.target}; see CrossGL/crosstl#2000"
                     )
             if bit_storage and dtype == "float32":
-                values = list(
+                values = element_storage.array_values(
                     ctypes.cast(
                         buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
                     ).contents
@@ -1224,47 +1767,9 @@ class HostRuntime:
         if matched != set(supplied):
             raise ValueError("Reflected bindings do not cover the operation")
         if small_row and self.target != "metal":
-            adapter = self.executor.runtime_adapter
-            with prepare_native_loader_dispatch_regions(
-                region_packages,
-                inputs,
-                outputs,
-                thread_grid_size=execution["threadGridSize"],
-                source_workgroup_size=execution["workgroupSize"],
-                adapter=adapter,
-            ) as requests:
-                records = []
-                for (region_descriptor, root), request in zip(
-                    region_packages, requests
-                ):
-                    module_bytes = request.module_path.read_bytes()
-                    module_hash = hashlib.sha256(module_bytes).hexdigest()
-                    module = (
-                        self.trace.parent
-                        / "native-modules"
-                        / (module_hash + request.module_path.suffix)
-                    )
-                    module.parent.mkdir(parents=True, exist_ok=True)
-                    module.write_bytes(module_bytes)
-                    records.append(
-                        {
-                            "artifact": region_descriptor["artifact"],
-                            "packageRoot": str(root),
-                            "provenance": region_descriptor["provenance"],
-                            "moduleHash": module_hash,
-                            "moduleFile": str(module),
-                            "workgroupCount": list(request.dispatch.workgroup_count),
-                            "workgroupSize": list(request.dispatch.workgroup_size),
-                        }
-                    )
-                native_outputs = adapter.runtime.dispatch_sequence(None, None, requests)
-                result = RuntimeExecutorResult(
-                    outputs=native_outputs,
-                    details={
-                        "runtime": adapter.runtime.name,
-                        "regions": records,
-                    },
-                )
+            result = region_dispatch.run_regions(
+                self, region_packages, inputs, outputs, execution
+            )
         else:
             request = build_native_loader_dispatch_request(
                 descriptor,
@@ -1348,7 +1853,10 @@ class HostRuntime:
                     )
             if guarded and output["values"][buffer.count :] != guard:
                 raise RuntimeError("Native operation changed the output buffer guard")
-            if copy or slice_update:
+            # A validated copy writes distinct in-bounds destinations, as many
+            # as its shape has elements, so one that size writes every element.
+            copy_fills = copy and math.prod(copy_metadata["shape"]) == buffer.count
+            if (copy or slice_update) and not copy_fills:
                 written = set(
                     copy_layout.destination_indices(
                         copy_metadata if copy else slice_metadata
@@ -1384,12 +1892,12 @@ class HostRuntime:
                 result_values = half_storage.unpack(result_values, self.target)
             if dtype == "bfloat16":
                 result_values = bfloat_storage.unpack(result_values, self.target)
-            values = (storage_type * buffer.count)(
-                *(
-                    map(float, result_values)
-                    if storage_type is ctypes.c_float
-                    else result_values
-                )
+            values = (storage_type * buffer.count)()
+            # Slice assignment stores each item as the constructor would, in C.
+            values[:] = (
+                list(map(float, result_values))
+                if storage_type is ctypes.c_float
+                else result_values
             )
             ctypes.memmove(buffer.data, values, ctypes.sizeof(values))
         write_trace(
