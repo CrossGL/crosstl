@@ -3840,11 +3840,16 @@ class MetalToCrossGLConverter(
                                 previous_type_resolution_context
                             )
                             continue
-                        self.global_variable_types[glob.left.name] = (
-                            self.metal_declaration_expression_type(glob.left)
+                        # ``constant constexpr auto n = 32;`` takes its type from the
+                        # initializer, as a block-scope ``auto`` does ([dcl.type.auto.deduct]).
+                        inferred_type = self.inferred_metal_declaration_type(
+                            glob.left, glob.right
                         )
+                        self.global_variable_types[glob.left.name] = inferred_type
                         self.global_variable_type_qualifiers[glob.left.name] = (
-                            self.metal_declaration_type_qualifiers(glob.left)
+                            self.inferred_metal_declaration_type_qualifiers(
+                                glob.left, glob.right, inferred_type
+                            )
                         )
                     left = (
                         self.format_decl(glob.left, include_semantic=True)
