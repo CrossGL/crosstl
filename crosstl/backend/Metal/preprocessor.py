@@ -76,6 +76,7 @@ from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .reference_alias_arguments import call_argument_designates
 from .source_analysis_cache import SourceAnalysisCache, memoized
+from .static_assertion_sources import concrete_static_assertion_conditions
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
     discarded_instantiated_branch_spans,
@@ -10518,11 +10519,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         reachable_source = (
             "\n".join(
-                code[function.span[0] : function.span[1]]
-                for function in concrete_functions
-            )
-            if concrete_functions
-            else None
+                [
+                    code[function.span[0] : function.span[1]]
+                    for function in concrete_functions
+                ]
+                # Concrete static assertions are emitted and lowered too.
+                + concrete_static_assertion_conditions(self, code, template_spans)
+            ) if concrete_functions else None
         )
         source_aliases = self._collect_local_type_alias_bindings(
             code,
