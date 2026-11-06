@@ -43,6 +43,9 @@ from demos.integrations.mlx.portable_host import (
     copy_layout,
     cross_entropy_dispatch,
     cross_entropy_layout,
+    custom_kernel_dispatch,
+    custom_kernel_layout,
+    custom_kernel_packages,
     divmod_dispatch,
     dot_dispatch,
     dot_layout,
@@ -575,6 +578,16 @@ class HostRuntime:
             gated_delta_packages.GatedDeltaPackageCache(
                 mlx_root,
                 self.directory / gated_delta_packages.CACHE_DIRECTORY,
+                self.target,
+            )
+            if mlx_root is not None
+            else None
+        )
+        # The kernels mx.fast.metal_kernel builds, one per source and launch.
+        self.custom_kernels = (
+            custom_kernel_packages.CustomKernelPackageCache(
+                mlx_root,
+                self.directory / custom_kernel_packages.CACHE_DIRECTORY,
                 self.target,
             )
             if mlx_root is not None
@@ -1151,6 +1164,10 @@ class HostRuntime:
     def dispatch(self, entry, buffers, count, threads, *, launch=None):
         if entry.startswith(compiled_layout.ENTRY_PREFIX):
             return compiled_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if custom_kernel_layout.is_entry(entry):
+            return custom_kernel_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
         if self.lazy_wide_reduction(entry):

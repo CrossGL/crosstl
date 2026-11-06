@@ -754,7 +754,7 @@ def test_preparation_replaces_the_quantized_matmul_stub(monkeypatch):
         return text
 
     monkeypatch.setattr(prepare, "replace_once", record)
-    prepare.adapted_sources("", "", "")
+    prepare.adapted_sources("", "", "", "")
     assert "NO_GPU(QuantizedMatmul)" in replaced
     assert "NO_GPU(GatherQMM)" not in replaced
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")

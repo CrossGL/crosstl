@@ -576,7 +576,7 @@ def test_preparation_replaces_the_addmm_stub(monkeypatch):
         return text
 
     monkeypatch.setattr(prepare, "replace_once", record)
-    prepare.adapted_sources("", "", "")
+    prepare.adapted_sources("", "", "", "")
     assert "NO_GPU(AddMM)" in replaced
 
 

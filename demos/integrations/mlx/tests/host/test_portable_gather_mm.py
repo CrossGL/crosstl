@@ -750,7 +750,7 @@ def test_preparation_replaces_the_gather_mm_stub(monkeypatch):
         return text
 
     monkeypatch.setattr(prepare, "replace_once", record)
-    sources = prepare.adapted_sources("", "", "")
+    sources = prepare.adapted_sources("", "", "", "")
     assert "NO_GPU(GatherMM)" in replaced
     assert sources["crosstl_gather_mm.inc"] == (HOST / "gather_mm.inc").read_bytes()
 

@@ -665,7 +665,9 @@ def test_runtime_and_host_adapter_route_normalization():
         "// And the port of the vector attention kernels, whose views take the copy.\n"
         '#include "mlx/backend/no_gpu/crosstl_sdpa.inc"\n'
         "// And the port of the gated-delta recurrences, whose fills take the copy.\n"
-        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"\n'
+        "// And the port of mx.fast.metal_kernel's kernels, whose inputs take the copy.\n"
+        '#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"'
     )
     original = (
         "namespace fast {\nNO_GPU_USE_FALLBACK(LayerNorm)\nNO_GPU_MULTI(LayerNormVJP)\n"

@@ -2792,7 +2792,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # A hundred and two jobs, thirty-four of them on macOS: run them in ten waves.
+      # A hundred and five jobs, thirty-five of them on macOS: run them in ten waves.
       max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job.
@@ -2829,6 +2829,7 @@ jobs:
             attention-sweep-1,
             attention-sweep-2,
             attention-sweep-3,
+            custom-kernels,
             torch-conv,
             torch-layers,
             torch-upsample,

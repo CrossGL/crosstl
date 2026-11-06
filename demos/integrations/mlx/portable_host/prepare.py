@@ -64,6 +64,21 @@ FAST_PRIMITIVES = (
     "ScaledDotProductAttention",
     "ScaledDotProductAttentionVJP",
     *GATED_DELTA_PRIMITIVES,
+    # mx.fast.metal_kernel's kernels, which custom_kernel.inc launches.
+    "CustomKernel",
+)
+# mx.fast.metal_kernel refuses every stream without a Metal back end. The host
+# builds an adapted copy of metal_kernel.cpp in its place that also accepts
+# the GPU the registered runtime provides, which executes the kernel's Metal
+# source translated (custom_kernel.inc); the rest of the file is unchanged.
+METAL_KERNEL_SOURCE = "mlx/backend/common/metal_kernel.cpp"
+METAL_KERNEL_STREAM = (
+    "  if (metal::is_available()) {\n"
+    "    // Default an unspecified stream to the GPU rather than the global default\n"
+)
+METAL_KERNEL_HOST_STREAM = (
+    "  if (metal::is_available() || is_available(Device::gpu)) {\n"
+    "    // Default an unspecified stream to the GPU rather than the global default\n"
 )
 # no_gpu's attention definitions that sdpa.inc replaces with
 # scaled_dot_product_attention.cpp's.
@@ -130,8 +145,12 @@ def replace_once(text, before, after):
     return text.replace(before, after, 1)
 
 
-def adapted_sources(original, primitives, events):
-    """Render the complete adaptation without changing the source tree."""
+def adapted_sources(original, primitives, events, metal_kernel):
+    """Render the complete adaptation without changing the source tree.
+
+    ``original``, ``primitives`` and ``events`` are no_gpu's CMakeLists.txt,
+    primitives.cpp and event.cpp, and ``metal_kernel`` is metal_kernel.cpp.
+    """
     for primitive in (
         "Arange",
         "ArgReduce",
@@ -233,13 +252,29 @@ def adapted_sources(original, primitives, events):
     return;
   }""",
     )
+    metal_kernel = replace_once(
+        metal_kernel, METAL_KERNEL_STREAM, METAL_KERNEL_HOST_STREAM
+    )
+    # mlx/CMakeLists.txt adds backend/common before backend/no_gpu, so the
+    # adapted metal_kernel.cpp can take the original's place in mlx's sources.
     cmake = """option(MLX_CROSTL_HOST "Use the CrossTL synchronous host backend" OFF)
 if(MLX_CROSTL_HOST)
+  get_filename_component(
+    CROSTL_METAL_KERNEL ${CMAKE_CURRENT_SOURCE_DIR}/../common/metal_kernel.cpp
+    ABSOLUTE)
+  get_target_property(CROSTL_MLX_SOURCES mlx SOURCES)
+  list(FIND CROSTL_MLX_SOURCES ${CROSTL_METAL_KERNEL} CROSTL_METAL_KERNEL_INDEX)
+  if(CROSTL_METAL_KERNEL_INDEX EQUAL -1)
+    message(FATAL_ERROR "The CrossTL host cannot find ${CROSTL_METAL_KERNEL}")
+  endif()
+  list(REMOVE_ITEM CROSTL_MLX_SOURCES ${CROSTL_METAL_KERNEL})
+  set_property(TARGET mlx PROPERTY SOURCES ${CROSTL_MLX_SOURCES})
   target_sources(mlx PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fence.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/crosstl_backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/crosstl_event.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/crosstl_metal_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/crosstl_primitives.cpp)
 else()
 """ + original + "\nendif()\n"
@@ -247,6 +282,7 @@ else()
         "CMakeLists.txt": cmake.encode("utf-8"),
         "crosstl_primitives.cpp": primitives.encode("utf-8"),
         "crosstl_event.cpp": events.encode("utf-8"),
+        "crosstl_metal_kernel.cpp": metal_kernel.encode("utf-8"),
         "crosstl_backend.cpp": (HERE / "backend.cpp").read_bytes(),
         "crosstl_dispatch.h": (HERE / "dispatch.h").read_bytes(),
         "crosstl_normalization.inc": (HERE / "normalization.inc").read_bytes(),
@@ -261,6 +297,7 @@ else()
         "crosstl_sdpa.inc": (HERE / "sdpa.inc").read_bytes(),
         "crosstl_hadamard.inc": (HERE / "hadamard.inc").read_bytes(),
         "crosstl_gated_delta.inc": (HERE / "gated_delta.inc").read_bytes(),
+        "crosstl_custom_kernel.inc": (HERE / "custom_kernel.inc").read_bytes(),
     }
 
 
@@ -298,10 +335,16 @@ def verify_prepared(root):
         raise ValueError("Unrelated tracked MLX sources were modified")
     originals = [
         subprocess.check_output(
-            ["git", "-C", str(root), "show", f"HEAD:mlx/backend/no_gpu/{name}"],
+            ["git", "-C", str(root), "show", f"HEAD:{path}"],
             timeout=30,
         ).decode("utf-8")
-        for name in ("CMakeLists.txt", "primitives.cpp", "event.cpp")
+        for path in (
+            *(
+                f"mlx/backend/no_gpu/{name}"
+                for name in ("CMakeLists.txt", "primitives.cpp", "event.cpp")
+            ),
+            METAL_KERNEL_SOURCE,
+        )
     ]
     sources = adapted_sources(*originals)
     for name, expected in sources.items():
@@ -324,7 +367,8 @@ def prepare(root, output):
         *(
             (backend / name).read_text(encoding="utf-8")
             for name in ("CMakeLists.txt", "primitives.cpp", "event.cpp")
-        )
+        ),
+        (root / METAL_KERNEL_SOURCE).read_text(encoding="utf-8"),
     )
     generated = [backend / name for name in sources if name != "CMakeLists.txt"]
     if any(path.exists() or path.is_symlink() for path in generated):

@@ -592,7 +592,9 @@ def test_backend_ports_block_masked_mm_eval_gpu():
         "// And the port of the vector attention kernels, whose views take the copy.\n"
         '#include "mlx/backend/no_gpu/crosstl_sdpa.inc"\n'
         "// And the port of the gated-delta recurrences, whose fills take the copy.\n"
-        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"\n'
+        "// And the port of mx.fast.metal_kernel's kernels, whose inputs take the copy.\n"
+        '#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"'
     )
     start = port.index("void BlockMaskedMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]
@@ -629,7 +631,7 @@ def test_preparation_replaces_the_block_masked_mm_stub(monkeypatch):
         return text
 
     monkeypatch.setattr(prepare, "replace_once", record)
-    sources = prepare.adapted_sources("", "", "")
+    sources = prepare.adapted_sources("", "", "", "")
     assert "NO_GPU(BlockMaskedMM)" in replaced
     assert (
         sources["crosstl_block_masked_mm.inc"]
