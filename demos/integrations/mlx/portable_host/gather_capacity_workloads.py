@@ -4,6 +4,16 @@ import math
 
 from demos.integrations.mlx.portable_host import gather_workloads
 
+# Slices wider than one launch axis: a scalar index (the shape of
+# test_blas.test_gather_mm_blocks' reference), a 2-D index block, and a
+# gathered middle axis of a strided view. Each maps to its source root shape,
+# its index root and the gathered axis.
+SLICES = {
+    "large-slice": ((10, 129, 512), (7, -5, 1), 0),
+    "large-slice-rows": ((6, 257, 256), (9, -1, 9, 2, 9, -4, 9, 0, 9), 0),
+    "large-slice-axis": ((259, 5, 512), (9, 3, 9, -4, 9), 1),
+}
+
 
 def cases():
     yield from gather_workloads.cases()
@@ -18,6 +28,22 @@ def cases():
             "layout": "large-table",
             "count": count,
         }
+    for layout in SLICES:
+        yield {"id": f"float32-{layout}", "dtype": "float32", "layout": layout}
+
+
+def slice_arrays(np, case):
+    shape, index, _ = SLICES[case["layout"]]
+    source = np.resize(gather_workloads.data(np, case["dtype"]), shape)
+    return source, np.array(index, dtype=np.int32)
+
+
+def slice_views(module, source, index, layout):
+    if layout == "large-slice-axis":
+        return source[1:-1, :, ::2], index[1:-1:2]
+    view = index[1:2] if layout == "large-slice" else index[1:-1:2]
+    shape = () if layout == "large-slice" else (2, 2)
+    return source[1:-1], module.reshape(view, shape)
 
 
 def arrays(np, case):
@@ -60,6 +86,10 @@ def views(module, source, indices, shape, multiple):
 def reference(np, case):
     if not case["layout"].startswith("large-"):
         return gather_workloads.reference(np, case)
+    if case["layout"] in SLICES:
+        source, index = slice_views(np, *slice_arrays(np, case), case["layout"])
+        axis = SLICES[case["layout"]][2]
+        return source, (index,), np.take(source, index, axis=axis)
     source, indices, shape = arrays(np, case)
     source, indices = views(
         np, source, indices, shape, case["layout"] == "large-multiple"
@@ -73,14 +103,24 @@ def reference(np, case):
 def expression(mx, np, case):
     if not case["layout"].startswith("large-"):
         return gather_workloads.expression(mx, np, case)
-    source_data, index_data, shape = arrays(np, case)
+    if case["layout"] in SLICES:
+        source_data, index = slice_arrays(np, case)
+        index_data = (index,)
+    else:
+        source_data, index_data, shape = arrays(np, case)
     source_root = mx.array(source_data)
     index_roots = tuple(mx.array(index) for index in index_data)
-    source, indices = views(
-        mx, source_root, index_roots, shape, case["layout"] == "large-multiple"
-    )
+    if case["layout"] in SLICES:
+        source, index = slice_views(mx, source_root, index_roots[0], case["layout"])
+        indices = (index,)
+        axis = SLICES[case["layout"]][2]
+    else:
+        source, indices = views(
+            mx, source_root, index_roots, shape, case["layout"] == "large-multiple"
+        )
+        axis = 0
     result = (
-        source[indices] if len(indices) > 1 else mx.take(source, indices[0], axis=0)
+        source[indices] if len(indices) > 1 else mx.take(source, indices[0], axis=axis)
     )
     mx.eval(result)
     for root, original in zip((source_root, *index_roots), (source_data, *index_data)):

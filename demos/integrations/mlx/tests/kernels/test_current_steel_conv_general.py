@@ -44,11 +44,9 @@ from demos.integrations.mlx.tests.kernels.test_current_conv import _params_bytes
 from demos.integrations.mlx.tests.kernels.test_current_gemm import (
     GATE_TOOLS,
     GUARDS,
-    HELPER_ELEMENTS,
     MLX_COMMIT,
     ORIGINAL_FLAGS,
     PLATFORM_TARGETS,
-    SIGNED_MAX,
     _exact,
     _storage,
     _write_json,
@@ -56,7 +54,6 @@ from demos.integrations.mlx.tests.kernels.test_current_gemm import (
 from demos.integrations.mlx.tests.kernels.test_current_steel_conv import (
     OUTPUTS,
     TARGET_OPTIONS,
-    _tile_maxima,
     _validate,
     _values,
 )
@@ -102,17 +99,8 @@ SCOPE = (
     "Every float32, float16 and bfloat16 implicit_gemm_conv_2d_general entry "
     "with align_C true and false; the upstream suite is not covered."
 )
-# Single records the kernel reads through constant pointers, by GLSL helper
-# name; the residue tables are arrays.
-RECORD_HELPERS = (
-    "ImplicitGemmConv2DParams",
-    "MLXConvParams",
-    "MLXConvParams<2>",
-    "MLXConvParams_2",
-    "MLXConvParams_int_2",
-    "Conv2DGeneralJumpParams",
-)
-TABLE_HELPERS = ("Conv2DGeneralBaseInfo",)
+RECORD_HELPERS = general.RECORD_HELPERS
+TABLE_HELPERS = general.TABLE_HELPERS
 
 
 def _cases(entry, aligned):
@@ -194,40 +182,7 @@ SELECTED = tuple(
 )
 
 
-def _index_assertions(entry):
-    """GLSL index ranges: MLX buffers stay below 2^31 elements.
-
-    The parameter records are single elements. The threadgroup tiles reach
-    only the slots their loaders write and ``BlockMMA`` reads.
-    """
-    element = HELPER_ELEMENTS[entry.dtype]
-    device = [
-        {
-            "expression": "reference.offset + index",
-            "function": f"crosstl_resource_{access}_{scalar}",
-            "maximum": SIGNED_MAX,
-        }
-        for access in ("load", "store")
-        for scalar in sorted({element, "int", "int64_t", "uint"})
-    ] + [
-        {
-            "expression": "reference.offset + index",
-            "function": f"crosstl_resource_load_{record}",
-            "maximum": 0 if record in RECORD_HELPERS else SIGNED_MAX,
-        }
-        for record in RECORD_HELPERS + TABLE_HELPERS
-    ]
-    workgroup = [
-        {
-            "expression": "reference.offset + index",
-            "indexed": f"crosstl_workgroup_{tile}",
-            "maximum": maximum,
-        }
-        for tile, maximum in zip(("As", "Bs"), _tile_maxima(entry))
-    ]
-    return tuple(
-        {"source": SOURCE, **item, "minimum": 0} for item in device + workgroup
-    )
+_index_assertions = general.index_assertions
 
 
 def _config(root, output, target, entry, aligned):

@@ -28,7 +28,13 @@ RECORDS = [
     if record["family"] == "splitk"
 ]
 BY_NAME = {record["name"]: record for record in RECORDS}
-ONE = {"float32": 0x3F800000, "float16": 0x3C00, "bfloat16": 0x3F80}
+# complex64 (1, 0.5): the real part in the low word.
+ONE = {
+    "float32": 0x3F800000,
+    "float16": 0x3C00,
+    "bfloat16": 0x3F80,
+    "complex64": 0x3F000000_3F800000,
+}
 
 
 def native_binding(record, kind="splitk"):
@@ -84,24 +90,31 @@ def native_buffers(record, kind="splitk"):
 
 
 def test_signature_accepts_exactly_the_host_entries():
+    # Every instantiation: float types with float32 partials and complex64
+    # with complex64 partials, as matmul.cpp allocates C_split.
     accepted = {
         entry.name
         for entry in model.entries()
-        if entry.dtype in layout.DTYPES and entry.oname == "float32"
+        if entry.dtype in layout.ELEMENT_DTYPES
+        and entry.oname == layout.ACCUMULATORS[entry.dtype]
     }
-    assert len(accepted) == 3 * 4 * 4 * 4
+    assert len(accepted) == 4 * 4 * 4 * 4
     for name in accepted:
         info = layout.signature(name)
         assert info["kind"] == "splitk" and info["model"].name == name
         assert layout.workgroup_size(name) == (32, 2, 2)
-    for oname in layout.DTYPES:
-        name = f"steel_gemm_splitk_accum_{oname}_float32"
-        assert layout.signature(name)["kind"] == "accum"
-        assert layout.workgroup_size(name) == (1, 1, 1)
+    for oname in layout.ELEMENT_DTYPES:
+        partial = layout.ACCUMULATORS[oname]
+        for suffix, kind in (("", "accum"), ("_axbpy", "axbpy")):
+            name = f"steel_gemm_splitk_accum_{oname}_{partial}{suffix}"
+            assert layout.signature(name)["kind"] == kind
+            assert layout.signature(name)["model"].axpby == (kind == "axbpy")
+            assert layout.workgroup_size(name) == (1, 1, 1)
     for name in (
-        "steel_gemm_splitk_accum_float32_float32_axbpy",
-        "steel_gemm_splitk_accum_complex64_complex64",
-        "steel_gemm_splitk_nn_complex64_complex64_bm16_bn16_bk16_wm2_wn2"
+        "steel_gemm_splitk_accum_float32_float32_axpby",
+        "steel_gemm_splitk_accum_complex64_float32",
+        "steel_gemm_splitk_accum_float32_complex64",
+        "steel_gemm_splitk_nn_complex64_float32_bm16_bn16_bk16_wm2_wn2"
         "_MN_taligned_K_taligned",
         "steel_gemm_splitk_nn_float32_float32_bm64_bn16_bk16_wm2_wn2"
         "_MN_taligned_K_taligned",
@@ -394,13 +407,15 @@ def descriptor_for(entry, kind, target, fault):
     (None, "guard", "missing", "shape", "trace", "unbound", "readonly", "duplicate"),
 )
 @pytest.mark.parametrize("kind", ("splitk", "accum"))
+@pytest.mark.parametrize("name", ("splitk-nt-partial", "complex-splitk-nt-partial"))
 def test_dispatch_commits_the_output_only_after_validation(
-    tmp_path, monkeypatch, target, fault, kind
+    tmp_path, monkeypatch, target, fault, kind, name
 ):
-    record = BY_NAME["splitk-nt-partial"]
+    record = BY_NAME[name]
     entry = entry_of(record, kind)
     output = layout.OUTPUTS[kind]
     dtype = layout.parameter_type(entry, output)
+    parts = 2 if dtype == "complex64" else 1
     buffers, memory, execution = native_buffers(record, kind)
     descriptor = descriptor_for(entry, kind, target, fault)
     host = SimpleNamespace(
@@ -421,7 +436,7 @@ def test_dispatch_commits_the_output_only_after_validation(
         outputs = json.loads(json.dumps(outputs))
         value = outputs[f"binding_{output}"]
         count = len(memory[output])
-        value["values"][:count] = dispatch.encode_binding(
+        value["values"][: count * parts] = dispatch.encode_binding(
             dtype,
             [ONE[dtype]] * count,
             target,
@@ -460,12 +475,12 @@ def test_dispatch_commits_the_output_only_after_validation(
     assert set(kwargs["observe_inputs"]) == set(inputs) - {f"binding_{output}"}
     guarded = ("A", "B") if kind == "splitk" else ("C_split",)
     for parameter in guarded:
-        assert len(inputs[f"binding_{parameter}"]["values"]) == (
+        assert len(inputs[f"binding_{parameter}"]["values"]) == parts * (
             len(memory[parameter]) + dispatch.GUARD_COUNT
         )
     (event,) = (json.loads(line) for line in host.trace.read_text().splitlines())
     assert event["entry"] == entry
-    assert event["splitkMetadata"]["partitions"] == 4
+    assert event["splitkMetadata"]["partitions"] == record["route"]["partitions"]
     assert set(event["inputHashes"]) == set(guarded)
     assert event["boundParameters"] == sorted(layout.PARAMETERS[kind])
     if kind == "accum":
@@ -500,15 +515,16 @@ def test_package_configs_match_the_splitk_gate(tmp_path, kind):
 def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
     import concurrent.futures
 
-    from demos.integrations.mlx.portable_host import matmul_packages
+    from demos.integrations.mlx.portable_host import matmul_packages, verify_addmm
 
     entries = gemm_splitk_packages.verification_entries()
+    addmm = [verify_addmm.case_record(case) for case in verify_addmm.CASES]
     assert set(entries) == {
         name
-        for record in RECORDS
+        for record in RECORDS + [item for item in addmm if item["family"] == "splitk"]
         for name in (record["entry"], record["route"]["accum"])
     }
-    assert len(set(entries)) == 10
+    assert len(entries) == len(set(entries)) == 18
     calls = []
 
     def build(root, directory, target, entry):
@@ -559,10 +575,11 @@ def test_backend_mirrors_steel_gemm_splitk_axpby():
         "const int bn = N < 40 ? 16 : 32;",
         "std::min(std::max(2, next_power_of_2(_tk / (_tm * _tn))), 32);",
         "const int gemm_k_iterations = (K / bk) / split_k_partitions;",
-        "array C_split({split_k_partitions, M, N}, float32, nullptr, {});",
-        '"_float32_bm"',
+        "const Dtype partial_type = out.dtype() == complex64 ? complex64 : float32;",
+        "array C_split({split_k_partitions, M, N}, partial_type, nullptr, {});",
+        '"_" + partial + "_bm"',
         '"aligned_K_"',
-        'std::string("steel_gemm_splitk_accum_") + storage + "_float32"',
+        'std::string("steel_gemm_splitk_accum_") + storage + "_" + partial',
         "{uint32_t(tn), uint32_t(tm), uint32_t(split_k_partitions)}",
         "{{uint32_t(N), uint32_t(M), 1}, {1, 1, 1}}",
     ):

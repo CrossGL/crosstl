@@ -5,7 +5,7 @@ import math
 
 from demos.integrations.mlx.portable_host.reduction_packages import (
     COLUMN_ENTRIES,
-    PARTITION_SUM_ENTRIES,
+    HALF_COLUMN_ENTRIES,
 )
 
 LOOPED = {
@@ -40,12 +40,14 @@ def signature(entry):
     return TWO_PASS if entry.startswith("col_reduce_2pass_") else LOOPED
 
 
-def read_metadata(entry, entries, spec, buffers, logical_size):
+def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
     """Check one column launch's buffers and read its shape metadata.
 
     ``entries`` maps the family's entries to their element types and ``spec``
-    the entry's buffers to their metadata types. Returns the metadata and the
-    plan quantities ``(size, stride, total, outer, reduce_ndim)``.
+    the entry's buffers to their metadata types; ``outputs`` maps the entries
+    whose ``out`` holds another accumulator type to that type. Returns the
+    metadata and the plan quantities ``(size, stride, total, outer,
+    reduce_ndim)``.
     """
     if (
         entry not in entries
@@ -54,11 +56,13 @@ def read_metadata(entry, entries, spec, buffers, logical_size):
         or not 1 <= logical_size <= MAX_ELEMENTS
     ):
         raise ValueError("Native column reduction metadata does not match")
+    output_type = (outputs or {}).get(entry, entries[entry])
     for name, buffer in buffers.items():
         maximum = MAX_ELEMENTS if name in {"in", "out"} else 64 if name in ARRAYS else 1
+        element_type = output_type if name == "out" else entries[entry]
         if (
             not buffer.dtype
-            or buffer.dtype.decode("ascii") != (spec[name] or entries[entry])
+            or buffer.dtype.decode("ascii") != (spec[name] or element_type)
             or not 1 <= buffer.count <= maximum
             or not buffer.data
             or buffer.output != int(name == "out")
@@ -109,13 +113,29 @@ def read_metadata(entry, entries, spec, buffers, logical_size):
         not 1 <= size <= 65535
         or not 1 <= stride <= MAX_ELEMENTS
         or reductions[-1] != size
-        or steps[-1] != stride
         or metadata["non_col_reductions"] != [non_columns]
         or total * output_size != logical_size
     ):
         raise ValueError(
             "Native column reduction shape does not match its logical size"
         )
+    if steps[-1] != stride:
+        # backend.cpp split_column_span: a span of more column workgroups than
+        # one launch axis carries runs as k equal parts on one more, innermost
+        # outer axis of stride ``stride``, while the rows still step by the
+        # whole span. Only a span one launch cannot cover is split.
+        parts, remainder = divmod(steps[-1], stride)
+        if (
+            remainder
+            or parts < 2
+            or ndim < 1
+            or shape[-1] != parts
+            or strides[-1] != stride
+            or -(-steps[-1] // 32) <= MAX_GROUPS
+        ):
+            raise ValueError(
+                "Native column reduction span split does not match its rows"
+            )
     if outer > MAX_GROUPS:
         raise ValueError("Native column reduction launch exceeds 65535 workgroups")
     extent = stride + sum(
@@ -134,7 +154,7 @@ def template_dimension(reduce_ndim):
 def validate(entry, buffers, logical_size, execution):
     spec = signature(entry)
     metadata, (size, stride, total, outer, reduce_ndim) = read_metadata(
-        entry, {**COLUMN_ENTRIES, **PARTITION_SUM_ENTRIES}, spec, buffers, logical_size
+        entry, {**COLUMN_ENTRIES, **HALF_COLUMN_ENTRIES}, spec, buffers, logical_size
     )
     output_size = outer * stride
     two_pass = spec is TWO_PASS

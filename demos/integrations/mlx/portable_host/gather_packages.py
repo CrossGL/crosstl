@@ -24,7 +24,6 @@ from demos.integrations.mlx.portable_host import (
     scatter_axis_layout,
     scatter_layout,
 )
-from demos.integrations.mlx.portable_host.gather_layout import MAX_ELEMENTS
 from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revision
 
 JIT_HEADER = "mlx/backend/metal/jit/indexing.h"
@@ -35,6 +34,14 @@ SOURCE_TYPES = {
     "int64": "int64_t",
     "uint64": "uint64_t",
     "bool_": "bool",
+    # get_type_string's spellings of the types indexing.cpp instantiates.
+    "float16": "float16_t",
+    "bfloat16": "bfloat16_t",
+    "complex64": "complex64_t",
+    "int8": "int8_t",
+    "int16": "int16_t",
+    "uint8": "uint8_t",
+    "uint16": "uint16_t",
 }
 
 
@@ -175,11 +182,7 @@ class GatherPackageCache:
 
     def get(self, entry, maximum_index):
         signature(entry)
-        capacity = (
-            gather_layout.MAX_STORAGE_ELEMENTS
-            if entry.startswith("gather") and not entry.startswith("gather_axis")
-            else MAX_ELEMENTS
-        )
+        capacity = gather_layout.MAX_STORAGE_ELEMENTS
         if type(maximum_index) is not int or not 0 <= maximum_index < capacity:
             raise ValueError("Gather index bound exceeds the validated host contract")
         with self._lock:

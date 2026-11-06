@@ -8,7 +8,7 @@ from demos.integrations.mlx.portable_host.runtime import BOOLEAN_GUARD, COPY_GUA
 
 
 def cases():
-    for dtype in small.copies.DTYPES:
+    for dtype in small.copies.STORAGE_DTYPES:
         yield {"dtype": dtype, "operation": "sum", "layout": "batched"}
     for operation, layout in (
         ("replace", "column"),
