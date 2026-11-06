@@ -76,7 +76,7 @@ from .pattern_cache import pattern as _cached_pattern
 from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .reference_alias_arguments import call_argument_designates
-from .reopened_namespaces import reopened_namespace_scopes
+from .reopened_namespaces import ReopenedNamespaceIndex
 from .signed_type_spellings import fold_integer_type_spellings
 from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_member_constants import (
@@ -5520,10 +5520,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             "threadgroup",
             "volatile",
         }
-        namespace_spans = self._find_namespace_spans(code)
-        reopened_namespaces = len({span[2] for span in namespace_spans}) < len(
-            namespace_spans
-        )
+        reopened_index = ReopenedNamespaceIndex(self._find_namespace_spans(code), code)
+        reopened_namespaces = reopened_index.has_reopened_namespace
         # ``(block start, order, name, binding)`` of namespace members recorded for the later blocks of their
         # namespace, each declared where its block opens so it hides enclosing declarations made in between.
         pending_reopened: List[Tuple[int, int, str, _MetalIntegralConstantBinding]] = []
@@ -5626,8 +5624,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
             if reopened_namespaces:
                 declared = bindings[name][-1]
-                for block_start, block_end in reopened_namespace_scopes(
-                    namespace_spans, (scope_start, scope_end), declaration_position
+                for block_start, block_end in reopened_index.unrecorded_later_blocks(
+                    (scope_start, scope_end), declaration_position, name
                 ):
                     heappush(
                         pending_reopened,

@@ -6,7 +6,10 @@ from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
     MetalStaticAssertionError,
 )
-from crosstl.backend.Metal.reopened_namespaces import reopened_namespace_scopes
+from crosstl.backend.Metal.reopened_namespaces import (
+    ReopenedNamespaceIndex,
+    reopened_namespace_scopes,
+)
 from crosstl.backend.Metal.signed_type_spellings import fold_integer_type_spellings
 
 
@@ -111,3 +114,42 @@ def test_reopened_scopes_skip_blocks_nested_in_returned_block():
     ]
     assert reopened_namespace_scopes(spans, (10, 20), 12) == [(30, 60), (90, 95)]
     assert reopened_namespace_scopes(spans, (0, 100), 12) == []
+
+
+def test_redeclared_namespace_member_records_later_blocks_once():
+    spans = [(10, 20, "a"), (30, 40, "a"), (50, 60, "a")]
+    code = "x" * 10 + " N  N  N " + "x" * 11 + " N  N  N " + "x" * 11 + " N  N  N "
+    index = ReopenedNamespaceIndex(spans, code)
+    assert index.unrecorded_later_blocks((10, 20), 12, "N") == [(30, 40), (50, 60)]
+    assert index.unrecorded_later_blocks((30, 40), 32, "N") == []
+    assert index.unrecorded_later_blocks((30, 40), 32, "M") == []
+    assert index.later_blocks((30, 40), 32, "N") == [(50, 60)]
+
+
+def test_reopened_member_redeclared_in_later_block_stays_visible():
+    code = """
+    namespace lanes { using lane_t = uint; constant constexpr uint COUNT = 2; }
+    namespace lanes { using lane_t = uint; static_assert(COUNT == 2, "second block"); }
+    namespace lanes { static_assert(COUNT == 2, "third block"); }
+    kernel void k(device int* out [[buffer(0)]]) { out[0] = 1; }
+    """
+    assert "static_assert" not in _evaluate(code)
+
+
+def test_reopened_enclosing_blocks_do_not_multiply_nested_namespace_bindings():
+    blocks = "".join(
+        f"namespace outer {{ namespace inner {{ constant constexpr int V{i} = {i}; }} }}\n"
+        for i in range(60)
+    )
+    code = (
+        blocks
+        + 'namespace outer { namespace inner { static_assert(V0 + V59 == 59, "sum"); } }\n'
+        + "kernel void k(device int* out [[buffer(0)]]) { out[0] = 1; }\n"
+    )
+    preprocessor = MetalPreprocessor()
+    bindings = preprocessor._collect_local_integral_constant_bindings(
+        code, [], include_file_scope=True
+    )
+    # ``namespace inner`` opens in every block of ``outer``: one binding per block, not one per pair of blocks.
+    assert len(bindings.get("inner", ())) <= 2 * 61
+    assert "static_assert" not in _evaluate(code)
