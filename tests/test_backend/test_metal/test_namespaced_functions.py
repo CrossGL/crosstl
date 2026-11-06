@@ -69,6 +69,29 @@ kernel void k(device float* out [[buffer(0)]], uint tid [[thread_position_in_gri
 }
 """
 
+# Standard-library wrappers of a pass-through library math function for another element type in ``metal``,
+# ``metal::fast`` and ``metal::precise`` (the shape of a bfloat math header) extend the library overload set, so
+# ``ldexp(float, int)`` still binds to the library function.
+LIBRARY_MATH_OVERLOADS = HEADER + """
+#define define_ldexp(mfast)                                                         \\
+  METAL_FUNC bfloat ldexp(bfloat x, int k) {                                        \\
+    return static_cast<bfloat>(__metal_ldexp(static_cast<float>(x), k, mfast));     \\
+  }
+namespace metal {
+define_ldexp(false)
+namespace fast {
+define_ldexp(true)
+}
+namespace precise {
+define_ldexp(false)
+}
+}
+inline float scaled(float s, int e) { return ldexp(s, e); }
+kernel void k(device float* out [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+    out[tid] = scaled(float(tid) + 0.5f, int(tid % 5u) - 2);
+}
+"""
+
 
 def _translate(tmp_path, source, backend):
     path = tmp_path / "unit.metal"
@@ -231,3 +254,35 @@ def test_library_function_overloads_round_trip_through_metal(tmp_path):
     expected = _run_metal_kernel(LIBRARY_OVERLOADS, 32, group=32)
     translated = _translate(tmp_path, LIBRARY_OVERLOADS, "metal")
     assert _run_metal_kernel(translated, 32, group=32) == expected
+
+
+@pytest.mark.parametrize("backend", ("cgl", "metal", "opengl", "directx"))
+def test_library_math_wrappers_in_several_namespaces_keep_library_calls(
+    tmp_path, backend
+):
+    translated = _translate(tmp_path, LIBRARY_MATH_OVERLOADS, backend)
+    assert re.search(r"return ldexp\(s, e\);", translated), translated
+    if backend == "metal":
+        shader = tmp_path / "roundtrip.metal"
+        shader.write_text(translated, encoding="utf-8")
+        _run(
+            "xcrun",
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(shader),
+            "-o",
+            str(tmp_path / "unit.air"),
+        )
+    elif backend == "opengl":
+        shader = tmp_path / "unit.comp"
+        shader.write_text(translated, encoding="utf-8")
+        _run("glslangValidator", "-S", "comp", str(shader))
+
+
+def test_library_math_wrappers_round_trip_through_metal(tmp_path):
+    expected = _run_metal_kernel(LIBRARY_MATH_OVERLOADS, 8)
+    assert expected[:3] == (0.125, 0.75, 2.5)
+    translated = _translate(tmp_path, LIBRARY_MATH_OVERLOADS, "metal")
+    assert _run_metal_kernel(translated, 8) == expected

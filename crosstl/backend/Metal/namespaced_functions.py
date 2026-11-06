@@ -23,7 +23,33 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, Sequence
 
-__all__ = ["declared_in_several_namespaces", "nominated_namespaces_in_scope"]
+__all__ = [
+    "METAL_LIBRARY_MATH_FUNCTIONS",
+    "declared_in_several_namespaces",
+    "nominated_namespaces_in_scope",
+]
+
+# Math functions of the Metal standard library (Metal Shading Language Specification, section 6.5, Math Functions)
+# that the importer passes through by name instead of lowering them as intrinsics. A user overload of one of them,
+# such as ``metal::ldexp(bfloat, int)`` next to ``metal::fast::ldexp(bfloat, int)``, extends the library overload set
+# like an overload of an intrinsic does, so ``ldexp(float, int)`` still binds to the library function.
+METAL_LIBRARY_MATH_FUNCTIONS = frozenset(
+    {
+        "fdim",
+        "fmax3",
+        "fmedian3",
+        "fmin3",
+        "frexp",
+        "ilogb",
+        "ldexp",
+        "max3",
+        "median3",
+        "min3",
+        "modf",
+        "nextafter",
+        "pown",
+    }
+)
 
 
 def declared_in_several_namespaces(overloads: Iterable[object]) -> bool:
