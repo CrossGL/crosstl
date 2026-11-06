@@ -66,10 +66,12 @@ def _validate(tmp_path, glsl, stage, *environment):
         return
     source = tmp_path / f"out.{stage}"
     source.write_text(glsl)
+    # --target-env implies -V, which writes <stage>.spv into the working directory.
     result = subprocess.run(
         [validator, *environment, "-S", stage, str(source)],
         capture_output=True,
         text=True,
+        cwd=tmp_path,
     )
     assert result.returncode == 0, result.stdout + glsl
 
