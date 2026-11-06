@@ -756,7 +756,7 @@ def test_preparation_replaces_the_quantized_matmul_stub(monkeypatch):
     monkeypatch.setattr(prepare, "replace_once", record)
     prepare.adapted_sources("", "", "")
     assert "NO_GPU(QuantizedMatmul)" in replaced
-    assert "NO_GPU(GatherQMM)" not in replaced
+    assert "NO_GPU(GatherQMM)" in replaced
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert "void QuantizedMatmul::eval_gpu(" in backend
     for text in (
@@ -911,12 +911,16 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
     ]
     assert deadlines == [
         1800,
-        2400,
+        # The matrix-vector translation; its slowest observed run took 233 s.
+        1200,
         1800,
         900,
         900,
         1200,
         1200,
+        # GatherQMM translation and verification.
+        900,
+        300,
         1200,
         600,
         # On-demand reduction packages only record their configuration.

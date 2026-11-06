@@ -3395,6 +3395,7 @@ jobs:
           python -m pytest -q -n auto demos/integrations/mlx/tests/host/test_portable_quantized_matmul.py \
             demos/integrations/mlx/tests/host/test_portable_fp_quantized_matmul.py \
             demos/integrations/mlx/tests/host/test_portable_quantized_qmm.py \
+            demos/integrations/mlx/tests/host/test_portable_gather_qmm.py \
             demos/integrations/mlx/tests/host/test_portable_matmul.py demos/integrations/mlx/tests/host/test_portable_gemm.py \
             demos/integrations/mlx/tests/host/test_portable_addmm.py \
             demos/integrations/mlx/tests/host/test_portable_gather_mm.py \
@@ -3476,7 +3477,7 @@ jobs:
       - name: Translate quantized matrix-vector packages
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 2400 --label "MLX quantized matmul translation" -- \
+          python tools/run_bounded_command.py --timeout-seconds 1200 --label "MLX quantized matmul translation" -- \
             python -m demos.integrations.mlx.portable_host.matmul_packages --mlx-root mlx-upstream \
               --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
               2>&1 | tee .mlx-portable-quantized/quantized-matmul-translation.log
@@ -3531,6 +3532,26 @@ jobs:
               --packages .mlx-portable-quantized/base/packages --reductions .mlx-portable-quantized/column-reductions \
               --output-dir .mlx-portable-quantized/quantized-qmm \
               2>&1 | tee .mlx-portable-quantized/quantized-qmm.log
+      - name: Translate gathered quantized packages
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 900 --label "MLX gathered quantized translation" -- \
+            python -m demos.integrations.mlx.portable_host.gather_qmm_packages --mlx-root mlx-upstream \
+              --target "${{ matrix.target }}" --packages .mlx-portable-quantized/base/packages --verification --jobs 3 \
+              2>&1 | tee .mlx-portable-quantized/gather-qmm-translation.log
+      - name: Execute affine gathered quantized products through MLX
+        env:
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          CROSTL_DIRECTX_FORCE_WARP: "1"
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 300 --label "MLX gathered quantized host verification" -- \
+            python -m demos.integrations.mlx.portable_host.verify_gather_qmm --mlx-root mlx-upstream \
+              --packages .mlx-portable-quantized/base/packages \
+              --output-dir .mlx-portable-quantized/gather-qmm \
+              2>&1 | tee .mlx-portable-quantized/gather-qmm.log
       - name: Translate floating-point matrix-vector packages
         run: |
           set -euo pipefail

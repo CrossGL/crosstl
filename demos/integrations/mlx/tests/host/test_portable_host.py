@@ -63,6 +63,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "Scan",
                     "Quantize",
                     "QuantizedMatmul",
+                    "GatherQMM",
                     "Matmul",
                     "AddMM",
                     "GatherMM",
@@ -131,7 +132,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
 ):
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
-    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 15
+    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 16
     for name in prepare.FAST_PRIMITIVES:
         declared = f"{declaration_macro(name)}({name})"
         assert declared not in (backend / "crosstl_primitives.cpp").read_text()
