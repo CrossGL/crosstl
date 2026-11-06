@@ -11,6 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from heapq import heappop, heappush
+from itertools import count as sequence_numbers
 from typing import (
     Any,
     Callable,
@@ -75,6 +76,8 @@ from .pattern_cache import pattern as _cached_pattern
 from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .reference_alias_arguments import call_argument_designates
+from .reopened_namespaces import ReopenedNamespaceIndex
+from .signed_type_spellings import fold_integer_type_spellings
 from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_assertion_sources import concrete_static_assertion_conditions
 from .static_member_constants import (
@@ -5531,18 +5534,32 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             "threadgroup",
             "volatile",
         }
+        reopened_index = ReopenedNamespaceIndex(self._find_namespace_spans(code), code)
+        reopened_namespaces = reopened_index.has_reopened_namespace
+        # ``(block start, order, name, binding)`` of namespace members recorded for the later blocks of their
+        # namespace, each declared where its block opens so it hides enclosing declarations made in between.
+        pending_reopened: List[Tuple[int, int, str, _MetalIntegralConstantBinding]] = []
+        reopened_order = sequence_numbers()
+
+        def record_pending_through(position: int) -> None:
+            while pending_reopened and pending_reopened[0][0] <= position:
+                block_start, _order, reopened_name, reopened = heappop(pending_reopened)
+                record_parameters_through(block_start)
+                bindings.add(reopened_name, reopened)
+            record_parameters_through(position)
+
         for declaration_position, name, member, file_scope_only in sorted(
             raw_declarations
         ):
-            record_parameters_through(declaration_position)
+            record_pending_through(declaration_position)
             scope_start, scope_end = self._innermost_lexical_scope(
                 lexical_scopes, declaration_position, len(code)
             )
             value: Optional[str] = None
             type_tokens = IDENTIFIER_RE.findall(member.type_text)
-            value_type_tokens = [
-                token for token in type_tokens if token not in ignored_type_tokens
-            ]
+            value_type_tokens = fold_integer_type_spellings(
+                [token for token in type_tokens if token not in ignored_type_tokens]
+            )
             is_constexpr_integral = (
                 member.default is not None
                 and "constexpr" in type_tokens
@@ -5619,7 +5636,26 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     and type_tokens[0] in {"using", "typedef"},
                 ),
             )
-        record_parameters_through(len(code))
+            if reopened_namespaces:
+                declared = bindings[name][-1]
+                for block_start, block_end in reopened_index.unrecorded_later_blocks(
+                    (scope_start, scope_end), declaration_position, name
+                ):
+                    heappush(
+                        pending_reopened,
+                        (
+                            block_start,
+                            next(reopened_order),
+                            name,
+                            replace(
+                                declared,
+                                declaration_position=block_start,
+                                scope_start=block_start,
+                                scope_end=block_end,
+                            ),
+                        ),
+                    )
+        record_pending_through(len(code))
         return bindings
 
     def _local_data_member_declarations(

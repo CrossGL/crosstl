@@ -39,3 +39,19 @@ def fold_signed_type_spellings(tokens):
             index += 1
         folded.append(UNSIGNED_NAMES[base] if token == "unsigned" else base)
     return folded
+
+
+SIZED_INTEGER_NAMES = frozenset({"short", "ushort", "long", "ulong"})
+
+
+def fold_integer_type_spellings(tokens):
+    """Return ``tokens`` folded like :func:`fold_signed_type_spellings`, also dropping the optional ``int`` of
+    ``short int``, ``long int``, ``unsigned short int`` and ``unsigned long int``, so that every C++ spelling of
+    an integer scalar is one Metal name (``constexpr unsigned int N`` declares a ``uint``).
+    """
+    folded = []
+    for token in fold_signed_type_spellings(tokens):
+        if token == "int" and folded and folded[-1] in SIZED_INTEGER_NAMES:
+            continue
+        folded.append(token)
+    return folded
