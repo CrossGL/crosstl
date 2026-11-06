@@ -72,7 +72,7 @@ NN_TESTS = _tests(
 )
 
 # test_vmap and test_eval: vectorized maps of the composed ops, sorts,
-# partitions, scatters, factorizations and views, and synchronous,
+# partitions, scatters, convolutions, factorizations and views, and synchronous,
 # asynchronous and multi-stream evaluation.
 TRANSFORM_TESTS = _tests(
     "test_vmap",
@@ -86,6 +86,7 @@ TRANSFORM_TESTS = _tests(
         "vmap_argsort",
         "vmap_concatenate",
         "vmap_const_func",
+        "vmap_conv",
         "vmap_gather",
         "vmap_indexing",
         "vmap_inverse",
@@ -131,6 +132,7 @@ SERIALIZATION_TESTS = _tests(
         "basic_export_import",
         "export_control_flow",
         "export_conv",
+        "export_conv_shapeless",
         "export_import_metadata",
         "export_import_multi_with_constants",
         "export_import_scatter_sum",
@@ -278,8 +280,36 @@ FFT_TESTS = _tests(
 # 28 * 2**k points (hadamard.inc) in float32, float16 and bfloat16, strided
 # inputs through the copy, the strided two-pass split above 8,192 points, and
 # the transform's gradient under nested vmaps. test_hadamard skips itself
-# when CI is set, so the worker clears it for that test (CI_CLEARED_TESTS).
-HADAMARD_TESTS = _tests("test_ops", "TestOps", ("hadamard", "hadamard_grad_vmap"))
+# when CI is set, so the worker clears it for that test (CI_CLEARED_TESTS);
+# test_hadamard_m_only, the m stage alone, runs only where
+# mx.metal.is_available() (METAL_PATH_TESTS).
+HADAMARD_TESTS = _tests(
+    "test_ops", "TestOps", ("hadamard", "hadamard_grad_vmap", "hadamard_m_only")
+)
+
+# test_fast_gated_delta: the recurrent gated-delta update and its backward
+# (gated_delta.inc) on 32 heads and on 16 key heads shared by 32 or 48 value
+# heads, each checked against MLX's composed fallback. The masked test takes
+# the composed fallback on both sides, about eleven thousand launches, and the
+# dtype test checks the output types of graphs it never evaluates, so it
+# dispatches nothing (NO_DISPATCH_TESTS). test_gated_delta_vjp selects the
+# kernels only where mx.metal.is_available() (METAL_PATH_TESTS); its composed
+# reference takes about twenty-six thousand launches, half an hour natively on
+# Metal, so it runs in a job of its own.
+GATED_DELTA_TESTS = _tests(
+    "test_fast_gated_delta",
+    "TestGatedDelta",
+    ("gated_delta_dtypes", "gated_delta_fallback_masked"),
+)
+GATED_DELTA_VJP_TESTS = _tests(
+    "test_fast_gated_delta", "TestGatedDelta", ("gated_delta_vjp",)
+)
+# Tests the pinned suite runs only where mx.metal.is_available().
+METAL_PATH_TESTS = (
+    "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",
+    "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
+    "test_ops.TestOps.test_hadamard_m_only",
+)
 
 # test_fast_sdpa: queries of at most eight positions, which
 # scaled_dot_product_attention.cpp runs through the vector kernels in one pass
@@ -343,6 +373,63 @@ ATTENTION_SWEEP_TESTS = upstream_subtest_shards.shard_names(
     "test_fast_sdpa.TestFastSDPA.test_sdpa", SWEEP_SHARDS
 )
 
+# Tests that compare the GPU's results with PyTorch's on the CPU: the 1-D,
+# 2-D, 3-D, depthwise, general and asymmetrically padded convolutions, the
+# transposed ones with and without output padding, and their gradients; then
+# batch normalization, AdamW, nearest, linear and cubic upsampling with and
+# without antialiasing, and bfloat16 conversions from torch tensors. They skip
+# themselves without torch, so only their jobs install the pinned CPU wheel,
+# and the worker refuses to run them without it (TORCH_GROUPS).
+TORCH_CONV_TESTS = _tests(
+    "test_conv",
+    "TestConv",
+    (
+        "asymmetric_padding",
+        "torch_conv_1D",
+        "torch_conv_1D_grad",
+        "torch_conv_2D",
+        "torch_conv_2D_grad",
+        "torch_conv_3D",
+        "torch_conv_3D_grad",
+        "torch_conv_depthwise",
+        "torch_conv_general",
+    ),
+) + _tests(
+    "test_conv_transpose",
+    "TestConvTranspose",
+    (
+        "torch_conv_tranpose_1d_output_padding",
+        "torch_conv_transpose_1D",
+        "torch_conv_transpose_1D_grad",
+        "torch_conv_transpose_2D",
+        "torch_conv_transpose_2D_grad",
+        "torch_conv_transpose_2d_output_padding",
+        "torch_conv_transpose_3D",
+        "torch_conv_transpose_3D_grad",
+        "torch_conv_transpose_3d_output_padding",
+    ),
+)
+TORCH_LAYER_TESTS = (
+    _tests("test_bf16", "TestBF16", ("conversion",))
+    + _tests("test_nn", "TestLayers", ("batch_norm_matches_torch",))
+    + _tests("test_optimizers", "TestOptimizers", ("adamw_matches_pytorch",))
+    + _tests(
+        "test_upsample",
+        "TestUpsample",
+        (
+            "antialias_upscale_cubic_matches_pytorch",
+            "antialias_upscale_linear_is_noop",
+        ),
+    )
+)
+# The nearest, linear and cubic upsampling sweeps, with and without
+# antialiasing, launch about 36,000 kernels between them (28,000 for the
+# antialiased one), so they run in a job of their own.
+TORCH_UPSAMPLE_TESTS = _tests(
+    "test_upsample", "TestUpsample", ("torch_upsample", "torch_upsample_antialias")
+)
+TORCH_GROUPS = ("torch-conv", "torch-layers", "torch-upsample")
+
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.
 GROUPS = {
     "nn": NN_TESTS,
@@ -351,6 +438,8 @@ GROUPS = {
     "training": TRAINING_TESTS,
     "rope": ROPE_TESTS,
     "fft": FFT_TESTS + HADAMARD_TESTS,
+    "gated-delta": GATED_DELTA_TESTS,
+    "gated-delta-vjp": GATED_DELTA_VJP_TESTS,
     "sdpa": SDPA_TESTS,
     "attention": ATTENTION_TESTS,
     "attention-2": ATTENTION_2_TESTS,
@@ -359,4 +448,7 @@ GROUPS = {
         f"attention-sweep-{index}": (name,)
         for index, name in enumerate(ATTENTION_SWEEP_TESTS, start=1)
     },
+    "torch-conv": TORCH_CONV_TESTS,
+    "torch-layers": TORCH_LAYER_TESTS,
+    "torch-upsample": TORCH_UPSAMPLE_TESTS,
 }

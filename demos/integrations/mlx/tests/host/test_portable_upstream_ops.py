@@ -79,6 +79,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
         "test_fast.TestFast.test_layer_norm_dim_check",
         "test_reduce.TestReduce.test_zero_size",
         "test_fft.TestFFT.test_fft_throws",
+        "test_fast_gated_delta.TestGatedDelta.test_gated_delta_dtypes",
     }
     assert ops.NO_DISPATCH_TESTS <= set(ops.UPSTREAM_TESTS)
     for native in (True, False):
@@ -95,7 +96,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 551
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 583
     assert all(
         name.startswith(
             (
@@ -111,6 +112,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_tree.TestTreeUtils.test_",
                 "test_fft.TestFFT.test_",
                 "test_conv.TestConv.test_",
+                "test_conv_transpose.TestConvTranspose.test_",
                 "test_array.TestArray.test_",
                 "test_array.TestEquality.test_",
                 "test_array.TestInequality.test_",
@@ -131,6 +133,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_constants.TestConstants.test_",
                 "test_upsample.TestUpsample.test_",
                 "test_fast_sdpa.TestFastSDPA.test_",
+                "test_fast_gated_delta.TestGatedDelta.test_",
             )
         )
         for name in ops.UPSTREAM_TESTS
@@ -148,11 +151,16 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + upstream_module_groups.ROPE_TESTS
         + upstream_module_groups.FFT_TESTS
         + upstream_module_groups.HADAMARD_TESTS
+        + upstream_module_groups.GATED_DELTA_TESTS
+        + upstream_module_groups.GATED_DELTA_VJP_TESTS
         + upstream_module_groups.SDPA_TESTS
         + upstream_module_groups.ATTENTION_TESTS
         + upstream_module_groups.ATTENTION_2_TESTS
         + upstream_module_groups.ATTENTION_3_TESTS
         + upstream_module_groups.ATTENTION_SWEEP_TESTS
+        + upstream_module_groups.TORCH_CONV_TESTS
+        + upstream_module_groups.TORCH_LAYER_TESTS
+        + upstream_module_groups.TORCH_UPSAMPLE_TESTS
     )
     assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
@@ -205,7 +213,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 544 and not set(opengl) & set(excluded)
+    assert len(opengl) == 576 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -238,6 +246,8 @@ def test_upstream_op_groups_partition_the_inventory():
         "training",
         "rope",
         "fft",
+        "gated-delta",
+        "gated-delta-vjp",
         "sdpa",
         "attention",
         "attention-2",
@@ -245,6 +255,9 @@ def test_upstream_op_groups_partition_the_inventory():
         "attention-sweep-1",
         "attention-sweep-2",
         "attention-sweep-3",
+        "torch-conv",
+        "torch-layers",
+        "torch-upsample",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -298,7 +311,13 @@ def test_upstream_op_groups_partition_the_inventory():
         "test_fast.TestFast.test_cross_entropy_grad",
     ]
     assert ops.upstream_tests("opengl", "modules") == ops.MODULE_TESTS
-    assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 10
+    assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 11
+    # The transposed convolutions' unfold tiling joins them; the pinned suite
+    # runs it only where mx.metal.is_available().
+    assert ops.CONV_TESTS[-1] == (
+        "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling"
+    )
+    assert ops.CONV_TESTS[-1] in ops.METAL_PATH_TESTS
     assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
     # The array, autograd and compile modules each run alone in their group.
     for group, tests, module, count in (
@@ -313,8 +332,8 @@ def test_upstream_op_groups_partition_the_inventory():
     # a group of its own.
     for group, modules, count in (
         ("nn", ("test_nn.",), 41),
-        ("transforms", ("test_vmap.", "test_eval."), 35),
-        ("serialization", ("test_export_import.", "test_load."), 32),
+        ("transforms", ("test_vmap.", "test_eval."), 36),
+        ("serialization", ("test_export_import.", "test_load."), 33),
         (
             "training",
             (
@@ -329,7 +348,9 @@ def test_upstream_op_groups_partition_the_inventory():
         ),
         ("rope", ("test_fast.", "test_upsample."), 9),
         # The Walsh-Hadamard transforms of test_ops run with the FFTs.
-        ("fft", ("test_fft.", "test_ops."), 13),
+        ("fft", ("test_fft.", "test_ops."), 14),
+        ("gated-delta", ("test_fast_gated_delta.",), 2),
+        ("gated-delta-vjp", ("test_fast_gated_delta.",), 1),
         ("sdpa", ("test_fast_sdpa.",), 6),
         ("attention", ("test_fast_sdpa.",), 4),
         ("attention-2", ("test_fast_sdpa.",), 6),
@@ -337,6 +358,13 @@ def test_upstream_op_groups_partition_the_inventory():
         ("attention-sweep-1", ("test_fast_sdpa.",), 1),
         ("attention-sweep-2", ("test_fast_sdpa.",), 1),
         ("attention-sweep-3", ("test_fast_sdpa.",), 1),
+        ("torch-conv", ("test_conv.", "test_conv_transpose."), 18),
+        (
+            "torch-layers",
+            ("test_bf16.", "test_nn.", "test_optimizers.", "test_upsample."),
+            5,
+        ),
+        ("torch-upsample", ("test_upsample.",), 2),
     ):
         tests = upstream_module_groups.GROUPS[group]
         assert ops.GROUPS[group] == tests and len(tests) == count
@@ -992,6 +1020,39 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
     assert "--family column" in configure
     retain = names.index("Retain upstream op execution evidence")
     assert names.index(step["name"]) < retain
+    # Only the PyTorch-reference groups install torch, as a pinned CPU wheel,
+    # before the build and the tests.
+    torch = job["steps"][names.index("Install the pinned PyTorch CPU reference")]
+    assert torch["if"] == "startsWith(matrix.group, 'torch-')"
+    assert '"torch==2.14.1"' in torch["run"]
+    assert "--index-url https://download.pytorch.org/whl/cpu" in torch["run"]
+    assert "--extra-index-url" not in torch["run"]
+    assert names.index(torch["name"]) < names.index("Build adapted upstream MLX")
+    assert [group for group in ops.GROUPS if group.startswith("torch-")] == list(
+        upstream_module_groups.TORCH_GROUPS
+    )
+
+
+def test_torch_reference_tests_refuse_to_run_without_torch(monkeypatch):
+    groups = upstream_module_groups.TORCH_GROUPS
+    assert ops.TORCH_TESTS == {name for group in groups for name in ops.GROUPS[group]}
+    find_spec = ops.importlib.util.find_spec
+    monkeypatch.setattr(
+        ops.importlib.util,
+        "find_spec",
+        lambda name, *args: None if name == "torch" else find_spec(name, *args),
+    )
+    for group in groups:
+        with pytest.raises(RuntimeError, match="PyTorch reference tests need torch"):
+            ops.require_reference_modules(ops.upstream_tests("opengl", group))
+    # One reference test is enough to require torch; other groups never do.
+    with pytest.raises(RuntimeError, match="need torch"):
+        ops.require_reference_modules(
+            ops.GROUPS["conv"] + upstream_module_groups.TORCH_LAYER_TESTS[:1]
+        )
+    for group in ops.GROUPS:
+        if group not in groups:
+            ops.require_reference_modules(ops.upstream_tests("opengl", group))
 
 
 @pytest.mark.parametrize("fault", ["none", "w256", "target", "selection-target"])

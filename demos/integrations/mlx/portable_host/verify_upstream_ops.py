@@ -47,6 +47,7 @@ family fails the trace instead of passing on an unchecked package.
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -67,6 +68,9 @@ from demos.integrations.mlx.portable_host import (
     dynamic_offset_evidence,
     dynamic_offset_packages,
     elementwise_evidence,
+    gated_delta_evidence,
+    gated_delta_layout,
+    gated_delta_packages,
     gather_evidence,
     hadamard_evidence,
     hadamard_layout,
@@ -170,6 +174,10 @@ from demos.integrations.mlx.portable_host.upstream_module_groups import (
 from demos.integrations.mlx.portable_host.upstream_module_groups import (
     GROUPS as MODULE_GROUPS,
 )
+from demos.integrations.mlx.portable_host.upstream_module_groups import (
+    METAL_PATH_TESTS as MODULE_METAL_PATH_TESTS,
+)
+from demos.integrations.mlx.portable_host.upstream_module_groups import TORCH_GROUPS
 from demos.integrations.mlx.portable_host.upstream_trace_audit import TraceAudit
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
@@ -268,7 +276,10 @@ MODULE_TESTS = tuple(
 # shapes of strided and dilated convolutions, unaligned 2-D channels and the
 # per-depth-tap 3-D decomposition, which reach the unfold, depthwise,
 # padded-channel, general and implicit GEMM and small-depth 3-D routes of
-# conv.cpp.
+# conv.cpp. test_conv_transpose_unfold_tiling runs the transposed 1-D, 2-D,
+# 3-D and grouped convolutions through the input-dilated unfold, whole and in
+# the row tiles MLX_CONV_UNFOLD_TILE_ROWS forces; the pinned suite runs it only
+# where mx.metal.is_available() (METAL_PATH_TESTS).
 CONV_TESTS = tuple(
     "test_conv.TestConv.test_" + name
     for name in (
@@ -283,7 +294,7 @@ CONV_TESTS = tuple(
         "numpy_conv",
         "repeated_conv",
     )
-)
+) + ("test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",)
 
 # test_array methods that reach the GPU: indexing and its gradients, item
 # assignment and functional .at[] updates, slice updates of 2-D contiguous
@@ -784,6 +795,8 @@ NO_DISPATCH_TESTS = frozenset(
         "test_reduce.TestReduce.test_zero_size",
         # Rejects a zero-dimensional irfftn and an unknown norm.
         "test_fft.TestFFT.test_fft_throws",
+        # Checks the output types of gated-delta graphs it never evaluates.
+        "test_fast_gated_delta.TestGatedDelta.test_gated_delta_dtypes",
     )
 )
 # Tests the pinned suite skips when CI is set, as too slow on its Metal
@@ -791,6 +804,11 @@ NO_DISPATCH_TESTS = frozenset(
 # CI cleared (import_ci_cleared). test_hadamard is test_ops' only CI-gated
 # method, so no other test of the module changes.
 CI_CLEARED_TESTS = frozenset(("test_ops.TestOps.test_hadamard",))
+# Tests the pinned suite runs only where mx.metal.is_available(), as they
+# select MLX's Metal kernels, which the native host executes translated. The
+# native worker imports their modules with is_available reporting the host's
+# GPU (import_metal_path); the CPU worker skips them (GPU_ONLY_TESTS).
+METAL_PATH_TESTS = frozenset(MODULE_METAL_PATH_TESTS)
 # Tests that skip on the MLX CPU because they need a GPU: the CPU worker must
 # skip each of them and the native worker must run them. They compare the
 # products with NumPy's or the CPU stream's, so the CPU run is not their
@@ -822,6 +840,7 @@ GPU_ONLY_TESTS = frozenset(
             )
         ),
         *ATTENTION_SWEEP_TESTS,
+        *METAL_PATH_TESTS,
     )
 )
 # CI runs each group in its own job. The normalization gradients move tens of
@@ -931,6 +950,22 @@ def upstream_tests(target, group=None):
     return tuple(name for name in selected if name not in excluded)
 
 
+# The tests that compare with PyTorch and skip themselves without it.
+TORCH_TESTS = frozenset(name for group in TORCH_GROUPS for name in GROUPS[group])
+
+
+def require_reference_modules(tests):
+    """Refuse to run PyTorch-reference tests where torch cannot be imported.
+
+    Without torch they skip themselves, which the workers would only report
+    as unexpected skips after the whole group ran.
+    """
+    if TORCH_TESTS.intersection(tests) and importlib.util.find_spec("torch") is None:
+        raise RuntimeError(
+            "The PyTorch reference tests need torch; install the pinned CPU wheel"
+        )
+
+
 def negative_checks(group):
     """The rejection checks a group runs; the operation tests own them."""
     return NEGATIVE_CHECKS if group in {None, "operations"} else {}
@@ -1036,7 +1071,8 @@ def worker(args):
     os.environ["CI"] = "1"
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     tests = upstream_tests(package_target(args.packages), args.group)
-    import_ci_cleared(tests)
+    require_reference_modules(tests)
+    import_gated_modules(mx, tests, native=host is not None)
     records = []
     for name in tests:
         start = host.dispatch_count if host else 0
@@ -1092,6 +1128,40 @@ def import_ci_cleared(tests):
         function = getattr(getattr(sys.modules[module], case), method)
         if getattr(function, "__unittest_skip__", False):
             raise RuntimeError(f"{name} was imported with CI set")
+
+
+def import_gated_modules(mx, tests, *, native):
+    """Import the modules whose ``tests`` the pinned suite gates at import.
+
+    ``unittest.skipIf`` reads the environment and ``mx.metal.is_available()``
+    when a module is imported. The modules of ``CI_CLEARED_TESTS`` import with
+    CI cleared (``import_ci_cleared``). On the native worker, the modules of
+    ``METAL_PATH_TESTS`` import while is_available reports the host's GPU,
+    which is restored after, so the test bodies see MLX's own value; the CPU
+    worker leaves those tests skipped.
+    """
+    selected = [name for name in tests if name in METAL_PATH_TESTS] if native else []
+    if not selected:
+        import_ci_cleared(tests)
+        return
+    if not mx.is_available(mx.gpu):
+        raise RuntimeError("Metal-path upstream tests need the native host")
+    for name in selected:
+        if name.split(".")[0] in sys.modules:
+            raise RuntimeError(f"{name} was imported before its Metal path")
+    original = mx.metal.is_available
+    mx.metal.is_available = lambda: True
+    try:
+        import_ci_cleared(tests)
+        for name in selected:
+            importlib.import_module(name.split(".")[0])
+    finally:
+        mx.metal.is_available = original
+    for name in selected:
+        module, case, method = name.split(".")
+        function = getattr(getattr(sys.modules[module], case), method)
+        if getattr(function, "__unittest_skip__", False):
+            raise RuntimeError(f"{name} was imported without its Metal path")
 
 
 def run_upstream_test(name):
@@ -1315,6 +1385,14 @@ def event_audits(np, args, target, installed, modules=None):
             CrossEntropyPackageCache(root, packages / CROSS_ENTROPY_CACHE, target),
         ),
         owned(
+            gated_delta_layout.ENTRIES,
+            "gated-delta",
+            gated_delta_evidence.audit_event,
+            gated_delta_packages.GatedDeltaPackageCache(
+                root, packages / gated_delta_packages.CACHE_DIRECTORY, target
+            ),
+        ),
+        owned(
             hadamard_packages.ENTRIES,
             "Hadamard",
             hadamard_evidence.audit_event,
@@ -1497,6 +1575,7 @@ def verify(args):
     before = verify_prepared(args.mlx_root)
     target = package_target(args.packages)
     tests = upstream_tests(target, args.group)
+    require_reference_modules(tests)
     checks = negative_checks(args.group)
     sources = upstream_test_sources(args.mlx_root, tests)
     write_json(output / "adaptation-before.json", before)
