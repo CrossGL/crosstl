@@ -2486,8 +2486,10 @@ The `array`, `autograd` and `compile` groups run the `test_array` (43),
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
 `nn` (41 `test_nn` methods: module state, weight files and the layers),
 `transforms` (25 `test_vmap` methods, among them the vectorized convolution,
-and 11 `test_eval` methods), `serialization` (18 `test_export_import` methods,
-among them the shapeless convolution, and 15 `test_load` methods, with the
+11 `test_eval` methods and the two `test_threads` methods: thread-local
+streams and transforms traced on three threads at once), `serialization` (18
+`test_export_import` methods, among them the shapeless convolution, and 15
+`test_load` methods, with the
 NumPy, safetensors and GGUF formats), `training` (19 `test_optimizers`
 methods, six `test_random` samplers, four `test_bf16` sweeps and the device,
 stream, memory and constant tests) and `rope` (the seven rotary embedding and

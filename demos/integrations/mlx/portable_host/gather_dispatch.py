@@ -17,6 +17,7 @@ from demos.integrations.mlx.portable_host import (
     scatter_axis_layout,
     scatter_layout,
 )
+from demos.integrations.mlx.portable_host.retained_modules import retain
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 
@@ -29,16 +30,9 @@ def execute(host, request):
         raise ValueError("Native gather execution plan contains diagnostics")
     state = RuntimeExecutionState(request=request, plan=request.execution_plan)
     retained = host.trace.parent / "native-modules"
-    retained.mkdir(parents=True, exist_ok=True)
 
     def save(path):
-        data = path.read_bytes()
-        if not data:
-            raise RuntimeError("Native gather compiler produced an empty module")
-        digest = hashlib.sha256(data).hexdigest()
-        destination = retained / (digest + path.suffix)
-        destination.write_bytes(data)
-        return {"file": str(destination), "sha256": digest}
+        return retain(retained, path.read_bytes(), path.suffix)
 
     try:
         native = adapter.prepare_buffers(state)

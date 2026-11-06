@@ -6,7 +6,9 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
+#include <unordered_set>
 
 #include "mlx/allocator.h"
 #include "mlx/backend/common/binary.h"
@@ -1535,14 +1537,56 @@ extern "C" MLX_API int crosstl_mlx_register_runtime(
 }
 
 namespace mlx::core::gpu {
+namespace {
+
+// Ports the stream bookkeeping of mlx/backend/metal/eval.cpp and device.cpp
+// (get_command_encoders): a stream belongs to the thread that made it, except
+// a thread-unsafe stream, which every thread shares. Evaluating on a stream
+// the current thread cannot see fails as Metal's get_command_encoder does.
+std::unordered_set<int>& thread_streams() {
+  if (is_main_thread()) {
+    static auto* streams = new std::unordered_set<int>();
+    return *streams;
+  }
+  static thread_local std::unordered_set<int> streams;
+  return streams;
+}
+
+std::unordered_set<int>& global_streams() {
+  static std::unordered_set<int> streams;
+  return streams;
+}
+
+std::mutex global_streams_mutex;
+
+bool global_stream(int index) {
+  std::lock_guard<std::mutex> lock(global_streams_mutex);
+  return global_streams().count(index) != 0;
+}
+
+void require_stream(Stream s) {
+  if (!thread_streams().count(s.index) && !global_stream(s.index)) {
+    throw std::runtime_error(
+        "There is no Stream(gpu, " + std::to_string(s.index) +
+        ") in current thread.");
+  }
+}
+
+} // namespace
+
 void init() {}
-void new_stream(Stream) {
+void new_stream(Stream s) {
   require_runtime();
+  thread_streams().insert(s.index);
 }
-void new_thread_unsafe_stream(Stream) {
+void new_thread_unsafe_stream(Stream s) {
   require_runtime();
+  std::lock_guard<std::mutex> lock(global_streams_mutex);
+  global_streams().insert(s.index);
 }
-void clear_streams() {}
+void clear_streams() {
+  thread_streams().clear();
+}
 
 bool is_available() {
   return dispatch_callback.load() != nullptr;
@@ -1571,16 +1615,19 @@ device_info(int index) {
 
 void eval(array& value) {
   require_runtime();
+  require_stream(value.primitive().stream());
   auto outputs = value.outputs();
   value.primitive().eval_gpu(value.inputs(), outputs);
 }
 
 // The callback returns only after device readback, so no work remains queued.
-void finalize(Stream) {
+void finalize(Stream s) {
   require_runtime();
+  require_stream(s);
 }
-void synchronize(Stream) {
+void synchronize(Stream s) {
   require_runtime();
+  require_stream(s);
 }
 } // namespace mlx::core::gpu
 
