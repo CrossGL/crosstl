@@ -640,6 +640,18 @@ class MetalCodeGen(
     }
     # Numeric grouping determines floating rounding and integer promotion.
     ASSOCIATIVE_BINARY_OPS = {"&&", "||"}
+    # Higher-precedence children that clang's -Wlogical-op-parentheses,
+    # -Wbitwise-op-parentheses, -Wparentheses (bitwise over comparison) and
+    # -Wshift-op-parentheses reject under -Werror when left unparenthesized.
+    _COMPARISON_OPS = frozenset({"==", "!=", "<", ">", "<=", ">="})
+    CLANG_PARENTHESIZED_BINARY_CHILDREN = {
+        "||": frozenset({"&&"}),
+        "|": frozenset({"&", "^"}) | _COMPARISON_OPS,
+        "^": frozenset({"&"}) | _COMPARISON_OPS,
+        "&": _COMPARISON_OPS,
+        "<<": frozenset({"+", "-"}),
+        ">>": frozenset({"+", "-"}),
+    }
     METAL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
         {
             "mem_none",
@@ -13374,7 +13386,12 @@ class MetalCodeGen(
                 self.generate_expression(expr.true_expr),
                 self.generate_expression(expr.false_expr),
             )
-            return f"{self.generate_expression(expr.condition)} ? {true_code} : {false_code}"
+            condition = self.generate_expression(expr.condition)
+            # `?:` is right-associative: an unparenthesized conditional
+            # condition would regroup as part of the false arm.
+            if isinstance(expr.condition, TernaryOpNode):
+                condition = f"({condition})"
+            return f"{condition} ? {true_code} : {false_code}"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value
@@ -13798,10 +13815,12 @@ class MetalCodeGen(
         if child_precedence < parent_precedence:
             return True
         if child_precedence > parent_precedence:
-            # Clang intentionally warns on an unparenthesized additive child of a
-            # shift even though C++ precedence is unambiguous.  Retain explicit
-            # source grouping so warning-fatal native Metal builds stay portable.
-            return parent_operator in {"<<", ">>"} and child_operator in {"+", "-"}
+            # Clang's -Wparentheses (part of -Wall) warns on these children even
+            # though C++ precedence is unambiguous.  Retain explicit grouping so
+            # warning-fatal native Metal builds stay portable.
+            return child_operator in self.CLANG_PARENTHESIZED_BINARY_CHILDREN.get(
+                parent_operator, ()
+            )
         return is_right_child and (
             parent_operator not in self.ASSOCIATIVE_BINARY_OPS
             or child_operator != parent_operator
