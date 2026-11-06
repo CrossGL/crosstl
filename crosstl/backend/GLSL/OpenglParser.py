@@ -3,6 +3,10 @@
 import re
 
 from ..switch_clauses import record_default_position
+from .default_block_layouts import (
+    DefaultBlockLayouts,
+    member_layouts_with_block_matrix_order,
+)
 from .interface_block_locations import anonymous_block_member_layouts
 from .OpenglAst import (
     ArrayAccessNode,
@@ -452,6 +456,7 @@ class GLSLParser:
         self.current_xfb_output_buffer = None
         self.xfb_output_stride_by_buffer = {}
         self.current_output_stream = None
+        self.default_block_layouts = DefaultBlockLayouts()
 
     def is_auto_shader_type(self, shader_type):
         return shader_type in AUTO_SHADER_TYPES
@@ -549,6 +554,12 @@ class GLSLParser:
 
             if layout is not None and self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
+                block_interface = self.default_block_layouts.default_interface(
+                    qualifiers, layout
+                )
+                if block_interface is not None:
+                    self.default_block_layouts.declare(block_interface, layout)
+                    continue
                 layout = self.consume_standalone_xfb_output_layout(qualifiers, layout)
                 if layout is not None:
                     layouts.append({"layout": layout, "qualifiers": qualifiers})
@@ -1694,6 +1705,8 @@ class GLSLParser:
             layout = self.merge_layout_qualifiers(layout, register_layout)
         layout = self.output_layout_with_xfb_defaults(qualifiers, layout)
         layout = self.output_layout_with_stream_default(qualifiers, layout)
+        if not hlsl_cbuffer:
+            layout = self.default_block_layouts.block_layout(qualifiers, layout)
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1727,6 +1740,15 @@ class GLSLParser:
 
         self.eat("RBRACE")
         self.skip_newlines()
+        if "uniform" in {str(qualifier).lower() for qualifier in qualifiers or []}:
+            member_layouts = member_layouts_with_block_matrix_order(
+                layout,
+                members,
+                [member.interface_member_layout for member in members],
+                self.known_type_names,
+            )
+            for member, member_layout in zip(members, member_layouts):
+                member.interface_member_layout = member_layout
 
         instance_name = None
         array_size = None
