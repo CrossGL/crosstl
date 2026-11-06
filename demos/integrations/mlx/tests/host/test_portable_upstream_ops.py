@@ -442,19 +442,29 @@ def test_upstream_tests_replay_from_the_recorded_run_seed():
             seeds.parse_seed(text)
 
 
-def test_fixed_input_tests_draw_the_inputs_of_one_run_seed():
+def test_fixed_input_tests_draw_the_inputs_of_their_recorded_run_seed():
     seeds = upstream_test_seeds
-    assert seeds.FIXED_INPUT_TESTS == {"test_ops.TestOps.test_softmax"}
-    assert seeds.FIXED_INPUT_TESTS <= set(ops.upstream_tests("metal", "operations"))
-    for name in seeds.FIXED_INPUT_TESTS:
-        fixed = seeds.test_seed(seeds.FIXED_RUN_SEED, name)
-        assert fixed == 13239174713553859637
+    assert seeds.FIXED_RUN_SEEDS == {
+        "test_ops.TestOps.test_softmax": 0,
+        "test_blas.TestBlas.test_segmented_mm": 0,
+        "test_blas.TestBlas.test_block_masked_matmul": 2,
+    }
+    assert set(seeds.FIXED_RUN_SEEDS) <= set(ops.upstream_tests("metal"))
+    assert seeds.test_seed(0, "test_ops.TestOps.test_softmax") == 13239174713553859637
+    for name, run_seed in seeds.FIXED_RUN_SEEDS.items():
+        fixed = seeds.test_seed(run_seed, name)
         assert {seeds.test_seed(seed, name) for seed in (1, 7, (1 << 64) - 1)} == {
             fixed
         }
+    # The seed is the recorded run seed's own derivation, so the stock MLX
+    # measurement replays with the same inputs.
+    digest = hashlib.sha256(b"2:test_blas.TestBlas.test_block_masked_matmul")
+    assert seeds.test_seed(9, "test_blas.TestBlas.test_block_masked_matmul") == (
+        int.from_bytes(digest.digest()[:8], "little")
+    )
     # Every other test still draws the inputs of the run seed.
     other = "test_ops.TestOps.test_sort"
-    assert seeds.test_seed(7, other) != seeds.test_seed(seeds.FIXED_RUN_SEED, other)
+    assert seeds.test_seed(7, other) != seeds.test_seed(0, other)
 
 
 SHARDED_MODULE = """
