@@ -337,7 +337,11 @@ from .hlsl_ray_queries import (
     hlsl_ray_query_helpers,
     hlsl_ray_query_type,
 )
-from .hlsl_refusals import DirectXBufferLayoutError, DirectXLoweringRefused
+from .hlsl_refusals import (
+    DirectXBufferLayoutError,
+    DirectXLoweringRefused,
+    DirectXStageAttributesMissingError,
+)
 from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
 from .hlsl_storage_array_views import (
@@ -40432,10 +40436,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             present_attributes.add("maxvertexcount")
         missing_attributes = sorted(required_attributes - present_attributes)
         if missing_attributes:
-            missing = ", ".join(missing_attributes)
-            raise ValueError(
-                f"DirectX {shader_type} stage requires HLSL attribute(s): {missing}"
-            )
+            raise DirectXStageAttributesMissingError(shader_type, missing_attributes)
         self.validate_hlsl_tessellation_domain(func, shader_type)
         self.validate_hlsl_tessellation_output_topology(func, shader_type)
         self.validate_hlsl_tessellation_domain_topology(func, shader_type)

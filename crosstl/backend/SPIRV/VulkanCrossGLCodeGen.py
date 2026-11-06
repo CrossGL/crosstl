@@ -1446,6 +1446,13 @@ class VulkanToCrossGLConverter:
         )
         if storage_mapped_name:
             return f"@{storage_mapped_name}"
+        if (
+            str(builtin_name) == "PrimitiveId"
+            and storage_class == "Input"
+            and "geometry" in self.spirv_module_shader_stages
+        ):
+            # A geometry stage's incoming primitive ID is gl_PrimitiveIDIn; gl_PrimitiveID is the one it writes.
+            return "@gl_PrimitiveIDIn"
         mapped_name = mapped_builtins.get(str(builtin_name))
         if mapped_name:
             return f"@{mapped_name}"
