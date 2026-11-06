@@ -54,6 +54,8 @@ from demos.integrations.mlx.portable_host import (
     fft_packages,
     fp_matmul_layout,
     fp_qmm_layout,
+    gated_delta_dispatch,
+    gated_delta_packages,
     gather_dispatch,
     gather_mm_dispatch,
     gemm_dispatch,
@@ -568,6 +570,16 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # The gated-delta pipelines gated_delta_update.cpp builds.
+        self.gated_deltas = (
+            gated_delta_packages.GatedDeltaPackageCache(
+                mlx_root,
+                self.directory / gated_delta_packages.CACHE_DIRECTORY,
+                self.target,
+            )
+            if mlx_root is not None
+            else None
+        )
         # The Hadamard stages hadamard.cpp generates, one per size and type.
         self.hadamards = (
             hadamard_packages.HadamardPackageCache(
@@ -970,6 +982,8 @@ class HostRuntime:
                 return 1
             if name in hadamard_packages.ENTRIES and self.hadamards is not None:
                 return 1
+            if gated_delta_dispatch.is_entry(name):
+                return int(self.gated_deltas is not None)
             if (
                 name in wide_reduction_packages.ENTRIES
                 and self.wide_reductions is not None
@@ -1185,6 +1199,10 @@ class HostRuntime:
             )
         if entry in hadamard_packages.ENTRIES:
             return hadamard_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if gated_delta_dispatch.is_entry(entry):
+            return gated_delta_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
         if self.lazy_copy(entry):

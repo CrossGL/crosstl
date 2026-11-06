@@ -514,9 +514,13 @@ def test_runtime_host_port_and_upstream_inventory_route_hadamard():
     assert upstream_module_groups.HADAMARD_TESTS == (
         "test_ops.TestOps.test_hadamard",
         "test_ops.TestOps.test_hadamard_grad_vmap",
+        "test_ops.TestOps.test_hadamard_m_only",
     )
     assert (
-        verify_upstream_ops.GROUPS["fft"][-2:] == upstream_module_groups.HADAMARD_TESTS
+        "test_ops.TestOps.test_hadamard_m_only" in verify_upstream_ops.METAL_PATH_TESTS
+    )
+    assert (
+        verify_upstream_ops.GROUPS["fft"][-3:] == upstream_module_groups.HADAMARD_TESTS
     )
     assert verify_upstream_ops.CI_CLEARED_TESTS == {"test_ops.TestOps.test_hadamard"}
 

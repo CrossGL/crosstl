@@ -2387,7 +2387,29 @@ transforms, at most 65535 workgroups per axis, and the audit recomputes every
 retained transform. `test_hadamard` skips itself when `CI` is set, so the
 native worker imports `test_ops` with `CI` cleared (`CI_CLEARED_TESTS`), and
 the CI job translates its 114 stages ahead of the tests.
-`test_hadamard_m_only` runs only where `mx.metal.is_available()`.
+`test_hadamard_m_only`, the `m` stage alone, runs only where
+`mx.metal.is_available()`, so the native worker imports `test_ops` while
+`is_available` reports the host's GPU and restores it before any test body
+runs (`METAL_PATH_TESTS`); the CPU worker skips it.
+The `gated-delta` group runs `test_fast_gated_delta` through
+`gated_delta.inc`, a port of gated_delta_update.cpp: `GatedDeltaUpdate`
+runs the sequential kernel up to eight steps and the eight-step chunk kernel
+beyond, as MLX does on a device without NAX, and `GatedDeltaUpdateVJP` runs
+the save pass, which stores the state entering every step, before the
+sequential backward replays it. Head shapes that
+`supported_gated_delta_shape` rejects keep MLX's composed fallback.
+`gated_delta_layout` names each pipeline as MLX does, with function constant
+200 frozen into `<name>_save`, and checks every launch's buffers, step count
+and `(32, 4, 1)` threadgroup grid before `gated_delta_packages` translates
+it on first use. The backward adds its query, key, decay and beta gradients
+through `mlx_atomic<float>` in any order, so the audit checks each
+dispatch's package, launch and digests, and the unchanged tests compare the
+values with the composed fallback. `test_gated_delta_vjp` selects the
+kernels only where `mx.metal.is_available()` (`METAL_PATH_TESTS`), and
+`test_gated_delta_dtypes` checks output types without evaluating, so it
+dispatches nothing (`NO_DISPATCH_TESTS`). Its composed reference takes
+about twenty-six thousand launches, half an hour natively on Metal, so the
+`gated-delta-vjp` group runs it in a job of its own.
 `nn.losses.cross_entropy` with class indices on the GPU, `test_losses`'
 `test_cross_entropy` and `test_fast`'s `test_cross_entropy` reach
 `cross_entropy.metal`:

@@ -4897,3 +4897,5 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_fft.inc"
 // And the port of the vector attention kernels, whose views take the copy.
 #include "mlx/backend/no_gpu/crosstl_sdpa.inc"
+// And the port of the gated-delta recurrences, whose fills take the copy.
+#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"

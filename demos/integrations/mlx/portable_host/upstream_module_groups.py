@@ -278,8 +278,35 @@ FFT_TESTS = _tests(
 # 28 * 2**k points (hadamard.inc) in float32, float16 and bfloat16, strided
 # inputs through the copy, the strided two-pass split above 8,192 points, and
 # the transform's gradient under nested vmaps. test_hadamard skips itself
-# when CI is set, so the worker clears it for that test (CI_CLEARED_TESTS).
-HADAMARD_TESTS = _tests("test_ops", "TestOps", ("hadamard", "hadamard_grad_vmap"))
+# when CI is set, so the worker clears it for that test (CI_CLEARED_TESTS);
+# test_hadamard_m_only, the m stage alone, runs only where
+# mx.metal.is_available() (METAL_PATH_TESTS).
+HADAMARD_TESTS = _tests(
+    "test_ops", "TestOps", ("hadamard", "hadamard_grad_vmap", "hadamard_m_only")
+)
+
+# test_fast_gated_delta: the recurrent gated-delta update and its backward
+# (gated_delta.inc) on 32 heads and on 16 key heads shared by 32 or 48 value
+# heads, each checked against MLX's composed fallback. The masked test takes
+# the composed fallback on both sides, about eleven thousand launches, and the
+# dtype test checks the output types of graphs it never evaluates, so it
+# dispatches nothing (NO_DISPATCH_TESTS). test_gated_delta_vjp selects the
+# kernels only where mx.metal.is_available() (METAL_PATH_TESTS); its composed
+# reference takes about twenty-six thousand launches, half an hour natively on
+# Metal, so it runs in a job of its own.
+GATED_DELTA_TESTS = _tests(
+    "test_fast_gated_delta",
+    "TestGatedDelta",
+    ("gated_delta_dtypes", "gated_delta_fallback_masked"),
+)
+GATED_DELTA_VJP_TESTS = _tests(
+    "test_fast_gated_delta", "TestGatedDelta", ("gated_delta_vjp",)
+)
+# Tests the pinned suite runs only where mx.metal.is_available().
+METAL_PATH_TESTS = (
+    "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
+    "test_ops.TestOps.test_hadamard_m_only",
+)
 
 # test_fast_sdpa: queries of at most eight positions, which
 # scaled_dot_product_attention.cpp runs through the vector kernels in one pass
@@ -351,6 +378,8 @@ GROUPS = {
     "training": TRAINING_TESTS,
     "rope": ROPE_TESTS,
     "fft": FFT_TESTS + HADAMARD_TESTS,
+    "gated-delta": GATED_DELTA_TESTS,
+    "gated-delta-vjp": GATED_DELTA_VJP_TESTS,
     "sdpa": SDPA_TESTS,
     "attention": ATTENTION_TESTS,
     "attention-2": ATTENTION_2_TESTS,

@@ -491,7 +491,9 @@ def test_runtime_and_host_adapter_route_cross_entropy():
         "// And the port of FFT, whose inputs take the strided copy.\n"
         '#include "mlx/backend/no_gpu/crosstl_fft.inc"\n'
         "// And the port of the vector attention kernels, whose views take the copy.\n"
-        '#include "mlx/backend/no_gpu/crosstl_sdpa.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_sdpa.inc"\n'
+        "// And the port of the gated-delta recurrences, whose fills take the copy.\n"
+        '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"'
     )
     # The upstream op audit owns the cross-entropy dispatches.
     assert layout.PREFIX in verify_upstream_ops.RETAINED_VALUES
