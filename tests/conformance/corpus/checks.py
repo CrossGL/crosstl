@@ -274,11 +274,22 @@ def spirv_environment(text):
     return SPIRV_ENVIRONMENT.get(match.group(1), "vulkan1.1") if match else "vulkan1.1"
 
 
+# An entry whose size the pipeline specializes, next to entries of other sizes, is sized by LocalSizeId, which Vulkan
+# accepts when the device enables VK_KHR_maintenance4 (crosstl/translator/codegen/spirv_entry_workgroup_sizes.py).
+LOCAL_SIZE_ID = re.compile(r"^\s*OpExecutionModeId\s+%\S+\s+LocalSizeId\b", re.M)
+
+
+def spirv_features(text):
+    """spirv-val options for the device features the module requires."""
+    return ["--allow-localsizeid"] if LOCAL_SIZE_ID.search(text) else []
+
+
 def check_spirv(path, scratch):
     missing = _missing("spirv-as", "spirv-val")
     if missing:
         return missing
-    environment = spirv_environment(Path(path).read_text(errors="replace"))
+    text = Path(path).read_text(errors="replace")
+    environment = spirv_environment(text)
     binary = Path(scratch) / "unit.spv"
     results = [
         run(
@@ -296,7 +307,13 @@ def check_spirv(path, scratch):
     if results[0].status == "accepted":
         results.append(
             run(
-                [*tool("spirv-val").command, "--target-env", environment, binary],
+                [
+                    *tool("spirv-val").command,
+                    "--target-env",
+                    environment,
+                    *spirv_features(text),
+                    binary,
+                ],
                 timeout=TIMEOUT,
             )
         )

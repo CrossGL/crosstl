@@ -236,6 +236,13 @@ from .spirv_single_evaluation import (
     recording_subscript_indices,
     subscript_index_scope,
 )
+from .specialized_workgroup_size import has_specialized_workgroup_size
+from .spirv_entry_workgroup_sizes import (
+    effective_workgroup_config,
+    emit_entry_local_size_id,
+    entry_workgroup_size_value,
+    plan_entry_workgroup_sizes,
+)
 from .spirv_specialized_workgroup_size import (
     declare_specialized_workgroup_size,
     module_compute_stage_config,
@@ -683,6 +690,13 @@ class VulkanSPIRVCodeGen(
         self.current_function_id = None
         self.current_stage = None
         self.module_compute_entry_config = None
+        # Per-entry workgroup sizes (spirv_entry_workgroup_sizes); planned before any function is generated.
+        self.module_has_one_workgroup_size = True
+        self.entry_workgroup_size_metadata = {}
+        self.entry_workgroup_size_values = {}
+        self.host_workgroup_size_spec_ids = None
+        self.used_workgroup_specialization_ids = set()
+        self.uses_local_size_id = False
         self.current_return_type = None
         self.current_return_type_source = None
         self.current_return_semantic_output = None
@@ -31186,6 +31200,11 @@ class VulkanSPIRVCodeGen(
             return builtin_id
 
         type_name, builtin_name, storage_class = info
+        if storage_class == "Constant" and not self.module_has_one_workgroup_size:
+            # A module-wide WorkgroupSize built-in would resize every entry point; read the entry's own size.
+            return entry_workgroup_size_value(
+                self, name, self.map_crossgl_type(type_name)
+            )
         if builtin_name.startswith("Subgroup") or builtin_name == "NumSubgroups":
             self.require_group_non_uniform(
                 "GroupNonUniformBallot" if builtin_name.endswith("Mask") else None
@@ -31604,6 +31623,7 @@ class VulkanSPIRVCodeGen(
             config = self.module_compute_entry_config or {}
         else:
             config = getattr(stage, "execution_config", {}) or {}
+        config = effective_workgroup_config(self, config)
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
             if isinstance(value, (list, tuple)) and len(value) >= 3:
@@ -31614,7 +31634,9 @@ class VulkanSPIRVCodeGen(
                     for index in range(3)
                 )
 
-        require_static_workgroup_size(config)
+        if not has_specialized_workgroup_size(config):
+            # The pipeline sets a specialized size, so only the source's host leaves it unknown.
+            require_static_workgroup_size(config)
         return (
             self.positive_local_size_dimension(
                 config.get("local_size_x", 1), "local_size_x", "x", stage
@@ -32149,12 +32171,13 @@ class VulkanSPIRVCodeGen(
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
             self.emit_tessellation_execution_modes(execution_model, function_id, stage)
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
-            declare_specialized_workgroup_size(self, stage)
-            x, y, z = self.compute_local_size(stage)
-            if self.requires_compute_derivatives:
-                x = max(2, x + (x % 2))
-                y = max(2, y + (y % 2))
-            self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
+            if not emit_entry_local_size_id(self, function_id, stage):
+                declare_specialized_workgroup_size(self, stage)
+                x, y, z = self.compute_local_size(stage)
+                if self.requires_compute_derivatives:
+                    x = max(2, x + (x % 2))
+                    y = max(2, y + (y % 2))
+                self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
             if self.requires_compute_derivatives:
                 self.emit(f"OpExecutionMode %{function_id.id} DerivativeGroupQuadsKHR")
             if execution_model in {"MeshEXT", "TaskEXT"}:
@@ -32205,6 +32228,8 @@ class VulkanSPIRVCodeGen(
             for capability in self.required_capabilities
         ):
             return "1.3"
+        if self.uses_local_size_id:
+            return "1.2"
         return "1.0"
 
     def ordered_module_lines(self) -> List[str]:
@@ -32739,6 +32764,7 @@ class VulkanSPIRVCodeGen(
             self.module_compute_entry_config = compute_entry_configs[0]
         elif not compute_entry_configs:
             self.module_compute_entry_config = module_compute_stage_config(self, ast)
+        plan_entry_workgroup_sizes(self, ast, top_level_entries)
 
         if self.tessellation_control_stage is None:
             for func, qualifier in top_level_entries:

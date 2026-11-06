@@ -161,7 +161,9 @@ def test_hlsl_wave_lane_index_narrows_explicitly(tmp_path):
 
 def test_lane_index_without_threadgroup_size_is_refused(tmp_path):
     with pytest.raises(HostDefinedWorkgroupSizeError, match="lanes"):
-        _translate(_metal(tmp_path, METAL_LANE), "spirv")
+        _translate(_metal(tmp_path, METAL_LANE), "directx")
+    # SPIR-V lets the pipeline set the size the host chooses.
+    assert "SpecId 0" in _translate(_metal(tmp_path, METAL_LANE), "spirv")
 
 
 def test_crossgl_16_bit_compute_system_values_are_accepted_by_hlsl():

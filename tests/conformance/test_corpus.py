@@ -313,6 +313,12 @@ def test_spirv_environment_follows_module_version():
     assert checks.spirv_environment("OpCapability Shader\n") == "vulkan1.1"
 
 
+def test_spirv_features_enable_local_size_id_only_where_declared():
+    declared = "OpExecutionModeId %2 LocalSizeId %7 %8 %9\n"
+    assert checks.spirv_features(declared) == ["--allow-localsizeid"]
+    assert checks.spirv_features("OpExecutionMode %2 LocalSize 1 1 1\n") == []
+
+
 def _records(outcomes):
     data = load()
     units = data["slices"]["candle-metal"]["units"][: len(outcomes)]

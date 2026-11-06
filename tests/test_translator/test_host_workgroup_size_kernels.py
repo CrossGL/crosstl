@@ -85,7 +85,8 @@ def _size(code, backend):
     return tuple(int(value) for value in match.groups())
 
 
-@pytest.mark.parametrize("backend", sorted(SIZES) + ["wgsl"])
+# SPIR-V specializes a size the host chooses instead (test_spirv_entry_workgroup_sizes.py).
+@pytest.mark.parametrize("backend", sorted(set(SIZES) - {"vulkan"}) + ["wgsl"])
 @pytest.mark.parametrize(
     "source, suffix, reason",
     [
@@ -141,7 +142,12 @@ def test_required_opencl_size_is_kept(tmp_path, backend):
 def test_grid_index_and_grid_stride_need_no_block_size(tmp_path, backend, source):
     """blockIdx * blockDim + threadIdx and blockDim * gridDim do not depend on how the grid is split."""
     if source is CUDA_BLOCK_INDEX:
-        # blockIdx alone does depend on the split.
+        # blockIdx alone does depend on the split, so SPIR-V lets the pipeline set the size.
+        if backend == "vulkan":
+            code = _translate(tmp_path, source, ".cu", backend)
+            assert "OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize" in code
+            assert "SpecId 0" in code
+            return
         with pytest.raises(HostDefinedWorkgroupSizeError, match="gl_WorkGroupID"):
             _translate(tmp_path, source, ".cu", backend)
         return

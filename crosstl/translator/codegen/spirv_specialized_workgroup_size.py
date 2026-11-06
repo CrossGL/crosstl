@@ -17,6 +17,7 @@ from .specialized_workgroup_size import (
     has_specialized_workgroup_size,
     workgroup_size_specialization_ids,
 )
+from .spirv_entry_workgroup_sizes import effective_workgroup_config
 
 __all__ = [
     "declare_specialized_workgroup_size",
@@ -30,8 +31,11 @@ _TARGET = "SPIR-V"
 
 def _stage_config(generator, stage):
     if stage is None:
-        return generator.module_compute_entry_config or {}
-    return getattr(stage, "execution_config", {}) or {}
+        config = generator.module_compute_entry_config or {}
+    else:
+        config = getattr(stage, "execution_config", {}) or {}
+    # A size the source's host chooses becomes one the pipeline specializes.
+    return effective_workgroup_config(generator, config)
 
 
 def stage_has_specialized_workgroup_size(generator, stage) -> bool:
