@@ -681,7 +681,9 @@ class MetalParser:
                     self.annotate_declaration_scope(typedef)
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
-                global_variables.append(self.parse_static_assert())
+                global_variables.append(
+                    self.annotate_declaration_scope(self.parse_static_assert())
+                )
             elif self.is_conversion_operator_fragment():
                 self.skip_struct_method()
             elif self.is_operator_function_definition():

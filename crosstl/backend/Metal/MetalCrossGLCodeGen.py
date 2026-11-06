@@ -77,6 +77,7 @@ from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
+from .namespace_scope_variables import resolve_namespace_scope_variables
 from .opaque_matrix_contracts import complete_opaque_matrix_contracts
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
@@ -3443,8 +3444,11 @@ class MetalToCrossGLConverter(
         """Render ``ast`` as a CrossGL program.
 
         Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully, and
-        :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares.
+        :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares, and
+        :class:`.namespace_scope_variables.MetalNamespaceLookupError` for an unqualified use of a variable name that
+        several namespaces declare and lookup cannot bind to one of them.
         """
+        resolve_namespace_scope_variables(ast)
         refuse_external_function_calls(ast)
         declare_referenced_library_structs(ast, parse_metal_structs)
         return self.refusals.run(self.render_program, ast)
