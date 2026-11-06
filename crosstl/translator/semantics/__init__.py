@@ -115,12 +115,14 @@ from .metal_runtime_types import (
     MetalRuntimeTypeUnsupportedError,
     refuse_metal_runtime_types,
 )
+from .metal_vector_scalar_operands import convert_metal_vector_scalar_operands
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
 from .narrow_arithmetic import wrap_narrow_arithmetic
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .push_constant_layouts import mark_push_constant_layouts
 from .relative_vertex_ids import (
     RelativeVertexIdUnsupportedError,
     lower_relative_vertex_ids,
@@ -330,7 +332,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
     ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
     (:mod:`.buffer_strides`), ``ConstantBuffer<T>`` declarations with a layout the target's constant buffers do not
-    give constant blocks holding one ``T`` (:mod:`.constant_buffer_layouts`), and constant
+    give constant blocks holding one ``T`` (:mod:`.constant_buffer_layouts`), push-constant blocks keeping their std430
+    layout for HLSL (:mod:`.push_constant_layouts`), and constant
     references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
@@ -441,6 +444,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
+    convert_metal_vector_scalar_operands(program, report.source)
     convert_struct_constructor_arguments(program)
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
@@ -455,6 +459,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
+    mark_push_constant_layouts(program, report.target)
     hoist_constant_buffer_layouts(program, report.target)
     hoist_constant_reference_layouts(program, report.target)
     refuse_unplaced_packed_members(program, report.target)

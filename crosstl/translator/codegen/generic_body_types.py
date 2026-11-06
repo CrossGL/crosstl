@@ -13,6 +13,7 @@ from __future__ import annotations
 from ..ast import ASTNode, FunctionCallNode, IdentifierNode
 from ..semantics.rewrite import child_slots, get_child
 from .enum_utils import substitute_generic_type_name
+from .generic_pointer_deduction import concrete_generic_pointer_type
 from .generic_vector_deduction import (
     concrete_generic_vector_name,
     concrete_generic_vector_type,
@@ -30,6 +31,11 @@ def _substituted(generator, value, substitutions):
     vector = concrete_generic_vector_type(value, substitutions)
     if vector is not None:
         return vector
+    pointer = concrete_generic_pointer_type(
+        value, lambda pointee: _substituted(generator, pointee, substitutions)
+    )
+    if pointer is not None:
+        return pointer
     name = generator.type_name_string(value)
     concrete = substitute_generic_type_name(name, substitutions)
     return None if concrete == name else concrete

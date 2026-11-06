@@ -122,6 +122,11 @@ from .pointer_reinterpret import (
 from .relational_builtins import lower_relational_builtins
 from .resource_aggregates import lower_resource_aggregates
 from .spirv_argument_tables import plan_entry_descriptor_slots
+from .spirv_atomic_load_store import (
+    SPIRV_ATOMIC_LOAD_STORE_FUNCTIONS,
+    call_spirv_atomic_load_store,
+    spirv_atomic_load_store_access,
+)
 from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
 from .spirv_constant_folding import (
@@ -4979,7 +4984,7 @@ class VulkanSPIRVCodeGen(
         return spirv_id
 
     def resource_function_names(self):
-        return {
+        names = {
             "subpassLoad",
             "imageLoad",
             "imageStore",
@@ -5052,6 +5057,7 @@ class VulkanSPIRVCodeGen(
             "textureQueryLevels",
             "textureQueryLod",
         } | TEXTURE_LOD_CLAMP_INTRINSIC_NAMES
+        return names | set(SPIRV_ATOMIC_LOAD_STORE_FUNCTIONS)
 
     def image_atomic_function_names(self):
         return {
@@ -6494,6 +6500,8 @@ class VulkanSPIRVCodeGen(
             return self.call_image_atomic_function(function_name, args)
         if function_name in self.buffer_atomic_function_names():
             return self.call_buffer_atomic_function(function_name, args)
+        if function_name in SPIRV_ATOMIC_LOAD_STORE_FUNCTIONS:
+            return call_spirv_atomic_load_store(self, function_name, args)
         if function_name in self.projected_texture_function_names():
             return self.call_projected_texture_function(function_name, args)
         if function_name in self.projected_shadow_function_names():
@@ -7770,7 +7778,10 @@ class VulkanSPIRVCodeGen(
             if pointer_arg is not None:
                 return pointer_arg
 
-        if function_name in self.buffer_atomic_function_names() and arg_index == 0:
+        if (
+            function_name in self.buffer_atomic_function_names()
+            or function_name in SPIRV_ATOMIC_LOAD_STORE_FUNCTIONS
+        ) and arg_index == 0:
             pointer_arg = self.storage_reference_pointer(arg)
             if pointer_arg is not None:
                 return pointer_arg
@@ -15510,6 +15521,9 @@ class VulkanSPIRVCodeGen(
         source_type_name = self.source_storage_buffer_expression_type_name(expr)
         if source_type_name is not None:
             return source_type_name
+        if getattr(self, "collecting_generic_function_specializations", False):
+            # Collection runs before any variable is declared: resolving a pointer would lower the expression.
+            return None
 
         pointer = self.variable_pointer_from_expression(expr)
         if pointer is None:
@@ -20071,6 +20085,14 @@ class VulkanSPIRVCodeGen(
                 return self.variable_value_types.get(
                     variable.id
                 ) or self.value_types.get(variable.id)
+            named_constant = self.named_constants.get(name)
+            if named_constant is not None:
+                constant_type = self.value_types.get(named_constant.id)
+                if constant_type is not None:
+                    return constant_type
+            cbuffer_member = self.cbuffer_members.get(name)
+            if cbuffer_member is not None:
+                return cbuffer_member[1]
             builtin_type = self.infer_builtin_expression_result_type(name)
             if builtin_type is not None:
                 return builtin_type
@@ -21179,6 +21201,11 @@ class VulkanSPIRVCodeGen(
             if type_name is not None:
                 type_names[name] = type_name
 
+        for node in getattr(ast, "constants", []) or []:
+            # Program constants, such as ``const float LUT[3]``, are typed by ``const_type``.
+            type_name = self.type_name_from_value(getattr(node, "const_type", None))
+            if getattr(node, "name", None) and type_name is not None:
+                type_names[node.name] = type_name
         for node in getattr(ast, "global_variables", []) or []:
             record_variable(node)
         for cbuffer in getattr(ast, "cbuffers", []) or []:
@@ -23167,7 +23194,7 @@ class VulkanSPIRVCodeGen(
             return "read_write"
         if func_name in self.buffer_atomic_function_names():
             return "read_write"
-        return None
+        return spirv_atomic_load_store_access(func_name)
 
     def storage_buffer_member_method_access_requirement(self, method_name):
         if method_name in {"Load"} or self.byte_address_method_load_width(method_name):
@@ -32590,6 +32617,7 @@ class VulkanSPIRVCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
+            global_types=self.source_variable_type_names,
         )
         if generic_function_specializations:
             all_functions = all_functions + list(

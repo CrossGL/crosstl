@@ -7,13 +7,22 @@ the Metal generator renames it, every overload and every call that one of its ov
 (issue #3156), the way :func:`~crosstl.translator.semantics.function_name_collisions.rename_colliding_functions`
 renames functions that share a name with a value. A call with another argument count, such as ``clamp(x, 0.0, 1.0)``
 beside a user ``clamp(float)``, and the library calls the generator writes itself, reach the library.
+
+A call with a matching argument count still reaches the library when no user overload can take one of its
+arguments: a vector converts to no scalar and to no vector of another width (MSL section 2.12; GLSL and C++ alike),
+so ``dot(v, v)`` on ``float4`` values calls the library ``dot`` beside a user ``float dot(float, float)``, as the
+Metal compiler resolves it. HLSL truncates a vector argument implicitly, but its exact-width built-in overload ranks
+above that conversion, so the call resolves the same way there.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
 
+from .. import ast as A
 from ..semantics.function_name_collisions import rename_functions, user_function_names
+from ..semantics.hub_types import call_name, iter_functions, type_from_node
+from ..semantics.scoped_walk import ScopedWalker, parameter_type
 
 __all__ = [
     "MSL_LIBRARY_FUNCTIONS",
@@ -154,11 +163,56 @@ def shadows_msl_library(name) -> bool:
     )
 
 
+def _takes(parameters, argument_types) -> bool:
+    """Whether an overload with ``parameters`` (hub types, ``None`` when unknown) can take the arguments."""
+    for parameter, argument in zip(parameters, argument_types):
+        if parameter is None or argument is None or argument.lanes == 1:
+            continue
+        if parameter.lanes != argument.lanes:
+            return False
+    return True
+
+
+class _LibraryCalls(ScopedWalker):
+    """The calls of ``names`` that only a library overload can take, by node identity."""
+
+    def __init__(self, program, names):
+        super().__init__(program)
+        self.overloads = {}
+        for function in iter_functions(program):
+            if function.name in names:
+                self.overloads.setdefault(function.name, []).append(
+                    [
+                        type_from_node(parameter_type(parameter))
+                        for parameter in function.parameters or []
+                    ]
+                )
+        self.calls = set()
+
+    def visit(self, node):
+        if not isinstance(node, A.FunctionCallNode):
+            return
+        overloads = self.overloads.get(call_name(node))
+        if not overloads:
+            return
+        arguments = list(getattr(node, "args", None) or [])
+        candidates = [
+            parameters for parameters in overloads if len(parameters) == len(arguments)
+        ]
+        if not candidates:
+            return
+        argument_types = [self.scope.infer(argument) for argument in arguments]
+        if not any(_takes(parameters, argument_types) for parameters in candidates):
+            self.calls.add(id(node))
+
+
 def rename_msl_library_functions(ast):
     """``ast``, or a copy whose user functions named like library functions are renamed with every call to them."""
     names = {name for name in user_function_names(ast) if shadows_msl_library(name)}
     if not names:
         return ast
     ast = deepcopy(ast)
-    rename_functions(ast, names, by_arity=True)
+    library_calls = _LibraryCalls(ast, names)
+    library_calls.run_program()
+    rename_functions(ast, names, by_arity=True, keep_calls=library_calls.calls)
     return ast

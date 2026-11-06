@@ -219,6 +219,7 @@ from .for_in_utils import (
 )
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
+from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -231,6 +232,7 @@ from .generic_function_utils import (
     reject_unresolved_explicit_generic_call,
     reject_unresolved_generic_member_call,
 )
+from .generic_global_types import glsl_preliminary_global_variable_types
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -240,6 +242,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
+from .glsl_affine_relations import related_local_interval
 from .glsl_buffer_layout import (
     glsl_buffer_block_node_type,
     std430_array_stride,
@@ -606,6 +609,7 @@ from .storage_image_texels import (
     texel_store_value,
     texel_vector_type,
 )
+from .storage_pointer_local_aliases import bind_local_storage_pointers
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
@@ -9304,6 +9308,11 @@ class GLSLCodeGen(
                 self.generic_struct_specializations,
             )
         )
+        # Generic calls bind type parameters from global arguments; the complete
+        # table, built once declarations are lowered, replaces this one.
+        self.global_variable_types = glsl_preliminary_global_variable_types(
+            self, ast, target_stage
+        )
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             functions,
@@ -10434,6 +10443,7 @@ class GLSLCodeGen(
                 continue
 
             if generic_function_parameters(func):
+                mark_generic_function_emitted(self, func)
                 specialized_code = ""
                 for specialized_func in generic_function_emission_list(self, func):
                     for (
@@ -10553,6 +10563,7 @@ class GLSLCodeGen(
                             )
 
                     if generic_function_parameters(func):
+                        mark_generic_function_emitted(self, func)
                         for specialized_func in generic_function_emission_list(
                             self,
                             func,
@@ -28004,20 +28015,17 @@ class GLSLCodeGen(
                 }
             }
             nodes = list(self.walk_ast(getattr(function, "body", [])))
-            changed = True
-            while changed:
-                changed = False
-                for node in nodes:
-                    if not isinstance(node, VariableNode):
-                        continue
-                    if not self.glsl_storage_pointer_declaration(node, aliases):
-                        continue
-                    binding = self.glsl_storage_pointer_binding(
-                        getattr(node, "initial_value", None), aliases
-                    )
-                    if binding is not None and aliases.get(node.name) != binding:
-                        aliases[node.name] = binding
-                        changed = True
+            if not bind_local_storage_pointers(
+                [node for node in nodes if isinstance(node, VariableNode)],
+                aliases,
+                self.glsl_storage_pointer_declaration,
+                self.glsl_storage_pointer_binding,
+                preferred_root=parameter_name,
+            ):
+                self.glsl_storage_pointer_access_requirement_cache[cache_key] = (
+                    "read_write"
+                )
+                return "read_write"
 
             for node in nodes:
                 if isinstance(node, AssignmentNode):
@@ -37657,6 +37665,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.local_variable_types.get(name)
                 or self.glsl_buffer_block_variable_types.get(name)
                 or self.global_variable_types.get(name)
+                or self.glsl_constant_types.get(name)
                 or self.glsl_builtin_identifier_result_type(name)
             )
         if hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
@@ -37665,6 +37674,7 @@ complex64_t crossgl_complex64_mod_assign(
                 self.local_variable_types.get(name)
                 or self.glsl_buffer_block_variable_types.get(name)
                 or self.global_variable_types.get(name)
+                or self.glsl_constant_types.get(name)
                 or self.glsl_builtin_identifier_result_type(name)
             )
         if isinstance(expr, (int, float)):
@@ -45147,6 +45157,18 @@ complex64_t crossgl_complex64_mod_assign(
         else:
             key = self.expression_name(expression)
         interval = intervals.get(key) if key is not None else None
+        related = related_local_interval(
+            self,
+            getattr(self, "current_glsl_emitted_function", None),
+            expression,
+            intervals,
+        )
+        if related is not None:
+            interval = (
+                related
+                if interval is None
+                else (max(interval[0], related[0]), min(interval[1], related[1]))
+            )
         if interval is None:
             return None
 

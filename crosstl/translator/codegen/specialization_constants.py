@@ -28,6 +28,7 @@ __all__ = [
     "SpecializationConstantError",
     "array_sizes_reading",
     "case_labels_reading",
+    "declares_specialization_id",
     "identifier_names",
     "walk_nodes",
     "specialization_constant_ids",
@@ -68,6 +69,14 @@ def _attribute_name(attribute) -> str:
         if name.startswith(prefix):
             return name[len(prefix) :]
     return name
+
+
+def declares_specialization_id(node) -> bool:
+    """Whether ``node`` carries a specialization id attribute, whatever its arguments are."""
+    return any(
+        _attribute_name(attribute) in SPECIALIZATION_ID_ATTRIBUTES
+        for attribute in getattr(node, "attributes", None) or []
+    )
 
 
 def _integer_id(argument) -> int | None:

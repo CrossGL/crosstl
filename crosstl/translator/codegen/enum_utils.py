@@ -5,6 +5,9 @@ import re
 from ..ast import EnumNode, StructNode
 from .array_utils import format_c_style_array_declaration
 
+# An element type followed by one or more ``[size]`` dimensions, such as ``T[2]`` or ``T*[2][3]``.
+_ARRAY_TYPE_PATTERN = re.compile(r"^(.+?)((?:\s*\[[^\[\]]*\])+)$")
+
 
 def collect_plain_enums(nodes):
     """Return enums whose variants do not carry payload data."""
@@ -870,6 +873,13 @@ def substitute_generic_type_name(type_name, substitutions):
         pointee_type = type_name.strip()[:-1].strip()
         if pointee_type:
             return f"{substitute_generic_type_name(pointee_type, substitutions)}*"
+
+    array_parts = _ARRAY_TYPE_PATTERN.match(type_name.strip())
+    if array_parts is not None:
+        element_type, dimensions = array_parts.groups()
+        return (
+            f"{substitute_generic_type_name(element_type, substitutions)}{dimensions}"
+        )
 
     base_name, generic_args = generic_type_parts(type_name)
     if not generic_args:

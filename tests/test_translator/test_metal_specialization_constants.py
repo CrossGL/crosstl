@@ -228,13 +228,159 @@ shader SizedBySpecialization {
 
 
 @pytest.mark.parametrize("size", ["count", "padded"])
-def test_array_sized_by_a_specialization_constant_is_refused(tmp_path, size):
-    # A function constant is not a constant expression to the Metal front end, so freezing the array at the
-    # default would disagree with every specialized value. ``padded`` follows ``count`` through its initializer.
-    with pytest.raises(
-        MetalLoweringRefused, match=rf"array sized by specialization constant '{size}'"
+def test_array_sized_by_a_specialization_constant_reads_a_compile_time_macro(
+    tmp_path, size
+):
+    # A function constant is not a constant expression to the Metal front end, so ``count`` is specialized when the
+    # source is compiled: it reads a macro named after its id that defaults to 4. ``padded`` follows ``count``
+    # through its initializer, so it moves ``count`` to the macro as well.
+    metal = translate(tmp_path, SIZED.replace("SIZE", size))
+    assert "#ifndef CROSSGL_SPECIALIZATION_CONSTANT_ID_3\n" in metal, metal
+    assert "#define CROSSGL_SPECIALIZATION_CONSTANT_ID_3 4\n" in metal, metal
+    assert " count = int(CROSSGL_SPECIALIZATION_CONSTANT_ID_3);" in metal, metal
+    assert " padded = count + 1;" in metal, metal
+    assert f"float values[{size}];" in metal, metal
+    assert "[[function_constant(3)]]" not in metal, metal
+    xcrun = metal_compiler()
+    if xcrun is None:
+        return
+    shader = tmp_path / "sized.metal"
+    shader.write_text(metal, encoding="utf-8")
+    for tag, defines in (
+        ("default", []),
+        ("specialized", ["-D", "CROSSGL_SPECIALIZATION_CONSTANT_ID_3=9"]),
     ):
-        translate(tmp_path, SIZED.replace("SIZE", size))
+        run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                *defines,
+                "-c",
+                shader,
+                "-o",
+                tmp_path / f"sized-{tag}.air",
+            ]
+        )
+
+
+def test_only_the_constants_that_size_arrays_leave_function_constants(tmp_path):
+    source = (
+        SIZED.replace("SIZE", "count")
+        .replace(
+            "    const int fixedCount = 4;\n",
+            "    const int fixedCount = 4;\n    const int scale @constant_id(4) = 2;\n",
+        )
+        .replace("values[j] = float(j);", "values[j] = float(j * scale);")
+    )
+    metal = translate(tmp_path, source)
+    assert "#define CROSSGL_SPECIALIZATION_CONSTANT_ID_3 4\n" in metal, metal
+    assert "[[function_constant(4)]];" in metal, metal
+    assert "CROSSGL_SPECIALIZATION_CONSTANT_ID_4" not in metal, metal
+
+
+def test_host_reflection_reports_both_kinds_of_metal_specialization(tmp_path):
+    # The host specializes a macro constant through MTLCompileOptions.preprocessorMacros and a function constant
+    # through MTLFunctionConstantValues, so the reflection of the artifact names both, each with its id.
+    from crosstl.project.host_reflection import reflect_target_host_interface
+
+    source = (
+        SIZED.replace("SIZE", "count")
+        .replace(
+            "    const int fixedCount = 4;\n",
+            "    const int fixedCount = 4;\n    const int scale @constant_id(4) = 2;\n",
+        )
+        .replace("values[j] = float(j);", "values[j] = float(j * scale);")
+    )
+    artifact = tmp_path / "sized.metal"
+    artifact.write_text(translate(tmp_path, source), encoding="utf-8")
+    reflection = reflect_target_host_interface(artifact, target="metal")
+    constants = {item["id"]: item for item in reflection["specializationConstants"]}
+    assert sorted(constants) == [3, 4], reflection["specializationConstants"]
+    assert constants[3]["kind"] == "preprocessor-macro"
+    assert constants[3]["macro"] == "CROSSGL_SPECIALIZATION_CONSTANT_ID_3"
+    assert constants[3]["name"] == "count"
+    assert constants[3]["dtype"] == "int"
+    assert constants[3]["default"] == 4
+    assert constants[3]["required"] is False
+    assert constants[4]["kind"] == "function-constant"
+    assert constants[4]["source"] == "metal.function_constant"
+
+
+SIZED_DISPATCH = """
+shader SizedDispatch {
+    const int count @constant_id(3) = 4;
+    compute {
+        layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+        buffer int* fin;
+        buffer int* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            int values[count];
+            for (int j = 0; j < count; j++) {
+                values[j] = j + 1;
+            }
+            int total = 0;
+            for (int j = 0; j < count; j++) {
+                total += values[j];
+            }
+            outp[i] = fin[i] * 100 + total;
+        }
+    }
+}
+"""
+
+
+def test_array_sizing_specialization_constant_takes_the_host_macro_on_metal(tmp_path):
+    if os.environ.get(REQUIRE_ENV) != "1" or sys.platform != "darwin":
+        pytest.skip(f"set {REQUIRE_ENV}=1 on macOS to require the Metal dispatch")
+    xcrun = metal_compiler()
+    assert xcrun is not None, "the Metal toolchain is required"
+    metal = translate(tmp_path, SIZED_DISPATCH)
+    shader = tmp_path / "sized_dispatch.metal"
+    shader.write_text(metal, encoding="utf-8")
+    run(
+        [
+            "swiftc",
+            ROOT / "tests/fixtures/runtime_verification/metal_raw_buffers.swift",
+            "-o",
+            tmp_path / "runner",
+        ]
+    )
+    kernel = re.search(r"kernel void (\w+)\((.*?)\) \{", metal, re.S)
+    assert kernel is not None, metal
+    slots = {
+        name: int(index)
+        for name, index in re.findall(r"(\w+) \[\[buffer\((\d+)\)\]\]", kernel.group(2))
+    }
+    inputs = [0, 1, 2, -5]
+    results = {}
+    for tag, defines, count in (
+        ("defaults", [], 4),
+        ("specialized", ["-D", "CROSSGL_SPECIALIZATION_CONSTANT_ID_3=7"], 7),
+    ):
+        air = tmp_path / f"{tag}.air"
+        library = tmp_path / f"{tag}.metallib"
+        run(
+            [
+                xcrun,
+                "-sdk",
+                "macosx",
+                "metal",
+                "-Werror",
+                *defines,
+                "-c",
+                shader,
+                "-o",
+                air,
+            ]
+        )
+        run([xcrun, "-sdk", "macosx", "metallib", air, "-o", library])
+        results[tag] = _dispatch(tmp_path, library, kernel.group(1), slots, inputs, tag)
+        # The array holds ``count`` elements 1..count, so their sum follows the macro.
+        assert results[tag] == [x * 100 + count * (count + 1) // 2 for x in inputs], tag
 
 
 def test_array_sized_by_a_plain_constant_still_compiles(tmp_path):

@@ -67,6 +67,10 @@ from .dependent_builtins import (
 )
 from .external_functions import refuse_external_function_calls
 from .library_structs import declare_referenced_library_structs
+from .local_aggregate_declarators import (
+    union_layout,
+    unnamed_aggregate_display_name,
+)
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
 from .mesh_import import MetalMeshImport
@@ -79,6 +83,7 @@ from .preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from .scalar_type_identity import canonical_scalar_type_spelling
 from .scoped_member_types import resolve_concrete_scoped_member_type
 from .simd_aliases import SIMD_TYPE_ALIASES
 from .sparse_color import (
@@ -2067,6 +2072,7 @@ class MetalToCrossGLConverter(
         self.cooperative_matrix_fragment_type_replacements = {}
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
+        self.template_name_spellings = {}
         self.texture_method_functions = {
             "read": "textureLoad",
             "write": "textureStore",
@@ -2190,6 +2196,12 @@ class MetalToCrossGLConverter(
         ):
             return name
 
+        if "<" in str(name):
+            # ``f<uint>`` and ``f<uint32_t>`` name one specialization; the first spelling met names it.
+            spellings = self.__dict__.setdefault("template_name_spellings", {})
+            name = spellings.setdefault(
+                canonical_scalar_type_spelling(str(name)), str(name)
+            )
         parts = []
         for index, char in enumerate(str(name)):
             valid = (
@@ -8942,6 +8954,7 @@ class MetalToCrossGLConverter(
         self.suppressed_out_of_line_call_operator_ids = set()
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
+        self.template_name_spellings = {}
         self.storage_texture_declaration_ids = (
             self.collect_storage_texture_declaration_ids(ast)
         )
@@ -10927,7 +10940,12 @@ class MetalToCrossGLConverter(
             self.current_function_specialization
             or self.current_function_name
             or "<unknown>",
-            getattr(struct_node, "name", None)
+            (
+                f"<unnamed {struct_node.unnamed_aggregate_kind}>"
+                if getattr(struct_node, "unnamed_aggregate_kind", None)
+                else None
+            )
+            or getattr(struct_node, "name", None)
             or getattr(struct_node, "typedef_tag", None)
             or "<anonymous>",
             reason,
@@ -10941,7 +10959,7 @@ class MetalToCrossGLConverter(
 
     def validate_local_aggregate_shape(self, struct_node):
         aggregate_kind = getattr(struct_node, "aggregate_kind", None) or "struct"
-        if aggregate_kind != "struct":
+        if aggregate_kind not in {"struct", "union"}:
             raise self.local_aggregate_error(
                 struct_node,
                 f"{aggregate_kind} storage semantics cannot be represented by "
@@ -11152,10 +11170,16 @@ class MetalToCrossGLConverter(
             str(qualifier).lower()
             for qualifier in getattr(declaration, "qualifiers", None) or []
         }
+        declared_type = getattr(declaration, "vtype", None)
+        # ``constexpr auto`` deduces an integral type exactly when the folded
+        # initializer is an integer; floating initializers do not fold below.
         if (
             not name
             or "constexpr" not in qualifiers
-            or not self.is_integral_constexpr_type(getattr(declaration, "vtype", None))
+            or not (
+                str(declared_type or "").strip() == "auto"
+                or self.is_integral_constexpr_type(declared_type)
+            )
         ):
             return
         rendered_value = self.substitute_local_integral_constant_text(rendered_value)
@@ -11178,8 +11202,11 @@ class MetalToCrossGLConverter(
             return canonical_name
 
         self.validate_local_aggregate_shape(struct_node)
+        unnamed_kind = getattr(struct_node, "unnamed_aggregate_kind", None)
         canonical_name = self.reserve_local_aggregate_name(
-            getattr(struct_node, "name", None)
+            unnamed_aggregate_display_name(unnamed_kind)
+            if unnamed_kind
+            else getattr(struct_node, "name", None)
             or getattr(struct_node, "typedef_tag", None)
         )
         self.bind_local_aggregate_aliases(struct_node, canonical_name)
@@ -11269,6 +11296,12 @@ class MetalToCrossGLConverter(
                 layout[1] for _member, _source_type, layout in member_layouts
             )
 
+        layout_contract = None
+        if getattr(struct_node, "aggregate_kind", None) == "union":
+            rendered_members, layout_contract = self.local_union_layout_contract(
+                struct_node, rendered_members, member_layouts
+            )
+
         self.local_aggregate_declaration_keys[key] = canonical_name
         self.local_aggregate_declarations.append(
             {
@@ -11278,11 +11311,38 @@ class MetalToCrossGLConverter(
                     struct_node, "declaration_source_location", None
                 ),
                 "native_storage_alignment": native_storage_alignment,
+                "union_layout": layout_contract,
             }
         )
         self.struct_member_types[canonical_name] = member_types
         self.struct_member_name_maps[canonical_name] = member_names
         return canonical_name
+
+    def local_union_layout_contract(
+        self, struct_node, rendered_members, member_layouts
+    ):
+        """Members annotated with their overlapping storage, and the union's size and alignment.
+
+        Hoisting keeps a block-scope union's storage semantics through the same layout metadata that a
+        program-scope union carries, so every member layout must be known.
+        """
+        unresolved = sorted(
+            source_type
+            for _member, source_type, layout in member_layouts
+            if layout is None
+        )
+        if unresolved:
+            raise self.local_aggregate_error(
+                struct_node,
+                "union storage layout cannot be proven for " + ", ".join(unresolved),
+                unresolved_dependencies=tuple(unresolved),
+            )
+        layouts = [layout for _member, _source_type, layout in member_layouts]
+        annotated = tuple(
+            f"@union_member_layout(0, {size}, {alignment}) {member}"
+            for member, (size, alignment) in zip(rendered_members, layouts)
+        )
+        return annotated, union_layout(layouts)
 
     def render_struct_member_identifier(self, object_expression, member):
         try:
@@ -11305,6 +11365,13 @@ class MetalToCrossGLConverter(
             native_storage_alignment = declaration.get("native_storage_alignment")
             if native_storage_alignment is not None:
                 code += f"{pad}@metal_alignas({native_storage_alignment})\n"
+            if declaration.get("union_layout") is not None:
+                size, alignment = declaration["union_layout"]
+                code += (
+                    f"{pad}// Metal union {declaration['name']} retains overlapping "
+                    "storage through layout metadata\n"
+                    f"{pad}@union_layout({size}, {alignment}, little_endian, metal)\n"
+                )
             code += f"{pad}struct {declaration['name']} {{\n"
             for member in declaration["members"]:
                 code += f"{member_pad}{member}\n"
@@ -11959,7 +12026,7 @@ class MetalToCrossGLConverter(
             )
             if bfloat_plan is not None and bfloat_plan[1][1] is not None:
                 rhs = f"{self.map_type(bfloat_plan[1][1])}({rhs})"
-            conversion = self.metal_integer_vector_scalar_conversion(
+            conversion = self.metal_vector_scalar_conversion(
                 op[:-1],
                 self.expression_metal_type(node.left),
                 self.expression_metal_type(node.right),
@@ -12440,9 +12507,7 @@ class MetalToCrossGLConverter(
                             f"{self.map_type(conversion_type)}({operands[index]})"
                         )
                 return f"{operands[0]} {expr.op} {operands[1]}"
-            conversion = self.metal_integer_vector_scalar_conversion(
-                expr.op, *source_types
-            )
+            conversion = self.metal_vector_scalar_conversion(expr.op, *source_types)
             if conversion is not None:
                 index, element_type = conversion
                 operands = [left, right]
@@ -13407,7 +13472,7 @@ class MetalToCrossGLConverter(
             if (
                 target_type is None
                 or expected_type is None
-                or self.map_type(target_type) not in {"int", "uint", "float"}
+                or not self.is_portable_atomic_scalar_type(self.map_type(target_type))
                 or self.map_type(expected_type) != self.map_type(target_type)
             ):
                 raise error(
@@ -13451,11 +13516,9 @@ class MetalToCrossGLConverter(
             pointee = self.metal_pointer_pointee_type_once(
                 self.expression_metal_type(args[0])
             )
-            if pointee is None or self.map_type(pointee) not in {
-                "int",
-                "uint",
-                "float",
-            }:
+            if pointee is None or not self.is_portable_atomic_scalar_type(
+                self.map_type(pointee)
+            ):
                 raise MetalAtomicLoadLoweringError(
                     "requires a scalar int, uint or float atomic target",
                     source_location,
@@ -21210,6 +21273,28 @@ float {scalar}(float value) {{
             getattr(expression, "source_location", None),
         )
 
+    def is_portable_atomic_scalar_type(self, mapped_type):
+        """Whether an atomic target of ``mapped_type`` has a portable scalar contract.
+
+        A type parameter the enclosing generic function leaves open is accepted: every
+        backend monomorphizes generic functions and checks the bound scalar type of each
+        specialization's atomic target before it emits the operation.
+        """
+        mapped_type = str(mapped_type or "").strip()
+        if mapped_type in {"int", "uint", "float"}:
+            return True
+        func = self.current_function
+        if func is None or getattr(func, "qualifier", None):
+            return False
+        bound = self.current_function_materialization_bindings or {}
+        return any(
+            kind in {"typename", "class"}
+            and name
+            and name not in bound
+            and mapped_type in {name, self.sanitize_identifier(name)}
+            for kind, name in getattr(func, "template_parameters", None) or ()
+        )
+
     def metal_pointer_pointee_type_once(self, metal_type):
         if metal_type is None:
             return None
@@ -22149,7 +22234,7 @@ float {scalar}(float value) {{
             return signed_name
         return "uint64_t" if signed_bits == 64 else "uint"
 
-    def metal_integer_vector_scalar_conversion(self, operator, left_type, right_type):
+    def metal_vector_scalar_conversion(self, operator, left_type, right_type):
         if operator not in {
             "+",
             "-",
@@ -22178,17 +22263,29 @@ float {scalar}(float value) {{
             return None
         index = 1 if left_vector is not None else 0
         element_type, _width = left_vector or right_vector
+        scalar_type = (left_type, right_type)[index]
         element = self.metal_scalar_arithmetic_type_info(element_type)
-        scalar = self.metal_scalar_arithmetic_type_info((left_type, right_type)[index])
-        if (
-            element is None
-            or scalar is None
-            or element[0] != "integer"
-            or scalar[0] != "integer"
-            or element[2] == 1
-        ):
+        scalar = self.metal_scalar_arithmetic_type_info(scalar_type)
+        if element is None or scalar is None:
             return None
-        return index, element_type
+        if element[0] == "integer" and scalar[0] == "integer" and element[2] != 1:
+            return index, element_type
+        # MSL converts a scalar operand to a floating vector's element type,
+        # so ``half3 * float`` stays ``half3``. A wider floating scalar is the
+        # case CrossGL would otherwise widen the vector for.
+        if (
+            element[0] == "floating"
+            and scalar[0] == "floating"
+            and scalar[2] > element[2]
+            and operator in {"+", "-", "*", "/", "==", "!=", "<", "<=", ">", ">="}
+            and not any(
+                self.normalized_metal_type(self.resolve_type_alias(vtype))
+                in self.metal_source_bfloat_types
+                for vtype in (element_type, scalar_type)
+            )
+        ):
+            return index, element_type
+        return None
 
     def metal_vector_scalar_operand(self, rendered, source_type, element_type):
         if self.metal_scalar_arithmetic_type_info(
@@ -22383,9 +22480,7 @@ float {scalar}(float value) {{
         if left_vector is not None or right_vector is not None:
             vector = left_vector or right_vector
             if (
-                self.metal_integer_vector_scalar_conversion(
-                    expr.op, left_type, right_type
-                )
+                self.metal_vector_scalar_conversion(expr.op, left_type, right_type)
                 is not None
             ):
                 return self.metal_vector_type_from_element(vector[0], vector[1])
@@ -23462,7 +23557,7 @@ float {scalar}(float value) {{
             )
             if bfloat_plan is not None and bfloat_plan[1][1] is not None:
                 rendered_value = f"{self.map_type(bfloat_plan[1][1])}({rendered_value})"
-            conversion = self.metal_integer_vector_scalar_conversion(
+            conversion = self.metal_vector_scalar_conversion(
                 binary_op,
                 self.expression_metal_type(access),
                 self.expression_metal_type(value),

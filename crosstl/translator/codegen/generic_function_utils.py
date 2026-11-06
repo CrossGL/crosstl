@@ -21,12 +21,23 @@ from ..ast import (
     ReturnNode,
     VariableNode,
 )
+from .builtin_result_types import swizzle_access_type
 from .enum_utils import (
     generic_type_parts,
     sanitize_type_name,
     substitute_generic_type_name,
 )
 from .generic_body_types import substitute_body_types
+from .generic_call_results import (
+    generic_call_argument_type_name,
+    generic_call_result_type_name,
+    generic_calls_read_by,
+)
+from .generic_emission_order import (
+    reject_late_generic_specialization,
+    reset_generic_function_emission,
+)
+from .generic_pointer_deduction import structured_buffer_element_type
 from .generic_vector_deduction import (
     bind_generic_vector_parameter,
     generic_vector_signature_name,
@@ -188,8 +199,14 @@ def _generic_member_expression_text(value):
     return str(value)
 
 
-def prepare_generic_function_specializations(generator, functions):
-    """Collect concrete generic function instantiations used by ``functions``."""
+def prepare_generic_function_specializations(generator, functions, global_types=None):
+    """Collect concrete generic function instantiations used by ``functions``.
+
+    ``global_types`` maps global and stage-scope declarations to the type spelling the generator
+    gives them while it emits code, so a call such as ``twice(scale)`` on a uniform binds its type
+    parameter here as it does during emission.
+    """
+    generator.generic_collection_global_types = dict(global_types or {})
     definitions = {}
     definition_ordinals = {}
     for func in functions or []:
@@ -212,6 +229,7 @@ def prepare_generic_function_specializations(generator, functions):
     generator.generic_function_specializations = {}
     generator.generic_function_specialized_names = {}
     generator.generic_function_resolved_call_ids = set()
+    reset_generic_function_emission(generator)
 
     if not definitions:
         return {}
@@ -892,7 +910,9 @@ def _collect_from_function(generator, func, substitutions):
         "current_generic_function_substitutions",
         {},
     )
-    generator.local_variable_types = {}
+    generator.local_variable_types = dict(
+        getattr(generator, "generic_collection_global_types", None) or {}
+    )
     generator.current_expression_expected_type = None
     generator.current_generic_function_substitutions = substitutions
     try:
@@ -1011,6 +1031,7 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
     specializations = generator.generic_function_specializations
     if key in specializations:
         return
+    reject_late_generic_specialization(generator, func, key)
 
     clone = deepcopy(func)
     overload_ordinal = key[2] if len(key) > 2 else None
@@ -1089,6 +1110,8 @@ def _collect_type_parameter_bindings(
 
     expected_pointee = _pointer_pointee_type(expected_type)
     actual_pointee = _pointer_pointee_type(actual_type)
+    if expected_pointee is not None and actual_pointee is None:
+        actual_pointee = structured_buffer_element_type(actual_type)
     if expected_pointee is not None and actual_pointee is not None:
         _collect_type_parameter_bindings(
             expected_pointee,
@@ -1197,7 +1220,8 @@ def _member_access_result_type(generator, expr):
     if set(member) <= set("xyzwrgba") and len(member) <= 4:
         component_type = _scalar_component_type_name(generator, object_type)
         if not component_type:
-            return None
+            # A vector spelled in its target family (``int3.xy`` is ``int2``).
+            return swizzle_access_type(object_type, len(member))
         if len(member) == 1:
             return component_type
         return _vector_type_name(component_type, len(member))
@@ -1244,6 +1268,8 @@ def _function_call_result_type(generator, expr):
     if func_name is None:
         return None
     func_name = str(func_name)
+    if generic_calls_read_by(generator, expr):
+        return generic_call_result_type_name(generator, expr, generic_function_call_key)
 
     if "::" in func_name:
         type_param, method = func_name.split("::", 1)
@@ -1445,6 +1471,14 @@ def _safe_call_argument_type_name(generator, expr):
         call_argument_type_name = getattr(generator, "call_argument_type_name")
     except AttributeError:
         call_argument_type_name = None
+    generic_calls = generic_calls_read_by(generator, expr)
+    if generic_calls:
+        actual_type = _safe_generator_argument_type_name(
+            generator, call_argument_type_name, expr
+        )
+        return generic_call_argument_type_name(
+            generator, generic_calls, fallback_type, actual_type
+        )
     if call_argument_type_name is not None:
         try:
             actual_type = call_argument_type_name(expr)
@@ -1458,6 +1492,15 @@ def _safe_call_argument_type_name(generator, expr):
 
     if fallback_type:
         return fallback_type
+    return generator.type_name_string(_safe_expression_result_type(generator, expr))
+
+
+def _safe_generator_argument_type_name(generator, call_argument_type_name, expr):
+    if call_argument_type_name is not None:
+        try:
+            return generator.type_name_string(call_argument_type_name(expr))
+        except (AttributeError, TypeError, ValueError):
+            return None
     return generator.type_name_string(_safe_expression_result_type(generator, expr))
 
 

@@ -20,13 +20,29 @@ The emitter used to print only ``constant int scale = 3;`` under a "cannot prese
 the default. A type that MSL cannot use for a function constant is refused rather than lowered.
 
 A function constant is not a constant expression to the Metal front end, so it cannot size an array ("array size
-is not a constant expression"). Freezing such an array at the default would disagree with every specialized value,
-so a specialization constant that sizes an array, directly or through a constant expression, is refused too.
+is not a constant expression"), and freezing such an array at the default would disagree with every specialized
+value. A specialization constant that sizes an array, directly or through a constant expression, is therefore
+specialized when the Metal source is compiled instead: it reads a preprocessor macro named after its id, which
+defaults to the declared value and which the host sets through ``MTLCompileOptions.preprocessorMacros`` (or ``-D``
+for the offline compiler), exactly where it would set the SPIR-V SpecId:
 
-A stage-interface array is the exception. Its interface locations are assigned from the default size (a larger
-specialized size would overlap the next interface variable), and Metal never declares it as an array: each element
-becomes its own ``[[attribute(N)]]`` or ``[[user(...)]]`` member, read through constant indices or a switch helper.
-The caller passes those member types as ``flattened_array_types`` and they are not refused.
+.. code-block:: c++
+
+    #ifndef CROSSGL_SPECIALIZATION_CONSTANT_ID_1
+    #define CROSSGL_SPECIALIZATION_CONSTANT_ID_1 512
+    #endif
+    constant int size = int(CROSSGL_SPECIALIZATION_CONSTANT_ID_1);
+    ...
+    threadgroup float4 shared_data[size];
+
+Every other specialization constant stays a function constant.
+
+Two kinds of array never need a constant-expression size, so they do not move a specialization constant to a
+macro. A stage-interface array's interface locations are assigned from the default size (a larger specialized size
+would overlap the next interface variable), and Metal never declares it as an array: each element becomes its own
+``[[attribute(N)]]`` or ``[[user(...)]]`` member, read through constant indices or a switch helper. A uniform or
+storage block member keeps the static layout of its default size (see :func:`block_member_array_types`). The
+caller passes both kinds as ``exempt_array_types``.
 """
 
 from __future__ import annotations
@@ -36,14 +52,19 @@ from .ast_walk import walk_ast_values
 
 __all__ = [
     "METAL_FUNCTION_CONSTANT_PREFIX",
+    "METAL_SPECIALIZATION_MACRO_PREFIX",
+    "block_member_array_types",
     "flattened_stage_io_array_types",
     "metal_function_constant_type_refusal",
-    "refuse_specialization_sized_arrays",
     "render_metal_specialization_constant",
+    "render_metal_specialization_macro",
+    "specialization_constant_roots",
+    "specialization_constants_sizing_arrays",
     "specialization_dependent_constants",
 ]
 
 METAL_FUNCTION_CONSTANT_PREFIX = "__crossgl_function_constant_"
+METAL_SPECIALIZATION_MACRO_PREFIX = "CROSSGL_SPECIALIZATION_CONSTANT_ID_"
 
 
 def metal_function_constant_type_refusal(name, type_name, mapped_type, is_value_type):
@@ -76,6 +97,23 @@ def render_metal_specialization_constant(
     )
 
 
+def render_metal_specialization_macro(
+    qualifier, mapped_type, declaration, constant_id, value_code
+):
+    """Render a specialization constant that sizes an array: a program-scope constant read from a macro.
+
+    The macro is named after ``constant_id`` and defaults to ``value_code``; a host that defines it when it compiles
+    the source specializes the constant, and every array it sizes, as a SpecId does.
+    """
+    macro = f"{METAL_SPECIALIZATION_MACRO_PREFIX}{constant_id}"
+    return (
+        f"#ifndef {macro}\n"
+        f"#define {macro} {value_code}\n"
+        "#endif\n"
+        f"{qualifier} {declaration} = {mapped_type}({macro});\n"
+    )
+
+
 def _identifier_names(value):
     return {
         node.name
@@ -84,55 +122,87 @@ def _identifier_names(value):
     }
 
 
-def specialization_dependent_constants(constants, is_specialization_constant):
-    """Return the names of the program constants whose value follows a specialization constant.
+def specialization_constant_roots(constants, is_specialization_constant):
+    """Map each program constant whose value follows a specialization constant to the ones it follows.
 
-    A specialization constant depends on itself; any other constant depends on one when its initializer reads a
-    dependent constant declared before it.
+    A specialization constant follows itself; any other constant follows those its initializer reads, through the
+    constants declared before it.
     """
-    dependent = set()
+    roots = {}
     for node in constants or []:
         name = getattr(node, "name", None)
         if not isinstance(name, str):
             continue
-        if is_specialization_constant(node) or (
-            _identifier_names(getattr(node, "value", None)) & dependent
-        ):
-            dependent.add(name)
-    return dependent
+        if is_specialization_constant(node):
+            roots[name] = {name}
+            continue
+        followed = set()
+        for read in _identifier_names(getattr(node, "value", None)):
+            followed |= roots.get(read, set())
+        if followed:
+            roots[name] = followed
+    return roots
 
 
-def refuse_specialization_sized_arrays(
-    ast, is_specialization_constant, refuse, flattened_array_types=()
+def specialization_dependent_constants(constants, is_specialization_constant):
+    """Return the names of the program constants whose value follows a specialization constant."""
+    return set(specialization_constant_roots(constants, is_specialization_constant))
+
+
+def specialization_constants_sizing_arrays(
+    ast, is_specialization_constant, exempt_array_types=()
 ):
-    """Call ``refuse(reason)`` once per specialization-dependent constant that sizes an array in ``ast``.
+    """Return the specialization constants that size an array in ``ast``, directly or through constants.
 
-    ``flattened_array_types`` holds the ``ArrayType`` nodes of stage-interface members that Metal emits one
-    element per member; they never reach a Metal array declarator, so they are not refused.
+    ``exempt_array_types`` holds the ``ArrayType`` nodes that never need a constant-expression size in Metal:
+    stage-interface members emitted one element per member, and block members laid out from their default size.
     """
-    dependent = specialization_dependent_constants(
+    roots = specialization_constant_roots(
         getattr(ast, "constants", None), is_specialization_constant
     )
-    if not dependent:
-        return
-    flattened = {id(node) for node in flattened_array_types}
-    reported = set()
+    if not roots:
+        return set()
+    exempt = {id(node) for node in exempt_array_types}
+    sizing = set()
     for node in walk_ast_values(ast):
         if not isinstance(node, ArrayType) or node.size is None:
             continue
-        if id(node) in flattened:
+        if id(node) in exempt:
             continue
         if isinstance(node.size, (int, str)):
             names = {node.size} if isinstance(node.size, str) else set()
         else:
             names = _identifier_names(node.size)
-        for name in sorted((names & dependent) - reported):
-            reported.add(name)
-            refuse(
-                f"array sized by specialization constant '{name}': a Metal array size must be a constant "
-                "expression, and a function constant is not one (Metal Shading Language Specification, "
-                "section 5.8.1)"
-            )
+        for name in names:
+            sizing |= roots.get(name, set())
+    return sizing
+
+
+def block_member_array_types(cbuffers, structs, lowered_block_struct_names):
+    """Return the ``ArrayType`` types of uniform and storage block members, whose layout ignores specialization.
+
+    GL_KHR_vulkan_glsl, "Specialization Constants": an array inside a block may be sized with a specialization
+    constant, "but the block will have a static layout. Changing the specialized size will not re-layout the block.
+    In the absence of explicit offsets, the layout will be based on the default size of the array." Metal lays the
+    block out from that default (a ``constant`` struct for a uniform block, byte offsets into the bound buffer for a
+    lowered storage block), while ``length()``, loop bounds and every other value use keep reading the function
+    constant. Only direct block members qualify; a structure nested inside a block may also be declared as a value
+    of its own, where its array would need a constant size.
+    """
+    found = []
+    for cbuffer in cbuffers or []:
+        for member in getattr(cbuffer, "members", None) or []:
+            raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if isinstance(raw_type, ArrayType):
+                found.append(raw_type)
+    for struct in structs or []:
+        if getattr(struct, "name", None) not in lowered_block_struct_names:
+            continue
+        for member in getattr(struct, "members", None) or []:
+            raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if isinstance(raw_type, ArrayType):
+                found.append(raw_type)
+    return found
 
 
 def flattened_stage_io_array_types(structs, stage_io_struct_names, array_info):
