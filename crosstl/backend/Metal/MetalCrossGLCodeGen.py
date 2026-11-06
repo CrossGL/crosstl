@@ -78,6 +78,10 @@ from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
+from .namespaced_functions import (
+    declared_in_several_namespaces,
+    nominated_namespaces_in_scope,
+)
 from .opaque_matrix_contracts import complete_opaque_matrix_contracts
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
@@ -14939,9 +14943,13 @@ class MetalToCrossGLConverter(
         )
 
         for function_name, overloads in self.user_function_overloads_by_name.items():
-            builtin_collision = function_name in builtin_names and any(
-                not self.is_materialized_metal_stdlib_wrapper(function)
-                for function in overloads
+            builtin_collision = (
+                function_name in builtin_names
+                and any(
+                    not self.is_materialized_metal_stdlib_wrapper(function)
+                    for function in overloads
+                )
+                or declared_in_several_namespaces(overloads)
             )
             if builtin_collision:
                 self.metal_builtin_name_collision_groups.add(function_name)
@@ -15496,7 +15504,9 @@ class MetalToCrossGLConverter(
                 if not explicitly_global:
                     visible_names.update(
                         f"{target}::{function_name}"
-                        for target in self.visible_using_namespace_targets(scope)
+                        for target in nominated_namespaces_in_scope(
+                            namespace, scope, self.visible_using_namespace_targets
+                        )
                     )
                 scoped = {
                     signature: declarations
@@ -15679,8 +15689,12 @@ class MetalToCrossGLConverter(
                 if not explicitly_global:
                     visible.update(
                         f"{target}::{function_name}"
-                        for target in self.visible_using_namespace_targets(
-                            scope, use_offset=source_offset
+                        for target in nominated_namespaces_in_scope(
+                            namespace,
+                            scope,
+                            lambda directive_scope: self.visible_using_namespace_targets(
+                                directive_scope, use_offset=source_offset
+                            ),
                         )
                     )
                 matching = [
