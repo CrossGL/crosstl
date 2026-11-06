@@ -42,6 +42,7 @@ from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
+    MetalTypeTraitError,
 )
 from crosstl.project import reflect_target_host_interface, translate_project
 from crosstl.translator.ast import ArrayAccessNode as CrossGLArrayAccessNode
@@ -5305,7 +5306,7 @@ def test_codegen_rewrites_static_alias_call_inside_materialized_method():
     assert "HelperType::run" not in crossgl
 
 
-def test_codegen_scoped_variable_template_expression_from_mlx_gemv_masked():
+def test_codegen_refuses_gemv_masked_trait_outside_its_template():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
     # Commit: b155224b9963cd9476363b464a559232a0868000
@@ -5318,12 +5319,11 @@ def test_codegen_scoped_variable_template_expression_from_mlx_gemv_masked():
     constant constexpr const bool has_mul_operand_mask =
         has_operand_mask && !metal::is_same_v<op_mask_t, bool>;
     """
-    crossgl = convert(code)
-
-    assert "metal_u3a_u3ais_same_v_u3cop_mask_t_u2cnomask_t_u3e" in crossgl
-    assert "metal_u3a_u3ais_same_v_u3cop_mask_t_u2cbool_u3e" in crossgl
-    assert "is_same_v<" not in crossgl
-    assert parse_crossgl(crossgl) is not None
+    # Outside GEMVKernel's template header ``op_mask_t`` names no type, so the
+    # trait cannot be folded. It used to reach CrossGL as the mangled identifier
+    # metal_u3a_u3ais_same_v_u3cop_mask_t_u2cnomask_t_u3e, which nothing declares.
+    with pytest.raises(MetalTypeTraitError, match=r"is_same_v<op_mask_t, nomask_t>"):
+        convert(code)
 
 
 def test_codegen_normalizes_generic_atomic_types_from_apple_msl_spec():
