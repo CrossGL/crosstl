@@ -14,6 +14,7 @@ from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
 from .signed_type_spellings import fold_signed_type_spellings
 from .simd_aliases import SIMD_TYPE_ALIASES
+from .string_literals import concatenate_string_literals
 
 MIN_METAL_PARSE_RECURSION_LIMIT = 10000
 
@@ -2210,6 +2211,17 @@ class MetalParser:
         self.register_known_type(alias_name)
         return TypeAliasNode(f"struct {tag_name}", alias_name)
 
+    def parse_string_literal_run(self):
+        """Parse adjacent string literals as the one literal C++ joins them into."""
+        spellings = []
+        while self.current_token[0] == "STRING":
+            spellings.append(self.current_token[1])
+            self.eat("STRING")
+        try:
+            return concatenate_string_literals(spellings)
+        except ValueError as exc:
+            raise SyntaxError(f"Invalid string literal concatenation: {exc}") from exc
+
     def parse_static_assert(self):
         self.eat("STATIC_ASSERT")
         self.eat("LPAREN")
@@ -2218,8 +2230,7 @@ class MetalParser:
         if self.current_token[0] == "COMMA":
             self.eat("COMMA")
             if self.current_token[0] == "STRING":
-                message = self.current_token[1]
-                self.eat("STRING")
+                message = self.parse_string_literal_run()
             else:
                 message = self.parse_expression()
         self.eat("RPAREN")
@@ -5302,12 +5313,7 @@ class MetalParser:
             self.eat("CHAR_LITERAL")
             return value
         if self.current_token[0] == "STRING":
-            value = self.current_token[1]
-            self.eat("STRING")
-            while self.current_token[0] == "STRING":
-                value += self.current_token[1]
-                self.eat("STRING")
-            return value
+            return self.parse_string_literal_run()
         if self.current_token[0] == "LPAREN":
             open_token = self.current_token
             self.eat("LPAREN")
