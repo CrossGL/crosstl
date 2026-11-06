@@ -66,7 +66,7 @@ EXTERNAL_FIXTURES = [
             OpFunctionEnd
         """).strip(),
         contains=(
-            "RWTexture2D Image @set(0) @binding(0) @rgba8 @writeonly;",
+            "image2D Image @set(0) @binding(0) @rgba8 @writeonly;",
             "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;",
             "imageStore(Image, int2(0, 0), float4(1.0, 1.0, 1.0, 0.0));",
         ),
