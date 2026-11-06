@@ -15985,6 +15985,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "lowp",
             # A declared buffer layout is a layout contract, not a semantic.
             "buffer_layout",
+            # An explicit member offset is a layout placement, not a semantic; without this a struct
+            # member placed with @offset(N) is emitted as the invalid HLSL semantic ': offset'.
+            "offset",
             # Matrix orientation is a storage qualifier and is emitted as one.
             "row_major",
             "column_major",

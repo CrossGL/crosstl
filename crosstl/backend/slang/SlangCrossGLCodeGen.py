@@ -1819,7 +1819,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         member_name = self.format_struct_member_name(struct_node, member.name)
         declaration = (
             f"{qualifiers}{self.map_type(member.vtype)} {member_name}"
-            f"{self.format_array_suffixes(member)}"
+            f"{self.format_array_suffixes(member)}{self.format_member_offset(member)}"
         )
         if getattr(member, "value", None) is not None:
             declaration += f" = {self.generate_expression(member.value)}"
