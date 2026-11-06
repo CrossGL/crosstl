@@ -83,6 +83,7 @@ from .MetalLexer import *
 from .MetalParser import *
 from .namespace_scope_variables import resolve_namespace_scope_variables
 from .namespaced_functions import (
+    METAL_LIBRARY_MATH_FUNCTIONS,
     declared_in_several_namespaces,
     nominated_namespaces_in_scope,
 )
@@ -14970,6 +14971,7 @@ class MetalToCrossGLConverter(
             | set(self.metal_bit_intrinsics)
             | set(self.metal_wave_intrinsics)
             | set(self.metal_atomic_intrinsics)
+            | METAL_LIBRARY_MATH_FUNCTIONS
         )
 
     def prepare_metal_source_overload_transport(self, ast):
