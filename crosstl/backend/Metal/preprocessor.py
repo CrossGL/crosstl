@@ -273,6 +273,16 @@ def _keyword_before(text: str, start: int, end: int, keyword: str) -> Optional[i
     return keyword_start
 
 
+# A member declaration of two or more plain names of one type, such as
+# `short sm, sn`: no pointer, reference or array declarators and no
+# initializers, whose meaning per name would need the declarator itself.
+_PLAIN_DECLARATOR_LIST = re.compile(
+    r"(?P<type>[^,*&=\[\]{}()]*?[^\s,*&=\[\]{}()]|.*?>)\s+"
+    r"(?P<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)",
+    re.DOTALL,
+)
+
+
 class MetalStructMethodError(ValueError):
     """A struct member-function call that cannot be lowered safely.
 
@@ -2555,6 +2565,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 spans,
             ) in self._dedupe_explicit_template_function_calls(instantiations):
                 key = self._template_specialization_key(struct_name, template_arguments)
+                canonical_arguments = self._canonical_materialized_struct_arguments(
+                    template_arguments, materialized_names
+                )
+                canonical_key = self._template_specialization_key(
+                    struct_name, canonical_arguments
+                )
+                if canonical_key != key and canonical_key in materialized_names:
+                    # `Tile<float, BaseFrag<float, 8, 8>>` and `Tile<float,
+                    # BaseFrag_float_8_8>` name one type once the inner
+                    # specialization exists, so they share one specialization.
+                    replacements.extend(
+                        (span[0], span[1], materialized_names[canonical_key])
+                        for span in spans
+                    )
+                    continue
                 partial_selection = selected_partial_specializations.get(key)
                 primary_template = templates_by_name[struct_name]
                 if partial_selection is None and not (
@@ -6455,6 +6480,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # suffix (used by the pointer-member scalar-replacement path). Strip both
         # assignment and direct-list defaults before deriving the member name:
         # otherwise `uint index{0}` ends in `}` and is silently omitted.
+        names = _PLAIN_DECLARATOR_LIST.fullmatch(declaration.strip())
+        if names is not None:
+            # `short sm, sn;` declares each name exactly as `short sm; short
+            # sn;` does ([dcl.decl]/3), so every name is a data member.
+            recorded = True
+            for name in re.split(r"\s*,\s*", names.group("names")):
+                recorded &= self._record_data_member(
+                    f"{names.group('type')} {name}",
+                    data_member_names,
+                    data_member_types,
+                    ordered_members,
+                    declaration_span,
+                )
+            return recorded
         declarator, _default, _initializer_style = self._split_data_member_initializer(
             declaration
         )
@@ -28160,6 +28199,34 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if identifier[0].isdigit():
             identifier = f"{function_name}_{identifier}"
         return identifier
+
+    def _canonical_materialized_struct_arguments(
+        self,
+        arguments: List[str],
+        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str],
+    ) -> List[str]:
+        """Spell each argument naming a materialized struct by its concrete name.
+
+        Only a whole argument of the form ``Name<...>`` whose specialization
+        key, with its own arguments canonicalized the same way, is already
+        materialized is replaced.
+        """
+        canonical = []
+        for argument in arguments:
+            match = re.fullmatch(
+                r"\s*([A-Za-z_]\w*)\s*<(.*)>\s*", str(argument), re.DOTALL
+            )
+            if match is not None:
+                inner = self._canonical_materialized_struct_arguments(
+                    self._split_top_level_commas(match.group(2)), materialized_names
+                )
+                concrete = materialized_names.get(
+                    self._template_specialization_key(match.group(1), inner)
+                )
+                if concrete is not None:
+                    argument = concrete
+            canonical.append(argument)
+        return canonical
 
     def _unique_struct_specialization_identifier(
         self, struct_name: str, key: Tuple[str, Tuple[str, ...]]

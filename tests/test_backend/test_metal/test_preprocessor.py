@@ -1968,7 +1968,8 @@ def test_preprocessor_rejects_false_static_assertion_for_padded_struct_layout():
     "declaration",
     (
         "device float* value;",
-        "float first, second;",
+        # A list whose declarators differ (`*`) needs the declarator per name.
+        "float* first, second;",
         "alignas(16) float value;",
     ),
 )
@@ -1998,6 +1999,34 @@ def test_preprocessor_keeps_unsupported_struct_layout_assertions_fail_closed(
     assert error.reason == "condition-unresolved"
     assert error.resolved_expression == "sizeof(UnsupportedLayout) == 8"
     assert error.unresolved_dependencies == ("UnsupportedLayout",)
+
+
+@pytest.mark.parametrize("expected,failure", ((8, None), (12, "8 == 12")))
+def test_preprocessor_lays_out_plain_member_declarator_lists(expected, failure):
+    # `float first, second;` declares two float members ([dcl.decl]/3).
+    code = f"""
+    struct Listed {{
+        float first, second;
+    }};
+
+    kernel void listed_layout(device float* out [[buffer(0)]]) {{
+        static_assert(sizeof(Listed) == {expected}, "Two float members.");
+        out[0] = 0.0f;
+    }}
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    if failure is None:
+        preprocessor._lower_struct_member_functions(materialized)
+        return
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+    assert exc_info.value.reason == "assertion-failed"
+    assert exc_info.value.resolved_expression == failure
 
 
 def test_preprocessor_rejects_false_static_assertion_with_source_context():
