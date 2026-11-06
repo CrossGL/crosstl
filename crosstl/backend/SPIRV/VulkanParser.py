@@ -24,6 +24,11 @@ from .ray_tracing_import import (
     ray_variable_locations,
     refuse_untranslated_statement,
 )
+from .sampled_images import (
+    sampled_image_arguments,
+    sampled_image_call,
+    sampled_image_image,
+)
 from .select_import import spirv_select_expression
 from .struct_result_import import (
     spirv_extended_arithmetic_call,
@@ -1625,12 +1630,14 @@ class VulkanParser:
                 record_expression(
                     result_id,
                     operands[0],
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                    sampled_image_image(
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
                     ),
                 )
                 continue
@@ -1639,24 +1646,23 @@ class VulkanParser:
                 record_expression(
                     result_id,
                     operands[0],
-                    FunctionCallNode(
+                    sampled_image_call(
+                        FunctionCallNode,
                         self.spirv_type_name(operands[0], types) or operands[0],
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operands[1],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                            self.spirv_assembly_operand_expression(
-                                operands[2],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                        ],
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                     ),
                 )
                 continue
@@ -3587,7 +3593,7 @@ class VulkanParser:
         parsed_operands = self.spirv_assembly_image_operands(
             image_operands, expressions, names, decorations, constants
         )
-        base_args = [image, coordinate]
+        base_args = [*sampled_image_arguments(image), coordinate]
         if dref is not None:
             base_args.append(dref)
         offset = self.spirv_assembly_image_offset_operand(parsed_operands)
@@ -3894,7 +3900,7 @@ class VulkanParser:
         offsets = self.spirv_assembly_image_const_offsets_operand(parsed_operands)
 
         if opcode == "OpImageDrefGather":
-            base_args = [image, coordinate, gathered]
+            base_args = [*sampled_image_arguments(image), coordinate, gathered]
             if offsets is not None:
                 return FunctionCallNode(
                     "textureGatherCompareOffsets", [*base_args, offsets]
@@ -3905,7 +3911,7 @@ class VulkanParser:
                 )
             return FunctionCallNode("textureGatherCompare", base_args)
 
-        base_args = [image, coordinate]
+        base_args = [*sampled_image_arguments(image), coordinate]
         if offsets is not None:
             return FunctionCallNode(
                 "textureGatherOffsets", [*base_args, offsets, gathered]
@@ -5491,8 +5497,10 @@ class VulkanParser:
             if data_type is None:
                 continue
 
+            # Private storage is the invocation's own, as CrossGL's static module-scope variable is; a plain one is
+            # read-only uniform data in HLSL and constant data in Metal (SPIR-V 1.6 section 3.7, Private).
             declaration = VariableNode(
-                data_type,
+                f"static {data_type}",
                 f"{self.spirv_assembly_value_name(variable['id'], names, decorations)}"
                 f"{array_suffix}",
                 spirv_id=variable["id"],

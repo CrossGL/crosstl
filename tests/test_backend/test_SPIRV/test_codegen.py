@@ -6337,8 +6337,8 @@ def test_glslang_private_global_variables_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "float4 outColor @output @location(0);" in generated_code
-    assert "float4 privateColor;" in generated_code
-    assert "float privateWeight = 1.0;" in generated_code
+    assert "static float4 privateColor;" in generated_code
+    assert "static float privateWeight = 1.0;" in generated_code
     assert "privateColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
     assert "outColor = privateColor;" in generated_code
     assert "outColor = loaded;" not in generated_code
@@ -6358,7 +6358,7 @@ def test_glslang_layout_nested_member_private_global_collision_codegen_reparse()
         in generated_code
     )
     assert "S s;" in generated_code
-    assert "S s_private_s;" in generated_code
+    assert "static S s_private_s;" in generated_code
     assert "s_private_s = s_private_s;" in generated_code
     assert "S s;\n    // Vertex Shader" not in generated_code
 
@@ -7448,7 +7448,7 @@ def test_spirv_descriptor_indexing_nonuniform_codegen_reparse():
     assert "float4 outColor @output @location(0);" in generated_code
     assert (
         "outColor = textureLod("
-        "sampler2D(textures[nonuniformEXT(materialIndex)], linearSampler), "
+        "textures[nonuniformEXT(materialIndex)], linearSampler, "
         "uv, 0.0);"
     ) in generated_code
     assert "textures[materialIndex]" not in generated_code
