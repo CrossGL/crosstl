@@ -39,6 +39,7 @@ from .constant_buffer_size import (
     ConstantBufferTooLargeError,
     refuse_large_constant_buffers,
 )
+from .constant_calls import fold_constant_calls
 from .constant_extents import fold_constant_extents, fold_stage_layout_counts
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
@@ -144,6 +145,10 @@ from .shader_records import (
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
 from .slang_vertex_indices import spell_slang_vertex_indices
+from .spirv_instructions import (
+    SpirvOperationUnsupportedError,
+    refuse_spirv_instructions,
+)
 from .stage_constant_blocks import (
     StageConstantBlockConflictError,
     hoist_stage_constant_blocks,
@@ -173,6 +178,7 @@ from .structured_layouts import (
 )
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
 from .task_payload_storage import declare_task_payload_storage
+from .template_assertions import resolve_template_assertions
 from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
@@ -242,6 +248,7 @@ __all__ = [
     "StaticAssertionFailedError",
     "StaticAssertionUnresolvedError",
     "SpirvArrayLengthUnsupportedError",
+    "SpirvOperationUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
     "StructMethodUnsupportedError",
@@ -295,6 +302,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (:mod:`.relative_vertex_ids`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
+    Calls of program functions in compile-time initializers and ``static_assert`` conditions become their values,
+    evaluated at translation time (:mod:`.constant_calls`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
     ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
@@ -392,7 +401,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
-    non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). The AST is
+    non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
+    operation the importer kept as a call is then refused with :class:`SpirvOperationUnsupportedError` for every
+    target but CrossGL (:mod:`.spirv_instructions`). The AST is
     rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
     exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
@@ -403,6 +414,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_local_structs(program, report.target)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
+    resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
@@ -412,6 +424,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
+    fold_constant_calls(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
     fold_stage_layout_counts(program, report.target)
@@ -498,6 +511,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_half_floats(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
     wrap_narrow_arithmetic(program, report.source, report.target)
+    refuse_spirv_instructions(program, report.target)
     Annotator(program, report.source, report).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)

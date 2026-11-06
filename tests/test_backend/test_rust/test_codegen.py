@@ -1358,7 +1358,7 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
     """
     result = parse_and_generate(code)
 
-    assert "typedef Image2d = sampler2D;" in result
+    assert "typedef sampler2D Image2d;" in result
     assert "fragment main_fs {" in result
     assert "Image2d sampled_tex @ set(2) @ binding(5)" in result
     assert "image2D storage_tex @ set(3) @ binding(1)" in result
@@ -2706,9 +2706,9 @@ def test_type_alias_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "typedef Real = float;" in result
-        assert "typedef Color = vec3;" in result
-        assert "typedef Weights = float[4];" in result
+        assert "typedef float Real;" in result
+        assert "typedef vec3 Color;" in result
+        assert "typedef float[4] Weights;" in result
         assert "typedef" in result
         assert "Buffer" not in result
         assert "Vector" not in result
@@ -2756,7 +2756,7 @@ def test_module_path_alias_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "typedef Real = float;" in result
+        assert "typedef float Real;" in result
         assert "Real sample(Real x, vec3 normal)" in result
         assert "lifted = vec3(1.0, 2.0, 3.0);" in result
         assert "c = self::helper::CONST;" in result
@@ -6745,7 +6745,7 @@ def test_gpu_resource_method_calls_convert_on_resource_type_alias_receivers():
 
     result = parse_and_generate(code)
 
-    assert "typedef ColorTexture = sampler2D;" in result
+    assert "typedef sampler2D ColorTexture;" in result
     assert (
         "vec4 alias_resources(ColorTexture tex, sampler2D generic_tex, "
         "sampler2DShadow shadow, RWStructuredBuffer<int> values"
@@ -11480,7 +11480,7 @@ def test_type_alias_codegen_reparse_from_rust_gpu_entry_interface():
 
     result = parse_and_generate(code)
 
-    assert "typedef Id = Word;" in result
+    assert "typedef Word Id;" in result
     crosstl.translator.parse(result)
 
 
@@ -11596,7 +11596,7 @@ def test_unsafe_extern_function_pointer_type_codegen_reparse_from_rusty_v8_callb
 
     result = parse_and_generate(code)
 
-    assert "typedef NamedGetterCallbackForAccessor = auto;" in result
+    assert "typedef auto NamedGetterCallbackForAccessor;" in result
     assert "auto callback;" in result
     assert "auto fallback;" in result
     assert "static auto CALLBACK = handler;" in result

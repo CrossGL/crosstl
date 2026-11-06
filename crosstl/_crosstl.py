@@ -22,6 +22,7 @@ from .translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from .translator.codegen.ast_text_leaks import refuse_ast_text
 from .translator.codegen.entry_selection import prepare_entry_scoped_target
 from .translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
@@ -452,6 +453,7 @@ def _generate_target_code(codegen, ast, entry_point, backend=None):
                 entry_point=entry_point,
             )
         code = generate_entry(ast, entry_point)
+    refuse_ast_text(code, backend)
     notices = source_license_comments(ast, backend)
     return code if not notices or notices in code else notices + code
 

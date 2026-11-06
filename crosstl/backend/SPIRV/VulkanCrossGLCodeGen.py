@@ -153,37 +153,6 @@ class VulkanToCrossGLConverter:
             "sampler1DArray": "sampler1DArray",
             "sampler2DMS": "sampler2DMS",
             "sampler2DMSArray": "sampler2DMSArray",
-            "samplerBuffer": "Buffer",
-            "image1D": "RWTexture1D",
-            "image1DArray": "RWTexture1DArray",
-            "image2D": "RWTexture2D",
-            "image2DArray": "RWTexture2DArray",
-            "image2DMS": "RWTexture2DMS",
-            "image2DMSArray": "RWTexture2DMSArray",
-            "image3D": "RWTexture3D",
-            "imageBuffer": "RWBuffer",
-            "imageCube": "RWTextureCube",
-            "imageCubeArray": "RWTextureCubeArray",
-            "iimage1D": "RWTexture1D<int>",
-            "iimage1DArray": "RWTexture1DArray<int>",
-            "iimage2D": "RWTexture2D<int>",
-            "iimage2DArray": "RWTexture2DArray<int>",
-            "iimage2DMS": "RWTexture2DMS<int>",
-            "iimage2DMSArray": "RWTexture2DMSArray<int>",
-            "iimage3D": "RWTexture3D<int>",
-            "iimageBuffer": "RWBuffer<int>",
-            "iimageCube": "RWTextureCube<int>",
-            "iimageCubeArray": "RWTextureCubeArray<int>",
-            "uimage1D": "RWTexture1D<uint>",
-            "uimage1DArray": "RWTexture1DArray<uint>",
-            "uimage2D": "RWTexture2D<uint>",
-            "uimage2DArray": "RWTexture2DArray<uint>",
-            "uimage2DMS": "RWTexture2DMS<uint>",
-            "uimage2DMSArray": "RWTexture2DMSArray<uint>",
-            "uimage3D": "RWTexture3D<uint>",
-            "uimageBuffer": "RWBuffer<uint>",
-            "uimageCube": "RWTextureCube<uint>",
-            "uimageCubeArray": "RWTextureCubeArray<uint>",
             "atomic_uint": "RWStructuredBuffer<uint>",
         }
         self.semantic_map = {
@@ -1446,6 +1415,13 @@ class VulkanToCrossGLConverter:
         )
         if storage_mapped_name:
             return f"@{storage_mapped_name}"
+        if (
+            str(builtin_name) == "PrimitiveId"
+            and storage_class == "Input"
+            and "geometry" in self.spirv_module_shader_stages
+        ):
+            # A geometry stage's incoming primitive ID is gl_PrimitiveIDIn; gl_PrimitiveID is the one it writes.
+            return "@gl_PrimitiveIDIn"
         mapped_name = mapped_builtins.get(str(builtin_name))
         if mapped_name:
             return f"@{mapped_name}"
