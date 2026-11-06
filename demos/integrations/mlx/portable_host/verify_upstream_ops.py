@@ -788,6 +788,8 @@ NO_DISPATCH_TESTS = frozenset(
     (
         "test_fast.TestFast.test_layer_norm_dim_check",
         "test_reduce.TestReduce.test_zero_size",
+        # Rejects a zero-dimensional irfftn and an unknown norm.
+        "test_fft.TestFFT.test_fft_throws",
         # Checks the output types of gated-delta graphs it never evaluates.
         "test_fast_gated_delta.TestGatedDelta.test_gated_delta_dtypes",
     )

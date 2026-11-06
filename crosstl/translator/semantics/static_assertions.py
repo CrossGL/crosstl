@@ -26,6 +26,7 @@ from __future__ import annotations
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .binding_constants import _AMBIGUOUS, INTEGER_TYPES, _ConstantTable, _type_name
+from .integral_types import convert_to_integer_type
 from .storage_blocks import _declared_names, _walk
 
 __all__ = [
@@ -116,7 +117,9 @@ class _Evaluator:
         self.pending.add(id(entry))
         try:
             if entry[0] == "const":
-                value = self.evaluate(entry[2])
+                value = _checked(
+                    convert_to_integer_type(self.evaluate(entry[2]), entry[3])
+                )
             else:
                 value = self._enumerator(entry)
         finally:
@@ -174,12 +177,15 @@ class _Evaluator:
         raise _Unresolved(f"the literal {value!r} is not an integer or boolean")
 
     def _conversion(self, type_name, arguments):
+        type_name = self.table.aliases.resolve(type_name)
         if len(arguments) != 1:
             raise _Unresolved(f"a call of {type_name} is not a constant")
         if type_name == "bool":
             return int(self.evaluate(arguments[0]) != 0)
         if type_name in INTEGER_TYPES:
-            return self.evaluate(arguments[0])
+            return _checked(
+                convert_to_integer_type(self.evaluate(arguments[0]), type_name)
+            )
         raise _Unresolved(f"a call of {type_name} is not a constant")
 
     def _unary(self, operator, operand):

@@ -40,6 +40,11 @@ import re
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .integral_types import (
+    INTEGER_REPRESENTATIONS,
+    ProgramTypeAliases,
+    convert_to_integer_type,
+)
 from .storage_blocks import _walk
 
 __all__ = [
@@ -75,34 +80,7 @@ INDEX_ATTRIBUTES = frozenset(
         "threadgroup",
     }
 )
-INTEGER_TYPES = frozenset(
-    {
-        "int",
-        "uint",
-        "short",
-        "ushort",
-        "int8_t",
-        "uint8_t",
-        "int16_t",
-        "uint16_t",
-        "int32_t",
-        "uint32_t",
-        "int64_t",
-        "uint64_t",
-        "char",
-        "uchar",
-        "long",
-        "ulong",
-        "size_t",
-        # CrossGL spellings of the fixed-width integers.
-        "int8",
-        "uint8",
-        "int16",
-        "uint16",
-        "int64",
-        "uint64",
-    }
-)
+INTEGER_TYPES = frozenset(INTEGER_REPRESENTATIONS)
 REGISTER_SPELLING = re.compile(r"(?i)(?:set|space|[btsu])?\d+")
 INTEGER_LITERAL = re.compile(r"(?i)(0x[0-9a-f]+|0b[01]+|0[0-7]*|[1-9][0-9]*)[ul]*")
 _AMBIGUOUS = object()
@@ -187,6 +165,7 @@ class _ConstantTable:
         self.entries = {}
         self.values = {}
         self.pending = set()
+        self.aliases = ProgramTypeAliases(program)
         for node in _walk(program):
             if isinstance(node, A.EnumNode):
                 self._add_enum(node)
@@ -231,10 +210,12 @@ class _ConstantTable:
         if getattr(node, "attributes", None):
             # Specialization and function constants: the host may override the default.
             self._add(name, ("unresolved", f"{name} is a specialization constant"))
-        elif _type_name(declared_type) not in INTEGER_TYPES or value is None:
-            self._add(name, ("unresolved", f"{name} is not an integer constant"))
         else:
-            self._add(name, ("const", node, value))
+            type_name = self.aliases.resolve(_type_name(declared_type))
+            if type_name not in INTEGER_TYPES or value is None:
+                self._add(name, ("unresolved", f"{name} is not an integer constant"))
+            else:
+                self._add(name, ("const", node, value, type_name))
 
     def lookup(self, name):
         if name in self.values:
@@ -261,7 +242,7 @@ class _ConstantTable:
 
     def _evaluate_entry(self, entry):
         if entry[0] == "const":
-            return self.evaluate(entry[2])
+            return convert_to_integer_type(self.evaluate(entry[2]), entry[3])
         _, enum, variant, previous = entry
         if getattr(variant, "value", None) is not None:
             return self.evaluate(variant.value)
@@ -292,16 +273,18 @@ class _ConstantTable:
                 return operand
             raise _Unresolved(f"operator {node.op} is not supported in an index")
         if isinstance(node, A.CastNode):
-            if _type_name(node.target_type) not in INTEGER_TYPES:
+            type_name = self.aliases.resolve(_type_name(node.target_type))
+            if type_name not in INTEGER_TYPES:
                 raise _Unresolved("the index is cast to a non-integer type")
-            return self.evaluate(node.expression)
+            return convert_to_integer_type(self.evaluate(node.expression), type_name)
         if isinstance(node, A.FunctionCallNode):
             callee = _type_name(getattr(node, "name", None)) or _type_name(
                 getattr(node, "function", None)
             )
+            callee = self.aliases.resolve(callee)
             arguments = list(getattr(node, "arguments", None) or [])
             if callee in INTEGER_TYPES and len(arguments) == 1:
-                return self.evaluate(arguments[0])
+                return convert_to_integer_type(self.evaluate(arguments[0]), callee)
             raise _Unresolved("a function call is not a constant")
         raise _Unresolved(f"{type(node).__name__} is not a constant")
 

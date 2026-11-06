@@ -435,6 +435,7 @@ class HLSLToCrossGLConverter(
             "InterlockedMax": "atomicMax",
             "InterlockedExchange": "atomicExchange",
             "InterlockedCompareExchange": "atomicCompareExchange",
+            "InterlockedCompareStore": "atomicCompareExchange",
         }
         self.texture_method_map = {
             "Sample": "texture",
@@ -1146,9 +1147,10 @@ class HLSLToCrossGLConverter(
                 descriptor["dropped_parameters"] = ["status output"]
             return descriptor
 
-        byte_address_interlocked_args = (
-            {4} if member == "InterlockedCompareExchange" else {2, 3}
-        )
+        byte_address_interlocked_args = {
+            "InterlockedCompareExchange": {4},
+            "InterlockedCompareStore": {3},
+        }.get(member, {2, 3})
         if (
             member in self.byte_address_interlocked_method_map
             and self.is_byte_address_buffer_type(resource_type)
@@ -1156,6 +1158,8 @@ class HLSLToCrossGLConverter(
         ):
             if member == "InterlockedCompareExchange":
                 byte_address_operation = "atomic_compare_exchange"
+            elif member == "InterlockedCompareStore":
+                byte_address_operation = "atomic_compare_store"
             elif member == "InterlockedAdd":
                 byte_address_operation = "atomic_add"
             else:
@@ -1268,6 +1272,11 @@ class HLSLToCrossGLConverter(
     ):
         if not descriptor.get("byte_address_atomic") or len(rendered_args) < 2:
             return None
+
+        if descriptor.get("operation") == "atomic_compare_store":
+            # InterlockedCompareStore is a compare-exchange whose previous value is not returned.
+            offset, compare, value = rendered_args[:3]
+            return f"{descriptor['function']}({obj}, {offset}, {compare}, {value})"
 
         if descriptor.get("operation") == "atomic_compare_exchange":
             if len(rendered_args) < 4:
