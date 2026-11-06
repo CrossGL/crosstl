@@ -511,6 +511,7 @@ class ShaderNode(ASTNode):
         cbuffers: List["StructNode"] = None,
         imports: List["ImportNode"] = None,
         preprocessors: List["PreprocessorNode"] = None,
+        static_assertions: List["StaticAssertNode"] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -524,6 +525,8 @@ class ShaderNode(ASTNode):
         self.cbuffers = cbuffers or []
         self.imports = imports or []
         self.preprocessors = preprocessors or []
+        # Shader-, stage- and structure-scope static_assert declarations, in source order.
+        self.static_assertions = static_assertions or []
 
     def __repr__(self):
         return f"ShaderNode(name={self.name}, execution_model={self.execution_model})"
@@ -1158,6 +1161,28 @@ class ReturnNode(StatementNode):
 
     def __repr__(self):
         return f"ReturnNode(value={self.value})"
+
+
+class StaticAssertNode(StatementNode):
+    """``static_assert(condition[, message])``: a constant condition checked at translation time.
+
+    It declares nothing and has no run-time effect. One written in a block is a statement; the parser collects one
+    at shader, stage or structure scope in ``ShaderNode.static_assertions``. ``message`` is the text of the string
+    literal, or None. :mod:`.semantics.static_assertions` checks and removes every one before code generation.
+    """
+
+    def __init__(
+        self,
+        condition: "ExpressionNode",
+        message: Optional[str] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.condition = condition
+        self.message = message
+
+    def __repr__(self):
+        return f"StaticAssertNode(condition={self.condition}, message={self.message!r})"
 
 
 class BreakNode(StatementNode):

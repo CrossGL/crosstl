@@ -316,6 +316,8 @@ class _Folder:
         for cbuffer in getattr(self.program, "cbuffers", None) or []:
             self.scope.declare_cbuffer(cbuffer)
         self.declare_variables(getattr(self.program, "global_variables", None) or [])
+        for assertion in getattr(self.program, "static_assertions", None) or []:
+            self.visit(assertion)
         for function in getattr(self.program, "functions", None) or []:
             self.visit(function)
         stages = getattr(self.program, "stages", None) or {}
