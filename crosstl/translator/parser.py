@@ -2258,6 +2258,9 @@ class Parser:
         """Parse a variable declaration, including qualifiers and attributes."""
         attributes = list(leading_attributes or [])
         attributes.extend(self.parse_attribute_annotations())
+        if self.current_token[0] == "LET":
+            # ``@ deprecated("...") let pi = 3.14;``: annotations apply to a ``let`` binding as well.
+            return self.parse_let_declaration(attributes)
         is_type_alias = self.current_token_starts_type_alias_declaration()
         if is_type_alias:
             self.eat("IDENTIFIER")
@@ -2480,6 +2483,9 @@ class Parser:
 
         try:
             self.parse_attribute_annotations()
+
+            if self.current_token[0] == "LET":
+                return True
 
             if self.current_token_starts_type_alias_declaration():
                 self.eat("IDENTIFIER")
@@ -4440,8 +4446,8 @@ class Parser:
         statement.attributes = [*attributes, *existing]
         return statement
 
-    def parse_let_declaration(self):
-        """Parse Rust-style ``let [mut] name [: type] = expr;`` declarations."""
+    def parse_let_declaration(self, attributes=None):
+        """Parse Rust-style ``[@attr] let [mut] name [: type] = expr;`` declarations."""
         self.eat("LET")
 
         is_mutable = False
@@ -4462,7 +4468,10 @@ class Parser:
         self.eat("SEMICOLON")
 
         var_node = VariableNode(
-            name=name, var_type=var_type, initial_value=initial_value
+            name=name,
+            var_type=var_type,
+            initial_value=initial_value,
+            attributes=list(attributes or []),
         )
         var_node.generic_params = generic_params
 

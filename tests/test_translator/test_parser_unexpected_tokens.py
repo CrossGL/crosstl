@@ -106,6 +106,18 @@ def test_keywords_spelled_like_names_are_still_expressions():
     assert ast is not None
 
 
+def test_annotations_before_let_bindings_are_kept():
+    # Before, ``@`` before ``let`` was skipped token by token at shader scope.
+    ast = _parse(
+        _shader('@ deprecated("old") let pi = 3.14;\n@ doc_hidden let k = 42;')
+    )
+    annotated = {
+        variable.name: [attribute.name for attribute in variable.attributes]
+        for variable in ast.global_variables
+    }
+    assert annotated == {"pi": ["deprecated"], "k": ["doc_hidden"]}
+
+
 def test_more_than_ten_thousand_declarations_are_all_kept():
     count = 10_050
     source = "".join(f"const int C{index} = {index};\n" for index in range(count))

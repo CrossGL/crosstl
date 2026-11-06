@@ -1,6 +1,7 @@
 import pytest
 
 import crosstl.translator as cgl_translator
+from crosstl.backend.import_refusals import SlangImportRefused
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 
 EXTERNAL_REPOS = {
@@ -2447,35 +2448,6 @@ EXTERNAL_FIXTURES = [
             "ConstantBuffer<Params> p : register(b1)",
         ],
     },
-    {
-        # Source: https://github.com/shader-slang/slang
-        # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
-        # Path: tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang
-        "id": "slang_gfx_structured_buffer_pointer_element_reparse",
-        "repo": "shader-slang/slang-current-2026-06-10",
-        "path": "tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang",
-        "source": (
-            """
-            StructuredBuffer<int**> ptrs;
-            RWStructuredBuffer<int> output;
-
-            [shader("compute")]
-            [numthreads(1, 1, 1)]
-            void computeMain()
-            {
-                int** pp = ptrs[0];
-                output[0] = **pp;
-            }
-        """
-        ),
-        "crossgl": True,
-        "contains": [
-            "buffer<int**> ptrs;",
-            "int** pp = ptrs[0];",
-            "output[0] = **pp;",
-        ],
-        "not_contains": ["StructuredBuffer<int**> ptrs;"],
-    },
 ]
 
 
@@ -2523,6 +2495,29 @@ def test_external_fixture_codegen_crossgl_reparse(fixture):
 
     if fixture.get("crossgl", False):
         cgl_translator.parse(generated)
+
+
+def test_structured_buffer_of_pointers_is_refused():
+    # Source: https://github.com/shader-slang/slang
+    # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
+    # Path: tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang
+    # Before, the importer wrote ``buffer<int**> ptrs;``, which CrossGL could not read and
+    # dropped, so ``ptrs`` was used without a declaration.
+    source = """
+        StructuredBuffer<int**> ptrs;
+        RWStructuredBuffer<int> output;
+
+        [shader("compute")]
+        [numthreads(1, 1, 1)]
+        void computeMain()
+        {
+            int** pp = ptrs[0];
+            output[0] = **pp;
+        }
+    """
+
+    with pytest.raises(SlangImportRefused, match="elements are pointers"):
+        generate_crossgl(parse_slang(source))
 
 
 def test_gfx_public_namespace_static_constants_codegen_crossgl_reparse():
