@@ -11,6 +11,10 @@ import re
 import tempfile
 from pathlib import Path
 
+from crosstl.translator.codegen.host_workgroup_size_ids import (
+    HOST_WORKGROUP_SIZE_MACROS,
+)
+
 from ..process import run
 from ..toolchains import tool
 from ..validators import dxil_is_signed, hlsl_arguments
@@ -225,6 +229,10 @@ SPECIALIZATION_MACRO = re.compile(
     r"encoding_default=([^;\s]+);[\s*]*source_macro=(\w+)"
 )
 GLSL_VERSION_LINE = re.compile(r"^[ \t]*#[ \t]*version\b[^\n]*\n", re.M)
+# A workgroup size the source's host chooses reads its source-path value from three macros
+# (crosstl/translator/codegen/glsl_host_workgroup_size.py); the check gives them the size of one invocation that
+# the artifact's SPIR-V path encodes as their default.
+HOST_WORKGROUP_SIZE_DEFAULT = "1"
 
 
 def glsl_specialized_source(path, text, scratch):
@@ -232,6 +240,10 @@ def glsl_specialized_source(path, text, scratch):
     macros = {
         match.group(2): match.group(1) for match in SPECIALIZATION_MACRO.finditer(text)
     }
+    if any(f"defined({macro})" in text for macro in HOST_WORKGROUP_SIZE_MACROS):
+        macros.update(
+            dict.fromkeys(HOST_WORKGROUP_SIZE_MACROS, HOST_WORKGROUP_SIZE_DEFAULT)
+        )
     version = GLSL_VERSION_LINE.search(text)
     if not macros or version is None:
         return path

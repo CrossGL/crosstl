@@ -11,19 +11,22 @@ enabled.
 
 A kernel whose threadgroup size the source's host chooses at dispatch time (:mod:`crosstl.translator.
 host_workgroup_size`) becomes such an entry. The host sets the size when it creates the pipeline, through the
-three specialization constants that :func:`host_workgroup_size_ids` allocates: the smallest ids that no other
-specialization constant or workgroup dimension of the program uses. Every host-sized entry of the module shares
-them, because each Vulkan pipeline specializes its entry independently. Their default of one is the placeholder the
-encoding requires; a pipeline created without them runs one-invocation workgroups.
+three specialization constants whose ids :mod:`.host_workgroup_size_ids` allocates, the same ids the GLSL
+generator gives them. Every host-sized entry of the module shares them, because each Vulkan pipeline specializes
+its entry independently. Their default of one is the placeholder the encoding requires; a pipeline created without
+them runs one-invocation workgroups.
 """
 
 from __future__ import annotations
 
 import re
 
-from ..host_workgroup_size import HOST_WORKGROUP_SIZE_KEY, has_explicit_workgroup_size
+from .host_workgroup_size_ids import (
+    allocate_host_workgroup_size_ids,
+    host_sized_workgroup_config,
+    program_specialization_ids,
+)
 from .specialized_workgroup_size import (
-    SPECIALIZED_WORKGROUP_SIZE_KEYS,
     has_specialized_workgroup_size,
     workgroup_size_specialization_ids,
 )
@@ -48,19 +51,9 @@ def _raw_config(generator, metadata) -> dict:
     return getattr(metadata, "execution_config", None) or {}
 
 
-def _is_host_sized(config) -> bool:
-    return bool(config.get(HOST_WORKGROUP_SIZE_KEY)) and not (
-        has_explicit_workgroup_size(config) or has_specialized_workgroup_size(config)
-    )
-
-
 def effective_workgroup_config(generator, config):
     """``config``, with the specialization ids of the host's size when the source's host chooses it."""
-    config = config or {}
-    if not _is_host_sized(config):
-        return config
-    ids = host_workgroup_size_ids(generator)
-    return {**config, **dict(zip(SPECIALIZED_WORKGROUP_SIZE_KEYS, ids))}
+    return host_sized_workgroup_config(config, host_workgroup_size_ids(generator))
 
 
 def _workgroup_entries(generator, ast, top_level_entries) -> list:
@@ -83,34 +76,6 @@ def _workgroup_entries(generator, ast, top_level_entries) -> list:
     return entries
 
 
-def _declared_specialization_ids(generator, ast, entries) -> set:
-    nodes = [
-        *(getattr(ast, "constants", None) or []),
-        *(getattr(ast, "global_variables", None) or []),
-    ]
-    for stage in (getattr(ast, "stages", None) or {}).values():
-        nodes += [
-            *(getattr(stage, "constants", None) or []),
-            *(getattr(stage, "local_variables", None) or []),
-        ]
-    used = set()
-    for node in nodes:
-        declaration = getattr(node, "left", node)
-        if not generator.spirv_specialization_constant_attributes(declaration):
-            continue
-        try:
-            used.add(generator.spirv_specialization_constant_id(declaration))
-        except ValueError:
-            continue  # The declaration's own generation reports a malformed id.
-    for metadata in entries:
-        try:
-            ids = workgroup_size_specialization_ids(_raw_config(generator, metadata))
-        except ValueError:
-            continue
-        used.update(spec_id for spec_id in ids if spec_id is not None)
-    return used
-
-
 def _signature(generator, metadata):
     config = effective_workgroup_config(generator, _raw_config(generator, metadata))
     try:
@@ -126,9 +91,7 @@ def plan_entry_workgroup_sizes(generator, ast, top_level_entries) -> None:
     """Record whether the module's workgroup entries share one size, before any function reads it."""
     entries = _workgroup_entries(generator, ast, top_level_entries)
     generator.host_workgroup_size_spec_ids = None
-    generator.used_workgroup_specialization_ids = _declared_specialization_ids(
-        generator, ast, entries
-    )
+    generator.used_workgroup_specialization_ids = program_specialization_ids(ast)
     generator.entry_workgroup_size_metadata = {
         id(metadata): metadata for metadata in entries if metadata is not None
     }
@@ -146,13 +109,7 @@ def host_workgroup_size_ids(generator) -> tuple[int, int, int]:
     used = set(getattr(generator, "used_workgroup_specialization_ids", None) or ())
     for decoration in getattr(generator, "decorations", ()) or ():
         used.update(int(match) for match in _SPEC_ID.findall(decoration))
-    allocated = []
-    candidate = 0
-    while len(allocated) < 3:
-        if candidate not in used:
-            allocated.append(candidate)
-        candidate += 1
-    generator.host_workgroup_size_spec_ids = tuple(allocated)
+    generator.host_workgroup_size_spec_ids = allocate_host_workgroup_size_ids(used)
     return generator.host_workgroup_size_spec_ids
 
 

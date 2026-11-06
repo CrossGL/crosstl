@@ -85,8 +85,14 @@ def _size(code, backend):
     return tuple(int(value) for value in match.groups())
 
 
-# SPIR-V specializes a size the host chooses instead (test_spirv_entry_workgroup_sizes.py).
-@pytest.mark.parametrize("backend", sorted(set(SIZES) - {"vulkan"}) + ["wgsl"])
+# SPIR-V and GLSL specialize a size the host chooses instead (test_spirv_entry_workgroup_sizes.py,
+# test_glsl_host_workgroup_size.py).
+SPECIALIZING_BACKENDS = {"vulkan", "opengl"}
+
+
+@pytest.mark.parametrize(
+    "backend", sorted(set(SIZES) - SPECIALIZING_BACKENDS) + ["wgsl"]
+)
 @pytest.mark.parametrize(
     "source, suffix, reason",
     [
@@ -142,11 +148,17 @@ def test_required_opencl_size_is_kept(tmp_path, backend):
 def test_grid_index_and_grid_stride_need_no_block_size(tmp_path, backend, source):
     """blockIdx * blockDim + threadIdx and blockDim * gridDim do not depend on how the grid is split."""
     if source is CUDA_BLOCK_INDEX:
-        # blockIdx alone does depend on the split, so SPIR-V lets the pipeline set the size.
+        # blockIdx alone does depend on the split, so SPIR-V and GLSL let the pipeline set the size.
         if backend == "vulkan":
             code = _translate(tmp_path, source, ".cu", backend)
             assert "OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize" in code
             assert "SpecId 0" in code
+            return
+        if backend == "opengl":
+            code = _translate(tmp_path, source, ".cu", backend)
+            assert (
+                "local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2" in code
+            )
             return
         with pytest.raises(HostDefinedWorkgroupSizeError, match="gl_WorkGroupID"):
             _translate(tmp_path, source, ".cu", backend)

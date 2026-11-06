@@ -275,6 +275,11 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_host_workgroup_size import (
+    glsl_host_workgroup_layout,
+    glsl_program_host_workgroup_size_ids,
+    glsl_workgroup_proof_local_size,
+)
 from .glsl_instance_index import INSTANCE_INDEX
 from .glsl_interface_block_io import (
     block_declared_stage_io,
@@ -360,6 +365,7 @@ from .glsl_wave_extended import (
     GLSL_EXTENDED_WAVE_EXTENSIONS,
 )
 from .glsl_zero_values import zero_array_value
+from .host_workgroup_size_ids import is_host_sized_workgroup
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -583,7 +589,10 @@ from .scalar_return_bounds import (
 )
 from .sizeof_calls import sizeof_call_bytes
 from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS, glsl_quad_sum_helper
-from .specialized_workgroup_size import workgroup_size_specialization_ids
+from .specialized_workgroup_size import (
+    has_specialized_workgroup_size,
+    workgroup_size_specialization_ids,
+)
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -6190,6 +6199,13 @@ class GLSLCodeGen(
             )
         )
 
+        if has_specialized_workgroup_size(execution_config):
+            raise self.glsl_software_subgroup_error(
+                "OpenGL software subgroup lowering requires a workgroup size fixed "
+                "in the shader, not one the pipeline specializes",
+                reason="workgroup-size-specialized",
+                source_location=getattr(entry_function, "source_location", None),
+            )
         raw_workgroup_size = tuple(compute_local_size(execution_config))
         concrete_workgroup_size = []
         for value in raw_workgroup_size:
@@ -13011,8 +13027,10 @@ class GLSLCodeGen(
         for stage_name, stage in getattr(ast, "stages", {}).items():
             entry_point = getattr(stage, "entry_point", None)
             if entry_point is not None:
-                entry_point._glsl_workgroup_proof_local_size = compute_local_size(
-                    getattr(stage, "execution_config", None)
+                entry_point._glsl_workgroup_proof_local_size = (
+                    glsl_workgroup_proof_local_size(
+                        getattr(stage, "execution_config", None)
+                    )
                 )
                 entry_point._glsl_workgroup_proof_subgroup_width = (
                     self.software_subgroup_width
@@ -19442,6 +19460,10 @@ class GLSLCodeGen(
         return code
 
     def generate_compute_layout(self, execution_config=None):
+        if is_host_sized_workgroup(execution_config):
+            return glsl_host_workgroup_layout(
+                glsl_program_host_workgroup_size_ids(self), GLSL_SPIRV_GUARD
+            )
         x, y, z = self.validate_glsl_compute_workgroup_size(
             compute_local_size(execution_config)
         )

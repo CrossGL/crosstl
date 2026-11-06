@@ -67,9 +67,10 @@ def _wrap_materialization(monkeypatch, mutate):
     )
 
 
-def test_subgroup_width_rules_without_a_workgroup_size_are_refused(tmp_path):
+def test_subgroup_width_rules_without_a_workgroup_size_leave_it_to_the_host(tmp_path):
     # The lane index depends on how the host's threadgroup splits into SIMD-groups, so one-invocation
-    # workgroups would change every lane but the first.
+    # workgroups would change every lane but the first. HLSL fixes the size in the shader and refuses the
+    # kernel; GLSL lets the host set it when it creates the pipeline.
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_fixture(repo)
@@ -79,9 +80,15 @@ def test_subgroup_width_rules_without_a_workgroup_size_are_refused(tmp_path):
         format_output=False,
     ).to_json()
 
-    assert payload["summary"]["translatedCount"] == 0
+    by_target = payload["summary"]["artifactsByTarget"]
+    assert by_target["directx"]["translatedCount"] == 0
+    assert by_target["opengl"] == {
+        "artifactCount": 2,
+        "translatedCount": 2,
+        "failedCount": 0,
+    }
     codes = {item["code"] for item in payload["diagnostics"]}
-    assert "project.translate.workgroup-size-host-defined" in codes
+    assert codes == {"project.translate.workgroup-size-host-defined"}
 
 
 def test_subgroup_width_rules_emit_exact_directx_contract(
