@@ -39,9 +39,13 @@ TWO_HOST_SIZED = HOST_ONLY + HOST_ONLY.split(HEADER, 1)[1].replace(
     "reduce_sum", "reduce_max"
 ).replace("total += scratch[i]", "total = max(total, scratch[i])")
 
-FUNCTION_CONSTANT = HEADER + "constant int kMode [[function_constant(0)]];\n" + (
-    HOST_ONLY.split(HEADER, 1)[1].replace(
-        "dst[gid] = total;", "dst[gid] = kMode == 1 ? total : -total;"
+FUNCTION_CONSTANT = (
+    HEADER
+    + "constant int kMode [[function_constant(0)]];\n"
+    + (
+        HOST_ONLY.split(HEADER, 1)[1].replace(
+            "dst[gid] = total;", "dst[gid] = kMode == 1 ? total : -total;"
+        )
     )
 )
 
@@ -147,7 +151,9 @@ def test_host_sized_kernel_takes_its_size_from_the_pipeline(tmp_path):
     ]
     assert "OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize" in code
     assert re.search(
-        r"%gl_WorkGroupSize = OpSpecConstantComposite %v3uint %\d+ %\d+ %\d+", code
+        r"%gl_WorkGroupSize = OpSpecConstantComposite %v3uint "
+        r"%crossgl_workgroup_size_x %crossgl_workgroup_size_y %crossgl_workgroup_size_z",
+        code,
     )
     assert _spec_ids(code) == [0, 1, 2]
     assert "; Version: 1.0" in code
@@ -170,7 +176,11 @@ def test_host_sized_kernel_next_to_a_fixed_one_uses_local_size_id(tmp_path):
     code = _translate(tmp_path, HOST_AND_FIXED)
 
     assert "BuiltIn WorkgroupSize" not in code
-    assert re.search(r"OpExecutionModeId %2 LocalSizeId %\d+ %\d+ %\d+", code)
+    assert re.search(
+        r"OpExecutionModeId %2 LocalSizeId %crossgl_workgroup_size_x "
+        r"%crossgl_workgroup_size_y %crossgl_workgroup_size_z",
+        code,
+    )
     assert "OpExecutionMode %5 LocalSize 1 1 1" in code
     assert _spec_ids(code) == [0, 1, 2]
     # LocalSizeId is SPIR-V 1.2; Vulkan accepts it with VK_KHR_maintenance4, core in Vulkan 1.3.

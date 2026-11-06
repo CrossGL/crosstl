@@ -13,6 +13,10 @@ combination is refused.
 
 from __future__ import annotations
 
+from .host_workgroup_size_ids import (
+    HOST_WORKGROUP_SIZE_CONSTANT_NAMES,
+    is_host_sized_workgroup,
+)
 from .specialized_workgroup_size import (
     has_specialized_workgroup_size,
     workgroup_size_specialization_ids,
@@ -29,13 +33,24 @@ __all__ = [
 _TARGET = "SPIR-V"
 
 
-def _stage_config(generator, stage):
+def _raw_stage_config(generator, stage):
     if stage is None:
-        config = generator.module_compute_entry_config or {}
-    else:
-        config = getattr(stage, "execution_config", {}) or {}
+        return generator.module_compute_entry_config or {}
+    return getattr(stage, "execution_config", {}) or {}
+
+
+def _stage_config(generator, stage):
     # A size the source's host chooses becomes one the pipeline specializes.
-    return effective_workgroup_config(generator, config)
+    return effective_workgroup_config(generator, _raw_stage_config(generator, stage))
+
+
+def _name_host_size_constants(generator, components) -> None:
+    """Name the specialization constants of a size the host chooses, once per module, for reflection."""
+    named = generator.__dict__.setdefault("named_host_workgroup_size_constants", set())
+    for component, name in zip(components, HOST_WORKGROUP_SIZE_CONSTANT_NAMES):
+        if component.id not in named:
+            named.add(component.id)
+            generator.emit(f'OpName %{component.id} "{name}"')
 
 
 def stage_has_specialized_workgroup_size(generator, stage) -> bool:
@@ -55,6 +70,8 @@ def workgroup_size_components(generator, stage, uint_type):
             components.append(
                 generator.register_specialization_constant(default, uint_type, spec_id)
             )
+    if is_host_sized_workgroup(_raw_stage_config(generator, stage)):
+        _name_host_size_constants(generator, components)
     return components, any(spec_id is not None for spec_id in ids)
 
 

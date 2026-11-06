@@ -29,6 +29,7 @@ from .specialized_workgroup_size import (
 )
 
 __all__ = [
+    "HOST_WORKGROUP_SIZE_CONSTANT_NAMES",
     "HOST_WORKGROUP_SIZE_MACROS",
     "allocate_host_workgroup_size_ids",
     "host_sized_workgroup_config",
@@ -41,6 +42,13 @@ HOST_WORKGROUP_SIZE_MACROS = (
     "CROSSGL_WORKGROUP_SIZE_X",
     "CROSSGL_WORKGROUP_SIZE_Y",
     "CROSSGL_WORKGROUP_SIZE_Z",
+)
+
+# The names of the specialization constants of the x, y and z dimensions, which reflection recognizes them by.
+HOST_WORKGROUP_SIZE_CONSTANT_NAMES = (
+    "crossgl_workgroup_size_x",
+    "crossgl_workgroup_size_y",
+    "crossgl_workgroup_size_z",
 )
 
 # Every attribute spelling of a specialization id that a CrossTL generator reads, so that the host's ids collide
