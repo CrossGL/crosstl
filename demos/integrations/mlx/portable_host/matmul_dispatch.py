@@ -84,11 +84,12 @@ def dispatch(host, entry, buffers, count, threads, launch):
 def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
     """Run one launch of ``layout``'s quantized product kernels through ``cache``.
 
-    ``layout`` is ``matmul_layout``, ``qmm_layout``, ``fp_matmul_layout`` or
-    ``fp_qmm_layout``:
+    ``layout`` is ``matmul_layout``, ``qmm_layout``, ``fp_matmul_layout``,
+    ``fp_qmm_layout``, ``gather_qmm_layout`` or ``fp_gather_qmm_layout``:
     each binds the weights ``w``, the ``scales``, the input ``x``, the output
     ``y`` and, for affine kernels, the ``biases``, all in
-    ``layout.MATRIX_PARAMETERS``.
+    ``layout.MATRIX_PARAMETERS``. A layout whose arrays depend on the entry,
+    such as a global scale, names them with ``layout.matrix_parameters``.
     """
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
@@ -107,6 +108,12 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
         if name in supplied:
             raise ValueError(f"{label} buffer names must be unique")
         supplied[name] = buffer
+    # Layouts whose bound arrays depend on the entry name them per entry.
+    matrices = (
+        layout.matrix_parameters(entry)
+        if hasattr(layout, "matrix_parameters")
+        else layout.MATRIX_PARAMETERS
+    )
     counts, parameters = layout.read_storage(entry, supplied)
     execution = launch.execution()
     metadata = layout.plan(entry, counts, parameters, threads, execution)
@@ -119,7 +126,7 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
             + [POISON[layout.parameter_type(entry, name)]]
             * (GUARD_COUNT + metadata["overreadPadding"].get(name, 0))
         )
-        for name in layout.MATRIX_PARAMETERS
+        for name in matrices
     }
     for name, value in metadata["parameters"].items():
         storage[name] = [value] if isinstance(value, int) else list(value)
@@ -206,7 +213,7 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
                     )
                 ).hexdigest()
             )
-            for name in layout.MATRIX_PARAMETERS
+            for name in matrices
             if name != "y"
         },
         "outputValues": words[:size] if size <= 4096 else None,

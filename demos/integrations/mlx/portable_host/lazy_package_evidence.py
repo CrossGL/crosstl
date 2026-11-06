@@ -23,10 +23,12 @@ from demos.integrations.mlx.portable_host import (
     conv_layout,
     dot_layout,
     fft_layout,
+    fp_gather_qmm_layout,
     fp_matmul_layout,
     fp_qmm_layout,
     gather_mm_layout,
     gather_mv_layout,
+    gather_qmm_layout,
     gemm_layout,
     gemm_splitk_layout,
     gemv_layout,
@@ -68,6 +70,12 @@ from demos.integrations.mlx.portable_host.fft_packages import (
     CACHE_DIRECTORY as FFT_CACHE,
 )
 from demos.integrations.mlx.portable_host.fft_packages import FftPackageCache
+from demos.integrations.mlx.portable_host.fp_gather_qmm_packages import (
+    CACHE_DIRECTORY as FP_GATHER_QUANTIZED_CACHE,
+)
+from demos.integrations.mlx.portable_host.fp_gather_qmm_packages import (
+    FpGatherQmmPackageCache,
+)
 from demos.integrations.mlx.portable_host.fp_matmul_packages import (
     CACHE_DIRECTORY as FP_QUANTIZED_MV_CACHE,
 )
@@ -91,6 +99,12 @@ from demos.integrations.mlx.portable_host.gather_mm_packages import (
     GatherMmPackageCache,
     GatherMvPackageCache,
     GatherOffsetsPackageCache,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_packages import (
+    CACHE_DIRECTORY as GATHER_QUANTIZED_CACHE,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_packages import (
+    GatherQmmPackageCache,
 )
 from demos.integrations.mlx.portable_host.gemm_packages import (
     CACHE_DIRECTORY as GEMM_CACHE,
@@ -167,6 +181,8 @@ QUANTIZED_FAMILIES = {
     "fp-quantized-mv": fp_matmul_layout.ENTRY_PREFIXES,
     "quantized-mm": qmm_layout.ENTRY_PREFIXES,
     "fp-quantized-mm": fp_qmm_layout.ENTRY_PREFIXES,
+    "gather-quantized": gather_qmm_layout.ENTRY_PREFIXES,
+    "fp-gather-quantized": fp_gather_qmm_layout.ENTRY_PREFIXES,
 }
 EXECUTED_FAMILIES = {**MATRIX_FAMILIES, **QUANTIZED_FAMILIES}
 FAMILIES = ("scan", "small-row", "small-column", "long-column", *EXECUTED_FAMILIES)
@@ -255,6 +271,12 @@ class LazyPackages:
             ),
             "fp-quantized-mm": FpQuantizedQmmPackageCache(
                 mlx_root, packages / FP_QUANTIZED_MM_CACHE, target
+            ),
+            "gather-quantized": GatherQmmPackageCache(
+                mlx_root, packages / GATHER_QUANTIZED_CACHE, target
+            ),
+            "fp-gather-quantized": FpGatherQmmPackageCache(
+                mlx_root, packages / FP_GATHER_QUANTIZED_CACHE, target
             ),
         }
 

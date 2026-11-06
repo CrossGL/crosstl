@@ -52,10 +52,12 @@ from demos.integrations.mlx.portable_host import (
     elementwise_dispatch,
     fft_dispatch,
     fft_packages,
+    fp_gather_qmm_layout,
     fp_matmul_layout,
     fp_qmm_layout,
     gather_dispatch,
     gather_mm_dispatch,
+    gather_qmm_layout,
     gemm_dispatch,
     gemm_layout,
     gemm_splitk_dispatch,
@@ -157,6 +159,12 @@ from demos.integrations.mlx.portable_host.elementwise_packages import (
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     ElementwisePackageCache,
 )
+from demos.integrations.mlx.portable_host.fp_gather_qmm_packages import (
+    CACHE_DIRECTORY as FP_GATHER_QMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.fp_gather_qmm_packages import (
+    FpGatherQmmPackageCache,
+)
 from demos.integrations.mlx.portable_host.fp_matmul_packages import (
     CACHE_DIRECTORY as FP_QUANTIZED_MATMUL_CACHE,
 )
@@ -182,6 +190,12 @@ from demos.integrations.mlx.portable_host.gather_packages import (
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     signature as gather_signature,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_packages import (
+    CACHE_DIRECTORY as GATHER_QMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_packages import (
+    GatherQmmPackageCache,
 )
 from demos.integrations.mlx.portable_host.gemm_packages import (
     CACHE_DIRECTORY as GEMM_CACHE,
@@ -606,6 +620,22 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # GatherQMM's affine gathered matrix-vector and matrix-matrix kernels.
+        self.gather_qmms = (
+            GatherQmmPackageCache(
+                mlx_root, self.directory / GATHER_QMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
+        # GatherQMM's block-scaled gathered kernels, with and without global scales.
+        self.fp_gather_qmms = (
+            FpGatherQmmPackageCache(
+                mlx_root, self.directory / FP_GATHER_QMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.gemvs = (
             GemvPackageCache(mlx_root, self.directory / GEMV_CACHE, self.target)
             if mlx_root is not None
@@ -1015,6 +1045,18 @@ class HostRuntime:
             ):
                 fp_qmm_layout.signature(name)
                 return 1
+            if (
+                name.startswith(gather_qmm_layout.ENTRY_PREFIXES)
+                and self.gather_qmms is not None
+            ):
+                gather_qmm_layout.signature(name)
+                return 1
+            if (
+                name.startswith(fp_gather_qmm_layout.ENTRY_PREFIXES)
+                and self.fp_gather_qmms is not None
+            ):
+                fp_gather_qmm_layout.signature(name)
+                return 1
             if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
                 gemv_layout.signature(name)
                 return 1
@@ -1214,6 +1256,28 @@ class HostRuntime:
                 self,
                 fp_qmm_layout,
                 self.fp_quantized_qmms,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
+            )
+        if entry.startswith(gather_qmm_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                gather_qmm_layout,
+                self.gather_qmms,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
+            )
+        if entry.startswith(fp_gather_qmm_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                fp_gather_qmm_layout,
+                self.fp_gather_qmms,
                 entry,
                 buffers,
                 count,

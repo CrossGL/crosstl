@@ -90,7 +90,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 550
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 553
     assert all(
         name.startswith(
             (
@@ -99,6 +99,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_bf16.TestBF16.test_",
                 "test_fast.TestFast.test_",
                 "test_blas.TestBlas.test_",
+                "test_quantized.TestQuantized.test_",
                 "test_losses.TestLosses.test_",
                 "test_einsum.TestEinsum.test_",
                 "test_init.TestInit.test_",
@@ -199,7 +200,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 543 and not set(opengl) & set(excluded)
+    assert len(opengl) == 546 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -219,6 +220,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "blas-wide",
         "blas-gather",
         "blas-gather-blocks",
+        "blas-gather-quantized",
         "blas-masked",
         "sorting",
         "modules",
@@ -264,13 +266,27 @@ def test_upstream_op_groups_partition_the_inventory():
     blas = {
         "blas": 19,
         "blas-wide": 2,
-        "blas-gather": 6,
+        "blas-gather": 7,
         "blas-gather-blocks": 1,
+        "blas-gather-quantized": 2,
         "blas-masked": 1,
     }
+    # The gathered group also runs the quantized gathered product's gradient,
+    # and the gathered quantized products run in a group of their own.
+    quantized = tuple(
+        "test_quantized.TestQuantized." + name
+        for name in (
+            "test_gather_matmul_grad",
+            "test_gather_qmm",
+            "test_gather_qmm_matrix_path",
+        )
+    )
     for group, count in blas.items():
         assert len(ops.GROUPS[group]) == count
-        assert all(name.startswith("test_blas.") for name in ops.GROUPS[group])
+        names = [name for name in ops.GROUPS[group] if name not in quantized]
+        assert all(name.startswith("test_blas.") for name in names)
+    assert ops.GROUPS["blas-gather"][-1:] == quantized[:1]
+    assert ops.GROUPS["blas-gather-quantized"] == quantized[1:]
     assert not any(
         name.startswith(
             (

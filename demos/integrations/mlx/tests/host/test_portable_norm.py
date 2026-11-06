@@ -650,6 +650,9 @@ def test_runtime_and_host_adapter_route_normalization():
         '#include "mlx/backend/no_gpu/crosstl_compiled.inc"\n'
         "// So does the port of GatherMM's gathered products.\n"
         '#include "mlx/backend/no_gpu/crosstl_gather_mm.inc"\n'
+        "// So does the port of GatherQMM's affine gathered products, which reuses its\n"
+        "// index views.\n"
+        '#include "mlx/backend/no_gpu/crosstl_gather_qmm.inc"\n'
         "// So does the port of SegmentedMM, which shares its dispatch helper.\n"
         '#include "mlx/backend/no_gpu/crosstl_segmented_mm.inc"\n'
         "// So does the port of BlockMaskedMM's masked products.\n"
