@@ -146,6 +146,6 @@ def test_default_row_major_reaches_every_target(tmp_path):
     assert "row_major float4x4 m;" in translate(str(crossgl), backend="directx")
     assert "layout(row_major) mat4 m;" in translate(str(crossgl), backend="opengl")
     assert "transpose(" in translate(str(crossgl), backend="metal")
-    assert "OpMemberDecorate %Blk 0 RowMajor" in translate(
-        str(crossgl), backend="vulkan"
-    )
+    # Without SPIRV-Tools the ids stay numeric, so match the block id loosely.
+    spirv = translate(str(crossgl), backend="vulkan")
+    assert re.search(r"OpMemberDecorate %\w+ 0 RowMajor", spirv)
