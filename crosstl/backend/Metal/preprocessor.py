@@ -1252,8 +1252,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
         # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
-        # bound) as for the source's own concrete code.
-        processed = self._fold_concrete_type_trait_values(processed)
+        # bound) as for the source's own concrete code. No later stage folds a trait, so one left in concrete
+        # code is refused for every target rather than reaching the parser as an identifier.
+        processed = self._fold_concrete_type_trait_values(
+            processed, require_resolution=True
+        )
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def preprocess_for_entry_discovery(
@@ -7267,7 +7270,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return initializer
         return self._apply_text_replacements(initializer, replacements)
 
-    def _fold_concrete_type_trait_values(self, code: str) -> str:
+    def _fold_concrete_type_trait_values(
+        self, code: str, *, require_resolution: bool = False
+    ) -> str:
         if not any(name in code for name in self._METAL_TYPE_TRAIT_ARITIES):
             return code
         template_spans = self._find_template_declaration_spans(code)
@@ -7345,7 +7350,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     (match.start(), expression_end, "true" if value else "false")
                 )
                 continue
-            if not self._fail_closed_static_assertions:
+            if not (require_resolution or self._fail_closed_static_assertions):
                 continue
             expression = re.sub(
                 r"\s+", " ", code[match.start() : expression_end]
