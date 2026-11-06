@@ -104,6 +104,7 @@ from .wgsl_frexp_modf import (
     wgsl_frexp_modf_helpers,
 )
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
+from .wgsl_image_atomics import WGSLImageAtomicUnsupportedError, is_image_atomic_name
 from .wgsl_integer_builtins import lower_integer_builtin_inputs
 from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
@@ -3894,6 +3895,10 @@ class WGSLCodeGen(
             return self.generate_image_load_call(node, function_name)
         if normalized_name == "imagestore":
             return self.generate_image_store_call(node, function_name)
+        if is_image_atomic_name(normalized_name) and node.arguments:
+            raise WGSLImageAtomicUnsupportedError(
+                function_name, self.generate_expression(node.arguments[0])
+            )
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
         derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)

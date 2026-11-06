@@ -144,6 +144,10 @@ from .shader_records import (
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
 from .slang_vertex_indices import spell_slang_vertex_indices
+from .spirv_instructions import (
+    SpirvOperationUnsupportedError,
+    refuse_spirv_instructions,
+)
 from .stage_constant_blocks import (
     StageConstantBlockConflictError,
     hoist_stage_constant_blocks,
@@ -242,6 +246,7 @@ __all__ = [
     "StaticAssertionFailedError",
     "StaticAssertionUnresolvedError",
     "SpirvArrayLengthUnsupportedError",
+    "SpirvOperationUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
     "StructMethodUnsupportedError",
@@ -392,7 +397,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
-    non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). The AST is
+    non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
+    operation the importer kept as a call is then refused with :class:`SpirvOperationUnsupportedError` for every
+    target but CrossGL (:mod:`.spirv_instructions`). The AST is
     rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
     exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
@@ -498,6 +505,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_half_floats(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
     wrap_narrow_arithmetic(program, report.source, report.target)
+    refuse_spirv_instructions(program, report.target)
     Annotator(program, report.source, report).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)

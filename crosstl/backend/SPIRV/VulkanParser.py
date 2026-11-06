@@ -11,6 +11,7 @@ from .block_arrays import SpirvBlockArrayUnsupportedError, block_array_element
 from .block_layout_import import spirv_block_layout
 from .buffer_memory_qualifiers import storage_block_memory_qualifiers
 from .function_structure import SpirvFunctionStructure
+from .image_texel_atomics import fold_image_texel_atomic
 from .integer_signedness_import import (
     spirv_integer_binary_expression,
     spirv_integer_conversion_expression,
@@ -2342,7 +2343,7 @@ class VulkanParser:
                 "OpAtomicIDecrement",
             }:
                 if len(operands) >= 4:
-                    expressions[result_id] = (
+                    expressions[result_id] = fold_image_texel_atomic(
                         self.spirv_assembly_atomic_increment_expression(
                             opcode,
                             operands[1],
@@ -2350,7 +2351,9 @@ class VulkanParser:
                             names,
                             decorations,
                             constants,
-                        )
+                        ),
+                        opcode,
+                        self.spirv_type_name(operands[0], types),
                     )
                     expression_type_ids[result_id] = operands[0]
                     if result_id not in used_result_ids:
@@ -2359,14 +2362,18 @@ class VulkanParser:
 
             if result_id and opcode in self.SPIRV_ATOMIC_RMW_FUNCTIONS:
                 if len(operands) >= 5:
-                    expressions[result_id] = self.spirv_assembly_atomic_expression(
+                    expressions[result_id] = fold_image_texel_atomic(
+                        self.spirv_assembly_atomic_expression(
+                            opcode,
+                            operands[1],
+                            operands[4],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                         opcode,
-                        operands[1],
-                        operands[4],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                        self.spirv_type_name(operands[0], types),
                     )
                     expression_type_ids[result_id] = operands[0]
                     if result_id not in used_result_ids:
@@ -2398,7 +2405,7 @@ class VulkanParser:
                 "OpAtomicCompareExchangeWeak",
             }:
                 if len(operands) >= 7:
-                    expressions[result_id] = (
+                    expressions[result_id] = fold_image_texel_atomic(
                         self.spirv_assembly_atomic_compare_exchange_expression(
                             operands[1],
                             operands[5],
@@ -2407,7 +2414,9 @@ class VulkanParser:
                             names,
                             decorations,
                             constants,
-                        )
+                        ),
+                        opcode,
+                        self.spirv_type_name(operands[0], types),
                     )
                     expression_type_ids[result_id] = operands[0]
                     if result_id not in used_result_ids:
