@@ -57,6 +57,9 @@ class LaneHelpers:
                 "uint16": {"uint", "uint16_t"},
                 "int16": {"int", "int16_t"},
                 "float16": {"float", "half", "float16_t"},
+                # HLSL keeps bfloat16 values as their 16-bit patterns.
+                "bfloat16": {"uint"},
+                "bool": {"bool"},
             }[element]
         else:
             allowed = {
@@ -65,6 +68,9 @@ class LaneHelpers:
                 "uint16": {"uint"},
                 "int16": {"int"},
                 "float16": {"float"},
+                # GLSL keeps bfloat16 values as floats rounded to bfloat16.
+                "bfloat16": {"float"},
+                "bool": {"bool"},
             }[element]
         if mapped not in allowed:
             reject(
@@ -76,8 +82,19 @@ class LaneHelpers:
         mask = "0xffu" if bits == 8 else "0xffffu"
         if self.dialect == "glsl":
             mask = "255u" if bits == 8 else "65535u"
-        if element in INTEGER_ELEMENTS:
+        if element in INTEGER_ELEMENTS or element == "bfloat16" and mapped == "uint":
             return f"(uint(selected) & {mask})"
+        if element == "bool":
+            # A stored bool is one byte holding 0 or 1.
+            return "(selected ? 1u : 0u)"
+        if element == "bfloat16":
+            # Round to nearest even; a NaN keeps its sign and stays quiet.
+            return (
+                "((floatBitsToUint(selected) & 0x7fffffffu) > 0x7f800000u"
+                " ? ((floatBitsToUint(selected) >> 16u) | 64u)"
+                " : ((floatBitsToUint(selected) + 32767u"
+                " + ((floatBitsToUint(selected) >> 16u) & 1u)) >> 16u))"
+            )
         if self.dialect == "glsl":
             return f"(packHalf2x16(vec2(selected, 0.0)) & {mask})"
         if mapped == "float":
@@ -85,6 +102,12 @@ class LaneHelpers:
         return "uint(asuint16(selected))"
 
     def decode(self, element, bits, mapped, value):
+        if element == "bool":
+            return f"({value} != 0u)"
+        if element == "bfloat16":
+            if mapped == "uint":
+                return value
+            return f"uintBitsToFloat({value} << 16u)"
         if element in SIGNED_ELEMENTS:
             if self.dialect == "glsl":
                 return f"bitfieldExtract(int({value}), 0, {bits})"
