@@ -4245,17 +4245,20 @@ void dispatch_steel_gemm_splitk(
   const bool mn_aligned = M % bm == 0 && N % bn == 0;
   const bool k_aligned = K % bk == 0;
   const char* storage = matmul_storage(out.dtype());
+  // matmul.cpp's C_split holds complex64 partials for complex64 products.
+  const Dtype partial_type = out.dtype() == complex64 ? complex64 : float32;
+  const char* partial = matmul_storage(partial_type);
   const std::string entry = std::string("steel_gemm_splitk_") + (transpose_a ? "t" : "n") +
-      (transpose_b ? "t" : "n") + "_" + storage + "_float32_bm" + std::to_string(bm) + "_bn" +
+      (transpose_b ? "t" : "n") + "_" + storage + "_" + partial + "_bm" + std::to_string(bm) + "_bn" +
       std::to_string(bn) + "_bk" + std::to_string(bk) + "_wm" + std::to_string(wm) + "_wn" +
       std::to_string(wn) + "_MN_" + (mn_aligned ? "t" : "n") + "aligned_K_" +
       (k_aligned ? "t" : "n") + "aligned";
   const bool do_axpby = epilogue_axpby(epilogue);
-  const std::string accum = std::string("steel_gemm_splitk_accum_") + storage + "_float32" +
+  const std::string accum = std::string("steel_gemm_splitk_accum_") + storage + "_" + partial +
       (do_axpby ? "_axbpy" : "");
   require_entry(entry);
   require_entry(accum);
-  array C_split({split_k_partitions, M, N}, float32, nullptr, {});
+  array C_split({split_k_partitions, M, N}, partial_type, nullptr, {});
   C_split.set_data(allocator::malloc(C_split.nbytes()));
   // GEMMSpiltKParams in params.h order.
   std::vector<int32_t> params = {
@@ -4276,7 +4279,7 @@ void dispatch_steel_gemm_splitk(
   std::vector<CrosstlMlxBuffer> buffers = {
       {"A", storage, data(a), matmul_span(a), 0},
       {"B", storage, data(b), matmul_span(b), 0},
-      {"C", "float32", C_split.data<void>(), C_split.size(), 1},
+      {"C", partial, C_split.data<void>(), C_split.size(), 1},
       {"params", "int32", params.data(), params.size(), 0},
   };
   dispatch_splitk_kernel(
@@ -4288,7 +4291,7 @@ void dispatch_steel_gemm_splitk(
   int32_t partition_stride = int32_t(split_k_partition_stride);
   int32_t ldd = N;
   std::vector<CrosstlMlxBuffer> accum_buffers = {
-      {"C_split", "float32", C_split.data<void>(), C_split.size(), 0},
+      {"C_split", partial, C_split.data<void>(), C_split.size(), 0},
       {"D", storage, out.data<void>(), out.size(), 1},
       {"k_partitions", "int32", &k_partitions, 1, 0},
       {"partition_stride", "int32", &partition_stride, 1, 0},
@@ -4446,11 +4449,6 @@ void dispatch_steel_gemm(
     const AddmmEpilogue* epilogue = nullptr) {
   const int64_t split_tiles = int64_t((M + 16 - 1) / 16) * ((N + 16 - 1) / 16);
   if (batch_size_out == 1 && split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)) {
-    // The host does not translate steel_gemm_splitk's complex64 entries yet.
-    if (out.dtype() == complex64) {
-      throw std::invalid_argument(
-          "CrossTL complex64 matmul does not support split-K products yet.");
-    }
     dispatch_steel_gemm_splitk(
         a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);
     return;

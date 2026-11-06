@@ -2,8 +2,9 @@
 
 ``steel_matmul_axpby`` sends a single product with a small ``M x N`` tile
 count and a long ``K`` to ``steel_gemm_splitk_axpby``: ``gemm_splitk`` writes
-one float32 partial product per ``K`` partition into a temporary ``C_split``
-and ``gemm_splitk_accum`` sums the partitions into the output. ``Matmul``
+one partial product per ``K`` partition into a temporary ``C_split`` (float32,
+or complex64 for complex64 products) and ``gemm_splitk_accum`` sums the
+partitions into the output. ``Matmul``
 never reads ``C``, so its accumulation takes no ``axpby`` epilogue. ``AddMM``
 takes the ``_axbpy`` accumulation unless ``alpha == 1`` and ``beta == 0``; it
 also binds ``C`` with its row and column strides, ``alpha`` and ``beta``.
@@ -17,7 +18,6 @@ import ctypes
 import re
 
 from demos.integrations.mlx.portable_host import gemm_layout, gemv_layout
-from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
 from demos.integrations.mlx.tests.kernels import gemm_splitk_model as model
 
 SOURCE = "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_splitk.metal"
@@ -26,16 +26,23 @@ MAX_ELEMENTS = gemm_layout.MAX_ELEMENTS
 SIGNED_MAX = gemm_layout.SIGNED_MAX
 MAX_GROUPS = gemm_layout.MAX_GROUPS
 DTYPES = gemm_layout.DTYPES
+COMPLEX = gemm_layout.COMPLEX
+ELEMENT_DTYPES = gemm_layout.ELEMENT_DTYPES
+ELEMENT_SIZES = gemm_layout.ELEMENT_SIZES
 ACCUMULATOR = "float32"
+# matmul.cpp's C_split type: complex64 for complex products, else float32.
+ACCUMULATORS = {**{dtype: ACCUMULATOR for dtype in DTYPES}, COMPLEX: COMPLEX}
 BK, WM, WN = 16, 2, 2
 MAX_PARTITIONS = 32
 ACCUM_WORKGROUP = (1, 1, 1)
 PATTERN = re.compile(
-    r"steel_gemm_splitk_(nn|nt|tn|tt)_(float32|float16|bfloat16)_float32"
+    r"steel_gemm_splitk_(nn|nt|tn|tt)_(float32|float16|bfloat16|complex64)"
+    r"_(float32|complex64)"
     r"_bm(16|32)_bn(16|32)_bk16_wm2_wn2_MN_([tn])aligned_K_([tn])aligned"
 )
 ACCUM_PATTERN = re.compile(
-    r"steel_gemm_splitk_accum_(float32|float16|bfloat16)_float32(_axbpy)?"
+    r"steel_gemm_splitk_accum_(float32|float16|bfloat16|complex64)"
+    r"_(float32|complex64)(_axbpy)?"
 )
 ENTRY_PREFIXES = ("steel_gemm_splitk_",)
 # [[buffer(i)]] parameters of each kernel in index order; the host binds all.
@@ -99,18 +106,23 @@ def signature(entry):
     match = ACCUM_PATTERN.fullmatch(entry)
     if match is not None:
         model_entry = model.ACCUM_BY_NAME.get(entry)
-        if model_entry is None or model_entry.axpby != bool(match.group(2)):
+        dtype, accumulator, axbpy = match.groups()
+        if (
+            model_entry is None
+            or model_entry.axpby != bool(axbpy)
+            or ACCUMULATORS[dtype] != accumulator
+        ):
             raise ValueError("Unsupported split-K accumulation entry")
         return {
             "kind": "axbpy" if model_entry.axpby else "accum",
             "model": model_entry,
-            "dtype": match.group(1),
+            "dtype": dtype,
         }
     match = PATTERN.fullmatch(entry)
     model_entry = model.BY_NAME.get(entry) if match is not None else None
-    if model_entry is None:
+    if model_entry is None or ACCUMULATORS[match.group(2)] != match.group(3):
         raise ValueError("Unsupported split-K GEMM entry")
-    transpose, dtype, bm, bn, mn, k = match.groups()
+    transpose, dtype, _, bm, bn, mn, k = match.groups()
     return {
         "kind": "splitk",
         "model": model_entry,
@@ -146,18 +158,21 @@ def partition_plan(m, n, k):
 
 def select(dtype, transpose_a, transpose_b, m, n, k, axbpy=False):
     """The ``gemm_splitk`` and accumulation names matmul.cpp builds."""
-    if dtype not in DTYPES:
-        raise ValueError("Split-K products support float32, float16 and bfloat16")
+    if dtype not in ELEMENT_DTYPES:
+        raise ValueError(
+            "Split-K products support float32, float16, bfloat16 and complex64"
+        )
     bm, bn = tile(m, n)
     transpose = _flag(transpose_a) + _flag(transpose_b)
     mn_aligned = m % bm == 0 and n % bn == 0
+    accumulator = ACCUMULATORS[dtype]
     entry = (
-        f"steel_gemm_splitk_{transpose}_{dtype}_{ACCUMULATOR}"
+        f"steel_gemm_splitk_{transpose}_{dtype}_{accumulator}"
         f"_bm{bm}_bn{bn}_bk{BK}_wm{WM}_wn{WN}"
         f"_MN_{_flag(mn_aligned)}aligned_K_{_flag(k % BK == 0)}aligned"
     )
     suffix = "_axbpy" if axbpy else ""
-    return entry, f"steel_gemm_splitk_accum_{dtype}_{ACCUMULATOR}{suffix}"
+    return entry, f"steel_gemm_splitk_accum_{dtype}_{accumulator}{suffix}"
 
 
 def splitk_params(m, n, k, lda, ldb):
@@ -216,7 +231,7 @@ def parameter_type(entry, name):
     info = signature(entry)
     # The accumulation's C is AddMM's addend; gemm_splitk's C is C_split.
     if name == "C_split" or (name == "C" and info["kind"] == "splitk"):
-        return ACCUMULATOR
+        return ACCUMULATORS[info["dtype"]]
     if name in ("A", "B", "C", "D"):
         return info["dtype"]
     if name in FLOAT_SCALARS:
@@ -240,7 +255,7 @@ def read_storage(entry, buffers):
     for name in names:
         buffer, dtype = buffers[name], parameter_type(entry, name)
         scalar = name in SCALARS + AXBPY_SCALARS
-        itemsize = 4 if scalar else ITEM_SIZES.get(dtype) or 4
+        itemsize = 4 if scalar else ELEMENT_SIZES.get(dtype) or 4
         count = buffer.count
         limit = {"params": len(PARAMS_FIELDS)}.get(name, 1 if scalar else MAX_ELEMENTS)
         if (
@@ -411,9 +426,14 @@ def index_assertions(entry):
             }
             for indexed, expression in ACCUM_INDEX_EXPRESSIONS
         )
-    element = {"float32": "float", "float16": "float16", "bfloat16": "bfloat16"}[
-        info["dtype"]
-    ]
+    elements = {
+        "float32": "float",
+        "float16": "float16",
+        "bfloat16": "bfloat16",
+        COMPLEX: "complex_t_float",
+    }
+    element = elements[info["dtype"]]
+    partial = elements[ACCUMULATORS[info["dtype"]]]
     reads = max(loader.reads for loader in info["model"].loaders)
     device = [
         {"expression": f"source.offset + {offset}", "maximum": SIGNED_MAX}
@@ -424,7 +444,7 @@ def index_assertions(entry):
             "function": f"crosstl_resource_{access}",
             "maximum": SIGNED_MAX,
         }
-        for access in sorted({f"load_{element}", "store_float"})
+        for access in sorted({f"load_{element}", f"store_{partial}"})
     ]
     workgroup = [
         {

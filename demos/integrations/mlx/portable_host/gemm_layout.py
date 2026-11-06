@@ -236,10 +236,6 @@ def matmul_route(dtype, a_shape, a_strides, b_shape, b_strides):
     if min(m, n) == 1:
         return "gemv", gemv_layout.route(*operands)
     if split_k(m, n, k, prepared["batches"]):
-        if dtype == COMPLEX:
-            # The host does not translate steel_gemm_splitk's complex64
-            # entries yet, so it refuses these products.
-            raise ValueError("complex64 split-K matrix products are not translated yet")
         return "splitk", gemm_splitk_layout.route(*operands)
     return "gemm", route(*operands)
 

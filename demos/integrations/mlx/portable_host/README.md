@@ -720,15 +720,17 @@ lane-record views, and the host binds each element as its packed
 `{real, imag}` float32 pair, as for complex64 GEMV. `verify_matmul.py` runs
 upstream `test_complex_gemm`'s partial-tile product and a transposed batch of
 whole tiles, both parts on the exact grids. `mx.addmm` decomposes complex64
-into a matmul, multiplies and an add, so it never reaches `AddMM`. The host
-refuses complex64 products that would take the split-K route, whose complex64
-entries it does not translate yet.
+into a matmul, multiplies and an add, so it never reaches `AddMM`.
+complex64 products that split K accumulate complex64 partials in `C_split`,
+as matmul.cpp allocates it, through the complex64 `gemm_splitk` and
+`gemm_splitk_accum` entries.
 
 A single product whose `M x N` output has at most 1,024 tiles of 16, with
 `K / 16 >= 8` and `K >= max(M, N)`, follows `steel_gemm_splitk_axpby`: the
-host allocates the float32 `C_split` temporary of matmul.cpp's partition
-count, runs the `gemm_splitk` entry for its tile (16 or 32 per axis) and
-alignment, then `gemm_splitk_accum` over the partitions. matmul.cpp launches
+host allocates the `C_split` temporary of matmul.cpp's partition count
+(float32, or complex64 for complex64 products), runs the `gemm_splitk` entry
+for its tile (16 or 32 per axis) and alignment, then `gemm_splitk_accum` over
+the partitions. matmul.cpp launches
 the accumulation with `dispatch_threads` over exactly `N x M` threads; the
 kernel reads only `thread_position_in_grid` and has no bounds check, so the
 host covers the same threads with one-thread workgroups. `gemm_splitk_layout.py`

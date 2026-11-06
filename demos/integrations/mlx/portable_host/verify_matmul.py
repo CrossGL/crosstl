@@ -7,8 +7,8 @@ whole-array sum of its float32 partial sums and the copy to the output type,
 and checks each output bit against an exact float64 reference: inputs lie on
 dyadic grids that keep every float32 partial sum exact, whatever its order.
 complex64 products take ``gemv`` or ``gemv_t`` even for a single dot product,
-and ``steel_gemm_fused`` for matrix products, with both parts of every operand
-on such grids.
+and ``steel_gemm_fused`` or split-K for matrix products, with both parts of
+every operand on such grids.
 """
 
 import argparse
@@ -152,6 +152,20 @@ CASES = (
     ),
     # 208 / 16 = 13 K tiles over 16 partitions: only the last one has work.
     ("splitk-copied-operand", "float32", ((24, 416), "step"), ((208, 24), "dense")),
+    # complex64 split-K accumulates complex64 partials: partial tiles and K,
+    # and a transposed operand with whole tiles.
+    (
+        "complex-splitk-nt-partial",
+        "complex64",
+        ((20, 300), "dense"),
+        ((24, 300), "swap"),
+    ),
+    (
+        "complex-splitk-tn-aligned",
+        "complex64",
+        ((256, 32), "swap"),
+        ((256, 32), "dense"),
+    ),
     # Dot products: every type, whole and partial vector loads, several
     # threadgroups' partial sums and a copied operand.
     ("dot-product", "float32", ((1, 16), "dense"), ((16, 1), "dense")),
@@ -404,7 +418,8 @@ def _splitk_covered(records):
     return (
         {(info["transposeA"], info["transposeB"]) for info in signatures}
         == {(False, False), (False, True), (True, False), (True, True)}
-        and {info["dtype"] for info in signatures} == set(gemm_splitk_layout.DTYPES)
+        and {info["dtype"] for info in signatures}
+        == set(gemm_splitk_layout.ELEMENT_DTYPES)
         and {(info["bm"], info["bn"]) for info in signatures}
         == {(16, 16), (16, 32), (32, 16), (32, 32)}
         and {info["mnAligned"] for info in signatures} == {False, True}
