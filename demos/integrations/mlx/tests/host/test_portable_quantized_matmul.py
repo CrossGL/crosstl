@@ -913,12 +913,15 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         1800,
         # The matrix-vector translation; its slowest observed run took 233 s.
         1200,
-        1800,
+        # The matrix-matrix translation; its slowest observed run took 318 s.
+        1200,
         900,
         900,
         1200,
         1200,
-        # GatherQMM translation and verification.
+        # GatherQMM translation and verification, affine then block-scaled.
+        900,
+        300,
         900,
         300,
         1200,
@@ -927,7 +930,8 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         120,
         # Steel GEMM translation; its slowest observed run took 212 s.
         1200,
-        1800,
+        # Split-K GEMM translation; its slowest observed run took 114 s.
+        1200,
         1200,
         # AddMM and GatherMM verification.
         600,

@@ -14,8 +14,9 @@ order, so only the final cast rounds. float32 products must also match
 MLX's CPU bit for bit.
 
 The refusals check that sorted single-row batches, which quantized.cpp sends
-to the untranslated ``gather_qmm_rhs``, block-scaled modes and indices that
-name no matrix of their operand raise before any gathered product launches.
+to the untranslated ``gather_qmm_rhs``, and indices that name no matrix of
+their operand raise before any gathered product launches. The block-scaled
+modes are ``verify_fp_gather_qmm``'s.
 """
 
 import argparse
@@ -453,27 +454,6 @@ def run_refusals(mx, np, host, seed):
             ),
         ),
     ]
-    weights = mx.array(np.zeros((2, 32, 64)).tolist(), dtype=mx.float32)
-    w, scales = mx.quantize(weights, mode="mxfp4", stream=mx.cpu)
-    activations = mx.array(np.zeros((2, 1, 64)).tolist(), dtype=mx.float32)
-    mx.eval(w, scales, activations)
-    refusals.append(
-        _refuse(
-            mx,
-            host,
-            "block-scaled",
-            "affine weights only",
-            lambda: mx.gather_qmm(
-                activations,
-                w,
-                scales,
-                lhs_indices=mx.array([0, 1], dtype=mx.uint32),
-                rhs_indices=mx.array([1, 0], dtype=mx.uint32),
-                transpose=True,
-                mode="mxfp4",
-            ),
-        )
-    )
     return refusals
 
 

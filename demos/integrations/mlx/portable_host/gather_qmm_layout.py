@@ -171,16 +171,29 @@ def read_storage(entry, buffers):
     The returned parameters also hold the index buffers' values, which
     ``plan`` reads and does not return.
     """
-    names = parameter_names(entry)
-    counts, parameters = matmul_layout.read_buffers(
+    return read_gathered(
         buffers,
-        {name: parameter_type(entry, name) for name in names},
-        (*scalars(entry), *matmul_layout.BATCH_SCALARS, "batch_ndims"),
-        LABEL,
+        {name: parameter_type(entry, name) for name in parameter_names(entry)},
+        scalars(entry),
         MATRIX_PARAMETERS,
     )
+
+
+def read_gathered(buffers, types, sizes, matrices, label=LABEL):
+    """``read_storage`` for gathered kernels binding ``types``.
+
+    ``sizes`` names the kernel's dimension scalars and ``matrices`` its
+    matrix buffers, which hold the index buffers; their values are read too.
+    """
+    counts, parameters = matmul_layout.read_buffers(
+        buffers,
+        types,
+        (*sizes, *matmul_layout.BATCH_SCALARS, "batch_ndims"),
+        label,
+        matrices,
+    )
     if any(len(parameters[name]) > MAX_BATCH_DIMENSIONS for name in GATHER_VECTORS):
-        raise ValueError(f"{LABEL} index batch has too many dimensions")
+        raise ValueError(f"{label} index batch has too many dimensions")
     for name in INDICES:
         buffer = buffers[name]
         parameters[name] = list(
@@ -198,56 +211,75 @@ def _location(index, shape, strides):
     return location
 
 
-def _matrix_views(parameters, m, k, rows, words, groups):
+# The weight views adjust_matrix_offsets moves by ``w_idx``: the affine
+# kernels' weights, scales and biases. The block-scaled kernels have no biases.
+WEIGHT_VIEWS = ("w_strides", "s_strides", "b_strides")
+
+
+def _matrix_views(parameters, m, k, rows, words, groups, views, label):
     """Check add_strides_and_shapes' views; return the x and w matrix counts."""
     x_shape, x_strides = parameters["x_shape"], parameters["x_strides"]
-    w_shape, w_strides = parameters["w_shape"], parameters["w_strides"]
-    s_strides, b_strides = parameters["s_strides"], parameters["b_strides"]
+    w_shape = parameters["w_shape"]
     x_batch, w_batch = parameters["x_batch_ndims"], parameters["w_batch_ndims"]
+    weights = [parameters[name] for name in views]
     if (
         x_batch != len(x_shape) - 2
         or len(x_strides) != len(x_shape)
         or not 0 <= x_batch <= MAX_BATCH_DIMENSIONS
         or w_batch != len(w_shape) - 2
         or not 0 <= w_batch <= MAX_BATCH_DIMENSIONS
-        or not len(w_strides) == len(s_strides) == len(b_strides) == len(w_shape)
+        or any(len(strides) != len(w_shape) for strides in weights)
     ):
-        raise ValueError(f"{LABEL} batch ranks do not match")
+        raise ValueError(f"{label} batch ranks do not match")
     if x_shape[-2:] != [m, k] or w_shape[-2:] != [rows, words]:
-        raise ValueError(f"{LABEL} matrix shapes do not match")
-    # ensure_row_contiguous_matrix: unit columns and dense rows.
+        raise ValueError(f"{label} matrix shapes do not match")
+    # ensure_row_contiguous_matrix: unit columns and dense rows. Only the
+    # packed weights have ``words`` columns; scales and biases have ``groups``.
     for strides, extent, columns in (
         (x_strides, m, k),
-        (w_strides, rows, words),
-        (s_strides, rows, groups),
-        (b_strides, rows, groups),
+        *(
+            (strides, rows, words if name == "w_strides" else groups)
+            for name, strides in zip(views, weights)
+        ),
     ):
         if strides[-1] != 1 or (extent > 1 and strides[-2] != columns):
-            raise ValueError(f"{LABEL} matrices are not row contiguous")
+            raise ValueError(f"{label} matrices are not row contiguous")
     if any(
         extent < 1 or stride < 0
         for shape, strides, ndim in (
             (x_shape, x_strides, x_batch),
-            (w_shape, w_strides, w_batch),
-            (w_shape, s_strides, w_batch),
-            (w_shape, b_strides, w_batch),
+            *((w_shape, strides, w_batch) for strides in weights),
         )
         for extent, stride in zip(shape[:ndim], strides[:ndim])
     ):
-        raise ValueError(f"{LABEL} batch strides must be nonnegative")
+        raise ValueError(f"{label} batch strides must be nonnegative")
     return math.prod(x_shape[:x_batch]), math.prod(w_shape[:w_batch])
 
 
-def gathered_offsets(parameters, counts, m, k, rows, words, groups, batches):
-    """Per ``tid.z`` matrix indices and x, w, scales and biases offsets.
+def gathered_offsets(
+    parameters,
+    counts,
+    m,
+    k,
+    rows,
+    words,
+    groups,
+    batches,
+    views=WEIGHT_VIEWS,
+    label=LABEL,
+):
+    """Per ``tid.z`` matrix indices and x and weight offsets, one per ``views``.
 
     adjust_matrix_offsets reads ``tid.z``'s indices at ``tid.z * strides[0]``
     for one index dimension and through elem_to_loc_broadcast otherwise,
     then offsets x by ``x_idx * x_strides[0]`` for one batch dimension and
     through elem_to_loc otherwise, and the weights likewise by ``w_idx``.
-    Every index must name one of the matrices its operand holds.
+    Every index must name one of the matrices its operand holds. Also returns
+    the weights' matrix count.
     """
-    x_matrices, w_matrices = _matrix_views(parameters, m, k, rows, words, groups)
+    x_matrices, w_matrices = _matrix_views(
+        parameters, m, k, rows, words, groups, views, label
+    )
     ndims, shape = parameters["batch_ndims"], parameters["batch_shape"]
     lhs_strides, rhs_strides = parameters["lhs_strides"], parameters["rhs_strides"]
     if (
@@ -257,11 +289,11 @@ def gathered_offsets(parameters, counts, m, k, rows, words, groups, batches):
         or any(stride < 0 for stride in (*lhs_strides, *rhs_strides))
         or math.prod(shape) != batches
     ):
-        raise ValueError(f"{LABEL} index batch does not match the launch")
+        raise ValueError(f"{label} index batch does not match the launch")
     x_shape, x_strides = parameters["x_shape"], parameters["x_strides"]
     w_shape = parameters["w_shape"]
     x_batch, w_batch = parameters["x_batch_ndims"], parameters["w_batch_ndims"]
-    w_views = [parameters[name] for name in ("w_strides", "s_strides", "b_strides")]
+    w_views = [parameters[name] for name in views]
     lhs, rhs = parameters["lhs_indices"], parameters["rhs_indices"]
     indices, offsets = [], []
     for z in range(batches):
@@ -271,10 +303,10 @@ def gathered_offsets(parameters, counts, m, k, rows, words, groups, batches):
             lhs_at = _location(z, shape, lhs_strides)
             rhs_at = _location(z, shape, rhs_strides)
         if lhs_at >= counts["lhs_indices"] or rhs_at >= counts["rhs_indices"]:
-            raise ValueError(f"{LABEL} index view exceeds its buffer")
+            raise ValueError(f"{label} index view exceeds its buffer")
         x_idx, w_idx = lhs[lhs_at], rhs[rhs_at]
         if x_idx >= x_matrices or w_idx >= w_matrices:
-            raise ValueError(f"{LABEL} index names no matrix of its operand")
+            raise ValueError(f"{label} index names no matrix of its operand")
         if x_batch == 1:
             x_offset = x_idx * x_strides[0]
         else:
@@ -287,28 +319,39 @@ def gathered_offsets(parameters, counts, m, k, rows, words, groups, batches):
             ]
         indices.append((x_idx, w_idx))
         offsets.append((x_offset, *w_offsets))
-    return indices, offsets
+    return indices, offsets, w_matrices
 
 
-def launch_shape(entry, execution, m, n):
-    """The batch count of a launch, after checking MLX's grid for ``entry``."""
+def grid_batches(execution, size, matrix, m, n, tile, label=LABEL):
+    """The batch count of a launch whose grid and threadgroups match MLX's.
+
+    gather_qmm runs ``(ceil(N / 32), ceil(M / 32), B)`` threadgroups of
+    ``size``; gather_qmv and gather_qvm run ``(M, ceil(N / tile), B)``.
+    """
     if not isinstance(execution, dict) or set(execution) != {
         "workgroupCount",
         "workgroupSize",
     }:
-        raise ValueError(f"{LABEL} launch geometry is missing")
+        raise ValueError(f"{label} launch geometry is missing")
     count = list(execution["workgroupCount"])
-    tiles = -(-n // tile_columns(entry))
-    expected = [tiles, -(-m // qmm_layout.BM)] if is_matrix(entry) else [m, tiles]
+    tiles = -(-n // tile)
+    expected = [tiles, -(-m // qmm_layout.BM)] if matrix else [m, tiles]
     if (
-        list(execution["workgroupSize"]) != list(workgroup_size(entry))
+        list(execution["workgroupSize"]) != list(size)
         or len(count) != 3
         or any(type(value) is not int for value in count)
         or count[:2] != expected
         or not 1 <= min(count) <= max(count) <= MAX_GROUPS
     ):
-        raise ValueError(f"{LABEL} launch does not match MLX's grid")
+        raise ValueError(f"{label} launch does not match MLX's grid")
     return count[2]
+
+
+def launch_shape(entry, execution, m, n):
+    """The batch count of a launch, after checking MLX's grid for ``entry``."""
+    return grid_batches(
+        execution, workgroup_size(entry), is_matrix(entry), m, n, tile_columns(entry)
+    )
 
 
 def plan(entry, counts, parameters, threads, execution):
@@ -340,7 +383,7 @@ def plan(entry, counts, parameters, threads, execution):
     # Groups run along the weights' rows: K when transposed, N otherwise.
     rows, columns = (n, k) if transpose else (k, n)
     words, groups = columns * bits // 32, columns // group
-    indices, offsets = gathered_offsets(
+    indices, offsets, _ = gathered_offsets(
         parameters, counts, m, k, rows, words, groups, batches
     )
     extents = {

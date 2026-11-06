@@ -17,7 +17,6 @@ from demos.integrations.mlx.portable_host import gather_qmm_layout, qmm_packages
 from demos.integrations.mlx.portable_host.gather_qmm_layout import (
     SIMD_SIZE,
     SOURCE,
-    is_matrix,
     signature,
     workgroup_size,
 )
@@ -51,12 +50,15 @@ def _recipe_hashes():
     }
 
 
-def project_config(root, output_dir, target, entry):
-    """One entry's translation, with the current-tree gather gates' options."""
-    if is_matrix(entry):
-        return qmm_packages.project_config(
-            root, output_dir, target, entry, gather_qmm_layout
-        )
+def project_config(root, output_dir, target, entry, layout=gather_qmm_layout):
+    """One entry's translation, with the current-tree gather gates' options.
+
+    ``layout`` is ``gather_qmm_layout`` or ``fp_gather_qmm_layout``, whose
+    kernels share these options: it names the source, workgroup and
+    assertions.
+    """
+    if layout.is_matrix(entry):
+        return qmm_packages.project_config(root, output_dir, target, entry, layout)
     # simd_sum: software subgroups give DirectX and OpenGL MLX's 32 lanes.
     options = {
         "directx": {
@@ -68,16 +70,16 @@ def project_config(root, output_dir, target, entry):
     return ProjectConfig(
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
-        include_patterns=(SOURCE,),
+        include_patterns=(layout.SOURCE,),
         include_dirs=(".",),
         targets=(target,),
         output_dir=output_dir,
-        entry_points={SOURCE: (entry,)},
-        entry_workgroup_size_rules={SOURCE: {entry: workgroup_size(entry)}},
+        entry_points={layout.SOURCE: (entry,)},
+        entry_workgroup_size_rules={
+            layout.SOURCE: {entry: layout.workgroup_size(entry)}
+        },
         index_range_assertions=(
-            list(gather_qmm_layout.index_assertions(entry))
-            if target == "opengl"
-            else []
+            list(layout.index_assertions(entry)) if target == "opengl" else []
         ),
         source_options={
             "metal": {

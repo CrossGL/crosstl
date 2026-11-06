@@ -582,14 +582,15 @@ def test_backend_routes_gathered_products_as_quantized_cpp():
         "void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {",
         "if (M == 1 && B >= 16 && right_sorted_ && B / E >= 4) {",
         "const bool matrix = M >= vector_limit;",
-        '"affine_gather_qmm_t_" : "affine_gather_qmm_n_"',
+        'const std::string mode = affine ? "affine" : fp_mode;',
+        'mode + (transpose_ ? "_gather_qmm_t_" : "_gather_qmm_n_") + stem +',
         '(N % 32 == 0 ? "_alN_true" : "_alN_false")',
-        '"affine_gather_qmv_fast_"',
+        '"_gather_qmv_fast_"',
         "const int rows = transpose_ ? 8 : 2 * std::min(group_size_, 32);",
         "lhs_indices.shape(), {lhs_indices.strides(), rhs_indices.strides()});",
         "CrosstlMlxLaunch{{columns, tiles, uint32_t(B)}, {32, 2, 2}}",
         "CrosstlMlxLaunch{{columns, tiles, uint32_t(B)}, {32, 2, 1}}",
-        "translates affine weights only.",
+        "biases = matmul_operand(inputs[3]);",
     ):
         assert text in source, text
     # The buffers in quantized.cpp's binding order.
@@ -615,7 +616,7 @@ def test_trace_validation_requires_the_routed_entries():
     ]
     refusals = [
         {"name": "sorted-rhs", "dispatches": [verify.DEFAULT_INDEX_ENTRY]},
-        {"name": "block-scaled", "dispatches": []},
+        {"name": "rhs-out-of-range", "dispatches": []},
     ]
     trace = [
         {
