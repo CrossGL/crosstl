@@ -32904,6 +32904,14 @@ class GLSLCodeGen(
                 stage_name, mapped_type
             ):
                 prefix = self.with_flat_stage_io_declaration_prefix(prefix)
+            elif (
+                direction == "out"
+                and normalize_stage_name(stage_name) == "vertex"
+                and self.requires_flat_stage_io(mapped_type)
+            ):
+                # An integer cannot be interpolated; GLSL ES 3.00 section 4.3.6 requires a vertex output that is or
+                # contains one to be flat, as the fragment input it feeds is, and stage output structs emit so.
+                prefix = self.with_flat_stage_io_declaration_prefix(prefix)
             layout = self.glsl_variable_layout_prefix(node)
             self.reserve_global_stage_io_layout(node, f"{prefix} ", layout, mapped_type)
             return f"{prefix} {declaration};\n"
