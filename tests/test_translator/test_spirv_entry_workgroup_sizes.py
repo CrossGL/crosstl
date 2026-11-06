@@ -216,3 +216,33 @@ __global__ void block_sum(const float* in, float* out) {
     assert "OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize" in code
     assert _spec_ids(code) == [0, 1, 2]
     _validate(tmp_path, code)
+
+
+NARROW_SIZE_PARAMETERS = """
+#include <metal_stdlib>
+using namespace metal;
+kernel void k(device float *o [[buffer(0)]], uint tid [[thread_position_in_threadgroup]],
+              uint tptg [[threads_per_threadgroup]], ushort2 t2 [[threads_per_threadgroup]]) {
+    threadgroup float shared[64];
+    shared[tid] = o[tid];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    o[tid] = shared[(tid + 1) % tptg] + float(t2.y);
+}
+"""
+
+
+@pytest.mark.parametrize("threadgroup_size", [None, (32, 2, 1)])
+def test_narrower_size_parameters_take_the_leading_components(
+    tmp_path, threadgroup_size
+):
+    """``ushort2 [[threads_per_threadgroup]]`` holds the first two components of the uint3 built-in."""
+    path = tmp_path / "kernel.metal"
+    path.write_text(NARROW_SIZE_PARAMETERS)
+    options = (
+        {"source_options": {"threadgroup_size": threadgroup_size}}
+        if threadgroup_size
+        else {}
+    )
+    code = crosstl.translate(str(path), backend="vulkan", **options)
+    assert "OpStore %t2 %gl_WorkGroupSize" not in code
+    _validate(tmp_path, code)

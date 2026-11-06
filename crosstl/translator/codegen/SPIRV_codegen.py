@@ -130,6 +130,7 @@ from .spirv_atomic_load_store import (
 )
 from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
+from .spirv_builtin_overloads import separate_builtin_overloads
 from .spirv_byte_address_atomics import (
     process_byte_address_atomic_call,
     process_byte_address_member_min_max,
@@ -2183,9 +2184,13 @@ class VulkanSPIRVCodeGen(
             # OpConstantComposite value rather than a pointer variable, so the
             # value is used directly; emitting OpLoad against a non-pointer would
             # be invalid SPIR-V. A scalar parameter (e.g. threads_per_threadgroup)
-            # takes the leading component, mirroring the other compute builtins.
+            # takes the leading component, mirroring the other compute builtins, and a narrower vector
+            # (``ushort2 [[threads_per_threadgroup]]``) the leading components.
             return self.convert_value_to_type(
-                variable_id, result_type, allow_vector_to_scalar=True
+                variable_id,
+                result_type,
+                allow_vector_to_scalar=True,
+                allow_vector_resize=True,
             )
 
         if not self.is_sample_mask_builtin_variable(variable_id):
@@ -32502,6 +32507,7 @@ class VulkanSPIRVCodeGen(
 
         source_ast, fixed_samplers = ast, fixed_sampler_records(ast)
         validate_recursion_free(ast, "vulkan")
+        separate_builtin_overloads(ast)
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
