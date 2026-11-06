@@ -96,7 +96,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 555
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 558
     assert all(
         name.startswith(
             (
@@ -112,6 +112,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_tree.TestTreeUtils.test_",
                 "test_fft.TestFFT.test_",
                 "test_conv.TestConv.test_",
+                "test_conv_transpose.TestConvTranspose.test_",
                 "test_array.TestArray.test_",
                 "test_array.TestEquality.test_",
                 "test_array.TestInequality.test_",
@@ -209,7 +210,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 548 and not set(opengl) & set(excluded)
+    assert len(opengl) == 551 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -304,7 +305,13 @@ def test_upstream_op_groups_partition_the_inventory():
         "test_fast.TestFast.test_cross_entropy_grad",
     ]
     assert ops.upstream_tests("opengl", "modules") == ops.MODULE_TESTS
-    assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 10
+    assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 11
+    # The transposed convolutions' unfold tiling joins them; the pinned suite
+    # runs it only where mx.metal.is_available().
+    assert ops.CONV_TESTS[-1] == (
+        "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling"
+    )
+    assert ops.CONV_TESTS[-1] in ops.METAL_PATH_TESTS
     assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
     # The array, autograd and compile modules each run alone in their group.
     for group, tests, module, count in (
@@ -319,8 +326,8 @@ def test_upstream_op_groups_partition_the_inventory():
     # a group of its own.
     for group, modules, count in (
         ("nn", ("test_nn.",), 41),
-        ("transforms", ("test_vmap.", "test_eval."), 35),
-        ("serialization", ("test_export_import.", "test_load."), 32),
+        ("transforms", ("test_vmap.", "test_eval."), 36),
+        ("serialization", ("test_export_import.", "test_load."), 33),
         (
             "training",
             (

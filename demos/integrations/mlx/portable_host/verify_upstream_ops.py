@@ -274,7 +274,10 @@ MODULE_TESTS = tuple(
 # shapes of strided and dilated convolutions, unaligned 2-D channels and the
 # per-depth-tap 3-D decomposition, which reach the unfold, depthwise,
 # padded-channel, general and implicit GEMM and small-depth 3-D routes of
-# conv.cpp.
+# conv.cpp. test_conv_transpose_unfold_tiling runs the transposed 1-D, 2-D,
+# 3-D and grouped convolutions through the input-dilated unfold, whole and in
+# the row tiles MLX_CONV_UNFOLD_TILE_ROWS forces; the pinned suite runs it only
+# where mx.metal.is_available() (METAL_PATH_TESTS).
 CONV_TESTS = tuple(
     "test_conv.TestConv.test_" + name
     for name in (
@@ -289,7 +292,7 @@ CONV_TESTS = tuple(
         "numpy_conv",
         "repeated_conv",
     )
-)
+) + ("test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",)
 
 # test_array methods that reach the GPU: indexing and its gradients, item
 # assignment and functional .at[] updates, slice updates of 2-D contiguous

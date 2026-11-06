@@ -2425,24 +2425,31 @@ the class indices; the host refuses a launch with an index outside
 `[-n, n)` rather than read past its row. Every dispatch must name its cached
 package, upload its retained operands and keep its output guard; launches over
 more than 65,536 logits keep their extents and digests.
-The `conv` group runs seven unchanged `test_conv` tests (`CONV_TESTS`):
-`test_conv2d_large_filter_small_channels`, `test_conv_1d_groups_flipped`,
-`test_conv_1d_with_2d`, `test_conv_general_flip_grad`, `test_conv_groups_grad`,
-`test_numpy_conv` and `test_repeated_conv`. They reach the unfold and steel
-GEMM, depthwise, padded-channel and implicit GEMM routes of the convolution
-port (see "Convolution") and its gradients, and translate their kernels on
-demand. The other `test_conv` and `test_conv_transpose` tests need PyTorch or
-the general implicit GEMM and small-depth 3-D routes.
+The `conv` group runs ten unchanged `test_conv` tests and one
+`test_conv_transpose` test (`CONV_TESTS`): the conv1d-through-conv2d, large
+filter, unaligned channel, flipped and grouped 1-D, NumPy, repeated and
+small-depth 3-D convolutions, the flipped and grouped gradients and the
+gradient shapes. They reach the unfold and steel GEMM, depthwise,
+padded-channel, general and implicit GEMM and small-depth 3-D routes of the
+convolution port (see "Convolution") and its gradients, and translate their
+kernels on demand. `test_conv_transpose_unfold_tiling` runs transposed 1-D,
+2-D, 3-D and grouped convolutions through the input-dilated unfold, whole and
+in the row tiles `MLX_CONV_UNFOLD_TILE_ROWS` forces; the pinned suite runs it
+only where `mx.metal.is_available()` (`METAL_PATH_TESTS`). The other
+`test_conv` and `test_conv_transpose` tests compare against PyTorch, which
+the host environment does not install.
 The `array`, `autograd` and `compile` groups run the `test_array` (41),
-`test_autograd` (45) and `test_compile` (51) methods that reach the GPU. Five
+`test_autograd` (45) and `test_compile` (54) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
-`nn` (39 `test_nn` methods: module state, weight files and the layers),
-`transforms` (24 `test_vmap` and 11 `test_eval` methods), `serialization` (16
-`test_export_import` and 14 `test_load` methods, with the NumPy, safetensors
-and GGUF formats), `training` (19 `test_optimizers` methods, six `test_random`
-samplers, four `test_bf16` sweeps and the device, stream, memory and constant
-tests) and `rope` (the seven rotary embedding and fused transform methods of
-`test_fast` and the two antialiased `test_upsample` sweeps). A module's other
+`nn` (41 `test_nn` methods: module state, weight files and the layers),
+`transforms` (25 `test_vmap` methods, among them the vectorized convolution,
+and 11 `test_eval` methods), `serialization` (18 `test_export_import` methods,
+among them the shapeless convolution, and 15 `test_load` methods, with the
+NumPy, safetensors and GGUF formats), `training` (19 `test_optimizers`
+methods, six `test_random` samplers, four `test_bf16` sweeps and the device,
+stream, memory and constant tests) and `rope` (the seven rotary embedding and
+fused transform methods of `test_fast` and the two antialiased `test_upsample`
+sweeps). A module's other
 methods dispatch nothing or need a kernel family the host does not port yet.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every

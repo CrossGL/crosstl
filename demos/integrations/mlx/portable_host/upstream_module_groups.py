@@ -72,7 +72,7 @@ NN_TESTS = _tests(
 )
 
 # test_vmap and test_eval: vectorized maps of the composed ops, sorts,
-# partitions, scatters, factorizations and views, and synchronous,
+# partitions, scatters, convolutions, factorizations and views, and synchronous,
 # asynchronous and multi-stream evaluation.
 TRANSFORM_TESTS = _tests(
     "test_vmap",
@@ -86,6 +86,7 @@ TRANSFORM_TESTS = _tests(
         "vmap_argsort",
         "vmap_concatenate",
         "vmap_const_func",
+        "vmap_conv",
         "vmap_gather",
         "vmap_indexing",
         "vmap_inverse",
@@ -131,6 +132,7 @@ SERIALIZATION_TESTS = _tests(
         "basic_export_import",
         "export_control_flow",
         "export_conv",
+        "export_conv_shapeless",
         "export_import_metadata",
         "export_import_multi_with_constants",
         "export_import_scatter_sum",
@@ -304,6 +306,7 @@ GATED_DELTA_VJP_TESTS = _tests(
 )
 # Tests the pinned suite runs only where mx.metal.is_available().
 METAL_PATH_TESTS = (
+    "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",
     "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
     "test_ops.TestOps.test_hadamard_m_only",
 )
