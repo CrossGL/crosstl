@@ -75,6 +75,11 @@ def test_upstream_gpu_only_tests_skip_only_on_the_cpu(native):
 
 
 def test_upstream_op_tests_without_dispatches_are_exact():
+    assert ops.NO_DISPATCH_TESTS == {
+        "test_fast.TestFast.test_layer_norm_dim_check",
+        "test_reduce.TestReduce.test_zero_size",
+        "test_fft.TestFFT.test_fft_throws",
+    }
     assert ops.NO_DISPATCH_TESTS <= set(ops.UPSTREAM_TESTS)
     for native in (True, False):
         ops.validate_upstream(records(native=native), native=native)

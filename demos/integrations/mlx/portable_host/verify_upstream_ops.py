@@ -782,6 +782,8 @@ NO_DISPATCH_TESTS = frozenset(
     (
         "test_fast.TestFast.test_layer_norm_dim_check",
         "test_reduce.TestReduce.test_zero_size",
+        # Rejects a zero-dimensional irfftn and an unknown norm.
+        "test_fft.TestFFT.test_fft_throws",
     )
 )
 # Tests the pinned suite skips when CI is set, as too slow on its Metal

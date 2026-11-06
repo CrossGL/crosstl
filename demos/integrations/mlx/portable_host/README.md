@@ -2424,9 +2424,9 @@ tests) and `rope` (the seven rotary embedding and fused transform methods of
 methods dispatch nothing or need a kernel family the host does not port yet.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
-native run must dispatch, except `test_layer_norm_dim_check`, which rejects its
-arguments before building a graph, and `test_zero_size`, which must dispatch
-nothing. The CPU worker must skip the tests that need a GPU, such as
+native run must dispatch, except `test_layer_norm_dim_check` and
+`test_fft_throws`, which reject their arguments before building a graph, and
+`test_zero_size`; these must dispatch nothing. The CPU worker must skip the tests that need a GPU, such as
 `test_multistream_deadlock`, which the native worker runs. Every dispatch must
 belong to exactly one of the
 base, random, bitwise, selection, absolute-value, 64-bit integer or reduction
