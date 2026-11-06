@@ -143,6 +143,8 @@ class _Shape:
     source: str = "hlsl"
     # A vector stored in MSL's packed form (a ``@ packed`` member): aligned to its scalar under the MSL rules.
     packed: bool = False
+    # A struct's ``@metal_alignas(N)`` alignment (0 for none), which raises its alignment under the MSL rules only.
+    alignment: int = 0
 
     @property
     def lowerable(self) -> bool:
@@ -254,7 +256,45 @@ def _layout(shape: _Shape, rules: str) -> tuple[int, int, tuple]:
         leaves.extend((offset + start, width) for start, width in member_leaves)
         offset += size
         alignment = max(alignment, member_alignment)
+    if rules == "metal":
+        alignment = max(alignment, shape.alignment)
     return _round(offset, alignment), alignment, tuple(leaves)
+
+
+def _metal_alignment(struct, context) -> int:
+    """The ``@metal_alignas(N)`` alignment of ``struct``, 0 without one.
+
+    MSL raises a struct's alignment to its ``alignas`` and rounds its size to it (C++14 [dcl.align], which MSL 3.2
+    section 1.4 builds on), so ``struct alignas(16) R { float a; float b; }`` is a 16-byte element. Raises
+    :class:`StructuredLayoutUnsupportedError` unless there is at most one attribute with one positive power-of-two
+    literal.
+    """
+    attributes = [
+        attribute
+        for attribute in getattr(struct, "attributes", None) or []
+        if str(getattr(attribute, "name", "")).lower() == "metal_alignas"
+    ]
+    if not attributes:
+        return 0
+    arguments = list(getattr(attributes[0], "arguments", None) or [])
+    value = getattr(arguments[0], "value", None) if len(arguments) == 1 else None
+    if isinstance(value, str):
+        try:
+            value = int(value, 0)
+        except ValueError:
+            value = None
+    if (
+        len(attributes) != 1
+        or isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        or value & (value - 1)
+    ):
+        raise StructuredLayoutUnsupportedError(
+            f"{context}: the Metal alignment of struct {struct.name} is not one @metal_alignas with a positive "
+            "power-of-two literal"
+        )
+    return value
 
 
 def _same_layout(shape: _Shape, target_rules: str) -> bool:
@@ -359,7 +399,11 @@ class _Shapes:
                 members.append((member.name, shape, offset // 4))
                 offset += size
             self.cache[name] = _Shape(
-                "struct", name=name, members=tuple(members), source=self.source
+                "struct",
+                name=name,
+                members=tuple(members),
+                source=self.source,
+                alignment=_metal_alignment(struct, context),
             )
         return self.cache[name]
 

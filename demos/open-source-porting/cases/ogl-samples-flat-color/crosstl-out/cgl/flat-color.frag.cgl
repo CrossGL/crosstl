@@ -8,8 +8,6 @@ shader main {
     };
 
     fragment {
-    layout(std140, column_major) uniform;
-
     vec4 main() @location(0) @index(0) {
         vec4 Color;
         Color = Diffuse;
