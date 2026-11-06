@@ -19,7 +19,10 @@ OFFSETS = "gather_mm_offsets"
 
 def test_recorded_entries_are_sorted_matrix_entries_of_known_groups(tmp_path):
     assert set(warm.ENTRIES) <= set(ops.GROUPS)
-    assert set(warm.ORDER) == set(lazy.MATRIX_FAMILIES) | {"gather-quantized"}
+    assert set(warm.ORDER) == set(lazy.MATRIX_FAMILIES) | {
+        "gather-quantized",
+        "fp-gather-quantized",
+    }
     caches = lazy.LazyPackages(tmp_path / "mlx", tmp_path / "packages", "metal").caches
     for entries in warm.ENTRIES.values():
         assert entries and list(entries) == sorted(set(entries))
@@ -161,7 +164,14 @@ def test_only_the_blas_jobs_warm_their_matrix_kernels_before_the_tests():
     assert (
         set(warm.ENTRIES)
         == blas
-        == {"blas", "blas-wide", "blas-gather", "blas-gather-blocks", "blas-masked"}
+        == {
+            "blas",
+            "blas-wide",
+            "blas-gather",
+            "blas-gather-blocks",
+            "blas-gather-quantized",
+            "blas-masked",
+        }
     )
     assert names.index(step["name"]) < names.index(
         "Execute unchanged upstream op tests"

@@ -26,10 +26,12 @@ from demos.integrations.mlx.portable_host import lazy_package_evidence
 from demos.integrations.mlx.portable_host.matmul_packages import build_record
 
 # The lazily translated matrix families, slowest first, so the longest
-# translations start before the budget can run out. The gathered quantized
-# products are the only quantized family an op group reaches.
+# translations start before the budget can run out. The affine and
+# block-scaled gathered quantized products are the only quantized families an
+# op group reaches.
 ORDER = (
     "gather-quantized",
+    "fp-gather-quantized",
     "gemm",
     "gemm-splitk",
     "masked-mm",
@@ -220,6 +222,39 @@ ENTRIES = {
         "steel_gather_mm_nt_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_n_align_K_t",
         "steel_gather_mm_nt_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_t_align_K_t",
         "steel_gather_mm_nt_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_t_align_M_n_align_N_t_align_K_t",
+    ),
+    "blas-gather-quantized": (
+        "affine_gather_qmm_n_float_gs_64_b_4",
+        "affine_gather_qmm_t_bfloat16_t_gs_64_b_4_alN_true",
+        "affine_gather_qmm_t_float_gs_64_b_4_alN_true",
+        "affine_gather_qmv_fast_float_gs_64_b_4",
+        "affine_gather_qmv_float_gs_64_b_4",
+        "affine_gather_qvm_float_gs_64_b_4",
+        "gemv_gather_float32_bm4_bn1_sm1_sn32_tm4_tn4",
+        "gemv_t_gather_float32_bm1_bn2_sm8_sn4_tm4_tn4",
+        "gemv_t_gather_float32_bm1_bn4_sm8_sn4_tm4_tn4",
+        "mxfp4_gather_qmm_n_float_gs_32_b_4",
+        "mxfp4_gather_qmm_t_bfloat16_t_gs_32_b_4_alN_true",
+        "mxfp4_gather_qmm_t_float_gs_32_b_4_alN_true",
+        "mxfp4_gather_qmv_fast_float_gs_32_b_4",
+        "mxfp4_gather_qmv_float_gs_32_b_4",
+        "mxfp4_gather_qvm_float_gs_32_b_4",
+        "mxfp8_gather_qmm_n_float_gs_32_b_8",
+        "mxfp8_gather_qmm_t_float_gs_32_b_8_alN_true",
+        "mxfp8_gather_qmv_fast_float_gs_32_b_8",
+        "mxfp8_gather_qmv_float_gs_32_b_8",
+        "mxfp8_gather_qvm_float_gs_32_b_8",
+        "nvfp4_gather_qmm_n_float_gs_16_b_4",
+        "nvfp4_gather_qmm_t_float_gs_16_b_4_alN_true",
+        "nvfp4_gather_qmv_fast_float_gs_16_b_4",
+        "nvfp4_gather_qmv_float_gs_16_b_4",
+        "nvfp4_gather_qvm_float_gs_16_b_4",
+        "steel_gather_mm_nn_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_t_align_K_t",
+        "steel_gather_mm_nn_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_t_align_M_n_align_N_t_align_K_t",
+        "steel_gather_mm_nt_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_n_align_M_n_align_N_n_align_K_t",
+        "steel_gather_mm_nt_float32_float32_bm64_bn64_bk16_wm2_wn2_has_batch_t_align_M_n_align_N_n_align_K_t",
+        "steel_gemm_splitk_accum_float32_float32",
+        "steel_gemm_splitk_nt_float32_float32_bm32_bn32_bk16_wm2_wn2_MN_taligned_K_taligned",
     ),
     "blas-masked": (
         "gemv_float32_bm4_bn1_sm1_sn32_tm4_tn4_nc0_axpby0",

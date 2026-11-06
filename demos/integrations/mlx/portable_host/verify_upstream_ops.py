@@ -703,6 +703,12 @@ UPSTREAM_TESTS = (
         # affine_gather_qmm_t and affine_gather_qmm_n, through the product and
         # the gradient of its input, against GatherMM's steel kernels.
         "test_quantized.TestQuantized.test_gather_matmul_grad",
+        # These reach every GatherQMM route: the affine and block-scaled
+        # (mxfp4, mxfp8, nvfp4) gathered matrix-vector, vector-matrix and
+        # matrix kernels of float32, float16 and bfloat16, sorted and
+        # unsorted indices, and batched and broadcast index shapes.
+        "test_quantized.TestQuantized.test_gather_qmm",
+        "test_quantized.TestQuantized.test_gather_qmm_matrix_path",
     ) + MODULE_TESTS + CONV_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS + tuple(
         name for tests in MODULE_GROUPS.values() for name in tests
     )
@@ -843,19 +849,27 @@ GROUP_TESTS = {
     "blas-wide": tuple(
         "test_blas.TestBlas." + name for name in ("test_wide_matmul", "test_wide_addmm")
     ),
-    "blas-gather": tuple(
-        "test_blas.TestBlas." + name
-        for name in (
-            "test_gather_matmul",
-            "test_gather_matmul_grad",
-            "test_gather_mm_sorted",
-            "test_gather_mm_sorted_vjp",
-            "test_segmented_mm",
-            "test_gather_matmul_index_vjp_requires_stop_gradient",
+    "blas-gather": (
+        tuple(
+            "test_blas.TestBlas." + name
+            for name in (
+                "test_gather_matmul",
+                "test_gather_matmul_grad",
+                "test_gather_mm_sorted",
+                "test_gather_mm_sorted_vjp",
+                "test_segmented_mm",
+                "test_gather_matmul_index_vjp_requires_stop_gradient",
+            )
         )
-    )
-    + ("test_quantized.TestQuantized.test_gather_matmul_grad",),
+        + ("test_quantized.TestQuantized.test_gather_matmul_grad",)
+    ),
     "blas-gather-blocks": ("test_blas.TestBlas.test_gather_mm_blocks",),
+    # The gathered quantized products take a quarter of an hour natively on
+    # Metal, so they run in a job of their own.
+    "blas-gather-quantized": tuple(
+        "test_quantized.TestQuantized." + name
+        for name in ("test_gather_qmm", "test_gather_qmm_matrix_path")
+    ),
     "blas-masked": ("test_blas.TestBlas.test_block_masked_matmul",),
     # The sort, partition, median, searchsorted and unique tests sort through
     # the block and multi-block merge kernels; test_sort alone takes a quarter
