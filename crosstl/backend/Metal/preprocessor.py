@@ -241,6 +241,10 @@ def _strip_global_metal_qualifiers(text: str) -> str:
     return _GLOBAL_METAL_QUALIFIER.sub("", text)
 
 
+# Sort key of one `(source offset, declared type)` entry of a declaration map.
+_declaration_position = operator.itemgetter(0)
+
+
 def _keyword_before(text: str, start: int, end: int, keyword: str) -> Optional[int]:
     """Start of the match of a trailing keyword in ``text[start:end]``.
 
@@ -21741,20 +21745,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         entries = declarations.get(name)
         if not entries:
             return None
-        best: Optional[_DeclaredTypeT] = None
-        for decl_position, declared_type in entries:
-            if decl_position <= position:
-                if (
-                    isinstance(declared_type, _MetalAddressableValueType)
-                    and declared_type.scope is not None
-                    and not declared_type.scope[0] <= position < declared_type.scope[1]
-                ):
-                    continue
-                best = declared_type
-            else:
-                break
-        if best is not None:
-            return best
+        # Every declaration list is position-ordered, so the candidates are the
+        # prefix up to ``position``; scanning it backwards stops at the nearest
+        # active binding instead of visiting every earlier declaration of a
+        # name that recurs in each function of a large translation unit.
+        for index in range(
+            bisect_right(entries, position, key=_declaration_position) - 1, -1, -1
+        ):
+            declared_type = entries[index][1]
+            if (
+                isinstance(declared_type, _MetalAddressableValueType)
+                and declared_type.scope is not None
+                and not declared_type.scope[0] <= position < declared_type.scope[1]
+            ):
+                continue
+            return declared_type
         return None
 
     def _flatten_types_at(

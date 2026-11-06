@@ -15284,15 +15284,49 @@ class MetalToCrossGLConverter(
         prefix = f"{self.metal_free_operator_helper_prefix}{label}__"
         candidates = []
         overloads_by_name = getattr(self, "user_function_overloads_by_name", {})
-        for function_name, overloads in overloads_by_name.items():
-            if not str(function_name).startswith(prefix):
-                continue
+        for function_name in self.metal_free_operator_helper_names(
+            overloads_by_name, prefix
+        ):
             candidates.extend(
                 function
-                for function in overloads
+                for function in overloads_by_name[function_name]
                 if len(getattr(function, "params", []) or []) == arity
             )
         return candidates
+
+    def metal_free_operator_helper_names(self, overloads_by_name, prefix):
+        """Return the overload names that start with ``prefix``, in mapping order.
+
+        Every binary and unary operator asks for its helper candidates, and a
+        large translation unit has thousands of functions, so scanning every
+        name per operator dominated code generation. Names are only ever added
+        to the overload mapping (or the mapping is replaced), so the mapping's
+        identity and size identify its key set and key the cached lists.
+        """
+        cache = getattr(self, "_metal_free_operator_helper_name_cache", None)
+        if (
+            cache is None
+            or cache[0] is not overloads_by_name
+            or cache[1] != len(overloads_by_name)
+        ):
+            helper_prefix = self.metal_free_operator_helper_prefix
+            cache = (
+                overloads_by_name,
+                len(overloads_by_name),
+                [
+                    name
+                    for name in overloads_by_name
+                    if str(name).startswith(helper_prefix)
+                ],
+                {},
+            )
+            self._metal_free_operator_helper_name_cache = cache
+        names = cache[3].get(prefix)
+        if names is None:
+            names = cache[3][prefix] = [
+                name for name in cache[2] if str(name).startswith(prefix)
+            ]
+        return names
 
     def resolve_metal_free_operator(
         self, operator, arguments, source_location=None, argument_metal_types=None
