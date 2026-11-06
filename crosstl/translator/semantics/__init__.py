@@ -39,6 +39,7 @@ from .constant_buffer_size import (
     ConstantBufferTooLargeError,
     refuse_large_constant_buffers,
 )
+from .constant_calls import fold_constant_calls
 from .constant_extents import fold_constant_extents, fold_stage_layout_counts
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
@@ -295,6 +296,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     (:mod:`.relative_vertex_ids`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
+    Calls of program functions in compile-time initializers and ``static_assert`` conditions become their values,
+    evaluated at translation time (:mod:`.constant_calls`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
     ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
@@ -412,6 +415,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
+    fold_constant_calls(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
     fold_stage_layout_counts(program, report.target)
