@@ -777,6 +777,8 @@ NO_DISPATCH_TESTS = frozenset(
     (
         "test_fast.TestFast.test_layer_norm_dim_check",
         "test_reduce.TestReduce.test_zero_size",
+        # Rejects a zero-dimensional irfftn and an unknown norm.
+        "test_fft.TestFFT.test_fft_throws",
     )
 )
 # Tests that skip on the MLX CPU because they need a GPU: the CPU worker must
