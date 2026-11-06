@@ -2660,13 +2660,22 @@ class WGSLCodeGen(
             initializer = f" = {value}"
         prefix = f"{attributes}\n" if attributes else ""
         variable_name = self.module_identifier_name(node.name)
-        declaration = (
-            f"{prefix}var<{address_space}{access}> {variable_name}: "
-            f"{self.type_name_string(node.var_type, allow_storage_resources=True)}"
-            f"{initializer};"
-        )
+        type_name = self.type_name_string(node.var_type, allow_storage_resources=True)
         resource_declarations = self.generate_resource_member_global_variables(
             node.name, node.var_type
+        )
+        if (
+            initializer
+            and not resource_declarations
+            and qualifier_names & {"const", "constant"}
+        ):
+            # A module-scope constant is a WGSL ``const``: a ``var<private>`` initializer cannot read another
+            # module-scope variable, so ``constant int B = A + 1;`` must not make ``A`` a variable.
+            return f"const {variable_name}: {type_name}{initializer};"
+        declaration = (
+            f"{prefix}var<{address_space}{access}> {variable_name}: "
+            f"{type_name}"
+            f"{initializer};"
         )
         if resource_declarations:
             declaration += "\n" + "\n".join(resource_declarations)

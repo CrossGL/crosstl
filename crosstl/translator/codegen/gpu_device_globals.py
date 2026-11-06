@@ -107,6 +107,17 @@ def is_constant_declaration(node) -> bool:
     return any(
         str(qualifier).lower() == "const"
         for qualifier in getattr(node, "qualifiers", None) or []
+    ) or is_constant_value_declaration(node)
+
+
+def is_constant_value_declaration(node) -> bool:
+    """Whether ``node`` is an initialized MSL-style ``constant`` value, which CUDA and HIP declare ``const``.
+
+    A ``constant`` pointer or reference names the address space of what it points to instead, and stays mutable.
+    """
+    return getattr(node, "initial_value", None) is not None and any(
+        str(qualifier).lower() == "constant"
+        for qualifier in getattr(node, "qualifiers", None) or []
     )
 
 
