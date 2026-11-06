@@ -2285,7 +2285,9 @@ class Parser:
         )
 
         parsed_qualifiers = (
-            [] if is_colon_style_var else self.parse_variable_qualifiers()
+            []
+            if is_colon_style_var
+            else self.parse_variable_qualifiers(layout_attributes=attributes)
         )
         qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
             parsed_qualifiers
@@ -2431,10 +2433,25 @@ class Parser:
         """Parse one or more non-attribute array suffixes after a type/name."""
         return self.wrap_array_dimensions(type_node, self.parse_array_suffix_sizes())
 
-    def parse_variable_qualifiers(self):
-        """Parse declaration qualifiers that precede a variable type."""
+    def parse_variable_qualifiers(self, layout_attributes=None):
+        """Parse declaration qualifiers that precede a variable type.
+
+        GLSL 4.20 accepts the qualifiers of a declaration in any order, so ``uniform layout(rgba16f) image2D x;``
+        is the same declaration as ``layout(rgba16f) uniform image2D x;``. When ``layout_attributes`` is a list, a
+        ``layout(...)`` qualifier that follows another qualifier is parsed into it instead of ending the sequence.
+        """
         qualifiers = []
-        while self.current_token_is_variable_qualifier():
+        while True:
+            if (
+                layout_attributes is not None
+                and qualifiers
+                and self.current_token[0] == "LAYOUT"
+                and self.peek()[0] == "LPAREN"
+            ):
+                layout_attributes.extend(self.parse_layout_attributes())
+                continue
+            if not self.current_token_is_variable_qualifier():
+                break
             token_type, token_value = self.current_token
             if str(token_value).lower() in RESOURCE_MEMORY_QUALIFIER_NAMES:
                 qualifiers.append(self.parse_resource_memory_qualifier())
@@ -2490,7 +2507,7 @@ class Parser:
             if self.current_token_starts_var_address_space_declaration():
                 return True
 
-            self.parse_variable_qualifiers()
+            self.parse_variable_qualifiers(layout_attributes=[])
 
             if not self.is_type_token():
                 return False
@@ -6739,32 +6756,20 @@ class Parser:
         return None
 
     def parse_generic_declaration(self):
-        """Parse legacy generic declarations that wrap structs/enums/functions."""
-        if self.current_token[0] == "EOF":
-            return None
+        """Parse a ``generic<...>`` wrapper around a struct, enum, function or trait.
 
-        start_pos = self.pos
-        start_token = self.current_token
-
-        try:
-            return self.parse_generic_declaration_inner()
-        except SyntaxError:
-            self.pos = start_pos
-            self.current_token = start_token
-            self.skip_balanced_declaration()
-            return None
-
-    def parse_generic_declaration_inner(self):
-        """Parse a generic wrapper after recovery state has been captured."""
+        A malformed wrapper raises ``SyntaxError``; skipping it would drop the declaration from the program.
+        """
         self.eat("IDENTIFIER")
 
         if self.current_token[0] != "LESS_THAN":
-            return None
+            raise SyntaxError(
+                f"Expected '<' after 'generic', got {self.current_token[1]!r}"
+            )
 
         generic_params = self.parse_generic_parameters()
 
-        if self.current_token[0] == "EOF":
-            return None
+        self.reject_end_of_input("generic declaration")
         previous_scope = self.enter_generic_parameter_scope(generic_params)
         try:
             if self.current_token[0] == "STRUCT":
@@ -6787,8 +6792,10 @@ class Parser:
                 if trait_node:
                     trait_node.generic_params = generic_params
                 return trait_node
-            self.skip_balanced_declaration()
-            return None
+            raise SyntaxError(
+                "Expected a struct, enum, function or trait after the generic parameters, got "
+                f"{self.current_token[1]!r}"
+            )
         finally:
             self.restore_generic_parameter_scope(previous_scope)
 
