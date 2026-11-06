@@ -9234,19 +9234,20 @@ def test_vulkan_frontier_refusals_fail_closed_with_their_tracked_codes(
         assert issue.startswith("https://github.com/CrossGL/crosstl/issues/")
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
-    changed = {source: code for source, (code, _issue) in refusals.items()}
-    changed[next(iter(refusals))] = "project.translate.vulkan-builtin-unsupported"
+    commands = []
 
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         assert name == "vulkan-frontier-refusals" and check is False
+        commands.append(name)
         _write_vulkan_refusal_report(module, report_dir / f"{name}.json", codes=changed)
         return module.CommandResult(
             name, list(command), 1, tmp_path / "o", tmp_path / "e"
         )
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
-    with pytest.raises(module.PortingCheckError, match="no longer fails with"):
-        module._require_vulkan_frontier_refusals(
+
+    def require_refusals():
+        return module._require_vulkan_frontier_refusals(
             tmp_path,
             work_dir=tmp_path / "work",
             config_dir=tmp_path,
@@ -9254,6 +9255,32 @@ def test_vulkan_frontier_refusals_fail_closed_with_their_tracked_codes(
             log_dir=tmp_path,
             python="python",
         )
+
+    # With no refused source there is nothing to translate.
+    monkeypatch.setattr(module, "MLX_VULKAN_FRONTIER_REFUSALS", {})
+    assert require_refusals() == [] and commands == []
+    # A tracked refusal must fail with its own code, not merely fail.
+    tracked = (
+        "project.translate.vulkan-half-float-unsupported",
+        "https://github.com/CrossGL/crosstl/issues/2284",
+    )
+    monkeypatch.setattr(
+        module, "MLX_VULKAN_FRONTIER_REFUSALS", {module.MLX_BINARY_TWO_SOURCE: tracked}
+    )
+    changed = {module.MLX_BINARY_TWO_SOURCE: tracked[0]}
+    assert require_refusals() == [
+        {
+            "source": module.MLX_BINARY_TWO_SOURCE,
+            "code": tracked[0],
+            "issue": tracked[1],
+        }
+    ]
+    changed = {
+        module.MLX_BINARY_TWO_SOURCE: "project.translate.vulkan-builtin-unsupported"
+    }
+    with pytest.raises(module.PortingCheckError, match="no longer fails with"):
+        require_refusals()
+    assert commands == ["vulkan-frontier-refusals"] * 2
 
 
 def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
@@ -9372,7 +9399,10 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     )
     # arg_reduce, layer_norm, logsumexp, rms_norm, attention and softmax entries.
     assert result["workgroupBlockedEntryPointCount"] == 24 + 12 + 6 + 12 + 42 + 10
-    assert commands[-2][0] == "vulkan-frontier-refusals"
+    # The refusal project runs only when some source is refused.
+    assert (
+        "vulkan-frontier-refusals" in [name for name, _command in commands]
+    ) is bool(module.MLX_VULKAN_FRONTIER_REFUSALS)
     assert commands[-1][0] == "vulkan-workgroup-frontier"
     assert "--validate" in commands[-1][1]
     assert commands[0][0] == "vulkan-frontier"
@@ -12836,7 +12866,7 @@ def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
         "schema_version": 1,
-        "sha256": "3a0a33e27705f51774810098f9122acc700d0ca884841bbf02a81f54b42889c6",
+        "sha256": "7fc0bbdf6a5199e073ce4f653612d5805f01afe6ac79f1cca266a62899cb8b4d",
         "entry_identity_fields": [
             "entryPoint",
             "operator",
@@ -12997,7 +13027,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "c8403b863c4b2af133ca9fd16d91fc33f93ca24ab616a443cbf6e1b5898b2d10",
+        "sha256": "0f7b86380245c72005f0f6ab19b1a27db33fe08b482b3af3ca6e60bba0ee9fd6",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -13013,7 +13043,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
             "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json"
         ),
         "scalar_subset_sha256": (
-            "3a0a33e27705f51774810098f9122acc700d0ca884841bbf02a81f54b42889c6"
+            "7fc0bbdf6a5199e073ce4f653612d5805f01afe6ac79f1cca266a62899cb8b4d"
         ),
     }
     contract_path = ROOT / status["contract"]["path"]

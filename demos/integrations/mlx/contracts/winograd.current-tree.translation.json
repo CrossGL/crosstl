@@ -125,16 +125,16 @@
         "sizeBytes": 21433
       },
       "winograd_conv_2d_weight_transform_float16_bc32": {
-        "sha256": "8df09ca93ae756b1a0ca56bf658765c6589df1dd6f4eff0ef1d510f0b94726f5",
-        "sizeBytes": 23271
+        "sha256": "77a586536638457e619e5f6f37d48e8c06234a424f59c3855fb3da0fe0b694f9",
+        "sizeBytes": 23333
       },
       "winograd_conv_2d_input_transform_float16_bc32": {
-        "sha256": "cc1a10aae2f1324626e690d1a48690ceb3e295c14b1f724d97234eefe00fcc7e",
-        "sizeBytes": 22977
+        "sha256": "ed2f9eade34e2796afaaac22c91aec29b878c90894a7a81c1de6f1b55ba76dfe",
+        "sizeBytes": 23019
       },
       "winograd_conv_2d_output_transform_float16_bo32": {
-        "sha256": "811073e76bfecd02cf0d343b34cdc5788a850ba7ce24b4570f4427a0fea732f8",
-        "sizeBytes": 23395
+        "sha256": "d347bfc3fea8a7022193f8ff757fb49eb7dbfb9ef535602ca4d928371b259510",
+        "sizeBytes": 23425
       }
     }
   },
