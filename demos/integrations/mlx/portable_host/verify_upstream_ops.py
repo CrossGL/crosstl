@@ -47,6 +47,7 @@ family fails the trace instead of passing on an unchecked package.
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -176,6 +177,7 @@ from demos.integrations.mlx.portable_host.upstream_module_groups import (
 from demos.integrations.mlx.portable_host.upstream_module_groups import (
     METAL_PATH_TESTS as MODULE_METAL_PATH_TESTS,
 )
+from demos.integrations.mlx.portable_host.upstream_module_groups import TORCH_GROUPS
 from demos.integrations.mlx.portable_host.upstream_trace_audit import TraceAudit
 from demos.integrations.mlx.portable_host.verify import upstream_test_sources
 from demos.integrations.mlx.portable_host.verify_bitwise import verify_native_identity
@@ -948,6 +950,22 @@ def upstream_tests(target, group=None):
     return tuple(name for name in selected if name not in excluded)
 
 
+# The tests that compare with PyTorch and skip themselves without it.
+TORCH_TESTS = frozenset(name for group in TORCH_GROUPS for name in GROUPS[group])
+
+
+def require_reference_modules(tests):
+    """Refuse to run PyTorch-reference tests where torch cannot be imported.
+
+    Without torch they skip themselves, which the workers would only report
+    as unexpected skips after the whole group ran.
+    """
+    if TORCH_TESTS.intersection(tests) and importlib.util.find_spec("torch") is None:
+        raise RuntimeError(
+            "The PyTorch reference tests need torch; install the pinned CPU wheel"
+        )
+
+
 def negative_checks(group):
     """The rejection checks a group runs; the operation tests own them."""
     return NEGATIVE_CHECKS if group in {None, "operations"} else {}
@@ -1053,6 +1071,7 @@ def worker(args):
     os.environ["CI"] = "1"
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     tests = upstream_tests(package_target(args.packages), args.group)
+    require_reference_modules(tests)
     import_gated_modules(mx, tests, native=host is not None)
     records = []
     for name in tests:
@@ -1556,6 +1575,7 @@ def verify(args):
     before = verify_prepared(args.mlx_root)
     target = package_target(args.packages)
     tests = upstream_tests(target, args.group)
+    require_reference_modules(tests)
     checks = negative_checks(args.group)
     sources = upstream_test_sources(args.mlx_root, tests)
     write_json(output / "adaptation-before.json", before)

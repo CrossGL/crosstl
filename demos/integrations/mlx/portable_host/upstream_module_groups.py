@@ -373,6 +373,63 @@ ATTENTION_SWEEP_TESTS = upstream_subtest_shards.shard_names(
     "test_fast_sdpa.TestFastSDPA.test_sdpa", SWEEP_SHARDS
 )
 
+# Tests that compare the GPU's results with PyTorch's on the CPU: the 1-D,
+# 2-D, 3-D, depthwise, general and asymmetrically padded convolutions, the
+# transposed ones with and without output padding, and their gradients; then
+# batch normalization, AdamW, nearest, linear and cubic upsampling with and
+# without antialiasing, and bfloat16 conversions from torch tensors. They skip
+# themselves without torch, so only their jobs install the pinned CPU wheel,
+# and the worker refuses to run them without it (TORCH_GROUPS).
+TORCH_CONV_TESTS = _tests(
+    "test_conv",
+    "TestConv",
+    (
+        "asymmetric_padding",
+        "torch_conv_1D",
+        "torch_conv_1D_grad",
+        "torch_conv_2D",
+        "torch_conv_2D_grad",
+        "torch_conv_3D",
+        "torch_conv_3D_grad",
+        "torch_conv_depthwise",
+        "torch_conv_general",
+    ),
+) + _tests(
+    "test_conv_transpose",
+    "TestConvTranspose",
+    (
+        "torch_conv_tranpose_1d_output_padding",
+        "torch_conv_transpose_1D",
+        "torch_conv_transpose_1D_grad",
+        "torch_conv_transpose_2D",
+        "torch_conv_transpose_2D_grad",
+        "torch_conv_transpose_2d_output_padding",
+        "torch_conv_transpose_3D",
+        "torch_conv_transpose_3D_grad",
+        "torch_conv_transpose_3d_output_padding",
+    ),
+)
+TORCH_LAYER_TESTS = (
+    _tests("test_bf16", "TestBF16", ("conversion",))
+    + _tests("test_nn", "TestLayers", ("batch_norm_matches_torch",))
+    + _tests("test_optimizers", "TestOptimizers", ("adamw_matches_pytorch",))
+    + _tests(
+        "test_upsample",
+        "TestUpsample",
+        (
+            "antialias_upscale_cubic_matches_pytorch",
+            "antialias_upscale_linear_is_noop",
+        ),
+    )
+)
+# The nearest, linear and cubic upsampling sweeps, with and without
+# antialiasing, launch about 36,000 kernels between them (28,000 for the
+# antialiased one), so they run in a job of their own.
+TORCH_UPSAMPLE_TESTS = _tests(
+    "test_upsample", "TestUpsample", ("torch_upsample", "torch_upsample_antialias")
+)
+TORCH_GROUPS = ("torch-conv", "torch-layers", "torch-upsample")
+
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.
 GROUPS = {
     "nn": NN_TESTS,
@@ -391,4 +448,7 @@ GROUPS = {
         f"attention-sweep-{index}": (name,)
         for index, name in enumerate(ATTENTION_SWEEP_TESTS, start=1)
     },
+    "torch-conv": TORCH_CONV_TESTS,
+    "torch-layers": TORCH_LAYER_TESTS,
+    "torch-upsample": TORCH_UPSAMPLE_TESTS,
 }

@@ -96,7 +96,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 558
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 583
     assert all(
         name.startswith(
             (
@@ -158,6 +158,9 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + upstream_module_groups.ATTENTION_2_TESTS
         + upstream_module_groups.ATTENTION_3_TESTS
         + upstream_module_groups.ATTENTION_SWEEP_TESTS
+        + upstream_module_groups.TORCH_CONV_TESTS
+        + upstream_module_groups.TORCH_LAYER_TESTS
+        + upstream_module_groups.TORCH_UPSAMPLE_TESTS
     )
     assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
@@ -210,7 +213,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 5
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 551 and not set(opengl) & set(excluded)
+    assert len(opengl) == 576 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -252,6 +255,9 @@ def test_upstream_op_groups_partition_the_inventory():
         "attention-sweep-1",
         "attention-sweep-2",
         "attention-sweep-3",
+        "torch-conv",
+        "torch-layers",
+        "torch-upsample",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -352,6 +358,13 @@ def test_upstream_op_groups_partition_the_inventory():
         ("attention-sweep-1", ("test_fast_sdpa.",), 1),
         ("attention-sweep-2", ("test_fast_sdpa.",), 1),
         ("attention-sweep-3", ("test_fast_sdpa.",), 1),
+        ("torch-conv", ("test_conv.", "test_conv_transpose."), 18),
+        (
+            "torch-layers",
+            ("test_bf16.", "test_nn.", "test_optimizers.", "test_upsample."),
+            5,
+        ),
+        ("torch-upsample", ("test_upsample.",), 2),
     ):
         tests = upstream_module_groups.GROUPS[group]
         assert ops.GROUPS[group] == tests and len(tests) == count
@@ -1007,6 +1020,39 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
     assert "--family column" in configure
     retain = names.index("Retain upstream op execution evidence")
     assert names.index(step["name"]) < retain
+    # Only the PyTorch-reference groups install torch, as a pinned CPU wheel,
+    # before the build and the tests.
+    torch = job["steps"][names.index("Install the pinned PyTorch CPU reference")]
+    assert torch["if"] == "startsWith(matrix.group, 'torch-')"
+    assert '"torch==2.14.1"' in torch["run"]
+    assert "--index-url https://download.pytorch.org/whl/cpu" in torch["run"]
+    assert "--extra-index-url" not in torch["run"]
+    assert names.index(torch["name"]) < names.index("Build adapted upstream MLX")
+    assert [group for group in ops.GROUPS if group.startswith("torch-")] == list(
+        upstream_module_groups.TORCH_GROUPS
+    )
+
+
+def test_torch_reference_tests_refuse_to_run_without_torch(monkeypatch):
+    groups = upstream_module_groups.TORCH_GROUPS
+    assert ops.TORCH_TESTS == {name for group in groups for name in ops.GROUPS[group]}
+    find_spec = ops.importlib.util.find_spec
+    monkeypatch.setattr(
+        ops.importlib.util,
+        "find_spec",
+        lambda name, *args: None if name == "torch" else find_spec(name, *args),
+    )
+    for group in groups:
+        with pytest.raises(RuntimeError, match="PyTorch reference tests need torch"):
+            ops.require_reference_modules(ops.upstream_tests("opengl", group))
+    # One reference test is enough to require torch; other groups never do.
+    with pytest.raises(RuntimeError, match="need torch"):
+        ops.require_reference_modules(
+            ops.GROUPS["conv"] + upstream_module_groups.TORCH_LAYER_TESTS[:1]
+        )
+    for group in ops.GROUPS:
+        if group not in groups:
+            ops.require_reference_modules(ops.upstream_tests("opengl", group))
 
 
 @pytest.mark.parametrize("fault", ["none", "w256", "target", "selection-target"])

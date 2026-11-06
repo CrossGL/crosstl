@@ -2436,8 +2436,17 @@ kernels on demand. `test_conv_transpose_unfold_tiling` runs transposed 1-D,
 2-D, 3-D and grouped convolutions through the input-dilated unfold, whole and
 in the row tiles `MLX_CONV_UNFOLD_TILE_ROWS` forces; the pinned suite runs it
 only where `mx.metal.is_available()` (`METAL_PATH_TESTS`). The other
-`test_conv` and `test_conv_transpose` tests compare against PyTorch, which
-the host environment does not install.
+`test_conv` and `test_conv_transpose` tests compare against PyTorch on the
+CPU: the `torch-conv` group runs the nine `test_conv` ones (the 1-D, 2-D,
+3-D, depthwise, general and asymmetrically padded convolutions and the
+gradients) and the nine `test_conv_transpose` ones (with and without output
+padding, and the gradients). The `torch-layers` group runs the bfloat16
+conversion from torch tensors, batch normalization, AdamW and the two
+antialiased upscaling checks, and `torch-upsample` the nearest, linear and
+cubic upsampling sweeps with and without antialiasing (about 36,000
+launches). Only the jobs of these three groups (`TORCH_GROUPS`) install
+PyTorch, the pinned 2.14.1 CPU wheel, and the workers refuse to run them where
+torch cannot be imported, because the tests would skip themselves.
 The `array`, `autograd` and `compile` groups run the `test_array` (41),
 `test_autograd` (45) and `test_compile` (54) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
