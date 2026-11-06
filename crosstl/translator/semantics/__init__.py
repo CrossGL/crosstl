@@ -154,6 +154,11 @@ from .stage_interface_structs import (
 )
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
 from .stage_private_variables import hoist_stage_private_variables
+from .static_assertions import (
+    StaticAssertionFailedError,
+    StaticAssertionUnresolvedError,
+    resolve_static_assertions,
+)
 from .static_locals import StaticLocalUnsupportedError, hoist_static_locals
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
@@ -234,6 +239,8 @@ __all__ = [
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
+    "StaticAssertionFailedError",
+    "StaticAssertionUnresolvedError",
     "SpirvArrayLengthUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
@@ -297,7 +304,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
-    (:mod:`.type_aliases`), and an empty brace initializer of a scalar, ``float one = {};``, its zero
+    (:mod:`.type_aliases`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
+    refused with :class:`StaticAssertionFailedError` or :class:`StaticAssertionUnresolvedError`
+    (:mod:`.static_assertions`). An empty brace initializer of a scalar, ``float one = {};``, its zero
     (:mod:`.scalar_brace_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
@@ -415,6 +424,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_enum_values(program, report.target)

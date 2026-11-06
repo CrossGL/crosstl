@@ -91,6 +91,7 @@ from .integer_literals import integer_literal_parts
 from .math_namespaces import METAL_MATH_NAMESPACE_ANNOTATION, metal_math_namespace
 from .source_licenses import SOURCE_LICENSES
 from .stage_utils import shader_stage_from_name
+from .static_assertion_syntax import parse_static_assertion, starts_static_assertion
 from .validation import validate_shader_cbuffers
 from .wave_operations import GLSL_SUBGROUP_FUNCTIONS, WAVE_EXTENDED_OPERATIONS
 
@@ -345,6 +346,8 @@ class Parser:
         self.token_edits = []
         self.strict_function_bodies = strict_function_bodies
         self.anonymous_buffer_blocks = []
+        # static_assert declarations outside blocks, attached to the ShaderNode by finalize_shader.
+        self.static_assertions = []
         self.active_generic_parameter_names = set()
         self.value_type_scopes = [{}]
         # Declared values with their own parameters, which `name[...]` specializes.
@@ -443,6 +446,7 @@ class Parser:
 
     def finalize_shader(self, shader):
         bind_anonymous_buffer_block_members(shader, self.anonymous_buffer_blocks)
+        shader.static_assertions = list(self.static_assertions)
         return resolve_host_workgroup_sizes(
             validate_shader_cbuffers(shader), self.layout_argument_to_string
         )
@@ -540,6 +544,8 @@ class Parser:
         shader_node = None
 
         while self.current_token[0] != "EOF":
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] in ["IMPORT", "USE", "FROM"]:
                 imports.append(self.parse_import())
             elif self.current_token[0] == "PREPROCESSOR":
@@ -656,6 +662,8 @@ class Parser:
 
         while self.current_token[0] != "RBRACE":
             self.reject_end_of_input(f"shader declaration {name!r}")
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] == "PREPROCESSOR":
                 preprocessors.append(self.parse_preprocessor_directive())
             elif self.current_token[0] == "PRECISION":
@@ -818,6 +826,8 @@ class Parser:
 
         while self.current_token[0] != "RBRACE":
             self.reject_end_of_input(f"{stage_type} stage block")
+            if self.parse_scope_static_assertion():
+                continue
             if self.current_token[0] == "LAYOUT" and self.is_stage_layout_qualifier():
                 layout = self.parse_stage_layout_qualifier()
                 layout_qualifiers.append(layout)
@@ -1533,6 +1543,9 @@ class Parser:
     def parse_struct_member(self):
         """Parse one struct member declaration."""
         if self.current_token[0] == "EOF":
+            return None
+
+        if self.parse_scope_static_assertion():
             return None
 
         if self.current_token[0] == "PREPROCESSOR":
@@ -4331,6 +4344,8 @@ class Parser:
             # braceless body made of one becomes an empty block through parse_substatement.
             self.eat("SEMICOLON")
             return []
+        if starts_static_assertion(self):
+            return parse_static_assertion(self)
         if self.current_token[0] == "IF":
             return self.parse_if_statement()
         elif self.current_token[0] == "FOR":
@@ -6560,6 +6575,13 @@ class Parser:
             raise SyntaxError(f"Unexpected end of input in {construct}")
         raise SyntaxError(f"Unexpected {token_type} {token_value!r} in {construct}")
 
+    def parse_scope_static_assertion(self):
+        """Parse a ``static_assert`` outside a block into ``self.static_assertions``; False if none starts here."""
+        if not starts_static_assertion(self):
+            return False
+        self.static_assertions.append(parse_static_assertion(self))
+        return True
+
     def reject_end_of_input(self, construct):
         """Raise ``SyntaxError`` if the input ends inside ``construct`` before its closing brace.
 
@@ -6653,6 +6675,9 @@ class Parser:
     def parse_global(self):
         """Parse one top-level declaration; input that starts none raises ``SyntaxError``."""
         if self.current_token[0] == "EOF":
+            return None
+
+        if self.parse_scope_static_assertion():
             return None
 
         if self.current_token[0] == "PREPROCESSOR":
