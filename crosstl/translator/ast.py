@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
@@ -1169,17 +1169,23 @@ class StaticAssertNode(StatementNode):
     It declares nothing and has no run-time effect. One written in a block is a statement; the parser collects one
     at shader, stage or structure scope in ``ShaderNode.static_assertions``. ``message`` is the text of the string
     literal, or None. :mod:`.semantics.static_assertions` checks and removes every one before code generation.
+    One declared in a generic structure records that structure's name as ``template`` and its type parameters as
+    ``generic_params``; :mod:`.semantics.template_assertions` handles those whose condition names a parameter.
     """
 
     def __init__(
         self,
         condition: "ExpressionNode",
         message: Optional[str] = None,
+        template: Optional[str] = None,
+        generic_params: Sequence[str] = (),
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.condition = condition
         self.message = message
+        self.template = template
+        self.generic_params = tuple(generic_params)
 
     def __repr__(self):
         return f"StaticAssertNode(condition={self.condition}, message={self.message!r})"

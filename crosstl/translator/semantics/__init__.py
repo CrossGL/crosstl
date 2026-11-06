@@ -173,6 +173,7 @@ from .structured_layouts import (
 )
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
 from .task_payload_storage import declare_task_payload_storage
+from .template_assertions import resolve_template_assertions
 from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
@@ -403,6 +404,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_local_structs(program, report.target)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
+    resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
