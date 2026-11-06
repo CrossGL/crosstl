@@ -36,6 +36,7 @@ import re
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import TypeScope, type_from_name, type_from_node
+from .integral_types import ProgramTypeAliases
 from .rewrite import child_slots, get_child, set_child
 
 __all__ = [
@@ -212,28 +213,35 @@ def _metal_matrix_bytes(type_value, operand):
     return int(columns) * _vector_bytes(int(rows), element.bits // 8, operand, "metal")
 
 
-def sizeof_type_bytes(type_value, *, constants=None, target=None, layout="portable"):
+def sizeof_type_bytes(
+    type_value, *, constants=None, target=None, layout="portable", aliases=None
+):
     """The byte size of a CrossGL type (a ``TypeNode`` or a spelling); raises :class:`SizeofUnsupportedError`.
 
-    ``layout`` is ``"portable"`` for ``sizeof`` and ``"metal"`` for ``metal_sizeof``.
+    ``layout`` is ``"portable"`` for ``sizeof`` and ``"metal"`` for ``metal_sizeof``. ``aliases``, a
+    :class:`.integral_types.ProgramTypeAliases`, gives the types the program's type aliases name.
     """
     operand = _spelling(type_value)
     try:
-        return _type_bytes(type_value, operand, constants or {}, layout)
+        return _type_bytes(type_value, operand, constants or {}, layout, aliases)
     except SizeofUnsupportedError as error:
         raise SizeofUnsupportedError(
             error.operand, error.detail, target=target, function=_FUNCTIONS[layout]
         ) from None
 
 
-def _type_bytes(type_value, operand, constants, layout):
+def _type_bytes(type_value, operand, constants, layout, aliases=None):
+    if aliases is not None:
+        type_value = aliases.resolve_type(type_value)
     if isinstance(type_value, A.ReferenceType):
-        return _type_bytes(type_value.referenced_type, operand, constants, layout)
+        return _type_bytes(
+            type_value.referenced_type, operand, constants, layout, aliases
+        )
     if isinstance(type_value, str):
         match = _ARRAY_SPELLING.fullmatch(type_value.strip())
         if match:
             return int(match.group(2)) * _type_bytes(
-                match.group(1), operand, constants, layout
+                match.group(1), operand, constants, layout, aliases
             )
     if isinstance(type_value, A.ArrayType):
         count = _literal_int(type_value.size)
@@ -244,7 +252,9 @@ def _type_bytes(type_value, operand, constants, layout):
                 operand, "the array's element count is not a constant"
             )
         # Every layout here sizes an element to a multiple of its alignment, so the array has no padding.
-        return count * _type_bytes(type_value.element_type, operand, constants, layout)
+        return count * _type_bytes(
+            type_value.element_type, operand, constants, layout, aliases
+        )
     if isinstance(type_value, A.MatrixType) or (
         isinstance(type_value, str) and _MATRIX.fullmatch(type_value.strip())
     ):
@@ -302,6 +312,7 @@ class _Folder:
         self.target = target
         self.native = target in _NATIVE_SIZEOF_TARGETS
         self.scope = TypeScope(program)
+        self.aliases = ProgramTypeAliases(program)
         self.constants = {}
         self.generic_names = []
         self.folded = 0
@@ -442,7 +453,11 @@ class _Folder:
             return call
         try:
             size = sizeof_type_bytes(
-                type_value, constants=self.constants, target=self.target, layout=layout
+                type_value,
+                constants=self.constants,
+                target=self.target,
+                layout=layout,
+                aliases=self.aliases,
             )
         except SizeofUnsupportedError:
             if native:
