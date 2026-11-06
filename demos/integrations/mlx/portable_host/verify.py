@@ -111,7 +111,7 @@ COUNTS = (0, 1, 7, 257)
 # each dtype check proves that refusal happens with no native dispatch.
 FLOAT64_REFUSAL = "float64 is not supported on the GPU"
 NEGATIVE_CHECKS = {
-    "unsupported": "Hadamard has no GPU implementation",
+    "unsupported": "QQMatmul has no GPU implementation",
     "over-limit": "Arange currently supports at most 65535 elements",
     "missing": "artifact",
     "unary-dtype": FLOAT64_REFUSAL,
@@ -191,8 +191,10 @@ def worker(args):
     if args.worker in checks:
         try:
             if args.worker == "unsupported":
-                value = mx.hadamard_transform(
-                    mx.array([1.0, 2.0, 3.0, 4.0]), stream=mx.gpu
+                # qqmm quantizes both operands inside QQMatmul, which the
+                # host does not port.
+                value = mx.qqmm(
+                    mx.ones((1, 32)), mx.ones((32, 32)), mode="mxfp8", stream=mx.gpu
                 )
             elif args.worker == "over-limit":
                 # Integer aranges split into exact launches; a floating-point

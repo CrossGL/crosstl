@@ -2373,6 +2373,21 @@ compares against PyTorch, which the host environment does not install, and
 `mx.metal.is_available()`, which the portable host is not. The
 Metal runtime binds up to 1 GiB per dispatch, for the 128 MiB operands of a
 2**24-point pass.
+The `fft` group also runs `test_ops`' `test_hadamard` and
+`test_hadamard_grad_vmap` through `hadamard.inc`, a port of hadamard.cpp:
+`Hadamard::eval_gpu` decomposes `n = m * 2**k` with `decompose_hadamard`,
+splits transforms past 8,192 points into a strided `n1` and a contiguous `n2`
+pass, and runs the `m` pass for 12, 20 and 28, each stage as
+`hadamard_mn_contiguous` launches it. hadamard.cpp has no pinned library, so
+`hadamard_layout` renders the one it generates from the unchanged
+`kernels/hadamard.h` and the matrix strings of `common/hadamard.h`, and
+`hadamard_packages` translates each `n1`, `n2` and `m` stage of one size and
+type into its own package. The host launches each stage in slices of whole
+transforms, at most 65535 workgroups per axis, and the audit recomputes every
+retained transform. `test_hadamard` skips itself when `CI` is set, so the
+native worker imports `test_ops` with `CI` cleared (`CI_CLEARED_TESTS`), and
+the CI job translates its 114 stages ahead of the tests.
+`test_hadamard_m_only` runs only where `mx.metal.is_available()`.
 `nn.losses.cross_entropy` with class indices on the GPU, `test_losses`'
 `test_cross_entropy` and `test_fast`'s `test_cross_entropy` reach
 `cross_entropy.metal`:
@@ -2850,7 +2865,7 @@ compares them in one vector-vector dispatch without copies. Any
 other traced entry must be a unary or binary vector that the native run
 translated from the pinned sources on first use, as the upstream tests do for
 scalar-vector binaries; the evidence lists these as `lazyEntries`.
-Separate negative processes reject an unsupported primitive (Hadamard), an
+Separate negative processes reject an unsupported primitive (QQMatmul), an
 oversized floating-point arange, a missing artifact, unary inputs with
 unsupported dtype, contiguous and
 strided unary inputs that exceed their allocations (including a large view), and

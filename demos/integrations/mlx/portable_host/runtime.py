@@ -60,6 +60,8 @@ from demos.integrations.mlx.portable_host import (
     gemm_layout,
     gemm_splitk_dispatch,
     gemm_splitk_layout,
+    hadamard_dispatch,
+    hadamard_packages,
     gemv_dispatch,
     gemv_layout,
     half_storage,
@@ -566,6 +568,14 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        # The Hadamard stages hadamard.cpp generates, one per size and type.
+        self.hadamards = (
+            hadamard_packages.HadamardPackageCache(
+                mlx_root, self.directory / hadamard_packages.CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.gathers = (
             GatherPackageCache(mlx_root, self.directory / "gather", self.target)
             if mlx_root is not None
@@ -958,6 +968,8 @@ class HostRuntime:
                 and self.cross_entropies is not None
             ):
                 return 1
+            if name in hadamard_packages.ENTRIES and self.hadamards is not None:
+                return 1
             if (
                 name in wide_reduction_packages.ENTRIES
                 and self.wide_reductions is not None
@@ -1169,6 +1181,10 @@ class HostRuntime:
             return norm_dispatch.dispatch(self, entry, buffers, count, threads, launch)
         if entry in cross_entropy_layout.ENTRIES:
             return cross_entropy_dispatch.dispatch(
+                self, entry, buffers, count, threads, launch
+            )
+        if entry in hadamard_packages.ENTRIES:
+            return hadamard_dispatch.dispatch(
                 self, entry, buffers, count, threads, launch
             )
         if self.lazy_copy(entry):
