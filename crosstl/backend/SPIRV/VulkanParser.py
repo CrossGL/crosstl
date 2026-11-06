@@ -1215,6 +1215,9 @@ class VulkanParser:
         self.spirv_apply_decoration_groups(
             decorations, member_decorations, group_decorates, group_member_decorates
         )
+        self.spirv_geometry_module = any(
+            entry_point["execution_model"] == "Geometry" for entry_point in entry_points
+        )
         self.spirv_register_struct_type_names(types, names, member_names)
         self.spirv_name_struct_constants(constants, types)
         self.spirv_assign_flattened_resource_block_member_aliases(
@@ -6523,6 +6526,14 @@ class VulkanParser:
                 )
                 if storage_builtin_name:
                     return storage_builtin_name
+                if (
+                    value == "PrimitiveId"
+                    and storage_class == "Input"
+                    and getattr(self, "spirv_geometry_module", False)
+                ):
+                    # A geometry stage reads the incoming primitive's ID as gl_PrimitiveIDIn and writes the one it
+                    # passes on as gl_PrimitiveID (GLSL 4.60 section 7.1.4); both are BuiltIn PrimitiveId.
+                    return "gl_PrimitiveIDIn"
                 return self.SPIRV_BUILTIN_VARIABLE_NAMES.get(value, value)
         return fallback_name
 
