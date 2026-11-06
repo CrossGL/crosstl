@@ -103,6 +103,7 @@ from .wgsl_frexp_modf import (
     wgsl_frexp_modf_call,
     wgsl_frexp_modf_helpers,
 )
+from .wgsl_function_behaviors import end_is_reachable
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
 from .wgsl_image_atomics import WGSLImageAtomicUnsupportedError, is_image_atomic_name
 from .wgsl_integer_builtins import lower_integer_builtin_inputs
@@ -117,6 +118,7 @@ from .wgsl_integer_textures import (
     WGSLIntegerTextureSampleUnsupportedError,
     is_integer_sampler_type_name,
 )
+from .wgsl_loop_continuing import WGSLContinuingLoopNode, WGSLLoopContinuingMixin
 from .wgsl_must_use import wgsl_call_statement
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
@@ -184,6 +186,7 @@ class WGSLAggregateInitializerError(ValueError):
 
 
 class WGSLCodeGen(
+    WGSLLoopContinuingMixin,
     WGSLValueSideEffectsMixin,
     WGSLCompositeConditionalMixin,
     WGSLParameterLoweringMixin,
@@ -1301,6 +1304,11 @@ class WGSLCodeGen(
                     parameter_attributes=True,
                 )
                 body = self.generate_block(entry_point.body, indent=0)
+                body = self.add_generated_match_fallback_return(
+                    body,
+                    getattr(entry_point, "body", None),
+                    getattr(entry_point, "return_type", None),
+                )
                 body = self.prepend_parameter_copies(body, entry_point)
             finally:
                 self._entry_parameter_locations = previous_parameter_locations
@@ -1810,7 +1818,8 @@ class WGSLCodeGen(
         if not statements:
             return False
         if not self.contains_generated_rust_match_flag(statements):
-            return False
+            # WGSL rejects a value-returning body whose end it cannot rule out, as after a loop that returns.
+            return end_is_reachable(statements)
         return not self.statement_definitely_returns(statements[-1])
 
     def block_statements(self, body_node):
@@ -2986,8 +2995,8 @@ class WGSLCodeGen(
             return f"{pad}continue;"
         if isinstance(stmt, SwitchNode):
             return self.generate_switch(stmt, indent)
-        if isinstance(stmt, DoWhileNode):
-            raise ValueError("WGSL target does not support do-while statements")
+        if isinstance(stmt, WGSLContinuingLoopNode):
+            return self.generate_continuing_loop(stmt, indent)
         if isinstance(stmt, ForInNode):
             raise ValueError("WGSL target does not support for-in statements")
         if isinstance(stmt, MatchNode):
