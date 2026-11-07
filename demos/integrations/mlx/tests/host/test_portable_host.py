@@ -1278,6 +1278,214 @@ def test_unary_nonfinite_transport(translated_packages, tmp_path, monkeypatch, d
     assert list(output)[1:] == [math.inf, math.inf]
 
 
+# Operands every carrier holds exactly; the float sums overflow and round.
+PLAIN_CASES = {
+    "vv_Addfloat32": {
+        "a": [1.5, -0.0, 2.0**127, 2.0**-149],
+        "b": [2.25, 0.0, 2.0**127, 2.0],
+    },
+    "vv_Addint32": {"a": [1, -7, 2**30, -(2**31)], "b": [4, 7, 2**30 - 1, 5]},
+    "vv_Adduint32": {"a": [1, 0, 2**31, 2**32 - 6], "b": [4, 9, 2**31 - 1, 5]},
+    "v_Absfloat32float32": {"in": [-2.0, -0.0, math.inf, -(2.0**-149)]},
+}
+PLAIN_CODES = {"float32": "f", "int32": "i", "uint32": "I"}
+WIRE_FLOATS = {"nan": math.nan, "+infinity": math.inf, "-infinity": -math.inf}
+
+
+def plain_buffers(entry, operands):
+    """Native buffers of an installed plain binary or unary entry."""
+    binary = entry in packages.BINARY_ENTRIES
+    dtype = packages.BINARY_ENTRIES[entry] if binary else "float32"
+    names, output = (("a", "b", "c"), "c") if binary else (("in", "out"), "out")
+    count = len(next(iter(operands.values())))
+    ctype = runtime.TYPES[dtype]
+    memory = {name: (ctype * count)(*operands.get(name, ())) for name in names}
+    memory["size"] = ctypes.c_uint32(count)
+    buffers = (runtime.Buffer * len(memory))(
+        *[
+            runtime.Buffer(
+                name.encode(),
+                (b"uint32" if name == "size" else dtype.encode()),
+                ctypes.addressof(data),
+                1 if name == "size" else count,
+                int(name == output),
+            )
+            for name, data in memory.items()
+        ]
+    )
+    return buffers, memory, output, dtype
+
+
+def plain_result(entry, operands, dtype):
+    """The stored results of the fake kernels: ``a + b`` or ``abs(in)``."""
+    if entry in packages.BINARY_ENTRIES:
+        values = [left + right for left, right in zip(operands["a"], operands["b"])]
+    else:
+        values = [abs(value) for value in operands["in"]]
+    # The carrier rounds, and overflows to infinity, as ctypes stores.
+    return list((runtime.TYPES[dtype] * len(values))(*values))
+
+
+def run_plain(host, entry, operands, monkeypatch, fault=None):
+    """Dispatch ``entry`` through a fake executor; return its uploads."""
+    buffers, memory, output, dtype = plain_buffers(entry, operands)
+    code = PLAIN_CODES[dtype]
+    expected = plain_result(entry, operands, dtype)
+    uploads = []
+    original_build = runtime.build_native_loader_dispatch_request
+
+    def build(descriptor, package, inputs, outputs, *args, **kwargs):
+        uploads.append((inputs, outputs))
+        return original_build(descriptor, package, inputs, outputs, *args, **kwargs)
+
+    def decode(value):
+        data = value["values"]
+        if type(data) is bytes:
+            return list(struct.unpack(f"<{len(data) // 4}{code}", data))
+        return [WIRE_FLOATS.get(item, item) for item in data]
+
+    def execute(request):
+        inputs, outputs = uploads[-1]
+        ((name, upload),) = outputs.items()
+        # Every operand travels as the exact values the host holds.
+        assert sorted(
+            decode(value)
+            for binding, value in inputs.items()
+            if binding != name and value["shape"] != [1]
+        ) == sorted(values for key, values in operands.items())
+        initial = upload["values"]
+        count = len(expected)
+        if type(initial) is bytes:
+            data = struct.pack(f"<{count}{code}", *expected) + initial[count * 4 :]
+            if fault == "guard":
+                data = data[:-1] + bytes([data[-1] ^ 1])
+            elif fault == "short":
+                data = data[:-4]
+            elif fault == "list":
+                data = decode({"values": data})
+            readback = {**upload, "values": data}
+            if fault == "encoding":
+                readback["encoding"] = "ieee754-binary16"
+        else:
+            readback = {**upload, "values": expected + initial[count:]}
+        return SimpleNamespace(status="ok", outputs={name: readback}, details={})
+
+    monkeypatch.setattr(runtime, "build_native_loader_dispatch_request", build)
+    monkeypatch.setattr(host.executor, "run", execute)
+    monkeypatch.setattr(
+        runtime.gather_dispatch, "execute", lambda _host, request: execute(request)
+    )
+    host.dispatch(entry, buffers, len(memory), len(expected))
+    assert list(memory[output]) == expected
+    return uploads[-1]
+
+
+@pytest.mark.parametrize("entry", sorted(PLAIN_CASES))
+def test_installed_plain_families_carry_packed_storage(
+    translated_packages, tmp_path, monkeypatch, entry
+):
+    traces = {}
+    for transport in ("packed", "words"):
+        host = runtime.HostRuntime(
+            translated_packages, tmp_path / transport, trace_values=False
+        )
+        if transport == "words":
+            monkeypatch.setattr(
+                runtime.installed_transport, "packed_operation", lambda *args: False
+            )
+        inputs, outputs = run_plain(host, entry, PLAIN_CASES[entry], monkeypatch)
+        monkeypatch.undo()
+        assert {
+            type(value["values"]) for value in (*inputs.values(), *outputs.values())
+        } == ({bytes} if transport == "packed" else {list})
+        assert host.dispatch_count == 1
+        traces[transport] = (tmp_path / transport).read_bytes()
+    # The compact record is the word-list path's, byte for byte.
+    assert traces["packed"] == traces["words"]
+    event = json.loads(traces["packed"])
+    assert ("binaryGuardValues" in event) is entry.startswith("vv_")
+
+
+@pytest.mark.parametrize("retained", ["trace", "prefix", "modules", "dtype"])
+def test_installed_packed_storage_needs_unretained_plain_buffers(
+    translated_packages, tmp_path, monkeypatch, retained
+):
+    host = runtime.HostRuntime(
+        translated_packages,
+        tmp_path / "trace",
+        trace_values={"trace": True, "prefix": ("vv_Add",)}.get(retained, False),
+        retain_native_modules=retained == "modules",
+    )
+    buffers, memory, _, _ = plain_buffers("vv_Addint32", PLAIN_CASES["vv_Addint32"])
+    supplied = {buffer.name.decode(): buffer for buffer in buffers}
+    if retained == "dtype":
+        supplied["a"] = SimpleNamespace(dtype=b"int64")
+    assert not runtime.installed_transport.packed_operation(
+        host, "vv_Addint32", supplied, True
+    )
+    if retained != "dtype":
+        inputs, _ = run_plain(
+            host, "vv_Addint32", PLAIN_CASES["vv_Addint32"], monkeypatch
+        )
+        assert all(type(value["values"]) is list for value in inputs.values())
+
+
+@pytest.mark.parametrize("fault", ["guard", "short", "list", "encoding"])
+def test_installed_packed_readback_is_checked_before_it_is_stored(
+    translated_packages, tmp_path, monkeypatch, fault
+):
+    host = runtime.HostRuntime(
+        translated_packages, tmp_path / "trace", trace_values=False
+    )
+    message = {
+        "guard": "buffer guard",
+        "short": "size does not match",
+        "list": "size does not match",
+        "encoding": "storage encoding",
+    }[fault]
+    with pytest.raises(RuntimeError, match=message):
+        run_plain(
+            host, "vv_Addfloat32", PLAIN_CASES["vv_Addfloat32"], monkeypatch, fault
+        )
+    assert not host.trace.exists() and host.dispatch_count == 0
+
+
+def test_installed_packed_storage_keeps_nan_payloads(
+    translated_packages, tmp_path, monkeypatch
+):
+    host = runtime.HostRuntime(
+        translated_packages, tmp_path / "trace", trace_values=False
+    )
+    buffers, memory, output, _ = plain_buffers(
+        "v_Absfloat32float32", {"in": [0.0, 1.0]}
+    )
+    # A signalling NaN with a payload, written as bits.
+    ctypes.cast(memory["in"], ctypes.POINTER(ctypes.c_uint32))[0] = 0x7FA00001
+    uploads = []
+    original_build = runtime.build_native_loader_dispatch_request
+
+    def build(descriptor, package, inputs, outputs, *args, **kwargs):
+        uploads.append((inputs, outputs))
+        return original_build(descriptor, package, inputs, outputs, *args, **kwargs)
+
+    def execute(request):
+        inputs, outputs = uploads[-1]
+        ((name, upload),) = outputs.items()
+        (source,) = (value for value in inputs.values() if value["shape"] == [2])
+        # The kernel returns its operand's bits unchanged.
+        return SimpleNamespace(
+            status="ok",
+            outputs={name: {**upload, "values": source["values"]}},
+            details={},
+        )
+
+    monkeypatch.setattr(runtime, "build_native_loader_dispatch_request", build)
+    monkeypatch.setattr(host.executor, "run", execute)
+    host.dispatch("v_Absfloat32float32", buffers, 3, 2)
+    words = ctypes.cast(memory[output], ctypes.POINTER(ctypes.c_uint32 * 2)).contents
+    assert list(words) == [0x7FA00001, 0x3F800000]
+
+
 @pytest.mark.parametrize(
     "fault",
     [

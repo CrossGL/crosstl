@@ -73,6 +73,7 @@ from demos.integrations.mlx.portable_host import (
     hadamard_dispatch,
     hadamard_packages,
     half_storage,
+    installed_transport,
     masked_scatter_dispatch,
     masked_scatter_packages,
     matmul_dispatch,
@@ -1789,6 +1790,9 @@ class HostRuntime:
                 ctypes.c_float.from_buffer_copy(ctypes.c_uint32(word)).value
                 for word in COPY_GUARD
             ]
+        packed = installed_transport.packed_operation(
+            self, entry, supplied, entry in UNARY_ENTRIES or entry in BINARY_ENTRIES
+        )
         inputs, outputs, destinations = {}, {}, {}
         matched = set()
         binding_names = set()
@@ -1828,6 +1832,18 @@ class HostRuntime:
             ):
                 raise ValueError("Native and reflected element sizes disagree")
             ctype = TYPES[dtype]
+            if packed:
+                value = installed_transport.packed_value(
+                    buffer, dtype, self.target, guard if guarded else ()
+                )
+                if buffer.output:
+                    if guarded:
+                        inputs[binding["name"]] = value
+                    outputs[binding["name"]] = value
+                    destinations[binding["name"]] = (buffer, ctype)
+                else:
+                    inputs[binding["name"]] = value
+                continue
             view = ctypes.cast(
                 buffer.data, ctypes.POINTER(ctype * buffer.count)
             ).contents
@@ -1946,6 +1962,24 @@ class HostRuntime:
             )
         if result.status != "ok" or set(result.outputs) != set(destinations):
             raise RuntimeError("Native executor did not return the required outputs")
+        if packed:
+            return installed_transport.finish(
+                self,
+                {
+                    "entry": entry,
+                    "target": self.target,
+                    "threads": threads,
+                    **execution,
+                    "dispatchVersion": DISPATCH_VERSION,
+                    "artifact": descriptor["artifact"],
+                    "details": result.details,
+                },
+                result,
+                outputs,
+                destinations,
+                guard if guarded else (),
+                binary_operation,
+            )
         for name, (buffer, ctype) in destinations.items():
             output = result.outputs[name]
             size = buffer.count + (len(guard) if guarded else 0)
