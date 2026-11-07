@@ -18729,22 +18729,36 @@ def _metal_reachable_function_return_types(
     template_spans: Sequence[tuple[int, int]],
     reachable_function_spans: Sequence[tuple[int, int]],
 ) -> dict[str, str]:
+    # A call's type is its selected overload's return type. Without overload
+    # resolution here, a name is typed only when every definition of it states
+    # the same return type and no function template shares the name; otherwise
+    # the last definition would type calls that select another overload.
     reachable = set(reachable_function_spans)
-    return_types: dict[str, str] = {}
+    declared: dict[str, set[str | None]] = {}
+    reached: set[str] = set()
     for function in preprocessor._find_non_template_function_definitions(
         source,
         list(template_spans),
     ):
-        if function.span not in reachable:
-            continue
         return_type = _metal_function_return_type(
             preprocessor,
             _metal_function_header(source, function),
             function.name,
         )
-        if return_type:
-            return_types[function.name] = return_type
-    return return_types
+        declared.setdefault(function.name, set()).add(return_type or None)
+        if function.span in reachable:
+            reached.add(function.name)
+    template_names = {
+        template.name for template in preprocessor._find_template_functions(source)
+    }
+    return {
+        name: next(iter(return_types))
+        for name, return_types in sorted(declared.items())
+        if name in reached
+        and name not in template_names
+        and len(return_types) == 1
+        and None not in return_types
+    }
 
 
 def _materialize_plain_template_helper_calls(
