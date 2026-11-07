@@ -1588,6 +1588,10 @@ class MetalParser:
         if tok_type == "IDENTIFIER" and self.tokens[idx][1] in SIGNED_TYPE_PREFIXES:
             idx = self.skip_signed_type_prefix_at(idx)
             type_name = "int"
+        elif self.is_decltype_start_at(idx):
+            # ``decltype(e) f(...)``: parse_type_specifier reads the decltype return type.
+            type_name = "decltype"
+            idx = self.skip_decltype_type_at(idx)
         elif (
             tok_type in {"STRUCT", "ENUM"}
             and idx + 1 < len(self.tokens)
