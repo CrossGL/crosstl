@@ -5,6 +5,10 @@ follows), so ``(void)bump();`` still runs ``bump``. CrossGL carries the evaluati
 ``e`` is proven free of side effects (names, literals, member, element and swizzle reads, and operators over them)
 the statement is dropped, because it only silences an unused-value warning and some targets (GLSL, WGSL) reject a
 bare value statement.
+
+A statement whose root is a conditional, an element or member access or a cast (``c ? f() : g();``,
+``data[i++];``) is an expression statement too (C++14 section 6.2 [stmt.expr]): it evaluates the expression and
+discards its value. :data:`VALUE_STATEMENT_TYPES` lists those roots, which CrossGL carries as ``e;``.
 """
 
 from __future__ import annotations
@@ -19,7 +23,9 @@ from ..common_ast import (
     VariableNode,
 )
 
-__all__ = ["discarded_cast_operand"]
+__all__ = ["VALUE_STATEMENT_TYPES", "discarded_cast_operand"]
+
+VALUE_STATEMENT_TYPES = (TernaryOpNode, ArrayAccessNode, MemberAccessNode, CastNode)
 
 _STEP_OPERATORS = frozenset({"++", "--"})
 
