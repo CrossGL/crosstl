@@ -10800,7 +10800,7 @@ class TestCudaCodeGen:
         assert "cudaSurfaceObject_t syncImage;" in cuda_code
         assert "cudaSurfaceObject_t scopeImage;" in cuda_code
         assert "int* orderedValues;" in cuda_code
-        assert "unsigned char* linearRaw;" in cuda_code
+        assert "unsigned char* __restrict__ linearRaw;" in cuda_code
         assert "int value = readOnlyValues[index];" in cuda_code
         assert "int attrValue = attrReadValues[index];" in cuda_code
         assert "uint raw = cgl_byte_address_load_uint(rawInput, index);" in cuda_code
@@ -10869,8 +10869,31 @@ class TestCudaCodeGen:
         assert "coherent" not in cuda_code
         assert "globallycoherent" not in cuda_code
         assert "volatile" not in cuda_code
-        assert "restrict" not in cuda_code
+        assert "restrict" not in cuda_code.replace("__restrict__", "")
         assert "access(" not in cuda_code
+
+    def test_restrict_buffers_keep_restrict_in_cuda(self):
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                restrict buffer float* fin;
+                restrict buffer float* outp;
+                buffer float* plain;
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    outp[i] = fin[i] * 2.0 + plain[i];
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float* __restrict__ fin;" in cuda_code
+        assert "__device__ float* __restrict__ outp;" in cuda_code
+        assert "__device__ float* plain;" in cuda_code
 
     def test_image_access_aliases_inherit_cuda_diagnostics(self):
         source_code = """
