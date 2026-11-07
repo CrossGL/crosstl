@@ -31,6 +31,7 @@ from typing import (
 from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
+from .arithmetic_conversions import builtin_arithmetic_conversion
 from .array_element_receivers import array_element_receiver_end, array_rank_at
 from .auto_placeholders import deduced_auto_type
 from .call_result_types import CallResultScope, infer_call_result_type
@@ -23417,8 +23418,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         integral_type = self._integral_arithmetic_operand_result_type(
             left_type, right_type
         )
-        if integral_type is not None or arithmetic_operator == "%":
+        if integral_type is not None:
             return integral_type
+        decided, converted = builtin_arithmetic_conversion(
+            self, left_type, right_type, arithmetic_operator
+        )
+        if decided or arithmetic_operator == "%":
+            return converted
         return self._combine_binary_arithmetic_operand_types(
             left_type, right_type, left_expr, right_expr
         )
