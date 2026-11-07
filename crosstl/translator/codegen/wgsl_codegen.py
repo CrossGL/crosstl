@@ -85,6 +85,11 @@ from .wgsl_boolean_xor import (
     wgsl_boolean_xor_assignment,
     wgsl_boolean_xor_assignment_statement,
 )
+from .wgsl_buffer_atomics import (
+    ATOMIC_NAMES,
+    WGSLBufferAtomicsMixin,
+    WGSLCompareExchangeLoop,
+)
 from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
 from .wgsl_composite_conditionals import WGSLCompositeConditionalMixin
 from .wgsl_cube_texture_offsets import (
@@ -184,6 +189,7 @@ class WGSLAggregateInitializerError(ValueError):
 
 
 class WGSLCodeGen(
+    WGSLBufferAtomicsMixin,
     WGSLValueSideEffectsMixin,
     WGSLCompositeConditionalMixin,
     WGSLParameterLoweringMixin,
@@ -892,6 +898,8 @@ class WGSLCodeGen(
         # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
         ast = canonicalize_separate_textures(ast)
+        # Atomic built-ins address atomic<T> memory through pointers (wgsl_buffer_atomics).
+        ast = self.plan_buffer_atomics(ast)
         lower_relational_builtins(ast)
         lower_integer_builtin_inputs(
             ast, lambda name: self.BUILTIN_SEMANTICS.get(self.semantic_key(name))
@@ -2219,9 +2227,14 @@ class WGSLCodeGen(
                         for attribute in (attributes, "@align(16)")
                         if attribute
                     )
+                self.require_atomic_address_space(
+                    node.name, member.name, member_type, "uniform"
+                )
                 member_type_name = self.uniform_buffer_member_type_name(member_type)
             else:
-                member_type_name = self.type_name_string(member_type)
+                member_type_name = self.type_name_string(
+                    self.atomic_declaration_type(node.name, member.name, member_type)
+                )
             attributes = with_interpolation(
                 attributes,
                 member_type_name,
@@ -2652,8 +2665,11 @@ class WGSLCodeGen(
             attributes = (
                 self.explicit_binding_attributes(node) or self.next_binding_attributes()
             )
-        elif "workgroup" in qualifier_names or "shared" in qualifier_names:
+        elif qualifier_names & {"workgroup", "shared", "groupshared", "threadgroup"}:
             address_space = "workgroup"
+        self.require_atomic_address_space(
+            None, node.name, node.var_type, address_space, access
+        )
 
         initializer = ""
         if node.initial_value is not None and address_space == "private":
@@ -2661,7 +2677,10 @@ class WGSLCodeGen(
             initializer = f" = {value}"
         prefix = f"{attributes}\n" if attributes else ""
         variable_name = self.module_identifier_name(node.name)
-        type_name = self.type_name_string(node.var_type, allow_storage_resources=True)
+        type_name = self.type_name_string(
+            self.atomic_declaration_type(None, node.name, node.var_type),
+            allow_storage_resources=True,
+        )
         resource_declarations = self.generate_resource_member_global_variables(
             node.name, node.var_type
         )
@@ -2696,10 +2715,14 @@ class WGSLCodeGen(
             attributes = (
                 self.explicit_binding_attributes(node) or self.next_binding_attributes()
             )
+            self.require_atomic_address_space(
+                None, node.name, node.param_type, "storage", storage_buffer_access
+            )
+            param_type = self.atomic_declaration_type(None, node.name, node.param_type)
             return (
                 f"{attributes}\nvar<storage, {storage_buffer_access}> "
                 f"{self.module_identifier_name(node.name)}: "
-                f"{self.type_name_string(node.param_type, allow_storage_resources=True)};"
+                f"{self.type_name_string(param_type, allow_storage_resources=True)};"
             )
         uniform_type = self.stage_uniform_parameter_type(node)
         if uniform_type is not None:
@@ -2910,6 +2933,9 @@ class WGSLCodeGen(
         )
         access = self.glsl_buffer_block_access(node)
         type_name = self.glsl_buffer_block_struct_name(node.var_type)
+        self.require_atomic_address_space(
+            None, node.name, node.var_type, "storage", access
+        )
         return (
             f"{attributes}\nvar<storage, {access}> "
             f"{self.module_identifier_name(node.name)}: "
@@ -2918,6 +2944,8 @@ class WGSLCodeGen(
 
     def generate_statement(self, stmt, indent=0):
         pad = "    " * indent
+        if isinstance(stmt, WGSLCompareExchangeLoop):
+            return self.generate_compare_exchange_loop(stmt, indent)
         lowered = self.lower_value_side_effects(stmt)
         if lowered is not None:
             return "\n".join(
@@ -2938,6 +2966,7 @@ class WGSLCodeGen(
                 initializer = " = " + self.generate_expression_for_target(
                     stmt.initial_value, var_type
                 )
+            self.refuse_atomic_local(stmt)
             variable_name = self.declare_local_identifier(stmt.name)
             line = (
                 f"{pad}{mutable_keyword} {variable_name}: "
@@ -3908,6 +3937,8 @@ class WGSLCodeGen(
             raise WGSLImageAtomicUnsupportedError(
                 function_name, self.generate_expression(node.arguments[0])
             )
+        if function_name in ATOMIC_NAMES:
+            return self.generate_buffer_atomic_call(node, function_name)
         if normalized_name in self.BARRIER_FUNCTION_NAMES:
             return self.generate_barrier_call(node, function_name)
         derivative_name = self.DERIVATIVE_FUNCTION_NAME_MAP.get(normalized_name)
@@ -5691,6 +5722,9 @@ class WGSLCodeGen(
             )
             return f"array<{element}, {size}>"
         if isinstance(vtype, NamedType):
+            atomic_type = self.atomic_type_name(vtype)
+            if atomic_type is not None:
+                return atomic_type
             if not vtype.generic_args and vtype.name in self._enum_type_names:
                 return "i32"
             option_type = self.builtin_option_specialized_type_name(vtype)
@@ -7237,6 +7271,9 @@ class WGSLCodeGen(
             option_call_type = self.builtin_option_call_type(expr, function_name)
             if option_call_type is not None:
                 return option_call_type
+            atomic_call_type = self.buffer_atomic_call_type(expr)
+            if atomic_call_type is not None:
+                return atomic_call_type
             if self.is_type_constructor_name(function_name):
                 return self.type_name_string(function_name)
             if function_name in self._structs_by_name and not (
