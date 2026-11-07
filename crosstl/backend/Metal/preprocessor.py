@@ -1286,6 +1286,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
         self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
+        # Assertions over constexpr aggregates and operators, such as MLX's
+        # `(complex_t<half>{1, 2} * complex_t<half>{3, 4}).real == -5`, are decided while the struct templates and
+        # their operators are still spelled as in the source, as template materialization decides them; an
+        # undecided one is left for the translator's check (translator/semantics/static_assertions.py).
+        processed = self._evaluate_static_assertions(processed, keep_unresolved=True)
         processed = self._materialize_project_template_instantiations(processed)
         # Concrete helper bodies must exist while their receiver's methods are
         # still present; lowering the struct first loses those later call sites.
@@ -9471,7 +9476,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return code
         return self._apply_text_replacements(code, replacements)
 
-    def _evaluate_static_assertions(self, code: str) -> str:
+    def _evaluate_static_assertions(
+        self, code: str, *, keep_unresolved: bool = False
+    ) -> str:
+        # With keep_unresolved only assertions over constexpr aggregates are decided here: a proven one is removed
+        # and a false one raises. Integral and undecided conditions stay in the source for the translator's own
+        # check (crosstl/translator/semantics/static_assertions.py), and CrossGL keeps their declarations.
         code = self._fold_concrete_type_trait_values(code)
         if "static_assert" not in code:
             return code
@@ -9601,6 +9611,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             folded, value = self._evaluate_static_integral_expression(
                 evaluation_condition
             )
+            if keep_unresolved and folded:
+                # An integral condition is the translator's to check, and CrossGL keeps the declaration.
+                assertion_index += 1
+                continue
             if not folded:
                 if constexpr_binary_operators is None:
                     constexpr_binary_operators = (
@@ -9640,6 +9654,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 constexpr_index_built = True
                 continue
 
+            if keep_unresolved and not folded:
+                assertion_index += 1
+                continue
             source_message = (
                 self._evaluate_metal_string_expression(assertion.message)
                 if assertion.message is not None
