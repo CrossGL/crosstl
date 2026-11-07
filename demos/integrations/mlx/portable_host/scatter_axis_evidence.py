@@ -1,9 +1,18 @@
-"""Reconstruct scatter results from retained uploads and native readbacks."""
+"""Reconstruct scatter results from retained uploads and native readbacks.
+
+A complex64 sum uploads its updates as ``element_storage`` float32 lane pairs
+and its output as two raw 32-bit atomic words per element, which the audit
+reads back as complex64 values; each lane follows the float32 exactness rule.
+"""
 
 import hashlib
 import math
 
 from demos.integrations.mlx.portable_host import scatter_axis_workloads as workloads
+from demos.integrations.mlx.portable_host.element_storage import (
+    COMPLEX,
+    reflected_layout_matches,
+)
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_input_bindings,
     audit_native_execution,
@@ -17,7 +26,9 @@ from demos.integrations.mlx.portable_host.scatter_axis_layout import (
     launch_plan,
     signature,
 )
+from demos.integrations.mlx.portable_host.scatter_evidence import raw_words
 from demos.integrations.mlx.portable_host.scatter_layout import (
+    ATOMIC_LANES,
     ATOMIC_TYPES,
     atomic_storage_dtype,
 )
@@ -31,8 +42,14 @@ def exact_float_sums(np, initial, indices, updates, axis, axis_size):
     Every finite float32 is an integer multiple of 2^-149; when a destination's
     terms share a coarser power-of-two step and their magnitudes sum to fewer
     than 2^24 steps, every partial sum in every order is exact. A zero sum is
-    negative only when every term is -0.0, in any order.
+    negative only when every term is -0.0, in any order. A complex64 sum
+    adds its real and imaginary lanes separately, so each lane is checked.
     """
+    if np.iscomplexobj(initial):
+        return all(
+            exact_float_sums(np, part(initial), indices, part(updates), axis, axis_size)
+            for part in (np.real, np.imag)
+        )
     terms = {index: [initial[index]] for index in np.ndindex(initial.shape)}
     for coordinate in np.ndindex(indices.shape):
         destination = list(coordinate)
@@ -67,6 +84,16 @@ def audit_event(np, event):
         member = layout.get("memberName", name).removeprefix(event["entry"] + "_")
         member = "out" if member == "out_" else member
         require(member not in inputs, "Duplicate axis-scatter binding")
+        if dtype == COMPLEX and member == "upd":
+            require(
+                binding["dtype"] == value["dtype"]
+                and binding["shape"] == value["shape"] == [len(value["values"])]
+                and binding.get("encoding") == FLOAT32_BITS
+                and reflected_layout_matches(layout, value, COMPLEX),
+                "Axis-scatter binding layout changed",
+            )
+            inputs[member] = value
+            continue
         require(
             binding["dtype"] == value["dtype"] == layout["elementType"]
             and binding["shape"] == value["shape"]
@@ -100,9 +127,11 @@ def audit_event(np, event):
                 "Axis-scatter atomic layout changed",
             )
         inputs[member] = value
+    lanes = ATOMIC_LANES[dtype]
     dtypes = {
         **METADATA,
-        "upd": dtype,
+        # complex64 updates travel as float32 lane pairs.
+        "upd": "float32" if dtype == COMPLEX else dtype,
         "indices": index_dtype,
         "out": atomic_storage_dtype(dtype, event["target"]),
     }
@@ -111,16 +140,17 @@ def audit_event(np, event):
         require(inputs[name]["dtype"] == kind, "Axis-scatter storage type changed")
     arrays = {}
     for name, value in inputs.items():
-        if dtype == "float32" and name in {"out", "upd"}:
+        if dtype in {"float32", COMPLEX} and name in {"out", "upd"}:
             require(
-                isinstance(value["values"], list)
-                and all(
-                    type(word) is int and 0 <= word <= 0xFFFFFFFF
-                    for word in value["values"]
-                ),
+                raw_words(value),
                 "Axis-scatter float upload is not raw binary32 storage",
             )
-            arrays[name] = np.array(value["values"], dtype=np.uint32).view(np.float32)
+            arrays[name] = np.array(value["values"], dtype=np.uint32)
+            # The output keeps its words so its trailing guard stays exact.
+            if name == "upd" or dtype == "float32":
+                arrays[name] = arrays[name].view(
+                    np.complex64 if dtype == COMPLEX else np.float32
+                )
         else:
             arrays[name] = np.array(value["values"], dtype=value["dtype"])
     scalars = ("ndim", "axis", "out_axis_size", "upd_ax_stride", "idx_ax_stride")
@@ -171,13 +201,16 @@ def audit_event(np, event):
     )
     size = math.prod(output_shape)
     require(
-        arrays["out"].size == size + len(COPY_GUARD),
+        arrays["out"].size == lanes * size + len(COPY_GUARD),
         "Axis-scatter output extent changed",
     )
-    initial = arrays["out"][:size].reshape(output_shape).copy()
+    initial = arrays["out"][: lanes * size]
+    if dtype == COMPLEX:
+        initial = initial.view(np.complex64)
+    initial = initial.reshape(output_shape).copy()
     expected = initial.copy()
     require(
-        dtype != "float32"
+        dtype not in {"float32", COMPLEX}
         or operation != "sum"
         or exact_float_sums(np, initial, indices, updates, axis, axis_size),
         "Axis-scatter float32 sum depends on its update order",
@@ -196,11 +229,11 @@ def audit_event(np, event):
         else:
             expected[destination] += updates[coordinate]
     readback = event["scatterValues"]
-    storage = "uint32" if dtype == "float32" else dtype
+    storage = "uint32" if dtype in {"float32", COMPLEX} else dtype
     limits = np.iinfo(storage)
     require(
         isinstance(readback, list)
-        and len(readback) == size
+        and len(readback) == lanes * size
         and all(
             type(value) is int and limits.min <= value <= limits.max
             for value in readback
@@ -208,13 +241,15 @@ def audit_event(np, event):
         "Axis-scatter readback is outside its storage type",
     )
     raw = np.array(readback, dtype=storage)
-    actual = words(np, raw)
+    actual = words(np, raw.view(np.complex64) if dtype == COMPLEX else raw)
     require(
         actual == words(np, expected),
         "Axis-scatter native readback disagrees with uploads",
     )
     require(
-        event["scatterGuardValues"] == words(np, arrays["out"][size:]) == COPY_GUARD,
+        event["scatterGuardValues"]
+        == words(np, arrays["out"][lanes * size :])
+        == COPY_GUARD,
         "Axis-scatter output guards changed",
     )
     metadata = {
@@ -229,7 +264,7 @@ def audit_event(np, event):
         "axis": axis,
         "updateCount": math.prod(grid),
         "outputCount": size,
-        "maximumIndex": size - 1,
+        "maximumIndex": lanes * size - 1,
     }
     target = event["target"]
     require(

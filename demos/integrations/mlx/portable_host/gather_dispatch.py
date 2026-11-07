@@ -116,9 +116,10 @@ def word_value(host, buffer, layout, name, scatter, guard):
 def element_value(name, dtype, scatter):
     """Whether buffer ``name`` travels as ``gather_storage`` element words.
 
-    A scatter's output is its atomic words, so only its updates do.
+    A scatter's output is its atomic words, so only its updates (``updates``
+    of a general scatter, ``upd`` of an axis scatter) do.
     """
-    values = {"updates"} if scatter else gather_storage.VALUES
+    values = {"updates", "upd"} if scatter else gather_storage.VALUES
     return name in values and gather_storage.extended(dtype)
 
 

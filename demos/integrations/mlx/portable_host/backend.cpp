@@ -2303,16 +2303,24 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
 void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   constexpr uint64_t max_storage_elements = (uint64_t(1) << 28) - 33;
-  // The 32-bit types whose atomics every target provides.
+  // The 32-bit types whose atomics every target provides, and, as in
+  // indexing.cpp, a complex64 sum: Sum::atomic_update adds its real and
+  // imaginary float32 lanes separately, so the output binds as two 32-bit
+  // atomic words per element.
+  const bool complex_sum = out.dtype() == complex64 && reduce_type_ == Sum;
+  const uint64_t lanes = complex_sum ? 2 : 1;
   if (inputs.size() != 3 ||
-      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32) ||
+      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32 &&
+       !complex_sum) ||
       inputs[0].dtype() != out.dtype() || inputs[2].dtype() != out.dtype() ||
       inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
       inputs[1].ndim() != out.ndim() || inputs[2].shape() != inputs[1].shape() ||
-      axis_ < 0 || axis_ >= out.ndim() || out.size() > max_storage_elements ||
+      axis_ < 0 || axis_ >= out.ndim() || out.size() * lanes > max_storage_elements ||
       inputs[1].size() > max_storage_elements ||
       (reduce_type_ != None && reduce_type_ != Sum)) {
-    throw std::invalid_argument("CrossTL axis scatter requires bounded int32, uint32 or float32 arrays.");
+    throw std::invalid_argument(
+        "CrossTL axis scatter requires bounded int32, uint32 or float32 arrays, "
+        "or a bounded complex64 sum.");
   }
   const auto index_dtype = inputs[1].dtype();
   if (index_dtype != int32 && index_dtype != uint32 &&
@@ -2340,7 +2348,7 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto idx = gather_input(inputs[1]);
   const auto update_span = gather_span(upd, max_storage_elements);
   const auto index_span = gather_span(idx, max_storage_elements);
-  const std::string entry = std::string("scatter_axis") + storage_type(out.dtype()) +
+  const std::string entry = std::string("scatter_axis") + cast_type(out.dtype()) +
       storage_type(index_dtype) + (reduce_type_ == None ? "_none_int" : "_sum_int") +
       (upd.flags().row_contiguous ? "c" : "nc") + (idx.flags().row_contiguous ? "c" : "nc");
   require_entry(entry);
@@ -2369,9 +2377,9 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto* const update_data = static_cast<uint8_t*>(const_cast<void*>(upd.data<void>()));
   auto* const index_data = static_cast<uint8_t*>(const_cast<void*>(idx.data<void>()));
   CrosstlMlxBuffer buffers[] = {
-      {"upd", storage_type(upd.dtype()), update_data, update_span, 0},
+      {"upd", cast_type(upd.dtype()), update_data, update_span, 0},
       {"indices", storage_type(idx.dtype()), index_data, index_span, 0},
-      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
+      {"out", cast_type(out.dtype()), out.data<void>(), out.size(), 1},
       {"shape", "int32", shape.data(), shape.size(), 0},
       {"upd_strides", "int64", update_strides.data(), update_strides.size(), 0},
       {"idx_strides", "int64", index_strides.data(), index_strides.size(), 0},

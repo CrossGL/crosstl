@@ -444,6 +444,16 @@ def test_axis_scatter_uploads_initialized_output_and_guards_writeback(
 
 
 def scatter_event(tmp_path, case, target="metal", launch=None):
+    """A retained axis-scatter event for ``case``, or for a prebuilt ``launch``.
+
+    A complex64 sum uploads its updates as ``element_storage`` lane pairs and
+    its output, like its readback, as two raw atomic words per element.
+    """
+    from demos.integrations.mlx.portable_host.element_storage import (
+        COMPLEX_LAYOUT,
+        buffer_words,
+        packet,
+    )
     from demos.integrations.mlx.tests.host.test_portable_gather import evidence_event
 
     event = evidence_event(tmp_path)
@@ -465,7 +475,11 @@ def scatter_event(tmp_path, case, target="metal", launch=None):
     event["scatterValues"] = (
         words(np, expected)
         if case["dtype"] == "float32"
-        else expected.reshape(-1).tolist()
+        else (
+            expected.reshape(-1).view(np.uint32).tolist()
+            if case["dtype"] == "complex64"
+            else expected.reshape(-1).tolist()
+        )
     )
     event["scatterGuardValues"] = runtime.COPY_GUARD.copy()
     event["scatterStorageType"] = case["dtype"]
@@ -490,6 +504,15 @@ def scatter_event(tmp_path, case, target="metal", launch=None):
     }
     for name, buffer in supplied.items():
         kind = buffer.dtype.decode()
+        if kind == "complex64" and name == "upd":
+            value = packet(kind, target, buffer_words(buffer, kind))
+            event["inputs"][name] = value
+            request["buffers"][name] = {
+                **{key: item for key, item in value.items() if key != "values"},
+                "binding": {"metadata": {"scalarLayout": dict(COMPLEX_LAYOUT)}},
+            }
+            continue
+        lanes = scatter_layout.ATOMIC_LANES.get(kind, 1) if name == "out" else 1
         dtype = (
             scatter_layout.atomic_storage_dtype(kind, target) if name == "out" else kind
         )
@@ -497,8 +520,12 @@ def scatter_event(tmp_path, case, target="metal", launch=None):
             ctypes.cast(
                 buffer.data,
                 ctypes.POINTER(
-                    (ctypes.c_uint32 if kind == "float32" else runtime.TYPES[kind])
-                    * buffer.count
+                    (
+                        ctypes.c_uint32
+                        if kind == "float32" or lanes > 1
+                        else runtime.TYPES[kind]
+                    )
+                    * (buffer.count * lanes)
                 ),
             ).contents
         )

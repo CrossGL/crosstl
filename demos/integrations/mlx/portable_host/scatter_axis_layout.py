@@ -4,7 +4,10 @@ The pinned ``indexing.cpp`` instantiates ``scatter_axis`` for every MLX dtype
 with replacement and additive updates. The host runs the 32-bit types whose
 atomics every target provides: int32, uint32 and float32. Float32 outputs
 are raw binary32 words; OpenGL keeps them in uint32 atomics
-(``scatter_layout.atomic_storage_dtype``).
+(``scatter_layout.atomic_storage_dtype``). As in MLX's
+``ScatterAxis::eval_gpu``, complex64 is accepted only for sums: the output
+binds as two 32-bit atomic words per element (``scatter_layout.ATOMIC_LANES``)
+and its word count must stay within the storage bound.
 
 Storage follows the general gather's bound. Each launch keeps the portable
 per-axis workgroup limit: MLX's grid is [post, index axis, pre], and the host
@@ -24,6 +27,7 @@ from demos.integrations.mlx.portable_host.gather_layout import (
     TYPES,
     values,
 )
+from demos.integrations.mlx.portable_host.scatter_layout import ATOMIC_LANES
 
 METADATA = {
     "shape": "int32",
@@ -39,13 +43,15 @@ METADATA = {
 
 def signature(entry):
     match = re.fullmatch(
-        r"scatter_axis(int32|uint32|float32)(int32|uint32|int64|uint64)_(none|sum)_int"
-        r"(c|nc)(c|nc)",
+        r"scatter_axis(?:(int32|uint32|float32)(int32|uint32|int64|uint64)_(none|sum)"
+        r"|(complex64)(int32|uint32|int64|uint64)_(sum))_int(c|nc)(c|nc)",
         entry,
     )
     if match is None:
         raise ValueError("Unsupported native axis-scatter entry")
-    dtype, index_dtype, operation, update, index = match.groups()
+    groups = match.groups()
+    dtype, index_dtype, operation = groups[0:3] if groups[0] else groups[3:6]
+    update, index = groups[6:]
     return dtype, index_dtype, operation, update == "c", index == "c"
 
 
@@ -75,7 +81,11 @@ def validate(entry, buffers, logical_size, execution):
         entry
     )
     dtypes = {**METADATA, "upd": dtype, "indices": index_dtype, "out": dtype}
-    if set(buffers) != set(dtypes) or not 0 < logical_size <= MAX_STORAGE_ELEMENTS:
+    lanes = ATOMIC_LANES[dtype]
+    if (
+        set(buffers) != set(dtypes)
+        or not 0 < logical_size * lanes <= MAX_STORAGE_ELEMENTS
+    ):
         raise ValueError("Native axis-scatter buffers or output size do not match")
     for name, buffer in buffers.items():
         if (
@@ -174,5 +184,6 @@ def validate(entry, buffers, logical_size, execution):
         "axis": axis,
         "updateCount": math.prod(grid),
         "outputCount": logical_size,
-        "maximumIndex": logical_size - 1,
+        # The atomic words of the output are its largest index space.
+        "maximumIndex": logical_size * lanes - 1,
     }

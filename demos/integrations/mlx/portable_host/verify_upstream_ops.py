@@ -417,6 +417,7 @@ AUTOGRAD_TESTS = (
             "split_against_slice",
             "stop_gradient",
             "stop_gradient_computed_indices",
+            "take_along_axis_complex_vjp",
             "topk_grad",
             "transform_releases_captures",
             "update_state",
@@ -757,6 +758,11 @@ TARGET_EXCLUSIONS = {
         "test_reduce.TestReduce.test_arg_reduce": "CrossGL/crosstl#2120",
         "test_bf16.TestBF16.test_arg_reduction_ops": "CrossGL/crosstl#2120",
         **SORTED_GATHER_EXCLUSIONS,
+        # Sum<complex64_t>::atomic_update passes a float word view of its
+        # atomic output to a helper pointer parameter, which DirectX refuses.
+        "test_autograd.TestAutograd.test_take_along_axis_complex_vjp": (
+            "CrossGL/crosstl#4025"
+        ),
     },
 }
 # Source-specialized indexing kernels by entry prefix, longest prefix first.

@@ -1420,8 +1420,16 @@ outputs travel as raw binary32 words; OpenGL keeps them in uint32 atomics, as
 the general scatter does. Public
 `put_along_axis` operations use replacement; vector-Jacobian products of
 `take_along_axis` exercise additive scatter through MLX's own differentiation
-rules. Indices may be int32, uint32, int64 or uint64. Other output types and
-reduction operations fail explicitly.
+rules. Indices may be int32, uint32, int64 or uint64. As in MLX and the general
+scatter, complex64 is accepted only for addition: the output binds as two
+32-bit atomic words per element, within the same bound in words, updates
+travel as float32 lane pairs, and each lane follows the float32 exactness rule
+of the audit. `test_autograd.TestAutograd.test_take_along_axis_complex_vjp`
+runs in the `autograd` group on Metal and OpenGL. DirectX excludes it until
+helper pointer parameters accept the float word view that
+`Sum<complex64_t>::atomic_update` passes them
+([#4025](https://github.com/CrossGL/crosstl/issues/4025)). Other output types
+and reduction operations fail explicitly.
 
 The adapter first copies the source with a translated copy kernel, preserving
 the source even when updates alias it. Positive and zero strides retain their
