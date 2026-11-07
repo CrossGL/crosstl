@@ -1,5 +1,10 @@
 """Binary32 base-two logarithms with independent operand and accuracy policies."""
 
+# Calls the base-two logarithm profiles govern. log10(x) is computed as the
+# profiled log2(x) times log10(2), the nearest binary32 value of which is used.
+LOG2_PROFILED_OPERATIONS = frozenset({"log2", "log10"})
+LOG10_OF_TWO = "0.30102999566398119521"
+
 
 def binary32_log2_support(name, operand_profile, accuracy_profile):
     prefix = ""
