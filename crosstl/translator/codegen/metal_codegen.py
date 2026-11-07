@@ -415,6 +415,7 @@ from .metal_keyword_identifiers import (
 from .metal_library_functions import rename_msl_library_functions
 from .metal_library_structs import is_metal_library_struct
 from .metal_matrix_builtins import MetalMatrixBuiltins
+from .metal_member_attributes import attach_member_attributes
 from .metal_namespace_names import rename_metal_namespace_names
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
@@ -4907,9 +4908,11 @@ class MetalCodeGen(
                     member, semantic, struct_name, default_member_semantics
                 )
                 interpolation_attr = self.metal_interpolation_attribute_suffix(member)
+                declaration = attach_member_attributes(
+                    resource_array_declaration, member.name, abi_attr
+                )
                 return (
-                    f"    {resource_array_declaration}{abi_attr}{semantic_attr}"
-                    f"{interpolation_attr};\n",
+                    f"    {declaration}{semantic_attr}{interpolation_attr};\n",
                     set(),
                 )
 
@@ -4958,9 +4961,11 @@ class MetalCodeGen(
                     member
                 )
                 if resource_array_declaration is not None:
+                    declaration = attach_member_attributes(
+                        resource_array_declaration, member.name, abi_attr
+                    )
                     return (
-                        f"    {resource_array_declaration}{abi_attr}{semantic_attr}"
-                        f"{interpolation_attr};\n",
+                        f"    {declaration}{semantic_attr}{interpolation_attr};\n",
                         set(),
                     )
             address_space_declaration = self.format_address_space_parameter_declaration(
@@ -4975,9 +4980,11 @@ class MetalCodeGen(
                         self.convert_type_node_to_string(member.member_type)
                     )
                 )
+                declaration = attach_member_attributes(
+                    address_space_declaration, member.name, abi_attr
+                )
                 return (
-                    f"    {address_space_declaration}{abi_attr}{semantic_attr}"
-                    f"{interpolation_attr};\n",
+                    f"    {declaration}{semantic_attr}{interpolation_attr};\n",
                     dependencies,
                 )
             if str(type(member.member_type)).find("ArrayType") != -1:
@@ -28221,6 +28228,18 @@ class MetalCodeGen(
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
             return f"{operator}{operand}"
+        elif isinstance(expr, TernaryOpNode):
+            # A conditional extent such as `[size == 0 ? 1 : size]` binds below
+            # every binary operator, so it is parenthesized inside one.
+            condition = self.safe_expression_to_string_with_precedence(
+                expr.condition, 1
+            )
+            true_value = self.safe_expression_to_string_with_precedence(expr.true_expr)
+            false_value = self.safe_expression_to_string_with_precedence(
+                expr.false_expr
+            )
+            expression = f"{condition} ? {true_value} : {false_value}"
+            return f"({expression})" if parent_precedence > 0 else expression
         else:
             # Fallback - avoid calling generate_expression to prevent infinite recursion
             return str(expr)

@@ -440,8 +440,10 @@ class MetalParser:
         self.namespace_aliases = {}
         self.namespace_scope_stack = []
         self.using_namespace_directives = []
+        self.using_declarations = []
         self.last_struct_type_aliases = []
         self.last_struct_constructors = []
+        self.last_struct_declares_assignment_operator = False
         self.last_struct_call_operator_declarations = []
         self.last_struct_nested_aggregates = []
         self.last_type_specifier_qualifier_contract = {
@@ -747,6 +749,7 @@ class MetalParser:
             self.template_specialization_limit_source
         )
         shader.using_namespace_directives = list(self.using_namespace_directives)
+        shader.using_declarations = list(self.using_declarations)
         shader.namespace_aliases = dict(self.namespace_aliases)
         shader.function_prototypes = dict(self.function_prototypes)
         self.associate_out_of_line_call_operators(shader)
@@ -1803,7 +1806,10 @@ class MetalParser:
                 )
             return None
         if self.is_using_declaration_start():
-            self.parse_using_declaration()
+            target_name = self.parse_using_declaration()
+            self.using_declarations.append(
+                {"namespace": self.current_namespace(), "target": target_name}
+            )
             return None
         alias_name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -1848,8 +1854,9 @@ class MetalParser:
         )
 
     def parse_using_declaration(self):
-        self.parse_scoped_identifier()
+        target_name = self.parse_scoped_identifier()
         self.eat("SEMICOLON")
+        return target_name
 
     def is_union_alias_start(self):
         return self.current_token == ("IDENTIFIER", "union")
@@ -2879,6 +2886,9 @@ class MetalParser:
         struct_node.base_types = base_types
         struct_node.type_aliases = list(self.last_struct_type_aliases)
         struct_node.constructors = list(self.last_struct_constructors)
+        struct_node.declares_assignment_operator = (
+            self.last_struct_declares_assignment_operator
+        )
         struct_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -2940,6 +2950,9 @@ class MetalParser:
         class_node.aggregate_kind = "class"
         class_node.type_aliases = list(self.last_struct_type_aliases)
         class_node.constructors = list(self.last_struct_constructors)
+        class_node.declares_assignment_operator = (
+            self.last_struct_declares_assignment_operator
+        )
         class_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -3022,6 +3035,9 @@ class MetalParser:
         union_node.aggregate_kind = "union"
         union_node.type_aliases = list(self.last_struct_type_aliases)
         union_node.constructors = list(self.last_struct_constructors)
+        union_node.declares_assignment_operator = (
+            self.last_struct_declares_assignment_operator
+        )
         union_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -3102,6 +3118,7 @@ class MetalParser:
         constructors = []
         call_operator_declarations = []
         nested_aggregates = []
+        declares_assignment_operator = False
 
         def capture_nested_aggregate(nested):
             if nested is None:
@@ -3157,6 +3174,9 @@ class MetalParser:
                         self.parse_template_constructor_declaration(owner_name)
                     )
                     continue
+                declares_assignment_operator |= (
+                    self.skipped_member_declares_assignment_operator()
+                )
                 self.skip_template_declaration()
                 continue
             member_alignas = self.parse_alignas_specifiers()
@@ -3193,12 +3213,16 @@ class MetalParser:
                 continue
             vtype, qualifiers = self.parse_type_specifier()
             if self.current_token[0] == "OPERATOR":
+                declares_assignment_operator |= (
+                    self.skipped_member_declares_assignment_operator()
+                )
                 self.skip_struct_method()
                 continue
             qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
             var_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
             member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             if var_name == "operator":
+                declares_assignment_operator |= self.current_token[0] == "EQUALS"
                 self.skip_struct_method()
                 continue
             if self.current_token[0] == "LPAREN":
@@ -3236,7 +3260,28 @@ class MetalParser:
         self.last_struct_constructors = constructors
         self.last_struct_call_operator_declarations = call_operator_declarations
         self.last_struct_nested_aggregates = nested_aggregates
+        self.last_struct_declares_assignment_operator = declares_assignment_operator
         return members
+
+    def skipped_member_declares_assignment_operator(self):
+        """Whether the member declaration at the cursor declares ``operator=``.
+
+        The struct parser skips member operators, but a user-declared copy assignment operator replaces the
+        member-wise assignment an implicit conversion would otherwise feed ([class.copy.assign]).
+        """
+        index = self.pos
+        while index + 1 < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type in {"LBRACE", "SEMICOLON", "EOF"}:
+                return False
+            names_operator = token_type == "OPERATOR" or self.tokens[index] == (
+                "IDENTIFIER",
+                "operator",
+            )
+            if names_operator and self.tokens[index + 1][0] == "EQUALS":
+                return True
+            index += 1
+        return False
 
     def is_struct_call_operator_declaration_start(self):
         if not self.is_operator_function_definition():

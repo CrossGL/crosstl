@@ -772,3 +772,32 @@ def test_host_sized_hlsl_is_compiled_with_one_invocation(tmp_path):
         "-D",
         "CROSSGL_WORKGROUP_SIZE_Z=1",
     ]
+
+
+def test_default_less_hlsl_specialization_constants_are_compiled_as_zero(tmp_path):
+    from crosstl.translator.codegen.hlsl_specialization_macros import (
+        render_hlsl_required_specialization_constant,
+    )
+
+    from .validators import hlsl_arguments
+
+    required = tmp_path / "required.hlsl"
+    required.write_text(
+        render_hlsl_required_specialization_constant("has_w", 20, "bool")
+        + render_hlsl_required_specialization_constant("count", 3, "uint")
+        + render_hlsl_required_specialization_constant("has_w", 20, "bool")
+        + "[numthreads(1, 1, 1)]\nvoid CSMain() {}\n"
+    )
+    # Each macro once, in a stable order, as the zero of the constant's type.
+    assert hlsl_arguments(required) == [
+        "-D",
+        "CROSSGL_SPECIALIZE_count=0",
+        "-D",
+        "CROSSGL_SPECIALIZE_has_w=0",
+    ]
+    # A constant with a default declares no macro, and a macro named only in a comment is not a guard.
+    plain = tmp_path / "plain.hlsl"
+    plain.write_text(
+        "// define CROSSGL_SPECIALIZE_has_w\nstatic const bool has_w = true;\n"
+    )
+    assert hlsl_arguments(plain) == []
