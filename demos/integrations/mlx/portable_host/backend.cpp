@@ -3919,7 +3919,9 @@ int qmm_split_k(int M, int N, int K, int group_size) {
 // quantized.cpp qmm: (32, 2, 2) threadgroups over 32 by 32 output tiles,
 // batch parameters bound only for more than one matrix. Affine kernels bind
 // biases; the mxfp4, mxfp8 and nvfp4 kernels bind uint8 scales and no
-// biases, and qmm leaves fp_qmm_t's global scale slot unbound.
+// biases. qmm leaves fp_qmm_t's global scale slot unbound unless QQMatmul
+// (``qq``) passes its weights' nvfp4 global scale, which takes the ``_hgs``
+// kernels; a ``route`` buffer then tells the runtime whose routing to check.
 void dispatch_qmm(
     const array& x,
     const array& w,
@@ -3932,12 +3934,18 @@ void dispatch_qmm(
     int bits,
     int M,
     int N,
-    int K) {
+    int K,
+    const std::optional<array>& global_scale = std::nullopt,
+    bool qq = false) {
   const uint64_t B = out.size() / M / N;
+  if (global_scale && (!transpose || biases)) {
+    throw std::invalid_argument(
+        "CrossTL qmm global scale requires transposed weights without biases.");
+  }
   const std::string entry = std::string(mode) + (transpose ? "_qmm_t_" : "_qmm_n_") +
       quantized_source(out.dtype()) + "_gs_" + std::to_string(group_size) + "_b_" +
       std::to_string(bits) + (transpose ? (N % 32 == 0 ? "_alN_true" : "_alN_false") : "") +
-      (B > 1 ? "_batch_1" : "_batch_0");
+      (B > 1 ? "_batch_1" : "_batch_0") + (global_scale ? "_hgs" : "");
   require_entry(entry);
   const uint32_t tiles_n = (uint32_t(N) + 31) / 32;
   const uint32_t tiles_m = (uint32_t(M) + 31) / 32;
@@ -3968,6 +3976,16 @@ void dispatch_qmm(
       biases ? QuantizedBatchViews(x, w, scales, *biases) : QuantizedBatchViews(x, w, scales);
   if (B > 1) {
     views.bind(buffers);
+  }
+  if (global_scale) {
+    if (global_scale->dtype() != float32 || global_scale->size() != 1) {
+      throw std::invalid_argument("CrossTL quantized matmul requires one float32 global scale.");
+    }
+    buffers.push_back({"global_scale", "float32", data(*global_scale), 1, 0});
+  }
+  static constexpr char qq_route[] = "qqmm";
+  if (qq) {
+    buffers.push_back({"route", "utf8", const_cast<char*>(qq_route), 4, 0});
   }
   const CrosstlMlxLaunch launch{{tiles_n, tiles_m, uint32_t(B)}, {32, 2, 2}};
   quantized_dispatch(entry, buffers, out.size(), launch, "quantized matrix product");
@@ -5100,7 +5118,7 @@ void Quantize::eval_gpu(
 } // namespace mlx::core::fast
 
 // The port of QQMatmul, which quantizes both operands of its product with the
-// quantization and matrix-vector dispatches above.
+// quantization, matrix-vector and matrix-matrix dispatches above.
 #include "mlx/backend/no_gpu/crosstl_qq_matmul.inc"
 // The Hadamard port uses this translation unit's dispatch helpers and copy.
 #include "mlx/backend/no_gpu/crosstl_hadamard.inc"

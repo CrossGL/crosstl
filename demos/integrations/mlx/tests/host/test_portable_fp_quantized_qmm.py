@@ -126,7 +126,13 @@ def test_signature_accepts_exactly_the_routed_instantiations(dtype, mode):
         "mxfp4_qmm_n_float_gs_32_b_4_alN_true_batch_0",
         "mxfp4_qmm_n_float_gs_32_b_4",
         "mxfp4_qmm_t_splitk_float_gs_32_b_4_alN_true_batch_0",
-        "nvfp4_qmm_t_bfloat16_t_gs_16_b_4_alN_true_batch_0_hgs",
+        # instantiate_quantized_qmm_hgs: unbatched bfloat16 nvfp4 qmm_t only.
+        "nvfp4_qmm_t_float_gs_16_b_4_alN_true_batch_0_hgs",
+        "nvfp4_qmm_t_float16_t_gs_16_b_4_alN_false_batch_0_hgs",
+        "nvfp4_qmm_t_bfloat16_t_gs_16_b_4_alN_true_batch_1_hgs",
+        "nvfp4_qmm_t_splitk_bfloat16_t_gs_16_b_4_alN_true_hgs",
+        "nvfp4_qmm_n_bfloat16_t_gs_16_b_4_batch_0_hgs",
+        "mxfp4_qmm_t_bfloat16_t_gs_32_b_4_alN_true_batch_0_hgs",
         "mxfp4_qmm_n_float_gs_32_b_4_batch_0_hgs",
         "affine_qmm_t_float_gs_32_b_4_alN_true_batch_0",
         "mxfp4_gather_qmm_t_float_gs_32_b_4_alN_true",
@@ -135,6 +141,122 @@ def test_signature_accepts_exactly_the_routed_instantiations(dtype, mode):
 def test_signature_refuses_entries_quantized_matmul_never_selects(entry):
     with pytest.raises(ValueError):
         layout.signature(entry)
+
+
+@pytest.mark.parametrize("aligned", ("true", "false"))
+def test_signature_accepts_qqmatmuls_global_scale_kernels(aligned):
+    entry = f"nvfp4_qmm_t_bfloat16_t_gs_16_b_4_alN_{aligned}_batch_0_hgs"
+    info = layout.signature(entry)
+    assert info["globalScale"] and info["kernel"] == "qmm_t"
+    assert not info["batched"] and info["dtype"] == "bfloat16"
+    assert entry.startswith(layout.ENTRY_PREFIXES)
+    # The kernel reads the bound scale, so no inert value replaces it.
+    assert not layout.declares_global_scale(entry)
+    assert layout.matrix_parameters(entry) == ("w", "scales", "x", "y", "global_scale")
+    assert "global_scale" in layout.parameter_names(entry)
+    assert layout.parameter_type(entry, "global_scale") == "float32"
+    unscaled = entry.removesuffix("_hgs")
+    assert layout.declares_global_scale(unscaled)
+    assert "global_scale" not in layout.parameter_names(unscaled)
+
+
+def test_qq_selection_follows_quantized_cpp_qmm_with_a_global_scale():
+    """test_qqmm_global_scale_matrix_kernels's shapes, as QQMatmul routes them."""
+    select = layout.select
+    for m in (32, 64):
+        for k in (96, 128):
+            assert select("nvfp4", "bfloat16", m, 128, k, 1, qq=True) == (
+                "nvfp4_qmm_t_bfloat16_t_gs_16_b_4_alN_true_batch_0_hgs"
+            )
+            assert select("nvfp4", "bfloat16", m, 130, k, 1, qq=True) == (
+                "nvfp4_qmm_t_bfloat16_t_gs_16_b_4_alN_false_batch_0_hgs"
+            )
+    # QQMatmul never splits K, even where QuantizedMatmul would.
+    assert qmm_layout.split_k(32, 128, 1024, 16) > 1
+    assert select("nvfp4", "bfloat16", 32, 128, 1024, 1, qq=True).endswith("_hgs")
+    for arguments in (
+        ("nvfp4", "float32", 32, 128, 96, 1),
+        ("nvfp4", "float16", 32, 128, 96, 1),
+        ("mxfp4", "bfloat16", 32, 128, 96, 1),
+        ("nvfp4", "bfloat16", 32, 128, 96, 2),
+        # K of 80 fills no whole 32-value tile.
+        ("nvfp4", "bfloat16", 32, 128, 80, 1),
+    ):
+        with pytest.raises(ValueError, match="QQMatmul"):
+            select(*arguments, qq=True)
+    with pytest.raises(ValueError, match="QQMatmul"):
+        select("nvfp4", "bfloat16", 32, 128, 96, 1, transpose=False, qq=True)
+    with pytest.raises(ValueError, match="vector products"):
+        select("nvfp4", "bfloat16", 17, 128, 96, 1, qq=True)
+
+
+def qq_buffers(m, n, k, *, scale_count=1):
+    """qq_matmul.inc's binding of one globally scaled product to dispatch_qmm."""
+    entry = layout.select("nvfp4", "bfloat16", m, n, k, 1, qq=True)
+    words, groups = k * 4 // 32, k // 16
+    data = {
+        "w": ("uint32", [0] * (n * words), 0),
+        "scales": ("uint8", [0] * (n * groups), 0),
+        "x": ("bfloat16", [0] * (m * k), 0),
+        "y": ("bfloat16", [0] * (m * n), 1),
+        "K": ("int32", [k], 0),
+        "N": ("int32", [n], 0),
+        "M": ("int32", [m], 0),
+        "global_scale": ("float32", [0x3FC00000] * scale_count, 0),
+    }
+    memory, buffers = {}, {}
+    for name, (dtype, values, output) in data.items():
+        memory[name] = (CTYPES[dtype] * len(values))(*values)
+        buffers[name] = runtime.Buffer(
+            name.encode(),
+            dtype.encode(),
+            ctypes.addressof(memory[name]),
+            len(values),
+            output,
+        )
+    execution = {
+        "workgroupCount": [-(-n // 32), -(-m // 32), 1],
+        "workgroupSize": [32, 2, 2],
+    }
+    return entry, buffers, memory, execution
+
+
+def test_qq_plan_binds_the_global_scale_under_qqmatmuls_route():
+    entry, buffers, _memory, execution = qq_buffers(64, 130, 96)
+    counts, parameters = layout.read_storage(entry, buffers)
+    assert counts["global_scale"] == 1 and "global_scale" not in parameters
+    metadata = layout.plan(entry, counts, parameters, counts["y"], execution, "qqmm")
+    assert metadata["route"] == "qqmm" and metadata["kernel"] == "qmm_t"
+    assert metadata["splitK"] == 1 and metadata["batches"] == 1
+    # The bound scale is read through its buffer, never replaced.
+    assert "global_scale" not in metadata["parameters"]
+    assert metadata["parameters"]["x_shape"] == [64, 96]
+    # QuantizedMatmul never selects a globally scaled kernel, and QQMatmul's
+    # route never takes one without its scale.
+    with pytest.raises(ValueError, match="routing"):
+        layout.plan(entry, counts, parameters, counts["y"], execution)
+    unscaled = entry.removesuffix("_hgs")
+    with pytest.raises(ValueError, match="routing"):
+        layout.plan(unscaled, counts, parameters, counts["y"], execution, "qqmm")
+    with pytest.raises(ValueError, match="route is unknown"):
+        layout.plan(entry, counts, parameters, counts["y"], execution, "gather_qqmm")
+
+
+@pytest.mark.parametrize("fault", ("missing", "dtype", "count"))
+def test_qq_storage_refuses_an_invalid_global_scale(fault):
+    entry, buffers, memory, execution = qq_buffers(32, 128, 128)
+    if fault == "missing":
+        del buffers["global_scale"]
+    elif fault == "dtype":
+        buffers["global_scale"].dtype = b"int32"
+    else:
+        entry, buffers, memory, execution = qq_buffers(32, 128, 128, scale_count=2)
+        counts, parameters = layout.read_storage(entry, buffers)
+        with pytest.raises(ValueError, match="global scale"):
+            layout.plan(entry, counts, parameters, counts["y"], execution, "qqmm")
+        return
+    with pytest.raises(ValueError):
+        layout.read_storage(entry, buffers)
 
 
 def test_selection_follows_quantized_cpp_for_the_tail_shapes():

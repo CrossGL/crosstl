@@ -1102,9 +1102,12 @@ number of vectors. Without a global scale that is `fp_qmv_quad`, `fp_qmv_wide`,
 binds. QQMatmul's launches carry a `route` buffer that the kernel never binds,
 so the dispatch checks them against QQMatmul's routing rather than
 QuantizedMatmul's. Quantize-dequantize launches cover complete groups, one
-workgroup of 32 lanes (16 for NVFP4) each. The globally scaled bfloat16
-matrix product that `quantized.cpp` sends to `qmm` is refused with a typed
-error before either operand is quantized, so the refusal launches nothing.
+workgroup of 32 lanes (16 for NVFP4) each. Globally scaled bfloat16 products
+of one quantized weight matrix whose `K` fills whole 32-value tiles go to
+`qmm` from the vector limit's rows on, as in `quantized.cpp`: the host has no
+NAX unit, so they run the unbatched `_hgs` instantiations of `fp_qmm_t`,
+never split, with the weights' global scale bound and a `route` of `qqmm`
+that holds each launch to QQMatmul's routing.
 
 `GatherQQMM::eval_gpu` (`gather_qmm.inc`) quantizes both operands the same
 way and sends each gathered product to `quantized.cpp`'s `gather_qmv`:
@@ -1155,7 +1158,8 @@ return early on their reduction, which DirectX and OpenGL software subgroups
 do not lower yet ([#2546](https://github.com/CrossGL/crosstl/issues/2546)),
 so the sorted tests run on Metal alone.
 
-`test_quantized.TestQuantized.test_qqmv`, `test_qqmm`, `test_gather_qqmm`,
+`test_quantized.TestQuantized.test_qqmv`, `test_qqmm`,
+`test_qqmm_global_scale_matrix_kernels`, `test_gather_qqmm`,
 `test_gather_qmm`, `test_gather_matmul_grad`, `test_gather_qmm_matrix_path`,
 `test_gather_qmm_sorted_sliced_weight`, `test_gather_qmm_sorted_unaligned_k`,
 `test_gather_qmm_grad` and `test_gather_qqmm_global_scale_matrix_paths` run in
@@ -1165,6 +1169,9 @@ longest sorted products run in groups of their own on Metal alone:
 `quantized-sorted`, and `test_fp_gather_qmm_non_multiple_of_32` in
 `quantized-fp-tails`. `verify_upstream_ops` refuses a group that runs no test
 on the selected target, and CI excludes those jobs.
+`test_qqmm_global_scale_matrix_kernels` and
+`test_gather_qmm_sorted_nax_large_m` skip unless `mx.metal.is_available()`,
+so the native worker runs them while it reports the host's GPU.
 
 ## General Gather
 

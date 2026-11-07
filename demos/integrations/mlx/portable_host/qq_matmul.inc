@@ -1,14 +1,18 @@
 // Ports mlx/backend/metal/quantized.cpp: QQMatmul::eval_gpu, which quantizes
 // both operands of a floating-point quantized product. crosstl_backend.cpp
 // includes this file after its dispatch helpers, so the port shares that
-// translation unit's quantization and matrix-vector dispatches.
+// translation unit's quantization, matrix-vector and matrix-matrix
+// dispatches.
 //
 // As quantized.cpp does, the weights are quantized with fp_quantized.metal's
 // quantize kernel unless they arrive quantized, the input is quantized and
 // dequantized in place of itself with the quantize_dequantize kernel, and the
 // product runs through dispatch_qmv; an nvfp4 global scale of the weights
-// takes the _hgs kernels. Every launch covers complete quantization groups,
-// one workgroup each, as the host's quantize launches do.
+// takes the _hgs kernels. Globally scaled bfloat16 products of quantized 2-D
+// weights with whole 32-value K tiles and at least the vector limit's rows
+// run through qmm's _hgs kernels instead. Every quantization launch covers
+// complete quantization groups, one workgroup each, as the host's quantize
+// launches do.
 
 namespace mlx::core {
 namespace {
@@ -135,19 +139,6 @@ void QQMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     throw std::invalid_argument(
         "CrossTL quantized-input matmul requires matching floating types.");
   }
-  if (global && w_quantized && inputs[1].ndim() == 2 && dtype == bfloat16 &&
-      inputs[0].ndim() >= 1) {
-    // quantized.cpp's qmm with the weights' global scale, refused before the
-    // operands are quantized: quantization keeps the shapes that choose it.
-    const int K = inputs[0].shape(-1);
-    const int N = out.shape(-1);
-    const int64_t M = K > 0 ? int64_t(inputs[0].size() / K) : 0;
-    if (K % 32 == 0 && M >= qq_vector_limit(K, N)) {
-      throw std::invalid_argument(
-          "CrossTL quantized-input matmul does not yet route globally scaled "
-          "bfloat16 matrix products.");
-    }
-  }
   std::optional<array> global_x, global_w;
   if (global) {
     global_x = dense_input(inputs[inputs.size() - 2]);
@@ -175,6 +166,15 @@ void QQMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (K <= 0 || M <= 0 || N <= 0 || out.size() % (uint64_t(M) * N) != 0) {
     throw std::invalid_argument(
         "CrossTL quantized-input matmul shape is empty or inconsistent.");
+  }
+  if (global && w_quantized && non_batched && dtype == bfloat16 && K % 32 == 0 &&
+      M >= qq_vector_limit(K, N)) {
+    // quantized.cpp's qmm with the weights' global scale: the host has no
+    // NAX unit for qmm_nax, and the weights are one matrix.
+    dispatch_qmm(
+        x, w_q, scales_w, std::nullopt, out, mode, true, group_size_, bits_, M, N, K,
+        global_w, true);
+    return;
   }
   dispatch_fp_quantized_matvec(
       x, w_q, scales_w, out, mode, true, group_size_, bits_, M, N, K, global_w, true);

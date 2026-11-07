@@ -355,6 +355,7 @@ METAL_PATH_TESTS = (
     "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
     "test_ops.TestOps.test_hadamard_m_only",
     "test_quantized.TestQuantized.test_gather_qmm_sorted_nax_large_m",
+    "test_quantized.TestQuantized.test_qqmm_global_scale_matrix_kernels",
     *(
         name
         for name in CUSTOM_KERNEL_TESTS
@@ -505,17 +506,21 @@ TORCH_GROUPS = ("torch-conv", "torch-layers", "torch-upsample")
 # test_quantized's products whose operands QQMatmul and GatherQQMM quantize:
 # the block quantize and quantize-dequantize kernels, dispatch_qmv's mxfp8
 # and nvfp4 routes and gather_qmv's, among them the kernels that read the
-# weights' global scales. GatherQMM's gathered products of quantized weights
-# follow: gather_qmv, gather_qvm and gather_qmm for affine and block-scaled
-# weights, in float32 and, for the matrix path, bfloat16; then the sorted
-# single-row products gather_qmm_rhs multiplies, among them GatherQQMM's
-# globally scaled bfloat16 products (gather_qqmm_global_scale_matrix_paths).
+# weights' global scales, and qmm's for QQMatmul's globally scaled bfloat16
+# matrix products (qqmm_global_scale_matrix_kernels, which runs only where
+# mx.metal.is_available(): METAL_PATH_TESTS). GatherQMM's gathered products
+# of quantized weights follow: gather_qmv, gather_qvm and gather_qmm for
+# affine and block-scaled weights, in float32 and, for the matrix path,
+# bfloat16; then the sorted single-row products gather_qmm_rhs multiplies,
+# among them GatherQQMM's globally scaled bfloat16 products
+# (gather_qqmm_global_scale_matrix_paths).
 QQ_MATMUL_TESTS = _tests(
     "test_quantized",
     "TestQuantized",
     (
         "qqmm",
         "qqmv",
+        "qqmm_global_scale_matrix_kernels",
         "gather_qqmm",
         "gather_qmm",
         "gather_matmul_grad",

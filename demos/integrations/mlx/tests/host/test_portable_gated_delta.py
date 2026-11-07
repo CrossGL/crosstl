@@ -559,12 +559,14 @@ def test_runtime_host_port_and_inventory_route_gated_delta():
         "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
         "test_ops.TestOps.test_hadamard_m_only",
         "test_quantized.TestQuantized.test_gather_qmm_sorted_nax_large_m",
+        "test_quantized.TestQuantized.test_qqmm_global_scale_matrix_kernels",
     }
     assert set(upstream_module_groups.METAL_PATH_TESTS) <= set(
         tests
         + upstream_module_groups.HADAMARD_TESTS
         + verify_upstream_ops.CONV_TESTS
         + upstream_module_groups.CUSTOM_KERNEL_TESTS
+        + upstream_module_groups.QQ_MATMUL_TESTS
         + upstream_module_groups.QUANTIZED_SORTED_TESTS
     )
     assert verify_upstream_ops.METAL_PATH_TESTS <= verify_upstream_ops.GPU_ONLY_TESTS

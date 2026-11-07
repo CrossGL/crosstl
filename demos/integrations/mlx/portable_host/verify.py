@@ -111,7 +111,7 @@ COUNTS = (0, 1, 7, 257)
 # each dtype check proves that refusal happens with no native dispatch.
 FLOAT64_REFUSAL = "float64 is not supported on the GPU"
 NEGATIVE_CHECKS = {
-    "unsupported": "does not yet route globally scaled bfloat16 matrix products",
+    "unsupported": "blocked head-dim-512 attention",
     "over-limit": "Arange currently supports at most 65535 elements",
     "missing": "artifact",
     "unary-dtype": FLOAT64_REFUSAL,
@@ -191,17 +191,18 @@ def worker(args):
     if args.worker in checks:
         try:
             if args.worker == "unsupported":
-                # The host refuses the globally scaled bfloat16 matrix products
-                # QQMatmul sends to qmm before it quantizes anything: 32 rows
-                # reach the vector limit of K = 64. Quantized nvfp4 weights and
-                # constant operands of the output type need no copy or cast.
-                value = mx.qqmm(
-                    mx.array(np.ones((32, 64), dtype=np.float32), dtype=mx.bfloat16),
-                    mx.array(np.zeros((32, 8), dtype=np.uint32)),
-                    mx.array(np.full((32, 4), 56, dtype=np.uint8)),
-                    mode="nvfp4",
-                    global_scale_x=mx.array(1.0, dtype=mx.float32),
-                    global_scale_w=mx.array(1.0, dtype=mx.float32),
+                # Without NAX, scaled_dot_product_attention.cpp sends causal
+                # half-precision attention of 512-wide heads over at least
+                # 1024 queries to its blocked kernels, which the host refuses
+                # before it launches anything. Contiguous operands of one
+                # type need no copy or cast.
+                operand = mx.array(np.ones((1, 1, 1024, 512), dtype=np.float16))
+                value = mx.fast.scaled_dot_product_attention(
+                    operand,
+                    operand,
+                    operand,
+                    scale=1.0,
+                    mask="causal",
                     stream=mx.gpu,
                 )
             elif args.worker == "over-limit":

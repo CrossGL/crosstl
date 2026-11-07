@@ -210,7 +210,7 @@ def test_qq_storage_refuses_an_invalid_global_scale(fault):
 
 @pytest.mark.parametrize("fault", ("unknown", "dtype", "unrouted"))
 def test_route_buffers_are_read_only_where_a_layout_takes_them(fault):
-    from demos.integrations.mlx.portable_host import fp_qmm_layout
+    from demos.integrations.mlx.portable_host import qmm_layout
 
     text = b"gemm" if fault == "unknown" else b"qqmm"
     memory = ctypes.create_string_buffer(text)
@@ -221,7 +221,7 @@ def test_route_buffers_are_read_only_where_a_layout_takes_them(fault):
         len(text),
         0,
     )
-    target = fp_qmm_layout if fault == "unrouted" else layout
+    target = qmm_layout if fault == "unrouted" else layout
     with pytest.raises(ValueError, match="route"):
         matmul_dispatch._route(target, buffer, target.LABEL)
     assert matmul_dispatch._route(target, None, target.LABEL) is None
@@ -240,21 +240,24 @@ def test_backend_ports_qqmatmul_as_quantized_cpp_does():
         '(global_scale ? "_hgs_true" : "_hgs_false")',
         # dispatch_qmv with the weights' global scale and QQMatmul's route.
         "x, w_q, scales_w, out, mode, true, group_size_, bits_, M, N, K, global_w, true);",
+        # qmm with the weights' global scale for globally scaled bfloat16
+        # products of one quantized matrix from the vector limit's rows on.
+        "if (global && w_quantized && non_batched && dtype == bfloat16 && K % 32 == 0 &&\n"
+        "      M >= qq_vector_limit(K, N)) {",
+        "x, w_q, scales_w, std::nullopt, out, mode, true, group_size_, bits_, M, N, K,\n"
+        "        global_w, true);",
     ):
         assert text in port, text
-    # qmm's globally scaled bfloat16 route is refused, not approximated, and
-    # before any operand is quantized, so the refusal launches nothing.
+    # Every globally scaled product now runs; none is refused.
+    assert "does not yet route" not in port
     start = port.index("void QQMatmul::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]
-    assert body.count("does not yet route globally scaled") == 1
-    assert body.index("does not yet route globally scaled") < body.index(
-        "qq_weights(stream(), inputs[1], scales, global_w, mode_, group_size_, bits_);"
-    )
+    assert body.index("dispatch_qmm(") < body.index("dispatch_fp_quantized_matvec(")
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert (
         "} // namespace mlx::core::fast\n\n"
         "// The port of QQMatmul, which quantizes both operands of its product with the\n"
-        "// quantization and matrix-vector dispatches above.\n"
+        "// quantization, matrix-vector and matrix-matrix dispatches above.\n"
         '#include "mlx/backend/no_gpu/crosstl_qq_matmul.inc"\n'
     ) in backend
     for text in (
@@ -263,8 +266,19 @@ def test_backend_ports_qqmatmul_as_quantized_cpp_does():
         '(B > 1 ? "_batch_1" : "_batch_0") + (global_scale ? "_hgs" : "");',
         'buffers.push_back({"global_scale", "float32", data(*global_scale), 1, 0});',
         'buffers.push_back({"route", "utf8", const_cast<char*>(qq_route), 4, 0});',
+        # dispatch_qmm takes QQMatmul's global scale to the _hgs kernels.
+        '(B > 1 ? "_batch_1" : "_batch_0") + (global_scale ? "_hgs" : "");\n'
+        "  require_entry(entry);\n"
+        "  const uint32_t tiles_n",
+        "if (global_scale && (!transpose || biases)) {",
     ):
         assert text in backend, text
+    assert (
+        backend.count(
+            'buffers.push_back({"route", "utf8", const_cast<char*>(qq_route), 4, 0});'
+        )
+        == 2
+    )
     # prepare replaces no_gpu's NO_GPU(QQMatmul) and installs the port;
     # test_portable_host checks the adapted tree.
     adapter = Path(prepare.__file__).read_text(encoding="utf-8")
@@ -276,6 +290,7 @@ def test_qq_products_run_in_their_own_upstream_group():
     assert upstream_module_groups.GROUPS["quantized-products"] == (
         "test_quantized.TestQuantized.test_qqmm",
         "test_quantized.TestQuantized.test_qqmv",
+        "test_quantized.TestQuantized.test_qqmm_global_scale_matrix_kernels",
         "test_quantized.TestQuantized.test_gather_qqmm",
         "test_quantized.TestQuantized.test_gather_qmm",
         "test_quantized.TestQuantized.test_gather_matmul_grad",
@@ -295,15 +310,20 @@ def test_qq_products_run_in_their_own_upstream_group():
     )
     # test_qqmm and the GatherQQMM tests skip on MLX's CPU, which has neither
     # QQMatmul nor GatherQQMM, so the CPU worker must skip them and the
-    # native worker must run them; the large sorted product runs only where
-    # mx.metal.is_available(). test_qqmv and MLX's CPU GatherQMM tests run on
-    # both.
-    assert (
-        "test_quantized.TestQuantized.test_gather_qmm_sorted_nax_large_m"
-        in verify_upstream_ops.METAL_PATH_TESTS
-    )
+    # native worker must run them; the large sorted product and QQMatmul's
+    # globally scaled matrix products run only where mx.metal.is_available().
+    # test_qqmv and MLX's CPU GatherQMM tests run on both.
+    for name in (
+        "test_gather_qmm_sorted_nax_large_m",
+        "test_qqmm_global_scale_matrix_kernels",
+    ):
+        assert (
+            f"test_quantized.TestQuantized.{name}"
+            in verify_upstream_ops.METAL_PATH_TESTS
+        )
     for name in (
         "test_qqmm",
+        "test_qqmm_global_scale_matrix_kernels",
         "test_gather_qqmm",
         "test_gather_qqmm_global_scale_matrix_paths",
         "test_gather_qmm_sorted_nax_large_m",
