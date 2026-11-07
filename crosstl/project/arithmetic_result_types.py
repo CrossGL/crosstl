@@ -15,7 +15,12 @@ The result now follows the Metal compiler (checked with ``xcrun metal -std=metal
   vector with a ``bfloat`` scalar and a ``bfloat`` vector with a ``half`` or ``float`` scalar (ill-formed);
 * vectors of different types, ``bool`` vectors, and ``%``, ``|``, ``&``, ``^`` on floating operands are untyped.
 
-Other operand types (structs, matrices, pointers) are typed only when all operands have the same type.
+Pointer offsets follow [expr.add]: ``p + n``, ``n + p`` and ``p - n`` have the pointer's type. Adding two
+pointers is ill-formed, so one pointer among the operands of ``+`` types the sum even when the offset is
+untyped (``loader.dst + i * pack()`` with a loop counter ``i``). ``p - q`` is ``ptrdiff_t``, so a difference
+keeps the pointer type only when every subtrahend is typed and is not a pointer.
+
+Other operand types (structs, matrices) are typed only when all operands have the same type.
 """
 
 from __future__ import annotations
@@ -113,11 +118,39 @@ def _combine(preprocessor, left: str, right: str, operator: str) -> str | None:
     return left if _FLOATING_RANK[left_kind] > _FLOATING_RANK[right_kind] else right
 
 
+def _is_pointer(type_text: str | None) -> bool:
+    return bool(type_text) and "*" in type_text
+
+
+def _pointer_offset_type(
+    operand_types: Sequence[str | None], operator: str
+) -> str | None:
+    """The pointer type of ``p + n + ...``, ``n + p`` or ``p - n - ...``, or None.
+
+    Returns None when no operand is a pointer, so the arithmetic rules apply.
+    """
+    pointers = [operand for operand in operand_types if _is_pointer(operand)]
+    if operator not in {"+", "-"} or len(pointers) != 1:
+        return None
+    if operator == "+":
+        return pointers[0]
+    first, *subtrahends = operand_types
+    if _is_pointer(first) and all(
+        subtrahend and not _is_pointer(subtrahend) for subtrahend in subtrahends
+    ):
+        return first
+    return None
+
+
 def arithmetic_result_type(
     preprocessor, operand_types: Sequence[str | None], operator: str
 ) -> str | None:
     """The type of ``a op b op c ...`` (left to right) for operands of the given types."""
-    if not operand_types or any(not operand for operand in operand_types):
+    if not operand_types:
+        return None
+    if any(_is_pointer(operand) for operand in operand_types):
+        return _pointer_offset_type(operand_types, operator)
+    if any(not operand for operand in operand_types):
         return None
     result = operand_types[0]
     for operand in operand_types[1:]:
