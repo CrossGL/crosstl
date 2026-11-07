@@ -41,3 +41,99 @@ def test_overloads_with_one_return_type_still_type_the_call(tmp_path):
     output = _translate(tmp_path, "float", "half")
     assert "g_float(" in output
     assert "g_half" not in output
+
+
+UNDEDUCED_AUTO = """#include <metal_stdlib>
+using namespace metal;
+template <typename T, typename U>
+T smaller(T a, U b) { return a < T(b) ? a : T(b); }
+kernel void k(device uint* out [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+  const auto limit = undeclared_source_of_a_value();
+  out[tid] = smaller(tid, limit);
+}
+"""
+
+
+def test_an_undeduced_auto_local_is_not_a_template_argument():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+    from crosstl.project.pipeline import _metal_expression_type
+
+    preprocessor = MetalPreprocessor()
+    environment = {"limit": "auto", "begin": "uint", "pointer": "const auto*"}
+    assert _metal_expression_type(preprocessor, "limit", environment, {}) is None
+    assert (
+        _metal_expression_type(preprocessor, "begin + limit", environment, {}) is None
+    )
+    assert _metal_expression_type(preprocessor, "pointer", environment, {}) is None
+    assert _metal_expression_type(preprocessor, "begin", environment, {}) == "uint"
+    # Increments keep their operand's type; `+` alone does not.
+    assert _metal_expression_type(preprocessor, "begin++", environment, {}) == "uint"
+    assert _metal_expression_type(preprocessor, "--begin", environment, {}) == "uint"
+    assert _metal_expression_type(preprocessor, "limit++", environment, {}) is None
+
+
+ARITHMETIC = """#include <metal_stdlib>
+using namespace metal;
+template <typename T>
+T g(T v) {{ return v; }}
+kernel void k(device {out_type}* out [[buffer(0)]], constant long& big [[buffer(1)]],
+              constant float4& v4 [[buffer(2)]], constant half& h [[buffer(3)]],
+              uint tid [[thread_position_in_grid]]) {{
+  uint u = tid;
+  long l = big;
+  float f = float(tid);
+  short s = short(tid);
+  out[tid] = {out_cast}g({argument});
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    "argument,out_type,out_cast,specialization",
+    (
+        # uint + long is long; the first operand's uint used to be taken.
+        ("u + l", "long", "", "g_long("),
+        ("u - l", "long", "", "g_long("),
+        ("v4 * f", "float4", "", "g_float4("),
+        ("h * f", "float", "", "g_float("),
+        ("s + s", "int", "", "g_int("),
+        ("u + 1u", "uint", "", "g_uint("),
+    ),
+)
+def test_arithmetic_arguments_take_the_usual_arithmetic_conversions(
+    tmp_path, argument, out_type, out_cast, specialization
+):
+    path = tmp_path / "arithmetic.metal"
+    path.write_text(
+        ARITHMETIC.format(argument=argument, out_type=out_type, out_cast=out_cast)
+    )
+    output = crosstl.translate(str(path), backend="directx", format_output=False)
+    assert specialization in output
+
+
+def test_arithmetic_result_types():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+    from crosstl.project.arithmetic_result_types import arithmetic_result_type
+
+    preprocessor = MetalPreprocessor()
+    cases = (
+        (["uint", "long"], "+", "long"),
+        (["int", "uint"], "+", "uint"),
+        (["short", "short"], "*", "int"),
+        (["half", "float"], "*", "float"),
+        (["int", "half"], "*", "half"),
+        (["half4", "float"], "*", "half4"),
+        (["float4", "int"], "*", "float4"),
+        (["int4", "float"], "*", None),
+        (["half", "bfloat"], "+", None),
+        (["float4", "half4"], "+", None),
+        (["float", "int"], "%", None),
+        (["uint", None], "+", None),
+        (["Custom", "Custom"], "+", "Custom"),
+        (["Custom", "float"], "*", None),
+        (["int", "int", "long"], "+", "long"),
+    )
+    for operands, operator, expected in cases:
+        assert (
+            arithmetic_result_type(preprocessor, operands, operator) == expected
+        ), operands

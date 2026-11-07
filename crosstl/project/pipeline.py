@@ -59,6 +59,7 @@ from crosstl.backend.Metal.variable_templates import (
     materialize_value_variable_templates,
 )
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project.arithmetic_result_types import arithmetic_result_type
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
@@ -17869,6 +17870,26 @@ def _metal_expression_type(
     type_environment: Mapping[str, str],
     return_types: Mapping[str, str],
 ) -> str | None:
+    """The concrete type of ``expression``, or None.
+
+    A local whose ``auto`` was not deduced keeps the placeholder in the type
+    environment; it is not a type, so it never types an expression (it would
+    otherwise become a template argument such as ``min<uint, auto>``).
+    """
+    inferred = _metal_expression_type_or_placeholder(
+        preprocessor, expression, type_environment, return_types
+    )
+    if inferred is None or is_auto_placeholder(inferred) or "decltype" in inferred:
+        return None
+    return inferred
+
+
+def _metal_expression_type_or_placeholder(
+    preprocessor: Any,
+    expression: str,
+    type_environment: Mapping[str, str],
+    return_types: Mapping[str, str],
+) -> str | None:
     text = _metal_strip_outer_parentheses(expression).rstrip(";").strip()
     if not text:
         return None
@@ -17971,8 +17992,23 @@ def _metal_expression_type(
                 indexed_type = element_type
             return indexed_type
 
+    # `x++`, `x--`, `++x` and `--x` have the type of `x` ([expr.post.incr],
+    # [expr.pre.incr]).
+    update_match = re.fullmatch(
+        r"(?:\+\+|--)\s*(?P<prefix>[A-Za-z_][A-Za-z0-9_]*)"
+        r"|(?P<postfix>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\+|--)",
+        text,
+    )
+    if update_match is not None:
+        return type_environment.get(
+            update_match.group("prefix") or update_match.group("postfix")
+        )
+    # `p + n` and `p - n` keep a pointer's type. Any other `a + b` is arithmetic
+    # and is typed by the operator rule below (`uint + long` is `long`).
     pointer_match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*[+\-]", text)
-    if pointer_match is not None and pointer_match.group("name") in type_environment:
+    if pointer_match is not None and "*" in type_environment.get(
+        pointer_match.group("name"), ""
+    ):
         return type_environment[pointer_match.group("name")]
 
     address_match = re.match(r"&\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b", text)
@@ -18021,18 +18057,7 @@ def _metal_expression_type(
                 )
                 for part in parts
             ]
-            for preferred in (
-                "double",
-                "float",
-                "half",
-                "ulong",
-                "uint",
-                "long",
-                "int",
-            ):
-                if preferred in inferred:
-                    return preferred
-            return next((item for item in inferred if item), None)
+            return arithmetic_result_type(preprocessor, inferred, operator_text)
     return None
 
 
