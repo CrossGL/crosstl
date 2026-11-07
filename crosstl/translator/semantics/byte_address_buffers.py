@@ -20,12 +20,14 @@ rewrites every byte-address buffer declaration and parameter into the matching `
 - an atomic on ``(b, a)`` becomes the same atomic on ``b[w]`` with ``uint`` operands, and its ``uint`` result
   converts into the variable that receives it, as HLSL converts the ``original_value`` output.
 
-``InterlockedMin`` and ``InterlockedMax`` compare as signed integers when the value is signed (DXIL selects
-``IMin``/``IMax`` from the value's type), and a ``uint`` word cannot be compared that way in GLSL, so they are lowered
-only for an unsigned value. Everything the pass cannot lower faithfully is reported through ``refuse(reason)`` and
-left in place: a rasterizer-ordered buffer, a byte-address buffer in a structure or a return type, a use other than
-the accesses above or an argument of a program function, an address, buffer index or value with side effects that a
-multi-word access would evaluate twice, and an atomic whose operand count does not match a byte-address form.
+``InterlockedMin`` and ``InterlockedMax`` compare as signed integers when the value is an ``int`` (DXIL selects
+``IMin``/``IMax`` from the value's type), which a ``uint`` word's atomics cannot do, so with an ``int`` value they
+become a compare-exchange loop on the word (:mod:`.byte_address_signed_atomics`). Everything the pass cannot lower
+faithfully is reported through ``refuse(reason)`` and left in place: a rasterizer-ordered buffer, a byte-address
+buffer in a structure or a return type, a use other than the accesses above or an argument of a program function, an
+address, buffer index or value with side effects that a multi-word access would evaluate twice, an atomic whose
+operand count does not match a byte-address form, a signed ``atomicMin``/``atomicMax`` inside a larger expression,
+and one whose value is neither ``int`` nor ``uint``.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from __future__ import annotations
 import copy
 
 from .. import ast as A
+from .byte_address_signed_atomics import signed_ordered_atomic_replacement
 from .hub_types import TypeScope, type_from_node
 from .rewrite import child_slots, clone, get_child, is_pure, set_child
 
@@ -295,10 +298,17 @@ class _Lowerer:
             return None
         buffer, address, *values = args
         if name in _ORDERED_ATOMICS and not self.unsigned_scalar(values[-1]):
-            self.refuse(
-                f"{name} on a byte-address buffer with a value that is not uint: HLSL compares signed values as "
-                "signed integers, and the uint word the target binds compares as unsigned"
-            )
+            if self.scalar_kind(values[-1]) == "i":
+                self.refuse(
+                    f"{name} on a byte-address buffer with an int value inside an expression: the uint word the "
+                    "target binds compares as unsigned, and the signed form is a compare-exchange loop that needs "
+                    "a statement, an assignment or a declaration in a block of its own"
+                )
+            else:
+                self.refuse(
+                    f"{name} on a byte-address buffer with a value that is neither int nor uint: HLSL selects "
+                    "the signed or the unsigned comparison from the value's type"
+                )
             return None
         target = self.element(buffer, self.word_index(address))
         # The Interlocked methods take uint operands (a float converts numerically) and return the original
@@ -384,8 +394,15 @@ class _Lowerer:
         return A.BlockNode(statements)
 
     # Traversal --------------------------------------------------------------------------------------------------
-    def statement_replacement(self, node):
-        """The lowered statement for a byte-address store or dimension query used as a statement, else ``None``."""
+    def statement_replacement(self, node, in_block=False):
+        """The lowered statement for a byte-address store or dimension query used as a statement, else ``None``.
+
+        A signed ``atomicMin``/``atomicMax`` statement, assignment or declaration becomes a compare-exchange loop:
+        a block, or for a declaration directly inside a block (``in_block``) a list of statements to splice there.
+        """
+        signed = signed_ordered_atomic_replacement(self, node, in_block)
+        if signed is not None:
+            return signed
         if not isinstance(node, A.ExpressionStatementNode):
             return None
         call = node.expression
@@ -469,6 +486,7 @@ class _Lowerer:
                 for argument in node.arguments or []
                 if self.buffer_kind(argument) is not None
             }
+        splices = []
         for field, key in list(child_slots(node)):
             if fields is not None and field not in fields:
                 continue
@@ -479,7 +497,14 @@ class _Lowerer:
             if isinstance(node, A.FunctionCallNode) and field in ("function", "name"):
                 continue
             child = get_child(node, field, key)
-            replacement = self.statement_replacement(child)
+            in_block = isinstance(node, A.BlockNode) and field == "statements"
+            replacement = self.statement_replacement(child, in_block)
+            if isinstance(replacement, list):
+                # Statements that replace a declaration in its block, spliced in once the block is visited.
+                splices.append((key, replacement))
+                for statement in replacement:
+                    self.visit(statement)
+                continue
             if replacement is None:
                 replacement = self.expression_replacement(
                     child, _receiver(node, field, key)
@@ -493,6 +518,8 @@ class _Lowerer:
                 self.visit_buffer_reference(child)
                 continue
             self.visit(child)
+        for key, statements in reversed(splices):
+            node.statements[key : key + 1] = statements
 
     def visit_buffer_reference(self, expr):
         """Visit the indices of a buffer reference such as ``buffers[i]`` without treating the name as a use."""

@@ -114,6 +114,7 @@ from .generic_function_utils import (
     reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import named_struct_constructor_arguments
+from .global_specialization_constants import split_global_specialization_constants
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
@@ -156,6 +157,7 @@ from .push_constant_blocks import (
 )
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
     generate_slang_projected_compare,
@@ -164,6 +166,7 @@ from .slang_projected_compare import (
 from .slang_refusals import SlangLoweringRefused
 from .slang_specialization_constants import plan_slang_specialization_constants
 from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_names
+from .slang_workgroup_locals import slang_workgroup_local_prefix
 from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_utils import (
     compute_local_size,
@@ -624,10 +627,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += self.generate_enum_support_code()
 
             structs = getattr(ast, "structs", [])
+            constants, global_vars = split_global_specialization_constants(ast)
             leading_constants, struct_dependent_constants = (
-                partition_constants_by_struct_dependency(
-                    getattr(ast, "constants", []) or [], structs
-                )
+                partition_constants_by_struct_dependency(constants, structs)
             )
             result += self.generate_constants(ast, leading_constants)
             for struct in structs:
@@ -639,7 +641,6 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += self.generate_constants(ast, struct_dependent_constants)
             result += self.slang_struct_dependent_helper_marker()
 
-            global_vars = getattr(ast, "global_variables", [])
             for node in global_vars:
                 result += self.generate_global_variable(node)
             result += self.generate_slang_lowered_struct_resource_member_globals()
@@ -1912,10 +1913,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         result += self.generate_enum_support_code()
 
         structs = getattr(node, "structs", [])
+        constants, global_vars = split_global_specialization_constants(node)
         leading_constants, struct_dependent_constants = (
-            partition_constants_by_struct_dependency(
-                getattr(node, "constants", []) or [], structs
-            )
+            partition_constants_by_struct_dependency(constants, structs)
         )
         result += self.generate_constants(node, leading_constants)
         for struct in structs:
@@ -1927,7 +1927,6 @@ class SlangCodeGen(LoweringRefusalMixin):
         result += self.generate_constants(node, struct_dependent_constants)
         result += self.slang_struct_dependent_helper_marker()
 
-        global_vars = getattr(node, "global_variables", [])
         for global_var in global_vars:
             result += self.generate_global_variable(global_var)
         result += self.generate_slang_lowered_struct_resource_member_globals()
@@ -4341,7 +4340,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
         if (
             expected_type == "uint3"
-            and mapped_semantic == "SV_DispatchThreadID"
+            and mapped_semantic in {
+                "SV_DispatchThreadID",
+                "SV_GroupThreadID",
+                "SV_GroupID",
+            }
             and not array_suffix
             and base_type in {"uint", "uint2"}
         ):
@@ -4954,7 +4957,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         return " ".join(qualifiers) + " "
 
     def slang_static_storage_prefix(self, node, mapped_type=None):
-        """``static`` for a module-scope value with one copy per invocation.
+        """``static`` for a module-scope value with one copy per invocation, ``static const`` for a constant.
 
         As in HLSL, a Slang global without ``static`` is a uniform, so CrossGL's module-scope ``static`` values
         (SPIR-V ``Private`` storage) keep the keyword. Groupshared, uniform and resource declarations do not.
@@ -4963,8 +4966,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
         }
-        if "static" not in qualifiers or qualifiers & {
-            "const",
+        constant = bool(qualifiers & {"const", "constant"})
+        if not (constant or "static" in qualifiers) or qualifiers & {
             "uniform",
             "groupshared",
             "shared",
@@ -4977,7 +4980,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             and self.slang_register_prefix_for_type(mapped_type, node, None) is not None
         ):
             return ""
-        return "static "
+        # A module-scope constant (``const``, ``static const`` or MSL's ``constant``) is a compile-time value;
+        # without ``static`` Slang would make it a uniform parameter and drop its initializer.
+        return "static const " if constant else "static "
 
     def slang_parameter_qualifier_prefix(self, node):
         qualifiers = []
@@ -8596,7 +8601,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         mapped_type = self.map_resource_type_with_format(var_type, node)
         declaration = self.format_declaration(var_type, node.name, node)
         declaration = (
-            self.slang_declaration_qualifier_prefix(node)
+            # A function-scope groupshared variable is static (slang_workgroup_locals.py).
+            slang_workgroup_local_prefix(self, node, initial_value)
+            + self.slang_declaration_qualifier_prefix(node)
             + self.slang_resource_memory_qualifier_prefix(mapped_type, node)
             + declaration
         )
@@ -11290,6 +11297,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         if type_name in self.enum_struct_type_names:
             return type_name
 
+        unrepresentable = slang_unrepresentable_type_reason(type_name)
+        if unrepresentable is not None:
+            return self.refuse_lowering(unrepresentable, type_name)
+
         type_map = {
             "f16": "half",
             "float16": "half",
@@ -13278,10 +13289,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                 "buffer_store", "requires RWStructuredBuffer resource"
             )
 
+        # Slang's RWStructuredBuffer has no Store method (slangc E30027): its elements are written by subscript.
         buffer = self.generate_expression(args[0])
         index = self.generate_expression(args[1])
         value = self.generate_expression(args[2])
-        return f"{buffer}.Store({index}, {value})"
+        store = f"{buffer}[{index}] = {value}"
+        return store if statement_context else f"({store})"
 
     def buffer_append_expression(self, args):
         if len(args) < 2:

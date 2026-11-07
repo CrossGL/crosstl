@@ -419,6 +419,10 @@ from .metal_namespace_names import rename_metal_namespace_names
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
+from .metal_reference_argument_conditions import generate_header_writeback_statement
+from .metal_reference_argument_order import generate_ordered_writeback_statement
+from .metal_reference_argument_returns import generate_return_writeback_statement
+from .metal_reference_call_results import generate_call_result_statement
 from .metal_refusals import metal_refusals
 from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
@@ -442,6 +446,7 @@ from .metal_texel_buffers import (
     MetalTexelBuffers,
     texel_buffer_component_type,
 )
+from .metal_threadgroup_forwarding import collect_metal_forwarded_threadgroup_storage
 from .metal_threadgroup_parameters import metal_threadgroup_parameter_attribute
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
@@ -640,6 +645,18 @@ class MetalCodeGen(
     }
     # Numeric grouping determines floating rounding and integer promotion.
     ASSOCIATIVE_BINARY_OPS = {"&&", "||"}
+    # Higher-precedence children that clang's -Wlogical-op-parentheses,
+    # -Wbitwise-op-parentheses, -Wparentheses (bitwise over comparison) and
+    # -Wshift-op-parentheses reject under -Werror when left unparenthesized.
+    _COMPARISON_OPS = frozenset({"==", "!=", "<", ">", "<=", ">="})
+    CLANG_PARENTHESIZED_BINARY_CHILDREN = {
+        "||": frozenset({"&&"}),
+        "|": frozenset({"&", "^"}) | _COMPARISON_OPS,
+        "^": frozenset({"&"}) | _COMPARISON_OPS,
+        "&": _COMPARISON_OPS,
+        "<<": frozenset({"+", "-"}),
+        ">>": frozenset({"+", "-"}),
+    }
     METAL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
         {
             "mem_none",
@@ -2441,6 +2458,21 @@ class MetalCodeGen(
         self.metal_lowered_program_scope_groupshared_global_ids.update(
             thread_private_ids
         )
+        threadgroup_storage, threadgroup_ids = (
+            collect_metal_forwarded_threadgroup_storage(
+                self,
+                ast,
+                target_stage,
+                global_vars,
+                all_functions,
+                METAL_GROUPSHARED_ENTRY_STAGES,
+            )
+        )
+        for function_id, nodes in threadgroup_storage.items():
+            self.metal_lowered_program_scope_groupshared_globals_by_function.setdefault(
+                function_id, []
+            ).extend(nodes)
+        self.metal_lowered_program_scope_groupshared_global_ids.update(threadgroup_ids)
         self.metal_runtime_initialized_constants = (
             self.collect_metal_runtime_initialized_constants(global_vars)
         )
@@ -8458,11 +8490,22 @@ class MetalCodeGen(
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as Metal source."""
         if id(stmt) not in self.metal_writeback_statement_ids:
+            return_code = generate_return_writeback_statement(self, stmt, indent)
+            if return_code is not None:
+                return return_code
             writebacks = self.metal_reference_argument_writebacks(stmt)
             if writebacks:
-                return self.generate_statement_with_argument_writebacks(
-                    stmt, indent, writebacks
+                call_code = generate_call_result_statement(
+                    self, stmt, indent, writebacks
                 )
+                if call_code is not None:
+                    return call_code
+                return generate_ordered_writeback_statement(
+                    self, stmt, indent, writebacks
+                )
+            header_code = generate_header_writeback_statement(self, stmt, indent)
+            if header_code is not None:
+                return header_code
         indent_str = "    " * indent
         if isinstance(stmt, (VariableNode, BackendVariableNode)):
             var_type = self.local_variable_declared_type(stmt)
@@ -13374,7 +13417,12 @@ class MetalCodeGen(
                 self.generate_expression(expr.true_expr),
                 self.generate_expression(expr.false_expr),
             )
-            return f"{self.generate_expression(expr.condition)} ? {true_code} : {false_code}"
+            condition = self.generate_expression(expr.condition)
+            # `?:` is right-associative: an unparenthesized conditional
+            # condition would regroup as part of the false arm.
+            if isinstance(expr.condition, TernaryOpNode):
+                condition = f"({condition})"
+            return f"{condition} ? {true_code} : {false_code}"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value
@@ -13798,10 +13846,12 @@ class MetalCodeGen(
         if child_precedence < parent_precedence:
             return True
         if child_precedence > parent_precedence:
-            # Clang intentionally warns on an unparenthesized additive child of a
-            # shift even though C++ precedence is unambiguous.  Retain explicit
-            # source grouping so warning-fatal native Metal builds stay portable.
-            return parent_operator in {"<<", ">>"} and child_operator in {"+", "-"}
+            # Clang's -Wparentheses (part of -Wall) warns on these children even
+            # though C++ precedence is unambiguous.  Retain explicit grouping so
+            # warning-fatal native Metal builds stay portable.
+            return child_operator in self.CLANG_PARENTHESIZED_BINARY_CHILDREN.get(
+                parent_operator, ()
+            )
         return is_right_child and (
             parent_operator not in self.ASSOCIATIVE_BINARY_OPS
             or child_operator != parent_operator

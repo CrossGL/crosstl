@@ -16,6 +16,8 @@ LANE_ELEMENTS = {
     "int16": ("int16", 16),
     "half": ("float16", 16),
     "float16": ("float16", 16),
+    "bfloat16": ("bfloat16", 16),
+    "bool": ("bool", 8),
 }
 
 

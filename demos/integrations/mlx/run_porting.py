@@ -525,12 +525,9 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
 )
 # Frontier sources the SPIR-V emitter refuses, fail-closed, with the diagnostic code each must raise.
 # Before #2256 these produced SPIR-V that dropped the construct, so they were never translated correctly.
-MLX_VULKAN_FRONTIER_REFUSALS: dict[str, tuple[str, str]] = {
-    MLX_BINARY_TWO_SOURCE: (
-        "project.translate.vulkan-half-float-unsupported",
-        "https://github.com/CrossGL/crosstl/issues/2284",
-    ),
-}
+# binary_two.metal left this set when the exact binary16 fmod helper reached SPIR-V (#3981); it is part
+# of the clean Vulkan frontier again, so it must translate and pass the Vulkan toolchain.
+MLX_VULKAN_FRONTIER_REFUSALS: dict[str, tuple[str, str]] = {}
 # LayerNorm also needs the SPIR-V lowering tracked in
 # https://github.com/CrossGL/crosstl/issues/2283, but its kernels take the host's
 # threadgroup size, so Vulkan refuses it first as a dynamic-workgroup source.
@@ -7171,6 +7168,8 @@ def _require_vulkan_frontier_refusals(
 ) -> list[dict[str, str]]:
     """Each refused Vulkan frontier source must fail closed with its tracked diagnostic code."""
     sources = tuple(MLX_VULKAN_FRONTIER_REFUSALS)
+    if not sources:
+        return []
     _result, payload, _config_path, _report_path = _run_frontier_project(
         mlx_root=mlx_root,
         config_dir=config_dir,

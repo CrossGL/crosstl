@@ -20,7 +20,8 @@ Arithmetic and comparisons keep their binary16 types.
 Storage slots that are copied, passed or pointed through one another form one
 group with one representation. If any slot of a group is used in a way this
 pass does not rewrite, the whole group keeps its typed representation, which is
-what the generator wrote before.
+what the generator wrote before. So does every other group of the program
+(``lower_half_private_storage``), because values move between groups.
 """
 
 import re
@@ -50,6 +51,7 @@ from ..ast import (
     PrimitiveType,
     RayQueryOpNode,
     RayTracingOpNode,
+    StructMemberNode,
     StructNode,
     SwizzleNode,
     TernaryOpNode,
@@ -1009,15 +1011,63 @@ def _walk_all(node, seen=None):
         yield from _walk_all(get_child(node, field, key), seen)
 
 
+def _declared_type(node):
+    if isinstance(node, ParameterNode):
+        return node.param_type
+    if isinstance(node, StructMemberNode):
+        return node.member_type
+    if isinstance(node, VariableNode):
+        return node.var_type
+    return None
+
+
+def _keeps_typed_memory(analysis):
+    """True if some binary16 workgroup or private memory stays typed.
+
+    That is a group the analysis kept typed, or a binary16 array, or a
+    workgroup or thread pointer to binary16 elements, that is not one of the
+    lowered slots: a struct member, an initialized or qualified array, an entry
+    point parameter.
+    """
+    roots = {analysis.find(key) for key in analysis.slots}
+    if roots - analysis.lowered_roots:
+        return True
+    for node in _walk_all(analysis.program):
+        vtype = _declared_type(node)
+        if vtype is None or id(node) in analysis.slots:
+            continue
+        if isinstance(vtype, PointerType):
+            if (
+                vtype.address_space in _POINTER_SPACES
+                and analysis.width(vtype.pointee_type) is not None
+            ):
+                return True
+            continue
+        depth = 0
+        while isinstance(vtype, ArrayType):
+            vtype = vtype.element_type
+            depth += 1
+        if depth and analysis.width(vtype) is not None:
+            return True
+    return False
+
+
 def lower_half_private_storage(ast, map_type):
     """Rewrite binary16 workgroup and private storage of ``ast`` to raw bits in place.
 
     ``ast`` must be the generator's private copy. ``map_type`` maps a CrossGL
     type to its HLSL spelling; storage is lowered only for types it maps to a
     native ``float16_t`` scalar or vector.
+
+    The program's binary16 memory is lowered whole or not at all. DXC folds a
+    reinterpreted value stored into typed memory, or loaded from it, into an
+    access through a reinterpreted pointer (``bitcast half* to i16*``), and WARP
+    does not read such memory back as the bits it was given. A kernel that keeps
+    any binary16 workgroup or private memory typed therefore keeps all of it
+    typed, as the generator wrote it before.
     """
     analysis = _Analysis(ast, map_type)
     analysis.run()
-    if not analysis.lowered_roots:
+    if not analysis.lowered_roots or _keeps_typed_memory(analysis):
         return ast
     return _Rewrite(analysis).run()
