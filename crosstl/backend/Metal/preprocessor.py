@@ -44,6 +44,7 @@ from .auto_placeholders import deduced_auto_type
 from .call_result_types import CallResultScope, infer_call_result_type
 from .category_traits import CATEGORY_TRAITS, evaluate_category_trait
 from .concrete_free_operators import materialize_concrete_free_operators
+from .concrete_qualified_aliases import resolve_concrete_qualified_type_aliases
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
 from .constrained_call_carriers import constrained_call_carriers
@@ -1319,6 +1320,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = prune_unreferenced_specialization_members(self, processed)
         processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
+        # A dependent member type substituted before its owner was materialized
+        # names a concrete struct's alias now; spell the alias target instead.
+        processed = resolve_concrete_qualified_type_aliases(self, processed)
         # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
         # bound) as for the source's own concrete code. No later stage folds a trait, so one left in concrete
         # code is refused for every target rather than reaching the parser as an identifier.
@@ -6495,7 +6499,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             set(method.parameter_names) | self._local_variable_names(body)
         )
         # Lowered methods leave the struct's type scope before explicit helper
-        # templates are materialized, so resolve only their argument lists here.
+        # templates are materialized and type traits are folded, so resolve
+        # only their argument lists here.
         replacements: List[Tuple[int, int, str]] = []
         index = 0
         while index < len(body):
@@ -6507,7 +6512,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 index += 1
                 continue
 
-            _identifier, consumed = self._read_identifier(body, index)
+            identifier, consumed = self._read_identifier(body, index)
             identifier_end = index + consumed
             angle_start = identifier_end
             while angle_start < len(body) and body[angle_start].isspace():
@@ -6522,7 +6527,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             call_start = angle_end + 1
             while call_start < len(body) and body[call_start].isspace():
                 call_start += 1
-            if call_start >= len(body) or body[call_start] != "(":
+            # A type trait's operands are types in every position, e.g. the
+            # owner alias in `is_same_v<scalar_T, float>`, so its argument list
+            # leaves the struct's type scope too even though no call follows.
+            is_type_trait = (
+                identifier.removesuffix("_v") in self._METAL_TYPE_TRAIT_ARITIES
+            )
+            if not is_type_trait and (
+                call_start >= len(body) or body[call_start] != "("
+            ):
                 index = identifier_end
                 continue
 
