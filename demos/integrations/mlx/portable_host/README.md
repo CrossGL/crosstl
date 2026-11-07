@@ -95,6 +95,8 @@ dtypes' selections translate on first use. Optional absolute-value packages exte
 unsupported-GPU errors. Other unary inputs except Abs, LogicalNot and BitwiseInvert
 must be float32. Stored-contiguous broadcasts and column-major views retain
 their metadata; noncontiguous inputs use translated copies before unary dispatch.
+Unary dispatch reads its input by reference, as `unary_op_gpu` does, so a
+donatable contiguous input still donates its buffer to the output.
 Dispatch is synchronous and uses host staging buffers. Layout copies accept signed
 32-bit element counts and storage spans, with up to 64 axes and 65,535 workgroups
 per launch axis. Unary operations also batch stored elements without changing

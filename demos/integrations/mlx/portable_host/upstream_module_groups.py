@@ -73,7 +73,8 @@ NN_TESTS = _tests(
 
 # test_vmap, test_eval and test_threads: vectorized maps of the composed ops,
 # sorts, partitions, scatters, convolutions, factorizations and views;
-# synchronous, asynchronous and multi-stream evaluation; and thread-local
+# synchronous, asynchronous and multi-stream evaluation and the buffer
+# donation of no-op unary and copy chains; and thread-local
 # streams and transforms traced on several threads at once.
 TRANSFORM_TESTS = (
     _tests(
@@ -116,6 +117,7 @@ TRANSFORM_TESTS = (
             "async_eval_into_eval_diff_stream",
             "async_eval_twice",
             "async_eval_with_multiple_streams",
+            "donation_for_noops",
             "eval",
             "eval_mixed",
             "eval_slow_fast_multi_stream",

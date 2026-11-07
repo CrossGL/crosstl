@@ -158,19 +158,23 @@ void dispatch_unary(
         "bfloat16, float32 or complex64 arrays.");
   }
   const char* out_type = cast_type(out.dtype());
-  auto in = inputs[0];
-  if (in.shape() != out.shape()) {
+  // Read the input by reference, as unary_op_gpu does: a copy of the array
+  // would share its descriptor, and set_unary_output_data would no longer
+  // donate a donatable input's buffer to the output.
+  const auto& input = inputs[0];
+  if (input.shape() != out.shape()) {
     throw std::invalid_argument("CrossTL unary input must match output shape.");
   }
-  if (in.size() == 0) {
-    mlx::core::set_unary_output_data(in, out);
+  if (input.size() == 0) {
+    mlx::core::set_unary_output_data(input, out);
     return;
   }
-  if (!in.flags().contiguous) {
-    mlx::core::array dense(in.shape(), in.dtype(), nullptr, {});
-    dispatch_copy(in, dense);
-    in = std::move(dense);
+  std::optional<mlx::core::array> dense;
+  if (!input.flags().contiguous) {
+    dense.emplace(input.shape(), input.dtype(), nullptr, std::vector<mlx::core::array>{});
+    dispatch_copy(input, *dense);
   }
+  const mlx::core::array& in = dense ? *dense : input;
   if (in.offset() < 0 || uint64_t(in.offset()) > in.buffer_size() ||
       in.data_size() >
           (in.buffer_size() - uint64_t(in.offset())) / in.itemsize()) {
@@ -184,7 +188,7 @@ void dispatch_unary(
     uint32_t size = static_cast<uint32_t>(
         std::min<uint64_t>(65535, in.data_size() - first));
     CrosstlMlxBuffer buffers[] = {
-        {"in", dtype, in.data<char>() + first * in.itemsize(), size, 0},
+        {"in", dtype, const_cast<char*>(in.data<char>()) + first * in.itemsize(), size, 0},
         {"out", out_type, out.data<char>() + first * out.itemsize(), size, 1},
         {"size", "uint32", &size, 1, 0},
     };
