@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "mlx/allocator.h"
@@ -2300,6 +2301,141 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 // Scatter::eval_gpu lives in crosstl_scatter.inc.
 
+namespace {
+// Defined with the general scatter in crosstl_scatter.inc.
+bool exact_in_every_order(const std::vector<float>& terms);
+} // namespace
+
+// The index value of an axis-scatter index array at storage location ``at``.
+int64_t axis_index_value(const array& idx, int64_t at) {
+  switch (idx.dtype()) {
+    case int32:
+      return idx.data<int32_t>()[at];
+    case uint32:
+      return idx.data<uint32_t>()[at];
+    case int64:
+      return idx.data<int64_t>()[at];
+    default:
+      return static_cast<int64_t>(idx.data<uint64_t>()[at]);
+  }
+}
+
+// Visit every index position of an axis scatter as (leading position, index
+// row, trailing position, destination flat output element, update location).
+template <typename Visit>
+void visit_axis_scatter(
+    const array& upd, const array& idx, const array& out, int axis, Visit visit) {
+  const int ndim = idx.ndim();
+  const int64_t axis_size = out.shape(axis);
+  uint64_t after = 1;
+  for (int i = axis + 1; i < ndim; ++i) {
+    after *= idx.shape(i);
+  }
+  std::vector<int> coordinate(ndim, 0);
+  for (uint64_t flat = 0; flat < idx.size(); ++flat) {
+    uint64_t remaining = flat;
+    for (int i = ndim; i-- > 0;) {
+      coordinate[i] = remaining % idx.shape(i);
+      remaining /= idx.shape(i);
+    }
+    int64_t index_at = 0, update_at = 0, destination = 0, out_step = 1;
+    for (int i = ndim; i-- > 0;) {
+      index_at += coordinate[i] * idx.strides()[i];
+      update_at += coordinate[i] * upd.strides()[i];
+    }
+    int64_t target = axis_index_value(idx, index_at);
+    target = target < 0 ? target + axis_size : target;
+    for (int i = ndim; i-- > 0;) {
+      destination += (i == axis ? target : coordinate[i]) * out_step;
+      out_step *= out.shape(i);
+    }
+    const uint64_t row = coordinate[axis];
+    const uint64_t post = flat % after;
+    const uint64_t pre = flat / after / idx.shape(axis);
+    visit(pre, row, post, destination, update_at);
+  }
+}
+
+// Whether native contention could land a float32 lane sum of an axis
+// scatter differently from the index-order reference, as for the general
+// scatter: each element holds ``lanes`` float32 lanes, summed on its own.
+bool axis_scatter_order_dependent(
+    const array& upd, const array& idx, const array& out, int axis, int lanes) {
+  std::unordered_map<int64_t, std::vector<float>> terms;
+  const float* initial = static_cast<const float*>(out.data<void>());
+  const float* data = static_cast<const float*>(upd.data<void>());
+  bool contended = false;
+  visit_axis_scatter(upd, idx, out, axis, [&](uint64_t, uint64_t, uint64_t,
+                                              int64_t destination, int64_t at) {
+    for (int lane = 0; lane < lanes; ++lane) {
+      auto [slot, inserted] = terms.try_emplace(destination * lanes + lane);
+      if (inserted) {
+        slot->second.push_back(initial[destination * lanes + lane]);
+      }
+      slot->second.push_back(data[at * lanes + lane]);
+      contended = contended || slot->second.size() > 2;
+    }
+  });
+  if (!contended) {
+    return false;
+  }
+  for (const auto& [destination, sums] : terms) {
+    if (sums.size() > 2 && !exact_in_every_order(sums)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Launches of one leading position each whose index rows never share a
+// destination at any trailing position, in index order, so every destination
+// receives its updates in index order, as the audit's replay applies them.
+std::vector<AxisLaunchTile> axis_scatter_ordered_tiles(
+    const array& upd,
+    const array& idx,
+    const array& out,
+    int axis,
+    const std::vector<int32_t>& pre_shape) {
+  constexpr uint64_t limit = 65535;
+  const uint64_t rows = idx.shape(axis);
+  std::vector<std::vector<std::vector<int64_t>>> targets;
+  visit_axis_scatter(upd, idx, out, axis, [&](uint64_t pre, uint64_t row,
+                                              uint64_t post, int64_t destination,
+                                              int64_t) {
+    if (targets.size() <= pre) {
+      targets.resize(pre + 1, std::vector<std::vector<int64_t>>(rows));
+    }
+    targets[pre][row].push_back(destination);
+    static_cast<void>(post);
+  });
+  std::vector<AxisLaunchTile> tiles;
+  const std::vector<int32_t> unit(pre_shape.size(), 1);
+  for (uint64_t pre = 0; pre < targets.size(); ++pre) {
+    std::vector<uint64_t> start(pre_shape.size());
+    uint64_t remaining = pre;
+    for (size_t i = pre_shape.size(); i-- > 0;) {
+      start[i] = remaining % uint64_t(pre_shape[i]);
+      remaining /= uint64_t(pre_shape[i]);
+    }
+    std::unordered_set<int64_t> touched;
+    uint64_t first = 0;
+    for (uint64_t row = 0; row < rows; ++row) {
+      bool shared = row - first == limit;
+      for (const auto destination : targets[pre][row]) {
+        shared = shared || touched.count(destination) != 0;
+      }
+      if (row > first && shared) {
+        tiles.push_back({pre, 1, unit, start, first, row - first});
+        touched.clear();
+        first = row;
+      }
+      touched.insert(targets[pre][row].begin(), targets[pre][row].end());
+    }
+    tiles.push_back({pre, 1, unit, start, first, rows - first});
+  }
+  return tiles;
+}
+
 void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
   constexpr uint64_t max_storage_elements = (uint64_t(1) << 28) - 33;
@@ -2389,7 +2525,16 @@ void ScatterAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
       {"upd_ax_stride", "uint64", &update_step, 1, 0},
       {"idx_ax_stride", "uint64", &index_step, 1, 0},
   };
-  for (const auto& tile : axis_launch_tiles(pre_shape, idx.shape(axis_))) {
+  // Native atomics apply contending updates in an unspecified order, so a
+  // float32 or complex64 sum that some order would round launches ordered
+  // runs of index rows instead of MLX's single grid.
+  const bool ordered = reduce_type_ == Sum &&
+      (out.dtype() == float32 || complex_sum) &&
+      axis_scatter_order_dependent(upd, idx, out, axis_, int(lanes));
+  const auto tiles = ordered
+      ? axis_scatter_ordered_tiles(upd, idx, out, axis_, pre_shape)
+      : axis_launch_tiles(pre_shape, idx.shape(axis_));
+  for (const auto& tile : tiles) {
     std::copy(tile.pre_shape.begin(), tile.pre_shape.end(), shape.begin());
     // Each view starts at the tile's first element and spans only the tile.
     uint64_t update_offset = tile.first_row * update_step;

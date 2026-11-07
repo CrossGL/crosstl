@@ -42,8 +42,10 @@ def exact_float_sums(np, initial, indices, updates, axis, axis_size):
     Every finite float32 is an integer multiple of 2^-149; when a destination's
     terms share a coarser power-of-two step and their magnitudes sum to fewer
     than 2^24 steps, every partial sum in every order is exact. A zero sum is
-    negative only when every term is -0.0, in any order. A complex64 sum
-    adds its real and imaginary lanes separately, so each lane is checked.
+    negative only when every term is -0.0, in any order. A destination that
+    one launch updates at most once has one order: the host launches ordered
+    runs of index rows for sums that another order would round. A complex64
+    sum adds its real and imaginary lanes separately, so each lane is checked.
     """
     if np.iscomplexobj(initial):
         return all(
@@ -56,6 +58,8 @@ def exact_float_sums(np, initial, indices, updates, axis, axis_size):
         destination[axis] = int(indices[coordinate]) % axis_size
         terms[tuple(destination)].append(updates[coordinate])
     for values in terms.values():
+        if len(values) <= 2:
+            continue
         if not all(np.isfinite(value) for value in values):
             return False
         scaled = [int(abs(float(value)) * 2.0**149) for value in values]

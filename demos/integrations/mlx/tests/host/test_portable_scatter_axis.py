@@ -696,6 +696,32 @@ def test_axis_scatter_float_sums_are_exact_only_without_rounding():
     # Tiny steps are exact while their magnitudes fit in 24 bits of the step.
     tiny = np.array([2.0**-140, 2.0**-149, -(2.0**-149), 0.0], dtype=np.float32)
     assert scatter_axis_evidence.exact_float_sums(np, zeros, indices, tiny, 0, 2)
+    # A destination updated once has one order, even when its sum rounds or
+    # is not finite: ordered launches leave every destination one update.
+    once = np.array([0, 1], dtype=np.int32)
+    initial = np.array([2.0**24, np.inf], dtype=np.float32)
+    single = np.array([1.0, -1.0], dtype=np.float32)
+    assert scatter_axis_evidence.exact_float_sums(np, initial, once, single, 0, 2)
+    twice = np.array([0, 0], dtype=np.int32)
+    assert not scatter_axis_evidence.exact_float_sums(
+        np, initial, twice, np.array([1.0, 1.0], dtype=np.float32), 0, 2
+    )
+
+
+def test_axis_scatter_orders_sums_that_contention_would_round():
+    backend = (Path(__file__).parents[2] / "portable_host" / "backend.cpp").read_text(
+        encoding="utf-8"
+    )
+    port = backend[backend.index("void ScatterAxis::eval_gpu") :]
+    port = port[: port.index("\n}\n")]
+    # As the general scatter does, an order-dependent float32 or complex64
+    # sum launches ordered runs of index rows, one leading position each.
+    assert "axis_scatter_order_dependent(upd, idx, out, axis_, int(lanes))" in port
+    assert "axis_scatter_ordered_tiles(upd, idx, out, axis_, pre_shape)" in port
+    assert ": axis_launch_tiles(pre_shape, idx.shape(axis_));" in port
+    helpers = backend[: backend.index("void ScatterAxis::eval_gpu")]
+    assert "if (sums.size() > 2 && !exact_in_every_order(sums))" in helpers
+    assert "tiles.push_back({pre, 1, unit, start, first, row - first});" in helpers
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))

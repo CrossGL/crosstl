@@ -1447,7 +1447,12 @@ position, because the contiguous specializations stride leading positions by
 the row count. Each launch's views start at its first element and are checked
 against their allocations. Every reachable index and allocation span is
 validated before dispatch. Empty updates retain the copied source and do not
-submit a scatter kernel.
+submit a scatter kernel. Native atomics apply contending updates in an
+unspecified order, so, as for the general scatter, a float32 or complex64 sum
+that some order would round launches runs of index rows instead, one leading
+position each, whose rows never share a destination. Every destination then
+receives its updates in index order, and the audit's exactness rule applies
+only to destinations that one launch updates more than once.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.verify_scatter_axis \
