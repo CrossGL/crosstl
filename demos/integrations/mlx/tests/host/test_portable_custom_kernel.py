@@ -548,9 +548,8 @@ def test_host_port_follows_custom_kernel_cpp():
     ):
         assert text in port, text
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
-    assert backend.rstrip().endswith(
-        '#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"'
-    )
+    tail = backend[backend.rindex("} // namespace mlx::core::fast") :]
+    assert '#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"\n' in tail
     assert "CustomKernel" in prepare.FAST_PRIMITIVES
 
 

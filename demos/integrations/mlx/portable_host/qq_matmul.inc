@@ -76,6 +76,35 @@ array qq_rounded_input(
   return rounded;
 }
 
+// quantized.cpp quantize_input: float weights go through the host's port of
+// the Quantize primitive's kernels, quantized weights and their scales are
+// bound as they arrive.
+std::pair<array, array> qq_weights(
+    const Stream& stream,
+    const array& w_pre,
+    const std::optional<array>& scales,
+    const std::optional<array>& global_scale,
+    QuantizationMode mode,
+    int group_size,
+    int bits) {
+  if (scales) {
+    return {matmul_operand(w_pre), matmul_operand(*scales)};
+  }
+  const array w = dense_input(w_pre);
+  auto packed_shape = w.shape();
+  packed_shape.back() = w.shape(-1) * bits / 32;
+  auto scales_shape = w.shape();
+  scales_shape.back() = w.shape(-1) / group_size;
+  std::vector<array> quantize_inputs{w};
+  if (global_scale) {
+    quantize_inputs.push_back(*global_scale);
+  }
+  std::vector<array> quantized{
+      array(packed_shape, uint32, nullptr, {}), array(scales_shape, uint8, nullptr, {})};
+  fast::Quantize(stream, {}, group_size, bits, mode, false).eval_gpu(quantize_inputs, quantized);
+  return {quantized[0], quantized[1]};
+}
+
 // get_qmv_batch_limit for a device without an Apple GPU generation, as
 // QuantizedMatmul::eval_gpu's port uses it.
 int qq_vector_limit(int K, int N) {
@@ -116,31 +145,15 @@ void QQMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
           "CrossTL quantized-input matmul requires float32 global scales.");
     }
   }
-  std::optional<array> w_q, scales_w;
+  std::optional<array> scales;
   if (w_quantized) {
-    w_q = matmul_operand(inputs[1]);
-    scales_w = matmul_operand(inputs[2]);
-  } else {
-    // quantize_input: the host's port of the Quantize primitive's kernels.
-    const array w = dense_input(inputs[1]);
-    auto packed_shape = w.shape();
-    packed_shape.back() = w.shape(-1) * bits_ / 32;
-    auto scales_shape = w.shape();
-    scales_shape.back() = w.shape(-1) / group_size_;
-    std::vector<array> quantize_inputs{w};
-    if (global_w) {
-      quantize_inputs.push_back(*global_w);
-    }
-    std::vector<array> quantized{
-        array(packed_shape, uint32, nullptr, {}), array(scales_shape, uint8, nullptr, {})};
-    fast::Quantize(stream(), {}, group_size_, bits_, mode_, false)
-        .eval_gpu(quantize_inputs, quantized);
-    w_q = quantized[0];
-    scales_w = quantized[1];
+    scales = inputs[2];
   }
+  const auto [w_q, scales_w] =
+      qq_weights(stream(), inputs[1], scales, global_w, mode_, group_size_, bits_);
   const array x = qq_rounded_input(inputs[0], global_x, mode, group_size_, bits_);
-  const bool non_batched = w_q->ndim() == 2;
-  if (x.ndim() < 1 || w_q->ndim() < 2 || (!non_batched && x.ndim() < 2)) {
+  const bool non_batched = w_q.ndim() == 2;
+  if (x.ndim() < 1 || w_q.ndim() < 2 || (!non_batched && x.ndim() < 2)) {
     throw std::invalid_argument("CrossTL quantized-input matmul operand ranks are invalid.");
   }
   const int K = x.shape(-1);
@@ -158,7 +171,7 @@ void QQMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         "bfloat16 matrix products.");
   }
   dispatch_fp_quantized_matvec(
-      x, *w_q, *scales_w, out, mode, true, group_size_, bits_, M, N, K, global_w, true);
+      x, w_q, scales_w, out, mode, true, group_size_, bits_, M, N, K, global_w, true);
 }
 
 } // namespace mlx::core

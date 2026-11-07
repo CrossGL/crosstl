@@ -501,10 +501,13 @@ TORCH_UPSAMPLE_TESTS = _tests(
 )
 TORCH_GROUPS = ("torch-conv", "torch-layers", "torch-upsample")
 
-# test_quantized's products whose operands QQMatmul quantizes: the block
-# quantize and quantize-dequantize kernels and dispatch_qmv's mxfp8 and nvfp4
-# routes, among them the qmv kernels that read the weights' global scale.
-QQ_MATMUL_TESTS = _tests("test_quantized", "TestQuantized", ("qqmm", "qqmv"))
+# test_quantized's products whose operands QQMatmul and GatherQQMM quantize:
+# the block quantize and quantize-dequantize kernels, dispatch_qmv's mxfp8
+# and nvfp4 routes and gather_qmv's, among them the kernels that read the
+# weights' global scales.
+QQ_MATMUL_TESTS = _tests(
+    "test_quantized", "TestQuantized", ("qqmm", "qqmv", "gather_qqmm")
+)
 
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.
 GROUPS = {

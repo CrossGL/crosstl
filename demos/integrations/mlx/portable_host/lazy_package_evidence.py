@@ -2,15 +2,16 @@
 
 Scans, small row reductions, small and long column reductions, GEMV, dot-product,
 steel GEMM, split-K GEMM, GatherMM, SegmentedMM, BlockMaskedMM, convolution,
-Stockham FFT and affine and floating-point quantized matrix-vector and matrix-matrix
-kernels are translated from the pinned sources on first use, so no static index lists
-their packages. Each dispatch is checked by deriving its
-package again from the same cache, from the event's entry, launch and
-metadata, and by comparing the recorded artifact with the unchanged cached
-source. Scans and matrix kernels run through the source-specialized executor,
-so their retained native modules are checked as for indexing kernels. Small
-rows on Direct3D and OpenGL run as dispatch regions, each of which must name
-its cached region package and a retained native module.
+Stockham FFT, affine and floating-point quantized matrix-vector and matrix-matrix
+kernels and gathered quantized matrix-vector kernels are translated from the
+pinned sources on first use, so no static index lists their packages. Each
+dispatch is checked by deriving its package again from the same cache, from
+the event's entry, launch and metadata, and by comparing the recorded artifact
+with the unchanged cached source. Scans and matrix kernels run through the
+source-specialized executor, so their retained native modules are checked as
+for indexing kernels. Small rows on Direct3D and OpenGL run as dispatch
+regions, each of which must name its cached region package and a retained
+native module.
 """
 
 import hashlib
@@ -27,6 +28,7 @@ from demos.integrations.mlx.portable_host import (
     fp_qmm_layout,
     gather_mm_layout,
     gather_mv_layout,
+    gather_qmv_layout,
     gemm_layout,
     gemm_splitk_layout,
     gemv_layout,
@@ -91,6 +93,12 @@ from demos.integrations.mlx.portable_host.gather_mm_packages import (
     GatherMmPackageCache,
     GatherMvPackageCache,
     GatherOffsetsPackageCache,
+)
+from demos.integrations.mlx.portable_host.gather_qmv_packages import (
+    CACHE_DIRECTORY as GATHER_QUANTIZED_MV_CACHE,
+)
+from demos.integrations.mlx.portable_host.gather_qmv_packages import (
+    GatherQuantizedMatmulPackageCache,
 )
 from demos.integrations.mlx.portable_host.gemm_packages import (
     CACHE_DIRECTORY as GEMM_CACHE,
@@ -167,6 +175,7 @@ QUANTIZED_FAMILIES = {
     "fp-quantized-mv": fp_matmul_layout.ENTRY_PREFIXES,
     "quantized-mm": qmm_layout.ENTRY_PREFIXES,
     "fp-quantized-mm": fp_qmm_layout.ENTRY_PREFIXES,
+    "gather-quantized-mv": gather_qmv_layout.ENTRY_PREFIXES,
 }
 EXECUTED_FAMILIES = {**MATRIX_FAMILIES, **QUANTIZED_FAMILIES}
 FAMILIES = ("scan", "small-row", "small-column", "long-column", *EXECUTED_FAMILIES)
@@ -255,6 +264,9 @@ class LazyPackages:
             ),
             "fp-quantized-mm": FpQuantizedQmmPackageCache(
                 mlx_root, packages / FP_QUANTIZED_MM_CACHE, target
+            ),
+            "gather-quantized-mv": GatherQuantizedMatmulPackageCache(
+                mlx_root, packages / GATHER_QUANTIZED_MV_CACHE, target
             ),
         }
 

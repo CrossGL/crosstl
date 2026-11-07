@@ -232,13 +232,14 @@ def test_backend_ports_qqmatmul_as_quantized_cpp_does():
     for text in (
         "void QQMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {",
         # quantize_input: the host's Quantize port quantizes float weights.
-        "fast::Quantize(stream(), {}, group_size_, bits_, mode_, false)",
+        "fast::Quantize(stream, {}, group_size, bits, mode, false)",
+        "qq_weights(stream(), inputs[1], scales, global_w, mode_, group_size_, bits_);",
         # quantize_dequantize_input rounds the input, donating it if it can.
         "bool donate = x_pre.is_donatable();",
         '"_quantize_dequantize_" +',
         '(global_scale ? "_hgs_true" : "_hgs_false")',
         # dispatch_qmv with the weights' global scale and QQMatmul's route.
-        "x, *w_q, *scales_w, out, mode, true, group_size_, bits_, M, N, K, global_w, true);",
+        "x, w_q, scales_w, out, mode, true, group_size_, bits_, M, N, K, global_w, true);",
         # qmm's globally scaled bfloat16 route is refused, not approximated.
         "does not yet route globally scaled",
     ):
@@ -269,12 +270,15 @@ def test_qq_products_run_in_their_own_upstream_group():
     assert upstream_module_groups.GROUPS["quantized-products"] == (
         "test_quantized.TestQuantized.test_qqmm",
         "test_quantized.TestQuantized.test_qqmv",
+        "test_quantized.TestQuantized.test_gather_qqmm",
     )
-    # test_qqmm skips on MLX's CPU, which has no QQMatmul, so the CPU worker
-    # must skip it and the native worker must run it; test_qqmv runs on both.
-    assert (
-        "test_quantized.TestQuantized.test_qqmm" in verify_upstream_ops.GPU_ONLY_TESTS
-    )
+    # test_qqmm and test_gather_qqmm skip on MLX's CPU, which has neither
+    # QQMatmul nor GatherQQMM, so the CPU worker must skip them and the
+    # native worker must run them; test_qqmv runs on both.
+    for name in ("test_qqmm", "test_gather_qqmm"):
+        assert (
+            f"test_quantized.TestQuantized.{name}" in verify_upstream_ops.GPU_ONLY_TESTS
+        )
     assert "test_quantized.TestQuantized.test_qqmv" not in (
         verify_upstream_ops.GPU_ONLY_TESTS
     )

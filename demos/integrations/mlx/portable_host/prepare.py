@@ -167,6 +167,7 @@ def adapted_sources(original, primitives, events, metal_kernel):
         "Quantize",
         "QuantizedMatmul",
         "QQMatmul",
+        "GatherQQMM",
         "Matmul",
         "AddMM",
         "GatherMM",
@@ -300,6 +301,7 @@ else()
         "crosstl_hadamard.inc": (HERE / "hadamard.inc").read_bytes(),
         "crosstl_gated_delta.inc": (HERE / "gated_delta.inc").read_bytes(),
         "crosstl_custom_kernel.inc": (HERE / "custom_kernel.inc").read_bytes(),
+        "crosstl_gather_qmm.inc": (HERE / "gather_qmm.inc").read_bytes(),
     }
 
 

@@ -102,11 +102,12 @@ def dispatch(host, entry, buffers, count, threads, launch):
 def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
     """Run one launch of ``layout``'s quantized product kernels through ``cache``.
 
-    ``layout`` is ``matmul_layout``, ``qmm_layout``, ``fp_matmul_layout`` or
-    ``fp_qmm_layout``:
-    each binds the weights ``w``, the ``scales``, the input ``x``, the output
-    ``y`` and, for affine kernels, the ``biases``, all in
-    ``layout.MATRIX_PARAMETERS``.
+    ``layout`` is ``matmul_layout``, ``qmm_layout``, ``fp_matmul_layout``,
+    ``fp_qmm_layout`` or ``gather_qmv_layout``: each binds the weights ``w``,
+    the ``scales``, the input ``x``, the output ``y`` and, for affine kernels,
+    the ``biases``, all in ``layout.MATRIX_PARAMETERS``.
+    ``gather_qmv_layout`` adds its index buffers there and names each entry's
+    buffers with ``matrix_parameters``.
     """
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
@@ -133,6 +134,12 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
             f"{label} dispatch requires pinned packages, buffers and geometry"
         )
     counts, parameters = layout.read_storage(entry, supplied)
+    # A layout whose entries bind different buffers by address names them.
+    matrices = (
+        layout.matrix_parameters(entry)
+        if hasattr(layout, "matrix_parameters")
+        else layout.MATRIX_PARAMETERS
+    )
     execution = launch.execution()
     routed = {} if route is None else {"route": route}
     metadata = layout.plan(entry, counts, parameters, threads, execution, **routed)
@@ -145,7 +152,7 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
             + [POISON[layout.parameter_type(entry, name)]]
             * (GUARD_COUNT + metadata["overreadPadding"].get(name, 0))
         )
-        for name in layout.MATRIX_PARAMETERS
+        for name in matrices
     }
     for name, value in metadata["parameters"].items():
         storage[name] = [value] if isinstance(value, int) else list(value)
@@ -232,7 +239,7 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
                     )
                 ).hexdigest()
             )
-            for name in layout.MATRIX_PARAMETERS
+            for name in matrices
             if name != "y"
         },
         "outputValues": words[:size] if size <= 4096 else None,

@@ -5128,3 +5128,6 @@ void Quantize::eval_gpu(
 #include "mlx/backend/no_gpu/crosstl_gated_delta.inc"
 // And the port of mx.fast.metal_kernel's kernels, whose inputs take the copy.
 #include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"
+// And the port of GatherQQMM, which shares QQMatmul's quantization and
+// GatherMM's index helpers.
+#include "mlx/backend/no_gpu/crosstl_gather_qmm.inc"

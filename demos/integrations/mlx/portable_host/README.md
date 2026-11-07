@@ -1104,8 +1104,23 @@ so the dispatch checks them against QQMatmul's routing rather than
 QuantizedMatmul's. Quantize-dequantize launches cover complete groups, one
 workgroup of 32 lanes (16 for NVFP4) each. The globally scaled bfloat16
 matrix product that `quantized.cpp` sends to `qmm` is refused with a typed
-error. `test_quantized.TestQuantized.test_qqmv` and `test_qqmm` run in the
-`quantized-products` group; GatherQQMM keeps MLX's unsupported-GPU error.
+error.
+
+`GatherQQMM::eval_gpu` (`gather_qmm.inc`) quantizes both operands the same
+way and sends each gathered product to `quantized.cpp`'s `gather_qmv`:
+`fp_gather_qmv_fast` when `N` and `K` are aligned, otherwise
+`fp_gather_qmv`, over `(M, N / 8, B)` threadgroups of 64 lanes. An NVFP4
+global scale of the weights is broadcast to one scale per weight matrix, which
+the `_hgs` kernels read at the gathered matrix. Launches bind both index
+buffers by address with the collapsed index views and carry a `gather_qqmm`
+route. `gather_qmv_layout` reads every batch's two indices and proves that the
+gathered input rows, weights, scales and global scale lie inside their
+buffers, as do the offsets that OpenGL evaluates in 32 bits. The globally
+scaled bfloat16 matrix products that `quantized.cpp` sends to `gather_qmm` and
+`gather_qmm_rhs` are refused with a typed error.
+`test_quantized.TestQuantized.test_qqmv`, `test_qqmm` and `test_gather_qqmm`
+run in the `quantized-products` group; GatherQMM keeps MLX's unsupported-GPU
+error.
 
 ## General Gather
 
@@ -2974,7 +2989,7 @@ compares them in one vector-vector dispatch without copies. Any
 other traced entry must be a unary or binary vector that the native run
 translated from the pinned sources on first use, as the upstream tests do for
 scalar-vector binaries; the evidence lists these as `lazyEntries`.
-Separate negative processes reject an unsupported primitive (GatherQQMM), an
+Separate negative processes reject an unsupported primitive (GatherQMM), an
 oversized floating-point arange, a missing artifact, unary inputs with
 unsupported dtype, contiguous and
 strided unary inputs that exceed their allocations (including a large view), and

@@ -852,9 +852,11 @@ GPU_ONLY_TESTS = frozenset(
         "test_array.TestArray.test_array_at_complex_add_gpu",
         # Evaluates GPU and CPU streams that wait on each other.
         "test_eval.TestEval.test_multistream_deadlock",
-        # MLX's CPU has no QQMatmul; the test compares the product with the
-        # matmul of the operands it dequantizes on the same device.
+        # MLX's CPU has no QQMatmul or GatherQQMM; the tests compare each
+        # product with the matmul of the operands they dequantize on the same
+        # device.
         "test_quantized.TestQuantized.test_qqmm",
+        "test_quantized.TestQuantized.test_gather_qqmm",
         # Overrides the two-pass vector kernels' block count (sdpa.inc).
         "test_fast_sdpa.TestFastSDPA.test_sdpa_blocks_env_override",
         # Full attention with head dims 72, 80 and 96, and the shards of

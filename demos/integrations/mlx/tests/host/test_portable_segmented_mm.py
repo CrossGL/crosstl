@@ -535,7 +535,10 @@ def test_backend_ports_segmented_mm_eval_gpu():
         "// And the port of the gated-delta recurrences, whose fills take the copy.\n"
         '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"\n'
         "// And the port of mx.fast.metal_kernel's kernels, whose inputs take the copy.\n"
-        '#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"\n'
+        "// And the port of GatherQQMM, which shares QQMatmul's quantization and\n"
+        "// GatherMM's index helpers.\n"
+        '#include "mlx/backend/no_gpu/crosstl_gather_qmm.inc"'
     )
     start = port.index("void SegmentedMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]

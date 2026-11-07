@@ -495,7 +495,10 @@ def test_runtime_and_host_adapter_route_cross_entropy():
         "// And the port of the gated-delta recurrences, whose fills take the copy.\n"
         '#include "mlx/backend/no_gpu/crosstl_gated_delta.inc"\n'
         "// And the port of mx.fast.metal_kernel's kernels, whose inputs take the copy.\n"
-        '#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"'
+        '#include "mlx/backend/no_gpu/crosstl_custom_kernel.inc"\n'
+        "// And the port of GatherQQMM, which shares QQMatmul's quantization and\n"
+        "// GatherMM's index helpers.\n"
+        '#include "mlx/backend/no_gpu/crosstl_gather_qmm.inc"'
     )
     # The upstream op audit owns the cross-entropy dispatches.
     assert layout.PREFIX in verify_upstream_ops.RETAINED_VALUES
