@@ -42,9 +42,6 @@ from .stage_utils import (
     stage_matches,
 )
 
-# Address spaces whose reference parameters bind the caller's lvalue in place (MSL section 4.2).
-METAL_NON_THREAD_REFERENCE_SPACES = frozenset({"device", "threadgroup", "constant"})
-
 
 class MetalHlslFunctionMixin:
     """HLSL function-call and program-scope members of ``MetalCodeGen``."""
@@ -281,14 +278,9 @@ class MetalHlslFunctionMixin:
         raw_type = self.parameter_raw_type(parameter)
         if isinstance(raw_type, PointerType) or self.is_array_type_node(raw_type):
             return None
-        qualifiers = {
-            str(qualifier).lower()
-            for qualifier in getattr(parameter, "qualifiers", None) or []
-        }
-        if qualifiers & METAL_NON_THREAD_REFERENCE_SPACES:
-            # ``inout device float v`` is a ``device float&``: it binds the device
-            # lvalue itself, and a thread temporary could not bind to it.
-            return None
+        # A qualified parameter (``inout device float v``) is a reference in its
+        # address space; metal_argument_binds_parameter_reference decides whether
+        # the argument binds it in place, and a mismatch is refused.
         return parameter
 
     def generate_statement_with_argument_writebacks(self, stmt, indent, writebacks):
