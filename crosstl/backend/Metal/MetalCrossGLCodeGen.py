@@ -49,6 +49,7 @@ from .aggregate_scalar_conversions import (
     render_aggregate_scalar_conversion,
     render_explicit_aggregate_scalar_conversion,
 )
+from .aliased_member_owners import resolve_member_alias_type
 from .alignment_specifiers import MetalAlignmentSpecifiers
 from .array_designators import has_array_designators, positional_array_initializer
 from .barrier_import import metal_barrier_statements
@@ -1975,6 +1976,7 @@ class MetalToCrossGLConverter(
         self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
         self.callable_type_aliases = {}
+        self.metal_later_declarations_visible = False
         self.callable_alias_declarations = {}
         self.global_variable_types = {}
         self.current_variable_types = {}
@@ -6408,6 +6410,8 @@ class MetalToCrossGLConverter(
         return tiers
 
     def declaration_visible_at_current_offset(self, declaration):
+        if self.metal_later_declarations_visible:
+            return True
         use_offset = self.alias_resolution_offset()
         declaration_offset = self.alias_source_offset(declaration)
         return (
@@ -7279,7 +7283,7 @@ class MetalToCrossGLConverter(
         dependent = self.dependent_alias_type_parts(candidate)
         if dependent is not None:
             owner, member = dependent
-            resolved = self.resolve_dependent_alias_type(owner, member, required)
+            resolved = resolve_member_alias_type(self, owner, member, required)
             if resolved is not None:
                 return f"{resolved}{suffix}"
             if required and self.alias_template_resolution_stack:
