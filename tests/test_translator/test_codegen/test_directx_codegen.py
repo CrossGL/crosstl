@@ -1639,7 +1639,7 @@ def test_hlsl_invalid_compile_time_values_fail_before_global_emission(
     source = """
     shader RequiredDirectXSpecialization {
         float runtime_state;
-        constant bool has_w @function_constant(20);
+        constant vec2 offsets @function_constant(20) = vec2(1.0);
     }
     """
     ast = crosstl.translator.parse(source)
@@ -1667,14 +1667,13 @@ def test_hlsl_invalid_compile_time_values_fail_before_global_emission(
     assert diagnostic.missing_capabilities == (
         "directx.specialization-constant-variant",
     )
-    assert diagnostic.constant_name == "has_w"
+    assert diagnostic.constant_name == "offsets"
     assert diagnostic.constant_id == 20
-    assert diagnostic.constant_type == "bool"
-    assert diagnostic.reason == "missing-required-value"
+    assert diagnostic.constant_type == "float2"
+    assert diagnostic.reason == "incompatible-type"
     assert diagnostic.source_location == source_location
-    assert "has_w" in str(diagnostic)
+    assert "offsets" in str(diagnostic)
     assert "id 20" in str(diagnostic)
-    assert "no concrete/default value" in str(diagnostic)
 
     invalid_initializers = (
         (
