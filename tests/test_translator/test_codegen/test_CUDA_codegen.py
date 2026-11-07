@@ -6396,6 +6396,81 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
 
+    def test_r32f_image_uses_float_surface_access(self):
+        # Regression test for CrossGL/crosstl#3920: an r32f surface was read
+        # and written as float4, addressing texel 4 * x instead of x.
+        source_code = """
+        shader compute {
+            layout(r32f) uniform image2D img;
+            layout(std430, binding = 0) buffer Fin { float fin[]; };
+            layout(std430, binding = 1) buffer Outp { float outp[]; };
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                imageStore(img, ivec2(0, 0), imageLoad(img, ivec2(0, 0)) + vec4(fin[i]));
+                outp[i] = 0.0;
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert (
+            "surf2Dread<float>(img, make_int2(0, 0).x * sizeof(float), "
+            "make_int2(0, 0).y)" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(cgl_scalar_add_float4(surf2Dread<float>(img, "
+            "make_int2(0, 0).x * sizeof(float), make_int2(0, 0).y)" in cuda_code
+        )
+        assert "surf2Dread<float4>" not in cuda_code
+        assert "sizeof(float4)" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+
+    def test_unformatted_image_uses_read_value_type_for_surface_access(self):
+        # Regression test for CrossGL/crosstl#3920: without a declared
+        # format, surface access follows the type of the value read or
+        # written instead of defaulting to float4.
+        source_code = """
+        shader compute {
+            image2D img;
+            layout(std430, binding = 0) buffer Fin { float fin[]; };
+            layout(std430, binding = 1) buffer Outp { float outp[]; };
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                float v;
+                v = imageLoad(img, ivec2(0, 0));
+                imageStore(img, ivec2(0, 0), v + fin[i]);
+                outp[i] = 0.0;
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert (
+            "v = surf2Dread<float>(img, make_int2(0, 0).x * sizeof(float), "
+            "make_int2(0, 0).y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite((v + fin_.fin[i]), img, make_int2(0, 0).x * sizeof(float), "
+            "make_int2(0, 0).y);" in cuda_code
+        )
+        assert "surf2Dread<float4>" not in cuda_code
+        assert "sizeof(float4)" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+
     def test_typed_hlsl_extended_writable_resources_emit_cuda_surfaces(self):
         source_code = """
         shader TypedWritableExtendedCUDA {
