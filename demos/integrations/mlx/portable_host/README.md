@@ -845,8 +845,41 @@ Xcode 27.1 jobs retain separate artifacts; the original three-OS integer profile
 unchanged. These bounded workloads do not establish arbitrary floating reduction
 order, nonfinite arithmetic or full upstream indexing-suite parity.
 
-Packed storage, zero-index specializations, larger
-allocations and the complete upstream indexing/autodiff suite remain unsupported.
+Float16 and bfloat16 outputs run the pinned packed `mlx_atomic<half>` and
+`mlx_atomic<bfloat16_t>` scatters: each 32-bit atomic word holds two elements,
+lowest lane first, and the kernels update one lane by compare-and-swap. The
+host uploads the output as packed `uint32` words. An odd output's last word
+keeps the half or bfloat guard word in its unused high lane, and the adapter
+checks that lane on upload and after readback. Updates keep their reflected
+16-bit carriers: binary16 on Metal and DirectX (DirectX `uint16` storage with
+binary16 encoding), bfloat16 on Metal, raw `uint16` words for DirectX bfloat16,
+and exact float32 carriers on OpenGL. The reference follows `atomic.h`: each
+update stores `op(update, current)` rounded to nearest even, and only while
+`Op::condition` holds, so a product never changes a zero and minimum and
+maximum store only strict changes.
+
+```sh
+python -m demos.integrations.mlx.portable_host.verify_scatter \
+  --mlx-root mlx-upstream --packages host-packages \
+  --integer64 integer64-packages \
+  --half-packages half-packages --bfloat-packages bfloat-packages \
+  --half --output-dir half-scatter-evidence
+```
+
+The half profile runs 174 CPU/native workloads, 87 per format: every policy
+over the view layouts, an odd output and all work-per-thread settings, a
+replacement of signed zeros, subnormals, extreme finite values, infinities and
+quiet NaN payloads, and a sum that rounds at, below and above half-unit ties
+and across a binade. Other sums and products stay exact in any update order.
+The `half` and `bfloat` package families supply the translated 16-bit copies
+that initialize each output. Like the float32 profile, it reruns the integer
+list-index assignment test above. `test_init.TestInit.test_identity` and
+`test_sparse`, which scatter float16 rows, also need the boolean all-reduce
+and ArgSort on the host and belong to the upstream op groups. Required Linux,
+Windows and macOS jobs retain separate artifacts.
+
+Zero-index specializations, larger allocations and the complete upstream
+indexing/autodiff suite remain unsupported.
 
 Integer atomic loads have a separate required numerical gate on all three native
 targets. It covers signed and unsigned boundaries, buffer members, pointer and

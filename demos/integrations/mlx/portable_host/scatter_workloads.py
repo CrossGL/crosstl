@@ -14,6 +14,25 @@ LAYOUTS = (
     "alias",
     "empty",
 )
+# Binary16 and bfloat16 outputs pack two elements into each atomic word; an odd
+# output leaves the high lane of its last word unused.
+HALF_TYPES = ("float16", "bfloat16")
+FLOAT_TYPES = ("float32", *HALF_TYPES)
+HALF_LAYOUTS = (*LAYOUTS, "odd", "work4", "work8", "work16", "work32")
+# Signed zeros, the extreme finite values, infinities and quiet NaN payloads,
+# with binary16 subnormals. GLSL carries both formats in float registers, where
+# signaling NaNs need not be supported and float32 subnormals (which every
+# bfloat16 subnormal is) may be flushed to zero (GLSL 4.60, section 4.7.1).
+HALF_PAYLOADS = {
+    "float16": (
+        *(0x0000, 0x8000, 0x0001, 0x83FF, 0x0400, 0x7BFF),
+        *(0xFBFF, 0x7C00, 0xFC00, 0x7E01, 0xFE55, 0x3C00),
+    ),
+    "bfloat16": (
+        *(0x0000, 0x8000, 0x0080, 0x8080, 0x3F80, 0x7F7F),
+        *(0xFF7F, 0x7F80, 0xFF80, 0x7FC1, 0xFFD5, 0xBF81),
+    ),
+}
 
 
 def cases():
@@ -75,17 +94,159 @@ def float_cases():
     }
 
 
+def half_cases():
+    for dtype in HALF_TYPES:
+        for operation in ("none", "sum", "prod", "min", "max"):
+            for i, layout in enumerate(HALF_LAYOUTS):
+                yield {
+                    "id": f"{dtype}-{operation}-{layout}",
+                    "dtype": dtype,
+                    "operation": operation,
+                    "layout": layout,
+                    "index_dtype": ("int32", "uint32", "int64", "uint64")[i % 4],
+                }
+        yield {
+            "id": f"{dtype}-none-payloads",
+            "dtype": dtype,
+            "operation": "none",
+            "layout": "payloads",
+            "index_dtype": "int64",
+        }
+        yield {
+            "id": f"{dtype}-sum-rounding",
+            "dtype": dtype,
+            "operation": "sum",
+            "layout": "rounding",
+            "index_dtype": "uint32",
+        }
+
+
+def profile_cases(*, float32=False, half=False):
+    if float32 and half:
+        raise ValueError("Choose one scatter workload profile")
+    return half_cases() if half else float_cases() if float32 else cases()
+
+
+def half_words(np, values, dtype):
+    """Return the raw words of values that ``dtype`` represents exactly."""
+    exact = np.asarray(values, dtype=np.float64)
+    if dtype == "float16":
+        rounded = exact.astype(np.float16)
+        lanes = rounded.view(np.uint16)
+    else:
+        rounded = exact.astype(np.float32)
+        bits = rounded.view(np.uint32)
+        if (bits & 0xFFFF).any():
+            raise ValueError("Bfloat scatter workload values must be exact")
+        lanes = (bits >> 16).astype(np.uint16)
+    if not np.array_equal(rounded.astype(np.float64), exact):
+        raise ValueError("16-bit scatter workload values must be exact")
+    return lanes
+
+
+def half_values(np, lanes, dtype):
+    """Widen raw 16-bit words to the float32 values they hold exactly."""
+    lanes = np.asarray(lanes, dtype=np.uint16)
+    if dtype == "float16":
+        return lanes.view(np.float16).astype(np.float32)
+    return (lanes.astype(np.uint32) << 16).view(np.float32)
+
+
+def round_half(np, values, dtype):
+    """Round float32 values to the nearest 16-bit words, ties to even."""
+    values = np.asarray(values, dtype=np.float32)
+    if dtype == "float16":
+        return values.astype(np.float16).view(np.uint16)
+    bits = values.view(np.uint32).astype(np.uint64)
+    rounded = ((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16) & 0xFFFF
+    return np.where(np.isnan(values), (bits >> 16) | 0x40, rounded).astype(np.uint16)
+
+
+def combine(np, dtype, operation, current, update):
+    """Apply the pinned atomic.h update ``op(update, current)`` to raw words.
+
+    The compare-and-swap loop stores only while ``Op::condition`` holds: a
+    product never changes a zero, and min and max store only a strict change.
+    """
+    current = np.asarray(current, dtype=np.uint16)
+    update = np.asarray(update, dtype=np.uint16)
+    if operation == "none":
+        return update.copy()
+    a, b = half_values(np, update, dtype), half_values(np, current, dtype)
+    with np.errstate(all="ignore"):
+        result = {"sum": a + b, "prod": a * b, "min": a, "max": a}[operation]
+        store = {
+            "sum": np.ones(a.shape, dtype=bool),
+            "prod": b != 0,
+            "min": a < b,
+            "max": a > b,
+        }[operation]
+    return np.where(store, round_half(np, result, dtype), current).astype(np.uint16)
+
+
+def typed(xp, np, values, dtype):
+    """Build ``dtype`` storage; 16-bit floats are built from their raw words."""
+    values = np.asarray(values)
+    if dtype not in HALF_TYPES:
+        return xp.array(values.astype(dtype))
+    lanes = half_words(np, values, dtype)
+    return lanes if xp is np else xp.array(lanes).view(getattr(xp, dtype))
+
+
+def host_array(mx, np, array):
+    """Return NumPy storage of an MLX array; 16-bit floats as their raw words."""
+    if array.dtype in (mx.float16, mx.bfloat16):
+        array = array.view(mx.uint16)
+    return np.array(array)
+
+
+def half_layout(xp, np, case, shape):
+    """The payload and rounding workloads, which index rows exactly once."""
+    dtype = case["dtype"]
+
+    def build(lanes):
+        return lanes.copy() if xp is np else xp.array(lanes).view(getattr(xp, dtype))
+
+    if case["layout"] == "payloads":
+        lanes = np.array(HALF_PAYLOADS[dtype], dtype=np.uint16).reshape(shape)
+        return (
+            build(lanes[::-1].copy()),
+            [xp.array(np.array([2, 0, 1], dtype=case["index_dtype"]))],
+            build(lanes),
+        )
+    # Each sum needs rounding: below, at and above a half-unit tie, with even
+    # and odd neighbours, at and below a binade boundary and on negative values.
+    precision = 11 if dtype == "float16" else 8
+    unit = 2.0 ** (1 - precision)
+    pairs = (
+        *((1, unit / 2), (1 + unit, unit / 2), (1, 3 * unit / 4), (1, unit / 4)),
+        *((-1, -unit / 2), (-(1 + unit), -unit / 2), (2**precision, 1)),
+        *((2**precision + 2, 1), (0.5, unit / 4), (3, unit), (1, -unit / 4)),
+        (1, -3 * unit / 4),
+    )
+    initial, update = (np.array(column).reshape(shape) for column in zip(*pairs))
+    return (
+        build(half_words(np, initial, dtype)),
+        [xp.array(np.array([0, 1, 2], dtype=case["index_dtype"]))],
+        build(half_words(np, update, dtype)),
+    )
+
+
 def arrays(xp, np, case):
     layout = case["layout"]
-    shape = (2, 2) if layout.startswith("work") else (3, 4)
+    shape = (
+        (2, 2) if layout.startswith("work") else (3, 3) if layout == "odd" else (3, 4)
+    )
     if layout == "capacity":
         shape = (65535,)
+    if case["dtype"] in HALF_TYPES and layout in ("payloads", "rounding"):
+        return half_layout(xp, np, case, shape)
     raw_source = np.arange(np.prod(shape)).reshape(shape)
-    if case["dtype"] == "float32":
+    if case["dtype"] in FLOAT_TYPES:
         raw_source = (raw_source + 1) * np.where(raw_source % 2, -0.5, 0.5)
     else:
         raw_source = raw_source + 10
-    source = xp.array(raw_source.astype(case["dtype"]))
+    source = typed(xp, np, raw_source, case["dtype"])
     if layout == "capacity":
         return (
             source,
@@ -167,28 +328,36 @@ def arrays(xp, np, case):
         if case["dtype"] == "int32":
             update = np.where(positions % 7 == 1, -update, update)
         update = np.where(positions == 0, 0, update)
-        if case["dtype"] == "float32":
+        if case["dtype"] in FLOAT_TYPES:
             update = np.where(
                 positions < 8, np.take([-1.0, 0.5, -2.0, 1.0], positions % 4), 1.0
             )
+    elif case["operation"] == "sum" and case["dtype"] in HALF_TYPES:
+        # Every partial sum, in any order, keeps within bfloat16's 8 bits.
+        update = (np.arange(update.size).reshape(update.shape) % 5 - 2) / 2
     elif case["operation"] != "none":
         update = np.arange(update.size).reshape(update.shape) % 19 + 1
-    if case["dtype"] == "float32" and case["operation"] != "prod":
+    if (
+        case["dtype"] in FLOAT_TYPES
+        and case["operation"] != "prod"
+        and not (case["operation"] == "sum" and case["dtype"] in HALF_TYPES)
+    ):
         update = -update / 4 if case["operation"] == "none" else (update - 10) / 4
-    update = update.astype(case["dtype"])
+    if case["dtype"] not in HALF_TYPES:
+        update = update.astype(case["dtype"])
     if layout == "update-strided":
-        update = xp.array(np.repeat(update, 2, axis=-1))[..., ::2]
+        update = typed(xp, np, np.repeat(update, 2, axis=-1), case["dtype"])[..., ::2]
     elif layout == "update-broadcast":
         update = xp.broadcast_to(
-            xp.array(
+            typed(
+                xp,
+                np,
                 np.array(
-                    (
-                        (0.5 if case["operation"] == "prod" else -1.75)
-                        if case["dtype"] == "float32"
-                        else (2 if case["operation"] == "prod" else 7)
-                    ),
-                    dtype=case["dtype"],
-                )
+                    (0.5 if case["operation"] == "prod" else -1.75)
+                    if case["dtype"] in FLOAT_TYPES
+                    else (2 if case["operation"] == "prod" else 7)
+                ),
+                case["dtype"],
             ),
             update.shape,
         )
@@ -196,7 +365,7 @@ def arrays(xp, np, case):
         update = source[:2]
         indices = [xp.array(np.array([1, 0], dtype=case["index_dtype"]))]
     else:
-        update = xp.array(update)
+        update = typed(xp, np, update, case["dtype"])
     if layout == "index-reversed":
         indices = [index[::-1] for index in indices]
         update = update[::-1]
@@ -209,7 +378,11 @@ def reference(np, case):
     operation = case["operation"]
     for coordinate in np.ndindex(indices[0].shape):
         destination = tuple(int(index[coordinate]) for index in indices)
-        if operation == "none":
+        if case["dtype"] in HALF_TYPES:
+            expected[destination] = combine(
+                np, case["dtype"], operation, expected[destination], updates[coordinate]
+            )
+        elif operation == "none":
             expected[destination] = updates[coordinate]
         elif operation == "sum":
             expected[destination] += updates[coordinate]

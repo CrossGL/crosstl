@@ -30,6 +30,8 @@ from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revisio
 JIT_HEADER = "mlx/backend/metal/jit/indexing.h"
 SOURCE_TYPES = {
     "float32": "float",
+    "float16": "half",
+    "bfloat16": "bfloat16_t",
     "int32": "int",
     "uint32": "uint",
     "int64": "int64_t",
