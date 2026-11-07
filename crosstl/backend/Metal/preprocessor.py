@@ -78,6 +78,7 @@ from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
 )
+from .integral_constant_tags import concretize_integral_constant_tags
 from .library_fallback_lookup import (
     library_fallback_obstacle,
     library_using_declaration_present,
@@ -1320,8 +1321,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = self._fold_concrete_type_trait_values(
             processed, require_resolution=True
         )
-        # With the traits folded, a materialized return-type enabler names its type.
+        # With the traits folded, a materialized return-type enabler names its type, and a concrete library tag
+        # (metal::bool_constant<true>) a declared tag struct (integral_constant_tags.py).
         processed = fold_concrete_enablers(self, processed)
+        processed = concretize_integral_constant_tags(self, processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def preprocess_for_entry_discovery(

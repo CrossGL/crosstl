@@ -43,6 +43,9 @@ from crosstl.backend.Metal.function_specialization import (
     _template_parameter_values_from_arguments,
     unique_specialization_identifier,
 )
+from crosstl.backend.Metal.integral_constant_tags import (
+    concretize_integral_constant_tags,
+)
 from crosstl.backend.Metal.member_lowering_layers import (
     lower_members_with_late_specializations,
 )
@@ -23572,6 +23575,9 @@ def _project_template_materialization_for_artifact(
         materialized = preprocessor._prune_unreferenced_template_struct_declarations(
             materialized
         )
+    # Every tag argument is bound now; a concrete metal::bool_constant<true> becomes a declared tag struct
+    # (integral_constant_tags.py).
+    materialized = concretize_integral_constant_tags(preprocessor, materialized)
     unsupported_target_artifact = (
         target_artifact if post_materialization_unsupported else None
     )
