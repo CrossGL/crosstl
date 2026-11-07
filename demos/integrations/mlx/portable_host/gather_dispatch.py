@@ -10,6 +10,7 @@ from crosstl.project.runtime_verification import (
     RuntimeExecutionState,
     RuntimeExecutorResult,
 )
+from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
     gather_axis_layout,
     gather_layout,
@@ -69,6 +70,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
         BOOLEAN_GUARD,
         COPY_GUARD,
         DISPATCH_VERSION,
+        TYPES,
         boolean_values,
         physical_dtype,
     )
@@ -123,11 +125,28 @@ def dispatch(host, entry, buffers, count, threads, launch):
         storage = physical_dtype(kind, host.target)
         if scatter and name == "out":
             storage = scatter_layout.atomic_storage_dtype(kind, host.target)
-        size = 1 if storage == "bool" else ctypes.sizeof(gather_layout.TYPES[storage])
-        if layout["elementType"] != storage or layout["elementStrideBytes"] != size:
+        reflected = encoded_storage_dtype(
+            layout,
+            target=host.target,
+            resource_kind=binding.get("kind", ""),
+            logical_dtype=storage,
+        )
+        size = 1 if storage == "bool" else ctypes.sizeof(TYPES[storage])
+        if layout["elementType"] != reflected or layout["elementStrideBytes"] != size:
             raise ValueError("Native and reflected gather layouts disagree")
         if name == "out" and not scatter:
             values = [guard[0]] * buffer.count
+        elif kind in scatter_layout.PACKED_TYPES:
+            lanes = list(
+                ctypes.cast(
+                    buffer.data, ctypes.POINTER(ctypes.c_uint16 * buffer.count)
+                ).contents
+            )
+            values = (
+                scatter_layout.pack_lanes(lanes, scatter_layout.PADDING[kind])
+                if name == "out"
+                else scatter_layout.carriers(kind, lanes, host.target)
+            )
         elif kind == "float32":
             values = list(
                 ctypes.cast(
@@ -161,8 +180,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
         ):
             raise ValueError("Native scatter atomic storage layout does not match")
         value = {"dtype": storage, "shape": shape, "values": values}
-        if storage == "float32":
-            value["encoding"] = FLOAT32_BITS
+        if storage in scatter_layout.ENCODINGS:
+            value["encoding"] = scatter_layout.ENCODINGS[storage]
         inputs[binding["name"]] = value
         if name == "out":
             output_name = binding["name"]
@@ -184,9 +203,11 @@ def dispatch(host, entry, buffers, count, threads, launch):
         raise RuntimeError("Native gather executor did not return its output")
     output = result.outputs[output_name]
     storage = physical_dtype(dtype, host.target)
+    packed = scatter and dtype in scatter_layout.PACKED_TYPES
+    words = scatter_layout.storage_count(dtype, threads) if scatter else threads
     if scatter:
         storage = scatter_layout.atomic_storage_dtype(dtype, host.target)
-    size = threads + len(guard)
+    size = words + len(guard)
     if (
         output.get("dtype") != storage
         or output.get("shape") != ([size, 1] if scatter else [size])
@@ -200,7 +221,9 @@ def dispatch(host, entry, buffers, count, threads, launch):
         boolean_values(readback, storage)
     else:
         bits = (
-            32 if dtype == "float32" else ctypes.sizeof(gather_layout.TYPES[dtype]) * 8
+            32
+            if dtype == "float32" or packed
+            else ctypes.sizeof(gather_layout.TYPES[dtype]) * 8
         )
         low, high = (
             (-(2 ** (bits - 1)), 2 ** (bits - 1) - 1)
@@ -211,10 +234,16 @@ def dispatch(host, entry, buffers, count, threads, launch):
             type(value) is not int or not low <= value <= high for value in readback
         ):
             raise RuntimeError("Native gather readback is outside its storage type")
-    if readback[threads:] != guard:
+    if readback[words:] != guard:
         raise RuntimeError("Native gather changed the output buffer guard")
-    ctype = ctypes.c_uint32 if dtype == "float32" else gather_layout.TYPES[dtype]
-    native = (ctype * threads)(*readback[:threads])
+    if packed:
+        lanes, padding = scatter_layout.unpack_lanes(readback[:words], threads)
+        if padding != [scatter_layout.PADDING[dtype]] * len(padding):
+            raise RuntimeError("Native scatter changed its packed padding lane")
+        native = (ctypes.c_uint16 * threads)(*lanes)
+    else:
+        ctype = ctypes.c_uint32 if dtype == "float32" else gather_layout.TYPES[dtype]
+        native = (ctype * threads)(*readback[:threads])
     record = {
         "entry": entry,
         "target": host.target,
@@ -226,8 +255,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
         "details": result.details,
         ("scatterMetadata" if scatter else "gatherMetadata"): metadata,
         ("scatterStorageType" if scatter else "gatherStorageType"): dtype,
-        ("scatterValues" if scatter else "gatherValues"): readback[:threads],
-        ("scatterGuardValues" if scatter else "gatherGuardValues"): readback[threads:],
+        ("scatterValues" if scatter else "gatherValues"): readback[:words],
+        ("scatterGuardValues" if scatter else "gatherGuardValues"): readback[words:],
         "inputs": inputs,
         "outputHash": hashlib.sha256(bytes(native)).hexdigest(),
     }

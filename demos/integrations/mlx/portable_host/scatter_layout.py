@@ -5,6 +5,12 @@ import itertools
 import math
 import re
 
+from crosstl.project.runtime_value_encoding import (
+    BFLOAT16_BITS,
+    FLOAT16_BITS,
+    FLOAT32_BITS,
+)
+from demos.integrations.mlx.portable_host import bfloat_storage, half_storage
 from demos.integrations.mlx.portable_host.gather_layout import (
     MAX_ELEMENTS,
     TYPES,
@@ -27,16 +33,66 @@ METADATA = {
     "idx_size": "uint64",
 }
 ATOMIC_TYPES = {"int32": "int", "uint32": "uint", "float32": "float"}
+# The pinned mlx_atomic<half> and mlx_atomic<bfloat16_t> are one atomic uint
+# that packs two elements, lowest lane first (kernels/atomic.h uint_or_packed).
+PACKED_TYPES = ("float16", "bfloat16")
+PACKING = 2
+# Host element types; binary16 and bfloat16 elements are raw 16-bit words.
+ELEMENT_TYPES = {**TYPES, "float16": ctypes.c_uint16, "bfloat16": ctypes.c_uint16}
+# An odd output's last word keeps this value in its unused high lane.
+PADDING = {"float16": half_storage.GUARD[0], "bfloat16": bfloat_storage.GUARD[0]}
+# The wire encodings of float carriers; integer storage has none.
+ENCODINGS = {
+    "float32": FLOAT32_BITS,
+    "float16": FLOAT16_BITS,
+    "bfloat16": BFLOAT16_BITS,
+}
 
 
 def atomic_storage_dtype(dtype, target):
     """Return the reflected physical type of the output atomic allocation."""
+    if dtype in PACKED_TYPES:
+        return "uint32"
     return "uint32" if dtype == "float32" and target == "opengl" else dtype
+
+
+def storage_count(dtype, count):
+    """Return the number of atomic words that hold ``count`` output elements."""
+    return -(-count // PACKING) if dtype in PACKED_TYPES else count
+
+
+def pack_lanes(lanes, padding):
+    """Pack 16-bit elements into atomic words; an odd tail pads its high lane."""
+    lanes = list(lanes)
+    if any(type(lane) is not int or not 0 <= lane <= 0xFFFF for lane in lanes) or (
+        type(padding) is not int or not 0 <= padding <= 0xFFFF
+    ):
+        raise ValueError("Packed scatter lanes must be unsigned 16-bit words")
+    if len(lanes) % PACKING:
+        lanes.append(padding)
+    return [low | (high << 16) for low, high in zip(lanes[::2], lanes[1::2])]
+
+
+def carriers(dtype, lanes, target):
+    """Return the native carriers of 16-bit update words, without rounding."""
+    storage = half_storage if dtype == "float16" else bfloat_storage
+    return storage.pack(lanes, target)
+
+
+def unpack_lanes(words, count):
+    """Return the ``count`` packed elements and the padding lanes after them."""
+    words = list(words)
+    if any(type(word) is not int or not 0 <= word <= 0xFFFFFFFF for word in words):
+        raise ValueError("Packed scatter words must be unsigned 32-bit values")
+    if len(words) != storage_count("float16", count):
+        raise ValueError("Packed scatter word count does not match its elements")
+    lanes = [lane for word in words for lane in (word & 0xFFFF, word >> 16)]
+    return lanes[:count], lanes[count:]
 
 
 def signature(entry):
     match = re.fullmatch(
-        r"scatter(int32|uint32|float32)(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"
+        r"scatter(int32|uint32|float32|float16|bfloat16)(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"
         r"([1-9]|10)_updc_(true|false)_nwork(1|4|8|16|32)_int",
         entry,
     )
@@ -174,9 +230,9 @@ def validate(entry, buffers, logical_size, execution):
             if not 0 <= value <= shape[axis] - slices[axis]:
                 raise ValueError("Native scatter index would exceed its output slice")
     output = buffers["out"]
-    output_end = output.data + output.count * ctypes.sizeof(TYPES[dtype])
+    output_end = output.data + output.count * ctypes.sizeof(ELEMENT_TYPES[dtype])
     for name, buffer in buffers.items():
-        end = buffer.data + buffer.count * ctypes.sizeof(TYPES[dtypes[name]])
+        end = buffer.data + buffer.count * ctypes.sizeof(ELEMENT_TYPES[dtypes[name]])
         if name != "out" and max(buffer.data, output.data) < min(end, output_end):
             raise ValueError("Native scatter output overlaps an input allocation")
     return {

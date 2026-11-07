@@ -3884,6 +3884,15 @@ jobs:
           - os: xcode-27
             target: metal
             profile: float32
+          - os: ubuntu-24.04
+            target: opengl
+            profile: half
+          - os: windows-2025
+            target: directx
+            profile: half
+          - os: macos-26
+            target: metal
+            profile: half
     defaults:
       run:
         shell: bash
@@ -3982,6 +3991,16 @@ jobs:
           set -euo pipefail
           python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX general scatter host build" -- \
             python -m pip install -e ./mlx-upstream --no-build-isolation -v 2>&1 | tee .mlx-portable-scatter/build.log
+      - name: Translate 16-bit copy prerequisites for half scatter
+        if: matrix.profile == 'half'
+        run: |
+          set -euo pipefail
+          for family in half bfloat; do
+            python tools/run_bounded_command.py --timeout-seconds 1800 --label "MLX half scatter $family copies" -- \
+              python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream \
+                --target "${{ matrix.target }}" --family "$family" --jobs 4 --output-dir ".mlx-portable-scatter/$family-packages" \
+                2>&1 | tee ".mlx-portable-scatter/$family-translation.log"
+          done
       - name: Execute general scatter host operations
         env:
           EGL_PLATFORM: surfaceless
@@ -3993,6 +4012,7 @@ jobs:
             python -m demos.integrations.mlx.portable_host.verify_scatter --mlx-root mlx-upstream \
               --packages .mlx-portable-scatter/base/base/packages --integer64 .mlx-portable-scatter/base/integer64-packages \
               ${{ matrix.profile == 'float32' && '--float32' || '' }} \
+              ${{ matrix.profile == 'half' && '--half --half-packages .mlx-portable-scatter/half-packages --bfloat-packages .mlx-portable-scatter/bfloat-packages' || '' }} \
               --output-dir .mlx-portable-scatter/scatter-evidence \
               2>&1 | tee .mlx-portable-scatter/scatter-verification.log
       - name: Retain general scatter execution evidence

@@ -1769,14 +1769,17 @@ void GatherAxis::eval_gpu(const std::vector<array>& inputs, array& out) {
 
 void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
+  // Binary16 and bfloat16 outputs are the pinned packed mlx_atomic words: two
+  // elements per 32-bit word, updated by compare-and-swap.
   if (inputs.size() < 3 || inputs.size() > 12 || axes_.size() != inputs.size() - 2 ||
-      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32) ||
+      (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32 &&
+       out.dtype() != float16 && out.dtype() != bfloat16) ||
       inputs[0].dtype() != out.dtype() || inputs.back().dtype() != out.dtype() ||
       inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
       out.size() > 65535 || inputs.back().size() > 65535 ||
       (reduce_type_ != None && reduce_type_ != Sum && reduce_type_ != Prod &&
        reduce_type_ != Min && reduce_type_ != Max)) {
-    throw std::invalid_argument("CrossTL scatter requires bounded int32, uint32 or float32 indexed updates.");
+    throw std::invalid_argument("CrossTL scatter requires bounded int32, uint32, float32, float16 or bfloat16 indexed updates.");
   }
   const auto index_dtype = inputs[1].dtype();
   if (index_dtype != int32 && index_dtype != uint32 &&
@@ -1816,7 +1819,7 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
       reduce_type_ == Sum ? "sum" : reduce_type_ == Prod ? "prod" :
       reduce_type_ == Min ? "min" : "max";
   const auto count = axes_.size();
-  const std::string entry = std::string("scatter") + storage_type(out.dtype()) +
+  const std::string entry = std::string("scatter") + cast_type(out.dtype()) +
       storage_type(index_dtype) + "_" + operation + "_" + std::to_string(count) +
       "_updc_" + (upd.flags().row_contiguous ? "true" : "false") +
       "_nwork" + std::to_string(work) + "_int";
@@ -1847,8 +1850,8 @@ void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   std::vector<int32_t> axes(axes_.begin(), axes_.end());
   int32_t idx_ndim = index_rank;
   std::vector<CrosstlMlxBuffer> buffers = {
-      {"updates", storage_type(upd.dtype()), const_cast<void*>(upd.data<void>()), update_span, 0},
-      {"out", storage_type(out.dtype()), out.data<void>(), out.size(), 1},
+      {"updates", cast_type(upd.dtype()), const_cast<void*>(upd.data<void>()), update_span, 0},
+      {"out", cast_type(out.dtype()), out.data<void>(), out.size(), 1},
       {"upd_shape", "int32", update_shape.data(), update_shape.size(), 0},
       {"upd_strides", "int64", update_strides.data(), update_strides.size(), 0},
       {"upd_ndim", "uint64", &upd_ndim, 1, 0},

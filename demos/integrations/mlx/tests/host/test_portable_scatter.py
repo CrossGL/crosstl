@@ -142,9 +142,11 @@ def buffers(case, *, normalize_scalar=False):
             (size - 1) * (step // array.itemsize)
             for size, step in zip(array.shape, array.strides)
         )
+        # 16-bit float workloads hold raw words; the host names their dtype.
+        kind = case["dtype"] if name in {"out", "updates"} else str(array.dtype)
         supplied[name] = runtime.Buffer(
             name.encode(),
-            b"bool_" if name == "idx_contigs" else str(array.dtype).encode(),
+            b"bool_" if name == "idx_contigs" else kind.encode(),
             array.ctypes.data,
             span,
             int(name == "out"),
@@ -274,7 +276,7 @@ def test_scatter_rejects_invalid_layout_before_translation(fault):
 @pytest.mark.parametrize(
     "entry",
     (
-        "scatterfloat16int32_sum_1_updc_true_nwork1_int",
+        "scatterint64int32_sum_1_updc_true_nwork1_int",
         "scatterint32int32_median_1_updc_true_nwork1_int",
         "scatterint32int32_sum_0_updc_true_nwork1_int",
         "scatterint32int32_sum_01_updc_true_nwork1_int",
@@ -413,13 +415,20 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
     entry, supplied, arrays, expected, execution = buffers(
         case, normalize_scalar=normalize_scalar
     )
+    packed = case["dtype"] in layout.PACKED_TYPES
     event.update(entry=entry, target=target, threads=expected.size, **execution)
     event.update(
         scatterMetadata=layout.validate(entry, supplied, expected.size, execution),
         scatterValues=(
             words(np, expected)
             if case["dtype"] == "float32"
-            else expected.reshape(-1).tolist()
+            else (
+                layout.pack_lanes(
+                    expected.reshape(-1).tolist(), layout.PADDING[case["dtype"]]
+                )
+                if packed
+                else expected.reshape(-1).tolist()
+            )
         ),
         scatterGuardValues=runtime.COPY_GUARD.copy(),
         scatterStorageType=case["dtype"],
@@ -444,15 +453,25 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         storage = runtime.physical_dtype(kind, target)
         if name == "out":
             storage = layout.atomic_storage_dtype(kind, target)
-        values = (
-            list(
+        if kind == "float32":
+            values = list(
                 ctypes.cast(
                     buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
                 ).contents
             )
-            if kind == "float32"
-            else layout.values(buffer)
-        )
+        elif kind in layout.PACKED_TYPES:
+            lanes = list(
+                ctypes.cast(
+                    buffer.data, ctypes.POINTER(ctypes.c_uint16 * buffer.count)
+                ).contents
+            )
+            values = (
+                layout.pack_lanes(lanes, layout.PADDING[kind])
+                if name == "out"
+                else layout.carriers(kind, lanes, target)
+            )
+        else:
+            values = layout.values(buffer)
         if name == "idx_contigs":
             values = [
                 bool(value) if target == "metal" else int(value) for value in values
@@ -464,9 +483,20 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         scalar = {
             "elementType": storage,
             "elementStrideBytes": (
-                1 if storage == "bool" else np.dtype(storage).itemsize
+                1 if storage == "bool" else ctypes.sizeof(runtime.TYPES[storage])
             ),
         }
+        if storage == "float16" and target == "directx":
+            # The reflected DirectX binary16 contract: uint16 structured words.
+            scalar.update(
+                elementType="uint16",
+                storageLayout="hlsl-structured-buffer",
+                runtimeSized=True,
+                storageEncoding={
+                    "encoding": "ieee754-binary16",
+                    "logicalElementType": "float16",
+                },
+            )
         if name == "out":
             scalar.update(
                 componentCount=1,
@@ -481,11 +511,11 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         request["buffers"][name] = {
             "dtype": storage,
             "shape": shape,
-            "binding": {"metadata": {"scalarLayout": scalar}},
+            "binding": {"kind": "buffer", "metadata": {"scalarLayout": scalar}},
         }
-        if storage == "float32":
-            event["inputs"][name]["encoding"] = "ieee754-binary32"
-            request["buffers"][name]["encoding"] = "ieee754-binary32"
+        if storage in layout.ENCODINGS:
+            event["inputs"][name]["encoding"] = layout.ENCODINGS[storage]
+            request["buffers"][name]["encoding"] = layout.ENCODINGS[storage]
     if target != "metal":
         module = tmp_path / ("test.dxil" if target == "directx" else "test.glsl")
         module.write_bytes(b"retained-test-module")
