@@ -68,6 +68,7 @@ from .dxr_ray_interfaces import (
 from .enum_values import lower_enum_values
 from .feedback_textures import FeedbackTextureUnsupportedError, refuse_feedback_textures
 from .fixed_samplers import bind_fixed_samplers
+from .float_relations import lower_float_relations
 from .fragment_colour_outputs import (
     FragmentColourOutputUnsupportedError,
     name_fragment_colour_outputs,
@@ -199,6 +200,8 @@ from .vertex_input_positions import (
     VertexInputPositionUnsupportedError,
     attribute_vertex_input_positions,
 )
+from .void_casts import VoidCastError, lower_void_casts
+from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 from .written_stage_inputs import copy_written_stage_inputs
 
@@ -265,6 +268,8 @@ __all__ = [
     "TypeAliasUnsupportedError",
     "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
+    "VoidCastError",
+    "VoidValueError",
     "apply_rule_carrying",
 ]
 
@@ -425,6 +430,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_constant_blocks(program, report.target)
     resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
+    lower_void_casts(program, report.target)
+    refuse_void_values(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)
@@ -450,6 +457,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
     lower_metal_math_spellings(program, report.target)
+    lower_float_relations(program, report.target)
     lower_enum_values(program, report.target)
     lower_device_struct_references(program, report.target)
     separate_initializer_scopes(program, report.source, report.target)
