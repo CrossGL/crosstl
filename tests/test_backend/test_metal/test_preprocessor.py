@@ -13835,7 +13835,6 @@ def test_preprocessor_selects_unique_free_function_sfinae_overload_and_fails_amb
     [
         "int select_value(int value) { return 2; }",
         "int select_value(int value);",
-        "int select_value(float value);",
         "int select_value(int value, int other = 0);",
         "int select_value(int value, ...);",
         "template <typename T> int select_value(T value) { return 2; }",
@@ -13864,6 +13863,24 @@ def test_preprocessor_diagnoses_competing_free_function_sfinae_overloads(competi
     assert excinfo.value.callee_template == "select_value"
     assert excinfo.value.requested_signature == "select_value(value)"
     assert "distinct name" in excinfo.value.suggested_action
+
+
+def test_exact_constrained_template_outranks_a_converting_competitor():
+    # select_value<int>(int) is an exact match; select_value(float) needs an
+    # int-to-float conversion, so the template is the better function.
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    int select_value(float value);
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = select_value(value);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "out[0] = select_value_int(value);" in output
+    assert "int select_value_int(int value) { return 1; }" in output
 
 
 @pytest.mark.parametrize(
