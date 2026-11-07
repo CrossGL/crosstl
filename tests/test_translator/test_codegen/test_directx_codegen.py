@@ -51548,15 +51548,24 @@ def test_hlsl_software_subgroup_requires_workgroup_uniform_returns(tmp_path, gro
         relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
     )
     ast = parse_code(tokenize_code(code))
-    if groups > 1:
-        with pytest.raises(DirectXSoftwareSubgroupError) as excinfo:
-            codegen.generate(ast)
-        assert excinfo.value.reason == "early-return-unproven"
-        return
     generated = codegen.generate(ast)
+    assert "for (uint offset = (width / 2u);" in generated
+    if groups > 1:
+        # The return is uniform only within each subgroup, so it is
+        # predicated: every invocation halves the counter and shuffles, and
+        # only the first subgroup stores (see test_subgroup_exit_value_shuffles).
+        active = re.search(r"bool (__crossgl_subgroup_active\w*) = ", generated)
+        assert active is not None
+        assert "return;" not in generated
+        loop = generated.index("for (uint offset = (width / 2u);")
+        assert generated.index(f"if ({active.group(1)})", loop) > loop
+        assert "WaveReadLaneAt" not in generated
+        assert_directx_warnings_clean_if_available(
+            generated, tmp_path, profile="cs_6_6"
+        )
+        return
     assert "if (subgroup != 0u)" in generated
     assert "return;" in generated
-    assert "for (uint offset = (width / 2u);" in generated
     assert "WaveReadLaneAt" not in generated
     assert_directx_warnings_clean_if_available(generated, tmp_path, profile="cs_6_6")
 
