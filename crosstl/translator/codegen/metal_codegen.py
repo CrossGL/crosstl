@@ -422,6 +422,7 @@ from .metal_ray_flags import metal_trace_ray_flag_statements
 from .metal_reference_argument_conditions import generate_header_writeback_statement
 from .metal_reference_argument_order import generate_ordered_writeback_statement
 from .metal_reference_argument_returns import generate_return_writeback_statement
+from .metal_reference_call_results import generate_call_result_statement
 from .metal_refusals import metal_refusals
 from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
@@ -8494,6 +8495,11 @@ class MetalCodeGen(
                 return return_code
             writebacks = self.metal_reference_argument_writebacks(stmt)
             if writebacks:
+                call_code = generate_call_result_statement(
+                    self, stmt, indent, writebacks
+                )
+                if call_code is not None:
+                    return call_code
                 return generate_ordered_writeback_statement(
                     self, stmt, indent, writebacks
                 )

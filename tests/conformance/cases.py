@@ -810,6 +810,40 @@ def o_return_reference_copy(inp):
     return np.array(out, np.int32)
 
 
+def o_reference_copy_order(inp):
+    """Statements that read, call again with or store to an inout argument after the call that copies it back."""
+
+    def bump(t):
+        t = t * 3 + 1
+        return t, t - 2
+
+    out = []
+    for x in inp.astype(np.int64):
+        tile, value = bump(x)
+        tile = value + 1
+        v = [x, x + 5]
+        v[1], value = bump(v[1])
+        r = (value, v[1])
+        tile, value = bump(tile)
+        s = (value << 1) ^ tile
+        v[0], first = bump(v[0])
+        v[0], second = bump(v[0])
+        z = first - second
+        tile, first = bump(tile)
+        tile = tile + first
+        p = tile * 2
+        v[1], value = bump(v[1])
+        c = v[1] if value != v[1] else -1
+        tile, value = bump(tile)
+        f = value + tile
+        v[0], value = bump(v[0])
+        v[0] = v[0] + value
+        tile, value = bump(tile)
+        tile = tile + value
+        out += [r[0], r[1], s, z, p, c, f, tile + v[0]]
+    return np.array(out, np.int64).astype(np.int32)
+
+
 def o_array_constants(inp):
     """Constant arrays of floats, of structs and of two-element vector arrays, indexed by bits of the input."""
     weights = [1.0, 2.0, 4.0, 8.0]
@@ -1766,6 +1800,16 @@ CASES = [
         SMALL,
         np.int32,
         o_return_reference_copy,
+        threads=128,
+    ),
+    Case(
+        "g_reference_copy_order",
+        "H13",
+        "reads, calls and stores after a call that copies an inout argument back, in the same statement",
+        "GLSL 4.60 section 6.1.1: inout arguments are copied back when the called function returns",
+        SMALL,
+        np.int32,
+        o_reference_copy_order,
         threads=128,
     ),
     Case(

@@ -49,13 +49,14 @@ class RuleStatement:
     """A statement-shaped operation that carries a rule: ``x op= e``, ``++x`` or ``--x``.
 
     ``conversions`` convert the target and the value to ``result_type`` before the polyfill; ``back_conversion``
-    converts the result to the target's type.
+    converts the result to the target's type. ``value_type`` is the type of a compound assignment's value.
     """
 
     intrinsic: str
     conversions: tuple[HubType | None, HubType | None] = (None, None)
     result_type: HubType | None = None
     back_conversion: HubType | None = None
+    value_type: HubType | None = None
 
 
 def is_int32(value) -> bool:
@@ -290,7 +291,7 @@ class Annotator:
         self.report.count(WRAP)
         intrinsic = BINARY_WRAP_INTRINSIC[_COMPOUND[node.operator]]
         node.annotations["cgl_rule_statement"] = RuleStatement(
-            intrinsic, (None, _conversion(value)), target
+            intrinsic, (None, _conversion(value)), target, value_type=value
         )
 
     def rewrite_division(self, node):

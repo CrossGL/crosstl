@@ -116,6 +116,9 @@ class MetalHlslFunctionMixin:
         )
 
     def metal_expression_is_side_effect_free(self, expr):
+        if id(expr) in self.metal_argument_substitutions:
+            # Already evaluated into a local.
+            return True
         for node in self.iter_ast_nodes(expr):
             if isinstance(node, (FunctionCallNode, AssignmentNode)):
                 return False
@@ -151,6 +154,9 @@ class MetalHlslFunctionMixin:
 
         def visit(expr, conditional):
             if expr is None or isinstance(expr, (str, int, float, bool)):
+                return
+            if id(expr) in self.metal_argument_substitutions:
+                # Already evaluated into a local, with its own copies.
                 return
             if isinstance(expr, (list, tuple)):
                 for item in expr:
