@@ -123,7 +123,8 @@ def _expand_once(
         if match is None:
             break
         angle_start = match.end() - 1
-        angle_end = preprocessor._find_matching_template_param_angle(text, angle_start)
+        # _find_matching_angle skips a `>` inside parentheses (`Int<(N > 1)>`).
+        angle_end = preprocessor._find_matching_angle(text, angle_start)
         if angle_end is None:
             break
         arguments = [

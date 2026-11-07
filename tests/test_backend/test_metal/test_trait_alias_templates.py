@@ -66,6 +66,8 @@ def test_find_trait_alias_templates_keeps_plain_namespace_aliases_only():
     [
         ("Int<1>", "integral_const<int, 1>"),
         ("Int< 16 >", "integral_const<int, 16>"),
+        ("Int<(4 > 2)>", "integral_const<int, (4 > 2)>"),
+        ("Swap<Int<(1 >> 1)>, float>", "pair<float, integral_const<int, (1 >> 1)>>"),
         ("Swap<Int<2>, float>", "pair<float, integral_const<int, 2>>"),
         ("lib::Pair2<float>", "vec<float, 2>"),
         ("::other::Pair2<half>", "vec<half, 3>"),
