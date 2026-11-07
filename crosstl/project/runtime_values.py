@@ -13,6 +13,8 @@ from __future__ import annotations
 import copy
 import math
 import struct
+import sys
+from array import array
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -42,6 +44,22 @@ _PACK_FORMATS = {
         for width, code in ((8, "B"), (16, "H"), (32, "I"), (64, "Q"))
     },
     **_FLOAT_FORMATS,
+}
+# ``array`` type codes whose C type has exactly the integer dtype's width.
+# The table leaves out any width this platform's C types do not match.
+_ARRAY_CODES = {
+    dtype: code
+    for dtype, code, width in (
+        ("int8", "b", 1),
+        ("uint8", "B", 1),
+        ("int16", "h", 2),
+        ("uint16", "H", 2),
+        ("int32", "i", 4),
+        ("uint32", "I", 4),
+        ("int64", "q", 8),
+        ("uint64", "Q", 8),
+    )
+    if array(code).itemsize == width
 }
 
 
@@ -151,6 +169,34 @@ def pack_scalars(
     return _checked_storage(values, dtype, types, pack=True)
 
 
+def integer_storage(values: Sequence[int], dtype: str) -> bytes | None:
+    """The little-endian ``dtype`` storage of exact ``int`` values, or ``None``.
+
+    The caller has checked that the exact type of every item is ``int``.
+    ``None`` means some value lies outside the integer dtype's range. Building
+    an ``array`` of the C type with the dtype's width refuses such a value with
+    ``OverflowError``, so one C pass decides the range and packs the words,
+    several times faster than a ``min``/``max`` pass followed by ``struct``.
+    The bytes are those of packing each value with its ``struct`` code.
+    """
+    if type(values) is not list:
+        # ``array`` reads a bytes-like initializer as raw storage, not items.
+        values = list(values)
+    code = _ARRAY_CODES.get(dtype)
+    if code is None:
+        low, high = _INTEGER_RANGES[dtype]
+        if values and not (low <= min(values) and max(values) <= high):
+            return None
+        return struct.pack(f"<{len(values)}{_PACK_FORMATS[dtype]}", *values)
+    try:
+        words = array(code, values)
+    except OverflowError:
+        return None
+    if sys.byteorder != "little":
+        words.byteswap()
+    return words.tobytes()
+
+
 def _checked_storage(
     values: Sequence[Any], dtype: str, types: frozenset[type] | None, *, pack: bool
 ) -> bytes | None:
@@ -158,11 +204,9 @@ def _checked_storage(
         if not _within(values, _BOOL_TYPES, types):
             return None
     elif dtype in _INTEGER_RANGES:
-        low, high = _INTEGER_RANGES[dtype]
-        if not _within(values, _INT_TYPES, types) or (
-            values and not (low <= min(values) and max(values) <= high)
-        ):
+        if not _within(values, _INT_TYPES, types):
             return None
+        return integer_storage(values, dtype)
     elif dtype in _FLOAT_FORMATS:
         if not _within(values, _NUMERIC_TYPES, types):
             return None

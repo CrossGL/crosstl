@@ -887,7 +887,9 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             path=f"{path}.allocation",
         )
     try:
-        validate_value_encoding(runtime_value.encoding, dtype, runtime_value.values)
+        validate_value_encoding(
+            runtime_value.encoding, dtype, runtime_value.values, types=types
+        )
     except ValueError as exc:
         raise NativeLoaderDispatchError(
             "value-encoding-invalid",

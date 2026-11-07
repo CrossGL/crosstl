@@ -14,7 +14,7 @@ from typing import Any, Mapping, Sequence
 
 from crosstl.translator.resource_storage import encoded_storage_dtype
 
-from .runtime_value_encoding import validate_value_encoding
+from .runtime_value_encoding import encoded_storage, validate_value_encoding
 from .runtime_values import flatten_scalars, flatten_values, pack_scalars
 from .runtime_verification import (
     NativeRuntimeBufferBinding,
@@ -5192,7 +5192,11 @@ def _pack_values(
 ) -> bytes:
     values, types = flatten_scalars(value)
     try:
-        validate_value_encoding(encoding, dtype, values)
+        if encoding is None:
+            validate_value_encoding(encoding, dtype)
+        else:
+            # Encoded storage words are checked and packed in one pass.
+            encoded = encoded_storage(encoding, dtype, values, types=types)
     except ValueError as exc:
         raise RuntimeExecutorUnavailable(str(exc)) from exc
     if len(values) != expected_count:
@@ -5200,10 +5204,7 @@ def _pack_values(
             f"{target} compute runtime buffer value count does not match shape."
         )
     if encoding is not None:
-        return struct.pack(
-            "<" + ("H" if dtype in {"float16", "bfloat16"} else "I") * expected_count,
-            *values,
-        )
+        return encoded
     payload = pack_scalars(values, dtype, types=types)
     if payload is not None:
         # Exact scalars that fit pack as the checks and code below would.

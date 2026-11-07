@@ -111,6 +111,28 @@ def test_value_digests_of_one_exact_type_hash_machine_words():
     assert trace_records.value_digest(wide) == _digest(wide)
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        [0, 2**32 - 1] * N,
+        [7],
+        [0, -1] * N,
+        [1] * N + [2**32],
+        [2**32 - 1] * N + [-1],
+        [2**63 - 1, -(2**63)] * N,
+    ],
+)
+def test_integer_digests_hash_the_little_endian_int64_words(values):
+    # Words within 32 unsigned bits widen; the rest pack as int64 directly.
+    words = struct.pack(f"<{len(values)}q", *values)
+    assert trace_records._int64_words(values) == words
+    assert (
+        trace_records.value_digest(values)
+        == hashlib.sha256(b"int64\0" + words).hexdigest()
+    )
+    assert trace_records._int64_words(values + [2**63]) is None
+
+
 def test_trace_stream_reads_one_record_at_a_time(tmp_path):
     path = tmp_path / "trace.jsonl"
     records = [{"entry": "a", "values": [1, 2]}, {"entry": "b"}]

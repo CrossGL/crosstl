@@ -269,13 +269,24 @@ def scalar_words_fit(words, ctype):
     """Whether every word is an exact ``int`` that ``ctype`` stores unchanged.
 
     This decides ``all(type(w) is int and ctype(w).value == w for w in words)``
-    with one C-level type scan and one ``min``/``max`` pass, which is several
-    times faster on readbacks of tens of thousands of words. ``bool`` words
-    are refused, as the exact type test refuses them.
+    with one C-level type scan and one ``array`` of ``ctype``'s own C type,
+    whose construction refuses any value that type cannot hold, which is
+    several times faster on readbacks of tens of thousands of words. ``bool``
+    words are refused, as the exact type test refuses them.
     """
+    if type(words) is not list:
+        # ``array`` reads a bytes-like initializer as raw storage, not items.
+        words = list(words)
     if not exact_types_within(words, _INT_TYPES):
         return False
     if not words:
+        return True
+    code = ctype._type_
+    if packed_array(code).itemsize == ctypes.sizeof(ctype):
+        try:
+            packed_array(code, words)
+        except OverflowError:
+            return False
         return True
     low, high = word_range(ctype)
     return low <= min(words) and max(words) <= high

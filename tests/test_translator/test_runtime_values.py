@@ -3,18 +3,28 @@
 import copy
 import math
 import random
+import re
 import struct
 from collections.abc import Sequence
 
 import pytest
 
 from crosstl.project import native_loader_dispatch, native_runtime_drivers
-from crosstl.project.runtime_value_encoding import storage_words
+from crosstl.project.runtime_value_encoding import (
+    BFLOAT16_BITS,
+    FLOAT16_BITS,
+    FLOAT32_BITS,
+    encoded_storage,
+    storage_bytes,
+    storage_words,
+    validate_value_encoding,
+)
 from crosstl.project.runtime_values import (
     copy_values,
     exact_types_within,
     flatten_scalars,
     flatten_values,
+    integer_storage,
     pack_scalars,
     scalar_types,
     scalars_fit,
@@ -344,3 +354,101 @@ def test_typed_runtime_values_check_their_values_through_one_scan():
                 path="$.inputValues.x",
             )
         assert error.value.path == "$.inputValues.x.values" + field
+
+
+INTEGER_DTYPES = tuple(
+    f"{sign}int{width}" for sign in ("", "u") for width in (8, 16, 32, 64)
+)
+
+
+@pytest.mark.parametrize("dtype", INTEGER_DTYPES)
+def test_integer_storage_packs_in_range_ints_and_refuses_the_rest(dtype):
+    code = native_runtime_drivers._dtype_format(dtype)
+    width = struct.calcsize(code) * 8
+    if dtype.startswith("int"):
+        low, high = -(1 << (width - 1)), (1 << (width - 1)) - 1
+    else:
+        low, high = 0, (1 << width) - 1
+    rng = random.Random(dtype)
+    accepted = [[], [low, high], [high, 0, low], [0] * 3]
+    accepted.append([rng.randint(low, high) for _ in range(500)])
+    for values in accepted:
+        expected = struct.pack(f"<{len(values)}{code}", *values)
+        assert integer_storage(values, dtype) == expected
+        assert integer_storage(tuple(values), dtype) == expected
+    # A bytes-like sequence is read item by item, as ``struct`` reads it.
+    assert integer_storage(b"\x01\x02", dtype) == struct.pack(f"<2{code}", 1, 2)
+    for values in ([low - 1], [high + 1], [0, high + 1, 0], [low, low - 1]):
+        assert integer_storage(values, dtype) is None
+        assert pack_scalars(values, dtype) is None
+        assert not scalars_fit(values, dtype)
+
+
+@pytest.mark.parametrize("width", [16, 32])
+def test_storage_bytes_packs_exactly_what_storage_words_accepts(width):
+    code = "H" if width == 16 else "I"
+    for values in ([], [0, (1 << width) - 1], [[1], (2, 3)], [5, 0] * 300):
+        words = storage_words(values, width=width)
+        expected = struct.pack(f"<{len(words)}{code}", *words)
+        assert storage_bytes(values, width=width) == expected
+        types = scalar_types(values)
+        assert storage_bytes(values, width=width, types=types) == expected
+        assert storage_words(values, width=width, types=types) == words
+    for invalid in ([1 << width], [-1], [True], [1.0], [[1 << width]], 7.0, [0, -1]):
+        with pytest.raises(ValueError) as expected:
+            storage_words(invalid, width=width)
+        message = re.escape(str(expected.value))
+        with pytest.raises(ValueError, match=message):
+            storage_bytes(invalid, width=width)
+        if type(invalid) is list:
+            with pytest.raises(ValueError, match=message):
+                storage_bytes(invalid, width=width, types=scalar_types(invalid))
+    with pytest.raises(ValueError, match="width"):
+        storage_bytes([1], width=8)
+
+
+@pytest.mark.parametrize(
+    "encoding, dtype, values",
+    [
+        (FLOAT32_BITS, "float32", [0, 0x7FC00000, 2**32 - 1]),
+        (FLOAT16_BITS, "float16", [0x7E00, 1]),
+        (BFLOAT16_BITS, "bfloat16", [[0x3F80], [0]]),
+        (FLOAT32_BITS, "float16", [0]),
+        ("other", "float32", [0]),
+        (["unhashable"], "float32", [0]),
+        (FLOAT16_BITS, "float16", [1 << 16]),
+        (BFLOAT16_BITS, "bfloat16", [-1]),
+        (FLOAT32_BITS, "float32", [True]),
+        (FLOAT32_BITS, "float32", [0.0]),
+    ],
+)
+def test_encoded_storage_checks_and_packs_as_validation_and_packing_do(
+    encoding, dtype, values
+):
+    types = scalar_types(values)
+    try:
+        validate_value_encoding(encoding, dtype, values)
+    except ValueError as error:
+        message = re.escape(str(error))
+        for known in (None, types):
+            with pytest.raises(ValueError, match=message):
+                validate_value_encoding(encoding, dtype, values, types=known)
+            with pytest.raises(ValueError, match=message):
+                encoded_storage(encoding, dtype, values, types=known)
+        with pytest.raises(
+            native_runtime_drivers.RuntimeExecutorUnavailable, match=message
+        ):
+            native_runtime_drivers._pack_values(
+                values, dtype, expected_count=len(values), encoding=encoding
+            )
+        return
+    validate_value_encoding(encoding, dtype, values, types=types)
+    words = storage_words(values, width=32 if dtype == "float32" else 16)
+    code = "I" if dtype == "float32" else "H"
+    expected = struct.pack(f"<{len(words)}{code}", *words)
+    assert encoded_storage(encoding, dtype, values) == expected
+    assert encoded_storage(encoding, dtype, values, types=types) == expected
+    packed = native_runtime_drivers._pack_values(
+        values, dtype, expected_count=len(words), encoding=encoding
+    )
+    assert packed == expected

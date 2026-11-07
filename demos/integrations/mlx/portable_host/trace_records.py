@@ -17,12 +17,37 @@ SUMMARY_KEYS = ("entry", "target", "threads")
 _SCALAR_TYPES = frozenset({type(None), bool, int, float, str})
 # Bool cannot be subclassed; these return exact built-in values for the rest.
 _BASE_CONVERSIONS = ((int, int.__int__), (float, float.__float__), (str, str.__str__))
+_UINT32_SIZE = array("I").itemsize
 
 
 def _little_endian(values):
     if sys.byteorder != "little":
         values.byteswap()
     return values.tobytes()
+
+
+def _int64_words(values):
+    """Little-endian int64 words of exact ``int`` values, or ``None``.
+
+    Values that all fit 32 unsigned bits, such as storage words, pack at that
+    width and widen by placing each word's bytes in the low half of a zeroed
+    64-bit slot, about twice as fast as packing them as int64. Others pack as
+    int64; ``None`` means some value does not fit.
+    """
+    if sys.byteorder == "little" and _UINT32_SIZE == 4:
+        try:
+            narrow = array("I", values).tobytes()
+        except OverflowError:
+            pass
+        else:
+            wide = bytearray(2 * len(narrow))
+            for offset in range(4):
+                wide[offset::8] = narrow[offset::4]
+            return bytes(wide)
+    try:
+        return _little_endian(array("q", values))
+    except OverflowError:
+        return None
 
 
 def _typed_encoding(values, types=None):
@@ -44,10 +69,8 @@ def _typed_encoding(values, types=None):
     if kind is bool:
         return b"bool\0" + bytes(values)
     if kind is int:
-        try:
-            return b"int64\0" + _little_endian(array("q", values))
-        except OverflowError:
-            return None
+        words = _int64_words(values)
+        return None if words is None else b"int64\0" + words
     # A finite sum excludes NaN and infinities.
     if kind is float and math.isfinite(sum(values)):
         return b"float64\0" + _little_endian(array("d", values))
