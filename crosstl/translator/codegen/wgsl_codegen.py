@@ -88,6 +88,7 @@ from .wgsl_boolean_xor import (
 )
 from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
 from .wgsl_composite_conditionals import WGSLCompositeConditionalMixin
+from .wgsl_conditional_effects import WGSLConditionalEffectsMixin
 from .wgsl_cube_texture_offsets import (
     OFFSET_TEXTURE_LOOKUPS,
     WGSLCubeTextureOffsetUnsupportedError,
@@ -194,6 +195,7 @@ class WGSLAggregateInitializerError(ValueError):
 class WGSLCodeGen(
     WGSLLoopContinuingMixin,
     WGSLValueSideEffectsMixin,
+    WGSLConditionalEffectsMixin,
     WGSLCompositeConditionalMixin,
     WGSLParameterLoweringMixin,
 ):
@@ -2949,6 +2951,11 @@ class WGSLCodeGen(
             return "\n".join(
                 self.generate_statement(statement, indent) for statement in lowered
             )
+        lowered = self.lower_effectful_ternary(stmt)
+        if lowered is not None:
+            return "\n".join(
+                self.generate_statement(statement, indent) for statement in lowered
+            )
         lowered = self.lower_composite_ternary(stmt)
         if lowered is not None:
             return "\n".join(
@@ -2987,6 +2994,12 @@ class WGSLCodeGen(
             user_functions.update(self._function_signature_identifier_names.values())
             user_functions.update(self._function_overloads_by_name)
             struct_types = set(self._type_identifier_names.values())
+            if not isinstance(
+                stmt.expression, (FunctionCallNode, ConstructorNode)
+            ) and not is_increment(stmt.expression):
+                # WGSL statements are calls, updates and assignments only (WGSL section 9); any other
+                # expression is evaluated and its value discarded with a phony assignment (section 9.2.1).
+                return f"{pad}_ = {expression};"
             statement = wgsl_call_statement(expression, user_functions, struct_types)
             return f"{pad}{statement};"
         if isinstance(stmt, AssignmentNode):
@@ -3725,6 +3738,7 @@ class WGSLCodeGen(
             return f"{expr.operator}{prefix_unary_operand(expr.operator, operand)}"
         if isinstance(expr, TernaryOpNode):
             self.require_select_operands(expr)
+            self.require_unconditional_branches(expr)
             return (
                 f"select({self.generate_expression(expr.false_expr)}, "
                 f"{self.generate_expression(expr.true_expr)}, "
