@@ -157,6 +157,7 @@ from .push_constant_blocks import (
 )
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
     generate_slang_projected_compare,
@@ -11295,6 +11296,10 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if type_name in self.enum_struct_type_names:
             return type_name
+
+        unrepresentable = slang_unrepresentable_type_reason(type_name)
+        if unrepresentable is not None:
+            return self.refuse_lowering(unrepresentable, type_name)
 
         type_map = {
             "f16": "half",
