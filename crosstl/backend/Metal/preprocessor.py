@@ -35,6 +35,7 @@ from .arithmetic_conversions import builtin_arithmetic_conversion
 from .array_element_receivers import array_element_receiver_end, array_rank_at
 from .auto_placeholders import deduced_auto_type
 from .call_result_types import CallResultScope, infer_call_result_type
+from .category_traits import CATEGORY_TRAITS, evaluate_category_trait
 from .concrete_free_operators import materialize_concrete_free_operators
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
@@ -6896,14 +6897,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         "is_unsigned": 1,
         "is_const": 1,
         "is_pointer": 1,
+        "is_scalar": 1,
+        "is_vector": 1,
+        "is_arithmetic": 1,
     }
     _METAL_TYPE_TRAIT_START_RE = re.compile(
         r"(?<![A-Za-z0-9_:])"
         r"(?:(?:::)?metal\s*::\s*)?"
         r"(?P<trait>is_same_v|is_convertible_v|is_integral_v|"
         r"is_floating_point_v|is_signed_v|is_unsigned_v|is_const_v|"
-        r"is_pointer_v|is_same|is_convertible|is_integral|"
-        r"is_floating_point|is_signed|is_unsigned|is_const|is_pointer)\s*<"
+        r"is_pointer_v|is_scalar_v|is_vector_v|is_arithmetic_v|"
+        r"is_same|is_convertible|is_integral|"
+        r"is_floating_point|is_signed|is_unsigned|is_const|is_pointer|"
+        r"is_scalar|is_vector|is_arithmetic)\s*<"
     )
 
     # Metal SIMD-group / quad-group built-ins that return the SAME type as their
@@ -7186,6 +7192,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if not all(concrete):
             return None, resolved_operands, "operand-unresolved"
+
+        if trait in CATEGORY_TRAITS:
+            category = evaluate_category_trait(self, trait, resolved_operands[0])
+            if category is None:
+                return None, resolved_operands, "operand-category-unsupported"
+            return category, resolved_operands, "evaluated"
 
         if trait == "is_same":
             return (
