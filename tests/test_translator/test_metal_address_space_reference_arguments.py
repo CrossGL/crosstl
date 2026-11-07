@@ -6,6 +6,7 @@ cannot bind it (Metal Shading Language 4.0, section 4: "Address Spaces"), so sto
 refused rather than copied.
 """
 
+import re
 import shutil
 import subprocess
 
@@ -54,7 +55,8 @@ def _translate(tmp_path, source):
 def test_matching_address_space_binds_without_temporaries(tmp_path):
     code = _translate(tmp_path, MATCHING_SPACES)
     assert "__crossgl_ref" not in code
-    assert "void increment(device int &value)" in code
+    # Output is clang-formatted only where clang-format is installed.
+    assert re.search(r"void increment\(device int\s*&\s*value\)", code)
     assert "increment(value);" in code
     assert "increment(result[1]);" in code
     assert "accumulate(result[0], tile[0]);" in code
