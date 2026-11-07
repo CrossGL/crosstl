@@ -17,6 +17,7 @@ import pytest
 
 import crosstl
 from crosstl.translator.codegen.wgsl_buffer_atomics import WGSLAtomicLoweringError
+from crosstl.translator.codegen.wgsl_workgroup_locals import WGSLWorkgroupLocalError
 
 PROGRAM = """shader main {
     struct B { uint head; int tail; uint data[]; };
@@ -258,11 +259,11 @@ def test_function_scope_workgroup_variables_move_to_module_scope(tmp_path):
 """
     output = _translate(tmp_path, "", source=source)
     assert "var<storage, read_write> counter: array<atomic<u32>>;" in output
-    assert "var<workgroup> k_count: atomic<i32>;" in output
-    assert "var<workgroup> k_tile: array<f32, 64>;" in output
+    assert "var<workgroup> count: atomic<i32>;" in output
+    assert "var<workgroup> tile: array<f32, 64>;" in output
     assert "var count" not in output and "var tile" not in output
-    assert "k_tile[lid] = f32(id);" in output
-    assert "atomicMax(&k_count, i32(old));" in output
+    assert "tile[lid] = f32(id);" in output
+    assert "atomicMax(&count, i32(old));" in output
     _validate(tmp_path, output)
 
 
@@ -330,7 +331,7 @@ def test_workgroup_local_with_an_initializer_is_refused(tmp_path):
     }
 }
 """
-    with pytest.raises(WGSLAtomicLoweringError, match="takes no initializer"):
+    with pytest.raises(WGSLWorkgroupLocalError, match="has no initializer"):
         _translate(tmp_path, "", source=source)
 
 

@@ -16,10 +16,10 @@ the AST it then rewrites every function:
 - ``atomicCompSwap`` and ``atomicCompareExchange`` are strong compare-exchanges, while WGSL has only
   ``atomicCompareExchangeWeak``, which may fail spuriously (section 17.8.5). The call runs before its statement as
   a loop that retries while the exchange failed although the old value equals the comparand. A loop condition
-  that holds one is tested at the top of the loop body instead;
-- a variable declared in a function with ``shared``, ``groupshared``, ``threadgroup`` or ``workgroup`` storage
-  moves to module scope, where WGSL requires workgroup variables (section 7.3); a function ``var`` would give
-  every invocation its own copy.
+  that holds one is tested at the top of the loop body instead.
+
+The plan runs after :func:`~crosstl.translator.codegen.wgsl_workgroup_locals.hoist_workgroup_locals` has moved the
+entry points' workgroup locals to module scope, so their atomic slots are module slots.
 
 The copy keeps each slot's scalar type, so expression typing is unchanged; the generator wraps the scalar in
 ``atomic<...>`` where it prints the slot's declaration.
@@ -93,7 +93,6 @@ ATOMIC_ARITY = {
 }
 SLOT_ANNOTATION = "wgsl_atomic_slot"
 COMPARE_PREFIX = "_crosstl_cas_"
-WORKGROUP_QUALIFIERS = frozenset({"shared", "groupshared", "threadgroup", "workgroup"})
 WRITE_QUALIFIERS = frozenset({"out", "inout"})
 INCREMENT_OPERATORS = {"++": "+", "--": "-"}
 SHORT_CIRCUIT_OPERATORS = frozenset({"&&", "||"})
@@ -171,12 +170,6 @@ def callee_name(call):
 
 def _qualifiers(node):
     return {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
-
-
-def is_workgroup_local(node):
-    return isinstance(node, VariableNode) and bool(
-        _qualifiers(node) & WORKGROUP_QUALIFIERS
-    )
 
 
 def _type_name(vtype):
@@ -273,7 +266,7 @@ def _repeatable(expr):
 
 
 class _Program:
-    """The shader's declarations, the atomic slots, and the function-scope workgroup variables to hoist."""
+    """The shader's declarations and the atomic slots."""
 
     def __init__(self, ast, scalar_name, is_stage_resource):
         self.ast = ast
@@ -282,8 +275,6 @@ class _Program:
         self.module_types = {}
         self.functions = []
         self.write_positions = {}
-        self.hoists = {}
-        self.hoisted_declarations = {}
         self.slots = {}
         self.compare_count = 0
         self._holds = {}
@@ -320,37 +311,6 @@ class _Program:
                 if _qualifiers(parameter) & WRITE_QUALIFIERS:
                     positions.add(index)
         self.function_names = {function.name for function, _, _ in self.functions}
-
-    def plan_hoists(self):
-        taken = set(self.module_types) | set(self.structs) | self.function_names
-        for function, _, declarations in self.functions:
-            names = {}
-            for node in _walk(function.body):
-                if (
-                    not is_workgroup_local(node)
-                    or id(node) in self.hoisted_declarations
-                ):
-                    continue
-                if node.initial_value is not None:
-                    raise WGSLAtomicLoweringError(
-                        f"workgroup variable {node.name} in {function.name} has an initializer; "
-                        "WGSL workgroup memory starts zeroed and takes no initializer"
-                    )
-                hoisted, suffix = f"{function.name}_{node.name}", 1
-                while hoisted in taken:
-                    hoisted, suffix = (
-                        f"{function.name}_{node.name}_{suffix}",
-                        suffix + 1,
-                    )
-                taken.add(hoisted)
-                names.setdefault(node.name, hoisted)
-                declaration = copy.copy(node)
-                _set(declaration, name=hoisted)
-                declaration.qualifiers = ["shared"]
-                declarations.append(declaration)
-                self.module_types[hoisted] = node.var_type
-                self.hoisted_declarations[id(node)] = hoisted
-            self.hoists[id(function)] = names
 
     def strip_explicit_atomics(self):
         """Record ``atomic<T>`` declarations as slots and give them their scalar type."""
@@ -452,9 +412,8 @@ class _Program:
         return None
 
     def module_name(self, name, lookup):
-        entry = lookup(name)
-        if entry is not None:
-            return entry[1] if entry[0] == "hoisted" else None
+        if lookup(name) is not None:
+            return None
         return name if name in self.module_types else None
 
     def module_root(self, expr, lookup):
@@ -499,12 +458,10 @@ class _Program:
         return AtomicSlot(owner, name, subscripts, vtype)
 
     def collect_slots(self):
+        def lookup(name):
+            return None
+
         for function, _, _ in self.functions:
-            hoists = self.hoists.get(id(function), {})
-
-            def lookup(name, hoists=hoists):
-                return ("hoisted", hoists[name]) if name in hoists else None
-
             for node in _walk(function.body):
                 if (
                     isinstance(node, FunctionCallNode)
@@ -523,7 +480,6 @@ class _Rewriter:
     def __init__(self, program):
         self.program = program
         self.scopes = []
-        self.hoists = {}
 
     def lookup(self, name):
         for scope in reversed(self.scopes):
@@ -542,7 +498,6 @@ class _Rewriter:
             )
 
     def function(self, function, resources):
-        self.hoists = self.program.hoists.get(id(function), {})
         self.scopes = [{}]
         for parameter in function.parameters or []:
             if id(parameter) not in resources:
@@ -655,10 +610,6 @@ class _Rewriter:
         return [self.generic(stmt, lambda child: self.expr(child, None))]
 
     def declaration(self, stmt, prelude):
-        hoisted = self.program.hoisted_declarations.get(id(stmt))
-        if hoisted is not None:
-            self.scopes[-1][stmt.name] = ("hoisted", hoisted)
-            return []
         # A local whose type holds atomic memory is refused where the generator prints it
         # (``refuse_atomic_local``), after any more specific initializer diagnostic.
         stmt.initial_value = self.expr(stmt.initial_value, prelude)
@@ -770,9 +721,6 @@ class _Rewriter:
             )
             return expr
         if isinstance(expr, IdentifierNode):
-            entry = self.lookup(expr.name)
-            if entry is not None and entry[0] == "hoisted":
-                return IdentifierNode(entry[1])
             return expr
         return self.expr(expr, prelude, conditional)
 
@@ -978,8 +926,6 @@ def _needs_plan(ast):
     for node in _walk(ast):
         if isinstance(node, FunctionCallNode) and callee_name(node) in ATOMIC_NAMES:
             return True
-        if is_workgroup_local(node):
-            return True
         for vtype in (
             getattr(node, "var_type", None),
             getattr(node, "member_type", None),
@@ -998,7 +944,6 @@ def plan_wgsl_buffer_atomics(ast, scalar_name, is_stage_resource):
         return ast, {}, set()
     ast = copy.deepcopy(ast)
     program = _Program(ast, scalar_name, is_stage_resource)
-    program.plan_hoists()
     program.strip_explicit_atomics()
     program.collect_slots()
     rewriter = _Rewriter(program)

@@ -53,6 +53,10 @@ from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
 )
+from .device_private_globals import (
+    DevicePrivateGlobalUnsupportedError,
+    lower_device_private_globals,
+)
 from .device_references import (
     DeviceReferenceUnsupportedError,
     lower_device_struct_references,
@@ -207,6 +211,7 @@ __all__ = [
     "BuiltinValueUnsupportedError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
+    "DevicePrivateGlobalUnsupportedError",
     "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
@@ -436,6 +441,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     rename_colliding_functions(program)
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
+    lower_device_private_globals(program, report.target)
     store_row_major_members_transposed(program, report.target)
     store_row_major_constant_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
