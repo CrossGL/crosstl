@@ -293,6 +293,26 @@ def test_glsl_specialization_macros_are_defined_after_version(tmp_path):
     assert checks.glsl_specialized_source(artifact, plain, scratch) == artifact
 
 
+def test_glsl_host_workgroup_size_macros_get_the_encoded_default(tmp_path):
+    artifact = tmp_path / "unit.glsl"
+    text = (
+        "#version 450 core\n"
+        "#elif defined(CROSSGL_WORKGROUP_SIZE_X) && \\\n"
+        "    defined(CROSSGL_WORKGROUP_SIZE_Y) && defined(CROSSGL_WORKGROUP_SIZE_Z)\n"
+        "void main() {}\n"
+    )
+    artifact.write_text(text)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    source = Path(checks.glsl_specialized_source(artifact, text, scratch))
+    assert source.read_text().splitlines()[1:5] == [
+        "#define CROSSGL_WORKGROUP_SIZE_X 1",
+        "#define CROSSGL_WORKGROUP_SIZE_Y 1",
+        "#define CROSSGL_WORKGROUP_SIZE_Z 1",
+        "#line 2",
+    ]
+
+
 def test_essl_artifacts_must_declare_glsl_es_300(tmp_path):
     desktop = tmp_path / "desktop.essl.glsl"
     desktop.write_text("#version 450\nvoid main() {}\n")
@@ -311,6 +331,12 @@ def test_spirv_environment_follows_module_version():
     assert checks.spirv_environment("; Version: 1.5\n") == "vulkan1.2"
     assert checks.spirv_environment("; Version: 1.6\n") == "vulkan1.3"
     assert checks.spirv_environment("OpCapability Shader\n") == "vulkan1.1"
+
+
+def test_spirv_features_enable_local_size_id_only_where_declared():
+    declared = "OpExecutionModeId %2 LocalSizeId %7 %8 %9\n"
+    assert checks.spirv_features(declared) == ["--allow-localsizeid"]
+    assert checks.spirv_features("OpExecutionMode %2 LocalSize 1 1 1\n") == []
 
 
 def _records(outcomes):

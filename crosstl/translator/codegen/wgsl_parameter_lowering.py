@@ -18,10 +18,13 @@ argument any other way. Core WGSL already demands that: the argument of a
 pointer parameter (WGSL section 11.3.1, the restriction that the
 ``unrestricted_pointer_parameters`` extension lifts), and two pointer
 arguments with one root variable may not be passed together when either is
-written (WGSL section 11.4, alias analysis). Every other argument form raises
-``ValueError`` instead of being passed by value, which would drop the
-callee's writes. So do ``inout``/``out`` parameters of entry points, because
-WGSL entry-point parameters are pipeline inputs (WGSL section 13.3.1).
+written (WGSL section 11.4, alias analysis). Any other l-value argument, such
+as an array element, a member or a module-scope variable, is copied into a
+local around the call by ``wgsl_reference_argument_copies``; an argument that
+is not an l-value raises ``ValueError`` instead of being passed by value,
+which would drop the callee's writes. So do ``inout``/``out`` parameters of
+entry points, because WGSL entry-point parameters are pipeline inputs (WGSL
+section 13.3.1).
 """
 
 from __future__ import annotations
@@ -283,20 +286,37 @@ class WGSLParameterLoweringMixin:
     def reference_parameter_expression(self, name):
         return f"(*{self.identifier_name(name)})"
 
+    def direct_reference_argument(self, argument):
+        """``&v`` for a whole local variable, a pointer parameter itself, else None.
+
+        Every other l-value argument is copied in and out around the call by
+        ``wgsl_reference_argument_copies``.
+        """
+        if not isinstance(argument, IdentifierNode):
+            return None
+        name = argument.name
+        if self.is_reference_parameter_name(name):
+            return self.identifier_name(name)
+        plan = self.current_parameter_plan()
+        is_parameter = plan is not None and self.is_current_parameter_name(name)
+        if self.is_local_identifier(name) and (
+            not is_parameter or name in plan["copies"]
+        ):
+            return f"&{self.identifier_name(name)}"
+        return None
+
     def reference_argument_expression(self, argument, parameter, function):
         """``&v`` for a whole local variable, or a pointer parameter itself."""
         qualifier = reference_parameter_qualifier(parameter)
         callee = getattr(function, "name", "") or "<anonymous>"
+        direct = self.direct_reference_argument(argument)
+        if direct is not None:
+            return direct
         if isinstance(argument, IdentifierNode):
-            name = argument.name
-            if self.is_reference_parameter_name(name):
-                return self.identifier_name(name)
             plan = self.current_parameter_plan()
-            is_parameter = plan is not None and self.is_current_parameter_name(name)
-            if self.is_local_identifier(name) and (
-                not is_parameter or name in plan["copies"]
-            ):
-                return f"&{self.identifier_name(name)}"
+            is_parameter = plan is not None and self.is_current_parameter_name(
+                argument.name
+            )
             where = "a module-scope variable" if not is_parameter else "a parameter"
         else:
             where = "not a whole local variable"

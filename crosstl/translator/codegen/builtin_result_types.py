@@ -119,6 +119,19 @@ def component_access_type(type_name, family):
     return format_type(shape.scalar, first, C_FAMILY)
 
 
+def swizzle_access_type(type_name, length):
+    """The type of a ``length``-component swizzle of the vector ``type_name``, spelled in its family.
+
+    ``ivec3.xy`` is ``ivec2`` and ``int3.xy`` is ``int2``. Returns ``None`` when ``type_name`` is not a vector.
+    """
+    shape = type_shape(type_name)
+    if shape is None or shape.matrix is not None or shape.width == 1:
+        return None
+    if not 1 <= length <= 4:
+        return None
+    return format_type(shape.scalar, length, shape.family)
+
+
 # Componentwise functions whose genType parameters share one type and whose scalar parameters broadcast, so the
 # result has the first argument's scalar and the widest argument's width (GLSL 4.60 sections 8.1-8.5, 8.8 and 8.14).
 _COMPONENTWISE = frozenset(

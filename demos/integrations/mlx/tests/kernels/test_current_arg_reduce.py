@@ -196,15 +196,15 @@ ARTIFACTS = {
         },
         "argmin_float16": {
             "sha256": (
-                "a61794aeeaba7ce5cb8135019c5d77ba148b01f7c2a206e9946aeb574b02ad8b"
+                "0ab4e07a52baea203ff2ff1471f47b207ddfc10e785bf5e27f648afb2334cb88"
             ),
-            "sizeBytes": 11328,
+            "sizeBytes": 11379,
         },
         "argmax_float16": {
             "sha256": (
-                "3931345866af7f959443238e191cd62df3cf6f5756a803fe82a3e040d2fe6cd4"
+                "9cea2cafc2c7277cb630e573e9fd4f502aed2f55901e38b5641f2eee47bd7474"
             ),
-            "sizeBytes": 11330,
+            "sizeBytes": 11381,
         },
         "argmin_float32": {
             "sha256": (

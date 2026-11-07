@@ -3129,6 +3129,7 @@ def test_parse_materialx_out_parameter_qualifier_from_xcode_genmsl():
 
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
     code = """
+    template <typename T0>
     void reduce(uint j, uint limit, device float* dst_row) {
         for (int i = 0; i < limit; i++) {
             _Pragma("clang loop unroll(full)")
@@ -3150,6 +3151,7 @@ def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
 
 def test_parse_empty_for_condition_before_type_trait_from_llama_cpp():
     code = """
+    template <typename T0>
     void flash_attn_ext(uint iwg, uint sgitg) {
         for (int ic0 = iwg * NSG + sgitg; ; ic0 += NWG * NSG) {
             int ic = ic0;

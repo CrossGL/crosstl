@@ -14,6 +14,7 @@ from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
 from .signed_type_spellings import fold_signed_type_spellings
 from .simd_aliases import SIMD_TYPE_ALIASES
+from .string_literals import concatenate_string_literals
 
 MIN_METAL_PARSE_RECURSION_LIMIT = 10000
 
@@ -681,7 +682,9 @@ class MetalParser:
                     self.annotate_declaration_scope(typedef)
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
-                global_variables.append(self.parse_static_assert())
+                global_variables.append(
+                    self.annotate_declaration_scope(self.parse_static_assert())
+                )
             elif self.is_conversion_operator_fragment():
                 self.skip_struct_method()
             elif self.is_operator_function_definition():
@@ -2210,6 +2213,17 @@ class MetalParser:
         self.register_known_type(alias_name)
         return TypeAliasNode(f"struct {tag_name}", alias_name)
 
+    def parse_string_literal_run(self):
+        """Parse adjacent string literals as the one literal C++ joins them into."""
+        spellings = []
+        while self.current_token[0] == "STRING":
+            spellings.append(self.current_token[1])
+            self.eat("STRING")
+        try:
+            return concatenate_string_literals(spellings)
+        except ValueError as exc:
+            raise SyntaxError(f"Invalid string literal concatenation: {exc}") from exc
+
     def parse_static_assert(self):
         self.eat("STATIC_ASSERT")
         self.eat("LPAREN")
@@ -2218,8 +2232,7 @@ class MetalParser:
         if self.current_token[0] == "COMMA":
             self.eat("COMMA")
             if self.current_token[0] == "STRING":
-                message = self.current_token[1]
-                self.eat("STRING")
+                message = self.parse_string_literal_run()
             else:
                 message = self.parse_expression()
         self.eat("RPAREN")
@@ -5141,18 +5154,24 @@ class MetalParser:
         if idx >= len(self.tokens) or self.tokens[idx][0] != "LESS_THAN":
             return False
         depth = 0
+        grouped_depth = 0
         saw_value_token = False
         while idx < len(self.tokens):
             token_type, token_value = self.tokens[idx]
             if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
                 return False
-            if token_type == "LESS_THAN":
+            grouping = self.template_argument_grouping(token_type, depth, grouped_depth)
+            if grouping is None:
+                return False
+            nested = grouping or grouped_depth
+            grouped_depth = grouping
+            if not nested and token_type == "LESS_THAN":
                 depth += 1
-            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+            elif not nested and token_type == "SHIFT_RIGHT" and depth >= 2:
                 depth -= 2
                 if depth == 0:
                     return saw_value_token
-            elif token_type == "GREATER_THAN":
+            elif not nested and token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     return saw_value_token
@@ -5168,6 +5187,22 @@ class MetalParser:
             idx += 1
         return False
 
+    @staticmethod
+    def template_argument_grouping(token_type, depth, grouped_depth):
+        """Return the parenthesis depth after ``token_type`` inside a template argument list.
+
+        A ``<`` or ``>`` nested in parentheses or brackets neither opens nor closes the list (C++
+        [temp.names]), and a closer with no opener inside the list means the ``<`` was a comparison, as in
+        ``i < ((a) > (b) ? (a) : (b))``; that case returns ``None``.
+        """
+        if depth == 0:
+            return grouped_depth
+        if token_type in {"LPAREN", "LBRACKET"}:
+            return grouped_depth + 1
+        if token_type in {"RPAREN", "RBRACKET"}:
+            return grouped_depth - 1 if grouped_depth else None
+        return grouped_depth
+
     def is_variable_template_name(self, name):
         if not isinstance(name, str):
             return False
@@ -5181,14 +5216,20 @@ class MetalParser:
         follow_token_types = follow_token_types or {"LPAREN"}
         idx = self.pos
         depth = 0
+        grouped_depth = 0
         saw_type_like = False
         while idx < len(self.tokens):
             token_type = self.tokens[idx][0]
             if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
                 return False
-            if token_type == "LESS_THAN":
+            grouping = self.template_argument_grouping(token_type, depth, grouped_depth)
+            if grouping is None:
+                return False
+            nested = grouping or grouped_depth
+            grouped_depth = grouping
+            if not nested and token_type == "LESS_THAN":
                 depth += 1
-            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+            elif not nested and token_type == "SHIFT_RIGHT" and depth >= 2:
                 depth -= 2
                 if depth == 0:
                     if require_type_like_argument and not saw_type_like:
@@ -5197,7 +5238,7 @@ class MetalParser:
                         idx + 1 < len(self.tokens)
                         and self.tokens[idx + 1][0] in follow_token_types
                     )
-            elif token_type == "GREATER_THAN":
+            elif not nested and token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     if require_type_like_argument and not saw_type_like:
@@ -5274,12 +5315,7 @@ class MetalParser:
             self.eat("CHAR_LITERAL")
             return value
         if self.current_token[0] == "STRING":
-            value = self.current_token[1]
-            self.eat("STRING")
-            while self.current_token[0] == "STRING":
-                value += self.current_token[1]
-                self.eat("STRING")
-            return value
+            return self.parse_string_literal_run()
         if self.current_token[0] == "LPAREN":
             open_token = self.current_token
             self.eat("LPAREN")

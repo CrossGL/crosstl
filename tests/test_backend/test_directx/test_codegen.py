@@ -2416,7 +2416,8 @@ def test_codegen_template_method_arguments_closed_by_shift_right_token_from_dxc(
 
     output = generate_crossgl(hlsl)
 
-    assert "return buffer_load(BAB, offset);" in output
+    # Load<T> moves sizeof(T) bytes as they are: four words, reinterpreted as floats.
+    assert "return uintBitsToFloat(buffer_load4(BAB, offset));" in output
     parse_crossgl(output)
 
 
@@ -7529,8 +7530,9 @@ def test_codegen_byte_address_interlocked_compare_store_roundtrip():
 
     assert "RWByteAddressBuffer rawBytes;" in crossgl
     assert "@ register(u4)" in crossgl
-    assert "rawBytes.InterlockedCompareStore(offset, compare, 7u);" in crossgl
-    assert "atomicCompareExchange(rawBytes" not in crossgl
+    # CrossGL spells it as the byte-address compare-exchange whose previous value is unused.
+    assert "atomicCompareExchange(rawBytes, offset, compare, 7u);" in crossgl
+    assert "InterlockedCompareStore" not in crossgl
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "RWByteAddressBuffer rawBytes : register(u4);" in regenerated_hlsl

@@ -23,11 +23,13 @@ MEMO_ENTRY_LIMIT = 16
 
 # Preprocessor attributes, besides the source text, that the scan reads. The
 # struct specializations steer template-argument deduction of declarations
-# such as ``template void f(Box_float);``.
+# such as ``template void f(Box_float);``, and the aggregates of the active
+# sizeof source give ``sizeof(S)`` in folded constant expressions its value.
 METAL_INSTANTIATION_STATE = (
     "_materialized_struct_specializations",
     "_materialized_struct_primary_templates",
     "group_non_type_template_substitutions",
+    "_active_sizeof_source",
 )
 # Methods compared by identity, so a replaced class-level implementation never
 # reuses a result computed by an earlier one.

@@ -18,6 +18,13 @@ requires module-scope initializers to be constant expressions (GLSL 4.60 section
 program or stage ``typedef`` (``real scratch;`` for ``typedef float real;``) is judged, and declared at module scope,
 as the type the alias names. Declarations whose types are not plain values (opaque types, pointers, unsized arrays,
 stage-local structures, aliases carrying a qualifier) are left to the generators.
+
+A stage-scope constant (``const``, ``static const`` or MSL's ``constant``, with an initializer) was dropped by the
+same generators, and declared as a uniform by the Slang one. It moves as well, as a module-scope ``constant``, which
+each generator declares as its constant (a GLSL ``const``, an HLSL and Slang ``static const``, an MSL ``constant``).
+Its initializer may read the program's constants and the stage constants declared before it. A constant whose
+initializer reads anything else moves as a private variable that the entry point assigns first, which is the value
+every function of the stage then reads.
 """
 
 from __future__ import annotations
@@ -52,6 +59,8 @@ TARGETS = (
             "d3d11",
             "d3d12",
             "slang",
+            "cuda",
+            "hip",
         }
     )
     | _HELPER_ONLY_TARGETS
@@ -60,6 +69,7 @@ TARGETS = (
 _SCALAR_NAMES = frozenset({"bool", "int", "uint", "float", "half", "double"})
 _SIZED_SCALAR = re.compile(r"u?int(?:8|16|32|64)_t|float(?:16|32|64)_t")
 _PRIVATE_QUALIFIERS = frozenset({"static"})
+_CONSTANT_QUALIFIERS = frozenset({"const", "constant"})
 
 
 def hoist_stage_private_variables(program, target) -> int:
@@ -88,7 +98,10 @@ def hoist_stage_private_variables(program, target) -> int:
         candidates = [
             variable
             for variable in getattr(stage, "local_variables", None) or []
-            if _is_private(variable, structs, aliases)
+            if (
+                _is_private(variable, structs, aliases)
+                or _is_constant_value(variable, structs, aliases)
+            )
             and (
                 target not in _HELPER_ONLY_TARGETS
                 or _helpers_use(functions[1:], variable.name)
@@ -118,16 +131,22 @@ def hoist_stage_private_variables(program, target) -> int:
                 variable.name = new_name
             hoisted_names.add(variable.name)
             value = getattr(variable, "initial_value", None)
+            constant = bool(_qualifiers(variable) & _CONSTANT_QUALIFIERS)
             if value is not None and not _is_constant(value, constants):
+                # The entry point computes the value before any function of the stage reads it, so a constant
+                # whose initializer reads the stage's values becomes a private variable nothing else writes.
                 variable.initial_value = None
+                variable.is_mutable = True
+                constant = False
                 initializations.append(
                     A.AssignmentNode(A.IdentifierNode(variable.name), value, "=")
                 )
-            variable.qualifiers = ["static"] + [
-                qualifier
-                for qualifier in getattr(variable, "qualifiers", None) or []
-                if str(qualifier).lower() != "static"
-            ]
+            if constant:
+                # CrossGL's module-scope constant, which every generator declares as one.
+                variable.qualifiers = ["constant"]
+                constants.add(variable.name)
+            else:
+                variable.qualifiers = ["static"]
             variable.parent = program
             hoisted.append(variable)
         candidate_ids = {id(variable) for variable in candidates}
@@ -169,6 +188,25 @@ def _is_private(variable, structs, aliases):
     if not _qualifiers(variable) <= _PRIVATE_QUALIFIERS:
         return False
     if (
+        getattr(variable, "semantic", None)
+        or getattr(variable, "attributes", None)
+        or getattr(variable, "resource_qualifiers", None)
+        or getattr(variable, "is_type_alias", False)
+    ):
+        return False
+    return _is_value_type(getattr(variable, "var_type", None), structs, aliases, set())
+
+
+def _is_constant_value(variable, structs, aliases):
+    """A stage-scope constant of a value type: ``const``, ``static const`` or ``constant`` with an initializer."""
+    if type(variable) is not A.VariableNode or not getattr(variable, "name", None):
+        return False
+    qualifiers = _qualifiers(variable)
+    if not qualifiers & _CONSTANT_QUALIFIERS or not qualifiers <= (
+        _PRIVATE_QUALIFIERS | _CONSTANT_QUALIFIERS
+    ):
+        return False
+    if getattr(variable, "initial_value", None) is None or (
         getattr(variable, "semantic", None)
         or getattr(variable, "attributes", None)
         or getattr(variable, "resource_qualifiers", None)

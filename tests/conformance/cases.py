@@ -406,6 +406,15 @@ def o_loop_wrap(inp):
     return np.array(out, np.int32)
 
 
+def o_step_values(inp):
+    """``y++``, ``--z`` and ``k++`` in a loop condition, as values, with two's-complement wrapping."""
+    out = []
+    for x in inp.astype(np.int64):
+        y = int(_wrap32(x + 1))
+        out += [int(_wrap32(x + y)), int(_wrap32(x - 1)), 2, int(_wrap32(x + 3))]
+    return np.array(out, np.int32)
+
+
 def _shift_pairs():
     return _pairs(
         [
@@ -802,6 +811,48 @@ def o_mirror(inp):
     return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
 
 
+def o_return_reference_copy(inp):
+    """``return bump(tile[l])`` and ``return bump(v.y) + v.x``: the inout copy-back precedes the return."""
+    out = []
+    for x in inp.astype(np.int64):
+        out += [3 * x - 1, 3 * x + 1, 4 * x + 14, 3 * x + 16]
+    return np.array(out, np.int32)
+
+
+def o_reference_copy_order(inp):
+    """Statements that read, call again with or store to an inout argument after the call that copies it back."""
+
+    def bump(t):
+        t = t * 3 + 1
+        return t, t - 2
+
+    out = []
+    for x in inp.astype(np.int64):
+        tile, value = bump(x)
+        tile = value + 1
+        v = [x, x + 5]
+        v[1], value = bump(v[1])
+        r = (value, v[1])
+        tile, value = bump(tile)
+        s = (value << 1) ^ tile
+        v[0], first = bump(v[0])
+        v[0], second = bump(v[0])
+        z = first - second
+        tile, first = bump(tile)
+        tile = tile + first
+        p = tile * 2
+        v[1], value = bump(v[1])
+        c = v[1] if value != v[1] else -1
+        tile, value = bump(tile)
+        f = value + tile
+        v[0], value = bump(v[0])
+        v[0] = v[0] + value
+        tile, value = bump(tile)
+        tile = tile + value
+        out += [r[0], r[1], s, z, p, c, f, tile + v[0]]
+    return np.array(out, np.int64).astype(np.int32)
+
+
 def o_array_constants(inp):
     """Constant arrays of floats, of structs and of two-element vector arrays, indexed by bits of the input."""
     weights = [1.0, 2.0, 4.0, 8.0]
@@ -896,6 +947,15 @@ CASES = [
         np.int32,
         o_loop_wrap,
         v1="int_loop_overflow",
+    ),
+    Case(
+        "g_step_values",
+        "H1",
+        "y++, --z and while (k++ != x + 2) used as values with x near INT_MAX or INT_MIN",
+        "GLSL 4.60 §4.1.3 WRAP; §5.9: a postfix step yields the old value, a prefix step the new one",
+        _i32_edge(),
+        np.int32,
+        o_step_values,
     ),
     Case(
         "h_add_wrap",
@@ -1751,6 +1811,26 @@ CASES = [
         threads=128,
     ),
     Case(
+        "g_return_reference_copy",
+        "H13",
+        "a returned call whose inout argument is a shared array element or a vector component",
+        "GLSL 4.60 section 6.1.1: inout arguments are copied back when the called function returns",
+        SMALL,
+        np.int32,
+        o_return_reference_copy,
+        threads=128,
+    ),
+    Case(
+        "g_reference_copy_order",
+        "H13",
+        "reads, calls and stores after a call that copies an inout argument back, in the same statement",
+        "GLSL 4.60 section 6.1.1: inout arguments are copied back when the called function returns",
+        SMALL,
+        np.int32,
+        o_reference_copy_order,
+        threads=128,
+    ),
+    Case(
         "g_buffer_length",
         "H13",
         "length() of a runtime array after a buffer block's header",
@@ -2008,6 +2088,18 @@ CASES = [
         np.int32,
         control_flow_cases.short_circuit_reference,
         threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
+    ),
+    Case(
+        "g_for_header_lists",
+        "control",
+        "for headers with two declarations, two assignments, two updates and an update that stores through an "
+        "increment, and a do-while whose continue reaches a condition that decrements",
+        "GLSL 4.60 sections 5.9 and 6.3: the comma operator evaluates its operands left to right, and the loop "
+        "expression of a for, like the condition of a do-while, runs after every iteration, also one left by "
+        "continue",
+        control_flow_cases.for_header_list_inputs(),
+        np.int32,
+        control_flow_cases.for_header_list_reference,
     ),
     Case(
         "g_assignment_operand",

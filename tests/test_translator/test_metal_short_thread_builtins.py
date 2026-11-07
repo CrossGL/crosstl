@@ -18,7 +18,10 @@ import pytest
 
 import crosstl
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
-from crosstl.translator.host_workgroup_size import HostDefinedWorkgroupSizeError
+from crosstl.translator.host_workgroup_size import (
+    HostDefinedWorkgroupSizeError,
+    require_static_workgroup_size,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -159,9 +162,21 @@ def test_hlsl_wave_lane_index_narrows_explicitly(tmp_path):
     assert "uint16_t2 tpig = (uint16_t2)tpig_wide.xy;" in _flat(hlsl)
 
 
-def test_lane_index_without_threadgroup_size_is_refused(tmp_path):
+def test_lane_index_without_threadgroup_size_takes_the_host_size(tmp_path):
+    (stage,) = (
+        Parser(Lexer(_translate(_metal(tmp_path, METAL_LANE), "cgl")).get_tokens())
+        .parse()
+        .stages.values()
+    )
     with pytest.raises(HostDefinedWorkgroupSizeError, match="lanes"):
-        _translate(_metal(tmp_path, METAL_LANE), "spirv")
+        require_static_workgroup_size(stage.execution_config)
+    # HLSL reads the size from macros the host defines when it compiles the shader.
+    assert (
+        "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, CROSSGL_WORKGROUP_SIZE_Z)]"
+        in _flat(_translate(_metal(tmp_path, METAL_LANE), "directx"))
+    )
+    # SPIR-V lets the pipeline set the size the host chooses.
+    assert "SpecId 0" in _translate(_metal(tmp_path, METAL_LANE), "spirv")
 
 
 def test_crossgl_16_bit_compute_system_values_are_accepted_by_hlsl():

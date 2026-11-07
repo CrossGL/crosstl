@@ -479,3 +479,82 @@ def test_tuple_importers_keep_the_tuple_literal(tmp_path, extension, source, exp
     generated = crosstl.translate(str(path), backend="cgl")
     assert expected in generated
     parse_crossgl(generated)
+
+
+# A comma of assignments as a whole statement, ``dl = x, ml = y;``: C++ [expr.comma] gives the comma the lowest
+# precedence, so it is two assignments run left to right, never ``dl = (x, ml = y)``.
+STATEMENT_COMMA_SOURCES = {
+    "metal": (
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+        template <typename T>
+        void scale(device const float* o, uint i, thread T& r) {
+            float dl, ml;
+            dl = o[i] * 2.0f, ml = o[i] + 1.0f;
+            r = dl - ml;
+        }
+        kernel void probe(device float* o [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+            float dl, ml;
+            dl = o[i] * 3.0f, ml = o[i] + 5.0f;
+            float r;
+            scale<float>(o, i, r);
+            o[i] = r + dl - ml;
+        }
+    """
+    ),
+    "hlsl": (
+        """
+        RWStructuredBuffer<float> o : register(u0);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            float dl, ml;
+            dl = o[id.x] * 3.0f, ml = o[id.x] + 5.0f;
+            o[id.x] = dl - ml;
+        }
+    """
+    ),
+}
+
+
+def statement_commas(crossgl):
+    """The comma expressions that are whole statements in ``crossgl``."""
+    return [
+        node.expression
+        for node in parse_crossgl(crossgl).walk()
+        if isinstance(node, A.ExpressionStatementNode)
+        and isinstance(node.expression, A.CommaExpressionNode)
+    ]
+
+
+@pytest.mark.parametrize("extension", sorted(STATEMENT_COMMA_SOURCES))
+def test_statement_commas_of_assignments_are_one_comma_expression(tmp_path, extension):
+    source = write(
+        tmp_path, f"statement.{extension}", STATEMENT_COMMA_SOURCES[extension]
+    )
+    crossgl = crosstl.translate(str(source), backend="cgl")
+    commas = statement_commas(crossgl)
+    assert commas, crossgl
+    for comma in commas:
+        targets = [operand.left.name for operand in comma.expressions]
+        assert all(isinstance(op, A.AssignmentNode) for op in comma.expressions)
+        assert targets == ["dl", "ml"], crossgl
+
+
+def test_metal_statement_commas_reach_spirv_and_glsl(tmp_path):
+    source = write(tmp_path, "statement.metal", STATEMENT_COMMA_SOURCES["metal"])
+    spirv = crosstl.translate(str(source), backend="vulkan")
+    glsl = crosstl.translate(str(source), backend="opengl")
+    assert "((dl = (o[" in glsl and "(ml = (o[" in glsl
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        assembly = write(tmp_path, "statement.spvasm", spirv)
+        binary = tmp_path / "statement.spv"
+        run_tool(
+            [spirv_as, "--target-env", "vulkan1.1", str(assembly), "-o", str(binary)]
+        )
+        run_tool([spirv_val, "--target-env", "vulkan1.1", str(binary)])
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        run_tool([glslang, "-S", "comp", str(write(tmp_path, "statement.comp", glsl))])

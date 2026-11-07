@@ -121,6 +121,7 @@ from .pointer_reinterpret import (
 )
 from .relational_builtins import lower_relational_builtins
 from .resource_aggregates import lower_resource_aggregates
+from .specialized_workgroup_size import has_specialized_workgroup_size
 from .spirv_argument_tables import plan_entry_descriptor_slots
 from .spirv_atomic_load_store import (
     SPIRV_ATOMIC_LOAD_STORE_FUNCTIONS,
@@ -129,6 +130,11 @@ from .spirv_atomic_load_store import (
 )
 from .spirv_bfloat16_math import SpirvBfloat16MathMixin
 from .spirv_boolean_reductions import BOOLEAN_REDUCTIONS, spirv_boolean_reduction
+from .spirv_builtin_overloads import separate_builtin_overloads
+from .spirv_byte_address_atomics import (
+    process_byte_address_atomic_call,
+    process_byte_address_member_min_max,
+)
 from .spirv_constant_folding import (
     spirv_evaluated_scalar_initializer,
     spirv_folded_constant,
@@ -142,6 +148,12 @@ from .spirv_entry_interfaces import complete_entry_point_interfaces, ray_storage
 from .spirv_entry_locations import (
     interface_location_state,
     restore_interface_location_state,
+)
+from .spirv_entry_workgroup_sizes import (
+    effective_workgroup_config,
+    emit_entry_local_size_id,
+    entry_workgroup_size_value,
+    plan_entry_workgroup_sizes,
 )
 from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
@@ -253,11 +265,16 @@ from .spirv_struct_varyings import (
     store_flattened_struct_varying,
 )
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
+from .spirv_swizzle_reference_arguments import (
+    prepare_swizzle_reference_binding,
+    write_back_swizzle_reference_bindings,
+)
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_texture_residency import (
     spirv_texture_residency_call,
     spirv_texture_resident_call,
 )
+from .spirv_type_queries import type_query_pointer
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
 from .spirv_uniform_block_arrays import (
     declare_uniform_block_array,
@@ -679,6 +696,13 @@ class VulkanSPIRVCodeGen(
         self.current_function_id = None
         self.current_stage = None
         self.module_compute_entry_config = None
+        # Per-entry workgroup sizes (spirv_entry_workgroup_sizes); planned before any function is generated.
+        self.module_has_one_workgroup_size = True
+        self.entry_workgroup_size_metadata = {}
+        self.entry_workgroup_size_values = {}
+        self.host_workgroup_size_spec_ids = None
+        self.used_workgroup_specialization_ids = set()
+        self.uses_local_size_id = False
         self.current_return_type = None
         self.current_return_type_source = None
         self.current_return_semantic_output = None
@@ -2165,9 +2189,13 @@ class VulkanSPIRVCodeGen(
             # OpConstantComposite value rather than a pointer variable, so the
             # value is used directly; emitting OpLoad against a non-pointer would
             # be invalid SPIR-V. A scalar parameter (e.g. threads_per_threadgroup)
-            # takes the leading component, mirroring the other compute builtins.
+            # takes the leading component, mirroring the other compute builtins, and a narrower vector
+            # (``ushort2 [[threads_per_threadgroup]]``) the leading components.
             return self.convert_value_to_type(
-                variable_id, result_type, allow_vector_to_scalar=True
+                variable_id,
+                result_type,
+                allow_vector_to_scalar=True,
+                allow_vector_resize=True,
             )
 
         if not self.is_sample_mask_builtin_variable(variable_id):
@@ -15521,8 +15549,11 @@ class VulkanSPIRVCodeGen(
         source_type_name = self.source_storage_buffer_expression_type_name(expr)
         if source_type_name is not None:
             return source_type_name
+        if getattr(self, "collecting_generic_function_specializations", False):
+            # Collection runs before any variable is declared: resolving a pointer would lower the expression.
+            return None
 
-        pointer = self.variable_pointer_from_expression(expr)
+        pointer = type_query_pointer(self, expr)
         if pointer is None:
             return None
         metadata = self.structured_buffer_metadata_for_pointer(pointer)
@@ -19818,6 +19849,12 @@ class VulkanSPIRVCodeGen(
 
     def process_statement(self, stmt):
         """Process a single CrossGL statement."""
+        if isinstance(stmt, list):
+            # A for-loop header keeps ``k = 0, m = 3`` and ``i++, j--`` as lists, run in order.
+            for item in stmt:
+                if item is not None:
+                    self.process_statement(item)
+            return
         if isinstance(stmt, AssignmentNode):
             self.process_assignment(stmt)
         elif isinstance(stmt, VariableNode):
@@ -19875,6 +19912,11 @@ class VulkanSPIRVCodeGen(
                         self.create_return()
             else:
                 self.process_expression(expression)
+        elif stmt is not None:
+            # Dropping a statement the emitter cannot place would change the program.
+            self.refuse_lowering(
+                f"statement {type(stmt).__name__} has no SPIR-V lowering"
+            )
 
     def local_declaration_scope_state(self) -> dict:
         """Capture name and pointer-alias state owned by a lexical scope."""
@@ -20082,6 +20124,14 @@ class VulkanSPIRVCodeGen(
                 return self.variable_value_types.get(
                     variable.id
                 ) or self.value_types.get(variable.id)
+            named_constant = self.named_constants.get(name)
+            if named_constant is not None:
+                constant_type = self.value_types.get(named_constant.id)
+                if constant_type is not None:
+                    return constant_type
+            cbuffer_member = self.cbuffer_members.get(name)
+            if cbuffer_member is not None:
+                return cbuffer_member[1]
             builtin_type = self.infer_builtin_expression_result_type(name)
             if builtin_type is not None:
                 return builtin_type
@@ -21190,6 +21240,11 @@ class VulkanSPIRVCodeGen(
             if type_name is not None:
                 type_names[name] = type_name
 
+        for node in getattr(ast, "constants", []) or []:
+            # Program constants, such as ``const float LUT[3]``, are typed by ``const_type``.
+            type_name = self.type_name_from_value(getattr(node, "const_type", None))
+            if getattr(node, "name", None) and type_name is not None:
+                type_names[node.name] = type_name
         for node in getattr(ast, "global_variables", []) or []:
             record_variable(node)
         for cbuffer in getattr(ast, "cbuffers", []) or []:
@@ -22747,21 +22802,8 @@ class VulkanSPIRVCodeGen(
             return storage_buffer_type
         inferred_type = self.infer_expression_result_type(arg)
         if inferred_type is None:
-            return self.collected_global_argument_type_name(arg)
+            return None
         return inferred_type.type.base_type
-
-    def collected_global_argument_type_name(self, arg) -> Optional[str]:
-        """The source type of a global argument while generic specializations are collected.
-
-        Collection runs before globals are declared, so a generic call such as ``twice(scale)``
-        on a uniform would otherwise leave its type parameter unbound.
-        """
-        if not getattr(self, "collecting_generic_function_specializations", False):
-            return None
-        name = getattr(arg, "name", None) if isinstance(arg, IdentifierNode) else None
-        if not name or name in (self.local_variable_types or {}):
-            return None
-        return self.source_variable_type_names.get(name)
 
     def call_argument_type_names(self, args):
         return [self.call_argument_type_name(arg) or "unknown" for arg in args]
@@ -24323,6 +24365,7 @@ class VulkanSPIRVCodeGen(
                 self.local_variables[param_name] = parameter_value
 
             result = self.inline_function_body(function_node)
+            write_back_swizzle_reference_bindings(self, prepared_bindings)
             if result is not None:
                 return result
             return self.default_value_for_function(function_node)
@@ -24419,6 +24462,12 @@ class VulkanSPIRVCodeGen(
                     if param_type_name is not None
                     else None
                 )
+                swizzle_binding = prepare_swizzle_reference_binding(
+                    self, func_name, index, param, param_name, arg, param_value_type
+                )
+                if swizzle_binding is not None:
+                    prepared.append(swizzle_binding)
+                    continue
                 pointer_arg = self.assignable_pointer_from_expression(arg)
                 source_value_type = (
                     self.pointer_pointee_type(pointer_arg)
@@ -26703,6 +26752,11 @@ class VulkanSPIRVCodeGen(
             )
 
         if interlocked_info is not None:
+            handled, result = process_byte_address_member_min_max(
+                self, buffer_pointer, metadata, method_name, args
+            )
+            if handled:
+                return True, result
             return True, self.process_byte_address_buffer_interlocked_call(
                 buffer_pointer, metadata, method_name, args
             )
@@ -29003,6 +29057,11 @@ class VulkanSPIRVCodeGen(
             comparator = "<"
 
         if start is None:
+            if isinstance(iterable, RangeNode) and iterable.start is not None:
+                self.refuse_lowering(
+                    "for-in range start has no value: "
+                    f"{self.diagnostic_expression(iterable.start)}"
+                )
             start = self.register_constant(0, int_type)
 
         previous_variable = self.local_variables.get(pattern)
@@ -29023,6 +29082,9 @@ class VulkanSPIRVCodeGen(
         loop_value = self.get_variable_value(loop_variable)
         end_value = self.process_loop_control_expression(end_expr)
         if end_value is None:
+            self.refuse_lowering(
+                "for-in bound has no value: " f"{self.diagnostic_expression(end_expr)}"
+            )
             end_value = self.register_constant(0, int_type)
         condition = self.binary_operation(comparator, int_type, loop_value, end_value)
 
@@ -29081,6 +29143,10 @@ class VulkanSPIRVCodeGen(
         arms = getattr(node, "arms", []) or []
         expression = self.process_expression(getattr(node, "expression", None))
         if expression is None:
+            self.refuse_lowering(
+                "match scrutinee has no value: "
+                f"{self.diagnostic_expression(getattr(node, 'expression', None))}"
+            )
             expression = self.register_constant(0, self.register_primitive_type("int"))
 
         if not arms:
@@ -29434,6 +29500,10 @@ class VulkanSPIRVCodeGen(
         cases = getattr(node, "cases", []) or []
         expression = self.process_expression(getattr(node, "expression", None))
         if expression is None:
+            self.refuse_lowering(
+                "switch selector has no value: "
+                f"{self.diagnostic_expression(getattr(node, 'expression', None))}"
+            )
             expression = self.register_constant(0, self.register_primitive_type("int"))
 
         explicit_cases = [
@@ -30101,6 +30171,10 @@ class VulkanSPIRVCodeGen(
                 right = self.process_expression(expr.right)
 
             if left is None or right is None:
+                self.refuse_lowering(
+                    f"Operand of {expr.op!r} has no value: "
+                    f"{self.diagnostic_expression(expr.left if left is None else expr.right)}"
+                )
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -30134,6 +30208,10 @@ class VulkanSPIRVCodeGen(
 
             operand = self.process_expression(expr.operand)
             if operand is None:
+                self.refuse_lowering(
+                    f"Operand of {expr.op!r} has no value: "
+                    f"{self.diagnostic_expression(expr.operand)}"
+                )
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -30148,10 +30226,20 @@ class VulkanSPIRVCodeGen(
             false_value = self.process_expression(expr.false_expr)
 
             if condition is None:
+                self.refuse_lowering(
+                    "Conditional operator condition has no value: "
+                    f"{self.diagnostic_expression(expr.condition)}"
+                )
                 condition = self.register_constant(
                     False, self.register_primitive_type("bool")
                 )
             if true_value is None or false_value is None:
+                self.refuse_lowering(
+                    "Conditional operator branch has no value: "
+                    + self.diagnostic_expression(
+                        expr.true_expr if true_value is None else expr.false_expr
+                    )
+                )
                 float_type = self.register_primitive_type("float")
                 fallback = self.register_constant(0.0, float_type)
                 true_value = true_value or fallback
@@ -30213,6 +30301,11 @@ class VulkanSPIRVCodeGen(
 
             handled_byte_address_call, byte_address_result = (
                 self.process_byte_address_buffer_method_call(expr)
+            )
+            if handled_byte_address_call:
+                return byte_address_result
+            handled_byte_address_call, byte_address_result = (
+                process_byte_address_atomic_call(self, expr)
             )
             if handled_byte_address_call:
                 return byte_address_result
@@ -31169,6 +31262,11 @@ class VulkanSPIRVCodeGen(
             return builtin_id
 
         type_name, builtin_name, storage_class = info
+        if storage_class == "Constant" and not self.module_has_one_workgroup_size:
+            # A module-wide WorkgroupSize built-in would resize every entry point; read the entry's own size.
+            return entry_workgroup_size_value(
+                self, name, self.map_crossgl_type(type_name)
+            )
         if builtin_name.startswith("Subgroup") or builtin_name == "NumSubgroups":
             self.require_group_non_uniform(
                 "GroupNonUniformBallot" if builtin_name.endswith("Mask") else None
@@ -31587,6 +31685,7 @@ class VulkanSPIRVCodeGen(
             config = self.module_compute_entry_config or {}
         else:
             config = getattr(stage, "execution_config", {}) or {}
+        config = effective_workgroup_config(self, config)
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
             if isinstance(value, (list, tuple)) and len(value) >= 3:
@@ -31597,7 +31696,9 @@ class VulkanSPIRVCodeGen(
                     for index in range(3)
                 )
 
-        require_static_workgroup_size(config)
+        if not has_specialized_workgroup_size(config):
+            # The pipeline sets a specialized size, so only the source's host leaves it unknown.
+            require_static_workgroup_size(config)
         return (
             self.positive_local_size_dimension(
                 config.get("local_size_x", 1), "local_size_x", "x", stage
@@ -32132,12 +32233,13 @@ class VulkanSPIRVCodeGen(
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
             self.emit_tessellation_execution_modes(execution_model, function_id, stage)
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
-            declare_specialized_workgroup_size(self, stage)
-            x, y, z = self.compute_local_size(stage)
-            if self.requires_compute_derivatives:
-                x = max(2, x + (x % 2))
-                y = max(2, y + (y % 2))
-            self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
+            if not emit_entry_local_size_id(self, function_id, stage):
+                declare_specialized_workgroup_size(self, stage)
+                x, y, z = self.compute_local_size(stage)
+                if self.requires_compute_derivatives:
+                    x = max(2, x + (x % 2))
+                    y = max(2, y + (y % 2))
+                self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
             if self.requires_compute_derivatives:
                 self.emit(f"OpExecutionMode %{function_id.id} DerivativeGroupQuadsKHR")
             if execution_model in {"MeshEXT", "TaskEXT"}:
@@ -32188,6 +32290,8 @@ class VulkanSPIRVCodeGen(
             for capability in self.required_capabilities
         ):
             return "1.3"
+        if self.uses_local_size_id:
+            return "1.2"
         return "1.0"
 
     def ordered_module_lines(self) -> List[str]:
@@ -32460,6 +32564,7 @@ class VulkanSPIRVCodeGen(
 
         source_ast, fixed_samplers = ast, fixed_sampler_records(ast)
         validate_recursion_free(ast, "vulkan")
+        separate_builtin_overloads(ast)
         lower_relational_builtins(ast)
         lower_per_vertex_builtin_arrays(ast, self)
         self.reset_generation_state()
@@ -32614,6 +32719,7 @@ class VulkanSPIRVCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
+            global_types=self.source_variable_type_names,
         )
         if generic_function_specializations:
             all_functions = all_functions + list(
@@ -32721,6 +32827,7 @@ class VulkanSPIRVCodeGen(
             self.module_compute_entry_config = compute_entry_configs[0]
         elif not compute_entry_configs:
             self.module_compute_entry_config = module_compute_stage_config(self, ast)
+        plan_entry_workgroup_sizes(self, ast, top_level_entries)
 
         if self.tessellation_control_stage is None:
             for func, qualifier in top_level_entries:

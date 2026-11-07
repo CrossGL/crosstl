@@ -61,6 +61,7 @@ from ..math_namespaces import (
 from ..matrix_shape import length_method_object
 from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
+from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.constant_buffers import lower_constant_buffer_resources
 from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
 from ..semantics.narrowing_constructors import select_narrowing_constructor_components
@@ -389,6 +390,7 @@ from .metal_buffer_component_stores import (
     metal_buffer_component_type,
     metal_glsl_buffer_component_refusal,
 )
+from .metal_buffer_resource_types import metal_buffer_resource_scope_type
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
@@ -417,6 +419,10 @@ from .metal_namespace_names import rename_metal_namespace_names
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
+from .metal_reference_argument_conditions import generate_header_writeback_statement
+from .metal_reference_argument_order import generate_ordered_writeback_statement
+from .metal_reference_argument_returns import generate_return_writeback_statement
+from .metal_reference_call_results import generate_call_result_statement
 from .metal_refusals import metal_refusals
 from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
@@ -440,6 +446,7 @@ from .metal_texel_buffers import (
     MetalTexelBuffers,
     texel_buffer_component_type,
 )
+from .metal_threadgroup_forwarding import collect_metal_forwarded_threadgroup_storage
 from .metal_threadgroup_parameters import metal_threadgroup_parameter_attribute
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
@@ -639,6 +646,18 @@ class MetalCodeGen(
     }
     # Numeric grouping determines floating rounding and integer promotion.
     ASSOCIATIVE_BINARY_OPS = {"&&", "||"}
+    # Higher-precedence children that clang's -Wlogical-op-parentheses,
+    # -Wbitwise-op-parentheses, -Wparentheses (bitwise over comparison) and
+    # -Wshift-op-parentheses reject under -Werror when left unparenthesized.
+    _COMPARISON_OPS = frozenset({"==", "!=", "<", ">", "<=", ">="})
+    CLANG_PARENTHESIZED_BINARY_CHILDREN = {
+        "||": frozenset({"&&"}),
+        "|": frozenset({"&", "^"}) | _COMPARISON_OPS,
+        "^": frozenset({"&"}) | _COMPARISON_OPS,
+        "&": _COMPARISON_OPS,
+        "<<": frozenset({"+", "-"}),
+        ">>": frozenset({"+", "-"}),
+    }
     METAL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
         {
             "mem_none",
@@ -2083,6 +2102,7 @@ class MetalCodeGen(
                 "argument buffer"
             ),
         )
+        ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         ast = bind_combined_samplers(ast)
@@ -2439,6 +2459,21 @@ class MetalCodeGen(
         self.metal_lowered_program_scope_groupshared_global_ids.update(
             thread_private_ids
         )
+        threadgroup_storage, threadgroup_ids = (
+            collect_metal_forwarded_threadgroup_storage(
+                self,
+                ast,
+                target_stage,
+                global_vars,
+                all_functions,
+                METAL_GROUPSHARED_ENTRY_STAGES,
+            )
+        )
+        for function_id, nodes in threadgroup_storage.items():
+            self.metal_lowered_program_scope_groupshared_globals_by_function.setdefault(
+                function_id, []
+            ).extend(nodes)
+        self.metal_lowered_program_scope_groupshared_global_ids.update(threadgroup_ids)
         self.metal_runtime_initialized_constants = (
             self.collect_metal_runtime_initialized_constants(global_vars)
         )
@@ -8456,11 +8491,22 @@ class MetalCodeGen(
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as Metal source."""
         if id(stmt) not in self.metal_writeback_statement_ids:
+            return_code = generate_return_writeback_statement(self, stmt, indent)
+            if return_code is not None:
+                return return_code
             writebacks = self.metal_reference_argument_writebacks(stmt)
             if writebacks:
-                return self.generate_statement_with_argument_writebacks(
-                    stmt, indent, writebacks
+                call_code = generate_call_result_statement(
+                    self, stmt, indent, writebacks
                 )
+                if call_code is not None:
+                    return call_code
+                return generate_ordered_writeback_statement(
+                    self, stmt, indent, writebacks
+                )
+            header_code = generate_header_writeback_statement(self, stmt, indent)
+            if header_code is not None:
+                return header_code
         indent_str = "    " * indent
         if isinstance(stmt, (VariableNode, BackendVariableNode)):
             var_type = self.local_variable_declared_type(stmt)
@@ -9875,6 +9921,10 @@ class MetalCodeGen(
     def record_readonly_metal_local_alias(self, node):
         reason = self.readonly_metal_local_alias_reason(node)
         if reason is None:
+            # A writable declaration hides a read-only one of the same name, such as a
+            # ``const`` local of an earlier loop body.
+            self.current_readonly_metal_parameters.discard(node.name)
+            self.current_readonly_metal_parameter_reasons.pop(node.name, None)
             return
         self.current_readonly_metal_parameters.add(node.name)
         self.current_readonly_metal_parameter_reasons[node.name] = reason
@@ -11792,6 +11842,10 @@ class MetalCodeGen(
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
+        # Read-only locals end with their block, so an outer variable of the same name
+        # is writable again after it.
+        previous_readonly = set(self.current_readonly_metal_parameters)
+        previous_readonly_reasons = dict(self.current_readonly_metal_parameter_reasons)
         try:
             return self.generate_statement_body(body, indent)
         finally:
@@ -11799,6 +11853,8 @@ class MetalCodeGen(
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+            self.current_readonly_metal_parameters = previous_readonly
+            self.current_readonly_metal_parameter_reasons = previous_readonly_reasons
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
@@ -13362,7 +13418,12 @@ class MetalCodeGen(
                 self.generate_expression(expr.true_expr),
                 self.generate_expression(expr.false_expr),
             )
-            return f"{self.generate_expression(expr.condition)} ? {true_code} : {false_code}"
+            condition = self.generate_expression(expr.condition)
+            # `?:` is right-associative: an unparenthesized conditional
+            # condition would regroup as part of the false arm.
+            if isinstance(expr.condition, TernaryOpNode):
+                condition = f"({condition})"
+            return f"{condition} ? {true_code} : {false_code}"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value
@@ -13786,10 +13847,12 @@ class MetalCodeGen(
         if child_precedence < parent_precedence:
             return True
         if child_precedence > parent_precedence:
-            # Clang intentionally warns on an unparenthesized additive child of a
-            # shift even though C++ precedence is unambiguous.  Retain explicit
-            # source grouping so warning-fatal native Metal builds stay portable.
-            return parent_operator in {"<<", ">>"} and child_operator in {"+", "-"}
+            # Clang's -Wparentheses (part of -Wall) warns on these children even
+            # though C++ precedence is unambiguous.  Retain explicit grouping so
+            # warning-fatal native Metal builds stay portable.
+            return child_operator in self.CLANG_PARENTHESIZED_BINARY_CHILDREN.get(
+                parent_operator, ()
+            )
         return is_right_child and (
             parent_operator not in self.ASSOCIATIVE_BINARY_OPS
             or child_operator != parent_operator
@@ -21722,8 +21785,8 @@ class MetalCodeGen(
     ):
         if include_all:
             resources = [
-                (node, buffer_type, address_space)
-                for node, _, buffer_type, _, address_space in (
+                (node, buffer_type, array_size, address_space)
+                for node, _, buffer_type, array_size, address_space in (
                     self.metal_buffer_resource_variables
                 )
             ]
@@ -21732,12 +21795,7 @@ class MetalCodeGen(
                 for node, _, buffer_type, _ in self.structured_buffer_variables
             ]
         else:
-            resources = [
-                (node, buffer_type, address_space)
-                for node, buffer_type, _, address_space in (
-                    self.required_function_metal_buffer_resources(func_name)
-                )
-            ]
+            resources = self.required_function_metal_buffer_resources(func_name)
             structured_resources = [
                 (node, buffer_type)
                 for node, buffer_type, _ in self.required_function_structured_buffers(
@@ -21745,11 +21803,13 @@ class MetalCodeGen(
                 )
             ]
 
-        for node, buffer_type, address_space in resources:
+        for node, buffer_type, array_size, address_space in resources:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             if not name:
                 continue
-            self.local_variable_types[name] = self.type_name_string(buffer_type)
+            self.local_variable_types[name] = metal_buffer_resource_scope_type(
+                self, buffer_type, array_size
+            )
             self.current_address_space_variables[name] = address_space
             if address_space == "constant":
                 self.current_readonly_metal_parameters.add(name)
