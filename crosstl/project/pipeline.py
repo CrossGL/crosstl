@@ -49,6 +49,9 @@ from crosstl.backend.Metal.integral_constant_tags import (
 from crosstl.backend.Metal.member_lowering_layers import (
     lower_members_with_late_specializations,
 )
+from crosstl.backend.Metal.orphaned_explicit_specializations import (
+    prune_orphaned_explicit_specializations,
+)
 from crosstl.backend.Metal.pointer_conversions import pointer_conversion_type
 from crosstl.backend.Metal.return_type_enablers import fold_concrete_enablers
 from crosstl.backend.Metal.template_overloads import (
@@ -23646,6 +23649,7 @@ def _project_template_materialization_for_artifact(
     # The source is parsed without preprocessing, so the materialized return-type enablers are folded to the
     # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py).
     materialized = fold_concrete_enablers(preprocessor, materialized)
+    materialized = prune_orphaned_explicit_specializations(preprocessor, materialized)
 
     if unsupported:
         message = _template_materialization_unsupported_message(
