@@ -36,6 +36,24 @@ def test_bfloat_transport_rejects_inexact_gl_carriers(word):
         bfloat_storage.unpack([word], "opengl")
 
 
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_bfloat_transport_checks_whole_buffers_and_returns_int_lists(target):
+    # The bulk checks see a bad word anywhere in the buffer, and the carriers
+    # stay plain lists of exact ints whatever iterable came in.
+    for words in ([], [7, 0xFFFF], [0, 0x3EAB]):
+        for given in (words, tuple(words), iter(words)):
+            physical = bfloat_storage.pack(given, target)
+            assert type(physical) is list
+            assert all(type(word) is int for word in physical)
+            assert bfloat_storage.unpack(iter(physical), target) == words
+    for bad in (0x10000, -1, True):
+        with pytest.raises(ValueError):
+            bfloat_storage.pack([1, 2, bad, 3], target)
+    if target == "opengl":
+        with pytest.raises(ValueError):
+            bfloat_storage.unpack([0x3F800000, 0x3F800000, 0x00008000], target)
+
+
 @pytest.fixture(scope="module", params=("metal", "directx", "opengl"))
 def translated(tmp_path_factory, request):
     root = tmp_path_factory.mktemp("bfloat-" + request.param)

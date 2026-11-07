@@ -96,7 +96,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 612
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 619
     assert all(
         name.startswith(
             (
@@ -137,7 +137,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_quantized.TestQuantized.test_gather_qqmm",
                 "test_quantized.TestQuantized.test_gather_qmm",
                 "test_quantized.TestQuantized.test_gather_matmul_grad",
-                "test_quantized.TestQuantized.test_gather_qmm_matrix_path",
+                "test_quantized.TestQuantized.test_fp_gather_qmm_",
                 "test_fast_sdpa.TestFastSDPA.test_",
                 "test_fast_gated_delta.TestGatedDelta.test_",
             )
@@ -169,6 +169,8 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + upstream_module_groups.TORCH_LAYER_TESTS
         + upstream_module_groups.TORCH_UPSAMPLE_TESTS
         + upstream_module_groups.QQ_MATMUL_TESTS
+        + upstream_module_groups.QUANTIZED_SORTED_TESTS
+        + upstream_module_groups.QUANTIZED_FP_TAIL_TESTS
     )
     assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
@@ -208,22 +210,51 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
         "test_blas.TestBlas.test_gather_mm_sorted",
         "test_blas.TestBlas.test_gather_mm_sorted_vjp",
     ]
+    # gather_qmm_rhs schedules its row tiles as gather_mm_rhs does.
+    sorted_quantized = [
+        f"test_quantized.TestQuantized.test_{name}"
+        for name in (
+            "fp_gather_qmm_non_multiple_of_32",
+            "gather_qmm_sorted",
+            "gather_qmm_sorted_nax_large_m",
+            "gather_qmm_sorted_sliced_weight",
+            "gather_qmm_sorted_unaligned_k",
+            "gather_qmm_grad",
+            "gather_qqmm_global_scale_matrix_paths",
+        )
+    ]
     complex_axis = ["test_autograd.TestAutograd.test_take_along_axis_complex_vjp"]
     assert list(ops.TARGET_EXCLUSIONS["directx"]) == (
-        wide + sorted_gather + complex_axis
+        wide + sorted_gather + sorted_quantized + complex_axis
     )
     for target in ("opengl", "directx"):
         names = ops.TARGET_EXCLUSIONS[target]
         assert [name for name in names if names[name].endswith("2546")] == (
-            sorted_gather
+            sorted_gather + sorted_quantized
         )
         assert set(sorted_gather) < set(ops.GROUPS["blas-gather"])
         assert ops.upstream_tests(target, "blas-gather") == tuple(
             name for name in ops.GROUPS["blas-gather"] if name not in sorted_gather
         )
+        quantized = upstream_module_groups.QUANTIZED_GROUPS
+        assert set(sorted_quantized) < {
+            name for group in quantized for name in ops.GROUPS[group]
+        }
+        for group in quantized:
+            assert ops.upstream_tests(target, group) == tuple(
+                name for name in ops.GROUPS[group] if name not in sorted_quantized
+            )
+        # The sorted and tail groups hold gather_qmm_rhs's products alone.
+        assert not ops.upstream_tests(target, "quantized-sorted")
+        assert not ops.upstream_tests(target, "quantized-fp-tails")
+        with pytest.raises(ValueError, match="runs no tests on"):
+            ops.selected_tests(target, "quantized-sorted")
+        assert ops.selected_tests(target, "quantized-products") == (
+            ops.upstream_tests(target, "quantized-products")
+        )
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     directx = ops.upstream_tests("directx")
-    assert len(directx) == len(ops.UPSTREAM_TESTS) - 6
+    assert len(directx) == len(ops.UPSTREAM_TESTS) - 13
     opengl = ops.upstream_tests("opengl")
     assert len(opengl) == 605 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
@@ -272,6 +303,8 @@ def test_upstream_op_groups_partition_the_inventory():
         "torch-layers",
         "torch-upsample",
         "quantized-products",
+        "quantized-sorted",
+        "quantized-fp-tails",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -384,12 +417,17 @@ def test_upstream_op_groups_partition_the_inventory():
             5,
         ),
         ("torch-upsample", ("test_upsample.",), 2),
-        ("quantized-products", ("test_quantized.",), 6),
+        ("quantized-products", ("test_quantized.",), 10),
+        ("quantized-sorted", ("test_quantized.",), 2),
+        ("quantized-fp-tails", ("test_quantized.",), 1),
     ):
         tests = upstream_module_groups.GROUPS[group]
         assert ops.GROUPS[group] == tests and len(tests) == count
         assert {name.split(".")[0] + "." for name in tests} == set(modules)
-        assert ops.upstream_tests("opengl", group) == tests
+        # gather_qmm_rhs's sorted products run on Metal alone (#2546).
+        assert ops.upstream_tests("opengl", group) == tuple(
+            name for name in tests if name not in ops.SORTED_GATHER_EXCLUSIONS
+        )
     # The rotary embedding tests are test_fast methods, but not normalization.
     assert not set(ops.GROUPS["rope"]) & set(ops.GROUPS["normalization"])
     # Every slice update reduction's gradient and both shapeless tests that
@@ -991,8 +1029,15 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
         "opengl",
     }
     assert set(matrix["target"]) == {"metal", "directx", "opengl"}
-    # Every group runs in its own job on every platform.
+    # Every group runs in its own job on every platform that runs any of its
+    # tests.
     assert matrix["group"] == list(ops.GROUPS)
+    assert matrix["exclude"] == [
+        {"group": group, "target": target}
+        for group in ops.GROUPS
+        for target in ("opengl", "directx", "metal")
+        if not ops.upstream_tests(target, group)
+    ]
     assert "${{ matrix.group }}" in job["name"]
     names = [step.get("name") for step in job["steps"]]
     step = job["steps"][names.index("Execute unchanged upstream op tests")]

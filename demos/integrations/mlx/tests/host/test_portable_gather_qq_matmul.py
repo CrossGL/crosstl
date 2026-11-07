@@ -383,18 +383,24 @@ def test_backend_ports_gather_qqmm_as_quantized_cpp_does():
     start = port.index("void GatherQQMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]
     order = [
-        # Globally scaled bfloat16 matrix products are refused before any
-        # operand is quantized, so the refusal launches nothing.
-        "does not yet route globally",
         # quantize_input and quantize_dequantize_input, as QQMatmul's port.
         "qq_weights(stream(), inputs[1], scales, global_w, mode_, group_size_, bits_);",
         "qq_rounded_input(inputs[0], global_x, mode, group_size_, bits_);",
         # The weights' global scale is broadcast to one per matrix.
         "broadcast(*global_w, per_matrix);",
-        '"gather_qqmm");',
+        # Globally scaled bfloat16 products of quantized batched weights take
+        # quantized.cpp's matrix kernels, in its order.
+        "global && w_quantized && dtype == bfloat16 && w_q.ndim() == 3 && K % 32 == 0;",
+        "if (matrix && M == 1 && B >= 16 && right_sorted_ && B / E >= 4) {",
+        "dispatch_gather_qmm_rhs(",
+        "if (matrix && M >= qq_vector_limit(K, N)) {",
+        "dispatch_gather_qmm(",
+        "dispatch_gather_qmv(",
     ]
     positions = [body.index(text) for text in order]
     assert positions == sorted(positions)
+    assert body.count('"gather_qqmm");') == 3
+    assert "does not yet route" not in body
     for text in (
         '{"global_scale", "float32", const_cast<void*>(global_scale->data<void>()),',
         "collapse_contiguous_dims(\n        lhs_indices.shape(), "

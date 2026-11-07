@@ -4,19 +4,19 @@
 // qq_matmul.inc and gather_mm.inc, so the port shares their quantization,
 // index and dispatch helpers.
 //
-// GatherQMM routes as quantized.cpp does on a device without NAX: products
-// of at least the vector limit's rows go to gather_qmm, transposed vector
-// products to gather_qmv and untransposed ones to gather_qvm, for affine,
-// mxfp4, mxfp8 and nvfp4 weights and nvfp4 global scales. Sorted right-hand
-// indices of single rows, which quantized.cpp sends to gather_qmm_rhs, are
-// refused with a typed error.
+// GatherQMM routes as quantized.cpp does on a device without NAX: single
+// rows with sorted right-hand indices, at least 16 batches and at least four
+// per weight matrix go to gather_qmm_rhs, products of at least the vector
+// limit's rows to gather_qmm, transposed vector products to gather_qmv and
+// untransposed ones to gather_qvm, for affine, mxfp4, mxfp8 and nvfp4
+// weights and nvfp4 global scales.
 //
 // GatherQQMM quantizes its weights unless they arrive quantized, quantizes
 // and dequantizes its input, and broadcasts an nvfp4 global scale of the
 // weights to one scale per weight matrix, which the _hgs kernels read at the
-// gathered matrix. Every product goes to gather_qmv except the globally
-// scaled bfloat16 matrix products quantized.cpp sends to gather_qmm and
-// gather_qmm_rhs, which the port refuses before it launches anything.
+// gathered matrix. Globally scaled bfloat16 products of quantized batched
+// weights take gather_qmm_rhs and gather_qmm as GatherQMM's do; every other
+// product goes to gather_qmv.
 
 namespace mlx::core {
 namespace {
@@ -245,6 +245,90 @@ void dispatch_gather_qmm(
   quantized_dispatch(entry, buffers, out.size(), launch, "gathered quantized matmul");
 }
 
+// quantized.cpp gather_qmm_rhs without NAX: gather_mm_offsets finds each
+// weight matrix's first row of the sorted right-hand indices, and (32, 2, 1)
+// threadgroups cover 32-column tiles and the 16-row tiles each matrix's rows
+// fill. The entry name carries align_N and align_K as quantized.cpp's hash
+// name does.
+void dispatch_gather_qmm_rhs(
+    const array& x_,
+    const array& w_,
+    const array& scales_,
+    const std::optional<array>& biases_,
+    const std::optional<array>& global_scale,
+    const array& indices_,
+    array& out,
+    const char* mode,
+    bool transpose,
+    int group_size,
+    int bits,
+    int N,
+    int K,
+    const char* route) {
+  // ensure_row_contiguous for the indices and every operand.
+  const array indices = dense_input(indices_);
+  // quantized.cpp multiplies x.size() / K rows, which cover the output only
+  // when x has one row per index and needs no broadcast.
+  if (x_.ndim() < 2 || x_.size() / x_.shape(-2) / x_.shape(-1) != indices.size()) {
+    throw std::invalid_argument(
+        "CrossTL sorted gathered quantized matmul requires one input row per index.");
+  }
+  const array x = dense_input(x_);
+  const array w = dense_input(w_);
+  const array scales = dense_input(scales_);
+  std::optional<array> biases, gs;
+  if (biases_) {
+    biases = dense_input(*biases_);
+  }
+  if (global_scale) {
+    gs = dense_input(*global_scale);
+  }
+  const int M = x.size() / K;
+  const int E = w.size() / w.shape(-1) / w.shape(-2);
+  constexpr int bm = 16, bn = 32;
+  auto flag = [](bool value) { return value ? "t" : "n"; };
+  const std::string entry =
+      gathered_stem(
+          mode, transpose ? "_gather_qmm_rhs_nt_" : "_gather_qmm_rhs_nn_", out.dtype(),
+          group_size, bits) +
+      "_bm_16_bn_32_bk_32_wm_1_wn_2" + (gs ? "_hgs" : "") + "_align_N_" + flag(N % bn == 0) +
+      "_align_K_" + flag(K % 32 == 0);
+  require_entry(entry);
+  const int64_t tiles_n = (int64_t(N) + bn - 1) / bn;
+  const int64_t tiles_m = std::min<int64_t>(M, (int64_t(M) + bm - 1) / bm + E - 1);
+  if (out.size() != uint64_t(M) * N || out.size() > max_matmul_elements || tiles_n > 65535 ||
+      tiles_m > 65535) {
+    throw std::invalid_argument(
+        "CrossTL sorted gathered quantized matmul launch exceeds its bounds.");
+  }
+  array offsets = dispatch_gather_mm_offsets(indices, E, M);
+  out.set_data(allocator::malloc(out.nbytes()));
+  int32_t m = M, n = N, k = K, groups = E;
+  const char* storage = matmul_storage(out.dtype());
+  auto data = [](const array& value) { return const_cast<void*>(value.data<void>()); };
+  std::vector<CrosstlMlxBuffer> buffers = {
+      {"x", storage, data(x), matmul_span(x), 0},
+      {"w", "uint32", data(w), matmul_span(w), 0},
+      {"scales", biases ? storage : "uint8", data(scales), matmul_span(scales), 0},
+  };
+  if (biases) {
+    buffers.push_back({"biases", storage, data(*biases), matmul_span(*biases), 0});
+  }
+  buffers.insert(
+      buffers.end(),
+      {
+          {"offsets", "int32", data(offsets), uint64_t(E), 0},
+          {"y", storage, out.data<void>(), out.size(), 1},
+          {"M", "int32", &m, 1, 0},
+          {"N", "int32", &n, 1, 0},
+          {"K", "int32", &k, 1, 0},
+          {"num_groups", "int32", &groups, 1, 0},
+      });
+  finish_gathered(buffers, gs, route);
+  const CrosstlMlxLaunch launch{{uint32_t(tiles_n), uint32_t(tiles_m), 1}, {32, 2, 1}};
+  quantized_dispatch(entry, buffers, out.size(), launch, "sorted gathered quantized matmul");
+}
+
 bool affine_parameters(int group_size, int bits) {
   return (group_size == 32 || group_size == 64 || group_size == 128) &&
       (bits == 2 || bits == 3 || bits == 4 || bits == 5 || bits == 6 || bits == 8);
@@ -309,10 +393,11 @@ void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
   const int64_t B = out.size() / M / N;
   const int64_t E = w.size() / w.shape(-1) / w.shape(-2);
   if (M == 1 && B >= 16 && right_sorted_ && B / E >= 4) {
-    // quantized.cpp's gather_qmm_rhs.
-    throw std::invalid_argument(
-        "CrossTL gathered quantized matmul does not yet route sorted right-hand "
-        "indices (gather_qmm_rhs).");
+    // quantized.cpp's gather_qmm_rhs over x.size() / K rows.
+    dispatch_gather_qmm_rhs(
+        x, w, scales, biases, global_scale, rhs_indices, out, mode, transpose_, group_size_,
+        bits_, N, K, "gather_qmm");
+    return;
   }
   // get_qmv_batch_limit for a device without an Apple GPU generation.
   const int vector_limit = transpose_ ? qq_vector_limit(K, N) : 4;
@@ -356,25 +441,6 @@ void GatherQQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
     out.set_data(allocator::malloc(out.nbytes()));
     return;
   }
-  if (global && w_quantized && dtype == bfloat16 && inputs[1].ndim() == 3 &&
-      inputs[0].ndim() >= 2) {
-    // quantized.cpp's gather_qmm_rhs and gather_qmm with the weights' global
-    // scales, refused before the operands are quantized: quantization keeps
-    // the shapes that choose them.
-    const array& w = inputs[1];
-    const int K = inputs[0].shape(-1);
-    const int M = inputs[0].shape(-2);
-    const int N = out.shape(-1);
-    const int64_t E = w.shape(0);
-    const int64_t B = M > 0 && N > 0 ? int64_t(out.size() / M / N) : 0;
-    if (K % 32 == 0 && E > 0 &&
-        ((M == 1 && B >= 16 && right_sorted_ && B / E >= 4) ||
-         M >= qq_vector_limit(K, N))) {
-      throw std::invalid_argument(
-          "CrossTL gathered quantized-input matmul does not yet route globally "
-          "scaled bfloat16 matrix products.");
-    }
-  }
   std::optional<array> global_x, global_w;
   if (global) {
     global_x = dense_input(inputs[inputs.size() - 2]);
@@ -416,10 +482,28 @@ void GatherQQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
     broadcast(*global_w, per_matrix);
     global_w = dense_input(per_matrix);
   }
+  const array lhs_indices = gather_indices(inputs[2]);
+  const array rhs_indices = gather_indices(inputs[3]);
+  // quantized.cpp's matrix kernels take globally scaled bfloat16 products
+  // of quantized batched weights whose K fills whole 32-value tiles.
+  const bool matrix =
+      global && w_quantized && dtype == bfloat16 && w_q.ndim() == 3 && K % 32 == 0;
+  const int64_t B = out.size() / M / N;
+  if (matrix && M == 1 && B >= 16 && right_sorted_ && B / E >= 4) {
+    dispatch_gather_qmm_rhs(
+        x, w_q, scales_w, std::nullopt, global_w, rhs_indices, out, mode, true, group_size_,
+        bits_, N, K, "gather_qqmm");
+    return;
+  }
+  if (matrix && M >= qq_vector_limit(K, N)) {
+    dispatch_gather_qmm(
+        x, w_q, scales_w, std::nullopt, global_w, lhs_indices, rhs_indices, out, mode, true,
+        group_size_, bits_, M, N, K, "gather_qqmm");
+    return;
+  }
   dispatch_gather_qmv(
-      x, w_q, scales_w, std::nullopt, global_w, gather_indices(inputs[2]),
-      gather_indices(inputs[3]), out, mode, true, group_size_, bits_, M, N, K,
-      "gather_qqmm");
+      x, w_q, scales_w, std::nullopt, global_w, lhs_indices, rhs_indices, out, mode, true,
+      group_size_, bits_, M, N, K, "gather_qqmm");
 }
 
 } // namespace mlx::core

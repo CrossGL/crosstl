@@ -730,13 +730,26 @@ UPSTREAM_TESTS = (
         name for tests in MODULE_GROUPS.values() for name in tests
     )
 )
-# Sorted right indices route a one-row product through gather_mm_rhs, which
-# finds its row tile with subgroup scans of ``offsets`` and returns early on
-# their reduction. DirectX and OpenGL software subgroups lower that only once
-# reductions of lane-symmetric values count as workgroup-uniform.
+# Sorted right indices route a one-row product through gather_mm_rhs, or a
+# quantized one through gather_qmm_rhs, each of which finds its row tile with
+# subgroup scans of ``offsets`` and returns early on their reduction. DirectX
+# and OpenGL software subgroups lower that only once reductions of
+# lane-symmetric values count as workgroup-uniform.
 SORTED_GATHER_EXCLUSIONS = {
     "test_blas.TestBlas.test_gather_mm_sorted": "CrossGL/crosstl#2546",
     "test_blas.TestBlas.test_gather_mm_sorted_vjp": "CrossGL/crosstl#2546",
+    **{
+        f"test_quantized.TestQuantized.test_{name}": "CrossGL/crosstl#2546"
+        for name in (
+            "fp_gather_qmm_non_multiple_of_32",
+            "gather_qmm_sorted",
+            "gather_qmm_sorted_nax_large_m",
+            "gather_qmm_sorted_sliced_weight",
+            "gather_qmm_sorted_unaligned_k",
+            "gather_qmm_grad",
+            "gather_qqmm_global_scale_matrix_paths",
+        )
+    },
 }
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
@@ -857,6 +870,7 @@ GPU_ONLY_TESTS = frozenset(
         # device.
         "test_quantized.TestQuantized.test_qqmm",
         "test_quantized.TestQuantized.test_gather_qqmm",
+        "test_quantized.TestQuantized.test_gather_qqmm_global_scale_matrix_paths",
         # Overrides the two-pass vector kernels' block count (sdpa.inc).
         "test_fast_sdpa.TestFastSDPA.test_sdpa_blocks_env_override",
         # Full attention with head dims 72, 80 and 96, and the shards of
@@ -980,6 +994,18 @@ def upstream_tests(target, group=None):
     excluded = TARGET_EXCLUSIONS.get(target, {})
     selected = UPSTREAM_TESTS if group is None else GROUPS[group]
     return tuple(name for name in selected if name not in excluded)
+
+
+def selected_tests(target, group):
+    """``upstream_tests``, refusing a group that runs nothing on ``target``.
+
+    CI excludes such a group's job on that target; a run that reached it would
+    otherwise pass without executing a test.
+    """
+    tests = upstream_tests(target, group)
+    if not tests:
+        raise ValueError(f"Upstream op group {group} runs no tests on {target}")
+    return tests
 
 
 # The tests that compare with PyTorch and skip themselves without it.
@@ -1636,7 +1662,7 @@ def verify(args):
         args.seed = int.from_bytes(os.urandom(8), "little")
     before = verify_prepared(args.mlx_root)
     target = package_target(args.packages)
-    tests = upstream_tests(target, args.group)
+    tests = selected_tests(target, args.group)
     require_reference_modules(tests)
     checks = negative_checks(args.group)
     sources = upstream_test_sources(args.mlx_root, tests)

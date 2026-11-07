@@ -2792,10 +2792,12 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # A hundred and eight jobs, thirty-six of them on macOS: run them in ten waves.
+      # A hundred and ten jobs, thirty-eight of them on macOS: run them in
+      # eleven waves.
       max-parallel: 10
       matrix:
-        # verify_upstream_ops.GROUPS: each group runs in its own job.
+        # verify_upstream_ops.GROUPS: each group runs in its own job on every
+        # target that runs any of its tests.
         group:
           [
             operations,
@@ -2834,8 +2836,20 @@ jobs:
             torch-layers,
             torch-upsample,
             quantized-products,
+            quantized-sorted,
+            quantized-fp-tails,
           ]
         target: [opengl, directx, metal]
+        # gather_qmm_rhs's sorted products run on Metal alone (#2546).
+        exclude:
+          - group: quantized-sorted
+            target: opengl
+          - group: quantized-sorted
+            target: directx
+          - group: quantized-fp-tails
+            target: opengl
+          - group: quantized-fp-tails
+            target: directx
         include:
           - os: ubuntu-24.04
             target: opengl

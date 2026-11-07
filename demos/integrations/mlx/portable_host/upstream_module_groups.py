@@ -354,6 +354,7 @@ METAL_PATH_TESTS = (
     "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",
     "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
     "test_ops.TestOps.test_hadamard_m_only",
+    "test_quantized.TestQuantized.test_gather_qmm_sorted_nax_large_m",
     *(
         name
         for name in CUSTOM_KERNEL_TESTS
@@ -506,7 +507,9 @@ TORCH_GROUPS = ("torch-conv", "torch-layers", "torch-upsample")
 # and nvfp4 routes and gather_qmv's, among them the kernels that read the
 # weights' global scales. GatherQMM's gathered products of quantized weights
 # follow: gather_qmv, gather_qvm and gather_qmm for affine and block-scaled
-# weights, in float32 and, for the matrix path, bfloat16.
+# weights, in float32 and, for the matrix path, bfloat16; then the sorted
+# single-row products gather_qmm_rhs multiplies, among them GatherQQMM's
+# globally scaled bfloat16 products (gather_qqmm_global_scale_matrix_paths).
 QQ_MATMUL_TESTS = _tests(
     "test_quantized",
     "TestQuantized",
@@ -517,8 +520,29 @@ QQ_MATMUL_TESTS = _tests(
         "gather_qmm",
         "gather_matmul_grad",
         "gather_qmm_matrix_path",
+        "gather_qmm_sorted_sliced_weight",
+        "gather_qmm_sorted_unaligned_k",
+        "gather_qmm_grad",
+        "gather_qqmm_global_scale_matrix_paths",
     ),
 )
+# gather_qmm_rhs's sorted products over every quantization mode, about a
+# quarter of an hour natively on Metal, and the 32,832-row product, which
+# test_gather_qmm_sorted_nax_large_m runs only where mx.metal.is_available()
+# (METAL_PATH_TESTS); without NAX it takes gather_qmm_rhs too.
+QUANTIZED_SORTED_TESTS = _tests(
+    "test_quantized",
+    "TestQuantized",
+    ("gather_qmm_sorted", "gather_qmm_sorted_nax_large_m"),
+)
+# The nvfp4 products whose K or N leaves a 16-element tail, sorted through
+# gather_qmm_rhs and tiled through gather_qmm, in float32, float16 and
+# bfloat16 on the GPU; their operands of up to two million elements take
+# over half an hour natively on Metal.
+QUANTIZED_FP_TAIL_TESTS = _tests(
+    "test_quantized", "TestQuantized", ("fp_gather_qmm_non_multiple_of_32",)
+)
+QUANTIZED_GROUPS = ("quantized-products", "quantized-sorted", "quantized-fp-tails")
 
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.
 GROUPS = {
@@ -543,4 +567,6 @@ GROUPS = {
     "torch-layers": TORCH_LAYER_TESTS,
     "torch-upsample": TORCH_UPSAMPLE_TESTS,
     "quantized-products": QQ_MATMUL_TESTS,
+    "quantized-sorted": QUANTIZED_SORTED_TESTS,
+    "quantized-fp-tails": QUANTIZED_FP_TAIL_TESTS,
 }

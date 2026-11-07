@@ -135,6 +135,19 @@ void QQMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     throw std::invalid_argument(
         "CrossTL quantized-input matmul requires matching floating types.");
   }
+  if (global && w_quantized && inputs[1].ndim() == 2 && dtype == bfloat16 &&
+      inputs[0].ndim() >= 1) {
+    // quantized.cpp's qmm with the weights' global scale, refused before the
+    // operands are quantized: quantization keeps the shapes that choose it.
+    const int K = inputs[0].shape(-1);
+    const int N = out.shape(-1);
+    const int64_t M = K > 0 ? int64_t(inputs[0].size() / K) : 0;
+    if (K % 32 == 0 && M >= qq_vector_limit(K, N)) {
+      throw std::invalid_argument(
+          "CrossTL quantized-input matmul does not yet route globally scaled "
+          "bfloat16 matrix products.");
+    }
+  }
   std::optional<array> global_x, global_w;
   if (global) {
     global_x = dense_input(inputs[inputs.size() - 2]);
@@ -162,13 +175,6 @@ void QQMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
   if (K <= 0 || M <= 0 || N <= 0 || out.size() % (uint64_t(M) * N) != 0) {
     throw std::invalid_argument(
         "CrossTL quantized-input matmul shape is empty or inconsistent.");
-  }
-  if (global && w_quantized && non_batched && dtype == bfloat16 && K % 32 == 0 &&
-      M >= qq_vector_limit(K, N)) {
-    // quantized.cpp's qmm with the weights' global scale.
-    throw std::invalid_argument(
-        "CrossTL quantized-input matmul does not yet route globally scaled "
-        "bfloat16 matrix products.");
   }
   dispatch_fp_quantized_matvec(
       x, w_q, scales_w, out, mode, true, group_size_, bits_, M, N, K, global_w, true);

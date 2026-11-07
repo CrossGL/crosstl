@@ -15,6 +15,11 @@ the tiles and loaders of the ungathered qmm kernels (``qmm_layout``).
 The kernels move the input and the weights to the gathered matrices as the
 matrix-vector kernels do, so ``plan`` reads both indices of every batch and
 bounds the operands they gather through ``gather_qmv_layout``.
+
+``GatherQQMM::eval_gpu`` sends the same kernels its globally scaled bfloat16
+nvfp4 products of quantized batched weights; the ``route`` buffer names the
+primitive whose routing a launch follows, and ``check_route`` holds
+GatherQQMM's launches to the entries it selects.
 """
 
 import re
@@ -48,8 +53,23 @@ ENTRY_PREFIXES = tuple(
     for kernel in ("qmm_t", "qmm_n")
 )
 # The primitives whose routing a launch follows; every launch names one.
-ROUTES = ("gather_qmm",)
+ROUTES = ("gather_qmm", "gather_qqmm")
 SCALAR_PARAMETERS = ("K", "N", "M", "x_batch_ndims", "w_batch_ndims", "batch_ndims")
+
+
+def check_route(info, route, transpose, k, label=LABEL):
+    """GatherQQMM sends the matrix kernels only its globally scaled bfloat16
+    nvfp4 products of transposed weights whose K fills whole 32-value tiles."""
+    if route not in ROUTES:
+        raise ValueError(f"{label} route is unknown")
+    if route == "gather_qqmm" and not (
+        info["mode"] == "nvfp4"
+        and info["globalScale"]
+        and info["dtype"] == "bfloat16"
+        and transpose
+        and k % 32 == 0
+    ):
+        raise ValueError(f"{label} entry differs from GatherQQMM's routing")
 
 
 def signature(entry):
@@ -195,6 +215,7 @@ def plan(entry, counts, parameters, threads, execution, route=None):
         or grouped % group
     ):
         raise ValueError(f"{LABEL} dimensions are invalid")
+    check_route(info, route, transpose, k)
     # (32, 2, 2) threadgroups over 32 by 32 output tiles.
     batches = qmm_layout.launch_depth(execution, m, n, LABEL)
     if m < matmul_layout.vector_limit(k, n, transpose):

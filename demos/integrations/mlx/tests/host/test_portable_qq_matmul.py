@@ -240,10 +240,16 @@ def test_backend_ports_qqmatmul_as_quantized_cpp_does():
         '(global_scale ? "_hgs_true" : "_hgs_false")',
         # dispatch_qmv with the weights' global scale and QQMatmul's route.
         "x, w_q, scales_w, out, mode, true, group_size_, bits_, M, N, K, global_w, true);",
-        # qmm's globally scaled bfloat16 route is refused, not approximated.
-        "does not yet route globally scaled",
     ):
         assert text in port, text
+    # qmm's globally scaled bfloat16 route is refused, not approximated, and
+    # before any operand is quantized, so the refusal launches nothing.
+    start = port.index("void QQMatmul::eval_gpu(")
+    body = port[start : port.index("\n}\n", start)]
+    assert body.count("does not yet route globally scaled") == 1
+    assert body.index("does not yet route globally scaled") < body.index(
+        "qq_weights(stream(), inputs[1], scales, global_w, mode_, group_size_, bits_);"
+    )
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert (
         "} // namespace mlx::core::fast\n\n"
@@ -274,12 +280,34 @@ def test_qq_products_run_in_their_own_upstream_group():
         "test_quantized.TestQuantized.test_gather_qmm",
         "test_quantized.TestQuantized.test_gather_matmul_grad",
         "test_quantized.TestQuantized.test_gather_qmm_matrix_path",
+        "test_quantized.TestQuantized.test_gather_qmm_sorted_sliced_weight",
+        "test_quantized.TestQuantized.test_gather_qmm_sorted_unaligned_k",
+        "test_quantized.TestQuantized.test_gather_qmm_grad",
+        "test_quantized.TestQuantized.test_gather_qqmm_global_scale_matrix_paths",
     )
-    # test_qqmm and test_gather_qqmm skip on MLX's CPU, which has neither
+    # gather_qmm_rhs's longest products run in groups of their own.
+    assert upstream_module_groups.GROUPS["quantized-sorted"] == (
+        "test_quantized.TestQuantized.test_gather_qmm_sorted",
+        "test_quantized.TestQuantized.test_gather_qmm_sorted_nax_large_m",
+    )
+    assert upstream_module_groups.GROUPS["quantized-fp-tails"] == (
+        "test_quantized.TestQuantized.test_fp_gather_qmm_non_multiple_of_32",
+    )
+    # test_qqmm and the GatherQQMM tests skip on MLX's CPU, which has neither
     # QQMatmul nor GatherQQMM, so the CPU worker must skip them and the
-    # native worker must run them; test_qqmv and MLX's CPU GatherQMM tests
-    # run on both.
-    for name in ("test_qqmm", "test_gather_qqmm"):
+    # native worker must run them; the large sorted product runs only where
+    # mx.metal.is_available(). test_qqmv and MLX's CPU GatherQMM tests run on
+    # both.
+    assert (
+        "test_quantized.TestQuantized.test_gather_qmm_sorted_nax_large_m"
+        in verify_upstream_ops.METAL_PATH_TESTS
+    )
+    for name in (
+        "test_qqmm",
+        "test_gather_qqmm",
+        "test_gather_qqmm_global_scale_matrix_paths",
+        "test_gather_qmm_sorted_nax_large_m",
+    ):
         assert (
             f"test_quantized.TestQuantized.{name}" in verify_upstream_ops.GPU_ONLY_TESTS
         )
@@ -288,6 +316,11 @@ def test_qq_products_run_in_their_own_upstream_group():
         "test_gather_qmm",
         "test_gather_matmul_grad",
         "test_gather_qmm_matrix_path",
+        "test_fp_gather_qmm_non_multiple_of_32",
+        "test_gather_qmm_sorted",
+        "test_gather_qmm_sorted_sliced_weight",
+        "test_gather_qmm_sorted_unaligned_k",
+        "test_gather_qmm_grad",
     ):
         assert f"test_quantized.TestQuantized.{name}" not in (
             verify_upstream_ops.GPU_ONLY_TESTS

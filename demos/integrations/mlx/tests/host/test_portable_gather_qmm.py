@@ -41,6 +41,7 @@ def gathered(
     bits=None,
     global_scales=None,
     route=b"gather_qmm",
+    dtype="float32",
 ):
     """gather_qmm.inc's binding of one GatherQMM product with 1-D indices."""
     if group is None:
@@ -58,17 +59,17 @@ def gathered(
     data = {
         "w": ("uint32", [0] * (math.prod(w_batches) * rows * words), 0),
         "scales": (
-            "float32" if affine else "uint8",
+            dtype if affine else "uint8",
             [0] * (math.prod(w_batches) * rows * groups),
             0,
         ),
-        "x": ("float32", [0] * (math.prod(x_batches) * m * k), 0),
+        "x": (dtype, [0] * (math.prod(x_batches) * m * k), 0),
         "lhs_indices": ("uint32", list(lhs), 0),
         "rhs_indices": ("uint32", list(rhs), 0),
-        "y": ("float32", [0] * (batches * m * n), 1),
+        "y": (dtype, [0] * (batches * m * n), 1),
     }
     if affine:
-        data["biases"] = ("float32", [0] * len(data["scales"][1]), 0)
+        data["biases"] = (dtype, [0] * len(data["scales"][1]), 0)
     if layout is vector:
         data["in_vec_size"] = ("int32", [k], 0)
         data["out_vec_size"] = ("int32", [n], 0)
@@ -95,11 +96,11 @@ def gathered(
         data["global_scale"] = ("float32", [0x3F800000] * global_scales, 0)
     scaled = global_scales is not None
     if layout is vector:
-        entry = vector.select(mode, "float32", n, k, scaled, transpose, group, bits)
+        entry = vector.select(mode, dtype, n, k, scaled, transpose, group, bits)
         count = [m, -(-n // vector.tile_rows(entry)), batches]
         size = [32, 2, 1]
     else:
-        entry = matrix.select(mode, "float32", m, n, k, scaled, transpose, group, bits)
+        entry = matrix.select(mode, dtype, m, n, k, scaled, transpose, group, bits)
         count = [-(-n // 32), -(-m // 32), batches]
         size = [32, 2, 2]
     memory, buffers = {}, {}
@@ -324,6 +325,29 @@ def test_matrix_plan_reads_each_batch_index(kwargs, kernel):
 
 
 @pytest.mark.parametrize(
+    "kwargs,accepted",
+    (
+        ({"dtype": "bfloat16", "global_scales": 3}, True),
+        # GatherQQMM's matrix kernels read the weights' global scales.
+        ({"dtype": "bfloat16"}, False),
+        ({"dtype": "float32", "global_scales": 3}, False),
+        ({"dtype": "bfloat16", "global_scales": 3, "transpose": False, "k": 32}, False),
+        ({"dtype": "bfloat16", "global_scales": 3, "k": 272}, False),
+    ),
+)
+def test_matrix_plan_holds_gather_qqmm_launches_to_its_routing(kwargs, accepted):
+    entry, buffers, _memory, execution = gathered(
+        matrix, "nvfp4", m=32, route=b"gather_qqmm", **kwargs
+    )
+    if not accepted:
+        with pytest.raises(ValueError, match="GatherQQMM"):
+            planned(matrix, entry, buffers, execution)
+        return
+    metadata = planned(matrix, entry, buffers, execution)
+    assert (metadata["route"], metadata["kernel"]) == ("gather_qqmm", "qmm_t")
+
+
+@pytest.mark.parametrize(
     "fault",
     (
         "route",
@@ -505,7 +529,7 @@ def test_backend_ports_gather_qmm_as_quantized_cpp_does():
         "gather_indices(inputs[inputs.size() - 2]);",
         # quantized.cpp's routes, in its order.
         "if (M == 1 && B >= 16 && right_sorted_ && B / E >= 4) {",
-        "does not yet route sorted right-hand",
+        "dispatch_gather_qmm_rhs(",
         "const int vector_limit = transpose_ ? qq_vector_limit(K, N) : 4;",
         "if (M >= vector_limit) {",
         "dispatch_gather_qmm(",
@@ -513,13 +537,21 @@ def test_backend_ports_gather_qmm_as_quantized_cpp_does():
     ]
     positions = [body.index(text) for text in order]
     assert positions == sorted(positions)
-    assert body.count('"gather_qmm");') == 2
+    assert body.count('"gather_qmm");') == 3
+    assert "does not yet route" not in port
     for text in (
         "const CrosstlMlxLaunch launch{{tiles_n, tiles_m, uint32_t(B)}, {32, 2, 2}};",
         "const int rows = transpose ? 8 : 2 * std::min(group_size, 32);",
         '(transpose ? (N % 32 == 0 ? "_alN_true" : "_alN_false") : "")',
         '{"scales", biases ? storage : "uint8", data(scales), matmul_span(scales), 0},',
         'buffers.push_back(vector("b_strides", "int64", b_strides));',
+        # gather_qmm_rhs: one input row per index, the offsets of each
+        # matrix's rows, then (32, 2, 1) threadgroups over 16-row tiles.
+        "x_.size() / x_.shape(-2) / x_.shape(-1) != indices.size()",
+        "array offsets = dispatch_gather_mm_offsets(indices, E, M);",
+        '"_bm_16_bn_32_bk_32_wm_1_wn_2" + (gs ? "_hgs" : "") + "_align_N_"',
+        "std::min<int64_t>(M, (int64_t(M) + bm - 1) / bm + E - 1);",
+        "{{uint32_t(tiles_n), uint32_t(tiles_m), 1}, {32, 2, 1}};",
     ):
         assert text in port, text
     adapter = (HOST / "prepare.py").read_text(encoding="utf-8")

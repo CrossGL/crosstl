@@ -29,6 +29,7 @@ from demos.integrations.mlx.portable_host import (
     gather_mm_layout,
     gather_mv_layout,
     gather_qmm_layout,
+    gather_qmm_rhs_layout,
     gather_qmv_layout,
     gemm_layout,
     gemm_splitk_layout,
@@ -100,6 +101,12 @@ from demos.integrations.mlx.portable_host.gather_qmm_packages import (
 )
 from demos.integrations.mlx.portable_host.gather_qmm_packages import (
     GatherQuantizedQmmPackageCache,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_rhs_packages import (
+    CACHE_DIRECTORY as GATHER_QUANTIZED_MM_RHS_CACHE,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_rhs_packages import (
+    GatherQuantizedQmmRhsPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_qmv_packages import (
     CACHE_DIRECTORY as GATHER_QUANTIZED_MV_CACHE,
@@ -184,6 +191,7 @@ QUANTIZED_FAMILIES = {
     "fp-quantized-mm": fp_qmm_layout.ENTRY_PREFIXES,
     "gather-quantized-mv": gather_qmv_layout.ENTRY_PREFIXES,
     "gather-quantized-mm": gather_qmm_layout.ENTRY_PREFIXES,
+    "gather-quantized-mm-rhs": gather_qmm_rhs_layout.ENTRY_PREFIXES,
 }
 EXECUTED_FAMILIES = {**MATRIX_FAMILIES, **QUANTIZED_FAMILIES}
 FAMILIES = ("scan", "small-row", "small-column", "long-column", *EXECUTED_FAMILIES)
@@ -278,6 +286,9 @@ class LazyPackages:
             ),
             "gather-quantized-mm": GatherQuantizedQmmPackageCache(
                 mlx_root, packages / GATHER_QUANTIZED_MM_CACHE, target
+            ),
+            "gather-quantized-mm-rhs": GatherQuantizedQmmRhsPackageCache(
+                mlx_root, packages / GATHER_QUANTIZED_MM_RHS_CACHE, target
             ),
         }
 

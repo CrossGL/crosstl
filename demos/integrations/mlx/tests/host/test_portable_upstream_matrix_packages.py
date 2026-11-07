@@ -85,11 +85,21 @@ def test_entries_past_the_budget_are_left_to_translate_on_demand(monkeypatch, tm
 
 def test_targets_skip_the_entries_only_their_excluded_tests_reach():
     # gather_mm_offsets and gather_mm_rhs run only for sorted right indices,
-    # whose tests DirectX and OpenGL exclude until #2546.
+    # whose tests DirectX and OpenGL exclude until #2546; the other sorted
+    # products that excludes are quantized, through gather_qmm_rhs.
     sorted_gather = {
         name
         for name, issue in ops.TARGET_EXCLUSIONS["opengl"].items()
+        if issue.endswith("#2546") and name.startswith("test_blas.")
+    }
+    assert {
+        name
+        for name, issue in ops.TARGET_EXCLUSIONS["opengl"].items()
         if issue.endswith("#2546")
+    } - sorted_gather == {
+        name
+        for name in ops.SORTED_GATHER_EXCLUSIONS
+        if name.startswith("test_quantized.")
     }
     assert sorted_gather == {
         "test_blas.TestBlas.test_gather_mm_sorted",

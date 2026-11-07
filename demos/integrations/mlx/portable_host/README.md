@@ -1104,7 +1104,7 @@ so the dispatch checks them against QQMatmul's routing rather than
 QuantizedMatmul's. Quantize-dequantize launches cover complete groups, one
 workgroup of 32 lanes (16 for NVFP4) each. The globally scaled bfloat16
 matrix product that `quantized.cpp` sends to `qmm` is refused with a typed
-error.
+error before either operand is quantized, so the refusal launches nothing.
 
 `GatherQQMM::eval_gpu` (`gather_qmm.inc`) quantizes both operands the same
 way and sends each gathered product to `quantized.cpp`'s `gather_qmv`:
@@ -1115,11 +1115,13 @@ the `_hgs` kernels read at the gathered matrix. Launches bind both index
 buffers by address with the collapsed index views and carry a `gather_qqmm`
 route. `gather_qmv_layout` reads every batch's two indices and proves that the
 gathered input rows, weights, scales and global scale lie inside their
-buffers, as do the offsets that OpenGL evaluates in 32 bits. The globally
-scaled bfloat16 matrix products that `quantized.cpp` sends to `gather_qmm` and
-`gather_qmm_rhs` are refused with a typed error.
-The globally scaled bfloat16 matrix products are refused before either
-operand is quantized, so the refusal launches nothing.
+buffers, as do the offsets that OpenGL evaluates in 32 bits. Globally scaled
+bfloat16 products of quantized batched weights whose `K` fills whole 32-value
+tiles take `quantized.cpp`'s matrix kernels instead, as GatherQMM's do:
+`gather_qmm_rhs` for sorted single rows and `gather_qmm_t` from the vector
+limit up, both reading the `_hgs` global scale of the gathered matrix. Their
+launches carry the `gather_qqmm` route, which the matrix layouts accept only
+for those entries.
 
 `GatherQMM::eval_gpu` (`gather_qmm.inc`) routes as `quantized.cpp` does on a
 device without NAX, for affine, MXFP4, MXFP8 and NVFP4 weights and NVFP4
@@ -1136,11 +1138,33 @@ limit, read every batch's two indices and prove that the gathered inputs,
 weights, scales, biases and global scales lie inside their buffers. The
 matrix entries translate with the ungathered `qmm` entries' options and the
 OpenGL index assertions of the gathered matrix gate, which adds the `uint32`
-index reads. Single-row products with sorted right-hand indices, which
-`quantized.cpp` sends to `gather_qmm_rhs`, are refused with a typed error.
+index reads.
+
+Single rows with sorted right-hand indices, at least 16 batches and at least
+four per weight matrix go to `gather_qmm_rhs` (`affine_gather_qmm_rhs` or
+`fp_gather_qmm_rhs`, transposed `nt` or not `nn`). The port runs
+`gather_mm_offsets` to find each weight matrix's first row, then
+`(N / 32, min(M, M / 16 + E - 1), 1)` threadgroups of 64 lanes; the entry
+names carry the `align_N` and `align_K` function constants, which the
+translation freezes. An input that would need broadcasting with the indices
+is refused, since `quantized.cpp` multiplies `x.size() / K` rows.
+`gather_qmm_rhs_layout` requires the offsets to split the rows in order and
+bounds the weights, scales, biases and global scale of every matrix that owns
+rows. The kernels find their row tile with subgroup scans of the offsets and
+return early on their reduction, which DirectX and OpenGL software subgroups
+do not lower yet ([#2546](https://github.com/CrossGL/crosstl/issues/2546)),
+so the sorted tests run on Metal alone.
+
 `test_quantized.TestQuantized.test_qqmv`, `test_qqmm`, `test_gather_qqmm`,
-`test_gather_qmm`, `test_gather_matmul_grad` and `test_gather_qmm_matrix_path`
-run in the `quantized-products` group.
+`test_gather_qmm`, `test_gather_matmul_grad`, `test_gather_qmm_matrix_path`,
+`test_gather_qmm_sorted_sliced_weight`, `test_gather_qmm_sorted_unaligned_k`,
+`test_gather_qmm_grad` and `test_gather_qqmm_global_scale_matrix_paths` run in
+the `quantized-products` group; DirectX and OpenGL exclude the last four. The
+longest sorted products run in groups of their own on Metal alone:
+`test_gather_qmm_sorted` and `test_gather_qmm_sorted_nax_large_m` in
+`quantized-sorted`, and `test_fp_gather_qmm_non_multiple_of_32` in
+`quantized-fp-tails`. `verify_upstream_ops` refuses a group that runs no test
+on the selected target, and CI excludes those jobs.
 
 ## General Gather
 
@@ -3009,7 +3033,7 @@ compares them in one vector-vector dispatch without copies. Any
 other traced entry must be a unary or binary vector that the native run
 translated from the pinned sources on first use, as the upstream tests do for
 scalar-vector binaries; the evidence lists these as `lazyEntries`.
-Separate negative processes reject an unsupported route (GatherQQMM's globally
+Separate negative processes reject an unsupported route (QQMatmul's globally
 scaled bfloat16 matrix product), an
 oversized floating-point arange, a missing artifact, unary inputs with
 unsupported dtype, contiguous and

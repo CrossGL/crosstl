@@ -192,18 +192,16 @@ def worker(args):
         try:
             if args.worker == "unsupported":
                 # The host refuses the globally scaled bfloat16 matrix products
-                # GatherQQMM sends to gather_qmm before it quantizes anything.
-                # Quantized nvfp4 weights, constant operands of the output type
-                # and unsigned indices of the batch shape need no copy or cast.
-                value = mx.gather_qqmm(
-                    mx.array(np.ones((1, 32, 64), dtype=np.float32), dtype=mx.bfloat16),
-                    mx.array(np.zeros((2, 32, 8), dtype=np.uint32)),
-                    mx.array(np.full((2, 32, 4), 56, dtype=np.uint8)),
-                    lhs_indices=mx.array([0], dtype=mx.uint32),
-                    rhs_indices=mx.array([1], dtype=mx.uint32),
+                # QQMatmul sends to qmm before it quantizes anything: 32 rows
+                # reach the vector limit of K = 64. Quantized nvfp4 weights and
+                # constant operands of the output type need no copy or cast.
+                value = mx.qqmm(
+                    mx.array(np.ones((32, 64), dtype=np.float32), dtype=mx.bfloat16),
+                    mx.array(np.zeros((32, 8), dtype=np.uint32)),
+                    mx.array(np.full((32, 4), 56, dtype=np.uint8)),
                     mode="nvfp4",
                     global_scale_x=mx.array(1.0, dtype=mx.float32),
-                    global_scale_w=mx.array([1.0, 1.0], dtype=mx.float32),
+                    global_scale_w=mx.array(1.0, dtype=mx.float32),
                     stream=mx.gpu,
                 )
             elif args.worker == "over-limit":

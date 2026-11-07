@@ -152,7 +152,8 @@ def verification_entries():
     64 and every block-scaled mode; the gradient of test_gather_matmul_grad
     multiplies by the untransposed weights. test_gather_qmm_matrix_path's
     bfloat16 products of 64 rows take gather_qmm_t for affine and mxfp4
-    weights.
+    weights, and test_gather_qqmm_global_scale_matrix_paths's globally
+    scaled nvfp4 ones the _hgs gather_qmm_t.
     """
     entries = set()
     for mode, group, bits in (
@@ -167,6 +168,7 @@ def verification_entries():
             entries.add(select(mode, "float32", 32, n, 32, False, False, group, bits))
     for mode, group, bits in (("affine", 64, 4), ("mxfp4", 32, 4)):
         entries.add(select(mode, "bfloat16", 64, 512, 512, False, True, group, bits))
+    entries.add(select("nvfp4", "bfloat16", 64, 64, 256, True))
     return sorted(entries)
 
 
