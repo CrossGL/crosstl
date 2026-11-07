@@ -151,20 +151,9 @@ def test_written_entry_point_parameter_is_copied():
     "body, helpers, message",
     [
         (
-            "Acc acc;\ntouch(acc.sum, 1);",
+            "int arr[2];\ntouch(arr[0] + 1, 1);",
             TOUCH,
-            "cannot pass a part of 'acc' to inout parameter x of touch",
-        ),
-        (
-            "int arr[2];\ntouch(arr[0], 1);",
-            TOUCH,
-            "cannot pass a part of 'arr' to inout parameter x of touch",
-        ),
-        ("touch(data[0], 1);", TOUCH, "a part of 'data'"),
-        (
-            "touch(counter, 1);",
-            "shared int counter;\n" + TOUCH,
-            "cannot pass 'counter' .* is a module-scope variable",
+            "cannot pass an expression to inout parameter x of touch",
         ),
         (
             "int a = 1;\nswap2(a, a);",
@@ -187,6 +176,25 @@ def test_unlowerable_reference_parameters_fail_closed(body, helpers, message):
     entry_parameters = "inout int v" if "entry point" in message else ""
     with pytest.raises(ValueError, match=message):
         compute(body, helpers, entry_parameters=entry_parameters)
+
+
+@pytest.mark.parametrize(
+    "body, helpers, copied",
+    [
+        ("Acc acc;\ntouch(acc.sum, 1);", TOUCH, "acc.sum"),
+        ("int arr[2];\ntouch(arr[0], 1);", TOUCH, "arr[0]"),
+        ("touch(data[0], 1);", TOUCH, "data[0]"),
+        ("touch(counter, 1);", "shared int counter;\n" + TOUCH, "counter"),
+    ],
+)
+def test_part_and_module_scope_arguments_are_copied_in_and_out(body, helpers, copied):
+    # wgsl_reference_argument_copies: WGSL 11.3.1 takes only whole local variables as pointer arguments.
+    lines = function_lines(compute(body, helpers), "compute_main")
+    start = lines.index(f"var _crosstl_ref_0: i32 = {copied};")
+    assert lines[start + 1 : start + 3] == [
+        "touch(&_crosstl_ref_0, 1);",
+        f"{copied} = _crosstl_ref_0;",
+    ]
 
 
 def test_entry_point_out_parameter_from_hlsl_becomes_stage_output():
