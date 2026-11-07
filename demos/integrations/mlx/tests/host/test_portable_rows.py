@@ -3,7 +3,9 @@
 import copy
 import ctypes
 import json
+import shutil
 import struct
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -319,12 +321,139 @@ def test_backend_bounds_row_passes_by_elements_and_workgroups():
         "uint64_t(steps[axis]) > max_row_elements",
         "uint64_t(span) > max_row_elements",
         "(simple && uint64_t(span) + uint64_t(width) * 4 > max_row_elements)",
-        "if (row_groups > 65535) {",
+        # Reduced axes bind whole; output axes split across launches.
+        "check_axes(shape, strides, max_row_elements);",
+        "check_axes(reduce_shape, reduce_strides, 65535);",
     ):
         assert text in body, text
     assert "span > 65535" not in body
-    # The launch bound is checked before the output allocation and dispatch.
-    assert body.index("if (row_groups > 65535) {") < body.index("out.set_data(")
+    # More rows than one launch axis carries split into exact launches, each
+    # validated against the upstream plan: four rows per simple workgroup, one
+    # per looped or small-row workgroup, 1024 per scalar small-row workgroup.
+    capacity = "simple ? 4 * 65535 : scalar_rows ? 1024 * 65535 : 65535"
+    assert f"const uint64_t capacity = {capacity};" in body
+    assert "row_groups" not in body
+    assert body.index("split_row_launches(") < body.index("out.set_data(")
+    assert body.index("for (const auto& part : launches) {") > body.index(
+        "out.set_data("
+    )
+
+
+def test_backend_row_launch_split_keeps_axes_and_rows_within_one_launch():
+    source = Path(row_reduction_layout.__file__).with_name("backend.cpp").read_text()
+    start = source.index("std::vector<RowLaunch> split_row_launches(")
+    body = source[start : source.index("\n}\n", start)]
+    # The outermost axis whose inner product would pass the capacity splits
+    # into equal chunks of at most min(axis_limit, capacity / inner) indexes;
+    # the outer axes run one index per launch, and the inner axes stay whole.
+    for text in (
+        "if (size > axis_limit || size > capacity / inner) {",
+        "const uint64_t most = std::min<uint64_t>(axis_limit, capacity / inner);",
+        "const uint64_t chunk = (extent + parts - 1) / parts;",
+        "origin + int64_t(start) * strides[axis],",
+        "(index * extent + start) * inner,",
+        "count * inner};",
+    ):
+        assert text in body, text
+
+
+_ROW_SPLIT_HARNESS = r"""
+int64_t location(uint64_t index, const mlx::core::Shape& shape,
+                 const mlx::core::Strides& strides) {
+  int64_t offset = 0;
+  for (int axis = int(shape.size()) - 1; axis >= 0; --axis) {
+    offset += int64_t(index % uint64_t(shape[axis])) * strides[axis];
+    index /= uint64_t(shape[axis]);
+  }
+  return offset;
+}
+
+int check(const mlx::core::Shape& shape, const mlx::core::Strides& strides,
+          uint64_t capacity, uint64_t axis_limit) {
+  uint64_t total = 1;
+  for (auto size : shape) total *= uint64_t(size);
+  uint64_t next = 0;
+  for (const auto& launch : split_row_launches(shape, strides, capacity, axis_limit)) {
+    if (launch.first != next || launch.rows == 0 || launch.rows > capacity) return 1;
+    if (launch.shape.size() != launch.strides.size()) return 2;
+    uint64_t rows = 1;
+    for (auto size : launch.shape) {
+      if (size < 1 || uint64_t(size) > axis_limit) return 3;
+      rows *= uint64_t(size);
+    }
+    if (rows != launch.rows) return 4;
+    for (uint64_t row = 0; row < launch.rows; ++row) {
+      if (launch.source + location(row, launch.shape, launch.strides) !=
+          location(launch.first + row, shape, strides)) return 5;
+    }
+    next += launch.rows;
+  }
+  return next == total ? 0 : 6;
+}
+
+int main() {
+  // The 4,116-dispatch gated delta layout: 128 * 32 * 128 output rows of a
+  // simple pass, and wider looped passes past one launch axis.
+  if (int status = check({524288}, {128}, 4 * 65535, 4 * 65535)) return status;
+  if (int status = check({128, 32, 128}, {524288, 16384, 128}, 65535, 65535))
+    return 10 + status;
+  if (int status = check({70000, 3}, {3, 1}, 65535, 65535)) return 20 + status;
+  uint64_t state = 7;
+  auto draw = [&](uint64_t bound) {
+    state = state * 6364136223846793005ull + 1442695040888963407ull;
+    return (state >> 33) % bound;
+  };
+  for (int trial = 0; trial < 4000; ++trial) {
+    mlx::core::Shape shape;
+    mlx::core::Strides strides;
+    const int rank = 1 + int(draw(4));
+    uint64_t rows = 1;
+    for (int axis = 0; axis < rank; ++axis) {
+      shape.push_back(int32_t(1 + draw(trial % 3 == 0 ? 120 : 24)));
+      strides.push_back(int64_t(draw(1000)));
+      rows *= uint64_t(shape.back());
+    }
+    if (rows > 20000) continue;
+    const uint64_t axis_limit = 1 + draw(70);
+    const uint64_t capacity = axis_limit * (1 + draw(50));
+    if (int status = check(shape, strides, capacity, axis_limit)) return 100 + status;
+  }
+  std::puts("ok");
+  return 0;
+}
+"""
+
+
+def test_backend_row_launch_split_covers_every_row_exactly_once(tmp_path):
+    compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
+    if compiler is None:
+        pytest.skip("no C++ compiler to build the row launch split")
+    source = Path(row_reduction_layout.__file__).with_name("backend.cpp").read_text()
+    start = source.index("struct RowLaunch {")
+    end = source.index(
+        "\n}\n", source.index("std::vector<RowLaunch> split_row_launches(")
+    )
+    program = tmp_path / "split.cpp"
+    program.write_text(
+        "#include <algorithm>\n#include <cstdint>\n#include <cstdio>\n"
+        "#include <vector>\n"
+        "namespace mlx::core {\nusing Shape = std::vector<int32_t>;\n"
+        "using Strides = std::vector<int64_t>;\n}\n"
+        + source[start : end + 3]
+        + _ROW_SPLIT_HARNESS
+    )
+    binary = tmp_path / "split"
+    subprocess.run(
+        [compiler, "-std=c++17", "-O1", str(program), "-o", str(binary)],
+        check=True,
+        capture_output=True,
+        timeout=120,
+    )
+    # Each launch starts where the previous one ended, holds at most the
+    # capacity, binds no axis above the limit and reads the very source
+    # elements the single launch assigns its rows.
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=120)
+    assert (result.returncode, result.stdout.strip()) == (0, "ok")
 
 
 def test_rank_mismatch_is_rejected_before_metadata_array_read(monkeypatch):

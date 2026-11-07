@@ -137,7 +137,7 @@ def test_upstream_host_only_group_runs_on_both_workers_without_kernels():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 699
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 785
     assert all(
         name.startswith(
             (
@@ -157,6 +157,12 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_array.TestArray.test_",
                 "test_array.TestEquality.test_",
                 "test_array.TestInequality.test_",
+                "test_array.TestArrayNamespsceInfo.test",
+                "test_array.TestDtypes.test_",
+                "test_array.TestVersion.test_",
+                "test_double.TestDouble.test_",
+                "test_graph.TestGraph.test_",
+                "test_zero_copy.TestZeroCopy.test_",
                 "test_autograd.TestAutograd.test_",
                 "test_compile.TestCompile.test_",
                 "test_nn.TestBase.test_",
@@ -307,7 +313,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 13
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 685 and not set(opengl) & set(excluded)
+    assert len(opengl) == 771 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -411,13 +417,16 @@ def test_upstream_op_groups_partition_the_inventory():
         "test_fast.TestFast.test_cross_entropy_grad",
     ]
     assert ops.upstream_tests("opengl", "modules") == ops.MODULE_TESTS
-    assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 11
-    # The transposed convolutions' unfold tiling joins them; the pinned suite
-    # runs it only where mx.metal.is_available().
+    assert ops.GROUPS["conv"] == ops.CONV_TESTS and len(ops.CONV_TESTS) == 12
+    # The Winograd batch tiling and the transposed convolutions' unfold tiling
+    # join them; the pinned suite runs both only where mx.metal.is_available().
     assert ops.CONV_TESTS[-1] == (
         "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling"
     )
-    assert ops.CONV_TESTS[-1] in ops.METAL_PATH_TESTS
+    assert {name for name in ops.CONV_TESTS if name in ops.METAL_PATH_TESTS} == {
+        "test_conv.TestConv.test_conv2d_winograd_batch_tiling",
+        ops.CONV_TESTS[-1],
+    }
     assert ops.upstream_tests("directx", "conv") == ops.CONV_TESTS
     # The array, autograd and compile modules each run alone in their group.
     for group, tests, module, count in (
@@ -448,7 +457,7 @@ def test_upstream_op_groups_partition_the_inventory():
         ),
         ("rope", ("test_fast.", "test_upsample."), 9),
         # The Walsh-Hadamard transforms of test_ops run with the FFTs.
-        ("fft", ("test_fft.", "test_ops."), 14),
+        ("fft", ("test_fft.", "test_ops."), 15),
         ("gated-delta", ("test_fast_gated_delta.",), 2),
         ("gated-delta-vjp", ("test_fast_gated_delta.",), 1),
         ("sdpa", ("test_fast_sdpa.",), 6),
@@ -477,14 +486,17 @@ def test_upstream_op_groups_partition_the_inventory():
         (
             "host-only",
             (
+                "test_array.",
                 "test_autograd.",
                 "test_bf16.",
                 "test_compile.",
                 "test_constants.",
                 "test_device.",
+                "test_double.",
                 "test_eval.",
                 "test_export_import.",
                 "test_fast.",
+                "test_graph.",
                 "test_init.",
                 "test_linalg.",
                 "test_load.",
@@ -492,8 +504,12 @@ def test_upstream_op_groups_partition_the_inventory():
                 "test_nn.",
                 "test_optimizers.",
                 "test_quantized.",
+                "test_random.",
+                "test_tree.",
+                "test_vmap.",
+                "test_zero_copy.",
             ),
-            76,
+            160,
         ),
     ):
         tests = upstream_module_groups.GROUPS[group]

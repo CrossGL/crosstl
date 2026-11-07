@@ -640,6 +640,92 @@ constexpr uint64_t max_column_elements = (uint64_t(1) << 28) - 1;
 // strides (row_reduction_layout.MAX_ELEMENTS).
 constexpr uint64_t max_row_elements = max_column_elements;
 
+// One launch of a row pass: ``rows`` consecutive outputs from ``first``, whose
+// rows start at ``source`` elements into the pass's source view and follow
+// ``shape`` and ``strides`` from there.
+struct RowLaunch {
+  mlx::core::Shape shape;
+  mlx::core::Strides strides;
+  int64_t source;
+  uint64_t first;
+  uint64_t rows;
+};
+
+// Upstream's single Metal launch may carry more than the portable 65535
+// workgroups on an axis. Its outputs are independent rows, so the rows split
+// into launches of at most ``capacity`` rows with no axis above
+// ``axis_limit``: the innermost axes that fit stay whole, the next axis splits
+// into equal chunks, and each index of the axes outside it runs on its own.
+// Every launch reads and writes exactly the elements the single launch
+// assigns its rows.
+std::vector<RowLaunch> split_row_launches(
+    const mlx::core::Shape& shape,
+    const mlx::core::Strides& strides,
+    uint64_t capacity,
+    uint64_t axis_limit) {
+  const int ndim = static_cast<int>(shape.size());
+  int axis = -1;
+  uint64_t inner = 1;
+  for (int i = ndim - 1; i >= 0; --i) {
+    const uint64_t size = uint64_t(shape[i]);
+    if (size > axis_limit || size > capacity / inner) {
+      axis = i;
+      break;
+    }
+    inner *= size;
+  }
+  if (axis < 0) {
+    return {{shape, strides, 0, 0, inner}};
+  }
+  const uint64_t extent = uint64_t(shape[axis]);
+  const uint64_t most = std::min<uint64_t>(axis_limit, capacity / inner);
+  const uint64_t parts = (extent + most - 1) / most;
+  const uint64_t chunk = (extent + parts - 1) / parts;
+  uint64_t outer = 1;
+  for (int i = 0; i < axis; ++i) {
+    outer *= uint64_t(shape[i]);
+  }
+  std::vector<RowLaunch> launches;
+  for (uint64_t index = 0; index < outer; ++index) {
+    int64_t origin = 0;
+    uint64_t rest = index;
+    for (int i = axis - 1; i >= 0; --i) {
+      origin += int64_t(rest % uint64_t(shape[i])) * strides[i];
+      rest /= uint64_t(shape[i]);
+    }
+    for (uint64_t start = 0; start < extent; start += chunk) {
+      const uint64_t count = std::min(chunk, extent - start);
+      RowLaunch launch{
+          {static_cast<int32_t>(count)},
+          {strides[axis]},
+          origin + int64_t(start) * strides[axis],
+          (index * extent + start) * inner,
+          count * inner};
+      launch.shape.insert(launch.shape.end(), shape.begin() + axis + 1, shape.end());
+      launch.strides.insert(launch.strides.end(), strides.begin() + axis + 1, strides.end());
+      launches.push_back(std::move(launch));
+    }
+  }
+  return launches;
+}
+
+// The source elements a row view reaches from its first element.
+int64_t row_view_span(
+    int64_t row_size,
+    const mlx::core::Shape& shape,
+    const mlx::core::Strides& strides,
+    const mlx::core::Shape& reduce_shape,
+    const mlx::core::Strides& reduce_strides) {
+  int64_t span = row_size;
+  for (size_t axis = 0; axis < shape.size(); ++axis) {
+    span += (int64_t(shape[axis]) - 1) * strides[axis];
+  }
+  for (size_t axis = 0; axis < reduce_shape.size(); ++axis) {
+    span += (int64_t(reduce_shape[axis]) - 1) * reduce_strides[axis];
+  }
+  return span;
+}
+
 void dispatch_row_reduce(
     const mlx::core::array& in,
     mlx::core::array& out,
@@ -665,18 +751,19 @@ void dispatch_row_reduce(
   for (auto size : reduce_shape) {
     non_rows *= size;
   }
-  int64_t span = row_size;
-  auto accumulate_span = [&](const auto& sizes, const auto& steps) {
+  // Reduced axes stay below 65536, as each launch binds them whole; the output
+  // axes split across launches below.
+  auto check_axes = [&](const auto& sizes, const auto& steps, uint64_t limit) {
     for (size_t axis = 0; axis < sizes.size(); ++axis) {
-      if (sizes[axis] < 1 || sizes[axis] > 65535 || steps[axis] < 0 ||
+      if (sizes[axis] < 1 || uint64_t(sizes[axis]) > limit || steps[axis] < 0 ||
           uint64_t(steps[axis]) > max_row_elements) {
         throw std::invalid_argument("CrossTL row reduction shape or stride exceeds its bounds.");
       }
-      span += (int64_t(sizes[axis]) - 1) * steps[axis];
     }
   };
-  accumulate_span(shape, strides);
-  accumulate_span(reduce_shape, reduce_strides);
+  check_axes(shape, strides, max_row_elements);
+  check_axes(reduce_shape, reduce_strides, 65535);
+  const int64_t span = row_view_span(row_size, shape, strides, reduce_shape, reduce_strides);
   const bool simple = !small && plan.type == ContiguousReduce && reduce_ndim == 0 &&
       in.size() / row_size >= 32;
   // A simple pass's inactive lanes form source indexes up to four values per
@@ -690,65 +777,75 @@ void dispatch_row_reduce(
   }
   // Every launch axis carries at most 65535 workgroups: four rows per simple
   // workgroup, one per looped or small-row workgroup, and up to 1024 per
-  // scalar small-row workgroup.
-  const uint64_t rows = out.size();
+  // scalar small-row workgroup. A simple pass's rows are consecutive.
   const bool scalar_rows = small && ((non_rows < 32 && row_size <= 8) || non_rows <= 8);
-  const uint64_t scalar_width = std::min<uint64_t>(rows, 1024);
-  const uint64_t row_groups = simple ? (rows + 3) / 4
-      : scalar_rows ? (rows + scalar_width - 1) / scalar_width
-                    : rows;
-  if (row_groups > 65535) {
-    throw std::invalid_argument("CrossTL row reduction launch exceeds 65535 workgroups.");
-  }
+  const uint64_t capacity = simple ? 4 * 65535 : scalar_rows ? 1024 * 65535 : 65535;
+  const auto launches = simple
+      ? split_row_launches({static_cast<int32_t>(out.size())}, {row_size}, capacity, capacity)
+      : split_row_launches(shape, strides, capacity, 65535);
   out.set_data(allocator::malloc(std::max<size_t>(out.nbytes(), 4)));
-  char error[2048] = {};
-  int status;
-  if (simple) {
-    uint64_t reduction_size = row_size;
-    int64_t out_size = out.size();
-    std::string entry = "row_reduce_simple_" + operation + dtype;
-    CrosstlMlxBuffer buffers[] = {
-        {"in", dtype, const_cast<void*>(in.data<void>()), uint64_t(span), 0},
-        {"out", output, out.data<void>(), out.size(), 1},
-        {"reduction_size", "uint64", &reduction_size, 1, 0},
-        {"out_size", "int64", &out_size, 1, 0},
-    };
-    const CrosstlMlxLaunch launch{{1, uint32_t((out_size + 3) / 4), 1}, {width, 1, 1}};
-    status = dispatch_callback.load()(entry.c_str(), buffers, 4, in.size(), &launch, error, sizeof(error));
-  } else {
-    const int dimension = reduce_ndim <= 1 ? 1 : reduce_ndim == 2 ? 2 : 5;
-    std::string entry = std::string(small ? "row_reduce_small_" : "row_reduce_looped_") +
-        std::to_string(dimension) + "_reduce_" + operation + dtype;
-    if (ndim == 0) { shape.push_back(0); strides.push_back(0); }
-    if (reduce_ndim == 0) { reduce_shape.push_back(0); reduce_strides.push_back(0); }
-    CrosstlMlxBuffer buffers[] = {
-        {"in", dtype, const_cast<void*>(in.data<void>()), uint64_t(span), 0},
-        {"out", output, out.data<void>(), out.size(), 1},
-        {"row_size", "int64", &row_size, 1, 0},
-        {"non_row_reductions", "int64", &non_rows, 1, 0},
-        {"shape", "int32", shape.data(), shape.size(), 0},
-        {"strides", "int64", strides.data(), strides.size(), 0},
-        {"ndim", "int32", &ndim, 1, 0},
-        {"reduce_shape", "int32", reduce_shape.data(), reduce_shape.size(), 0},
-        {"reduce_strides", "int64", reduce_strides.data(), reduce_strides.size(), 0},
-        {"reduce_ndim", "int32", &reduce_ndim, 1, 0},
-    };
-    CrosstlMlxLaunch launch{{1, uint32_t(out.size()), 1}, {width, 1, 1}, {0, 0, 0}};
-    if (small) {
-      // The current bounded output fits upstream get_2d_grid_dims' first axis.
-      const uint32_t rows = static_cast<uint32_t>(out.size());
-      if (scalar_rows) {
-        width = std::min<uint32_t>(rows, 1024);
-        launch = {{(rows + width - 1) / width, 1, 1}, {width, 1, 1}, {rows, 1, 1}};
-      } else {
-        launch = {{1, rows, 1}, {32, 1, 1}, {32, rows, 1}};
+  const char* source = static_cast<const char*>(in.data<void>());
+  char* target = out.data<char>();
+  for (const auto& part : launches) {
+    char error[2048] = {};
+    int status;
+    void* in_data = const_cast<char*>(source) + part.source * in.itemsize();
+    void* out_data = target + part.first * out.itemsize();
+    auto part_shape = part.shape;
+    auto part_strides = part.strides;
+    const uint64_t part_span = uint64_t(
+        row_view_span(row_size, part_shape, part_strides, reduce_shape, reduce_strides));
+    const uint64_t logical = part.rows * uint64_t(row_size * non_rows);
+    if (simple) {
+      uint64_t reduction_size = row_size;
+      int64_t out_size = int64_t(part.rows);
+      std::string entry = "row_reduce_simple_" + operation + dtype;
+      CrosstlMlxBuffer buffers[] = {
+          {"in", dtype, in_data, part_span, 0},
+          {"out", output, out_data, part.rows, 1},
+          {"reduction_size", "uint64", &reduction_size, 1, 0},
+          {"out_size", "int64", &out_size, 1, 0},
+      };
+      const CrosstlMlxLaunch launch{{1, uint32_t((out_size + 3) / 4), 1}, {width, 1, 1}};
+      status = dispatch_callback.load()(entry.c_str(), buffers, 4, logical, &launch, error, sizeof(error));
+    } else {
+      const int dimension = reduce_ndim <= 1 ? 1 : reduce_ndim == 2 ? 2 : 5;
+      std::string entry = std::string(small ? "row_reduce_small_" : "row_reduce_looped_") +
+          std::to_string(dimension) + "_reduce_" + operation + dtype;
+      int32_t part_ndim = ndim == 0 ? 0 : static_cast<int32_t>(part_shape.size());
+      auto part_reduce_shape = reduce_shape;
+      auto part_reduce_strides = reduce_strides;
+      if (part_ndim == 0) { part_shape = {0}; part_strides = {0}; }
+      if (reduce_ndim == 0) { part_reduce_shape = {0}; part_reduce_strides = {0}; }
+      CrosstlMlxBuffer buffers[] = {
+          {"in", dtype, in_data, part_span, 0},
+          {"out", output, out_data, part.rows, 1},
+          {"row_size", "int64", &row_size, 1, 0},
+          {"non_row_reductions", "int64", &non_rows, 1, 0},
+          {"shape", "int32", part_shape.data(), part_shape.size(), 0},
+          {"strides", "int64", part_strides.data(), part_strides.size(), 0},
+          {"ndim", "int32", &part_ndim, 1, 0},
+          {"reduce_shape", "int32", part_reduce_shape.data(), part_reduce_shape.size(), 0},
+          {"reduce_strides", "int64", part_reduce_strides.data(), part_reduce_strides.size(), 0},
+          {"reduce_ndim", "int32", &reduce_ndim, 1, 0},
+      };
+      const uint32_t rows = static_cast<uint32_t>(part.rows);
+      CrosstlMlxLaunch launch{{1, rows, 1}, {width, 1, 1}, {0, 0, 0}};
+      if (small) {
+        // Each launch's rows fit upstream get_2d_grid_dims' first axis.
+        if (scalar_rows) {
+          const uint32_t scalar_width = std::min<uint32_t>(rows, 1024);
+          launch = {{(rows + scalar_width - 1) / scalar_width, 1, 1}, {scalar_width, 1, 1}, {rows, 1, 1}};
+        } else {
+          launch = {{1, rows, 1}, {32, 1, 1}, {32, rows, 1}};
+        }
       }
+      status = dispatch_callback.load()(entry.c_str(), buffers, 10, logical, &launch, error, sizeof(error));
     }
-    status = dispatch_callback.load()(entry.c_str(), buffers, 10, in.size(), &launch, error, sizeof(error));
-  }
-  error[sizeof(error) - 1] = '\0';
-  if (status != 0) {
-    throw std::runtime_error(std::string("CrossTL native row reduction failed: ") + error);
+    error[sizeof(error) - 1] = '\0';
+    if (status != 0) {
+      throw std::runtime_error(std::string("CrossTL native row reduction failed: ") + error);
+    }
   }
 }
 

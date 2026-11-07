@@ -289,9 +289,12 @@ MODULE_TESTS = tuple(
 # shapes of strided and dilated convolutions, unaligned 2-D channels and the
 # per-depth-tap 3-D decomposition, which reach the unfold, depthwise,
 # padded-channel, general and implicit GEMM and small-depth 3-D routes of
-# conv.cpp. test_conv_transpose_unfold_tiling runs the transposed 1-D, 2-D,
-# 3-D and grouped convolutions through the input-dilated unfold, whole and in
-# the row tiles MLX_CONV_UNFOLD_TILE_ROWS forces; the pinned suite runs it only
+# conv.cpp. test_conv2d_winograd_batch_tiling runs 3x3 Winograd convolutions
+# whole and in the batch tiles MLX_CONV_WINOGRAD_TILE_BATCH and
+# MLX_CONV_WINOGRAD_WORKING_SET force, against the CPU stream.
+# test_conv_transpose_unfold_tiling runs the transposed 1-D, 2-D, 3-D and
+# grouped convolutions through the input-dilated unfold, whole and in the row
+# tiles MLX_CONV_UNFOLD_TILE_ROWS forces. The pinned suite runs both only
 # where mx.metal.is_available() (METAL_PATH_TESTS).
 CONV_TESTS = tuple(
     "test_conv.TestConv.test_" + name
@@ -299,6 +302,7 @@ CONV_TESTS = tuple(
         "basic_grad_shapes",
         "conv2d_large_filter_small_channels",
         "conv2d_unaligned_channels",
+        "conv2d_winograd_batch_tiling",
         "conv_1d_groups_flipped",
         "conv_1d_with_2d",
         "conv_3D_small_kd_decomposition",

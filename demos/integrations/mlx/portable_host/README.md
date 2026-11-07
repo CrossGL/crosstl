@@ -1844,9 +1844,14 @@ reachable widths and all 56 entries, producing 1,456 packages per target.
 Runtime checks reject invalid ranks, mismatched metadata arrays, out-of-range
 source spans and incorrect launch dimensions before device execution. Source
 spans, logical sizes and outputs hold at most 2^28 - 1 elements, the column
-passes' bound; every shape axis stays below 65,536, every stride inside that
-bound and every launch axis at most 65,535 workgroups (four rows per simple
-workgroup). The GLSL simple-row index assertion covers 0 through 2^28 - 1;
+passes' bound; every shape axis of a launch stays below 65,536, every stride
+inside that bound and every launch axis at most 65,535 workgroups (four rows
+per simple workgroup). Upstream's single Metal launch may carry more rows than
+that, so the host splits a pass's output rows into launches that each fit: the
+innermost output axes that fit stay whole, the next one splits into equal
+chunks, and every index of the axes outside it runs on its own. The rows are
+independent, so each launch reads and writes exactly the elements the single
+launch assigns them. The GLSL simple-row index assertion covers 0 through 2^28 - 1;
 every dispatch checks the source span plus four values per lane against that
 bound. This assertion does not enlarge an allocation or permit an
 out-of-bounds memory access. Wide workloads run simple, looped and sliced plans
@@ -2488,8 +2493,11 @@ transforms of 1,025 to 2,048 points) first run the translated
 `generate_bluestein_twiddles` kernel into the table past `w_q`'s spectrum,
 which the host checks with the other Bluestein tables. `test_fft_grads`
 compares against PyTorch, which the host environment does not install, and
-`test_batched_bluestein_twiddle_table` and `test_fft_too_large` run only where
-`mx.metal.is_available()`, which the portable host is not. The
+`test_fft_too_large` runs only where `mx.metal.is_available()`, which the
+portable host is not. `test_batched_bluestein_twiddle_table`, the 1,023- and
+1,024-row transforms of 1,031 and 1,531 points, runs there too; the native
+worker runs it with `is_available` reporting the host's GPU
+(`METAL_PATH_TESTS`). The
 Metal runtime binds up to 1 GiB per dispatch, for the 128 MiB operands of a
 2**24-point pass.
 The `fft` group also runs `test_ops`' `test_hadamard` and
@@ -2567,17 +2575,20 @@ the class indices; the host refuses a launch with an index outside
 `[-n, n)` rather than read past its row. Every dispatch must name its cached
 package, upload its retained operands and keep its output guard; launches over
 more than 65,536 logits keep their extents and digests.
-The `conv` group runs ten unchanged `test_conv` tests and one
+The `conv` group runs eleven unchanged `test_conv` tests and one
 `test_conv_transpose` test (`CONV_TESTS`): the conv1d-through-conv2d, large
-filter, unaligned channel, flipped and grouped 1-D, NumPy, repeated and
+filter, unaligned channel, Winograd batch tiling, flipped and grouped 1-D, NumPy, repeated and
 small-depth 3-D convolutions, the flipped and grouped gradients and the
 gradient shapes. They reach the unfold and steel GEMM, depthwise,
 padded-channel, general and implicit GEMM and small-depth 3-D routes of the
 convolution port (see "Convolution") and its gradients, and translate their
-kernels on demand. `test_conv_transpose_unfold_tiling` runs transposed 1-D,
-2-D, 3-D and grouped convolutions through the input-dilated unfold, whole and
-in the row tiles `MLX_CONV_UNFOLD_TILE_ROWS` forces; the pinned suite runs it
-only where `mx.metal.is_available()` (`METAL_PATH_TESTS`). The other
+kernels on demand. `test_conv2d_winograd_batch_tiling` runs 3x3 Winograd
+convolutions whole and in the batch tiles `MLX_CONV_WINOGRAD_TILE_BATCH` and
+`MLX_CONV_WINOGRAD_WORKING_SET` force, against the CPU stream.
+`test_conv_transpose_unfold_tiling` runs transposed 1-D, 2-D, 3-D and grouped
+convolutions through the input-dilated unfold, whole and in the row tiles
+`MLX_CONV_UNFOLD_TILE_ROWS` forces. The pinned suite runs both only where
+`mx.metal.is_available()` (`METAL_PATH_TESTS`). The other
 `test_conv` and `test_conv_transpose` tests compare against PyTorch on the
 CPU: the `torch-conv` group runs the nine `test_conv` ones (the 1-D, 2-D,
 3-D, depthwise, general and asymmetrically padded convolutions and the
@@ -2602,14 +2613,19 @@ NumPy, safetensors and GGUF formats), `training` (19 `test_optimizers`
 methods, six `test_random` samplers, four `test_bf16` sweeps and the device,
 stream, memory and constant tests) and `rope` (the seven rotary embedding and
 fused transform methods of `test_fast` and the two antialiased `test_upsample`
-sweeps). The `host-only` group runs 76 methods of these modules that reach
-no kernel: they trace, transform, compile or export graphs whose shapes, types
-and identities they check without evaluating them, reject invalid arguments,
-evaluate only on the CPU stream, read constants, devices, streams and buffer
-sizes, or construct modules, initializers, optimizers and schedulers. Its two
-leak tests compare MLX's active memory only where `mx.metal.is_available()`,
-so the native worker reports the host's GPU around them and the host's
-allocator counts their buffers. The CPU worker's host registers no runtime and
+sweeps). The `host-only` group runs 160 methods of these modules and of
+`test_array`, `test_double`, `test_graph`, `test_tree` and `test_zero_copy`
+that reach no kernel: they trace, transform, compile or export graphs whose
+shapes, types and identities they check without evaluating them, reject
+invalid arguments, evaluate only on the CPU stream, read constants, devices,
+streams and buffer sizes, or construct modules, initializers, optimizers and
+schedulers. They also convert arrays that hold their data to and from Python
+scalars, lists, NumPy, buffers and CPU DLPack capsules, promote and inspect
+dtypes, print arrays and graphs, refuse float64 work on the GPU stream, map
+trees and refuse zero-copy adoption without Metal. Its three leak tests
+(compile, export and vmap) compare MLX's active memory only where
+`mx.metal.is_available()`, so the native worker reports the host's GPU around
+them and the host's allocator counts their buffers. The CPU worker's host registers no runtime and
 behaves as MLX's `no_gpu` back end: new GPU streams raise `ValueError`, the GPU
 device count is 0 and its `device_info` is empty, which `test_stream` checks;
 `test_device_context` and `test_device_info_gpu` skip there. A module's other

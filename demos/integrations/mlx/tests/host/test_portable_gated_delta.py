@@ -555,14 +555,17 @@ def test_runtime_host_port_and_inventory_route_gated_delta():
     assert set(upstream_module_groups.METAL_PATH_TESTS) - set(
         upstream_module_groups.CUSTOM_KERNEL_TESTS
     ) == {
+        "test_conv.TestConv.test_conv2d_winograd_batch_tiling",
         "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",
         "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
+        "test_fft.TestFFT.test_batched_bluestein_twiddle_table",
         "test_ops.TestOps.test_hadamard_m_only",
         "test_quantized.TestQuantized.test_gather_qmm_sorted_nax_large_m",
         "test_quantized.TestQuantized.test_qqmm_global_scale_matrix_kernels",
     }
     assert set(upstream_module_groups.METAL_PATH_TESTS) <= set(
         tests
+        + upstream_module_groups.FFT_TESTS
         + upstream_module_groups.HADAMARD_TESTS
         + verify_upstream_ops.CONV_TESTS
         + upstream_module_groups.CUSTOM_KERNEL_TESTS

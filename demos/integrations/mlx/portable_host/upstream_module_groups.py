@@ -268,9 +268,12 @@ ROPE_TESTS = _tests(
 # updates, norms, strided and transposed inputs, and the vmap and jvp
 # transforms; every Stockham, Rader and fused Bluestein size up to 4,096
 # points in batches of 1, 3 and 32; four-step powers of two up to 2**24
-# points; and multi-upload Bluestein sizes up to 18,247 points. The
-# frequency and shift tests run with the operations; test_fft_grads compares
-# against PyTorch, which the host environment does not install.
+# points; and multi-upload Bluestein sizes up to 18,247 points. The batched
+# Bluestein test transforms 1,023 and 1,024 rows of 1,031 and 1,531 points,
+# whose twiddles the generate_bluestein_twiddles kernel tabulates; it runs
+# only where mx.metal.is_available() (METAL_PATH_TESTS). The frequency and
+# shift tests run with the operations; test_fft_grads compares against
+# PyTorch, which the host environment does not install.
 FFT_TESTS = _tests(
     "test_fft",
     "TestFFT",
@@ -286,6 +289,7 @@ FFT_TESTS = _tests(
         "fft_big_powers_of_two",
         "fft_large_numbers",
         "fft_into_ifft",
+        "batched_bluestein_twiddle_table",
     ),
 )
 
@@ -352,8 +356,10 @@ CUSTOM_KERNEL_TESTS = (
 )
 # Tests the pinned suite runs only where mx.metal.is_available().
 METAL_PATH_TESTS = (
+    "test_conv.TestConv.test_conv2d_winograd_batch_tiling",
     "test_conv_transpose.TestConvTranspose.test_conv_transpose_unfold_tiling",
     "test_fast_gated_delta.TestGatedDelta.test_gated_delta_vjp",
+    "test_fft.TestFFT.test_batched_bluestein_twiddle_table",
     "test_ops.TestOps.test_hadamard_m_only",
     "test_quantized.TestQuantized.test_gather_qmm_sorted_nax_large_m",
     "test_quantized.TestQuantized.test_qqmm_global_scale_matrix_kernels",
@@ -565,14 +571,15 @@ QUANTIZED_GROUPS = (
     "quantized-matmul",
 )
 
-# The two leak tests compare MLX's active memory before and after compiling or
-# exporting closures only where mx.metal.is_available(); the native worker
-# runs them while it reports the host's GPU, whose allocator counts the
-# buffers, and the CPU worker runs them unchanged (verify_upstream_ops
-# METAL_SOURCE_TESTS).
+# The three leak tests compare MLX's active memory before and after compiling,
+# exporting or vectorizing closures only where mx.metal.is_available(); the
+# native worker runs them while it reports the host's GPU, whose allocator
+# counts the buffers, and the CPU worker runs them unchanged
+# (verify_upstream_ops METAL_SOURCE_TESTS).
 HOST_MEMORY_TESTS = (
     "test_compile.TestCompile.test_leaks",
     "test_export_import.TestExportImport.test_leaks",
+    "test_vmap.TestVmap.test_leaks",
 )
 # The device context and GPU device_info tests skip unless
 # mx.is_available(mx.gpu), so the CPU worker, whose host registers no runtime,
@@ -587,11 +594,73 @@ HOST_GPU_TESTS = (
 # before building a graph, evaluate only on the CPU stream (the linear algebra
 # solvers, NumPy loads and their read errors), read constants, devices, streams
 # and buffer sizes, or construct modules, initializers, optimizers and
-# schedulers. The native worker must dispatch nothing for any of them
-# (verify_upstream_ops NO_DISPATCH_TESTS), so a lazy graph that starts to
-# evaluate fails the group.
+# schedulers. They also convert arrays that hold their data to and from Python
+# scalars, lists, NumPy, buffers and CPU DLPack capsules, promote and inspect
+# dtypes, print arrays and graphs, refuse float64 work on the GPU stream (the
+# test_double methods, which compute in float64 only on the CPU), map trees,
+# and refuse zero-copy adoption without Metal. The native worker must dispatch
+# nothing for any of them (verify_upstream_ops NO_DISPATCH_TESTS), so a lazy
+# graph that starts to evaluate fails the group.
 HOST_ONLY_TESTS = (
     _tests(
+        "test_array",
+        "TestArray",
+        (
+            "array_basics",
+            "array_iteration",
+            "array_namespace",
+            "array_namespace_asarray",
+            "array_np_conversion",
+            "array_np_shape_dim_check",
+            "array_repr",
+            "array_to_list",
+            "asarray_copy",
+            "bool_conversion",
+            "create_from_buffer",
+            "double_keeps_precision",
+            "dtype_promotion",
+            "dtype_python_scalar_promotion",
+            "from_dlpack_cpu",
+            "from_dlpack_cpu_strided",
+            "inplace_preserves_ids",
+            "int_type",
+            "large_indices",
+            "scalar_integer_conversion_overflow",
+            "slice_negative_step",
+            "to_scalar",
+        ),
+    )
+    # The namespace-information case names its one method plain ``test``.
+    + ("test_array.TestArrayNamespsceInfo.test",)
+    + _tests(
+        "test_array",
+        "TestDtypes",
+        (
+            "can_cast",
+            "dtypes",
+            "finfo",
+            "iinfo",
+            "index_conversion",
+            "index_conversion_invalid",
+            "isdtype",
+            "result_type",
+            "scalar_conversion",
+        ),
+    )
+    + _tests("test_array", "TestEquality", ("list_equals_array", "tuple_equals_array"))
+    + _tests(
+        "test_array",
+        "TestInequality",
+        (
+            "dlx_device_type",
+            "invalid_op_on_array",
+            "list_not_equals_array",
+            "obj_inequality_array",
+            "tuple_not_equals_array",
+        ),
+    )
+    + _tests("test_array", "TestVersion", ("version",))
+    + _tests(
         "test_autograd",
         "TestAutograd",
         (
@@ -646,6 +715,23 @@ HOST_ONLY_TESTS = (
     )
     + _tests("test_device", "TestStream", ("reentrant_stream_context", "stream"))
     + _tests(
+        "test_double",
+        "TestDouble",
+        (
+            "binary_ops",
+            "conversion",
+            "gemm",
+            "get_and_set_item",
+            "lapack",
+            "linspace",
+            "python_float_keeps_double_precision",
+            "reductions",
+            "type_promotion",
+            "unary_ops",
+            "where",
+        ),
+    )
+    + _tests(
         "test_eval",
         "TestEval",
         ("async_eval_error_in_synchronize", "async_eval_in_trace"),
@@ -656,6 +742,7 @@ HOST_ONLY_TESTS = (
     + _tests(
         "test_fast", "TestFast", ("cross_entropy_shape_checks", "rope_dims_validation")
     )
+    + _tests("test_graph", "TestGraph", ("to_dot",))
     + _tests(
         "test_init",
         "TestInit",
@@ -679,7 +766,23 @@ HOST_ONLY_TESTS = (
         ),
     )
     + _tests("test_memory", "TestMemory", ("array_buffer_size",))
-    + _tests("test_nn", "TestBase", ("chaining", "grad_of_module", "quantize"))
+    + _tests(
+        "test_nn",
+        "TestBase",
+        (
+            "chaining",
+            "freeze_strict_keys",
+            "grad_of_module",
+            "module_state",
+            "module_utilities",
+            "parameter_deletion",
+            "quantize",
+            "quantize_freeze",
+            "quantized_sharded_linear_construction",
+            "update",
+            "update_modules",
+        ),
+    )
     + _tests(
         "test_nn",
         "TestLayers",
@@ -687,13 +790,22 @@ HOST_ONLY_TESTS = (
             "alibi",
             "attention",
             "bilinear",
+            "conv_transpose_extra_repr",
             "dropout",
+            "dropout2d",
+            "dropout3d",
             "identity",
             "linear",
             "lstm",
+            "norm_eps_validation",
             "rnn",
             "rope",
             "set_dtype",
+            "transformer",
+            "transformer_custom_modules",
+            "transformer_decoder",
+            "transformer_decoder_layer",
+            "transformer_encoder",
             "transformer_encoder_layer",
         ),
     )
@@ -711,6 +823,40 @@ HOST_ONLY_TESTS = (
         "test_quantized",
         "TestQuantized",
         ("fp_vjp_scales_throws", "mode_error_cases", "qmm_fp_type"),
+    )
+    + _tests("test_random", "TestRandom", ("complex_normal",))
+    + _tests(
+        "test_tree",
+        "TestTreeUtils",
+        (
+            "empty_subtree_merge",
+            "tree_flatten",
+            "tree_map",
+            "tree_unflatten_integer_key_collision",
+        ),
+    )
+    + _tests(
+        "test_vmap",
+        "TestVmap",
+        (
+            "basics",
+            "leaks",
+            "mismatch_input_sizes",
+            "vmap_flatten",
+            "vmap_put_along_axis",
+            "vmap_split_vmap",
+            "vmap_take_along_axis",
+        ),
+    )
+    # Without Metal, asarray must refuse copy=False; the adoption tests skip.
+    + _tests(
+        "test_zero_copy",
+        "TestZeroCopy",
+        (
+            "copy_false",
+            "copy_false_dtype_conversion_raises",
+            "default_shares_or_copies",
+        ),
     )
 )
 
