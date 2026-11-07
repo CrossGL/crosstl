@@ -98,6 +98,10 @@ from .wgsl_entry_outputs import (
     lower_entry_output_parameters,
 )
 from .wgsl_enums import generate_enum_constants, split_enums
+from .wgsl_float_classification import (
+    is_float_classification_call,
+    wgsl_float_classification_call,
+)
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
@@ -3958,6 +3962,8 @@ class WGSLCodeGen(
             return self.generate_packed_dot4add_call(node, function_name, packed_dot)
         if is_two_argument_frexp_or_modf(self, node):
             return wgsl_frexp_modf_call(self, node)
+        if is_float_classification_call(self, node):
+            return wgsl_float_classification_call(self, node)
 
         if self.is_type_constructor_name(function_name):
             if len(node.arguments) == 1:
