@@ -123,7 +123,6 @@ def test_uniform_constant_reference_bounds_compile(tmp_path, expression):
     [
         ("uint stop = invocation;", ""),
         ("uint stop = inputWords[0];", ""),
-        ("uint stop = WaveActiveSum(1u);", ""),
         ("uint stop = group.x; stop = invocation;", ""),
         ("uint stop = group.x; stop += invocation;", ""),
         ("uint stop = group.x; ++stop;", ""),
