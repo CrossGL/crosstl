@@ -157,6 +157,7 @@ from .push_constant_blocks import (
 )
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .slang_constant_references import slang_constant_reference_parameter
 from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
@@ -165,6 +166,13 @@ from .slang_projected_compare import (
 )
 from .slang_refusals import SlangLoweringRefused
 from .slang_specialization_constants import plan_slang_specialization_constants
+from .slang_wave_shuffles import (
+    SLANG_WAVE_SHUFFLE_ARITIES,
+    as_type_target,
+    render_slang_wave_shuffle_helper,
+    slang_subgroup_parameter_alias,
+    slang_wave_shuffle_helper_name,
+)
 from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_names
 from .slang_workgroup_locals import slang_workgroup_local_prefix
 from .specialized_workgroup_size import workgroup_size_specialization_ids
@@ -6257,6 +6265,10 @@ class SlangCodeGen(LoweringRefusalMixin):
                         intrinsic_alias = self.slang_helper_invocation_parameter_alias(
                             param, param_type, semantic, shader_type
                         )
+                    if intrinsic_alias is None:
+                        intrinsic_alias = slang_subgroup_parameter_alias(
+                            self, param, param_type, semantic
+                        )
                     if intrinsic_alias is not None:
                         local_alias_declarations.append(intrinsic_alias)
                         emitted_param_names.add(param.name)
@@ -6301,6 +6313,25 @@ class SlangCodeGen(LoweringRefusalMixin):
                     if mesh_output_declaration is not None:
                         params.append(mesh_output_declaration)
                         continue
+                    constant_reference = (
+                        slang_constant_reference_parameter(self, param)
+                        if shader_type is not None
+                        else None
+                    )
+                    if constant_reference is not None:
+                        declaration, value_type = constant_reference
+                        self.register_variable_type(param.name, value_type, param)
+                        params.append(declaration)
+                        emitted_param_names.add(param.name)
+                        continue
+                    if shader_type is not None and str(param_type).rstrip().endswith(
+                        "&"
+                    ):
+                        # A Metal ``constant T& x [[buffer(n)]]`` argument; ``T &x`` is no Slang entry parameter.
+                        self.refuse_lowering(
+                            f"Slang entry parameter '{param.name}' has the reference type "
+                            f"{param_type}, which a Slang entry point cannot take"
+                        )
                     declaration = (
                         self.slang_stage_parameter_qualifier_prefix(param, shader_type)
                         + declaration
@@ -9391,6 +9422,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return self.slang_ray_tracing_result_type(operation)
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
+            bit_cast_type = as_type_target(func_name)
+            if bit_cast_type is not None:
+                return bit_cast_type
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type is not None:
                 return numeric_result_type
@@ -9875,6 +9909,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             if ray_tracing_call is not None:
                 operation, args = ray_tracing_call
                 return self.generate_slang_ray_tracing_call_expression(operation, args)
+            bit_cast_type = as_type_target(getattr(func_expr, "name", func_expr))
+            call_arguments = getattr(node, "arguments", getattr(node, "args", [])) or []
+            if bit_cast_type is not None and len(call_arguments) == 1:
+                return (
+                    f"bit_cast<{self.convert_type(bit_cast_type)}>"
+                    f"({self.generate_expression(call_arguments[0])})"
+                )
             if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
                 callee = func_expr.name
             elif isinstance(func_expr, str):
@@ -10185,7 +10226,79 @@ class SlangCodeGen(LoweringRefusalMixin):
             args = args[:6] + [ray_desc, args[10]]
         return f"{operation}({', '.join(args)})"
 
+    def generate_slang_wave_shuffle_expression(self, node):
+        """A relative wave shuffle as a call of its helper (see :mod:`.slang_wave_shuffles`)."""
+        operation = node.operation
+        arguments = list(node.arguments)
+        if len(arguments) not in SLANG_WAVE_SHUFFLE_ARITIES[operation]:
+            expected = " or ".join(
+                str(count) for count in sorted(SLANG_WAVE_SHUFFLE_ARITIES[operation])
+            )
+            return self.unsupported_slang_wave_op_expression(
+                operation, f"expects {expected} arguments, got {len(arguments)}"
+            )
+        value_type = self.slang_wave_argument_mapped_type(arguments[0])
+        if value_type is None or not self.is_slang_wave_value_type(value_type):
+            return self.unsupported_slang_wave_op_expression(
+                operation,
+                f"value must be a scalar or vector, got {value_type or 'an unknown type'}",
+            )
+        if operation == "WaveShuffleAndFillUp":
+            fill_type = self.slang_wave_argument_mapped_type(arguments[1])
+            if fill_type is not None and fill_type != value_type:
+                return self.unsupported_slang_wave_op_expression(
+                    operation, f"fill must be {value_type}, got {fill_type}"
+                )
+        conversion = self.slang_wave_result_conversion(value_type)
+        if conversion is None:
+            target_reason = self.slang_wave_target_type_rejection_reason(value_type)
+            if target_reason is not None:
+                return self.unsupported_slang_wave_op_expression(
+                    operation, target_reason
+                )
+        name = slang_wave_shuffle_helper_name(operation, value_type)
+        self.helper_functions.setdefault(
+            name, render_slang_wave_shuffle_helper(operation, value_type)
+        )
+        rendered = [self.generate_expression(argument) for argument in arguments]
+        if operation == "WaveShuffleAndFillUp":
+            modulo = (
+                f"uint({rendered[3]})" if len(rendered) == 4 else "WaveGetLaneCount()"
+            )
+            call = (
+                f"{name}({rendered[0]}, {rendered[1]}, uint({rendered[2]}), {modulo})"
+            )
+        else:
+            call = f"{name}({rendered[0]}, uint({rendered[1]}))"
+        return f"{conversion}({call})" if conversion else call
+
+    def slang_wave_result_conversion(self, result_type):
+        """The type a wave result converts to where it is used, when the use expects another value type.
+
+        Metal converts a returned or assigned value implicitly, as ``bool shuffle(bool b) { return
+        simd_shuffle(uint(b), lane); }`` does; the conversion is written out so slangc applies the same one.
+        ``None`` when no conversion is needed or the shapes differ.
+        """
+        expected = self.slang_wave_expected_target_type()
+        result = self.type_name_string(result_type)
+        if result:
+            result = self.convert_type(result)
+        if not expected or not result or expected == result:
+            return None
+        if not (
+            self.is_slang_wave_value_type(expected)
+            and self.is_slang_wave_value_type(result)
+        ):
+            return None
+        if self.is_vector_value_type(expected) != self.is_vector_value_type(result):
+            return None
+        if self.is_vector_value_type(expected) and expected[-1] != result[-1]:
+            return None
+        return expected
+
     def generate_slang_wave_op_expression(self, node):
+        if node.operation in SLANG_WAVE_SHUFFLE_ARITIES:
+            return self.generate_slang_wave_shuffle_expression(node)
         expected_arity = self.SLANG_WAVE_INTRINSIC_ARITIES.get(node.operation)
         if expected_arity is None:
             return self.unsupported_slang_wave_op_expression(
@@ -10205,14 +10318,17 @@ class SlangCodeGen(LoweringRefusalMixin):
                 node.operation, rejection_reason
             )
         result_type = self.slang_wave_result_type(node)
-        target_reason = self.slang_wave_target_type_rejection_reason(result_type)
-        if target_reason is not None:
-            return self.unsupported_slang_wave_op_expression(
-                node.operation, target_reason
-            )
+        conversion = self.slang_wave_result_conversion(result_type)
+        if conversion is None:
+            target_reason = self.slang_wave_target_type_rejection_reason(result_type)
+            if target_reason is not None:
+                return self.unsupported_slang_wave_op_expression(
+                    node.operation, target_reason
+                )
 
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
-        return f"{node.operation}({args})"
+        call = f"{node.operation}({args})"
+        return f"{conversion}({call})" if conversion else call
 
     def slang_wave_result_type(self, node):
         operation = getattr(node, "operation", None)
