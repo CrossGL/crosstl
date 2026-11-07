@@ -36,6 +36,11 @@ from .auto_placeholders import deduced_auto_type
 from .concrete_free_operators import materialize_concrete_free_operators
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
+from .constrained_call_carriers import constrained_call_carriers
+from .constrained_template_retention import (
+    DeferredConstrainedCall as _DeferredConstrainedCall,
+)
+from .constrained_template_retention import removable_constrained_templates
 from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
@@ -90,6 +95,7 @@ from .static_member_constants import (
     substitute_parameter_extent_static_members,
 )
 from .template_argument_text import normalize_template_argument_text
+from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
 from .template_function_parameters import template_function_pointer_parameter
 from .template_overloads import declared_type_names, select_instantiated_overload
@@ -1687,12 +1693,51 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         template_spans = self._find_template_declaration_spans(code)
         functions = self._find_non_template_function_definitions(code, template_spans)
         all_body_spans = [function.body_span for function in functions]
+        # Unconstrained templates whose bodies call a constrained template are
+        # instantiated here too, so those calls bind before the templates go.
+        free_templates = [
+            template
+            for template in templates
+            if self._containing_span(template.span[0], aggregate_spans) is None
+        ]
+        carriers = constrained_call_carriers(
+            free_templates,
+            set(by_name),
+            {function.name for function in functions},
+            [
+                reference
+                for reference in self._find_static_constexpr_calls(
+                    code, {template.name for template in free_templates}
+                )
+                if not self._function_reference_is_member_call(
+                    code, reference.span[0], set()
+                )
+            ],
+        )
+        carrier_names = {template.name for template in carriers}
+        for template in carriers:
+            by_name[template.name] = [template]
+        masked_code = self._mask_comments_and_literals(code)
         reachable_spans = self._reachable_function_spans(code, template_spans)
         if reachable_spans is not None:
-            reachable_set = set(reachable_spans)
+            # Concrete functions called from reached template bodies are reached too.
+            reachable_set = set(
+                template_carried_reachable_spans(
+                    masked_code, reachable_spans, functions, free_templates
+                )
+            )
+            directly_reachable = set(reachable_spans)
+            carried_body_spans = sorted(
+                function.body_span
+                for function in functions
+                if function.span in reachable_set
+                and function.span not in directly_reachable
+            )
             functions = [
                 function for function in functions if function.span in reachable_set
             ]
+        else:
+            carried_body_spans = []
         body_spans = [function.body_span for function in functions]
         if not body_spans:
             return code
@@ -1732,6 +1777,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 + explicit_spans
                 + [(template.body_start, template.span[1]) for template in templates]
                 + [template.span for template in constrained]
+                + [template.span for template in carriers]
             ),
             template_spans=template_spans,
             namespace_visibility=namespace_visibility,
@@ -1740,9 +1786,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         materialized_names: Dict[Tuple[Tuple[int, int], Tuple[str, ...]], str] = {}
         generated_name_owners: Dict[str, Tuple[Tuple[int, int], Tuple[str, ...]]] = {}
         handled_template_spans: Set[Tuple[int, int]] = set()
-        reserved_identifiers = set(
-            IDENTIFIER_RE.findall(self._mask_comments_and_literals(code))
-        )
+        native_fallback_names: Set[str] = set()
+        deferred_call_ids: Set[int] = set()
+        deferred_carrier_calls: List[_DeferredConstrainedCall] = []
+        carrier_spans = {template.span for template in carriers}
+        reserved_identifiers = set(IDENTIFIER_RE.findall(masked_code))
 
         # Append concrete bodies without rewriting the source until the worklist
         # is exhausted. Original declaration offsets and specialization ownership
@@ -1817,6 +1865,27 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 for argument in call.arguments
             ]
             if any(argument_type is None for argument_type in argument_types):
+                if call.name in carrier_names:
+                    # The generic path instantiates it; templates it needs stay.
+                    continue
+                if (
+                    owner_key is None
+                    and self._containing_span(call.span[0], carried_body_spans)
+                    is not None
+                ):
+                    # Only a template reaches this body; a later pass, which
+                    # sees the instantiated caller, binds the call.
+                    deferred_call_ids.add(id(call))
+                    continue
+                if owner_key is not None and owner_key[0] in carrier_spans:
+                    # A later pass binds the call in the instantiated carrier,
+                    # which keeps the templates lookup from its body can see.
+                    deferred_carrier_calls.append(
+                        _DeferredConstrainedCall(
+                            call.name, call.qualified_name, lookup_position
+                        )
+                    )
+                    continue
                 self._raise_constrained_free_function_error(
                     code,
                     call,
@@ -1839,6 +1908,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     position=lookup_position,
                     namespace_visibility=namespace_visibility,
                 )
+                if associated_namespaces is None and call.name in carrier_names:
+                    continue
                 if associated_namespaces is None:
                     self._raise_constrained_free_function_error(
                         code,
@@ -1912,10 +1983,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     call,
                     "multiple constrained overloads are enabled",
                 )
+            if not enabled and call.name in carrier_names:
+                # Deduction failed; the generic path instantiates the carrier.
+                continue
             if not enabled:
                 # Every recognized constrained candidate is disabled. Preserve
                 # the spelling so a native overload (such as metal::isnan) can
                 # resolve it after the fallback declaration is removed.
+                native_fallback_names.add(call.name)
                 continue
 
             for declaration in competing_declarations.get(call.name, []):
@@ -2124,7 +2199,37 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
 
         if not handled_template_spans:
             return code
-        replacements.extend((start, end, "") for start, end in handled_template_spans)
+        # Calls this pass does not bind, in template bodies and in functions no
+        # entry point reaches yet, keep the templates they can see for a later pass.
+        processed = {id(call) for call in calls} - deferred_call_ids
+        unbound_references = [
+            reference
+            for reference in references
+            if id(reference) not in processed
+            and not self._function_reference_is_member_call(
+                code, reference.span[0], set()
+            )
+        ]
+        removable = removable_constrained_templates(
+            handled_template_spans,
+            [*constrained, *carriers],
+            unbound_references,
+            native_fallback_names,
+            lambda template, reference: self._metal_call_reference_namespace(
+                reference.qualified_name
+            )
+            is None
+            or self._metal_template_function_call_visible(
+                template,
+                reference.qualified_name,
+                reference.span[0],
+                namespace_visibility,
+                None,
+            ),
+            self._containing_span,
+            deferred_carrier_calls,
+        )
+        replacements.extend((start, end, "") for start, end in removable)
         resolved = self._apply_text_replacements(code, replacements)
         return resolved
 
