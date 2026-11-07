@@ -521,6 +521,11 @@ def test_backend_ports_build_kernel_and_the_variant_selection():
         "compiled_allocate_outputs(inputs, outputs, is_constant_, contiguous);",
         '{"kernel_source", "utf8", const_cast<char*>(source.data()), source.size(), 0}',
         "work_per_thread = dynamic ? 2 : ndim > 3 ? 2 : 1;",
+        # Negatively strided inputs are read through translated dense copies;
+        # other inputs are used as they are, keeping their donation.
+        "compiled_negative_input_strides(source_inputs, is_constant_);",
+        "dispatch_copy(inputs[i], copy);",
+        "const std::vector<array>& inputs = materialized ? dense_inputs : source_inputs;",
     ):
         assert text in port, text
     assert port.count("namer.get_name(inputs_[i]);") == 1

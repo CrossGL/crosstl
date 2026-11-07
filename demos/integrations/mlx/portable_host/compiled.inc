@@ -306,12 +306,58 @@ void launch_compiled(
   }
 }
 
+// Whether a non-constant input reads its elements through a negative stride.
+bool compiled_negative_input_strides(
+    const std::vector<array>& inputs,
+    const std::function<bool(size_t)>& is_constant) {
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    const auto& strides = inputs[i].strides();
+    if (!is_constant(i) && !is_scalar(inputs[i]) &&
+        std::any_of(strides.begin(), strides.end(),
+                    [](int64_t stride) { return stride < 0; })) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The inputs with each negatively strided one replaced by a dense copy.
+std::vector<array> compiled_dense_inputs(
+    const std::vector<array>& inputs,
+    const std::function<bool(size_t)>& is_constant) {
+  std::vector<array> dense(inputs.begin(), inputs.end());
+  for (size_t i = 0; i < dense.size(); ++i) {
+    const auto& strides = inputs[i].strides();
+    if (is_constant(i) || is_scalar(inputs[i]) ||
+        std::none_of(strides.begin(), strides.end(),
+                     [](int64_t stride) { return stride < 0; })) {
+      continue;
+    }
+    array copy(inputs[i].shape(), inputs[i].dtype(), nullptr, {});
+    dispatch_copy(inputs[i], copy);
+    dense[i] = std::move(copy);
+  }
+  return dense;
+}
+
 } // namespace
 
 void Compiled::eval_gpu(
-    const std::vector<array>& inputs,
+    const std::vector<array>& source_inputs,
     std::vector<array>& outputs) {
   require_runtime();
+  // MLX indexes negatively strided inputs from their data pointers with its
+  // large variants, which a host upload starting at that pointer cannot hold.
+  // Such inputs are read through translated dense copies instead, so the
+  // kernel MLX builds for the copies' layout runs. Without them the inputs
+  // are used as they are, keeping their donation.
+  std::vector<array> dense_inputs;
+  const bool materialized =
+      compiled_negative_input_strides(source_inputs, is_constant_);
+  if (materialized) {
+    dense_inputs = compiled_dense_inputs(source_inputs, is_constant_);
+  }
+  const std::vector<array>& inputs = materialized ? dense_inputs : source_inputs;
   for (const auto& x : inputs) {
     if (!cast_type(x.dtype())) {
       throw std::invalid_argument("CrossTL compiled kernels do not support this dtype.");
@@ -325,8 +371,8 @@ void Compiled::eval_gpu(
   auto [contiguous, negative_strides, shape, strides] =
       compiled_collapse_contiguous_dims(inputs, outputs[0], is_constant_);
   if (negative_strides || compiled_use_large_index(inputs, outputs, contiguous)) {
-    // MLX's large variants index with int64_t from the data pointer, which a
-    // host upload starting at that pointer cannot hold for negative offsets.
+    // Dense copies leave no negative strides; MLX's large variants index
+    // with int64_t, which the translated kernels do not take.
     throw std::invalid_argument(
         "CrossTL compiled kernels require non-negative strides and 32-bit indices.");
   }
