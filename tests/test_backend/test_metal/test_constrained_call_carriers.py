@@ -242,3 +242,47 @@ def test_crossgl_drops_constrained_templates_reached_through_templates(
     code = _translate(tmp_path, source, "cgl")
 
     assert not re.search(r"generic<[^>]*>\s*\w+\s+max\b", code)
+
+
+@pytest.mark.parametrize(
+    "code, expected",
+    [
+        ("inline half twice(half v) {", True),
+        ("float twice(float v) const [[visible]]\n{", True),
+        ("  return twice(v);", False),
+        ("  if (twice(v)) {", False),
+        ("half twice(half v);", False),
+    ],
+)
+def test_function_definition_declarators_are_no_calls(code, expected):
+    from crosstl.backend.Metal.constrained_template_retention import defines_function
+
+    reference_end = code.index(")") + 1
+    assert defines_function(code, reference_end) is expected
+
+
+def test_explicit_specialization_does_not_retain_its_constrained_primary():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    code = """
+#include <metal_stdlib>
+namespace util {
+template <typename T>
+metal::enable_if_t<metal::is_floating_point_v<T>, T> twice(T v) {
+  return v + v;
+}
+template <>
+inline half twice(half v) {
+  return v * 3.0h;
+}
+}
+kernel void k(device float* f [[buffer(0)]], device half* h [[buffer(1)]],
+              uint id [[thread_position_in_grid]]) {
+  f[id] = util::twice(f[id]);
+  h[id] = util::twice(h[id]);
+}
+"""
+    output = MetalPreprocessor().preprocess(code)
+    assert "::util::twice_float(f[id])" in output
+    assert "::util::twice_half(h[id])" in output
+    assert "enable_if" not in output

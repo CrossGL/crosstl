@@ -17,13 +17,37 @@ templates lookup from that body can see in the same way, although the carrier's 
 
 A template consulted by a call whose every constrained candidate was disabled is still removed: that call is left
 for a native overload, which a residual unconstrained declaration must not capture.
+
+The name and parameter list of a function definition, such as ``template <> half twice(half v) { ... }`` or a
+concrete overload ``float twice(float v) { ... }``, read like a call but name no function, so they are no unbound
+reference (``defines_function``).
 """
 
+import re
 from typing import Any, Callable, Iterable, List, NamedTuple, Sequence, Set, Tuple
 
-__all__ = ["DeferredConstrainedCall", "removable_constrained_templates"]
+__all__ = [
+    "DeferredConstrainedCall",
+    "defines_function",
+    "removable_constrained_templates",
+]
 
 Span = Tuple[int, int]
+
+# What may stand between the parameter list of a function definition and its body.
+_DECLARATOR_SUFFIX_RE = re.compile(r"(?:\s+|\bconst\b|\bnoexcept\b|\[\[[^\[\]]*\]\])*")
+
+
+def defines_function(masked_code: str, reference_end: int) -> bool:
+    """Whether the call-shaped text ending at ``reference_end`` is the declarator of a function definition.
+
+    ``masked_code`` is the source with comments and literals masked. In an expression, a parenthesized argument
+    list is never followed by ``{``; after a declarator's parameter list only cv and exception qualifiers and
+    attributes can precede the body.
+    """
+    suffix = _DECLARATOR_SUFFIX_RE.match(masked_code, reference_end)
+    position = suffix.end() if suffix else reference_end
+    return masked_code.startswith("{", position)
 
 
 class DeferredConstrainedCall(NamedTuple):

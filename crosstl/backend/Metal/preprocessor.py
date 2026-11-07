@@ -43,7 +43,10 @@ from .constrained_call_carriers import constrained_call_carriers
 from .constrained_template_retention import (
     DeferredConstrainedCall as _DeferredConstrainedCall,
 )
-from .constrained_template_retention import removable_constrained_templates
+from .constrained_template_retention import (
+    defines_function,
+    removable_constrained_templates,
+)
 from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
@@ -2277,6 +2280,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             and not self._function_reference_is_member_call(
                 code, reference.span[0], set()
             )
+            and not defines_function(masked_code, reference.span[1])
         ]
         removable = removable_constrained_templates(
             handled_template_spans,
