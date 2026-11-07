@@ -29057,6 +29057,11 @@ class VulkanSPIRVCodeGen(
             comparator = "<"
 
         if start is None:
+            if isinstance(iterable, RangeNode) and iterable.start is not None:
+                self.refuse_lowering(
+                    "for-in range start has no value: "
+                    f"{self.diagnostic_expression(iterable.start)}"
+                )
             start = self.register_constant(0, int_type)
 
         previous_variable = self.local_variables.get(pattern)
@@ -29077,6 +29082,9 @@ class VulkanSPIRVCodeGen(
         loop_value = self.get_variable_value(loop_variable)
         end_value = self.process_loop_control_expression(end_expr)
         if end_value is None:
+            self.refuse_lowering(
+                "for-in bound has no value: " f"{self.diagnostic_expression(end_expr)}"
+            )
             end_value = self.register_constant(0, int_type)
         condition = self.binary_operation(comparator, int_type, loop_value, end_value)
 
@@ -29135,6 +29143,10 @@ class VulkanSPIRVCodeGen(
         arms = getattr(node, "arms", []) or []
         expression = self.process_expression(getattr(node, "expression", None))
         if expression is None:
+            self.refuse_lowering(
+                "match scrutinee has no value: "
+                f"{self.diagnostic_expression(getattr(node, 'expression', None))}"
+            )
             expression = self.register_constant(0, self.register_primitive_type("int"))
 
         if not arms:
@@ -29488,6 +29500,10 @@ class VulkanSPIRVCodeGen(
         cases = getattr(node, "cases", []) or []
         expression = self.process_expression(getattr(node, "expression", None))
         if expression is None:
+            self.refuse_lowering(
+                "switch selector has no value: "
+                f"{self.diagnostic_expression(getattr(node, 'expression', None))}"
+            )
             expression = self.register_constant(0, self.register_primitive_type("int"))
 
         explicit_cases = [
@@ -30155,6 +30171,10 @@ class VulkanSPIRVCodeGen(
                 right = self.process_expression(expr.right)
 
             if left is None or right is None:
+                self.refuse_lowering(
+                    f"Operand of {expr.op!r} has no value: "
+                    f"{self.diagnostic_expression(expr.left if left is None else expr.right)}"
+                )
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -30188,6 +30208,10 @@ class VulkanSPIRVCodeGen(
 
             operand = self.process_expression(expr.operand)
             if operand is None:
+                self.refuse_lowering(
+                    f"Operand of {expr.op!r} has no value: "
+                    f"{self.diagnostic_expression(expr.operand)}"
+                )
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -30202,10 +30226,20 @@ class VulkanSPIRVCodeGen(
             false_value = self.process_expression(expr.false_expr)
 
             if condition is None:
+                self.refuse_lowering(
+                    "Conditional operator condition has no value: "
+                    f"{self.diagnostic_expression(expr.condition)}"
+                )
                 condition = self.register_constant(
                     False, self.register_primitive_type("bool")
                 )
             if true_value is None or false_value is None:
+                self.refuse_lowering(
+                    "Conditional operator branch has no value: "
+                    + self.diagnostic_expression(
+                        expr.true_expr if true_value is None else expr.false_expr
+                    )
+                )
                 float_type = self.register_primitive_type("float")
                 fallback = self.register_constant(0.0, float_type)
                 true_value = true_value or fallback
