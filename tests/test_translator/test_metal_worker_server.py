@@ -9,7 +9,7 @@ import pytest
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.project import metal_runtime as module
-from crosstl.project.metal_worker_server import MetalWorkerServer
+from crosstl.project.metal_worker_server import MetalWorkerServer, ServedReply
 from crosstl.project.runtime_verification import (
     RuntimeAdapterSetupError,
     RuntimeExecutionError,
@@ -20,36 +20,50 @@ pytestmark = pytest.mark.skipif(
 )
 
 # A stand-in worker that speaks the serve protocol; each request names its
-# action. Replies carry the worker's process id so reuse is observable.
+# action. Replies carry the worker's process id so reuse is observable. A
+# request may be followed by ``binaryBytes`` raw bytes, which ``blob`` returns
+# reversed after its reply line.
 FAKE_WORKER = """\
 import json
 import os
 import sys
 import time
 
-for line in sys.stdin:
+stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
+for line in stdin:
     request = json.loads(line)
+    payload = stdin.read(request.get("binaryBytes", 0))
     action = request["action"]
     if action == "echo":
         reply = {"pid": os.getpid(), "size": len(request.get("data", ""))}
-        sys.stdout.write("+" + json.dumps(reply) + "\\n")
+        stdout.write(b"+" + json.dumps(reply).encode() + b"\\n")
+    elif action == "blob":
+        body = json.dumps({"pid": os.getpid()}).encode()
+        stdout.write(b"+%d:" % len(payload) + body + b"\\n" + payload[::-1])
+    elif action == "prefix":
+        stdout.write(request["reply"].encode() + b"\\n")
     elif action == "fail":
         failure = {"failure": "Invalid group count.", "error": {"field": "x"}}
-        sys.stdout.write("-" + json.dumps(failure) + "\\n")
+        stdout.write(b"-" + json.dumps(failure).encode() + b"\\n")
     elif action == "message":
-        sys.stdout.write("-" + json.dumps({"failure": "Missing entry."}) + "\\n")
+        stdout.write(b"-" + json.dumps({"failure": "Missing entry."}).encode() + b"\\n")
+    elif action == "fatal":
+        failure = {"failure": "Unreadable request framing.", "fatal": True}
+        stdout.write(b"-" + json.dumps(failure).encode() + b"\\n")
+        stdout.flush()
+        break
     elif action == "exit":
         sys.stderr.write("worker stopped\\n")
         sys.stderr.flush()
         sys.exit(3)
     elif action == "slow":
         time.sleep(0.5)
-        sys.stdout.write("+" + json.dumps({"pid": os.getpid()}) + "\\n")
+        stdout.write(b"+" + json.dumps({"pid": os.getpid()}).encode() + b"\\n")
     elif action == "hang":
         time.sleep(60)
     else:
-        sys.stdout.write("?" + "\\n")
-    sys.stdout.flush()
+        stdout.write(b"?" + b"\\n")
+    stdout.flush()
 """
 
 
@@ -104,6 +118,41 @@ def test_failure_replies_match_one_shot_results(worker):
         assert _pid(server.exchange(_request("echo"), 30)) == server.process.pid
     finally:
         server.terminate()
+
+
+def test_binary_payloads_cross_both_pipes_raw(worker):
+    server = MetalWorkerServer(worker)
+    try:
+        # Several megabytes in each direction, split over two request blobs.
+        blobs = (bytes(range(256)) * (12 << 12), b"\n+-:" * 1000)
+        size = sum(map(len, blobs))
+        reply = server.exchange(_request("blob", binaryBytes=size), 30, blobs)
+        assert reply.returncode == 0
+        assert reply.payload == b"".join(blobs)[::-1]
+        assert _pid(reply) == server.process.pid
+        # The framing stays aligned for the next request and reply.
+        empty = server.exchange(_request("blob", binaryBytes=0), 30)
+        assert (empty.payload, _pid(empty)) == (b"", server.process.pid)
+        assert server.exchange(_request("echo"), 30).payload == b""
+    finally:
+        server.terminate()
+
+
+@pytest.mark.parametrize("reply", ("+12x{}", "+1234567890123456:{}", "-0:{}"))
+def test_malformed_payload_prefixes_are_rejected(worker, reply):
+    server = MetalWorkerServer(worker)
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        server.exchange(_request("prefix", reply=reply), 30)
+    assert caught.value.details["reasonKind"] == "worker-protocol-invalid"
+    assert not server.usable
+
+
+def test_fatal_failure_stops_the_worker(worker):
+    server = MetalWorkerServer(worker)
+    result = server.exchange(_request("fatal"), 30)
+    assert (result.returncode, result.stderr) == (1, "Unreadable request framing.\n")
+    assert not server.usable
+    assert server.process.returncode is not None
 
 
 def test_worker_exit_reports_status_and_stderr(worker):
@@ -240,11 +289,13 @@ def test_native_worker_serves_independent_requests(tmp_path, monkeypatch):
     executor = _executor("metal")
     runtime = executor.runtime_adapter.runtime
     pids = []
+    sizes = []
     original = MetalWorkerServer.exchange
 
-    def observe(server, request_text, timeout_seconds):
+    def observe(server, request_text, timeout_seconds, payload=()):
         pids.append(server.process.pid)
-        return original(server, request_text, timeout_seconds)
+        sizes.append(json.loads(request_text).get("binaryBytes"))
+        return original(server, request_text, timeout_seconds, payload)
 
     monkeypatch.setattr(MetalWorkerServer, "exchange", observe)
     try:
@@ -262,6 +313,77 @@ def test_native_worker_serves_independent_requests(tmp_path, monkeypatch):
     finally:
         runtime.close()
     assert len(pids) == 4 and len(set(pids)) == 1
+    # Every served request moved its input bytes raw after its JSON line.
+    assert all(size and size > 0 for size in sizes), sizes
     (tmp_path / "serve.json").write_text(
         json.dumps({"pids": pids}, indent=2), encoding="utf-8"
     )
+
+
+def _served_runtime(tmp_path, monkeypatch, reply):
+    from tests.test_translator.test_metal_native_runtime import (
+        _native_request,
+    )
+    from tests.test_translator.test_metal_native_runtime import (
+        _request as _sample_request,
+    )
+
+    request, *_ = _sample_request(tmp_path)
+    state, native = _native_request(request)
+    # The reply is stubbed; the runtime only hashes the library it names.
+    native.module_path.write_bytes(b"stub library")
+    runtime = module.MetalComputeRuntime(platform_name="darwin")
+    runtime._worker_path = tmp_path / "stub-worker"
+    runtime._shared_worker = False
+    sent = []
+
+    def serve(worker, request_text, payload=()):
+        sent.append((json.loads(request_text), [bytes(blob) for blob in payload]))
+        return reply(sent[-1])
+
+    monkeypatch.setattr(runtime, "_serve", serve)
+    return runtime, state, native, sent
+
+
+def test_served_dispatch_moves_buffers_as_raw_bytes(tmp_path, monkeypatch):
+    import struct
+
+    expected = [value for i in range(8) for value in (i * 4 + 7, i * 2 - 2)]
+    result = struct.pack("<16f", *expected)
+
+    def reply(sent):
+        body = {"device": "stub", "outputs": {"result": [0, len(result)]}}
+        return ServedReply(["stub"], 0, json.dumps(body), "", result)
+
+    runtime, state, native, sent = _served_runtime(tmp_path, monkeypatch, reply)
+    values = runtime.dispatch(None, state, native)
+    assert values["result"]["values"] == expected
+    ((request, blobs),) = sent
+    uploads = [upload for item in request["allocations"] for upload in item["uploads"]]
+    # Every upload names its share of the payload instead of carrying base64.
+    assert all(set(upload) == {"offset", "size"} for upload in uploads)
+    assert [upload["size"] for upload in uploads] == list(map(len, blobs))
+    assert request["binaryBytes"] == sum(map(len, blobs))
+    assert struct.pack("<16f", *range(16)) in blobs
+
+
+@pytest.mark.parametrize(
+    "extent, payload",
+    (
+        ([0, 64], b"\0" * 32),
+        ([8, 64], b"\0" * 64),
+        ([0, 64], b"\0" * 96),
+        ("AAAA", b"\0" * 64),
+        ([0.0, 64], b"\0" * 64),
+    ),
+)
+def test_served_dispatch_rejects_readbacks_outside_the_payload(
+    tmp_path, monkeypatch, extent, payload
+):
+    def reply(sent):
+        body = {"device": "stub", "outputs": {"result": extent}}
+        return ServedReply(["stub"], 0, json.dumps(body), "", payload)
+
+    runtime, state, native, _ = _served_runtime(tmp_path, monkeypatch, reply)
+    with pytest.raises(module.RuntimeAdapterDispatchError, match="readback"):
+        runtime.dispatch(None, state, native)

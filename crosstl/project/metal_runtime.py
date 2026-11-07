@@ -206,7 +206,7 @@ class MetalComputeRuntime:
             command, input_text=input_text, timeout_seconds=self.timeout_seconds
         )
 
-    def _serve(self, worker, request_text):
+    def _serve(self, worker, request_text, payload=()):
         # An idle worker of the same helper is reused; concurrent dispatches
         # start their own, so dispatches never wait on each other.
         server = None
@@ -226,7 +226,7 @@ class MetalComputeRuntime:
                     "Metal worker could not start.", "worker-start-failed"
                 ) from exc
         try:
-            result = server.exchange(request_text, self.timeout_seconds)
+            result = server.exchange(request_text, self.timeout_seconds, payload)
         except BaseException:
             server.terminate()
             raise
@@ -426,11 +426,13 @@ class MetalComputeRuntime:
 
     def dispatch(self, adapter, state, request):
         _ = adapter
-        payload, outputs = self._prepare_request(request)
+        # Served workers take input and output bytes raw after each JSON line.
+        blobs = [] if self._persistent else None
+        payload, outputs = self._prepare_request(request, blobs)
         worker = self._worker()
         try:
             if self._persistent:
-                result = self._serve(worker, json.dumps(payload))
+                result = self._serve(worker, json.dumps(payload), blobs)
             else:
                 result = self._run([str(worker)], input_text=json.dumps(payload))
         except RuntimeAdapterSetupError as exc:
@@ -473,8 +475,22 @@ class MetalComputeRuntime:
                 for name, binding in request.buffers.items()
                 if _buffer_readback_packed(binding)
             }
+            reply_bytes = getattr(result, "payload", b"") if blobs is not None else None
+            if reply_bytes is not None and sum(
+                _payload_extent(raw_outputs[name], len(reply_bytes))[1]
+                for name in outputs
+            ) != len(reply_bytes):
+                raise ValueError("Metal readbacks do not cover the reply payload.")
             for name, (dtype, shape, size, encoding) in outputs.items():
-                data = base64.b64decode(raw_outputs[name], validate=True)
+                if reply_bytes is None:
+                    data = base64.b64decode(raw_outputs[name], validate=True)
+                else:
+                    start, length = _payload_extent(raw_outputs[name], len(reply_bytes))
+                    data = (
+                        reply_bytes
+                        if length == len(reply_bytes)
+                        else reply_bytes[start : start + length]
+                    )
                 if len(data) != size:
                     raise ValueError(f"Metal readback size does not match {name}.")
                 if name in observed_names:
@@ -511,7 +527,9 @@ class MetalComputeRuntime:
         }
         return values
 
-    def _prepare_request(self, request):
+    def _prepare_request(self, request, blobs=None):
+        """Return the worker request and its readbacks. With ``blobs``, input
+        bytes are appended there instead of being encoded in the request."""
         if request.target != "metal" or not request.entry_point:
             raise _setup_error(
                 "Metal dispatch requires its target and entry point.",
@@ -662,9 +680,17 @@ class MetalComputeRuntime:
                             "allocation-initialization-conflict",
                         )
                 upload_ranges.setdefault(allocation_id, []).append((offset, data))
-                allocation["uploads"].append(
-                    {"offset": offset, "data": base64.b64encode(data).decode("ascii")}
-                )
+                if blobs is None:
+                    allocation["uploads"].append(
+                        {
+                            "offset": offset,
+                            "data": base64.b64encode(data).decode("ascii"),
+                        }
+                    )
+                else:
+                    # A served request carries the bytes after its JSON line.
+                    blobs.append(data)
+                    allocation["uploads"].append({"offset": offset, "size": len(data)})
             readback = _binding_requires_readback(binding)
             if resource.access not in {"read", "write", "read_write"} or (
                 readback and resource.access == "read"
@@ -751,7 +777,22 @@ class MetalComputeRuntime:
             "allocations": list(allocations.values()),
             "buffers": buffers,
             "constants": constants,
+            **({} if blobs is None else {"binaryBytes": sum(map(len, blobs))}),
         }, outputs
+
+
+def _payload_extent(value, payload_size):
+    """Return a served readback's ``[offset, length]`` within the reply payload."""
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or any(type(item) is not int for item in value)
+    ):
+        raise ValueError("Metal served readback must be an [offset, length] pair.")
+    start, length = value
+    if start < 0 or length < 0 or start + length > payload_size:
+        raise ValueError("Metal served readback lies outside the reply payload.")
+    return start, length
 
 
 def _dimensions(values, name):

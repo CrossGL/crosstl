@@ -276,9 +276,9 @@ def test_native_instances_reuse_helper_and_execute_independent_requests(
     exchanges = []
 
     class ObservedServer(module.MetalWorkerServer):
-        def exchange(self, request_text, timeout_seconds):
+        def exchange(self, request_text, timeout_seconds, payload=()):
             exchanges.append((list(self.command), self.process.pid))
-            return super().exchange(request_text, timeout_seconds)
+            return super().exchange(request_text, timeout_seconds, payload)
 
     monkeypatch.setattr(module, "run_metal_command", observe)
     monkeypatch.setattr(module, "MetalWorkerServer", ObservedServer)

@@ -7,9 +7,17 @@ pipelines, and reads one JSON request per line. Each request still gets fresh
 zeroed allocations and its own command buffer, so requests stay independent.
 
 Each reply is one line: ``+`` followed by the response object, or ``-``
-followed by ``{"failure": message, "error": details?}``. A reply is returned
-as the :class:`subprocess.CompletedProcess` a one-shot worker would have
-produced, so callers handle both modes alike.
+followed by ``{"failure": message, "error": details?, "fatal": bool?}``. A
+reply is returned as the :class:`subprocess.CompletedProcess` a one-shot
+worker would have produced, so callers handle both modes alike.
+
+Buffer contents cross the pipes as raw bytes rather than base64 inside the
+JSON. A request line may be followed by a binary payload whose size its JSON
+states; a reply's status byte may be followed by the decimal size of a binary
+payload and a colon (``+33554432:{...}``), and that many raw bytes follow the
+reply's newline. The payload is returned as :attr:`ServedReply.payload`. A
+``fatal`` failure means the worker lost the request framing and is exiting,
+so the server stops it.
 """
 
 from __future__ import annotations
@@ -26,6 +34,16 @@ from .runtime_verification import RuntimeAdapterSetupError
 
 # The largest write or read per readiness event.
 _CHUNK = 1 << 20
+# The most decimal digits a reply's payload size may have.
+_SIZE_DIGITS = 15
+
+
+class ServedReply(subprocess.CompletedProcess):
+    """A worker reply; ``payload`` holds the raw bytes that followed it."""
+
+    def __init__(self, args, returncode, stdout, stderr, payload=b""):
+        super().__init__(args, returncode, stdout, stderr)
+        self.payload = payload
 
 
 class MetalWorkerServer:
@@ -61,23 +79,33 @@ class MetalWorkerServer:
             and self.process.poll() is None
         )
 
-    def exchange(self, request_text, timeout_seconds):
-        """Send one request and return its reply as a completed process."""
-        data = memoryview(request_text.encode("utf-8") + b"\n")
+    def exchange(self, request_text, timeout_seconds, payload=()):
+        """Send one request, then the bytes of ``payload`` in order, and return
+        its reply as a completed process."""
+        data = memoryview(b"".join((request_text.encode("utf-8"), b"\n", *payload)))
         deadline = time.monotonic() + timeout_seconds
         stdin = self.process.stdin.fileno()
         stdout = self.process.stdout.fileno()
         written = 0
         # Bytes before ``searched`` hold no newline, so each read is searched once.
         searched = 0
+        # Once the reply line is read: its newline, where its JSON starts, and
+        # the end of the binary payload that follows it.
+        newline = body = end = None
         with selectors.DefaultSelector() as selector:
             selector.register(stdin, selectors.EVENT_WRITE)
             selector.register(stdout, selectors.EVENT_READ)
             while True:
-                newline = self._buffer.find(b"\n", searched)
-                if newline >= 0:
+                if newline is None:
+                    found = self._buffer.find(b"\n", searched)
+                    if found >= 0:
+                        newline = found
+                        body, size = self._payload_size(newline)
+                        end = newline + 1 + size
+                    else:
+                        searched = len(self._buffer)
+                if end is not None and len(self._buffer) >= end:
                     break
-                searched = len(self._buffer)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     self._expire(timeout_seconds)
@@ -99,21 +127,42 @@ class MetalWorkerServer:
                     if not chunk:
                         return self._exited()
                     self._buffer += chunk
-        line = bytes(self._buffer[:newline])
-        del self._buffer[: newline + 1]
-        return self._reply(line)
+        status = bytes(self._buffer[:1])
+        text = self._buffer[body:newline].decode("utf-8")
+        view = memoryview(self._buffer)
+        try:
+            payload = view[newline + 1 : end].tobytes()
+        finally:
+            view.release()
+        del self._buffer[:end]
+        return self._reply(status, text, payload, sized=body > 1)
 
-    def _reply(self, line):
-        status, body = line[:1], line[1:].decode("utf-8")
+    def _payload_size(self, newline):
+        """Return where the reply's JSON starts and its payload's size."""
+        prefix = bytes(self._buffer[1 : min(newline, 2 + _SIZE_DIGITS)])
+        digits = len(prefix) - len(prefix.lstrip(b"0123456789"))
+        if not digits:
+            return 1, 0
+        if digits > _SIZE_DIGITS or prefix[digits : digits + 1] != b":":
+            self._malformed()
+        return 2 + digits, int(prefix[:digits])
+
+    def _malformed(self):
+        self.terminate()
+        raise RuntimeAdapterSetupError(
+            "Metal worker returned a malformed reply.",
+            details={"target": "metal", "reasonKind": "worker-protocol-invalid"},
+        )
+
+    def _reply(self, status, body, payload, sized=False):
         if status == b"+":
-            return subprocess.CompletedProcess(self.command, 0, body, "")
-        if status != b"-":
-            self.terminate()
-            raise RuntimeAdapterSetupError(
-                "Metal worker returned a malformed reply.",
-                details={"target": "metal", "reasonKind": "worker-protocol-invalid"},
-            )
+            return ServedReply(self.command, 0, body, "", payload)
+        if status != b"-" or sized:
+            self._malformed()
         failure = json.loads(body)
+        if failure.get("fatal"):
+            # The worker could not read the request's framing and exits.
+            self.terminate()
         stdout = (
             json.dumps({"error": failure["error"]}, sort_keys=True)
             if "error" in failure
