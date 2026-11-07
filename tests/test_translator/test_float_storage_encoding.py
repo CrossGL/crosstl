@@ -29,6 +29,7 @@ from crosstl.project.native_runtime_drivers import (
     _prepare_opengl_buffers,
     _unpack_values,
 )
+from crosstl.project.packed_storage import packed_json
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
 from crosstl.project.runtime_verification import (
     RuntimeAllocationView,
@@ -324,6 +325,21 @@ def _package(root, target):
     return descriptor, package
 
 
+def _packed(values):
+    """The same typed values with each word list as packed storage."""
+    return {
+        name: {**value, "values": struct.pack(f"<{len(words)}I", *words)}
+        for name, value in values.items()
+        for words in (value["values"],)
+    }
+
+
+def _evidence_json(item):
+    if type(item) is bytes:
+        return {"packedValues": packed_json(item)}
+    raise TypeError(f"{type(item).__name__} is not JSON serializable")
+
+
 def _values(steps):
     guard = [0x42F60000] * 8
     initial = (
@@ -386,8 +402,9 @@ def test_float_storage_package_retains_float_arithmetic(tmp_path, target):
     _compile(request.artifact_path.read_text(), target, tmp_path)
 
 
+@pytest.mark.parametrize("packed", [False, True])
 @pytest.mark.parametrize("steps", [1, 2])
-def test_float_storage_executes_natively(tmp_path, steps):
+def test_float_storage_executes_natively(tmp_path, steps, packed):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required native float storage")
     target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
@@ -395,6 +412,9 @@ def test_float_storage_executes_natively(tmp_path, steps):
         pytest.skip("Metal does not expose the shared-allocation sequence API")
     descriptor, package = _package(tmp_path, target)
     inputs, outputs = _values(steps)
+    if packed:
+        # Packed storage uploads the same words and reads back the same bytes.
+        inputs, outputs = _packed(inputs), _packed(outputs)
     expected = _bound_values(descriptor, outputs)
     request = build_native_loader_dispatch_request(
         descriptor,
@@ -500,6 +520,7 @@ def test_float_storage_executes_natively(tmp_path, steps):
                 },
                 indent=2,
                 allow_nan=False,
+                default=_evidence_json,
             ),
             encoding="utf-8",
         )

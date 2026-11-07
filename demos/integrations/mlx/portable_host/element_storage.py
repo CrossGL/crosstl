@@ -332,3 +332,98 @@ def supplied_buffers(buffers, count, label):
             raise ValueError(f"{label} buffer names must be unique")
         supplied[name] = buffer
     return supplied
+
+
+# The exact-width ``memoryview`` format of each logical storage word.
+STORAGE_CODES = {
+    "bool_": "B",
+    "float16": "H",
+    "bfloat16": "H",
+    "float32": "I",
+    "uint8": "B",
+    "uint16": "H",
+    "uint32": "I",
+    "uint64": "Q",
+    "int8": "b",
+    "int16": "h",
+    "int32": "i",
+    "int64": "q",
+    COMPLEX: "Q",
+}
+# The format of each packet item: Booleans, unsigned bit words or integers.
+_PACKET_CODES = {
+    "bool": "?",
+    "uint8": "B",
+    "uint16": "H",
+    "uint32": "I",
+    "uint64": "Q",
+    "int8": "b",
+    "int16": "h",
+    "int32": "i",
+    "int64": "q",
+}
+_ENCODED_CODES = {"float16": "H", "bfloat16": "H", "float32": "I"}
+
+
+def packed_layout(dtype, target):
+    """``(physical dtype, encoding)`` when ``target`` carries MLX's own storage.
+
+    The carrier then holds the buffer's bytes unchanged, so the packed packet
+    is the buffer itself. ``None`` means the target widens or re-encodes the
+    words, as ``packet`` does, and the storage must travel as a word list.
+    """
+    require_dtype(dtype)
+    if dtype in (COMPLEX, "float32"):
+        return "float32", FLOAT32_BITS
+    if dtype == "float16":
+        return None if target == "opengl" else ("float16", FLOAT16_BITS)
+    if dtype == "bfloat16":
+        return {"metal": ("bfloat16", BFLOAT16_BITS), "directx": ("uint16", None)}.get(
+            target
+        )
+    if dtype == "bool_":
+        return ("bool", None) if target == "metal" else None
+    if WIDENED[target].get(dtype, dtype) != dtype:
+        return None
+    return dtype, None
+
+
+def buffer_storage(buffer, dtype):
+    """A copy of a native buffer's storage bytes, refusing invalid Booleans."""
+    data = ctypes.string_at(
+        buffer.data, buffer.count * ctypes.sizeof(CTYPES[require_dtype(dtype)])
+    )
+    if dtype == "bool_" and data.translate(None, b"\x00\x01"):
+        raise ValueError("Boolean storage must contain canonical zero or one values")
+    return data
+
+
+def storage_bytes(dtype, words):
+    """The native storage bytes of logical ``words``."""
+    return native_bytes(CTYPES[require_dtype(dtype)], len(words), words)
+
+
+def packed_packet(dtype, target, data):
+    """The packet of ``packet(dtype, target, words)`` with ``data`` as its storage.
+
+    ``data`` is the native storage of ``words``; ``packed_layout`` must name
+    the carrier. The keys and their order are ``packet``'s.
+    """
+    layout = packed_layout(dtype, target)
+    if layout is None:
+        raise ValueError(f"{target} does not carry {dtype} storage unchanged")
+    physical, encoding = layout
+    count = len(data) // PHYSICAL_SIZES[physical]
+    return {
+        "dtype": physical,
+        "shape": [count],
+        **({"encoding": encoding} if encoding is not None else {}),
+        "values": data,
+    }
+
+
+def packet_code(value):
+    """The ``memoryview`` format of the items of a packet's word list."""
+    if value.get("encoding") is not None:
+        return _ENCODED_CODES[value["dtype"]]
+    return _PACKET_CODES[value["dtype"]]

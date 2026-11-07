@@ -721,6 +721,7 @@ def execute_buffer_views(
                     view.shape,
                     target="DirectX",
                     encoding=view.readback_encoding,
+                    packed=view.readback_packed,
                 )
     if isinstance(getattr(state, "details", None), dict):
         runtime_details["allocations"] = [

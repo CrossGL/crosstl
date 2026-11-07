@@ -24,6 +24,14 @@ from crosstl.project.directx_toolchain import (
     dxc_profile_for_source,
 )
 from crosstl.project.native_module_cache import ValidatedModuleCache
+from crosstl.project.packed_storage import (
+    PackedStorageError,
+    check_packed_storage,
+    is_packed,
+    packed_json,
+    parse_packed_json,
+    unpack_storage,
+)
 from crosstl.project.runtime_value_encoding import validate_value_encoding
 from crosstl.project.runtime_values import flatten_values
 from crosstl.project.storage_record_layout import validate_storage_record_layout
@@ -213,7 +221,9 @@ class RuntimeValue:
             payload["dtype"] = self.dtype
         if self.shape:
             payload["shape"] = list(self.shape)
-        if self.values is not None:
+        if is_packed(self.values):
+            payload["packedValues"] = packed_json(self.values)
+        elif self.values is not None:
             payload["values"] = self.values
         if self.encoding is not None:
             payload["encoding"] = self.encoding
@@ -4875,10 +4885,15 @@ def _parse_runtime_value(
     if "values" not in value and "value" in value:
         values = value.get("value")
     encoding = value.get("encoding")
-    try:
-        validate_value_encoding(encoding, dtype, values)
-    except ValueError as exc:
-        raise RuntimeVerificationError(f"{field_name}.encoding: {exc}") from exc
+    if "packedValues" in value or is_packed(values):
+        values = _parse_packed_runtime_value(
+            value, values, dtype, encoding, shape, field_name=field_name
+        )
+    else:
+        try:
+            validate_value_encoding(encoding, dtype, values)
+        except ValueError as exc:
+            raise RuntimeVerificationError(f"{field_name}.encoding: {exc}") from exc
     allocation = _parse_runtime_allocation_view(
         value.get("allocation"),
         field_name=f"{field_name}.allocation",
@@ -4894,6 +4909,34 @@ def _parse_runtime_value(
         allocation=allocation,
         encoding=encoding,
     )
+
+
+def _parse_packed_runtime_value(
+    value: Mapping[str, Any],
+    values: Any,
+    dtype: str | None,
+    encoding: Any,
+    shape: tuple[int, ...],
+    *,
+    field_name: str,
+) -> bytes:
+    """Packed storage from ``packedValues`` or ``values``, checked against its shape."""
+    try:
+        if "packedValues" in value:
+            if "values" in value or "value" in value:
+                raise PackedStorageError(
+                    "value-schema-invalid",
+                    "Packed values cannot be combined with values or value.",
+                )
+            values = parse_packed_json(value["packedValues"])
+        if not shape:
+            raise PackedStorageError(
+                "value-size-mismatch", "Packed values require an explicit shape."
+            )
+        check_packed_storage(values, dtype, encoding, math.prod(shape))
+    except PackedStorageError as exc:
+        raise RuntimeVerificationError(f"{field_name}.packedValues: {exc}") from exc
+    return values
 
 
 _RUNTIME_RESOURCE_ALIAS_KEYS = ("aliases", "resourceAliases", "bindingAliases")
@@ -7571,6 +7614,9 @@ def _compare_runtime_value(
     *,
     default_tolerance: RuntimeTolerance,
 ) -> dict[str, Any]:
+    # Packed storage compares as the value list a list readback would hold.
+    expected = _unpacked_value(expected)
+    actual = _unpacked_value(actual)
     bitwise = expected.encoding is not None
     tolerance = (
         RuntimeTolerance() if bitwise else (expected.tolerance or default_tolerance)
@@ -7690,6 +7736,17 @@ def _compare_runtime_value(
         )
         comparison["firstMismatch"] = first_mismatch
     return comparison
+
+
+def _unpacked_value(value: RuntimeValue | None) -> RuntimeValue | None:
+    if value is None or not is_packed(value.values):
+        return value
+    try:
+        values = unpack_storage(value.values, value.dtype, value.encoding)
+    except PackedStorageError:
+        # Storage of no known element type matches no value list.
+        return value
+    return replace(value, values=values)
 
 
 def _value_metadata(value: RuntimeValue | None) -> dict[str, Any]:

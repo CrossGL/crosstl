@@ -19,6 +19,13 @@ from crosstl.project.native_loader_abi import (
     NativeLoaderABIError,
     _validate_descriptor,
 )
+from crosstl.project.packed_storage import (
+    ELEMENT_SIZES,
+    PackedStorageError,
+    check_packed_storage,
+    is_packed,
+    parse_packed_json,
+)
 from crosstl.project.runtime_value_encoding import validate_value_encoding
 from crosstl.project.runtime_values import (
     copy_values,
@@ -198,6 +205,7 @@ _VALUE_FIELDS = frozenset(
         "tolerance",
         "metadata",
         "encoding",
+        "packedValues",
     )
 )
 _ALIAS_METADATA_FIELDS = frozenset(("aliases", "resourceAliases", "bindingAliases"))
@@ -801,12 +809,21 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
                 path=path,
                 details={"unsupportedFields": unsupported},
             )
-        if "values" in value and "value" in value:
+        if len({"values", "value", "packedValues"}.intersection(value)) > 1:
             raise NativeLoaderDispatchError(
                 "value-schema-invalid",
-                "Typed runtime value cannot define both values and value.",
+                "Typed runtime value defines more than one of values, value and "
+                "packedValues.",
                 path=path,
             )
+        values = value.get("values", value.get("value"))
+        if "packedValues" in value:
+            try:
+                values = parse_packed_json(value["packedValues"])
+            except PackedStorageError as exc:
+                raise NativeLoaderDispatchError(
+                    exc.reason, str(exc), path=f"{path}.packedValues"
+                ) from exc
         name = value.get("name", key)
         tolerance = _runtime_tolerance(value.get("tolerance"), path=f"{path}.tolerance")
         metadata = value.get("metadata", {})
@@ -821,7 +838,7 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             kind=value.get("kind", "buffer"),
             dtype=value.get("dtype"),
             shape=_value_shape(value.get("shape"), path=f"{path}.shape"),
-            values=value.get("values", value.get("value")),
+            values=values,
             tolerance=tolerance,
             metadata=copy.deepcopy(dict(metadata)),
             encoding=value.get("encoding"),
@@ -853,15 +870,18 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             path=f"{path}.kind",
             details={"name": runtime_value.name, "kind": runtime_value.kind},
         )
+    packed = is_packed(runtime_value.values)
     # One scan of a flat value list serves the copy, flattening and checks.
+    # Packed storage is immutable bytes, so it needs neither.
     types = (
         scalar_types(runtime_value.values)
         if type(runtime_value.values) is list
         else None
     )
-    runtime_value = replace(
-        runtime_value, values=copy_values(runtime_value.values, types=types)
-    )
+    if not packed:
+        runtime_value = replace(
+            runtime_value, values=copy_values(runtime_value.values, types=types)
+        )
     metadata = runtime_value.metadata
     if not isinstance(metadata, Mapping):
         raise NativeLoaderDispatchError(
@@ -888,7 +908,10 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
         )
     try:
         validate_value_encoding(
-            runtime_value.encoding, dtype, runtime_value.values, types=types
+            runtime_value.encoding,
+            dtype,
+            None if packed else runtime_value.values,
+            types=types,
         )
     except ValueError as exc:
         raise NativeLoaderDispatchError(
@@ -912,7 +935,9 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
             path=f"{path}.values",
             details={"name": runtime_value.name},
         )
-    if runtime_value.values is not None:
+    if packed:
+        _check_packed_value(runtime_value, dtype, shape, path=path)
+    elif runtime_value.values is not None:
         flattened_values, types = flatten_scalars(runtime_value.values, types=types)
         actual_count = len(flattened_values)
         expected_count = math.prod(shape)
@@ -947,6 +972,36 @@ def _typed_value(value: Any, *, key: str | None, role: str, path: str) -> Runtim
         encoding=runtime_value.encoding,
         allocation=copy.deepcopy(runtime_value.allocation),
     )
+
+
+def _check_packed_value(
+    runtime_value: RuntimeValue, dtype: str, shape: tuple[int, ...], *, path: str
+) -> None:
+    """Refuse packed storage that is not the declared shape's elements."""
+    data = runtime_value.values
+    expected_count = math.prod(shape)
+    try:
+        check_packed_storage(data, dtype, runtime_value.encoding, expected_count)
+    except PackedStorageError as exc:
+        size = ELEMENT_SIZES.get(dtype, 1)
+        field = "encoding" if exc.reason == "value-encoding-invalid" else "values"
+        raise NativeLoaderDispatchError(
+            exc.reason,
+            str(exc),
+            path=f"{path}.{field}",
+            details={
+                "name": runtime_value.name,
+                **(
+                    {
+                        "expectedCount": expected_count,
+                        "actualCount": len(data) // size,
+                        "byteLength": len(data),
+                    }
+                    if exc.reason == "value-size-mismatch"
+                    else {"dtype": dtype}
+                ),
+            },
+        ) from exc
 
 
 def _runtime_tolerance(value: Any, *, path: str) -> RuntimeTolerance | None:

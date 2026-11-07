@@ -9,21 +9,32 @@ in every vector, the reflected storage of every binding, and an output that
 either has its own allocation or is exactly a donated input. The output
 carries a trailing guard, and the readback is decoded exactly into MLX's
 logical storage.
+
+A dispatch whose records keep no values, and whose every operand the target
+carries as MLX's own storage bytes, uploads and reads back those bytes as
+packed storage. Its record is the compact record the word-list path writes.
 """
 
 import ctypes
 import hashlib
+import sys
 
 from crosstl.project import build_native_loader_dispatch_request
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
     GUARD_COUNT,
     INEXACT,
+    STORAGE_CODES,
+    buffer_storage,
     buffer_words,
     guard_words,
     native_bytes,
+    packed_layout,
+    packed_packet,
     packet,
+    packet_code,
     reflected_layout_matches,
+    storage_bytes,
     supplied_buffers,
     unpack,
 )
@@ -37,7 +48,12 @@ from demos.integrations.mlx.portable_host.elementwise_packages import (
     signature,
 )
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
-from demos.integrations.mlx.portable_host.trace_records import write_trace
+from demos.integrations.mlx.portable_host.trace_records import (
+    compact_storage,
+    compact_trace_values,
+    retains_values,
+    write_trace,
+)
 
 __all__ = (
     "ENTRIES",
@@ -50,6 +66,8 @@ __all__ = (
 )
 # backend.cpp splits unary and binary vectors into launches of 65535 groups.
 MAX_VECTOR = 65535
+# Operations whose operands ``require_defined`` reads.
+CHECKED_OPERATIONS = frozenset({"LeftShift", "RightShift", "Divide", "Remainder"})
 
 
 def operands(kernel):
@@ -209,6 +227,113 @@ def bind(entry, descriptor, supplied, uploads, output, types):
     return inputs, outputs, observed, matched
 
 
+def packed_transport(host, entry):
+    """Whether ``entry`` uploads and reads back its storage as packed bytes.
+
+    Records that keep their values go through word lists, which the audits
+    recompute; so does any operand the target widens or re-encodes.
+    """
+    if sys.byteorder != "little" or retains_values(host, entry):
+        return False
+    _, _, _, destination = signature(entry)
+    return all(
+        packed_layout(dtype, host.target) is not None
+        for dtype in (*operand_types(entry).values(), destination)
+    )
+
+
+def _traced_packet(value):
+    """A packet as the compact record of its word-list packet holds it."""
+    if type(value.get("values")) is not bytes:
+        return value
+    return {**value, "values": compact_storage(value["values"], packet_code(value))}
+
+
+def _dispatch_packed(host, entry, supplied, threads, execution, metadata):
+    """``dispatch`` through packed storage; see ``packed_transport``."""
+    from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
+
+    kernel, operation, source, destination = signature(entry)
+    names, output = operands(kernel)
+    target = host.target
+    types = operand_types(entry)
+    storage = {name: buffer_storage(supplied[name], types[name]) for name in names}
+    if operation in CHECKED_OPERATIONS:
+        words = {
+            name: memoryview(storage[name]).cast(STORAGE_CODES[types[name]]).tolist()
+            for name in names
+        }
+        require_defined(operation, source, broadcast(kernel, words, threads))
+    size = ctypes.sizeof(CTYPES[destination])
+    initial = storage_bytes(destination, guard_words(destination, threads))
+    tail = storage_bytes(destination, guard_words(destination))
+    uploads = {
+        **{
+            name: packed_packet(types[name], target, stored)
+            for name, stored in storage.items()
+        },
+        output: packed_packet(destination, target, initial + tail),
+    }
+    descriptor, directory = host.elementwise.get(entry)
+    inputs, outputs, observed, matched = bind(
+        entry, descriptor, supplied, uploads, output, types
+    )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        directory,
+        inputs,
+        outputs,
+        execution,
+        expected_target=target,
+        observe_inputs=tuple(observed),
+    )
+    result = execute(host, request)
+    data = _returned(result, outputs, matched[output])
+    if type(data) is not bytes or len(data) != (threads + GUARD_COUNT) * size:
+        raise RuntimeError("Native elementwise output extent differs")
+    if data[threads * size :] != tail:
+        raise RuntimeError("Native elementwise kernel changed its output guard")
+    payload = data[: threads * size]
+    if destination == "bool_" and payload.translate(None, b"\x00\x01"):
+        raise ValueError("Native readback returned a non-canonical Boolean")
+    code = STORAGE_CODES[destination]
+    event = {
+        "entry": entry,
+        "target": target,
+        "threads": threads,
+        **execution,
+        "dispatchVersion": DISPATCH_VERSION,
+        "artifact": descriptor["artifact"],
+        "packageRoot": str(directory),
+        "details": result.details,
+        "elementwiseMetadata": metadata,
+        "inputs": {name: _traced_packet(value) for name, value in inputs.items()},
+        "operandValues": {
+            name: compact_storage(stored, STORAGE_CODES[types[name]])
+            for name, stored in storage.items()
+        },
+        "initialValues": compact_storage(initial, code),
+        "outputValues": compact_storage(payload, code),
+        "outputHash": hashlib.sha256(payload).hexdigest(),
+    }
+    write_trace(host, compact_trace_values(event), prepared=True)
+    ctypes.memmove(supplied[output].data, payload, len(payload))
+    host.dispatch_count += 1
+
+
+def _returned(result, outputs, name):
+    """The readback values of output ``name``, after checking its layout."""
+    if result.status != "ok" or set(result.outputs) != {name}:
+        raise RuntimeError("Native elementwise kernel did not return its output")
+    returned = result.outputs[name]
+    expected = outputs[name]
+    if any(
+        returned.get(key) != expected.get(key) for key in ("dtype", "encoding", "shape")
+    ):
+        raise RuntimeError("Native elementwise output layout differs")
+    return returned.get("values")
+
+
 def dispatch(host, entry, buffers, count, threads, launch):
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
@@ -227,6 +352,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
     supplied = supplied_buffers(buffers, count, "Elementwise")
     execution = launch.execution()
     metadata = validate(entry, supplied, threads, execution)
+    if packed_transport(host, entry):
+        return _dispatch_packed(host, entry, supplied, threads, execution, metadata)
     target = host.target
     types = operand_types(entry)
     values = {name: buffer_words(supplied[name], types[name]) for name in names}
@@ -252,15 +379,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
         observe_inputs=tuple(observed),
     )
     result = execute(host, request)
-    if result.status != "ok" or set(result.outputs) != {matched[output]}:
-        raise RuntimeError("Native elementwise kernel did not return its output")
-    returned = result.outputs[matched[output]]
-    expected = outputs[matched[output]]
-    if any(
-        returned.get(key) != expected.get(key) for key in ("dtype", "encoding", "shape")
-    ):
-        raise RuntimeError("Native elementwise output layout differs")
-    words = returned.get("values")
+    words = _returned(result, outputs, matched[output])
     if not isinstance(words, list):
         raise RuntimeError("Native elementwise output extent differs")
     words = unpack(destination, target, words)

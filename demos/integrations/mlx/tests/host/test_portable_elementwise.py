@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from crosstl.project.packed_storage import unpack_storage
 from demos.integrations.mlx.portable_host import (
     element_storage,
     elementwise_dispatch,
@@ -19,6 +20,7 @@ from demos.integrations.mlx.portable_host import (
     elementwise_warm,
     packages,
     runtime,
+    trace_records,
 )
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -244,6 +246,7 @@ def run(
     fault=None,
     donate=False,
     compute=None,
+    trace_values=True,
 ):
     kernel, operation, source, destination = elementwise_packages.signature(entry)
     names, output = elementwise_dispatch.operands(kernel)
@@ -252,22 +255,29 @@ def run(
         elementwise=FakeCache(target),
         target=target,
         trace=tmp_path / "dispatch.jsonl",
-        trace_values=True,
+        trace_values=trace_values,
         dispatch_count=0,
     )
 
     types = elementwise_packages.operand_types(entry)
 
+    def words(value):
+        # A native runtime reads packed storage as the words it packs.
+        if type(value["values"]) is bytes:
+            return unpack_storage(
+                value["values"], value["dtype"], value.get("encoding")
+            )
+        return value["values"]
+
     def execute(_, request):
         values = {
             name: element_storage.unpack(
-                types[name], target, request["inputs"][name + "Binding"]["values"]
+                types[name], target, words(request["inputs"][name + "Binding"])
             )
             for name in names
         }
-        initial = element_storage.unpack(
-            destination, target, request["inputs"][output + "Binding"]["values"]
-        )
+        upload = request["inputs"][output + "Binding"]
+        initial = element_storage.unpack(destination, target, words(upload))
         result = (compute or elementwise_evidence.expected_words)(
             kernel,
             operation,
@@ -280,11 +290,18 @@ def run(
             result[-1] ^= 1
         if fault == "result":
             result[0] ^= 1
+        readback = (
+            element_storage.packed_packet(
+                destination,
+                target,
+                element_storage.storage_bytes(destination, result),
+            )
+            if type(upload["values"]) is bytes
+            else element_storage.packet(destination, target, result)
+        )
         return SimpleNamespace(
             status="ok",
-            outputs={
-                output + "Binding": element_storage.packet(destination, target, result)
-            },
+            outputs={output + "Binding": readback},
             details={"request": {}},
         )
 
@@ -468,6 +485,114 @@ def test_complex_vectors_dispatch_through_packed_float_pairs(
             compute=numpy_complex,
             fault="guard",
         )
+
+
+PACKED_CASES = (
+    ("v_Absint32int32", {"in": [-5, 7, -(1 << 31) + 1]}, None),
+    ("vv_Addint64", {"a": [1 << 62, -3, 9], "b": [5, -(1 << 62), 0]}, None),
+    ("vv_Adduint32", {"a": [(1 << 32) - 1, 5, 6], "b": [1, 2, 3]}, None),
+    ("v_Absfloat32float32", {"in": [0x3F800000, 0x7FC12345, 0x80000000]}, "words"),
+    ("vv_Equalfloat16", {"a": [0x3C00, 2, 3], "b": [0x3C00, 5, 3]}, "words"),
+    ("vv_Multiplycomplex64", {"a": [1, 2, 3], "b": [4, 5, 6]}, "complex"),
+    ("vv_Divideint32", {"a": [7, -9, 12], "b": [2, 4, -5]}, None),
+    ("vv_LeftShiftuint16", {"a": [1, 0xFFFF, 3], "b": [3, 1, 15]}, None),
+    ("vv_Addbfloat16", {"a": [0x3F80, 0x7FC1, 1], "b": [0x3F80, 0, 2]}, "words"),
+    ("vv_Addfloat16", {"a": [0x3C00, 0x7E01, 1], "b": [0x3C00, 0, 2]}, "words"),
+    ("vv_LogicalAndbool_", {"a": [1, 0, 1], "b": [1, 1, 0]}, None),
+    ("v_Selectint16", {"a": [1, 0, 1], "b": [1, -2, 3], "c": [4, 5, -6]}, None),
+)
+
+
+def bit_words(kernel, operation, source, destination, values):
+    """A floating fake: each result word is the first operand's word."""
+    first = next(iter(values.values()))
+    if destination == "bool_":
+        return [int(a == b) for a, b in zip(values["a"], values["b"])]
+    return list(first)
+
+
+@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize("length", [3, 300])
+@pytest.mark.parametrize("case", PACKED_CASES, ids=lambda case: case[0])
+def test_packed_storage_writes_the_word_list_record(
+    monkeypatch, tmp_path, target, length, case
+):
+    entry, operands, fake = case
+    if entry not in elementwise_packages.ENTRIES:
+        pytest.skip(f"{entry} is not a pinned vector")
+    operands = {name: (values * length)[:length] for name, values in operands.items()}
+    if fake == "complex":
+        operands = {
+            name: complex_words(np.asarray(values) * (1 + 1j))
+            for name, values in operands.items()
+        }
+    compute = {"words": bit_words, "complex": numpy_complex}.get(fake)
+    packed = elementwise_dispatch.packed_transport(
+        SimpleNamespace(target=target, trace_values=False), entry
+    )
+    _, _, _, destination = elementwise_packages.signature(entry)
+    assert packed == all(
+        element_storage.packed_layout(dtype, target) is not None
+        for dtype in (*elementwise_packages.operand_types(entry).values(), destination)
+    )
+    results = {}
+    for transport in ("packed", "words"):
+        if transport == "words":
+            monkeypatch.setattr(
+                elementwise_dispatch, "packed_transport", lambda host, entry: False
+            )
+        work = tmp_path / transport
+        work.mkdir()
+        results[transport] = run(
+            monkeypatch,
+            work,
+            target,
+            entry,
+            operands,
+            compute=compute,
+            trace_values=False,
+        )
+        monkeypatch.undo()
+    (words, event, host), (listed, listed_event, listed_host) = (
+        results["packed"],
+        results["words"],
+    )
+    assert words == listed and host.dispatch_count == listed_host.dispatch_count == 1
+    assert (tmp_path / "packed/dispatch.jsonl").read_bytes() == (
+        tmp_path / "words/dispatch.jsonl"
+    ).read_bytes()
+    assert event == listed_event
+    if length <= trace_records.COMPACT_TRACE_LIMIT:
+        assert elementwise_evidence.audit_event(event, native=False) == length
+    else:
+        # Recomputed families keep their values, so they never take this path.
+        assert not elementwise_evidence.recomputable(entry) or all(
+            "compactedValues" in event[key] for key in ("initialValues", "outputValues")
+        )
+    # A record that keeps its values goes through word lists.
+    assert not elementwise_dispatch.packed_transport(
+        SimpleNamespace(target=target, trace_values=True), entry
+    )
+
+
+def test_packed_storage_refuses_changed_guards_and_invalid_booleans(
+    monkeypatch, tmp_path
+):
+    for fault in ("guard",):
+        with pytest.raises(RuntimeError, match="guard"):
+            run(
+                monkeypatch,
+                tmp_path,
+                "metal",
+                "vv_Adduint32",
+                {"a": [1, 2], "b": [3, 4]},
+                fault=fault,
+                trace_values=False,
+            )
+    array, memory, threads = native_buffers("v_Absbool_bool_", {"in": [1, 0]})
+    ctypes.memset(ctypes.addressof(memory["in"]), 2, 1)
+    with pytest.raises(ValueError, match="canonical zero or one"):
+        element_storage.buffer_storage(array[0], "bool_")
 
 
 def numpy_select(kernel, operation, source, destination, values):

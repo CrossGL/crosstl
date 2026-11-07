@@ -131,6 +131,50 @@ def integer_digest(np, values, chunk=1 << 22):
     return digest.hexdigest()
 
 
+# Exact-width ``memoryview`` codes of the storage ``compact_storage`` reads.
+_STORAGE_SIZES = {
+    "?": 1,
+    "b": 1,
+    "B": 1,
+    "h": 2,
+    "H": 2,
+    "i": 4,
+    "I": 4,
+    "q": 8,
+    "Q": 8,
+}
+
+
+def compact_storage(data, code):
+    """``compact_trace_values`` of the items of native storage ``data``.
+
+    ``data`` holds this host's native-order items of the exact-width
+    ``memoryview`` format ``code``; the result is that of compacting
+    ``memoryview(data).cast(code).tolist()``. A long list of unsigned words
+    hashes its zero-extended int64 words and a long Boolean list its bytes,
+    which are exactly the encodings ``value_digest`` hashes for those lists,
+    without building the list. Other long lists are built and compacted.
+    """
+    size = _STORAGE_SIZES[code]
+    if len(data) % size:
+        raise ValueError("Native storage is not whole items of its format")
+    count = len(data) // size
+    if count <= COMPACT_TRACE_LIMIT or sys.byteorder != "little":
+        return compact_trace_values(memoryview(data).cast(code).tolist())
+    if code == "?":
+        if bytes(data).translate(None, b"\x00\x01"):
+            raise ValueError("Boolean storage must contain canonical zero or one bytes")
+        digest = hashlib.sha256(b"bool\0" + data)
+    elif code in "BHI":
+        wide = bytearray(8 * count)
+        for offset in range(size):
+            wide[offset::8] = data[offset::size]
+        digest = hashlib.sha256(b"int64\0" + wide)
+    else:
+        return compact_trace_values(memoryview(data).cast(code).tolist())
+    return {"compactedValues": {"length": count, "sha256": digest.hexdigest()}}
+
+
 def recorded_length(values):
     """The element count of a retained list or of its compact digest."""
     if type(values) is list:

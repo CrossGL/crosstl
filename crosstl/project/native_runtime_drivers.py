@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 
 from crosstl.translator.resource_storage import encoded_storage_dtype
 
+from .packed_storage import PackedStorageError, check_packed_storage, is_packed
 from .runtime_value_encoding import encoded_storage, validate_value_encoding
 from .runtime_values import flatten_scalars, flatten_values, pack_scalars
 from .runtime_verification import (
@@ -55,6 +56,7 @@ class _PreparedDirectXBuffer:
     readback_encoding: str | None = None
     raw: bool = False
     observe_input: bool = False
+    readback_packed: bool = False
 
     @property
     def size(self) -> int:
@@ -98,6 +100,7 @@ class _PreparedVulkanBuffer:
     output_name: str | None
     payload: bytes
     readback_encoding: str | None = None
+    readback_packed: bool = False
 
     @property
     def size(self) -> int:
@@ -131,6 +134,7 @@ class _PreparedOpenGLBuffer:
     allocation_explicit: bool = False
     readback_encoding: str | None = None
     observe_input: bool = False
+    readback_packed: bool = False
 
     @property
     def size(self) -> int:
@@ -835,6 +839,7 @@ class DirectXComputeRuntime:
                 prepared.shape,
                 target="DirectX",
                 encoding=prepared.readback_encoding,
+                packed=prepared.readback_packed,
             )
         return outputs
 
@@ -1914,6 +1919,7 @@ class OpenGLComputeRuntime:
                 prepared.shape,
                 target="OpenGL",
                 encoding=prepared.readback_encoding,
+                packed=prepared.readback_packed,
             )
         return outputs
 
@@ -2462,6 +2468,7 @@ class _VulkanDispatchContext:
                 prepared.shape,
                 target="Vulkan",
                 encoding=prepared.readback_encoding,
+                packed=prepared.readback_packed,
             )
         return outputs
 
@@ -3136,6 +3143,7 @@ def _prepare_directx_buffers(
                 readback_encoding=readback_encoding,
                 raw=raw,
                 observe_input=binding.observe_input,
+                readback_packed=_buffer_readback_packed(binding),
             )
         )
     return tuple(
@@ -4233,6 +4241,7 @@ def _prepare_vulkan_buffers(
                 output_name=_runtime_value_name(binding),
                 payload=payload,
                 readback_encoding=readback_encoding,
+                readback_packed=_buffer_readback_packed(binding),
             )
         )
     return tuple(
@@ -4377,6 +4386,7 @@ def _prepare_opengl_buffers(
                 allocation_explicit=binding.allocation is not None,
                 readback_encoding=readback_encoding,
                 observe_input=binding.observe_input,
+                readback_packed=_buffer_readback_packed(binding),
             )
         )
     return tuple(
@@ -4805,6 +4815,14 @@ def _buffer_readback_encoding(
     return encoding
 
 
+def _buffer_readback_packed(binding: NativeRuntimeBufferBinding) -> bool:
+    """Whether ``binding`` reads back packed storage, as its values are given."""
+    return is_packed(binding.value) or (
+        binding.expected_output is not None
+        and is_packed(binding.expected_output.values)
+    )
+
+
 def _workgroup_count(
     request: NativeRuntimeDispatchRequest,
     *,
@@ -5190,6 +5208,15 @@ def _pack_values(
     target: str = "Vulkan",
     encoding: str | None = None,
 ) -> bytes:
+    if is_packed(value):
+        # Packed storage is uploaded as it is once it holds its elements.
+        try:
+            check_packed_storage(value, dtype, encoding, expected_count)
+        except PackedStorageError as exc:
+            raise RuntimeExecutorUnavailable(
+                f"{target} compute runtime packed buffer storage is invalid: {exc}"
+            ) from exc
+        return value
     values, types = flatten_scalars(value)
     try:
         if encoding is None:
@@ -5273,7 +5300,8 @@ def _unpack_values(
     *,
     target: str = "Vulkan",
     encoding: str | None = None,
-) -> list[Any]:
+    packed: bool = False,
+) -> list[Any] | bytes:
     try:
         validate_value_encoding(encoding, dtype)
     except ValueError as exc:
@@ -5301,6 +5329,8 @@ def _unpack_values(
                 "byteLength": len(payload),
             },
         )
+    if packed:
+        return bytes(payload)
     count = len(payload) // size
     if count == 0:
         return []
@@ -5319,10 +5349,14 @@ def _buffer_readback(
     *,
     target: str,
     encoding: str | None = None,
+    packed: bool = False,
 ) -> dict[str, Any]:
+    """The typed readback of ``payload``; ``packed`` keeps its storage bytes."""
     return {
         "dtype": dtype,
         "shape": list(shape),
-        "values": _unpack_values(payload, dtype, target=target, encoding=encoding),
+        "values": _unpack_values(
+            payload, dtype, target=target, encoding=encoding, packed=packed
+        ),
         **({"encoding": encoding} if encoding is not None else {}),
     }

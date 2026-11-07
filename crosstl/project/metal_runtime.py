@@ -25,6 +25,7 @@ from .native_runtime_drivers import (
     _binding_requires_readback,
     _buffer_readback,
     _buffer_readback_encoding,
+    _buffer_readback_packed,
     _dtype_size,
     _input_observation_readback,
     _native_buffer_payload,
@@ -467,6 +468,11 @@ class MetalComputeRuntime:
                 for name, binding in request.buffers.items()
                 if binding.observe_input
             }
+            packed_names = {
+                _runtime_value_name(binding) or name
+                for name, binding in request.buffers.items()
+                if _buffer_readback_packed(binding)
+            }
             for name, (dtype, shape, size, encoding) in outputs.items():
                 data = base64.b64decode(raw_outputs[name], validate=True)
                 if len(data) != size:
@@ -475,7 +481,12 @@ class MetalComputeRuntime:
                     values[name] = _input_observation_readback(data, size, size)
                     continue
                 values[name] = _buffer_readback(
-                    data, dtype, shape, target="Metal", encoding=encoding
+                    data,
+                    dtype,
+                    shape,
+                    target="Metal",
+                    encoding=encoding,
+                    packed=name in packed_names,
                 )
         except (ValueError, TypeError, KeyError) as exc:
             raise RuntimeAdapterDispatchError(
