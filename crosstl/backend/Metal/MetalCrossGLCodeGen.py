@@ -70,6 +70,12 @@ from .dependent_builtins import (
     unbound_template_type_names,
 )
 from .external_functions import refuse_external_function_calls
+from .implicit_constructor_conversions import (
+    convert_user_call_arguments,
+    converted_assignment_value,
+    converting_constructor_argument,
+    converting_constructor_value,
+)
 from .instance_static_members import render_instance_static_struct_member
 from .library_structs import declare_referenced_library_structs
 from .local_aggregate_declarators import (
@@ -12059,6 +12065,8 @@ class MetalToCrossGLConverter(
                 node.operator,
                 is_main,
             )
+        if converted_rhs is None and component_info is None and lhs_info is None:
+            converted_rhs = converted_assignment_value(self, node, is_main)
         try:
             # `device T& r = buffer[i]` binds the element; buffer_load would
             # bind a copy and drop every write through `r`.
@@ -12806,6 +12814,9 @@ class MetalToCrossGLConverter(
                                     expr.args[index], parameter, is_main
                                 )
                             )
+            convert_user_call_arguments(
+                self, materialized_name, expr, wrapper_arguments, is_main
+            )
             materialized_name = self.transported_metal_source_overload_name(
                 materialized_name,
                 expr.args,
@@ -17491,6 +17502,9 @@ float {scalar}(float base, float exponent) {{
         return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def generate_metal_value_argument(self, argument, parameter, is_main):
+        converted = converting_constructor_argument(self, argument, parameter, is_main)
+        if converted is not None:
+            return converted
         if self.binary16_widening_profile is not None and isinstance(
             argument, InitializerListNode
         ):
@@ -23694,6 +23708,19 @@ float {scalar}(float value) {{
             access.array, is_main
         )
         index = self.generate_expression(access.index, is_main)
+        converted = (
+            converting_constructor_value(
+                self,
+                self.expression_metal_type(access),
+                value,
+                is_main,
+                assignment=True,
+            )
+            if operator == "="
+            else None
+        )
+        if converted is not None:
+            return f"buffer_store({buffer}, {index}, {converted})"
         rendered_value = self.generate_expression(value, is_main)
         if self.binary16_widening_profile is not None:
             rendered_value = self.render_metal_half_widening(
