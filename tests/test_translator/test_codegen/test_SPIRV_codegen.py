@@ -36627,3 +36627,126 @@ class TestSpirvShaderValidation:
         assert "OpCompositeExtract" in spv_code
         assert "OpCompositeConstruct" in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_specialization_constant_vector_composite_emits_spec_constant_composite(
+        self, tmp_path
+    ):
+        source_code = """
+        shader SpecConstantVectorRepro {
+            const int scale @constant_id(0) = 3;
+            const ivec2 steps = ivec2(scale, 1);
+
+            compute {
+                layout(local_size_x = 1) in;
+                void main() {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        scale_id = spirv_named_id(spv_code, "scale")
+        steps_id = spirv_named_id(spv_code, "steps")
+        assert f"OpDecorate {scale_id} SpecId 0" in spv_code
+        assert re.search(
+            rf"{re.escape(steps_id)} = OpSpecConstantComposite %\d+ {re.escape(scale_id)} %\d+",
+            spv_code,
+        )
+        assert (
+            re.search(rf"{re.escape(steps_id)} = OpConstantComposite\b", spv_code)
+            is None
+        )
+        # Round trip through the SPIR-V importer preserves steps
+        spv_file = tmp_path / "spec_steps.spvasm"
+        spv_file.write_text(spv_code, encoding="utf-8")
+        reparsed_cgl = crosstl.translate(str(spv_file), backend="crossgl")
+        assert "steps" in reparsed_cgl
+        assert "scale" in reparsed_cgl
+
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_specialization_constant_nested_composite_emits_spec_constant_composite(
+        self, tmp_path
+    ):
+        source_code = """
+        shader SpecConstantNestedComposite {
+            const float scale @constant_id(0) = 2.0;
+            const mat2 m = mat2(scale, 0.0, 0.0, 1.0);
+
+            struct Data {
+                ivec2 v;
+                int x;
+            };
+            const int offset @constant_id(1) = 5;
+            const Data d = Data(ivec2(offset, 1), 10);
+
+            compute {
+                layout(local_size_x = 1) in;
+                void main() {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        scale_id = spirv_named_id(spv_code, "scale")
+        m_id = spirv_named_id(spv_code, "m")
+        offset_id = spirv_named_id(spv_code, "offset")
+        d_id = spirv_named_id(spv_code, "d")
+
+        # Column containing scale must be OpSpecConstantComposite
+        assert re.search(
+            rf"%\d+ = OpSpecConstantComposite %\d+ {re.escape(scale_id)} %\d+",
+            spv_code,
+        )
+        # Matrix m itself must be OpSpecConstantComposite of columns
+        assert re.search(
+            rf"{re.escape(m_id)} = OpSpecConstantComposite %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        # Vector inside struct must be OpSpecConstantComposite
+        assert re.search(
+            rf"%\d+ = OpSpecConstantComposite %\d+ {re.escape(offset_id)} %\d+",
+            spv_code,
+        )
+        # Struct d itself must be OpSpecConstantComposite
+        assert re.search(
+            rf"{re.escape(d_id)} = OpSpecConstantComposite %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_all_literal_vector_composite_emits_op_constant_composite(self, tmp_path):
+        source_code = """
+        shader LiteralVectorComposite {
+            const ivec2 steps = ivec2(3, 1);
+
+            compute {
+                layout(local_size_x = 1) in;
+                void main() {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        steps_id = spirv_named_id(spv_code, "steps")
+        assert re.search(
+            rf"{re.escape(steps_id)} = OpConstantComposite %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            re.search(rf"{re.escape(steps_id)} = OpSpecConstantComposite\b", spv_code)
+            is None
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)

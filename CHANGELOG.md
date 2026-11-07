@@ -6,6 +6,8 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- SPIR-V output now emits OpSpecConstantComposite for vectors, matrices, and structs built from specialization constants (#3901).
+
 - GLSL output pads a short array constructor whose size is a compile-time integer constant, as it pads a literal size: `float[N](x)` with `const int N = 3;` becomes `float[N](x, 0.0, 0.0)`, and `float[N][2](float[2](x, 1.0))` with `N = 2` becomes `float[N][2](float[2](x, 1.0), float[2](0.0, 0.0))`. It used to copy the constructor with one argument, which glslang rejects with `array constructor needs one argument per array element` (#3811). A size set by a specialization constant is left as written.
 - GLSL output refuses an array constructor with more arguments than elements, such as `a = float[1](x, 1.0);`, in an assignment, a return, a call argument or a structure constructor, with `OpenGLAggregateInitializerError` (`project.translate.opengl-aggregate-initializer-invalid`), as it already did in a declaration. It used to copy it, which glslang rejects (#3710).
 - Metal output refuses the `length()` of a `StructuredBuffer<T>` or `RWStructuredBuffer<T>`, such as `values.length()` for `StructuredBuffer<float> values`, in an entry point or a helper, with `BufferLengthUnsupportedError` (`project.translate.metal-buffer-length-unsupported`), as it already does for a `buffer float*` view: a Metal buffer argument is a pointer and carries no size. It used to copy `values.length()` unchanged onto the device pointer, which the Metal compiler rejects as not a structure or union.
