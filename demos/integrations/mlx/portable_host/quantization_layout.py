@@ -1,4 +1,10 @@
-"""Storage and launch contracts for pinned quantization kernels."""
+"""Storage and launch contracts for pinned quantization kernels.
+
+Besides the quantize and dequantize kernels the Quantize primitive launches,
+QQMatmul rounds its input through fp_quantized.metal's block
+``quantize_dequantize`` kernels: values in, values of the same type out, and
+an optional nvfp4 global scale.
+"""
 
 import ctypes
 import re
@@ -18,7 +24,8 @@ def signature(entry):
         operation, source, group, bits = match.groups()
     else:
         match = re.fullmatch(
-            r"(mxfp4|mxfp8|nvfp4)_(quantize|dequantize)_(float|float16_t|bfloat16_t)_gs_(16|32)_b_(4|8)_hgs_(false|true)",
+            r"(mxfp4|mxfp8|nvfp4)_(quantize|dequantize|quantize_dequantize)"
+            r"_(float|float16_t|bfloat16_t)_gs_(16|32)_b_(4|8)_hgs_(false|true)",
             entry,
         )
         if match is None:
@@ -53,7 +60,9 @@ def launches(elements, group):
 
 def workgroup_size(entry):
     operation, _, group, bits = signature(entry)
-    return min(group, 32) if operation == "quantize" else group // pack_factor(bits)
+    if operation in ("quantize", "quantize_dequantize"):
+        return min(group, 32)
+    return group // pack_factor(bits)
 
 
 def buffer_contract(entry, groups):
@@ -63,6 +72,11 @@ def buffer_contract(entry, groups):
     values, packed = groups * group, groups * group * bits // 8
     quantize = operation == "quantize"
     block = not entry.startswith("affine_")
+    if operation == "quantize_dequantize":
+        contract = {"w": (dtype, values, 0), "out": (dtype, values, 1)}
+        if entry.endswith("_hgs_true"):
+            contract["global_scale"] = ("float32", 1, 0)
+        return contract
     contract = {
         "w": (dtype if quantize else "uint8", values if quantize else packed, 0),
         "out": ("uint8" if quantize else dtype, packed if quantize else values, 1),

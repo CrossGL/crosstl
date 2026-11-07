@@ -67,6 +67,24 @@ def _words(buffer, dtype):
     )
 
 
+def _route(layout, buffer, label):
+    """The ``route`` a launch names, which only a layout with ROUTES accepts."""
+    if buffer is None:
+        return None
+    if (
+        not getattr(layout, "ROUTES", ())
+        or buffer.dtype != b"utf8"
+        or buffer.output
+        or not buffer.data
+        or not 1 <= buffer.count <= 64
+    ):
+        raise ValueError(f"{label} route buffer is invalid")
+    route = ctypes.string_at(buffer.data, buffer.count).decode("ascii")
+    if route not in layout.ROUTES:
+        raise ValueError(f"{label} route is unknown")
+    return route
+
+
 def dispatch(host, entry, buffers, count, threads, launch):
     """Run one affine matrix-vector launch through its translated package."""
     return dispatch_with(
@@ -94,7 +112,7 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
 
     label = layout.LABEL
     names = layout.parameter_names(entry)
-    if cache is None or count != len(names) or not buffers or launch is None:
+    if cache is None or not buffers or launch is None:
         raise ValueError(
             f"{label} dispatch requires pinned packages, buffers and geometry"
         )
@@ -107,9 +125,17 @@ def dispatch_with(host, layout, cache, entry, buffers, count, threads, launch):
         if name in supplied:
             raise ValueError(f"{label} buffer names must be unique")
         supplied[name] = buffer
+    # A layout with ``ROUTES`` takes the primitive whose routing the launch
+    # follows from a ``route`` buffer the kernel never binds.
+    route = _route(layout, supplied.pop("route", None), label)
+    if len(supplied) != len(names):
+        raise ValueError(
+            f"{label} dispatch requires pinned packages, buffers and geometry"
+        )
     counts, parameters = layout.read_storage(entry, supplied)
     execution = launch.execution()
-    metadata = layout.plan(entry, counts, parameters, threads, execution)
+    routed = {} if route is None else {"route": route}
+    metadata = layout.plan(entry, counts, parameters, threads, execution, **routed)
     dtype = layout.signature(entry)["dtype"]
     storage = {
         name: (

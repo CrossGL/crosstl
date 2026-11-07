@@ -4161,9 +4161,12 @@ void dispatch_qvm_split_k(
 
 // quantized.cpp dispatch_qmv, qvm and qvm_split_k for mxfp4, mxfp8 and nvfp4
 // weights: fp_quantized.metal's kernels, with uint8 scales and no biases.
-// QuantizedMatmul passes no global scale, so qmv_wide serves two or more
-// vectors on every device. Products of at least the vector limit's rows take
-// dispatch_qmm and dispatch_qmm_split_k instead.
+// Without a global scale qmv_wide serves two or more vectors on every device.
+// QuantizedMatmul passes none, and sends products of at least the vector
+// limit's rows to dispatch_qmm and dispatch_qmm_split_k instead. QQMatmul
+// (``qq``) sends every product here, and an nvfp4 global scale takes the
+// ``_hgs`` qmv and qmv_fast kernels, never qmv_quad or qmv_wide. A ``route``
+// buffer tells the runtime which primitive's routing to check.
 void dispatch_fp_quantized_matvec(
     const array& x,
     const array& w,
@@ -4175,14 +4178,16 @@ void dispatch_fp_quantized_matvec(
     int bits,
     int M,
     int N,
-    int K) {
+    int K,
+    const std::optional<array>& global_scale = std::nullopt,
+    bool qq = false) {
   if (!transpose && K >= 1024) {
     dispatch_qvm_split_k(x, w, scales, std::nullopt, out, mode, group_size, bits, M, N, K);
     return;
   }
   const uint64_t B = out.size() / M / N;
-  const bool quad = transpose && (K == 64 || K == 128);
-  const bool wide = transpose && !quad && M >= 2;
+  const bool quad = transpose && (K == 64 || K == 128) && !global_scale;
+  const bool wide = transpose && !quad && M >= 2 && !global_scale;
   const bool fast = N % 8 == 0 && K % ((32 / bits) * 2 * 32) == 0;
   // qmv_wide's vecs_per_tg: the fewest tiles of at most 5 vectors.
   const int vector_tiles = (M + 4) / 5;
@@ -4196,7 +4201,7 @@ void dispatch_fp_quantized_matvec(
       "_gs_" + std::to_string(group_size) + "_b_" + std::to_string(bits) +
       (quad ? "_d_" + std::to_string(K) : "") +
       (wide ? "_nv_" + std::to_string(vectors) + "_kl_16" : "") +
-      (B > 1 ? "_batch_1" : "_batch_0");
+      (B > 1 ? "_batch_1" : "_batch_0") + (global_scale ? "_hgs" : "");
   require_entry(entry);
   // qvm: 2 simdgroups of min(group_size, 32) columns; qmv_quad: 8 quads of 8
   // rows; qmv_wide: 2 simdgroups of 2 rows; qmv: 2 simdgroups of 4 rows.
@@ -4226,6 +4231,16 @@ void dispatch_fp_quantized_matvec(
   QuantizedBatchViews views(x, w, scales);
   if (B > 1) {
     views.bind(buffers);
+  }
+  if (global_scale) {
+    if (global_scale->dtype() != float32 || global_scale->size() != 1) {
+      throw std::invalid_argument("CrossTL quantized matmul requires one float32 global scale.");
+    }
+    buffers.push_back({"global_scale", "float32", data(*global_scale), 1, 0});
+  }
+  static constexpr char qq_route[] = "qqmm";
+  if (qq) {
+    buffers.push_back({"route", "utf8", const_cast<char*>(qq_route), 4, 0});
   }
   const CrosstlMlxLaunch launch{{columns, tiles, uint32_t(B)}, {32, quad ? 1u : 2u, 1}};
   quantized_dispatch(
@@ -5084,6 +5099,9 @@ void Quantize::eval_gpu(
 
 } // namespace mlx::core::fast
 
+// The port of QQMatmul, which quantizes both operands of its product with the
+// quantization and matrix-vector dispatches above.
+#include "mlx/backend/no_gpu/crosstl_qq_matmul.inc"
 // The Hadamard port uses this translation unit's dispatch helpers and copy.
 #include "mlx/backend/no_gpu/crosstl_hadamard.inc"
 // The normalization ports use this translation unit's dispatch helpers.

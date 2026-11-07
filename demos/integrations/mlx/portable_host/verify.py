@@ -111,7 +111,7 @@ COUNTS = (0, 1, 7, 257)
 # each dtype check proves that refusal happens with no native dispatch.
 FLOAT64_REFUSAL = "float64 is not supported on the GPU"
 NEGATIVE_CHECKS = {
-    "unsupported": "QQMatmul has no GPU implementation",
+    "unsupported": "GatherQQMM has no GPU implementation",
     "over-limit": "Arange currently supports at most 65535 elements",
     "missing": "artifact",
     "unary-dtype": FLOAT64_REFUSAL,
@@ -191,10 +191,17 @@ def worker(args):
     if args.worker in checks:
         try:
             if args.worker == "unsupported":
-                # qqmm quantizes both operands inside QQMatmul, which the
-                # host does not port.
-                value = mx.qqmm(
-                    mx.ones((1, 32)), mx.ones((32, 32)), mode="mxfp8", stream=mx.gpu
+                # gather_qqmm quantizes both operands inside GatherQQMM,
+                # which the host does not port.
+                # Dense operands and unsigned indices of the batch shape need
+                # no copy or cast before the primitive.
+                value = mx.gather_qqmm(
+                    mx.array(np.ones((1, 1, 32), dtype=np.float32)),
+                    mx.array(np.ones((2, 32, 32), dtype=np.float32)),
+                    lhs_indices=mx.array([0], dtype=mx.uint32),
+                    rhs_indices=mx.array([1], dtype=mx.uint32),
+                    mode="mxfp8",
+                    stream=mx.gpu,
                 )
             elif args.worker == "over-limit":
                 # Integer aranges split into exact launches; a floating-point

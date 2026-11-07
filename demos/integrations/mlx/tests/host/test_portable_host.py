@@ -86,6 +86,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "FFT",
                     "Hadamard",
                     "QQMatmul",
+                    "GatherQQMM",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
                     *prepare.HOST_EVAL_PRIMITIVES,
@@ -144,7 +145,7 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
 ):
     backend = checkout(tmp_path, monkeypatch, newline)
     record = prepare.prepare(tmp_path, tmp_path / "adaptation.json")
-    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 19
+    assert record["commit"] == prepare.COMMIT and len(record["files"]) == 20
     for name in prepare.FAST_PRIMITIVES:
         declared = f"{declaration_macro(name)}({name})"
         assert declared not in (backend / "crosstl_primitives.cpp").read_text()
@@ -184,6 +185,9 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     )
     assert (backend / "crosstl_custom_kernel.inc").read_bytes() == (
         Path(prepare.__file__).with_name("custom_kernel.inc").read_bytes()
+    )
+    assert (backend / "crosstl_qq_matmul.inc").read_bytes() == (
+        Path(prepare.__file__).with_name("qq_matmul.inc").read_bytes()
     )
     # The adapted metal_kernel.cpp also accepts the runtime's GPU stream, and
     # the build takes it in place of the original.
@@ -247,8 +251,9 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
         assert f"NO_GPU({name})" in (backend / "primitives.cpp").read_text()
     assert "NO_GPU(Convolution)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Hadamard)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(QQMatmul)" not in (backend / "crosstl_primitives.cpp").read_text()
     # A primitive without a host port keeps MLX's explicit GPU error.
-    assert "NO_GPU(QQMatmul)" in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(GatherQQMM)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2

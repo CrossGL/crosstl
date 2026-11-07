@@ -12,8 +12,14 @@ holds for every floating-point mode), then ``fp_qmv_fast`` when ``N`` and
 products a column sum then adds. QuantizedMatmul never passes a global scale,
 so no routed entry reads one; the pinned qmv and qvm templates still declare
 that argument, and the host binds an inert value for it.
+
+QQMatmul quantizes both operands and sends every product to ``dispatch_qmv``,
+however many vectors it has; its launches carry a ``route`` of ``qqmm``. An
+nvfp4 global scale of its weights takes the ``_hgs`` qmv and qmv_fast kernels,
+never qmv_quad or qmv_wide, and binds the scale the kernels then read.
 """
 
+import ctypes
 import re
 
 from demos.integrations.mlx.portable_host import matmul_layout
@@ -34,8 +40,11 @@ MODES = {"mxfp4": (32, 4), "mxfp8": (32, 8), "nvfp4": (16, 4)}
 PATTERN = re.compile(
     r"(mxfp4|mxfp8|nvfp4)_(qmv_quad|qmv_fast|qmv_wide|qmv|qvm)"
     r"_(float|float16_t|bfloat16_t)_gs_(16|32)_b_(4|8)"
-    r"(?:_d_(64|128))?(?:_nv_([2-5])_kl_16)?_batch_(0|1)"
+    r"(?:_d_(64|128))?(?:_nv_([2-5])_kl_16)?_batch_(0|1)(_hgs)?"
 )
+# The primitives whose routing a launch follows: QuantizedMatmul's unless the
+# launch names another.
+ROUTES = ("qqmm",)
 SPLIT_PATTERN = re.compile(
     r"(mxfp4|mxfp8|nvfp4)_qvm_split_k_(float|float16_t|bfloat16_t)"
     r"_gs_(16|32)_b_(4|8)_spk_(8|32)"
@@ -94,12 +103,15 @@ def signature(entry):
     match = PATTERN.fullmatch(entry) if isinstance(entry, str) else None
     if match is None:
         raise ValueError(f"Unsupported {LABEL.lower()} entry")
-    mode, kernel, source, group, bits, dimension, vectors, batched = match.groups()
+    mode, kernel, source, group, bits, dimension, vectors, batched, scaled = (
+        match.groups()
+    )
     group, bits = int(group), int(bits)
     if (
         MODES[mode] != (group, bits)
         or (kernel == "qmv_quad") != (dimension is not None)
         or (kernel == "qmv_wide") != (vectors is not None)
+        or (scaled and (kernel in ("qmv_quad", "qmv_wide") or mode != "nvfp4"))
     ):
         raise ValueError(f"{LABEL} entry is never instantiated")
     return {
@@ -111,6 +123,7 @@ def signature(entry):
         "D": int(dimension) if dimension else None,
         "vectors": int(vectors) if vectors else None,
         "batched": batched == "1",
+        "globalScale": scaled is not None,
     }
 
 
@@ -145,14 +158,17 @@ def wide_vectors(m):
     return -(-m // tiles)
 
 
-def select(mode, dtype, m, n, k, batches, transpose=True):
+def select(mode, dtype, m, n, k, batches, transpose=True, qq=False, global_scale=False):
     """quantized.cpp QuantizedMatmul::eval_gpu's entry for one product.
 
     Raises for the products MLX sends to kernels the host does not route:
-    the matrix-matrix kernels.
+    the matrix-matrix kernels. ``qq`` follows QQMatmul's ``dispatch_qmv``
+    instead, for any vector count, and ``global_scale`` its ``_hgs`` kernels.
     """
     group, bits = MODES[mode]
-    if m >= vector_limit(k, n, transpose):
+    if global_scale and (not qq or mode != "nvfp4" or not transpose):
+        raise ValueError(f"{LABEL} global scales come only from nvfp4 QQMatmul")
+    if not qq and m >= vector_limit(k, n, transpose):
         raise ValueError(f"{LABEL} matrix-matrix products are not routed")
     stem = f"{SOURCE_TYPES[dtype]}_gs_{group}_b_{bits}"
     batch = "_batch_1" if batches > 1 else "_batch_0"
@@ -161,13 +177,14 @@ def select(mode, dtype, m, n, k, batches, transpose=True):
             partitions = 32 if k > QVM_WIDE_SPLIT else 8
             return f"{mode}_qvm_split_k_{stem}_spk_{partitions}"
         return f"{mode}_qvm_{stem}{batch}"
-    if k in QUAD_DIMENSIONS:
+    if k in QUAD_DIMENSIONS and not global_scale:
         # Both 4 and 8 bits are powers of two.
         return f"{mode}_qmv_quad_{stem}_d_{k}{batch}"
-    if m >= 2:
+    if m >= 2 and not global_scale:
         return f"{mode}_qmv_wide_{stem}_nv_{wide_vectors(m)}_kl_{WIDE_LANES}{batch}"
     fast = n % 8 == 0 and k % fast_alignment(bits) == 0
-    return f"{mode}_{'qmv_fast' if fast else 'qmv'}_{stem}{batch}"
+    scaled = "_hgs" if global_scale else ""
+    return f"{mode}_{'qmv_fast' if fast else 'qmv'}_{stem}{batch}{scaled}"
 
 
 def declares_global_scale(entry):
@@ -181,8 +198,10 @@ def scalar_parameters(entry):
 
 
 def parameter_names(entry):
-    """The parameters the host binds: never the global scale."""
+    """The parameters the host binds: the global scale only for ``_hgs``."""
     names = (*MATRIX_PARAMETERS, *scalar_parameters(entry))
+    if signature(entry).get("globalScale"):
+        names = (*names, "global_scale")
     if "splitK" in signature(entry):
         return (*names, *BATCH_PARAMETERS, *SPLIT_SCALARS)
     return (*names, *BATCH_PARAMETERS) if signature(entry)["batched"] else names
@@ -205,15 +224,39 @@ def parameter_type(entry, name):
 
 
 def read_storage(entry, buffers):
-    """Check native buffer identity and read the integer parameters."""
-    names = parameter_names(entry)
-    return matmul_layout.read_buffers(
+    """Check native buffer identity and read the integer parameters.
+
+    An ``_hgs`` launch's global scale is read as its raw binary32 word.
+    """
+    names = [name for name in parameter_names(entry) if name != "global_scale"]
+    scale = None
+    if signature(entry).get("globalScale"):
+        buffers = dict(buffers)
+        scale = buffers.pop("global_scale", None)
+        output = buffers.get("y")
+        if (
+            scale is None
+            or not scale.data
+            or scale.data % 4
+            or scale.dtype != b"float32"
+            or scale.count != 1
+            or scale.output != 0
+            or output is not None
+            and output.data < scale.data + 4
+            and scale.data < output.data + output.count * 4
+        ):
+            raise ValueError(f"{LABEL} global scale storage does not match")
+    counts, parameters = matmul_layout.read_buffers(
         buffers,
         {name: parameter_type(entry, name) for name in names},
         (*scalar_parameters(entry), *BATCH_SCALARS, *SPLIT_SCALARS),
         LABEL,
         matrices=MATRIX_PARAMETERS,
     )
+    if scale is not None:
+        word = ctypes.cast(scale.data, ctypes.POINTER(ctypes.c_uint32)).contents
+        parameters["global_scale"] = [word.value]
+    return counts, parameters
 
 
 def _grid(entry, info, n, parameters, execution):
@@ -242,13 +285,19 @@ def _grid(entry, info, n, parameters, execution):
     return m, batches
 
 
-def plan(entry, counts, parameters, threads, execution):
+def plan(entry, counts, parameters, threads, execution, route=None):
     """Validate one launch against MLX's routing and return its metadata.
 
     The returned ``parameters`` add the inert global scale and the unbatched
-    batch views that the translations reflect but never read.
+    batch views that the translations reflect but never read. ``route`` names
+    the primitive whose routing the launch follows, QuantizedMatmul's if None.
     """
     info = signature(entry)
+    if route is not None and route not in ROUTES:
+        raise ValueError(f"{LABEL} route is unknown")
+    qq = route == "qqmm"
+    if qq and "splitK" in info:
+        raise ValueError(f"{LABEL} QQMatmul never splits its reduction")
     if "splitK" in info:
         metadata = matmul_layout.plan_split(
             entry,
@@ -274,13 +323,24 @@ def plan(entry, counts, parameters, threads, execution):
     ):
         raise ValueError(f"{LABEL} dimensions are invalid")
     m, batches = _grid(entry, info, n, parameters, execution)
-    if select(info["mode"], info["dtype"], m, n, k, batches, transpose) != entry:
+    selected = select(
+        info["mode"],
+        info["dtype"],
+        m,
+        n,
+        k,
+        batches,
+        transpose,
+        qq=qq,
+        global_scale=info["globalScale"],
+    )
+    if selected != entry:
         raise ValueError(f"{LABEL} entry differs from MLX's routing")
     if threads != m * n * batches or counts["y"] != threads:
         raise ValueError(f"{LABEL} output extent differs")
     rows = n if transpose else k
     words, groups = grouped * bits // 32, grouped // group
-    supplied = set(parameters) - set(scalar_parameters(entry))
+    supplied = set(parameters) - set(scalar_parameters(entry)) - {"global_scale"}
     if info["batched"]:
         if supplied != set(BATCH_PARAMETERS):
             raise ValueError(f"Batched {LABEL.lower()} parameters are missing")
@@ -302,7 +362,9 @@ def plan(entry, counts, parameters, threads, execution):
             "w_strides": [words, 1],
             "s_strides": [groups, 1],
         }
-    if declares_global_scale(entry):
+    if info["globalScale"]:
+        values["global_scale"] = list(parameters["global_scale"])
+    elif declares_global_scale(entry):
         values["global_scale"] = [INACTIVE_GLOBAL_SCALE]
     extents = {"x": m * k, "w": rows * words, "scales": rows * groups}
     for column, name in enumerate(("x", "w", "scales")):
@@ -315,7 +377,7 @@ def plan(entry, counts, parameters, threads, execution):
         padding["scales"] = max(0, end - counts["scales"])
     if any(counts[name] + padding.get(name, 0) > MAX_ELEMENTS for name in counts):
         raise ValueError(f"{LABEL} buffers exceed the index bound")
-    return {
+    metadata = {
         "mode": info["mode"],
         "kernel": info["kernel"],
         "M": m,
@@ -325,6 +387,9 @@ def plan(entry, counts, parameters, threads, execution):
         "overreadPadding": padding,
         "parameters": values,
     }
+    if qq:
+        metadata["route"] = route
+    return metadata
 
 
 def tiles_covered(entry, n):
