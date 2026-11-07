@@ -80,6 +80,70 @@ _BODIES = {
   observed[2 * i] = lanes[2 * i];
   observed[2 * i + 1] = lanes[2 * i + 1];""",
     ),
+    # The views reach helper pointer parameters declared with the view's
+    # element type (#4025), directly and forwarded through a second helper.
+    "helper_add": (
+        "device atomic<uint>* words",
+        """device atomic<float>* lanes = reinterpret_cast<device atomic<float>*>(words);
+  observed[2 * i] = add_to(lanes, updates[i].real, 2 * i);
+  observed[2 * i + 1] = add_to(lanes, updates[i].imag, 2 * i + 1);""",
+    ),
+    "helper_wrapper_add": (
+        "device Words* words",
+        """float2 before = add_pair(words, updates[i], i);
+  observed[2 * i] = before.x;
+  observed[2 * i + 1] = before.y;""",
+    ),
+    "helper_store": (
+        "device uint* words",
+        """device float* lanes = reinterpret_cast<device float*>(words);
+  put(lanes, 2 * i, get(lanes, 2 * i) + updates[i].real);
+  put(lanes, 2 * i + 1, updates[i].imag);
+  observed[2 * i] = get(lanes, 2 * i);
+  observed[2 * i + 1] = get(lanes, 2 * i + 1);""",
+    ),
+}
+
+_HELPERS = {
+    "helper_add": (
+        """
+float add_to(device atomic<float>* object, float value, uint offset) {
+  return atomic_fetch_add_explicit(&object[offset], value, memory_order_relaxed);
+}
+"""
+    ),
+    "helper_wrapper_add": (
+        """
+float add_lane(device Lanes* object, float value, uint offset) {
+  return atomic_fetch_add_explicit(&(object[offset].val), value,
+                                   memory_order_relaxed);
+}
+
+float2 add_pair(device Words* out, Pair value, uint offset) {
+  device Lanes* lanes = reinterpret_cast<device Lanes*>(out);
+  float real = add_lane(lanes, value.real, 2 * offset);
+  return float2(real, add_lane(lanes, value.imag, 2 * offset + 1));
+}
+"""
+    ),
+    "helper_store": (
+        """
+void put(device float* lanes, uint offset, float value) {
+  lanes[offset] = value;
+}
+
+float get(device float* lanes, uint offset) {
+  return lanes[offset];
+}
+"""
+    ),
+}
+
+# The reinterpretation each case's Metal round trip keeps.
+_METAL_VIEWS = {
+    "helper_wrapper_add": "reinterpret_cast<device Lanes*>(out_)",
+    "wrapper_add": "reinterpret_cast<device Lanes*>(words)",
+    "wrapper_exchange": "reinterpret_cast<device Lanes*>(words)",
 }
 
 _INITIAL = (1.5, -2.25, 3.0, 0.125, 10.0, -0.5)
@@ -88,7 +152,7 @@ _UPDATES = ((0.25, 4.0), (-1.0, 0.5), (2.5, -3.75))
 
 def _source(case):
     words, body = _BODIES[case]
-    return f"""{_PRELUDE}
+    return f"""{_PRELUDE}{_HELPERS.get(case, "")}
 kernel void word_views({words} [[buffer(0)]],
                        const device Pair* updates [[buffer(1)]],
                        device float* observed [[buffer(2)]],
@@ -112,7 +176,12 @@ def _expected(case):
         for lane in range(2):
             initial = _INITIAL[2 * thread + lane]
             value = update[lane]
-            if case in {"wrapper_add", "scalar_add"}:
+            if case in {
+                "wrapper_add",
+                "scalar_add",
+                "helper_add",
+                "helper_wrapper_add",
+            }:
                 words.append(_bits(_f32(initial + value)))
                 observed.append(initial)
             elif case == "wrapper_exchange":
@@ -137,8 +206,8 @@ def test_word_view_translates_and_compiles(tmp_path, target, case):
     generated = _translate(tmp_path, _source(case), target)
     if target == "metal":
         # The round trip keeps the view, including a wrapper record view.
-        view = "Lanes" if case.startswith("wrapper") else "float"
-        assert f"reinterpret_cast<device {view}*>(words)" in generated
+        view = _METAL_VIEWS.get(case, "reinterpret_cast<device float*>(words)")
+        assert view in generated
     else:
         assert "asfloat(" in generated or "uintBitsToFloat(" in generated
         assert "Lanes" not in generated.split("void", 1)[-1]
@@ -397,27 +466,93 @@ def test_wrapper_views_forwarded_to_helpers_normalize_as_scalar_views():
     assert not isinstance(calls[1].arguments[0], PointerReinterpretNode)
 
 
-@pytest.mark.parametrize("target", ("metal", "opengl"))
+@pytest.mark.parametrize("target", TARGETS)
 def test_wrapper_views_forwarded_to_helpers_translate(tmp_path, target):
     generated = _translate(tmp_path, _HELPER_SOURCE, target)
     if target == "metal":
         assert "reinterpret_cast<device Lanes*>(words)" in generated
-    else:
+    elif target == "opengl":
         assert "atomicCompSwap(words[" in generated
         assert "atomicAdd(words[" in generated
+    else:
+        # Each helper that receives a view gets an overload over the backing
+        # records beside its declared form (#4025).
+        for helper, declared in (("add_lane", "float"), ("add_word", "uint")):
+            assert f"void {helper}(RWStructuredBuffer<{declared}> object" in generated
+            assert f"void {helper}(RWStructuredBuffer<Words> object" in generated
+        assert "void add_direct(RWStructuredBuffer<Words> object" in generated
+        assert "void add_both(RWStructuredBuffer<Words> object" in generated
+        # Float lanes add by compare-and-swap on the records' uint words.
+        assert (
+            "InterlockedCompareExchange(storage[index0].val, expected, "
+            "asuint(desired)"
+        ) in generated
     if shutil.which(TOOLS[target]):
         _compile(generated, target, tmp_path)
 
 
-def test_directx_refuses_word_views_passed_to_helpers(tmp_path):
-    # Helper resource parameters take their element type from the declaration
-    # until call sites solve the physical layout (#4025).
+_MIXED_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+
+float load_lane(const device float* lanes, uint offset) {
+  return lanes[offset];
+}
+
+void store_lane(device float* lanes, uint offset, float value) {
+  lanes[offset] = value;
+}
+
+kernel void mixed(device uint* words [[buffer(0)]],
+                  device float* floats [[buffer(1)]],
+                  uint i [[thread_position_in_grid]]) {
+  device float* lanes = reinterpret_cast<device float*>(words);
+  store_lane(lanes, i, load_lane(floats, i) + load_lane(lanes, i));
+  store_lane(floats, i, 2.0f);
+}
+"""
+
+
+def test_directx_overloads_helpers_for_word_view_and_plain_callers(tmp_path):
+    generated = _translate(tmp_path, _MIXED_SOURCE, "directx")
+    # The declared helpers keep their float buffers for the plain callers;
+    # the overloads read and write the uint words as bit casts.
+    for declaration in (
+        "void store_lane(RWStructuredBuffer<float> lanes",
+        "void store_lane(RWStructuredBuffer<uint> lanes",
+        "float load_lane(RWStructuredBuffer<float> lanes",
+        "float load_lane(RWStructuredBuffer<uint> lanes",
+    ):
+        assert generated.count(declaration) == 2
+    assert "return asfloat(lanes[" in generated
+    assert "] = asuint(value);" in generated
+    kernel = generated.split("void CSMain", 1)[1]
+    assert "store_lane(words, " in kernel and "load_lane(words, " in kernel
+    assert "load_lane(floats, int64_t(0), i)" in kernel
+    if shutil.which("dxc"):
+        _compile(generated, "directx", tmp_path)
+
+
+def test_directx_refuses_narrow_views_passed_to_helpers(tmp_path):
+    # A 16-bit view packs two elements in each backing word, so no overload
+    # can address it as whole words; the helper keeps refusing it.
     from crosstl.translator.codegen.directx_codegen import (
         DirectXResourcePointerParameterError,
     )
 
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+void store_short(device ushort* lanes, uint offset, ushort value) {
+  lanes[offset] = value;
+}
+
+kernel void narrow(device uint* words [[buffer(0)]],
+                   uint i [[thread_position_in_grid]]) {
+  store_short(reinterpret_cast<device ushort*>(words), i, ushort(1));
+}
+"""
     with pytest.raises(DirectXResourcePointerParameterError) as error:
-        _translate(tmp_path, _HELPER_SOURCE, "directx")
+        _translate(tmp_path, source, "directx")
     assert error.value.reason == "element-type-mismatch"
 
 

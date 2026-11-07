@@ -350,6 +350,7 @@ from .hlsl_wave_extended import (
     hlsl_subgroup_lane_mask_expression,
     hlsl_wave_extension_call,
 )
+from .hlsl_word_view_parameters import HLSLWordViewParametersMixin
 from .hlsl_word_views import (
     generate_hlsl_word_view_assignment,
     hlsl_word_float_atomic_body,
@@ -1807,6 +1808,7 @@ class HLSLCodeGen(
     HlslGlslBlockRegisters,
     HLSLNarrowIntegerMixin,
     HLSLResourceAccessVariantsMixin,
+    HLSLWordViewParametersMixin,
     LoweringRefusalMixin,
     HLSLBfloat16Vectors,
 ):
@@ -3655,7 +3657,7 @@ class HLSLCodeGen(
             ast,
         )
         try:
-            code = self.generate_hlsl_program_with_resource_access_variants(
+            code = self.generate_hlsl_program_with_word_view_parameters(
                 ast, target_stage
             )
         finally:
@@ -13793,6 +13795,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         _private_pointer_variant=None,
         _workgroup_pointer_variant=None,
         _resource_access_variant=None,
+        _word_view_variant=None,
     ):
         """Render a function or stage entry point with HLSL semantics."""
         function_name = getattr(func, "name", None)
@@ -13860,6 +13863,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.current_hlsl_workgroup_pointer_base_names = previous_base_names
             return code
 
+        word_view_variants = self.hlsl_word_view_function_variants(func)
+        if _word_view_variant is None and word_view_variants:
+            previous_views = self.current_hlsl_word_view_parameters
+            code = ""
+            try:
+                for variant in (frozenset(), *word_view_variants):
+                    self.current_hlsl_word_view_parameters = (
+                        self.hlsl_word_view_parameters_for(func, variant)
+                    )
+                    code += self.generate_function(
+                        func,
+                        indent=indent,
+                        shader_type=shader_type,
+                        execution_config=execution_config,
+                        entry_name=entry_name,
+                        stage_output_lowering=stage_output_lowering,
+                        stage_node=stage_node,
+                        _private_pointer_variant=_private_pointer_variant,
+                        _workgroup_pointer_variant=_workgroup_pointer_variant,
+                        _resource_access_variant=_resource_access_variant,
+                        _word_view_variant=variant,
+                    )
+            finally:
+                self.current_hlsl_word_view_parameters = previous_views
+            return code
+
         access_variants = self.hlsl_resource_access_function_variants(func)
         if _resource_access_variant is None and access_variants:
             previous_promotions = self.current_hlsl_resource_access_promotions
@@ -13880,6 +13909,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         _private_pointer_variant=_private_pointer_variant,
                         _workgroup_pointer_variant=_workgroup_pointer_variant,
                         _resource_access_variant=variant,
+                        _word_view_variant=_word_view_variant,
                     )
             finally:
                 self.current_hlsl_resource_access_promotions = previous_promotions
@@ -14188,8 +14218,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
 
             param_decl_type = self.type_name_string(raw_param_type)
-            resource_pointer_contract = self.hlsl_resource_pointer_parameter_contract(
-                p, function_name
+            resource_pointer_contract = self.hlsl_word_view_parameter_contract(
+                p, self.hlsl_resource_pointer_parameter_contract(p, function_name)
             )
             param_type = self.hlsl_workgroup_pointer_parameter_array_type(
                 p, getattr(func, "name", None)
@@ -14350,12 +14380,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.current_identifier_reserved_names.add(offset_name)
                 self.local_variable_types[offset_name] = "int64_t"
                 self.current_hlsl_resource_pointer_aliases[p.name] = (
-                    self.hlsl_narrow_pointer_parameter_alias_binding(
-                        resource_pointer_contract,
-                        function_name=self.hlsl_function_declaration_name(func),
-                        parameter_name=p.name,
-                        root=self.hlsl_declaration_identifier_name(p.name),
-                        offset=offset_name,
+                    self.hlsl_word_view_parameter_binding(
+                        p,
+                        self.hlsl_narrow_pointer_parameter_alias_binding(
+                            resource_pointer_contract,
+                            function_name=self.hlsl_function_declaration_name(func),
+                            parameter_name=p.name,
+                            root=self.hlsl_declaration_identifier_name(p.name),
+                            offset=offset_name,
+                        ),
                     )
                 )
             if self.hlsl_private_pointer_parameter(
@@ -22565,7 +22598,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ),
                 source_location=getattr(argument, "source_location", None),
             )
-        if not actual_type or actual_type != expected_type:
+        word_view = None
+        if actual_type and actual_type != expected_type:
+            # A same-width word view reaches an overload over its backing words.
+            word_view = self.hlsl_word_view_argument(
+                parameter_name, expected_type, binding
+            )
+        if (not actual_type or actual_type != expected_type) and (
+            word_view is None or self.hlsl_word_view_calls is None
+        ):
             raise DirectXResourcePointerParameterError(
                 "DirectX storage pointer argument for "
                 f"'{materialized_name}.{parameter_name}' changes element type "
@@ -22620,6 +22661,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 source_location=getattr(argument, "source_location", None),
             )
         binding["call_element_type"] = contract["element_type"]
+        binding["call_word_view"] = word_view
         binding["call_contract"] = contract
         binding["call_function_name"] = materialized_name
         binding["call_parameter_name"] = parameter_name
@@ -47746,6 +47788,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 resource_bindings[index] = resource_binding
         self.record_hlsl_resource_access_call(
             workgroup_pointer_func_name, resource_bindings
+        )
+        self.record_hlsl_word_view_call(
+            workgroup_pointer_func_name,
+            [
+                binding["call_word_view"]
+                for binding in resource_bindings.values()
+                if binding.get("call_word_view") is not None
+            ],
         )
         self.hlsl_validate_resource_pointer_call_aliases(
             workgroup_pointer_func_name,
