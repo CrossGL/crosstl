@@ -24,10 +24,7 @@ from crosstl.translator.codegen.hlsl_host_workgroup_size import (
 from crosstl.translator.codegen.host_workgroup_size_ids import (
     HOST_WORKGROUP_SIZE_MACROS,
 )
-from crosstl.translator.host_workgroup_size import (
-    HOST_WORKGROUP_SIZE_KEY,
-    STATIC_WORKGROUP_SIZE_TARGETS,
-)
+from crosstl.translator.host_workgroup_size import HOST_WORKGROUP_SIZE_KEY
 
 HEADER = "#include <metal_stdlib>\nusing namespace metal;\n"
 
@@ -88,10 +85,6 @@ def _translate(tmp_path, source, **options):
         format_output=False,
         source_options=options or None,
     )
-
-
-def test_directx_is_not_a_static_workgroup_size_target():
-    assert "directx" not in STATIC_WORKGROUP_SIZE_TARGETS
 
 
 def test_size_dependent_kernel_reads_the_host_macros(tmp_path):

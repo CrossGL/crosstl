@@ -167,9 +167,8 @@ from .slang_refusals import SlangLoweringRefused
 from .slang_specialization_constants import plan_slang_specialization_constants
 from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_names
 from .slang_workgroup_locals import slang_workgroup_local_prefix
-from .specialized_workgroup_size import workgroup_size_specialization_ids
+from .slang_workgroup_size import SlangWorkgroupSizeConstants
 from .stage_utils import (
-    compute_local_size,
     is_fragment_output_parameter,
     normalize_stage_name,
 )
@@ -452,6 +451,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.workgroup_atomics = SlangWorkgroupAtomics(
                 self, workgroup_variable_names(ast)
             )
+            self.workgroup_size_constants = SlangWorkgroupSizeConstants(ast)
             self.helper_name_aliases = {}
             self.user_symbol_names = self.collect_user_symbol_names(ast)
             self.current_function_return_type = None
@@ -705,7 +705,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             struct_helpers = ""
         helpers = self.emit_helper_functions()
         self._generating = False
-        generated = helpers + struct_helpers + result
+        constants = self.slang_workgroup_size_constants().declarations()
+        generated = constants + helpers + struct_helpers + result
         self.reject_unresolved_generic_output(generated)
         return generated
 
@@ -6455,22 +6456,15 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         return result
 
+    def slang_workgroup_size_constants(self):
+        constants = getattr(self, "workgroup_size_constants", None)
+        if constants is None:
+            constants = self.workgroup_size_constants = SlangWorkgroupSizeConstants(None)
+        return constants
+
     def generate_compute_numthreads(self, execution_config=None):
-        sizes = list(compute_local_size(execution_config))
-        ids = workgroup_size_specialization_ids(execution_config, "Slang")
-        declarations = ""
-        for index, (axis, spec_id) in enumerate(zip("xyz", ids)):
-            if spec_id is None:
-                continue
-            # A specialized dimension is a vk::constant_id constant named in numthreads; Slang sizes SPIR-V
-            # with LocalSizeId and refuses it for targets without specialization constants. It is an int:
-            # WorkgroupSize() is an int3, and a uint constant makes slangc build an invalid composite.
-            name = f"crossgl_workgroup_size_{axis}"
-            declarations += (
-                f"[vk::constant_id({spec_id})] const int {name} = {sizes[index]};\n"
-            )
-            sizes[index] = name
-        return f"{declarations}[numthreads({', '.join(map(str, sizes))})]\n"
+        # Specialized and host-chosen sizes name module-scope constants (slang_workgroup_size.py).
+        return self.slang_workgroup_size_constants().numthreads(execution_config)
 
     def validate_slang_return_semantic(
         self, shader_type, semantic, stage_role, ret_type_name
@@ -6897,30 +6891,36 @@ class SlangCodeGen(LoweringRefusalMixin):
     def slang_num_workgroups_parameter_alias(
         self, parameter, param_type, semantic, shader_type
     ):
-        """Bind a ``gl_NumWorkGroups`` entry parameter from ``WorkgroupCount()``.
+        """Bind a ``gl_NumWorkGroups`` or ``gl_WorkGroupSize`` entry parameter from its Slang intrinsic.
 
-        Slang has no system-value semantic for the dispatch size, so the parameter becomes a local read from the
-        ``WorkgroupCount()`` intrinsic in a compute entry point and is refused in other entry points.
+        Slang has no system-value semantic for the dispatch size or the workgroup size, so the parameter becomes a
+        local read from ``WorkgroupCount()`` or ``WorkgroupSize()`` (the entry's ``numthreads`` as an ``int3``) in a
+        compute entry point and is refused in other entry points.
         """
-        if semantic is None or str(semantic).lower() != "gl_numworkgroups":
+        intrinsics = {
+            "gl_numworkgroups": ("gl_NumWorkGroups", "WorkgroupCount()", "{}"),
+            "gl_workgroupsize": ("gl_WorkGroupSize", "WorkgroupSize()", "uint3({})"),
+        }
+        if semantic is None or str(semantic).lower() not in intrinsics:
             return None
+        builtin, intrinsic, value = intrinsics[str(semantic).lower()]
         name = getattr(parameter, "name", None)
         if shader_type is None:
             return None
         if shader_type != "compute":
             self.refuse_lowering(
-                f"Slang has no system value for the gl_NumWorkGroups parameter '{name}' "
-                f"of a {shader_type} entry point; WorkgroupCount() is read in compute "
+                f"Slang has no system value for the {builtin} parameter '{name}' "
+                f"of a {shader_type} entry point; {intrinsic} is read in compute "
                 "entry points only"
             )
             return None
         base_type, array_suffix = split_array_type_suffix(str(param_type))
         if array_suffix or base_type != "uint3":
             self.refuse_lowering(
-                f"Slang gl_NumWorkGroups parameter '{name}' must be a uvec3, not {param_type}"
+                f"Slang {builtin} parameter '{name}' must be a uvec3, not {param_type}"
             )
             return None
-        return f"uint3 {name} = WorkgroupCount();"
+        return f"uint3 {name} = {value.format(intrinsic)};"
 
     def slang_helper_invocation_parameter_alias(
         self, parameter, param_type, semantic, shader_type
