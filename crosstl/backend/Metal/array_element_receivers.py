@@ -13,7 +13,12 @@ itself need lowering or could change meaning when evaluated as part of an argume
 import re
 from typing import Optional
 
-__all__ = ["array_rank_at", "array_element_receiver_end"]
+__all__ = [
+    "array_extents_at",
+    "array_rank_at",
+    "array_element_receiver_end",
+    "array_subscript_element_type",
+]
 
 _UNSAFE_INDEX_RE = re.compile(r"[(){}.;,?]|->|<<=|>>=|(?<![=!<>])=(?!=)|\+\+|--")
 
@@ -50,6 +55,31 @@ def array_rank_at(code: str, position: int) -> int:
         rank += 1
         index = _skip_space(code, close + 1)
     return rank
+
+
+def array_extents_at(code: str, position: int) -> list:
+    """Extent texts of the ``[extent]`` groups of the declarator that continues at ``position``.
+
+    An unbalanced group yields no extents, like ``array_rank_at``.
+    """
+    extents = []
+    index = _skip_space(code, position)
+    while index < len(code) and code[index] == "[":
+        close = _closing_bracket(code, index)
+        if close is None:
+            return []
+        extents.append(" ".join(code[index + 1 : close].split()))
+        index = _skip_space(code, close + 1)
+    return extents
+
+
+def array_subscript_element_type(value_type: str, extents) -> str:
+    """Type of ``name[i]`` for a declarator ``value_type name[e0][e1]...``.
+
+    One subscript removes only the outermost dimension ([dcl.array]/7, [expr.sub]): ``T a[4][8]`` gives ``a[i]`` the
+    type ``T[8]``, so a second subscript is needed to reach ``T``.
+    """
+    return value_type + "".join(f"[{extent}]" for extent in list(extents)[1:])
 
 
 def array_element_receiver_end(

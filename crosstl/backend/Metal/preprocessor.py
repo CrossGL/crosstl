@@ -33,7 +33,12 @@ from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 from crosstl.translator.codegen.metal_library_functions import MSL_LIBRARY_FUNCTIONS
 
 from .arithmetic_conversions import builtin_arithmetic_conversion
-from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .array_element_receivers import (
+    array_element_receiver_end,
+    array_extents_at,
+    array_rank_at,
+    array_subscript_element_type,
+)
 from .auto_integral_constants import deduced_integral_auto_type
 from .auto_placeholders import deduced_auto_type
 from .call_result_types import CallResultScope, infer_call_result_type
@@ -17506,7 +17511,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         for parameter in parameters[: len(concrete_argument_types)]:
             subscriptable = self._pointer_or_array_parameter_type(parameter)
             declared = (
-                subscriptable.element_type
+                # Template arguments bind through the innermost element of a
+                # multidimensional array parameter, as through its decayed pointer.
+                re.sub(r"(?:\s*\[[^\[\]]*\])+$", "", subscriptable.element_type)
                 if subscriptable is not None
                 else self._function_parameter_value_type(parameter)
             )
@@ -22423,6 +22430,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     and normalized not in recognized_aggregates
                 ):
                     continue
+            extents = array_extents_at(code, match.end() - 1)
             pointer_type = f"{match.group('type')}*"
             if (
                 self._normalize_known_address_space_pointer_type(pointer_type) is None
@@ -22432,7 +22440,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 pointer_type = f"thread {match.group('type')}*"
             record(
                 match.group("name"),
-                normalized,
+                array_subscript_element_type(normalized, extents),
                 match.start(),
                 pointer_type,
             )
@@ -22702,26 +22710,23 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # T exactly as for the array declarator `thread T vals[N]`.
         reference = re.fullmatch(
             r"(?P<type>[^()\[\]]+?)\s*\(\s*&\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"
-            r"\s*(?:\[[^\[\]]*\]\s*)+",
+            r"\s*(?P<extents>(?:\[[^\[\]]*\]\s*)+)",
             text,
         )
+        type_text = None
         if reference is not None:
             type_text = reference.group("type").strip()
-            element_type = self._normalize_inferred_type(type_text)
-            if not element_type:
-                return None
-            return _MetalSubscriptableType(
-                element_type,
-                self._normalize_known_address_space_pointer_type(f"{type_text}*"),
-            )
-        if "[" in text:
+            extents = array_extents_at(reference.group("extents"), 0)
+        elif "[" in text:
             type_text = text[: text.find("[")]
+            extents = array_extents_at(text, text.find("["))
             type_text = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*$", "", type_text).strip()
+        if type_text is not None:
             element_type = self._normalize_inferred_type(type_text)
             if not element_type:
                 return None
             return _MetalSubscriptableType(
-                element_type,
+                array_subscript_element_type(element_type, extents),
                 self._normalize_known_address_space_pointer_type(f"{type_text}*"),
             )
         star = text.rfind("*")
@@ -23442,6 +23447,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return None
         pointer_type = self._buffer_pointer_type(buffer_element_types, base)
         if pointer_type is None:
+            return None
+        # `&rows[i]` of `T rows[N][M]` points to a row array, not to a `T`.
+        if "[" in (self._buffer_element_type(buffer_element_types, base) or ""):
             return None
         index = operand[bracket + 1 : close].strip()
         if not self._direct_reference_expression_is_safe(
@@ -24200,8 +24208,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # `builtin(arg0, ...)` for a SIMD/quad group built-in that returns arg0's
         # type -> the inferred type of arg0. Conservative: only a recognized
         # built-in with a fully balanced trailing call and an inferable first
-        # argument yields a type.
-        match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", expr)
+        # argument yields a type. `metal::`/`::metal::` name the same built-in.
+        match = re.match(
+            r"(?:(?:::\s*)?metal\s*::\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(", expr
+        )
         if match is None:
             return None
         if match.group(1) not in self._METAL_FIRST_ARG_TYPED_GROUP_BUILTINS:
