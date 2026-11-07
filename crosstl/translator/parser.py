@@ -4610,7 +4610,10 @@ class Parser:
                 if self.is_variable_declaration():
                     init = self.parse_for_loop_variable_declaration()
                 else:
-                    init = ExpressionStatementNode(self.parse_expression())
+                    # ``k = 0, m = 3`` gives the list of its expressions, like an update.
+                    init = self.parse_expression_sequence()
+                    if not isinstance(init, list):
+                        init = ExpressionStatementNode(init)
                 self.eat("SEMICOLON")
             else:
                 self.eat("SEMICOLON")

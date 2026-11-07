@@ -2010,6 +2010,18 @@ CASES = [
         threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
     ),
     Case(
+        "g_for_header_lists",
+        "control",
+        "for headers with two declarations, two assignments, two updates and an update that stores through an "
+        "increment, and a do-while whose continue reaches a condition that decrements",
+        "GLSL 4.60 sections 5.9 and 6.3: the comma operator evaluates its operands left to right, and the loop "
+        "expression of a for, like the condition of a do-while, runs after every iteration, also one left by "
+        "continue",
+        control_flow_cases.for_header_list_inputs(),
+        np.int32,
+        control_flow_cases.for_header_list_reference,
+    ),
+    Case(
         "g_assignment_operand",
         "control",
         "Parenthesized =, +=, -= and *= used as operands of arithmetic, unary minus and both arms of ?:",

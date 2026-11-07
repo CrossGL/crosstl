@@ -19844,6 +19844,12 @@ class VulkanSPIRVCodeGen(
 
     def process_statement(self, stmt):
         """Process a single CrossGL statement."""
+        if isinstance(stmt, list):
+            # A for-loop header keeps ``k = 0, m = 3`` and ``i++, j--`` as lists, run in order.
+            for item in stmt:
+                if item is not None:
+                    self.process_statement(item)
+            return
         if isinstance(stmt, AssignmentNode):
             self.process_assignment(stmt)
         elif isinstance(stmt, VariableNode):
@@ -19901,6 +19907,11 @@ class VulkanSPIRVCodeGen(
                         self.create_return()
             else:
                 self.process_expression(expression)
+        elif stmt is not None:
+            # Dropping a statement the emitter cannot place would change the program.
+            self.refuse_lowering(
+                f"statement {type(stmt).__name__} has no SPIR-V lowering"
+            )
 
     def local_declaration_scope_state(self) -> dict:
         """Capture name and pointer-alias state owned by a lexical scope."""
