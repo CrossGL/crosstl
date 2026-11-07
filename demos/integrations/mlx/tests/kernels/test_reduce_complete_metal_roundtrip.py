@@ -24,6 +24,7 @@ from demos.integrations.mlx.tests.corpus_evidence import (
 )
 from demos.integrations.mlx.tests.pins import (
     check_generated_artifact,
+    check_template_materialization,
     drift_allowed,
 )
 from tools.compile_artifact_bundle import write_bundle_entry
@@ -831,8 +832,13 @@ def _translate_reduce_metal_artifact(
     }
     assert artifact["execution"]["entryPoints"][0]["workgroupSize"] == [1, 1, 1]
     materialization = _normalized_materialization(artifact["templateMaterialization"])
-    assert materialization["specializationCount"] == workload.specialization_count
-    assert _canonical_json_sha256(materialization) == (workload.materialization_sha256)
+    check_template_materialization(
+        artifact["path"],
+        materialization,
+        _canonical_json_sha256(materialization),
+        sha256=workload.materialization_sha256,
+        specialization_count=workload.specialization_count,
+    )
     assert payload["validation"].get("toolchainRuns", []) == []
 
     generated_path = mlx_root / artifact["path"]
