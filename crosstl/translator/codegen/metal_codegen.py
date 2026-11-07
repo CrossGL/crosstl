@@ -28221,6 +28221,18 @@ class MetalCodeGen(
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
             return f"{operator}{operand}"
+        elif isinstance(expr, TernaryOpNode):
+            # A conditional extent such as `[size == 0 ? 1 : size]` binds below
+            # every binary operator, so it is parenthesized inside one.
+            condition = self.safe_expression_to_string_with_precedence(
+                expr.condition, 1
+            )
+            true_value = self.safe_expression_to_string_with_precedence(expr.true_expr)
+            false_value = self.safe_expression_to_string_with_precedence(
+                expr.false_expr
+            )
+            expression = f"{condition} ? {true_value} : {false_value}"
+            return f"({expression})" if parent_precedence > 0 else expression
         else:
             # Fallback - avoid calling generate_expression to prevent infinite recursion
             return str(expr)
