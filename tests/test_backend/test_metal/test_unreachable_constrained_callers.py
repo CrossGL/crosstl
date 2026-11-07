@@ -135,3 +135,12 @@ def test_argument_that_never_gets_a_type_is_still_refused():
     )
     with pytest.raises(MetalTemplateSpecializationError, match="halve"):
         MetalPreprocessor().preprocess(source)
+
+
+def test_later_round_reuses_an_earlier_instantiation():
+    # Round 1 binds ``halve(f[id])`` and ``larger``; round 2 binds ``halve(a)`` to the same ``halve<float>``.
+    source = CHAINED.replace("f[id] = halve(a);", "f[id] = halve(a) + halve(f[id]);")
+    output = MetalPreprocessor().preprocess(source)
+    assert "f[id] = halve_float(a) + halve_float(f[id]);" in output
+    assert output.count("inline float halve_float(") == 1
+    assert "halve_float_1" not in output

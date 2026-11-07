@@ -23,13 +23,14 @@ Arguments typed by an earlier binding. In::
 
 ``a`` has a type only once ``max`` is bound to a concrete instantiation, so ``div`` cannot be bound in the same
 pass. Such a call is deferred, and its templates stay declared for the next round, which sees the instantiation's
-return type. Rounds repeat while they make progress. A call that is still deferred when no further round makes
+return type. Rounds repeat while they make progress. A round reuses the instantiations that earlier rounds
+appended, so a specialization is materialized once. A call that is still deferred when no further round makes
 progress gets a final strict pass, which refuses it exactly as the single pass did.
 
 Calls in reachable bodies are always resolved fail-closed.
 """
 
-from typing import Any, Callable, FrozenSet, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 # Each soft retry repeats the whole pass; past this many failures the reachable-only pass decides.
 MAX_SOFT_RETRIES = 4
@@ -48,6 +49,24 @@ class UnreachableCallerScope:
         self.failure_offset: Optional[int] = None
         self.deferring = False
         self.deferred: List[int] = []
+        # Instantiations earlier rounds appended, by template and arguments, so a later round reuses them.
+        self.instantiations: Dict[Tuple[str, str, Tuple[str, ...]], str] = {}
+
+    def reusable_instantiation(
+        self, template: Any, arguments: Tuple[str, ...], present: Set[str]
+    ) -> Optional[str]:
+        """The helper an earlier round materialized for ``template<arguments>``, when the source still has it."""
+
+        if not self.active:
+            return None
+        name = self.instantiations.get((template.name, template.source, arguments))
+        return name if name is not None and name in present else None
+
+    def record_instantiation(
+        self, template: Any, arguments: Tuple[str, ...], name: str
+    ) -> None:
+        if self.active:
+            self.instantiations[(template.name, template.source, arguments)] = name
 
     def extend(self, reachable_spans: Optional[List[Span]]) -> Optional[List[Span]]:
         """Return ``reachable_spans`` with the active unreachable spans added."""
@@ -138,6 +157,7 @@ def materialize_with_unreachable_callers(
         # A nested pass keeps the outer pass's scope.
         return materialize(code)
     scope.active = True
+    scope.instantiations = {}
     try:
         for _ in range(MAX_ROUNDS):
             result, deferred = _soft_pass(preprocessor, scope, materialize, code, True)
@@ -150,3 +170,4 @@ def materialize_with_unreachable_callers(
         return _soft_pass(preprocessor, scope, materialize, code, False)[0]
     finally:
         scope.active = False
+        scope.instantiations = {}

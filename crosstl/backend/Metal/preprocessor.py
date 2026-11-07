@@ -2197,6 +2197,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 dependencies.setdefault(owner_key, set()).add(key)
             specialized_name = materialized_names.get(key)
             if specialized_name is None:
+                specialized_name = unreachable_caller_scope(
+                    self
+                ).reusable_instantiation(
+                    template, tuple(ordered_arguments), reserved_identifiers
+                )
+                if specialized_name is not None:
+                    materialized_names[key] = specialized_name
+            if specialized_name is None:
                 unique_count = len(materialized_names) + 1
                 if unique_count > self.max_template_specializations:
                     requested = self._template_specialization_signature(
@@ -2256,6 +2264,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 reserved_identifiers.add(specialized_name)
                 generated_name_owners[preferred_name] = key
                 materialized_names[key] = specialized_name
+                unreachable_caller_scope(self).record_instantiation(
+                    template, tuple(ordered_arguments), specialized_name
+                )
                 placed, declaration_offset = place_in_namespace(
                     template.namespace, materialized
                 )
