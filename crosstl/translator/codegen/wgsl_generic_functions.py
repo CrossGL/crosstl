@@ -23,6 +23,7 @@ from ..ast import (
     UnaryOpNode,
     VectorType,
 )
+from ..explicit_specializations import explicit_specializations
 from .enum_utils import generic_type_parts, sanitize_type_name
 
 # CrossGL primitive spellings for the scalar types WGSL renders.
@@ -76,6 +77,7 @@ class WGSLGenericFunctionSpecializer:
                 self.definitions.setdefault(func.name, []).append(func)
         self.specializations = {}
         self.pending = []
+        self.explicit = explicit_specializations(functions)
 
     def is_generic(self, func):
         return bool(generic_parameter_names(func))
@@ -253,7 +255,24 @@ class WGSLGenericFunctionSpecializer:
             return None
         return (specificity, func, concrete)
 
+    def _explicit_specialization_name(self, func, concrete):
+        """The concrete function ``@explicit_specialization`` marks for ``func<concrete>``, if any."""
+        if len(self.definitions.get(func.name, ())) != 1:
+            return None
+        for function, primary, arguments in self.explicit:
+            if primary != func.name or len(arguments) != len(concrete):
+                continue
+            rendered = tuple(
+                self._render(_crossgl_type(argument)) for argument in arguments
+            )
+            if rendered == tuple(concrete):
+                return function.name
+        return None
+
     def _specialization_name(self, func, concrete):
+        explicit = self._explicit_specialization_name(func, concrete)
+        if explicit is not None:
+            return explicit
         key = (id(func), concrete)
         existing = self.specializations.get(key)
         if existing is not None:
