@@ -75,6 +75,10 @@ from .overload_ranking import shared_template_parameter_positions
 from .pattern_cache import pattern as _cached_pattern
 from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
+from .receiver_visibility import (
+    ReceiverDeclarationSweep,
+    visible_receiver_declaration,
+)
 from .reference_alias_arguments import call_argument_designates
 from .reopened_namespaces import ReopenedNamespaceIndex
 from .signed_type_spellings import fold_integer_type_spellings
@@ -608,6 +612,8 @@ class _MetalSourceAnalysis:
     namespace_spans: Optional[List[Tuple[int, int, str]]] = None
     anonymous_namespace_spans: List[Tuple[int, int]] = field(default_factory=list)
     receiver_declarations: Optional[Dict[str, List[_MetalReceiverDeclaration]]] = None
+    # Per receiver name, the sweep that answers visibility queries over ``receiver_declarations``.
+    receiver_sweeps: Dict[str, ReceiverDeclarationSweep] = field(default_factory=dict)
     template_functions: Optional[List[_MetalTemplateFunction]] = None
     function_definitions: Dict[
         Tuple[Tuple[int, int], ...], Tuple[_MetalFunctionDefinition, ...]
@@ -15568,14 +15574,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         receiver: str,
         position: int,
     ) -> Optional[_MetalReceiverDeclaration]:
-        declaration = None
-        for candidate in self._find_receiver_declarations(code).get(receiver, ()):
-            if candidate.declaration_end > position:
-                break
-            if not (candidate.scope_start <= position < candidate.scope_end):
-                continue
-            declaration = candidate
-        return declaration
+        candidates = self._find_receiver_declarations(code).get(receiver)
+        if not candidates:
+            return None
+        return visible_receiver_declaration(
+            self._source_analysis(code).receiver_sweeps,
+            candidates,
+            receiver,
+            position,
+        )
 
     def _receiver_struct_type_at(
         self,
@@ -16543,11 +16550,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         call_start = code.rfind(struct.name, 0, arg_open)
         if call_start < 0:
             call_start = arg_open
-        call_location = self._source_location_for_offsets(
-            code,
-            call_start,
-            arg_close + 1,
-        )
+
+        # The location costs a count over the whole unit, so it is computed only for a refusal.
+        def call_location() -> Dict[str, int]:
+            return self._source_location_for_offsets(code, call_start, arg_close + 1)
 
         buffer_view = self._flatten_types_at(buffer_element_types, arg_open)
         local_view = self._flatten_types_at(local_variable_types, arg_open)
@@ -16591,7 +16597,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         "local variable, a literal, or an explicit cast so its "
                         "type can be inferred, or specialize the method manually"
                     ),
-                    source_location=call_location,
+                    source_location=call_location(),
                 )
             concrete_argument_types.append(inferred)
 
@@ -16612,7 +16618,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
         except MetalStructMethodError as exc:
             if exc.source_location is None:
-                exc.source_location = call_location
+                exc.source_location = call_location()
             raise
         helper_source = instantiated_template_functions.get(free_name)
         if helper_source is None:
@@ -16730,9 +16736,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         call_start = code.rfind(representative.name, 0, arg_open)
         if call_start < 0:
             call_start = arg_open
-        call_location = self._source_location_for_offsets(
-            code, call_start, arg_close + 1
-        )
+
+        # The location costs a count over the whole unit, so it is computed only for a refusal.
+        def call_location() -> Dict[str, int]:
+            return self._source_location_for_offsets(code, call_start, arg_close + 1)
 
         # Resolve the position-ordered declaration maps to the FLAT views valid at
         # this call site (nearest preceding declaration wins). Passing flat dicts
@@ -16791,7 +16798,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         "local variable, a literal, or an explicit cast so its "
                         "type can be inferred, or specialize the method manually"
                     ),
-                    source_location=call_location,
+                    source_location=call_location(),
                 )
             concrete_argument_types.append(inferred)
 
@@ -16825,7 +16832,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
         except MetalStructMethodError as exc:
             if exc.source_location is None:
-                exc.source_location = call_location
+                exc.source_location = call_location()
             raise
         # Static-ness comes from the overload set; all overloads of one name agree
         # on static-ness in the patterns we handle, so the representative decides.
@@ -18937,7 +18944,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 structs_by_name,
             ),
             f"{struct.name}::{selected.name}<" f"{', '.join(explicit_arguments)}>()",
-            source_location=self._source_location_for_offsets(
+            source_location_factory=lambda: self._source_location_for_offsets(
                 body,
                 ident_end - len(ident),
                 arg_close + 1,
@@ -20545,12 +20552,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         call_start = code.rfind(method.name, 0, arg_open)
         if call_start < 0:
             call_start = arg_open
+        # Most calls return values, and the location costs a count over the whole unit, so it is computed only
+        # once the call is known to be refused.
         self._reject_selected_reference_return(
             struct,
             method,
             return_type,
             signature,
-            source_location=self._source_location_for_offsets(
+            source_location_factory=lambda: self._source_location_for_offsets(
                 code,
                 call_start,
                 arg_close + 1,
@@ -20565,6 +20574,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         signature: str,
         *,
         source_location: Optional[object] = None,
+        source_location_factory: Optional[Callable[[], object]] = None,
     ) -> None:
         normalized_return_type = self._normalize_template_argument_text(return_type)
         if (
@@ -20573,6 +20583,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ):
             return
 
+        if source_location is None and source_location_factory is not None:
+            source_location = source_location_factory()
         owner = getattr(struct, "name", None) or str(struct)
         raise MetalStructMethodError(
             "Cannot lower reference-returning struct method "
