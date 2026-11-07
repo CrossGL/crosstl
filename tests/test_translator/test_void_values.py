@@ -112,7 +112,10 @@ def test_casts_to_void_lower_to_their_evaluations(tmp_path, target):
     output = crosstl.translate(_write(tmp_path, CASTS), backend=target)
     assert not re.search(r"\bvoid\s*\(", output.replace("(void)", "")), output
     if target == "vulkan":
-        assert len(re.findall(r"OpFunctionCall %void", output)) == 6
+        # Resolve the void type id: without SPIRV-Tools the ids are numeric.
+        void_id = re.search(r"(%\w+) = OpTypeVoid\b", output).group(1)
+        calls = re.findall(rf"OpFunctionCall {re.escape(void_id)}\s", output)
+        assert len(calls) == 6, output
         return
     lines = [
         line
