@@ -27,14 +27,15 @@ def cases():
             "dtype": dtype,
             "axisSize": axis,
             "layout": layout,
+            # backend.cpp scans a size-one axis of any stride as contiguous rows.
             "entry": (
-                f"{'strided' if layout == 'strided-column' else 'contig'}"
+                f"{'strided' if layout == 'strided-column' and axis > 1 else 'contig'}"
                 f"_scan_inclusive_{operation}_{dtype}_{dtype}"
             ),
-        }
-        for dtype in ("float32", "int32")
-        for operation in OPERATIONS
-        for axis, layout in (
+        } for dtype in (
+            "float32",
+            "int32",
+        ) for operation in OPERATIONS for axis, layout in (
             (1, "row"),
             (33, "row"),
             (129, "row"),
@@ -128,7 +129,7 @@ def audit_event(np, case, event, saved):
         "Scan result differs from its independent reference",
     )
     entry = case["entry"]
-    stride = 33 if case["layout"] == "strided-column" else 1
+    stride = 33 if entry.startswith("strided_") else 1
     execution = scan_layout.execution(entry, view.size, case["axisSize"], stride)
     request = event["details"]["request"]
     require(

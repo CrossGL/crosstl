@@ -24,6 +24,7 @@ from demos.integrations.mlx.portable_host.trace_records import write_trace
 # The bindings the translation must reflect: the kernel reads nothing else
 # without has_batch or use_out_source.
 REQUIRED = {"A", "B", "D", "params"}
+EPILOGUE_REQUIRED = REQUIRED | {"C", "addmm_params"}
 # Reflected struct bindings and their GEMMParams and GEMMAddMMParams strides.
 RECORD_STRIDES = {"params": 72, "addmm_params": 24}
 
@@ -45,14 +46,21 @@ def _storage(entry, supplied, counts, parameters):
     dtype = gemm_layout.signature(entry)["dtype"]
     storage = {
         "D": [GUARDS[dtype]] * (counts["D"] + GUARD_COUNT),
-        # use_out_source is false, so the kernel never reads C.
+        # Without use_out_source the kernel never reads C.
         "C": [POISON[dtype]] * GUARD_COUNT,
         "batch_shape": list(parameters["batch_shape"]),
         "batch_strides": list(parameters["batch_strides"]),
     }
-    for name in ("A", "B"):
+    for name in _matrices(entry):
         storage[name] = _words(supplied[name], dtype) + [POISON[dtype]] * GUARD_COUNT
     return storage
+
+
+def _matrices(entry):
+    """The matrix inputs the kernel reads."""
+    if gemm_layout.signature(entry)["constants"]["use_out_source"]:
+        return ("A", "B", "C")
+    return ("A", "B")
 
 
 def _type(entry, name):
@@ -91,7 +99,12 @@ def _inputs(host, entry, descriptor, storage, records):
             output = binding["name"]
         else:
             observed.append(binding["name"])
-    if not REQUIRED <= bound or output is None:
+    required = (
+        EPILOGUE_REQUIRED
+        if gemm_layout.signature(entry)["constants"]["use_out_source"]
+        else REQUIRED
+    )
+    if not required <= bound or output is None:
         raise ValueError("Steel GEMM reflection is incomplete")
     return inputs, observed, output, bound
 
@@ -99,7 +112,7 @@ def _inputs(host, entry, descriptor, storage, records):
 def dispatch(host, entry, buffers, count, threads, launch):
     from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
 
-    names = gemm_layout.HOST_PARAMETERS
+    names = gemm_layout.host_parameters(entry)
     if host.gemms is None or count != len(names) or not buffers or launch is None:
         raise ValueError(
             "Steel GEMM dispatch requires pinned packages, buffers and geometry"
@@ -118,7 +131,10 @@ def dispatch(host, entry, buffers, count, threads, launch):
     metadata = gemm_layout.plan(entry, counts, parameters, threads, execution)
     dtype = gemm_layout.signature(entry)["dtype"]
     storage = _storage(entry, supplied, counts, parameters)
-    records = {"params": parameters["params"], "addmm_params": metadata["inert"]}
+    records = {
+        "params": parameters["params"],
+        "addmm_params": metadata.get("addmm") or metadata["inert"],
+    }
     descriptor, directory = host.gemms.get(entry)
     inputs, observed, output, bound = _inputs(host, entry, descriptor, storage, records)
     outputs = {output: inputs[output]}
@@ -169,7 +185,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
                     )
                 ).hexdigest()
             )
-            for name in ("A", "B")
+            for name in _matrices(entry)
         },
         "outputValues": words[:size] if size <= 4096 else None,
         "outputHash": hashlib.sha256(payload).hexdigest(),

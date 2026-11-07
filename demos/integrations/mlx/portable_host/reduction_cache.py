@@ -23,7 +23,7 @@ from demos.integrations.mlx.portable_host.prepare import COMMIT, require_revisio
 from demos.integrations.mlx.portable_host.reduction_layout import stage
 from demos.integrations.mlx.portable_host.reduction_packages import (
     ALL_ENTRIES,
-    ROW_ENTRIES,
+    ALL_ROW_ENTRIES,
     SOURCE,
 )
 
@@ -40,7 +40,7 @@ def verify_events(events, root, directory, index):
         execution = {name: event[name] for name in ("workgroupCount", "workgroupSize")}
         entry, count = event["entry"], event["threads"]
         layout = None
-        if entry in ROW_ENTRIES:
+        if entry in ALL_ROW_ENTRIES:
             layout = event.get("reductionLayout")
             if not isinstance(layout, dict) or set(layout) != {
                 "inputCount",
@@ -87,14 +87,11 @@ def verify_events(events, root, directory, index):
                     if parameter == "in"
                     else contract["outputCount"] + 32
                 )
-                packet = event["inputs"][binding["name"]]
-                if (
-                    packet.get("dtype") != binding["scalarLayout"]["elementType"]
-                    or packet.get("shape") != [size]
-                    or not isinstance(packet.get("values"), list)
-                    or len(packet["values"]) != size
-                ):
-                    raise ValueError("Row trace upload differs from its source span")
+                check_source_span(
+                    event["inputs"][binding["name"]],
+                    binding["scalarLayout"]["elementType"],
+                    size,
+                )
         verify_artifacts(
             [event],
             package.parent,
@@ -103,8 +100,39 @@ def verify_events(events, root, directory, index):
         )
 
 
+def uploaded_length(values):
+    """Count an upload's values, also when its trace record kept only a digest.
+
+    Traces that do not retain an entry's values replace a long array with its
+    length and SHA-256 (``trace_records.compact_trace_values``).
+    """
+    if isinstance(values, list):
+        return len(values)
+    compacted = values.get("compactedValues") if isinstance(values, dict) else None
+    if (
+        isinstance(compacted, dict)
+        and set(compacted) == {"length", "sha256"}
+        and type(compacted["length"]) is int
+        and isinstance(compacted["sha256"], str)
+        and len(compacted["sha256"]) == 64
+    ):
+        return compacted["length"]
+    return None
+
+
+def check_source_span(packet, dtype, size):
+    """Require a row upload of ``dtype`` that spans exactly ``size`` elements."""
+    if (
+        not isinstance(packet, dict)
+        or packet.get("dtype") != dtype
+        or packet.get("shape") != [size]
+        or uploaded_length(packet.get("values")) != size
+    ):
+        raise ValueError("Row trace upload differs from its source span")
+
+
 def dispatch_contract(entry, count, execution, *, layout=None):
-    if isinstance(entry, str) and entry in ROW_ENTRIES:
+    if isinstance(entry, str) and entry in ALL_ROW_ENTRIES:
         from demos.integrations.mlx.portable_host import row_reduction_layout
 
         if not isinstance(layout, dict) or set(layout) != {

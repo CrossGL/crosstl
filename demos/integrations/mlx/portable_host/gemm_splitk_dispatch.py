@@ -69,8 +69,12 @@ def _storage(entry, supplied, counts, parameters):
             storage[name] = (
                 _words(supplied[name], dtype) + [POISON[dtype]] * GUARD_COUNT
             )
-    for name in layout.SCALARS:
-        if name in parameters:
+    for name in layout.SCALARS + layout.AXBPY_SCALARS:
+        if name in layout.FLOAT_SCALARS and name in parameters:
+            storage[name] = [
+                struct.unpack("<I", struct.pack("<f", parameters[name]))[0]
+            ]
+        elif name in parameters:
             storage[name] = [parameters[name]]
     return storage
 
