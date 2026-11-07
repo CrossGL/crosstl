@@ -109,8 +109,8 @@ def _callee_scope_type(
         name = getattr(parameter, "name", None)
         if not declared or not name:
             return None
-        scope[str(name)] = _IDENTIFIER_RE.sub(
-            lambda match: bindings.get(match.group(0), match.group(0)), str(declared)
+        scope[str(name)] = converter_preprocessor(converter)._replace_identifiers(
+            str(declared), bindings
         )
     saved_types = converter.current_variable_types
     saved_parameters = getattr(converter, "current_parameter_scope", None)
@@ -156,8 +156,8 @@ def deduce_call_return_type(
     unresolved = tuple(name for name in referenced if name not in bindings)
     if conflicting or unresolved:
         return None, unresolved, conflicting
-    substituted = _IDENTIFIER_RE.sub(
-        lambda match: bindings.get(match.group(0), match.group(0)), return_type
+    substituted = converter_preprocessor(converter)._replace_identifiers(
+        return_type, bindings
     )
     if scoped:
         resolved = _callee_scope_type(converter, function, substituted, bindings)
