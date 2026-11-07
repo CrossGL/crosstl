@@ -105,7 +105,24 @@ def _declared_return_type(
     declaration = SimpleNamespace(
         name=name, source=source, template_parameters=list(template_parameters)
     )
-    return preprocessor._materialized_template_function_return_type(declaration, {})
+    declared = preprocessor._materialized_template_function_return_type(declaration, {})
+    if declared is None and not template_parameters and "enable_if" in source:
+        # A materialized instantiation keeps its return-type enabler until the end of preprocessing; once its
+        # traits fold it names one type (return_type_enablers.py). An enabler that does not fold stays untyped.
+        from .return_type_enablers import fold_concrete_enablers
+
+        try:
+            folded = fold_concrete_enablers(
+                preprocessor, preprocessor._fold_concrete_type_trait_values(source)
+            )
+        except ValueError:
+            return None
+        if folded != source:
+            declaration.source = folded
+            declared = preprocessor._materialized_template_function_return_type(
+                declaration, {}
+            )
+    return declared
 
 
 def _definition_header_start(definition, namespace_spans) -> int:

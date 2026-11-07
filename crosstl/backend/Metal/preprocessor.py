@@ -151,6 +151,10 @@ from .trait_operand_types import (
     typedef_aggregate_names,
 )
 from .type_layout import metal_type_layout, metal_type_size
+from .unreachable_constrained_callers import (
+    materialize_with_unreachable_callers,
+    unreachable_caller_scope,
+)
 from .unused_specialization_members import prune_unreferenced_specialization_members
 from .value_traits import (
     complete_template_arguments,
@@ -1689,7 +1693,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     def _materialize_inferred_constrained_template_function_calls(
         self, code: str
     ) -> str:
-        # Arguments that call source functions are typed from this source.
+        return materialize_with_unreachable_callers(
+            self, code, self._materialize_constrained_template_calls_in_source
+        )
+
+    def _materialize_constrained_template_calls_in_source(self, code: str) -> str:
+        # Arguments that call source functions are typed from this source, which includes the
+        # instantiations an earlier round appended.
         with self._call_result_scope.active(code):
             return self._materialize_constrained_template_calls_in_scope(code)
 
@@ -1766,7 +1776,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         for template in carriers:
             by_name[template.name] = [template]
         masked_code = self._mask_comments_and_literals(code)
-        reachable_spans = self._reachable_function_spans(code, template_spans)
+        # Unreachable bodies join while unreachable_constrained_callers.py resolves them softly.
+        reachable_spans = unreachable_caller_scope(self).extend(
+            self._reachable_function_spans(code, template_spans)
+        )
         if reachable_spans is not None:
             # Concrete functions called from reached template bodies are reached too.
             reachable_set = set(
@@ -1943,6 +1956,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                             call.name, call.qualified_name, lookup_position
                         )
                     )
+                    continue
+                if owner_key is None and unreachable_caller_scope(self).defer(
+                    call.span[0]
+                ):
+                    # An argument may be typed by a call this pass binds; a later round decides.
+                    deferred_call_ids.add(id(call))
                     continue
                 self._raise_constrained_free_function_error(
                     code,
@@ -2591,6 +2610,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         call: _MetalConstexprCall,
         reason: str,
     ) -> None:
+        # A failure in an unreachable body is soft; the soft pass needs to know where it was.
+        unreachable_caller_scope(self).failure_offset = call.span[0]
         requested = re.sub(r"\s+", " ", code[call.span[0] : call.span[1]]).strip()
         suggested_action = (
             "give the intended overload a distinct name, specialize the free "
