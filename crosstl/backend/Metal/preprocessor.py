@@ -33,6 +33,7 @@ from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .arithmetic_conversions import builtin_arithmetic_conversion
 from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .auto_integral_constants import deduced_integral_auto_type
 from .auto_placeholders import deduced_auto_type
 from .call_result_types import CallResultScope, infer_call_result_type
 from .concrete_free_operators import materialize_concrete_free_operators
@@ -58,6 +59,11 @@ from .integral_binding_visibility import (
     IntegralBindingTable,
     indexed_visible_bindings,
 )
+from .integral_casts import (
+    fold_integral_cast,
+    integral_cast_target,
+    rewrite_integral_casts,
+)
 from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
@@ -67,7 +73,9 @@ from .member_address_types import (
     addressed_member_pointer_type,
     merge_receiver_variable_types,
 )
+from .member_declarator_lists import split_member_declarator_list
 from .member_lowering_layers import lower_members_with_late_specializations
+from .namespace_constants import NamespaceConstantValues
 from .namespaced_specializations import (
     place_in_namespace,
     specialization_namespaces,
@@ -100,6 +108,7 @@ from .static_member_constants import (
     static_member_constant_substituter,
     substitute_parameter_extent_static_members,
 )
+from .struct_head_specifiers import alignment_is_natural, skip_struct_head_specifiers
 from .swizzle_types import infer_swizzle_type
 from .template_argument_text import normalize_template_argument_text
 from .template_constants import unresolved_constant_references
@@ -4421,7 +4430,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             start = match.start()
             if self._containing_span(start, template_spans) is not None:
                 continue
-            name_start = match.end()
+            name_start, head_alignments = skip_struct_head_specifiers(code, match.end())
             name, consumed = self._read_identifier(code, name_start)
             if not name or not consumed:
                 continue
@@ -4483,6 +4492,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 body,
                 body_start + 1,
                 member_prototype_names=member_prototype_names,
+            )
+            # An alignas stricter than the natural alignment changes the layout.
+            layout_supported = layout_supported and alignment_is_natural(
+                head_alignments
             )
             definitions.append(
                 _MetalStructDefinition(
@@ -5565,6 +5578,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         }
         reopened_index = ReopenedNamespaceIndex(self._find_namespace_spans(code), code)
         reopened_namespaces = reopened_index.has_reopened_namespace
+        integral_types: Dict[int, str] = {}
         # ``(block start, order, name, binding)`` of namespace members recorded for the later blocks of their
         # namespace, each declared where its block opens so it hides enclosing declarations made in between.
         pending_reopened: List[Tuple[int, int, str, _MetalIntegralConstantBinding]] = []
@@ -5589,6 +5603,26 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             value_type_tokens = fold_integer_type_spellings(
                 [token for token in type_tokens if token not in ignored_type_tokens]
             )
+            auto_type = None
+            if (
+                value_type_tokens == ["auto"]
+                and member.default is not None
+                and "constexpr" in type_tokens
+            ):
+                auto_type = deduced_integral_auto_type(
+                    member.default,
+                    {
+                        visible_name: integral_types[id(binding)]
+                        for visible_name, binding in (
+                            self._local_integral_constant_bindings_at(
+                                bindings, declaration_position
+                            ).items()
+                        )
+                        if id(binding) in integral_types
+                    },
+                )
+                if auto_type is not None:
+                    value_type_tokens = [auto_type]
             is_constexpr_integral = (
                 member.default is not None
                 and "constexpr" in type_tokens
@@ -5657,14 +5691,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     declared_type=(
                         None
                         if file_scope_only
-                        else complete_declared_type(
-                            member.type_text, member.array_suffix
-                        )
+                        else auto_type
+                        or complete_declared_type(member.type_text, member.array_suffix)
                     ),
                     type_alias=bool(type_tokens)
                     and type_tokens[0] in {"using", "typedef"},
                 ),
             )
+            if is_constexpr_integral and value is not None:
+                # A proven constant's type, for an ``auto`` that copies it.
+                integral_types[id(bindings[name][-1])] = value_type_tokens[0]
             if reopened_namespaces:
                 declared = bindings[name][-1]
                 for block_start, block_end in reopened_index.unrecorded_later_blocks(
@@ -6482,6 +6518,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # suffix (used by the pointer-member scalar-replacement path). Strip both
         # assignment and direct-list defaults before deriving the member name:
         # otherwise `uint index{0}` ends in `}` and is silently omitted.
+        members = split_member_declarator_list(declaration)
+        if members is not None:
+            recorded = [
+                self._record_data_member(
+                    member,
+                    data_member_names,
+                    data_member_types,
+                    ordered_members,
+                    declaration_span,
+                )
+                for member in members
+            ]
+            return all(recorded)
         declarator, _default, _initializer_style = self._split_data_member_initializer(
             declaration
         )
@@ -9144,6 +9193,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         constexpr_binary_operators: Optional[List[_MetalConstexprBinaryOperator]] = None
         constexpr_index_built = False
         replacements: List[Tuple[int, int, str]] = []
+        namespace_constants = None
         assertion_index = 0
         while assertion_index < len(assertions):
             assertion = assertions[assertion_index]
@@ -9169,6 +9219,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     self._visible_local_declared_types(visible_bindings),
                 ),
                 visible_constants,
+            )
+            if namespace_constants is None or namespace_constants[0] is not constants:
+                namespace_constants = (
+                    constants,
+                    NamespaceConstantValues(
+                        self._find_namespace_spans(code), constants
+                    ),
+                )
+            resolved_condition = namespace_constants[1].substitute(
+                resolved_condition, condition_position
             )
             resolved_condition, evaluation_condition, _unresolved_calls = (
                 self._resolve_static_constexpr_calls(
@@ -12575,8 +12635,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # Translate C++ boolean spellings to Python solely for parsing, then
         # interpret a strict AST whitelist. The 32-bit intermediate bound avoids
         # folding expressions whose C++ overflow/promotion behavior is unclear.
-        text = self._replace_concrete_sizeof_expressions(
-            self._strip_template_argument_comments(expression)
+        text = rewrite_integral_casts(
+            self._replace_concrete_sizeof_expressions(
+                self._strip_template_argument_comments(expression)
+            )
         ).strip()
         if not text or len(text) > 512:
             return False, None
@@ -12954,7 +13016,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return True, 1
 
         if isinstance(node, ast.Call):
-            # Only Clang's bit-counting builtins, with one concrete operand.
+            cast_target = (
+                integral_cast_target(node.func.id)
+                if isinstance(node.func, ast.Name)
+                and len(node.args) == 1
+                and not node.keywords
+                else None
+            )
+            if cast_target is not None:
+                valid, operand = self._evaluate_static_integral_node(node.args[0])
+                if not valid or operand is None:
+                    return False, None
+                value = fold_integral_cast(cast_target, operand)
+                return (False, None) if value is None else (True, value)
+            # Otherwise only Clang's bit-counting builtins, with one concrete operand.
             if (
                 not isinstance(node.func, ast.Name)
                 or node.func.id not in BIT_BUILTIN_WIDTHS
