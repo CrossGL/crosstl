@@ -51,6 +51,7 @@ from .aggregate_scalar_conversions import (
 )
 from .alignment_specifiers import MetalAlignmentSpecifiers
 from .array_designators import has_array_designators, positional_array_initializer
+from .atomic_result_conversions import convert_atomic_result, is_atomic_result_call
 from .barrier_import import metal_barrier_statements
 from .bit_scan_import import lower_scan as lower_bit_scan
 from .bit_scan_import import scan_function as bit_scan_function
@@ -12047,6 +12048,12 @@ class MetalToCrossGLConverter(
             initializer_type = self.expression_metal_type(node.left)
         if self.binary16_widening_profile is not None and not initializer_type:
             initializer_type = self.expression_metal_type(node.left)
+        if (
+            not initializer_type
+            and node.operator == "="
+            and is_atomic_result_call(self, node.right)
+        ):
+            initializer_type = self.expression_metal_type(node.left)
         converted_rhs = None
         if component_info is None and lhs_info is None:
             converted_rhs = render_aggregate_scalar_conversion(
@@ -12311,6 +12318,8 @@ class MetalToCrossGLConverter(
                 expr, is_main, expected_type, expected_array
             )
         value = self.generate_expression(expr, is_main)
+        if not expected_array:
+            value = convert_atomic_result(self, expr, value, expected_type)
         if self.binary16_widening_profile is not None and not expected_array:
             value = self.render_metal_half_widening(
                 value,
@@ -23698,6 +23707,10 @@ float {scalar}(float value) {{
         )
         index = self.generate_expression(access.index, is_main)
         rendered_value = self.generate_expression(value, is_main)
+        if operator == "=" and is_atomic_result_call(self, value):
+            rendered_value = convert_atomic_result(
+                self, value, rendered_value, self.expression_metal_type(access)
+            )
         if self.binary16_widening_profile is not None:
             rendered_value = self.render_metal_half_widening(
                 rendered_value,
