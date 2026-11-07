@@ -58,6 +58,7 @@ from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
+from .forwarding_reference_accessors import forwarded_storage_expression
 from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
@@ -20752,6 +20753,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         receiver: str,
         arg_open: int,
         argument_values: Optional[List[str]] = None,
+        depth: int = 0,
     ) -> Tuple[int, str]:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -20760,7 +20762,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
             raise AssertionError("reference-return rejection must raise")
 
-        expression = self._direct_reference_return_expression(struct, method)
+        expression = self._direct_reference_return_expression(struct, method, depth)
         if expression is None:
             self._reject_reference_returning_method_call(
                 code, struct, method, arg_open, arg_close
@@ -20835,6 +20837,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self,
         struct: _MetalStructDefinition,
         method: _MetalStructMethod,
+        depth: int = 0,
     ) -> Optional[str]:
         body = self._rewrite_method_body(struct, method)
         match = re.fullmatch(
@@ -20844,7 +20847,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if match is None:
             return None
-        return self._strip_enclosing_parens(match.group("expression").strip())
+        expression = self._strip_enclosing_parens(match.group("expression").strip())
+        # `return at(j, i);` forwards another accessor's storage (forwarding_reference_accessors.py).
+        forwarded = forwarded_storage_expression(
+            self, struct, method, expression, depth
+        )
+        return expression if forwarded is None else forwarded
 
     @staticmethod
     def _direct_reference_expression_is_safe(expression: str) -> bool:
