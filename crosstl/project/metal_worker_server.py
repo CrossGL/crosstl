@@ -151,10 +151,18 @@ class MetalWorkerServer:
         )
 
     def _kill(self):
-        if self.process.poll() is None:
+        if self.process.poll() is not None:
+            return
+        try:
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            # Darwin answers EPERM for a group whose leader is already exiting.
+            # Signal the leader itself; the caller's wait() then reaps it.
             try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+                self.process.kill()
+            except (ProcessLookupError, PermissionError):
                 pass
 
     def terminate(self):

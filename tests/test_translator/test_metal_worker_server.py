@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import sys
 import threading
 
@@ -123,6 +124,21 @@ def test_deadline_kills_the_worker(worker):
     assert details["timeoutSeconds"] == 0.5
     assert details["command"] == [str(worker), "--serve"]
     assert server.process.returncode is not None
+    assert not server.usable
+
+
+def test_deadline_kills_the_worker_when_its_group_refuses_signals(worker, monkeypatch):
+    # Darwin refuses killpg with EPERM once the group leader starts exiting;
+    # the worker must still be stopped and reaped rather than leak the error.
+    def refuse(pid, signum):
+        raise PermissionError(1, "Operation not permitted")
+
+    server = MetalWorkerServer(worker)
+    monkeypatch.setattr(os, "killpg", refuse)
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        server.exchange(_request("hang"), 0.5)
+    assert caught.value.details["reasonKind"] == "operation-timeout"
+    assert server.process.returncode == -signal.SIGKILL
     assert not server.usable
 
 
