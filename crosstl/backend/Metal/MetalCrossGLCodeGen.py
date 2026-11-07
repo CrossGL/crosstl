@@ -69,6 +69,7 @@ from .dependent_builtins import (
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
+from .explicit_specialization_annotations import explicit_specialization_annotation
 from .external_functions import refuse_external_function_calls
 from .instance_static_members import render_instance_static_struct_member
 from .library_structs import declare_referenced_library_structs
@@ -9924,6 +9925,9 @@ class MetalToCrossGLConverter(
             for qualifier in ("static", "inline"):
                 if qualifier in qualifiers:
                     linkage_annotations.append(f"@metal_{qualifier}")
+            specialization = explicit_specialization_annotation(self, func)
+            if specialization is not None:
+                linkage_annotations.append(specialization)
         code += "    " * indent
         implicit_buffer_bindings = (
             self.apply_implicit_stage_entry_buffer_bindings(func) if stage_entry else []
