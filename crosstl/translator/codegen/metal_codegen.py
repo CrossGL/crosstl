@@ -419,6 +419,8 @@ from .metal_namespace_names import rename_metal_namespace_names
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
+from .metal_reference_argument_conditions import generate_header_writeback_statement
+from .metal_reference_argument_order import generate_ordered_writeback_statement
 from .metal_refusals import metal_refusals
 from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
@@ -442,6 +444,7 @@ from .metal_texel_buffers import (
     MetalTexelBuffers,
     texel_buffer_component_type,
 )
+from .metal_threadgroup_forwarding import collect_metal_forwarded_threadgroup_storage
 from .metal_threadgroup_parameters import metal_threadgroup_parameter_attribute
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
@@ -2453,6 +2456,21 @@ class MetalCodeGen(
         self.metal_lowered_program_scope_groupshared_global_ids.update(
             thread_private_ids
         )
+        threadgroup_storage, threadgroup_ids = (
+            collect_metal_forwarded_threadgroup_storage(
+                self,
+                ast,
+                target_stage,
+                global_vars,
+                all_functions,
+                METAL_GROUPSHARED_ENTRY_STAGES,
+            )
+        )
+        for function_id, nodes in threadgroup_storage.items():
+            self.metal_lowered_program_scope_groupshared_globals_by_function.setdefault(
+                function_id, []
+            ).extend(nodes)
+        self.metal_lowered_program_scope_groupshared_global_ids.update(threadgroup_ids)
         self.metal_runtime_initialized_constants = (
             self.collect_metal_runtime_initialized_constants(global_vars)
         )
@@ -8472,9 +8490,12 @@ class MetalCodeGen(
         if id(stmt) not in self.metal_writeback_statement_ids:
             writebacks = self.metal_reference_argument_writebacks(stmt)
             if writebacks:
-                return self.generate_statement_with_argument_writebacks(
-                    stmt, indent, writebacks
+                return generate_ordered_writeback_statement(
+                    self, stmt, indent, writebacks
                 )
+            header_code = generate_header_writeback_statement(self, stmt, indent)
+            if header_code is not None:
+                return header_code
         indent_str = "    " * indent
         if isinstance(stmt, (VariableNode, BackendVariableNode)):
             var_type = self.local_variable_declared_type(stmt)
