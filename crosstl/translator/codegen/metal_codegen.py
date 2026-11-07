@@ -493,6 +493,7 @@ from .storage_image_texels import (
     texel_store_value,
     texel_vector_type,
 )
+from .storage_word_views import reinterpret_source_layout
 from .texture_lod_clamp import (
     is_texture_lod_clamp_operation,
     metal_texture_lod_clamp_call,
@@ -28794,6 +28795,16 @@ class MetalCodeGen(
             ):
                 self.metal_storage_pointer_reinterpret_error(
                     expression, contract, "source-alignment-unproven", source_type
+                )
+
+        if contract.get("scalarWrapperView"):
+            # The source words must be one 32-bit scalar or such a wrapper.
+            source_layout, _ = reinterpret_source_layout(
+                source_pointee, self.structs_by_name
+            )
+            if source_layout is None or source_layout.bit_width != 32:
+                self.metal_storage_pointer_reinterpret_error(
+                    expression, contract, "source-element-layout-mismatch", source_type
                 )
 
         if contract.get("aggregateHomogeneousScalarArrayRead"):
