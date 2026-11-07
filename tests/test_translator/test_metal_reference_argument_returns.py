@@ -147,16 +147,18 @@ def test_returns_in_branches_and_cases_store_before_returning(tmp_path):
 
 def test_hlsl_vector_component_and_void_return(tmp_path):
     code = _translate(tmp_path, HLSL, "shader.hlsl")
-    assert _function(code, "int2 fromComp(")[1:5] == [
-        "int __crossgl_ref2 = v.y;",
-        "int2 __crossgl_return1 = int2(bump(__crossgl_ref2), v.x);",
-        "v.y = __crossgl_ref2;",
+    # The call is evaluated, and ``v.y`` copied back, before the constructor reads ``v``.
+    assert _function(code, "int2 fromComp(")[1:6] == [
+        "int __crossgl_ref3 = v.y;",
+        "int __crossgl_call2 = bump(__crossgl_ref3);",
+        "v.y = __crossgl_ref3;",
+        "int2 __crossgl_return1 = int2(__crossgl_call2, v.x);",
         "return __crossgl_return1;",
     ]
     assert _function(code, "void clearTile(")[1:5] == [
-        "int __crossgl_ref3;",
-        "clear(__crossgl_ref3);",
-        "tile[i] = __crossgl_ref3;",
+        "int __crossgl_ref4;",
+        "clear(__crossgl_ref4);",
+        "tile[i] = __crossgl_ref4;",
         "return;",
     ]
 
