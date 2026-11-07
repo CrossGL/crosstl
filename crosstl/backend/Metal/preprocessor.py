@@ -30,12 +30,30 @@ from typing import (
 
 from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
+from crosstl.translator.codegen.metal_library_functions import MSL_LIBRARY_FUNCTIONS
 
-from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .arithmetic_conversions import builtin_arithmetic_conversion
+from .array_element_receivers import (
+    array_element_receiver_end,
+    array_extents_at,
+    array_rank_at,
+    array_subscript_element_type,
+)
+from .auto_integral_constants import deduced_integral_auto_type
 from .auto_placeholders import deduced_auto_type
+from .call_result_types import CallResultScope, infer_call_result_type
+from .category_traits import CATEGORY_TRAITS, evaluate_category_trait
 from .concrete_free_operators import materialize_concrete_free_operators
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
+from .constrained_call_carriers import constrained_call_carriers
+from .constrained_template_retention import (
+    DeferredConstrainedCall as _DeferredConstrainedCall,
+)
+from .constrained_template_retention import (
+    defines_function,
+    removable_constrained_templates,
+)
 from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
 from .directives import MetalDirectiveMixin
@@ -56,27 +74,55 @@ from .integral_binding_visibility import (
     IntegralBindingTable,
     indexed_visible_bindings,
 )
+from .integral_casts import (
+    fold_integral_cast,
+    integral_cast_target,
+    rewrite_integral_casts,
+)
 from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
+)
+from .library_fallback_lookup import (
+    library_fallback_obstacle,
+    library_using_declaration_present,
+)
+from .library_overloads import (
+    LIBRARY_OVERLOAD_NAMES,
+    library_overload_precedence,
+    library_type_spelling,
 )
 from .local_decltypes import complete_declared_type, substitute_local_decltypes_in
 from .member_address_types import (
     addressed_member_pointer_type,
     merge_receiver_variable_types,
 )
+from .member_declarator_lists import split_member_declarator_list
 from .member_lowering_layers import lower_members_with_late_specializations
+from .namespace_constants import NamespaceConstantValues
 from .namespaced_specializations import (
     place_in_namespace,
     specialization_namespaces,
     specialization_reference,
 )
+from .narrow_float_constants import metal_predefined_constant_type
+from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
+from .overload_precedence import exact_template_outranks
 from .overload_ranking import shared_template_parameter_positions
 from .pattern_cache import pattern as _cached_pattern
 from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
+from .receiver_visibility import (
+    ReceiverDeclarationSweep,
+    visible_receiver_declaration,
+)
 from .reference_alias_arguments import call_argument_designates
 from .reopened_namespaces import ReopenedNamespaceIndex
+from .return_type_enablers import (
+    fold_concrete_enablers,
+    return_type_enabler_condition,
+)
+from .scope_qualifier_keywords import NON_SCOPE_KEYWORDS
 from .signed_type_spellings import fold_integer_type_spellings
 from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_assertion_sources import concrete_static_assertion_conditions
@@ -89,7 +135,10 @@ from .static_member_constants import (
     static_member_constant_substituter,
     substitute_parameter_extent_static_members,
 )
+from .struct_head_specifiers import alignment_is_natural, skip_struct_head_specifiers
+from .swizzle_types import infer_swizzle_type
 from .template_argument_text import normalize_template_argument_text
+from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
 from .template_function_parameters import template_function_pointer_parameter
 from .template_overloads import declared_type_names, select_instantiated_overload
@@ -608,6 +657,8 @@ class _MetalSourceAnalysis:
     namespace_spans: Optional[List[Tuple[int, int, str]]] = None
     anonymous_namespace_spans: List[Tuple[int, int]] = field(default_factory=list)
     receiver_declarations: Optional[Dict[str, List[_MetalReceiverDeclaration]]] = None
+    # Per receiver name, the sweep that answers visibility queries over ``receiver_declarations``.
+    receiver_sweeps: Dict[str, ReceiverDeclarationSweep] = field(default_factory=dict)
     template_functions: Optional[List[_MetalTemplateFunction]] = None
     function_definitions: Dict[
         Tuple[Tuple[int, int], ...], Tuple[_MetalFunctionDefinition, ...]
@@ -1127,6 +1178,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             {}
         )
         self._known_member_function_return_types: Dict[str, str] = {}
+        self._call_result_scope = CallResultScope()
         # (source, rewrite) for each active call-site scan, innermost last;
         # rewrite(start, end) returns source[start:end] with its member calls
         # rewritten in place.
@@ -1273,6 +1325,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = self._fold_concrete_type_trait_values(
             processed, require_resolution=True
         )
+        # With the traits folded, a materialized return-type enabler names its type.
+        processed = fold_concrete_enablers(self, processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def preprocess_for_entry_discovery(
@@ -1640,6 +1694,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     def _materialize_inferred_constrained_template_function_calls(
         self, code: str
     ) -> str:
+        # Arguments that call source functions are typed from this source.
+        with self._call_result_scope.active(code):
+            return self._materialize_constrained_template_calls_in_scope(code)
+
+    def _materialize_constrained_template_calls_in_scope(self, code: str) -> str:
         """Resolve ordinary calls to constrained free function templates.
 
         Metal overload sets commonly provide an SFINAE fallback next to a native
@@ -1687,12 +1746,51 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         template_spans = self._find_template_declaration_spans(code)
         functions = self._find_non_template_function_definitions(code, template_spans)
         all_body_spans = [function.body_span for function in functions]
+        # Unconstrained templates whose bodies call a constrained template are
+        # instantiated here too, so those calls bind before the templates go.
+        free_templates = [
+            template
+            for template in templates
+            if self._containing_span(template.span[0], aggregate_spans) is None
+        ]
+        carriers = constrained_call_carriers(
+            free_templates,
+            set(by_name),
+            {function.name for function in functions},
+            [
+                reference
+                for reference in self._find_static_constexpr_calls(
+                    code, {template.name for template in free_templates}
+                )
+                if not self._function_reference_is_member_call(
+                    code, reference.span[0], set()
+                )
+            ],
+        )
+        carrier_names = {template.name for template in carriers}
+        for template in carriers:
+            by_name[template.name] = [template]
+        masked_code = self._mask_comments_and_literals(code)
         reachable_spans = self._reachable_function_spans(code, template_spans)
         if reachable_spans is not None:
-            reachable_set = set(reachable_spans)
+            # Concrete functions called from reached template bodies are reached too.
+            reachable_set = set(
+                template_carried_reachable_spans(
+                    masked_code, reachable_spans, functions, free_templates
+                )
+            )
+            directly_reachable = set(reachable_spans)
+            carried_body_spans = sorted(
+                function.body_span
+                for function in functions
+                if function.span in reachable_set
+                and function.span not in directly_reachable
+            )
             functions = [
                 function for function in functions if function.span in reachable_set
             ]
+        else:
+            carried_body_spans = []
         body_spans = [function.body_span for function in functions]
         if not body_spans:
             return code
@@ -1716,8 +1814,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         context_end = len(code)
         namespace_visibility = self._metal_namespace_visibility(code)
         boolean_templates = self._find_boolean_variable_templates(code)
+        # A namespace-scope explicit specialization is no overload: it replaces the
+        # body of the primary it specializes once that primary is selected
+        # (C++14 [temp.expl.spec]/12), so it never competes with the primaries.
         explicit_specializations = (
-            self._find_explicit_template_function_specializations(code)
+            self._find_explicit_template_function_specializations(
+                code, include_namespaced=True
+            )
         )
         explicit_spans = sorted(
             specialization["span"]
@@ -1732,6 +1835,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 + explicit_spans
                 + [(template.body_start, template.span[1]) for template in templates]
                 + [template.span for template in constrained]
+                + [template.span for template in carriers]
             ),
             template_spans=template_spans,
             namespace_visibility=namespace_visibility,
@@ -1740,9 +1844,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         materialized_names: Dict[Tuple[Tuple[int, int], Tuple[str, ...]], str] = {}
         generated_name_owners: Dict[str, Tuple[Tuple[int, int], Tuple[str, ...]]] = {}
         handled_template_spans: Set[Tuple[int, int]] = set()
-        reserved_identifiers = set(
-            IDENTIFIER_RE.findall(self._mask_comments_and_literals(code))
-        )
+        native_fallback_names: Set[str] = set()
+        deferred_call_ids: Set[int] = set()
+        deferred_carrier_calls: List[_DeferredConstrainedCall] = []
+        carrier_spans = {template.span for template in carriers}
+        unconstrained_template_names = {
+            template.name
+            for template in templates
+            if not template.template_constraints and template.span not in carrier_spans
+        }
+        reserved_identifiers = set(IDENTIFIER_RE.findall(masked_code))
 
         # Append concrete bodies without rewriting the source until the worklist
         # is exhausted. Original declaration offsets and specialization ownership
@@ -1817,6 +1928,27 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 for argument in call.arguments
             ]
             if any(argument_type is None for argument_type in argument_types):
+                if call.name in carrier_names:
+                    # The generic path instantiates it; templates it needs stay.
+                    continue
+                if (
+                    owner_key is None
+                    and self._containing_span(call.span[0], carried_body_spans)
+                    is not None
+                ):
+                    # Only a template reaches this body; a later pass, which
+                    # sees the instantiated caller, binds the call.
+                    deferred_call_ids.add(id(call))
+                    continue
+                if owner_key is not None and owner_key[0] in carrier_spans:
+                    # A later pass binds the call in the instantiated carrier,
+                    # which keeps the templates lookup from its body can see.
+                    deferred_carrier_calls.append(
+                        _DeferredConstrainedCall(
+                            call.name, call.qualified_name, lookup_position
+                        )
+                    )
+                    continue
                 self._raise_constrained_free_function_error(
                     code,
                     call,
@@ -1839,6 +1971,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     position=lookup_position,
                     namespace_visibility=namespace_visibility,
                 )
+                if associated_namespaces is None and call.name in carrier_names:
+                    continue
                 if associated_namespaces is None:
                     self._raise_constrained_free_function_error(
                         code,
@@ -1912,10 +2046,25 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     call,
                     "multiple constrained overloads are enabled",
                 )
+            if not enabled and call.name in carrier_names:
+                # Deduction failed; the generic path instantiates the carrier.
+                continue
             if not enabled:
                 # Every recognized constrained candidate is disabled. Preserve
                 # the spelling so a native overload (such as metal::isnan) can
                 # resolve it after the fallback declaration is removed.
+                self._require_library_fallback_lookup(
+                    code,
+                    masked_code,
+                    call,
+                    lookup_position,
+                    visible_candidates,
+                    argument_types,
+                    namespace_visibility,
+                    has_other_declarations=bool(competing_declarations.get(call.name))
+                    or call.name in unconstrained_template_names,
+                )
+                native_fallback_names.add(call.name)
                 continue
 
             for declaration in competing_declarations.get(call.name, []):
@@ -1961,6 +2110,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         and namespace in associated_namespaces
                     )
                     for namespace in namespaces
+                ) and not exact_template_outranks(
+                    self,
+                    self._template_function_parameter_text(enabled[0][0]),
+                    enabled[0][1],
+                    argument_types,
+                    declaration.arguments,
                 ):
                     self._raise_constrained_free_function_error(
                         code,
@@ -1969,6 +2124,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     )
 
             template, bindings = enabled[0]
+            if self._library_overload_selected(
+                code,
+                masked_code,
+                call,
+                lookup_position,
+                visible_candidates,
+                argument_types,
+                namespace_visibility,
+                template,
+                bindings,
+            ):
+                # A non-template library overload matches as well as the
+                # template does and wins; the call stays for it.
+                native_fallback_names.add(call.name)
+                continue
             ordered_arguments = tuple(
                 bindings[name] for name in template.template_parameters
             )
@@ -1977,9 +2147,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 _explicit_template_function_specialization_for_selected_overload(
                     preprocessor=self,
                     explicit_specializations={
-                        key: value
+                        (str(value["name"]), key[1], key[2]): value
                         for key, value in explicit_specializations.items()
-                        if not template.namespace
+                        if value["namespace"] == template.namespace
                         and value["span"][0] <= instantiation_position
                     },
                     template=template,
@@ -2124,7 +2294,38 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
 
         if not handled_template_spans:
             return code
-        replacements.extend((start, end, "") for start, end in handled_template_spans)
+        # Calls this pass does not bind, in template bodies and in functions no
+        # entry point reaches yet, keep the templates they can see for a later pass.
+        processed = {id(call) for call in calls} - deferred_call_ids
+        unbound_references = [
+            reference
+            for reference in references
+            if id(reference) not in processed
+            and not self._function_reference_is_member_call(
+                code, reference.span[0], set()
+            )
+            and not defines_function(masked_code, reference.span[1])
+        ]
+        removable = removable_constrained_templates(
+            handled_template_spans,
+            [*constrained, *carriers],
+            unbound_references,
+            native_fallback_names,
+            lambda template, reference: self._metal_call_reference_namespace(
+                reference.qualified_name
+            )
+            is None
+            or self._metal_template_function_call_visible(
+                template,
+                reference.qualified_name,
+                reference.span[0],
+                namespace_visibility,
+                None,
+            ),
+            self._containing_span,
+            deferred_carrier_calls,
+        )
+        replacements.extend((start, end, "") for start, end in removable)
         resolved = self._apply_text_replacements(code, replacements)
         return resolved
 
@@ -2413,6 +2614,155 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             callee_template=call.name,
             requested_arguments=tuple(call.arguments),
         )
+
+    def _library_lookup_obstacle(
+        self,
+        masked_code: str,
+        call: _MetalConstexprCall,
+        lookup_position: int,
+        candidates: Sequence[_MetalTemplateFunction],
+        namespace_visibility: _MetalNamespaceVisibility,
+    ) -> Optional[str]:
+        """Why lookup at ``call`` misses the Metal library function, or ``None`` when it finds it."""
+        if library_using_declaration_present(masked_code, call.name):
+            return None
+        return library_fallback_obstacle(
+            name=call.name,
+            reference_namespace=self._metal_call_reference_namespace(
+                call.qualified_name
+            ),
+            call_namespace=self._namespace_at(
+                list(namespace_visibility.namespace_spans), lookup_position
+            ),
+            position=lookup_position,
+            candidate_namespaces=[template.namespace for template in candidates],
+            directives=namespace_visibility.using_namespace_directives,
+            directive_targets=lambda directive: self._metal_namespace_reference_candidates(
+                directive.target,
+                directive.declaration_namespace,
+                globally_qualified=directive.globally_qualified,
+            ),
+        )
+
+    def _library_argument_types(
+        self, argument_types: Sequence[Optional[str]]
+    ) -> Optional[List[str]]:
+        """The library spellings of scalar and vector argument types, or ``None`` if one is neither."""
+        spellings = []
+        for argument_type in argument_types:
+            decomposed = (
+                self._scalar_and_width(argument_type)
+                if argument_type is not None
+                else None
+            )
+            spelling = (
+                library_type_spelling(*decomposed) if decomposed is not None else None
+            )
+            if spelling is None:
+                return None
+            spellings.append(spelling)
+        return spellings
+
+    def _library_parameter_type(self, type_text: str) -> Optional[str]:
+        """The library spelling of a scalar or vector parameter, ``thread T &`` for a non-const reference."""
+        text = self._normalize_template_argument_text(type_text)
+        reference = text.endswith("&")
+        if reference:
+            text = text[:-1].strip()
+            # A const reference binds any argument as a by-value parameter does.
+            reference = "const" not in text.split(" ")
+        decomposed = self._scalar_and_width(text)
+        spelling = (
+            library_type_spelling(*decomposed) if decomposed is not None else None
+        )
+        if spelling is None:
+            return None
+        return f"thread {spelling} &" if reference else spelling
+
+    def _require_library_fallback_lookup(
+        self,
+        code: str,
+        masked_code: str,
+        call: _MetalConstexprCall,
+        lookup_position: int,
+        candidates: Sequence[_MetalTemplateFunction],
+        argument_types: Sequence[Optional[str]],
+        namespace_visibility: _MetalNamespaceVisibility,
+        *,
+        has_other_declarations: bool,
+    ) -> None:
+        """Refuse a call whose disabled templates hide the Metal library function it would fall back to."""
+        if (
+            has_other_declarations
+            or self._library_argument_types(argument_types) is None
+        ):
+            # Other declarations or argument-dependent lookup can still supply a viable function.
+            return
+        obstacle = self._library_lookup_obstacle(
+            masked_code, call, lookup_position, candidates, namespace_visibility
+        )
+        if obstacle is not None:
+            self._raise_constrained_free_function_error(
+                code,
+                call,
+                f"every constrained candidate is disabled and {obstacle}",
+            )
+
+    def _library_overload_selected(
+        self,
+        code: str,
+        masked_code: str,
+        call: _MetalConstexprCall,
+        lookup_position: int,
+        candidates: Sequence[_MetalTemplateFunction],
+        argument_types: Sequence[Optional[str]],
+        namespace_visibility: _MetalNamespaceVisibility,
+        template: _MetalTemplateFunction,
+        bindings: Mapping[str, str],
+    ) -> bool:
+        """Whether a Metal library overload, not the enabled ``template``, is the best function for ``call``."""
+        if (
+            call.name not in LIBRARY_OVERLOAD_NAMES
+            and call.name not in MSL_LIBRARY_FUNCTIONS
+        ):
+            return False
+        arguments = self._library_argument_types(argument_types)
+        if arguments is None:
+            return False
+        if (
+            self._library_lookup_obstacle(
+                masked_code, call, lookup_position, candidates, namespace_visibility
+            )
+            is not None
+        ):
+            return False
+        parameters = self._template_function_parameter_text(template) or ""
+        declarations = _metal_function_parameter_declarations(
+            self, f"{template.name}({parameters})"
+        )
+        parameter_types = [
+            (
+                None
+                if variadic
+                else self._library_parameter_type(
+                    self._substitute_static_type_bindings(type_text, bindings)
+                )
+            )
+            for type_text, _name, variadic in declarations
+        ]
+        precedence = (
+            library_overload_precedence(call.name, arguments, parameter_types)
+            if call.name in LIBRARY_OVERLOAD_NAMES
+            else "unproven"
+        )
+        if precedence == "unproven":
+            self._raise_constrained_free_function_error(
+                code,
+                call,
+                f"the enabled template competes with the Metal library's '{call.name}' "
+                "overloads, and which one overload resolution selects is unproven",
+            )
+        return precedence == "library"
 
     def _materialize_explicit_template_struct_instantiations(
         self,
@@ -4394,7 +4744,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             start = match.start()
             if self._containing_span(start, template_spans) is not None:
                 continue
-            name_start = match.end()
+            name_start, head_alignments = skip_struct_head_specifiers(code, match.end())
             name, consumed = self._read_identifier(code, name_start)
             if not name or not consumed:
                 continue
@@ -4456,6 +4806,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 body,
                 body_start + 1,
                 member_prototype_names=member_prototype_names,
+            )
+            # An alignas stricter than the natural alignment changes the layout.
+            layout_supported = layout_supported and alignment_is_natural(
+                head_alignments
             )
             definitions.append(
                 _MetalStructDefinition(
@@ -5538,6 +5892,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         }
         reopened_index = ReopenedNamespaceIndex(self._find_namespace_spans(code), code)
         reopened_namespaces = reopened_index.has_reopened_namespace
+        integral_types: Dict[int, str] = {}
         # ``(block start, order, name, binding)`` of namespace members recorded for the later blocks of their
         # namespace, each declared where its block opens so it hides enclosing declarations made in between.
         pending_reopened: List[Tuple[int, int, str, _MetalIntegralConstantBinding]] = []
@@ -5562,6 +5917,26 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             value_type_tokens = fold_integer_type_spellings(
                 [token for token in type_tokens if token not in ignored_type_tokens]
             )
+            auto_type = None
+            if (
+                value_type_tokens == ["auto"]
+                and member.default is not None
+                and "constexpr" in type_tokens
+            ):
+                auto_type = deduced_integral_auto_type(
+                    member.default,
+                    {
+                        visible_name: integral_types[id(binding)]
+                        for visible_name, binding in (
+                            self._local_integral_constant_bindings_at(
+                                bindings, declaration_position
+                            ).items()
+                        )
+                        if id(binding) in integral_types
+                    },
+                )
+                if auto_type is not None:
+                    value_type_tokens = [auto_type]
             is_constexpr_integral = (
                 member.default is not None
                 and "constexpr" in type_tokens
@@ -5630,14 +6005,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     declared_type=(
                         None
                         if file_scope_only
-                        else complete_declared_type(
-                            member.type_text, member.array_suffix
-                        )
+                        else auto_type
+                        or complete_declared_type(member.type_text, member.array_suffix)
                     ),
                     type_alias=bool(type_tokens)
                     and type_tokens[0] in {"using", "typedef"},
                 ),
             )
+            if is_constexpr_integral and value is not None:
+                # A proven constant's type, for an ``auto`` that copies it.
+                integral_types[id(bindings[name][-1])] = value_type_tokens[0]
             if reopened_namespaces:
                 declared = bindings[name][-1]
                 for block_start, block_end in reopened_index.unrecorded_later_blocks(
@@ -6455,6 +6832,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # suffix (used by the pointer-member scalar-replacement path). Strip both
         # assignment and direct-list defaults before deriving the member name:
         # otherwise `uint index{0}` ends in `}` and is silently omitted.
+        members = split_member_declarator_list(declaration)
+        if members is not None:
+            recorded = [
+                self._record_data_member(
+                    member,
+                    data_member_names,
+                    data_member_types,
+                    ordered_members,
+                    declaration_span,
+                )
+                for member in members
+            ]
+            return all(recorded)
         declarator, _default, _initializer_style = self._split_data_member_initializer(
             declaration
         )
@@ -6869,14 +7259,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         "is_unsigned": 1,
         "is_const": 1,
         "is_pointer": 1,
+        "is_scalar": 1,
+        "is_vector": 1,
+        "is_arithmetic": 1,
     }
     _METAL_TYPE_TRAIT_START_RE = re.compile(
         r"(?<![A-Za-z0-9_:])"
         r"(?:(?:::)?metal\s*::\s*)?"
         r"(?P<trait>is_same_v|is_convertible_v|is_integral_v|"
         r"is_floating_point_v|is_signed_v|is_unsigned_v|is_const_v|"
-        r"is_pointer_v|is_same|is_convertible|is_integral|"
-        r"is_floating_point|is_signed|is_unsigned|is_const|is_pointer)\s*<"
+        r"is_pointer_v|is_scalar_v|is_vector_v|is_arithmetic_v|"
+        r"is_same|is_convertible|is_integral|"
+        r"is_floating_point|is_signed|is_unsigned|is_const|is_pointer|"
+        r"is_scalar|is_vector|is_arithmetic)\s*<"
     )
 
     # Metal SIMD-group / quad-group built-ins that return the SAME type as their
@@ -7159,6 +7554,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if not all(concrete):
             return None, resolved_operands, "operand-unresolved"
+
+        if trait in CATEGORY_TRAITS:
+            category = evaluate_category_trait(self, trait, resolved_operands[0])
+            if category is None:
+                return None, resolved_operands, "operand-category-unsupported"
+            return category, resolved_operands, "evaluated"
 
         if trait == "is_same":
             return (
@@ -9117,6 +9518,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         constexpr_binary_operators: Optional[List[_MetalConstexprBinaryOperator]] = None
         constexpr_index_built = False
         replacements: List[Tuple[int, int, str]] = []
+        namespace_constants = None
         assertion_index = 0
         while assertion_index < len(assertions):
             assertion = assertions[assertion_index]
@@ -9142,6 +9544,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     self._visible_local_declared_types(visible_bindings),
                 ),
                 visible_constants,
+            )
+            if namespace_constants is None or namespace_constants[0] is not constants:
+                namespace_constants = (
+                    constants,
+                    NamespaceConstantValues(
+                        self._find_namespace_spans(code), constants
+                    ),
+                )
+            resolved_condition = namespace_constants[1].substitute(
+                resolved_condition, condition_position
             )
             resolved_condition, evaluation_condition, _unresolved_calls = (
                 self._resolve_static_constexpr_calls(
@@ -12548,8 +12960,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # Translate C++ boolean spellings to Python solely for parsing, then
         # interpret a strict AST whitelist. The 32-bit intermediate bound avoids
         # folding expressions whose C++ overflow/promotion behavior is unclear.
-        text = self._replace_concrete_sizeof_expressions(
-            self._strip_template_argument_comments(expression)
+        text = rewrite_integral_casts(
+            self._replace_concrete_sizeof_expressions(
+                self._strip_template_argument_comments(expression)
+            )
         ).strip()
         if not text or len(text) > 512:
             return False, None
@@ -12927,7 +13341,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return True, 1
 
         if isinstance(node, ast.Call):
-            # Only Clang's bit-counting builtins, with one concrete operand.
+            cast_target = (
+                integral_cast_target(node.func.id)
+                if isinstance(node.func, ast.Name)
+                and len(node.args) == 1
+                and not node.keywords
+                else None
+            )
+            if cast_target is not None:
+                valid, operand = self._evaluate_static_integral_node(node.args[0])
+                if not valid or operand is None:
+                    return False, None
+                value = fold_integral_cast(cast_target, operand)
+                return (False, None) if value is None else (True, value)
+            # Otherwise only Clang's bit-counting builtins, with one concrete operand.
             if (
                 not isinstance(node.func, ast.Name)
                 or node.func.id not in BIT_BUILTIN_WIDTHS
@@ -15568,14 +15995,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         receiver: str,
         position: int,
     ) -> Optional[_MetalReceiverDeclaration]:
-        declaration = None
-        for candidate in self._find_receiver_declarations(code).get(receiver, ()):
-            if candidate.declaration_end > position:
-                break
-            if not (candidate.scope_start <= position < candidate.scope_end):
-                continue
-            declaration = candidate
-        return declaration
+        candidates = self._find_receiver_declarations(code).get(receiver)
+        if not candidates:
+            return None
+        return visible_receiver_declaration(
+            self._source_analysis(code).receiver_sweeps,
+            candidates,
+            receiver,
+            position,
+        )
 
     def _receiver_struct_type_at(
         self,
@@ -16543,11 +16971,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         call_start = code.rfind(struct.name, 0, arg_open)
         if call_start < 0:
             call_start = arg_open
-        call_location = self._source_location_for_offsets(
-            code,
-            call_start,
-            arg_close + 1,
-        )
+
+        # The location costs a count over the whole unit, so it is computed only for a refusal.
+        def call_location() -> Dict[str, int]:
+            return self._source_location_for_offsets(code, call_start, arg_close + 1)
 
         buffer_view = self._flatten_types_at(buffer_element_types, arg_open)
         local_view = self._flatten_types_at(local_variable_types, arg_open)
@@ -16591,7 +17018,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         "local variable, a literal, or an explicit cast so its "
                         "type can be inferred, or specialize the method manually"
                     ),
-                    source_location=call_location,
+                    source_location=call_location(),
                 )
             concrete_argument_types.append(inferred)
 
@@ -16612,7 +17039,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
         except MetalStructMethodError as exc:
             if exc.source_location is None:
-                exc.source_location = call_location
+                exc.source_location = call_location()
             raise
         helper_source = instantiated_template_functions.get(free_name)
         if helper_source is None:
@@ -16730,9 +17157,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         call_start = code.rfind(representative.name, 0, arg_open)
         if call_start < 0:
             call_start = arg_open
-        call_location = self._source_location_for_offsets(
-            code, call_start, arg_close + 1
-        )
+
+        # The location costs a count over the whole unit, so it is computed only for a refusal.
+        def call_location() -> Dict[str, int]:
+            return self._source_location_for_offsets(code, call_start, arg_close + 1)
 
         # Resolve the position-ordered declaration maps to the FLAT views valid at
         # this call site (nearest preceding declaration wins). Passing flat dicts
@@ -16791,7 +17219,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         "local variable, a literal, or an explicit cast so its "
                         "type can be inferred, or specialize the method manually"
                     ),
-                    source_location=call_location,
+                    source_location=call_location(),
                 )
             concrete_argument_types.append(inferred)
 
@@ -16825,7 +17253,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
         except MetalStructMethodError as exc:
             if exc.source_location is None:
-                exc.source_location = call_location
+                exc.source_location = call_location()
             raise
         # Static-ness comes from the overload set; all overloads of one name agree
         # on static-ness in the patterns we handle, so the representative decides.
@@ -17083,7 +17511,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         for parameter in parameters[: len(concrete_argument_types)]:
             subscriptable = self._pointer_or_array_parameter_type(parameter)
             declared = (
-                subscriptable.element_type
+                # Template arguments bind through the innermost element of a
+                # multidimensional array parameter, as through its decayed pointer.
+                re.sub(r"(?:\s*\[[^\[\]]*\])+$", "", subscriptable.element_type)
                 if subscriptable is not None
                 else self._function_parameter_value_type(parameter)
             )
@@ -18937,7 +19367,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 structs_by_name,
             ),
             f"{struct.name}::{selected.name}<" f"{', '.join(explicit_arguments)}>()",
-            source_location=self._source_location_for_offsets(
+            source_location_factory=lambda: self._source_location_for_offsets(
                 body,
                 ident_end - len(ident),
                 arg_close + 1,
@@ -20545,12 +20975,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         call_start = code.rfind(method.name, 0, arg_open)
         if call_start < 0:
             call_start = arg_open
+        # Most calls return values, and the location costs a count over the whole unit, so it is computed only
+        # once the call is known to be refused.
         self._reject_selected_reference_return(
             struct,
             method,
             return_type,
             signature,
-            source_location=self._source_location_for_offsets(
+            source_location_factory=lambda: self._source_location_for_offsets(
                 code,
                 call_start,
                 arg_close + 1,
@@ -20565,6 +20997,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         signature: str,
         *,
         source_location: Optional[object] = None,
+        source_location_factory: Optional[Callable[[], object]] = None,
     ) -> None:
         normalized_return_type = self._normalize_template_argument_text(return_type)
         if (
@@ -20573,6 +21006,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ):
             return
 
+        if source_location is None and source_location_factory is not None:
+            source_location = source_location_factory()
         owner = getattr(struct, "name", None) or str(struct)
         raise MetalStructMethodError(
             "Cannot lower reference-returning struct method "
@@ -21995,6 +22430,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     and normalized not in recognized_aggregates
                 ):
                     continue
+            extents = array_extents_at(code, match.end() - 1)
             pointer_type = f"{match.group('type')}*"
             if (
                 self._normalize_known_address_space_pointer_type(pointer_type) is None
@@ -22004,7 +22440,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 pointer_type = f"thread {match.group('type')}*"
             record(
                 match.group("name"),
-                normalized,
+                array_subscript_element_type(normalized, extents),
                 match.start(),
                 pointer_type,
             )
@@ -22274,26 +22710,23 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # T exactly as for the array declarator `thread T vals[N]`.
         reference = re.fullmatch(
             r"(?P<type>[^()\[\]]+?)\s*\(\s*&\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"
-            r"\s*(?:\[[^\[\]]*\]\s*)+",
+            r"\s*(?P<extents>(?:\[[^\[\]]*\]\s*)+)",
             text,
         )
+        type_text = None
         if reference is not None:
             type_text = reference.group("type").strip()
-            element_type = self._normalize_inferred_type(type_text)
-            if not element_type:
-                return None
-            return _MetalSubscriptableType(
-                element_type,
-                self._normalize_known_address_space_pointer_type(f"{type_text}*"),
-            )
-        if "[" in text:
+            extents = array_extents_at(reference.group("extents"), 0)
+        elif "[" in text:
             type_text = text[: text.find("[")]
+            extents = array_extents_at(text, text.find("["))
             type_text = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*$", "", type_text).strip()
+        if type_text is not None:
             element_type = self._normalize_inferred_type(type_text)
             if not element_type:
                 return None
             return _MetalSubscriptableType(
-                element_type,
+                array_subscript_element_type(element_type, extents),
                 self._normalize_known_address_space_pointer_type(f"{type_text}*"),
             )
         star = text.rfind("*")
@@ -22568,6 +23001,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if not expr:
                 return None
 
+        def infer_operand(operand: str) -> Optional[str]:
+            return self._infer_argument_type(
+                operand,
+                buffer_element_types,
+                local_variable_types,
+                struct_field_types,
+                structs_by_name,
+            )
+
+        # A conditional expression has lower precedence than every shape below.
+        conditional = infer_conditional_type(self, expr, infer_operand)
+        if conditional is not None:
+            return conditional
+
         # Built-in scalar postfix updates retain the declared value type. Keep
         # the source expression unchanged so specialization does not consume or
         # duplicate its mutation; user-defined update operators remain unresolved.
@@ -22813,6 +23260,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if known_member_call is not None:
             return known_member_call
 
+        # A call to a source function whose declarations agree on one return type.
+        call_result = infer_call_result_type(
+            self, expr, self._call_result_scope, local_variable_types, structs_by_name
+        )
+        if call_result is not None:
+            return call_result
+
         # Functional cast `T(expr)` where T is a recognized scalar/vector type.
         cast = re.match(r"(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s*\(", expr)
         if cast is not None:
@@ -22835,6 +23289,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # Bare local variable -> its declared type.
         if IDENTIFIER_RE.fullmatch(expr) and expr in local_variable_types:
             return self._normalize_inferred_expression_type(local_variable_types[expr])
+        # A predefined constant that no local declares has its library type.
+        if IDENTIFIER_RE.fullmatch(expr):
+            predefined = metal_predefined_constant_type(expr)
+            if predefined is not None:
+                return self._normalize_inferred_expression_type(predefined)
 
         # Member access `obj.member` / `obj->member` -> the declared field type.
         # Pointer fields are not value-typeable as a bare access, so a trailing
@@ -22853,6 +23312,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if vector_member_type is not None:
             return vector_member_type
+        swizzle_type = infer_swizzle_type(
+            self,
+            expr,
+            lambda base: self._infer_argument_type(
+                base,
+                buffer_element_types,
+                local_variable_types,
+                struct_field_types,
+                structs_by_name,
+            ),
+        )
+        if swizzle_type is not None:
+            return swizzle_type
 
         # Pointer offset `base + integer`, `integer + base`, or `base - integer`
         # preserves the pointer's complete qualified type for template deduction.
@@ -22882,7 +23354,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if binary is not None:
             return binary
 
-        return None
+        return infer_unary_sign_type(self, expr, infer_operand)
 
     def _vector_local_component_type(
         self, base: str, local_variable_types: Dict[str, str]
@@ -22975,6 +23447,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return None
         pointer_type = self._buffer_pointer_type(buffer_element_types, base)
         if pointer_type is None:
+            return None
+        # `&rows[i]` of `T rows[N][M]` points to a row array, not to a `T`.
+        if "[" in (self._buffer_element_type(buffer_element_types, base) or ""):
             return None
         index = operand[bracket + 1 : close].strip()
         if not self._direct_reference_expression_is_safe(
@@ -23365,8 +23840,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         integral_type = self._integral_arithmetic_operand_result_type(
             left_type, right_type
         )
-        if integral_type is not None or arithmetic_operator == "%":
+        if integral_type is not None:
             return integral_type
+        decided, converted = builtin_arithmetic_conversion(
+            self, left_type, right_type, arithmetic_operator
+        )
+        if decided or arithmetic_operator == "%":
+            return converted
         return self._combine_binary_arithmetic_operand_types(
             left_type, right_type, left_expr, right_expr
         )
@@ -23728,8 +24208,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # `builtin(arg0, ...)` for a SIMD/quad group built-in that returns arg0's
         # type -> the inferred type of arg0. Conservative: only a recognized
         # built-in with a fully balanced trailing call and an inferable first
-        # argument yields a type.
-        match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(", expr)
+        # argument yields a type. `metal::`/`::metal::` name the same built-in.
+        match = re.match(
+            r"(?:(?:::\s*)?metal\s*::\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(", expr
+        )
         if match is None:
             return None
         if match.group(1) not in self._METAL_FIRST_ARG_TYPED_GROUP_BUILTINS:
@@ -24158,9 +24640,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         and parameter.declared_type is not None
                     },
                     template_type_traits=template_type_traits,
-                    template_constraints=self._template_parameter_constraints(
-                        parameter_text
-                    ),
+                    template_constraints=[
+                        *self._template_parameter_constraints(parameter_text),
+                        *filter(
+                            None,
+                            [
+                                return_type_enabler_condition(
+                                    self, header, function_name
+                                )
+                            ],
+                        ),
+                    ],
                     namespace=self._namespace_at(namespace_spans, start),
                     internal_linkage=any(
                         scope_start <= start < scope_end
@@ -27795,11 +28285,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             pos = declaration_start
         return spans
 
-    def _find_explicit_template_function_specializations(self, code: str) -> Dict[
+    def _find_explicit_template_function_specializations(
+        self, code: str, *, include_namespaced: bool = False
+    ) -> Dict[
         Tuple[str, Tuple[str, ...], Tuple[str, ...]],
         Dict[str, object],
     ]:
         """Return exact global free-function specializations with concrete bodies.
+
+        With ``include_namespaced``, a specialization declared directly in a
+        namespace body counts too, and its entry records the namespace; the
+        first key component is then the namespace-qualified name, so equal
+        signatures in two namespaces stay distinct. Every other entry records
+        the namespace ``""``.
 
         Direct Metal preprocessing intentionally preserves explicit specializations
         as source C++. Entry-scoped project translation targets template-hostile
@@ -27819,6 +28317,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             Dict[str, object],
         ] = {}
         masked_code = self._mask_comments_and_literals(code)
+        namespace_spans = self._find_namespace_spans(code) if include_namespaced else []
         scope_cursor = 0
         scope_depth = 0
         for match in re.finditer(r"\btemplate\s*<\s*>\s*", masked_code):
@@ -27828,8 +28327,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 elif character == "}":
                     scope_depth = max(0, scope_depth - 1)
             scope_cursor = match.start()
+            namespace = ""
             if scope_depth != 0:
-                continue
+                # Admitted only when every enclosing brace opens a namespace body.
+                enclosing = [
+                    span
+                    for span in namespace_spans
+                    if span[0] <= match.start() < span[1]
+                ]
+                if not include_namespaced or len(enclosing) != scope_depth:
+                    continue
+                namespace = self._namespace_at(namespace_spans, match.start())
 
             declaration_start = match.end()
             body_start = self._find_next_top_level_char(
@@ -27886,7 +28394,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
             parameter_types = tuple(self._function_parameter_type_texts(header))
             key = (
-                specialization_key[0],
+                (
+                    f"{namespace}::{specialization_key[0]}"
+                    if namespace
+                    else specialization_key[0]
+                ),
                 tuple(specialization_key[1]),
                 parameter_types,
             )
@@ -27924,6 +28436,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 "sourceLocation": source_location,
                 "source": source,
                 "nameSpan": (relative_name_start, relative_name_end),
+                "namespace": namespace,
             }
         return specializations
 
@@ -28138,7 +28651,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 code[name_start - 1].isalnum() or code[name_start - 1] == "_"
             ):
                 name_start -= 1
-            if name_start == name_end:
+            if (
+                name_start == name_end
+                or code[name_start:name_end] in NON_SCOPE_KEYWORDS
+            ):
+                # A global qualifier, as in `return ::max(a, b)`.
                 start = separator_end - 2
                 break
             start = name_start
@@ -29832,7 +30349,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         previous = previous_code_character(index)
         if previous < 0:
             return False
-        if text[previous] == ".":
+        # ``...`` ends a GNU range designator, ``[0 ... N - 1]``, or opens a fold, ``(... + xs)``: the
+        # identifier after it is no member.
+        if text[previous] == "." and text[max(0, previous - 2) : previous + 1] != "...":
             return True
         if previous >= 1 and text[previous - 1 : previous + 1] in {"::", "->"}:
             return True

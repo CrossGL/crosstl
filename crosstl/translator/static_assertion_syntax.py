@@ -9,7 +9,25 @@ from __future__ import annotations
 
 from .ast import StaticAssertNode
 
-__all__ = ["parse_static_assertion", "starts_static_assertion"]
+__all__ = [
+    "mark_template_assertions",
+    "parse_static_assertion",
+    "starts_static_assertion",
+]
+
+
+def mark_template_assertions(assertions, template, generic_params) -> None:
+    """Record the generic structure ``template`` and its parameters on the ``assertions`` declared in its body.
+
+    An assertion that a nested structure already claimed keeps its own template.
+    """
+    names = tuple(getattr(parameter, "name", parameter) for parameter in generic_params)
+    if not names:
+        return
+    for assertion in assertions:
+        if assertion.template is None:
+            assertion.template = template
+            assertion.generic_params = names
 
 
 def starts_static_assertion(parser) -> bool:

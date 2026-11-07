@@ -26,8 +26,18 @@ from crosstl.project.uniform_layout import (
     hlsl_constant_buffer_block_layout,
     std140_block_layout,
 )
+from crosstl.project.workgroup_size_reflection import (
+    WorkgroupSizeReflectionError,
+    glsl_execution_config,
+    hlsl_host_chosen_execution_config,
+    spirv_entry_execution_config,
+    spirv_workgroup_size_builtin,
+)
 from crosstl.translator.codegen.glsl_vulkan_descriptor_sets import (
     DESCRIPTOR_BINDING_MACRO,
+)
+from crosstl.translator.codegen.hlsl_specialization_macros import (
+    HLSL_SPECIALIZATION_MACRO_RE,
 )
 from crosstl.translator.codegen.stage_utils import compute_local_size
 from crosstl.translator.dispatch_region_contract import parse_dispatch_region_header
@@ -1233,9 +1243,10 @@ def _reflect_hlsl_source(
         execution_config = {}
         thread_match = HLSL_NUMTHREADS_RE.search(attributes)
         if thread_match:
-            execution_config["numthreads"] = [
-                _literal_value(thread_match.group(index)) for index in (1, 2, 3)
-            ]
+            operands = [thread_match.group(index) for index in (1, 2, 3)]
+            execution_config = hlsl_host_chosen_execution_config(
+                operands, entry=name
+            ) or {"numthreads": [_literal_value(operand) for operand in operands]}
         entry_points.append(
             {
                 "name": name,
@@ -1330,6 +1341,27 @@ def _reflect_hlsl_source(
             if resource.get("scalarLayout", {}).get("runtimeSized") is True
         },
     )
+    # A specialization constant without a default reads a host macro behind an #error guard
+    # (crosstl.translator.codegen.hlsl_specialization_macros); it is required, not a plain constant.
+    specialization_constants = []
+    specialization_spans = []
+    for match in HLSL_SPECIALIZATION_MACRO_RE.finditer(source):
+        specialization_spans.append(match.span())
+        specialization_constants.append(
+            {
+                "name": match.group("name"),
+                "kind": "preprocessor-macro",
+                "id": _int_value(match.group("id")),
+                "macro": match.group("macro"),
+                "dtype": match.group("type"),
+                "sourceType": match.group("type"),
+                "required": True,
+                "overridden": False,
+                "overrideStatus": "not-overridden",
+                "status": "required",
+                "source": "hlsl.preprocessor_macro",
+            }
+        )
     constants = [
         {
             "name": match.group("name"),
@@ -1340,6 +1372,7 @@ def _reflect_hlsl_source(
             "source": "hlsl.const",
         }
         for match in HLSL_CONSTANT_RE.finditer(source)
+        if not any(start <= match.start() < end for start, end in specialization_spans)
     ]
     return _finalize_reflection(
         parser="directx-reflection",
@@ -1347,6 +1380,7 @@ def _reflect_hlsl_source(
         entry_points=entry_points,
         resources=resources,
         constants=constants,
+        specialization_constants=specialization_constants,
         diagnostics=[],
     )
 
@@ -1813,17 +1847,13 @@ def _reflect_glsl_source(
     )
     source = _expand_opengl_descriptor_bindings(_strip_comments(raw_source))
     struct_declarations = _scalar_struct_declarations(source)
-    execution_config = {}
-    local_size_match = GLSL_LOCAL_SIZE_RE.search(source)
-    if local_size_match:
-        layout = _parse_layout(local_size_match.group("layout"))
-        execution_config.update(
-            {
-                "local_size_x": layout.get("local_size_x", 1),
-                "local_size_y": layout.get("local_size_y", 1),
-                "local_size_z": layout.get("local_size_z", 1),
-            }
-        )
+    execution_config = glsl_execution_config(
+        [
+            _parse_layout(match.group("layout"))
+            for match in GLSL_LOCAL_SIZE_RE.finditer(source)
+        ],
+        entry="main",
+    )
     entry_points = []
     if GLSL_MAIN_RE.search(source):
         entry_points.append(
@@ -2324,6 +2354,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
     constants_by_id: dict[str, dict[str, Any]] = {}
     entry_points = []
     execution_modes: dict[str, dict[str, Any]] = {}
+    composites: dict[str, list[str]] = {}
 
     for line in source.splitlines():
         tokens = _spirv_tokens(line)
@@ -2360,6 +2391,18 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                     _literal_value(tokens[4]),
                     _literal_value(tokens[5]),
                 ]
+        elif (
+            opcode == "OpExecutionModeId"
+            and len(tokens) >= 6
+            and tokens[2] == "LocalSizeId"
+        ):
+            execution_modes.setdefault(tokens[1], {})["local_size_id"] = tokens[3:6]
+        elif (
+            opcode in {"OpConstantComposite", "OpSpecConstantComposite"}
+            and len(tokens) >= 4
+            and tokens[1] == "="
+        ):
+            composites[tokens[0]] = tokens[4:]
         elif opcode == "OpTypePointer" and len(tokens) >= 5 and tokens[1] == "=":
             pointer_types[tokens[0]] = (tokens[3], tokens[4])
         elif opcode == "OpTypeBool" and len(tokens) >= 3 and tokens[1] == "=":
@@ -2414,11 +2457,14 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                 "value": opcode.endswith("True"),
             }
 
-    for entry_point in entry_points:
-        function_id = entry_point.get("metadata", {}).get("function")
-        mode = execution_modes.get(function_id)
-        if mode and "local_size" in mode:
-            entry_point["executionConfig"] = {"local_size": list(mode["local_size"])}
+    diagnostics = _reflect_spirv_workgroup_sizes(
+        entry_points,
+        execution_modes=execution_modes,
+        composites=composites,
+        constants=constants_by_id,
+        decorations=decorations,
+        names=names,
+    )
 
     resources = []
     for variable_id, variable in variables.items():
@@ -2493,8 +2539,50 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
         resources=resources,
         constants=constants,
         specialization_constants=specialization_constants,
-        diagnostics=[],
+        diagnostics=diagnostics,
     )
+
+
+def _reflect_spirv_workgroup_sizes(
+    entry_points: Sequence[dict[str, Any]],
+    *,
+    execution_modes: Mapping[str, Mapping[str, Any]],
+    composites: Mapping[str, Sequence[str]],
+    constants: Mapping[str, Mapping[str, Any]],
+    decorations: Mapping[str, Mapping[str, Any]],
+    names: Mapping[str, str],
+) -> list[ReflectionDiagnostic]:
+    """Set each entry point's ``executionConfig``; diagnose a size that is not made of constants."""
+    diagnostics = []
+    builtin = spirv_workgroup_size_builtin(decorations)
+    for entry_point in entry_points:
+        metadata = entry_point.setdefault("metadata", {})
+        try:
+            config, size_metadata = spirv_entry_execution_config(
+                entry_point,
+                mode=execution_modes.get(metadata.get("function")),
+                builtin=builtin,
+                composites=composites,
+                constants=constants,
+                decorations=decorations,
+                names=names,
+            )
+        except WorkgroupSizeReflectionError as exc:
+            diagnostics.append(
+                ReflectionDiagnostic(
+                    REFLECTION_INCOMPLETE_OUTPUT,
+                    f"Workgroup size of entry point {entry_point.get('name')} "
+                    f"is not reflectable: {exc}.",
+                    details={
+                        "entryPoint": entry_point.get("name"),
+                        "reasonKind": "workgroup-size-unresolved",
+                    },
+                )
+            )
+            continue
+        entry_point["executionConfig"] = config
+        metadata.update(size_metadata)
+    return diagnostics
 
 
 def _annotate_spirv_resource_entry_points(

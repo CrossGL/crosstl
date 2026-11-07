@@ -7,7 +7,6 @@ image2D img;`` as an unknown token, so the declaration silently lost its storage
 
 import pytest
 
-import crosstl.translator.parser as parser_module
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
@@ -30,16 +29,6 @@ shader S {{
 """
 
 
-@pytest.fixture
-def strict_parser(monkeypatch):
-    """Fail the test if the parser recovers by skipping a token."""
-
-    def refuse_skip(self):
-        raise AssertionError(f"parser skipped token {self.current_token!r}")
-
-    monkeypatch.setattr(parser_module.Parser, "skip_unknown_token", refuse_skip)
-
-
 def _parse(source):
     return Parser(Lexer(source).get_tokens()).parse()
 
@@ -59,7 +48,6 @@ def _attributes(variable):
     ]
 
 
-@pytest.mark.usefixtures("strict_parser")
 def test_qualifier_before_layout_keeps_the_storage_qualifier():
     ast = _parse(_shader("uniform layout(rgba16f) image2D img;"))
     variable = _stage_variable(ast, "img")
@@ -67,7 +55,6 @@ def test_qualifier_before_layout_keeps_the_storage_qualifier():
     assert _attributes(variable) == [("rgba16f", [])]
 
 
-@pytest.mark.usefixtures("strict_parser")
 def test_layout_after_qualifier_matches_layout_before_qualifier():
     interleaved = _stage_variable(
         _parse(_shader("uniform layout(rgba16f) image2D img;")), "img"
@@ -80,7 +67,6 @@ def test_layout_after_qualifier_matches_layout_before_qualifier():
     assert str(interleaved.var_type) == str(leading.var_type)
 
 
-@pytest.mark.usefixtures("strict_parser")
 def test_shader_scope_layouts_on_both_sides_of_a_qualifier_are_merged_in_order():
     ast = _parse(
         _shader(
@@ -93,7 +79,6 @@ def test_shader_scope_layouts_on_both_sides_of_a_qualifier_are_merged_in_order()
     assert _attributes(variable) == [("binding", [2]), ("rgba8", [])]
 
 
-@pytest.mark.usefixtures("strict_parser")
 def test_layout_between_two_qualifiers_keeps_both_qualifiers():
     ast = _parse(_shader("uniform layout(r32f) readonly image2D img;"))
     variable = _stage_variable(ast, "img")

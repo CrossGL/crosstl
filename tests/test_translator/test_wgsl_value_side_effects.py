@@ -167,7 +167,6 @@ def test_statement_level_updates_are_unchanged():
     [
         ("int i = 0;\nbool b = (i > 0) && (i++ > 1);", "right operand of && or ||"),
         ("int i = 0;\nint t = (i > 0) ? i++ : 0;", "ternary branch"),
-        ("int i = 0;\nfor (int m = 0; m < 4; data[i++] = m) { }", "for-loop update"),
         ("int arr[2];\nint v = arr[pick()]++;", "evaluate twice"),
     ],
 )

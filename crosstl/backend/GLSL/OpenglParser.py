@@ -2487,7 +2487,15 @@ class GLSLParser:
                 elif init_decls:
                     init = init_decls
             else:
-                init = self.parse_assignment_expression()
+                # ``k = 0, m = 3``: a comma expression, kept as the list of its operands like the update.
+                inits = [self.parse_assignment_expression()]
+                self.skip_newlines()
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    self.skip_newlines()
+                    inits.append(self.parse_assignment_expression())
+                    self.skip_newlines()
+                init = inits[0] if len(inits) == 1 else inits
 
         self.eat("SEMICOLON")
         self.skip_newlines()

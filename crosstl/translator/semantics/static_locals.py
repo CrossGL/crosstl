@@ -227,7 +227,7 @@ def _constant_names(program):
         qualifiers = {
             str(q).lower() for q in getattr(variable, "qualifiers", None) or []
         }
-        if "const" in qualifiers or "constexpr" in qualifiers:
+        if qualifiers & {"const", "constexpr", "constant"}:
             names.add(getattr(variable, "name", None))
     names.discard(None)
     return names

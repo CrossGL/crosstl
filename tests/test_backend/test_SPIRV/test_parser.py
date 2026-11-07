@@ -2140,11 +2140,12 @@ def test_glslang_private_global_variables_parse():
     assert isinstance(output_layout, LayoutNode)
     assert output_layout.variable_name == "outColor"
     assert isinstance(private_color, VariableNode)
-    assert private_color.vtype == "vec4"
+    # Private storage is per invocation: CrossGL's static module-scope variable.
+    assert private_color.vtype == "static vec4"
     assert private_color.name == "privateColor"
     assert isinstance(private_weight, AssignmentNode)
     assert isinstance(private_weight.left, VariableNode)
-    assert private_weight.left.vtype == "float"
+    assert private_weight.left.vtype == "static float"
     assert private_weight.left.name == "privateWeight"
     assert private_weight.right == "1.0"
 
@@ -2517,13 +2518,12 @@ def test_spirv_descriptor_indexing_nonuniform_parse():
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.right, FunctionCallNode)
     assert assignment.right.name == "textureLod"
+    # The separate image and sampler OpSampledImage combines lead the lookup, as CrossGL spells it.
+    assert len(assignment.right.args) == 4
+    assert isinstance(assignment.right.args[1], VariableNode)
+    assert assignment.right.args[1].name == "linearSampler"
 
-    sampled_texture = assignment.right.args[0]
-    assert isinstance(sampled_texture, FunctionCallNode)
-    assert sampled_texture.name == "sampler2D"
-    assert len(sampled_texture.args) == 2
-
-    indexed_texture = sampled_texture.args[0]
+    indexed_texture = assignment.right.args[0]
     assert isinstance(indexed_texture, ArrayAccessNode)
     assert isinstance(indexed_texture.index, FunctionCallNode)
     assert indexed_texture.index.name == "nonuniformEXT"

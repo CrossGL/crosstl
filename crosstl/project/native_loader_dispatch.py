@@ -58,6 +58,7 @@ from crosstl.translator.frozen_specializations import (
     frozen_specializations,
     parse_frozen_specializations,
 )
+from crosstl.translator.host_workgroup_size import HOST_WORKGROUP_SIZE_KEY
 from crosstl.translator.resource_storage import (
     RESOURCE_STORAGE_PREFIX,
     encoded_storage_dtype,
@@ -2164,6 +2165,16 @@ def _validate_specialization_value(value: Any, *, dtype: str, path: str) -> None
 
 def _reflected_workgroup_size(entry_point: Mapping[str, Any]) -> tuple[int, ...]:
     execution_config = entry_point["executionConfig"]
+    host_size = execution_config.get(HOST_WORKGROUP_SIZE_KEY)
+    if host_size:
+        # The artifact's size is a placeholder until the host specializes it, which a native request cannot do.
+        raise NativeLoaderDispatchError(
+            "workgroup-size-host-defined",
+            "The entry point's workgroup size is chosen by the host and has no "
+            "reflected value to dispatch.",
+            path=f"$.entryPoint.executionConfig.{HOST_WORKGROUP_SIZE_KEY}",
+            details=dict(host_size) if isinstance(host_size, Mapping) else {},
+        )
     candidates: list[tuple[str, tuple[int, ...]]] = []
     for key in (
         "workgroupSize",

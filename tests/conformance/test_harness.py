@@ -752,3 +752,23 @@ def test_native_16_bit_hlsl_is_compiled_with_16_bit_types(tmp_path):
     plain.write_text("min16float f(float x) { return x; } // float16_tx\n")
     assert hlsl_arguments(native) == ["-enable-16bit-types"]
     assert hlsl_arguments(plain) == []
+
+
+def test_host_sized_hlsl_is_compiled_with_one_invocation(tmp_path):
+    from .validators import hlsl_arguments
+
+    host_sized = tmp_path / "host.hlsl"
+    host_sized.write_text(
+        "#if !defined(CROSSGL_WORKGROUP_SIZE_X) || !defined(CROSSGL_WORKGROUP_SIZE_Y) || "
+        '!defined(CROSSGL_WORKGROUP_SIZE_Z)\n#error "size"\n#endif\n'
+        "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, CROSSGL_WORKGROUP_SIZE_Z)]\n"
+        "void CSMain() {}\n"
+    )
+    assert hlsl_arguments(host_sized) == [
+        "-D",
+        "CROSSGL_WORKGROUP_SIZE_X=1",
+        "-D",
+        "CROSSGL_WORKGROUP_SIZE_Y=1",
+        "-D",
+        "CROSSGL_WORKGROUP_SIZE_Z=1",
+    ]

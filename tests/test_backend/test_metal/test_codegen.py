@@ -5524,8 +5524,14 @@ def test_codegen_comma_assignment_statement_from_llama_cpp():
     """
     crossgl = convert(code)
 
-    assert "dl = values[0] , ml = values[1];" in crossgl
-    assert parse_crossgl(crossgl) is not None
+    # Both assignments stay one CrossGL comma expression; the bare ``a = x, b = y;`` spelling does not parse.
+    assert "(dl = values[0], ml = values[1]);" in crossgl
+    commas = [
+        node
+        for node in parse_crossgl(crossgl).walk()
+        if type(node).__name__ == "CommaExpressionNode"
+    ]
+    assert len(commas) == 1 and len(commas[0].expressions) == 2
 
 
 def test_codegen_braced_uchar_vector_constructor_from_llama_cpp():
