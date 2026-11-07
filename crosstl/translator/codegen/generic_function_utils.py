@@ -38,6 +38,10 @@ from .generic_emission_order import (
     reset_generic_function_emission,
 )
 from .generic_pointer_deduction import structured_buffer_element_type
+from .generic_specialization_names import (
+    reserve_program_names,
+    unique_specialization_name,
+)
 from .generic_vector_deduction import (
     bind_generic_vector_parameter,
     generic_vector_signature_name,
@@ -226,6 +230,9 @@ def prepare_generic_function_specializations(generator, functions, global_types=
         for func in functions or []
         if getattr(func, "name", None) and not generic_function_parameters(func)
     }
+    reserve_program_names(
+        generator, functions, generator.generic_collection_global_types
+    )
     generator.generic_function_specializations = {}
     generator.generic_function_specialized_names = {}
     generator.generic_function_resolved_call_ids = set()
@@ -1035,10 +1042,9 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
 
     clone = deepcopy(func)
     overload_ordinal = key[2] if len(key) > 2 else None
-    clone.name = generic_function_specialization_name(
-        key[0],
-        key[1],
-        overload_ordinal,
+    clone.name = unique_specialization_name(
+        generator,
+        generic_function_specialization_name(key[0], key[1], overload_ordinal),
     )
     clone.generic_params = []
     clone.return_type = substituted_generic_type(
