@@ -167,18 +167,27 @@ def _balanced_slice(tokens: Sequence[str]) -> bool:
     return not stack
 
 
+_BOOL_LITERALS = {"true": "1", "false": "0"}
+
+
+def _integer_spelling(literal: str) -> str:
+    """``literal`` with ``true`` and ``false`` spelled as the integers a ``bool`` converts to."""
+    if literal in _BOOL_LITERALS:
+        return _BOOL_LITERALS[literal]
+    return literal
+
+
 def _literal_status(pattern: str, concrete: str, dependent: frozenset[str]) -> str:
     if pattern == concrete:
         return MATCH
     if concrete in dependent:
         return UNDECIDED
-    truth = {"true": "1", "false": "0"}
-    pattern_value = truth.get(pattern, pattern)
-    concrete_value = truth.get(concrete, concrete)
+    pattern_value = _integer_spelling(pattern)
+    concrete_value = _integer_spelling(concrete)
     pattern_number = pattern_value.isdigit()
     concrete_number = concrete_value.isdigit()
     if pattern_number and concrete_number:
-        if pattern in truth or concrete in truth:
+        if pattern in _BOOL_LITERALS or concrete in _BOOL_LITERALS:
             # A bool parameter converts any nonzero value to ``true``.
             return (
                 MATCH if (pattern_value != "0") == (concrete_value != "0") else NO_MATCH
