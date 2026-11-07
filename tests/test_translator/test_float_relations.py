@@ -122,7 +122,10 @@ def _translate(tmp_path, source, backend, suffix=".metal"):
     path = tmp_path / f"relations{suffix}"
     path.write_text(source, encoding="utf-8")
     options = {"threadgroup_size": (64, 1, 1)} if suffix == ".metal" else None
-    return crosstl.translate(str(path), backend=backend, source_options=options)
+    # Unformatted, so the expected text does not depend on the local clang-format.
+    return crosstl.translate(
+        str(path), backend=backend, source_options=options, format_output=False
+    )
 
 
 def _run(command, **kwargs):
@@ -167,7 +170,7 @@ def test_metal_relations_lower_to_valid_target_code(tmp_path, backend):
 @pytest.mark.parametrize(
     "backend, expected",
     [
-        ("directx", ["(isnan(a.x) || isnan(b.x))", "!or (isnan(a.xy), isnan(b.xy))"]),
+        ("directx", ["(isnan(a.x) || isnan(b.x))", "!or(isnan(a.xy), isnan(b.xy))"]),
         ("opengl", ["(isnan(a.x) || isnan(b.x))", "not(bvec2(uvec2(isnan(a.xy))"]),
     ],
 )
@@ -207,7 +210,7 @@ def test_operands_with_side_effects_are_evaluated_once_each(tmp_path, backend):
 
 def test_vector_operands_with_side_effects_keep_the_componentwise_or(tmp_path):
     code = _translate(tmp_path, SIDE_EFFECTS, "directx", suffix=".cgl")
-    assert "or (isnan((bump(x) * p)), isnan(p.yx))" in code
+    assert "or(isnan((bump(x) * p)), isnan(p.yx))" in code
 
 
 @pytest.mark.parametrize("source", [NORMAL_IMPURE, NORMAL_DOUBLE])
