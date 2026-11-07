@@ -18,6 +18,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
     INEXACT,
     guard_words,
+    native_bytes,
     packet,
 )
 from demos.integrations.mlx.portable_host.gather_evidence import (
@@ -80,7 +81,7 @@ def audit_event(event, cache=None, *, native=True):
                 actual == wanted,
                 f"Arange result {index} of {entry} differs from its scalars",
             )
-        payload = bytes((CTYPES[dtype] * threads)(*outputs))
+        payload = native_bytes(CTYPES[dtype], threads, outputs)
         require(
             hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
             "Arange host output hash changed",

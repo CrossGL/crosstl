@@ -24,6 +24,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     supplied_buffers,
     unpack,
@@ -168,7 +169,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
             "Native wide small-column reduction changed its output guard"
         )
     words = words[:outputs]
-    payload = bytes((CTYPES[output_type] * outputs)(*words))
+    payload = native_bytes(CTYPES[output_type], outputs, words)
     write_trace(
         host,
         {

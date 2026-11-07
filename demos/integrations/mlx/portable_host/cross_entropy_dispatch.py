@@ -22,6 +22,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     supplied_buffers,
     unpack,
@@ -61,7 +62,7 @@ def uploads(entry, target, values, outputs, axis_size):
 def output_hash(entry, words):
     """The digest of the output's exact storage."""
     kind = layout.operand_types(entry)[layout.OUTPUT]
-    return hashlib.sha256(bytes((CTYPES[kind] * len(words))(*words))).hexdigest()
+    return hashlib.sha256(native_bytes(CTYPES[kind], len(words), words)).hexdigest()
 
 
 def _readback(result, native_outputs, binding, kind, outputs, target):
@@ -145,6 +146,6 @@ def dispatch(host, entry, buffers, count, threads, launch):
     if threads > RETAINED_LIMIT:
         event = compact_trace_values(event)
     write_trace(host, event)
-    payload = bytes((CTYPES[kind] * outputs)(*words))
+    payload = native_bytes(CTYPES[kind], outputs, words)
     ctypes.memmove(supplied[layout.OUTPUT].data, payload, len(payload))
     host.dispatch_count += 1

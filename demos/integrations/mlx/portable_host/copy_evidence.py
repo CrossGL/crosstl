@@ -27,6 +27,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     FLOAT32_MASK,
     FLOATING,
     guard_words,
+    native_bytes,
     packet,
 )
 from demos.integrations.mlx.portable_host.gather_evidence import (
@@ -401,7 +402,7 @@ def audit_event(event, cache=None, *, native=True):
             f"Copy result {index} of {entry} differs from its retained values",
         )
     if payload is None:
-        payload = bytes((CTYPES[destination] * len(outputs))(*outputs))
+        payload = native_bytes(CTYPES[destination], len(outputs), outputs)
     require(
         hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
         "Copy host output hash changed",

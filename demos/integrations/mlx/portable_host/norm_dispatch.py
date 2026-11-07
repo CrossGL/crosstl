@@ -23,6 +23,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     reflected_layout_matches,
     supplied_buffers,
@@ -113,7 +114,7 @@ def output_hash(entry, results):
     digest = hashlib.sha256()
     for name in norm_layout.outputs(entry):
         words = results[name]
-        digest.update(bytes((CTYPES[types[name]] * len(words))(*words)))
+        digest.update(native_bytes(CTYPES[types[name]], len(words), words))
     return digest.hexdigest()
 
 
@@ -202,6 +203,6 @@ def dispatch(host, entry, buffers, count, threads, launch):
         event = compact_trace_values(event)
     write_trace(host, event)
     for name, words in results.items():
-        payload = bytes((CTYPES[types[name]] * len(words))(*words))
+        payload = native_bytes(CTYPES[types[name]], len(words), words)
         ctypes.memmove(supplied[name].data, payload, len(payload))
     host.dispatch_count += 1

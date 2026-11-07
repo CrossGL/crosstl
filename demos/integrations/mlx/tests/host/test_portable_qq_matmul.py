@@ -291,7 +291,9 @@ def test_backend_ports_qqmatmul_as_quantized_cpp_does():
 
 
 def test_qq_products_run_in_their_own_upstream_group():
+    # The strided nvfp4 quantization runs first, ahead of the products.
     assert upstream_module_groups.GROUPS["quantized-products"] == (
+        "test_quantized.TestQuantized.test_quantize_strided",
         "test_quantized.TestQuantized.test_qqmm",
         "test_quantized.TestQuantized.test_qqmv",
         "test_quantized.TestQuantized.test_qqmm_global_scale_matrix_kernels",

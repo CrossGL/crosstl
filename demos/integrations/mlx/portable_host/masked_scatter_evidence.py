@@ -17,6 +17,7 @@ import math
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
     guard_words,
+    native_bytes,
     packet,
 )
 from demos.integrations.mlx.portable_host.gather_evidence import (
@@ -143,7 +144,7 @@ def audit_event(event, cache=None, *, native=True):
         f"Masked scatter of {entry} differs from its operands",
     )
     require(
-        hashlib.sha256(bytes((CTYPES[dtype] * threads)(*outputs))).hexdigest()
+        hashlib.sha256(native_bytes(CTYPES[dtype], threads, outputs)).hexdigest()
         == event.get("outputHash"),
         "Masked scatter host output hash changed",
     )

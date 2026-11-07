@@ -21,6 +21,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     INEXACT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     reflected_layout_matches,
     supplied_buffers,
@@ -268,7 +269,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     if words[threads:] != tail:
         raise RuntimeError("Native elementwise kernel changed its output guard")
     words = words[:threads]
-    payload = bytes((CTYPES[destination] * threads)(*words))
+    payload = native_bytes(CTYPES[destination], threads, words)
     event = {
         "entry": entry,
         "target": target,

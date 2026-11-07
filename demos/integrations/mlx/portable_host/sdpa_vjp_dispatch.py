@@ -28,6 +28,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     GUARDS,
     buffer_words,
+    native_bytes,
     packet,
     reflected_layout_matches,
     supplied_buffers,
@@ -205,7 +206,7 @@ def _readback(entry, result, requested, outputs, storage, metadata, target):
                     f"Native {LABEL} kernel wrote {name} outside its window"
                 )
             previous = end
-        payloads[name] = (words[:size], bytes((CTYPES[dtype] * size)(*words[:size])))
+        payloads[name] = (words[:size], native_bytes(CTYPES[dtype], size, words[:size]))
     return payloads
 
 

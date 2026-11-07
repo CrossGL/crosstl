@@ -18,6 +18,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     supplied_buffers,
     unpack,
@@ -228,7 +229,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
         ) from error
     if len(values) != threads + GUARD_COUNT or values[threads:] != tail:
         raise RuntimeError("Native masked scatter kernel changed its output guard")
-    payload = bytes((CTYPES[dtype] * threads)(*values[:threads]))
+    payload = native_bytes(CTYPES[dtype], threads, values[:threads])
     write_trace(
         host,
         {

@@ -17,7 +17,11 @@ from demos.integrations.mlx.portable_host.dynamic_offset_dispatch import (
     operand_types,
 )
 from demos.integrations.mlx.portable_host.dynamic_offset_packages import signature
-from demos.integrations.mlx.portable_host.element_storage import guard_words, packet
+from demos.integrations.mlx.portable_host.element_storage import (
+    guard_words,
+    native_bytes,
+    packet,
+)
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
@@ -80,7 +84,7 @@ def audit_event(event, cache=None, *, native=True):
         f"Dynamic offset of {entry} differs from its operands",
     )
     require(
-        hashlib.sha256(bytes((ctypes.c_int64 * 1)(*outputs))).hexdigest()
+        hashlib.sha256(native_bytes(ctypes.c_int64, 1, outputs)).hexdigest()
         == event.get("outputHash"),
         "Dynamic offset host output hash changed",
     )

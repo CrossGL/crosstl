@@ -22,6 +22,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     supplied_buffers,
     unpack,
@@ -159,7 +160,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     if words[rows:] != guard_words(output_type):
         raise RuntimeError("Native wide small-row reduction changed its output guard")
     words = words[:rows]
-    payload = bytes((CTYPES[output_type] * rows)(*words))
+    payload = native_bytes(CTYPES[output_type], rows, words)
     write_trace(
         host,
         {

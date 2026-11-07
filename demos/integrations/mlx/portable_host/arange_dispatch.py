@@ -16,6 +16,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     supplied_buffers,
     unpack,
@@ -111,7 +112,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     if words[threads:] != tail:
         raise RuntimeError("Native arange kernel changed its output guard")
     words = words[:threads]
-    payload = bytes((CTYPES[dtype] * threads)(*words))
+    payload = native_bytes(CTYPES[dtype], threads, words)
     write_trace(
         host,
         {

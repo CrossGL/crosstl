@@ -19,6 +19,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     supplied_buffers,
     unpack,
@@ -129,7 +130,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     if words[outputs:] != guard_words(OUTPUT_TYPE):
         raise RuntimeError("Native arg reduction changed its output guard")
     words = words[:outputs]
-    payload = bytes((CTYPES[OUTPUT_TYPE] * outputs)(*words))
+    payload = native_bytes(CTYPES[OUTPUT_TYPE], outputs, words)
     write_trace(
         host,
         {

@@ -18,6 +18,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     reflected_layout_matches,
     supplied_buffers,
@@ -98,7 +99,7 @@ def bind(entry, descriptor, packets):
 
 def output_hash(words):
     """The digest of the output's exact uint32 storage."""
-    return hashlib.sha256(bytes((ctypes.c_uint32 * len(words))(*words))).hexdigest()
+    return hashlib.sha256(native_bytes(ctypes.c_uint32, len(words), words)).hexdigest()
 
 
 def _readback(result, native_outputs, binding, count, target):
@@ -173,6 +174,6 @@ def dispatch(host, entry, buffers, count, threads, launch):
     if not retained(len(values["a"]), threads):
         event = compact_trace_values(event)
     write_trace(host, event)
-    payload = bytes((CTYPES[searchsorted_layout.OUTPUT_TYPE] * threads)(*words))
+    payload = native_bytes(CTYPES[searchsorted_layout.OUTPUT_TYPE], threads, words)
     ctypes.memmove(supplied[OUTPUT].data, payload, len(payload))
     host.dispatch_count += 1

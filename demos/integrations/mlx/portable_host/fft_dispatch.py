@@ -34,6 +34,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     GUARDS,
     buffer_words,
+    native_bytes,
     packet,
     reflected_layout_matches,
     supplied_buffers,
@@ -288,7 +289,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
     end = reach[output_name]
     if len(words) != end + GUARD_COUNT or words[end:] != guard:
         raise RuntimeError(f"Native {LABEL} kernel changed its output guard")
-    payload = bytes((CTYPES[output_type] * size)(*words[:size]))
+    payload = native_bytes(CTYPES[output_type], size, words[:size])
     # The twiddle kernel reads no transform input.
     input_hash = None
     if source is not None:

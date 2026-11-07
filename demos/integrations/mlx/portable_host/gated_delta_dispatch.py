@@ -23,6 +23,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     GUARDS,
     buffer_words,
+    native_bytes,
     packet,
     reflected_layout_matches,
     supplied_buffers,
@@ -211,7 +212,7 @@ def readback(entry, result, requested, outputs, words, target):
         size = len(initial) - GUARD_COUNT
         if len(values) != len(initial) or values[size:] != initial[size:]:
             raise RuntimeError(f"Native {LABEL} kernel changed its {name} guard")
-        payloads[name] = bytes((CTYPES[dtype] * size)(*values[:size]))
+        payloads[name] = native_bytes(CTYPES[dtype], size, values[:size])
     return payloads
 
 

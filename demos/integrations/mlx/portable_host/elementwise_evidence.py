@@ -20,6 +20,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
     INEXACT,
     guard_words,
+    native_bytes,
     packet,
 )
 from demos.integrations.mlx.portable_host.elementwise_dispatch import (
@@ -205,7 +206,7 @@ def audit_event(event, cache=None, *, native=True):
                 actual == wanted,
                 f"Elementwise result {index} of {entry} differs from its operands",
             )
-        payload = bytes((CTYPES[destination] * threads)(*outputs))
+        payload = native_bytes(CTYPES[destination], threads, outputs)
         require(
             hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
             "Elementwise host output hash changed",

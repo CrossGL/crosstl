@@ -16,6 +16,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
     GUARD_COUNT,
     GUARDS,
+    native_bytes,
     packet,
     reflected_layout_matches,
     supplied_buffers,
@@ -264,7 +265,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
         if words[threads:] != [GUARDS[dtype]] * GUARD_COUNT:
             raise RuntimeError("Native DivMod changed its output guard")
         values[name], guards[name] = words[:threads], words[threads:]
-        payloads.append(bytes((CTYPES[dtype] * threads)(*values[name])))
+        payloads.append(native_bytes(CTYPES[dtype], threads, values[name]))
     event = {
         "entry": entry,
         "target": host.target,

@@ -23,6 +23,7 @@ from demos.integrations.mlx.portable_host import row_reduction_layout
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
     guard_words,
+    native_bytes,
 )
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
@@ -116,7 +117,7 @@ def audit_event(event, cache, modules):
                 actual == wanted,
                 f"Wide small-row output {index} of {entry} differs from its inputs",
             )
-    payload = bytes((CTYPES[output_type] * rows)(*outputs))
+    payload = native_bytes(CTYPES[output_type], rows, outputs)
     require(
         hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
         "Wide small-row host output hash changed",

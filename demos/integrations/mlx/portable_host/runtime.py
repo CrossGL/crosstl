@@ -158,6 +158,7 @@ from demos.integrations.mlx.portable_host.dot_packages import (
     CACHE_DIRECTORY as DOT_CACHE,
 )
 from demos.integrations.mlx.portable_host.dot_packages import DotPackageCache
+from demos.integrations.mlx.portable_host.element_storage import native_bytes
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     CACHE as ELEMENTWISE_CACHE,
 )
@@ -2036,14 +2037,21 @@ class HostRuntime:
                 result_values = half_storage.unpack(result_values, self.target)
             if dtype == "bfloat16":
                 result_values = bfloat_storage.unpack(result_values, self.target)
-            values = (storage_type * buffer.count)()
-            # Slice assignment stores each item as the constructor would, in C.
-            values[:] = (
-                list(map(float, result_values))
-                if storage_type is ctypes.c_float
-                else result_values
+            if len(result_values) != buffer.count:
+                raise ValueError("Can only assign sequence of same size")
+            # Each item is stored as the ctypes constructor would store it.
+            payload = native_bytes(
+                storage_type,
+                buffer.count,
+                (
+                    list(map(float, result_values))
+                    if storage_type is ctypes.c_float
+                    else list(result_values)
+                ),
             )
-            ctypes.memmove(buffer.data, values, ctypes.sizeof(values))
+            ctypes.memmove(buffer.data, payload, len(payload))
+            # The stored items, as ``list`` of the ctypes array would read them.
+            values = memoryview(payload).cast(storage_type._type_)
         write_trace(
             self,
             {

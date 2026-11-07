@@ -23,7 +23,11 @@ from pathlib import Path
 
 from demos.integrations.mlx.portable_host import arg_reduce_layout
 from demos.integrations.mlx.portable_host.arg_reduce_dispatch import uploads
-from demos.integrations.mlx.portable_host.element_storage import CTYPES, guard_words
+from demos.integrations.mlx.portable_host.element_storage import (
+    CTYPES,
+    guard_words,
+    native_bytes,
+)
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
@@ -131,7 +135,7 @@ def audit_event(event, cache):
             actual == wanted,
             f"Arg reduction output {index} of {entry} differs from its inputs",
         )
-    payload = bytes((CTYPES[OUTPUT_TYPE] * count)(*outputs))
+    payload = native_bytes(CTYPES[OUTPUT_TYPE], count, outputs)
     require(
         hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
         "Arg reduction host output hash changed",

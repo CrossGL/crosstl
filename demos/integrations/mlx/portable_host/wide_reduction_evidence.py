@@ -23,6 +23,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
     INEXACT,
     guard_words,
+    native_bytes,
     packet,
 )
 from demos.integrations.mlx.portable_host.gather_evidence import (
@@ -143,7 +144,7 @@ def audit_event(event, cache=None, *, native=True):
                 actual == wanted,
                 f"Wide reduction row {index} of {entry} differs from its inputs",
             )
-        payload = bytes((CTYPES[output_type] * rows)(*outputs))
+        payload = native_bytes(CTYPES[output_type], rows, outputs)
         require(
             hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
             "Wide reduction host output hash changed",

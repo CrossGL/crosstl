@@ -21,6 +21,7 @@ from demos.integrations.mlx.portable_host.divmod_dispatch import (
     packet,
 )
 from demos.integrations.mlx.portable_host.divmod_packages import signature
+from demos.integrations.mlx.portable_host.element_storage import native_bytes
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
 )
@@ -156,7 +157,8 @@ def audit_event(event, *, native=True):
             f"DivMod result {index} of {event['entry']} differs from its operands",
         )
     payload = b"".join(
-        bytes((CTYPES[dtype] * threads)(*event["outputValues"][name])) for name in "cd"
+        native_bytes(CTYPES[dtype], threads, event["outputValues"][name])
+        for name in "cd"
     )
     require(
         hashlib.sha256(payload).hexdigest() == event.get("outputHash"),

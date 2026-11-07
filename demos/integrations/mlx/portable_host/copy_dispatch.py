@@ -24,6 +24,7 @@ from demos.integrations.mlx.portable_host.element_storage import (
     GUARD_COUNT,
     buffer_words,
     guard_words,
+    native_bytes,
     packet,
     reflected_layout_matches,
     supplied_buffers,
@@ -220,7 +221,7 @@ def dispatch(host, entry, buffers, count, threads, launch):
         if index not in written
     ):
         raise RuntimeError("Native copy changed untouched destination storage")
-    payload = bytes((CTYPES[destination] * dst.count)(*words))
+    payload = native_bytes(CTYPES[destination], dst.count, words)
     event = {
         "entry": entry,
         "target": target,

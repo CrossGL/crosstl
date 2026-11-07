@@ -14,7 +14,11 @@ import hashlib
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import softmax_layout
-from demos.integrations.mlx.portable_host.element_storage import CTYPES, guard_words
+from demos.integrations.mlx.portable_host.element_storage import (
+    CTYPES,
+    guard_words,
+    native_bytes,
+)
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
     require,
@@ -59,7 +63,7 @@ def audit_event(event, cache):
         and len(bound) == len(expected_uploads),
         "Softmax or logsumexp upload differs from its values",
     )
-    payload = bytes((CTYPES[dtype] * count)(*outputs))
+    payload = native_bytes(CTYPES[dtype], count, outputs)
     require(
         hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
         "Softmax or logsumexp host output hash changed",

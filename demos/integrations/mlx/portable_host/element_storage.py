@@ -13,12 +13,14 @@ of its logical type is refused, never rounded or wrapped.
 """
 
 import ctypes
+from array import array as packed_array
 
 from crosstl.project.runtime_value_encoding import (
     BFLOAT16_BITS,
     FLOAT16_BITS,
     FLOAT32_BITS,
 )
+from crosstl.project.runtime_values import exact_types_within
 from demos.integrations.mlx.portable_host import bfloat_storage, half_storage
 
 
@@ -31,6 +33,24 @@ def array_values(array):
     floating ctypes, ``bool`` for ``c_bool`` and ``int`` otherwise.
     """
     return memoryview(array).cast("B").cast(array._type_._type_).tolist()
+
+
+def native_bytes(ctype, count, words):
+    """``bytes((ctype * count)(*words))``, packed through ``array`` when it can be.
+
+    Unpacking tens of thousands of words into a ctypes array constructor costs
+    about ten times packing the same list with ``array`` and the ctype's own
+    native type code, which yields the same bytes for in-range values. Any
+    other input, such as a short list the constructor zero-pads or a value it
+    wraps or refuses, goes through the constructor itself, so the result and
+    every error stay the constructor's.
+    """
+    if type(words) is list and len(words) == count:
+        try:
+            return packed_array(ctype._type_, words).tobytes()
+        except (OverflowError, TypeError, ValueError):
+            pass
+    return bytes((ctype * count)(*words))
 
 
 DTYPES = (
@@ -68,6 +88,7 @@ CTYPES = {
     "int64": ctypes.c_int64,
     COMPLEX: ctypes.c_uint64,
 }
+_INT_TYPES = frozenset({int})
 # Booleans and the integers a target lacks widen to 32-bit storage words.
 WIDENED = {
     "metal": {},
@@ -143,10 +164,10 @@ def guard_words(dtype, count=GUARD_COUNT):
 def buffer_words(buffer, dtype):
     """Read a native buffer's logical storage words, refusing invalid Booleans."""
     ctype = CTYPES[require_dtype(dtype)]
-    words = list(
+    words = array_values(
         ctypes.cast(buffer.data, ctypes.POINTER(ctype * buffer.count)).contents
     )
-    if dtype == "bool_" and any(word > 1 for word in words):
+    if dtype == "bool_" and words and max(words) > 1:
         raise ValueError("Boolean storage must contain canonical zero or one values")
     return words
 
@@ -231,10 +252,33 @@ def unpack(dtype, target, words):
         if any(type(word) is not expected or word not in (0, 1) for word in words):
             raise ValueError("Native readback returned a non-canonical Boolean")
         return [int(word) for word in words]
-    ctype = CTYPES[dtype]
-    if any(type(word) is not int or ctype(word).value != word for word in words):
+    if not scalar_words_fit(words, CTYPES[dtype]):
         raise ValueError("Native readback returned invalid scalar storage")
     return list(words)
+
+
+def word_range(ctype):
+    """The inclusive ``(low, high)`` values a ctypes integer stores unchanged."""
+    bits = 8 * ctypes.sizeof(ctype)
+    if ctype(-1).value < 0:
+        return -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+    return 0, (1 << bits) - 1
+
+
+def scalar_words_fit(words, ctype):
+    """Whether every word is an exact ``int`` that ``ctype`` stores unchanged.
+
+    This decides ``all(type(w) is int and ctype(w).value == w for w in words)``
+    with one C-level type scan and one ``min``/``max`` pass, which is several
+    times faster on readbacks of tens of thousands of words. ``bool`` words
+    are refused, as the exact type test refuses them.
+    """
+    if not exact_types_within(words, _INT_TYPES):
+        return False
+    if not words:
+        return True
+    low, high = word_range(ctype)
+    return low <= min(words) and max(words) <= high
 
 
 def reflected_layout_matches(scalar, value, dtype=None):
