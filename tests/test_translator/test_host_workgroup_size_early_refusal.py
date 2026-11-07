@@ -156,7 +156,7 @@ def test_host_size_option_still_sizes_the_kernel(tmp_path, backend):
     assert "64" in code
 
 
-@pytest.mark.parametrize("backend", ["metal", "cuda"])
+@pytest.mark.parametrize("backend", ["metal", "cuda", "directx"])
 def test_targets_the_host_sizes_are_not_refused(tmp_path, backend):
     assert crosstl.translate(
         _write(tmp_path, "rotate.cgl", STAGE_BLOCK), backend=backend
