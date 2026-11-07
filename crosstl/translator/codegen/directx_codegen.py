@@ -270,6 +270,10 @@ from .glsl_buffer_layout import (
     vector_component_offsets,
 )
 from .helper_buffer_parameters import lower_helper_buffer_parameters
+from .hlsl_alias_offsets import (
+    hlsl_alias_offset_for_source,
+    hlsl_source_identifier_name,
+)
 from .hlsl_array_list_assignment import generate_hlsl_array_list_assignment
 from .hlsl_atomic_conditions import (
     condition_has_hlsl_atomic,
@@ -28316,7 +28320,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             else:
                 array = self.generate_expression(array_expr)
             index = self.generate_expression(index_expr)
-            index = self.hlsl_resource_pointer_offset_index(array, index)
+            index = self.hlsl_resource_pointer_offset_index(array, index, array_expr)
             index = self.hlsl_resource_index_expression(
                 array_expr,
                 index_expr,
@@ -31678,10 +31682,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "buffer_store4",
         }
 
-    def hlsl_resource_pointer_offset_for_name(self, resource_name):
+    def hlsl_resource_pointer_offset_for_name(self, resource_name, source=None):
         pointer_offset = self.current_hlsl_resource_pointer_offsets.get(resource_name)
         if pointer_offset is not None:
             return pointer_offset
+        # A pointer alias renders as its root resource, so the rendered name
+        # cannot tell `row[i]` from `root[i]`. A source identifier can: only
+        # an alias, never its root, carries the alias offset.
+        source_name = hlsl_source_identifier_name(source)
+        if source_name is not None:
+            return hlsl_alias_offset_for_source(self, source_name)
         binding = self.current_hlsl_resource_pointer_aliases.get(resource_name)
         if binding is not None:
             if binding.get("kind") == "workgroup-pointer" and not binding.get(
@@ -31696,8 +31706,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return alias_binding.get("offset")
         return None
 
-    def hlsl_resource_pointer_offset_index(self, resource_name, index):
-        pointer_offset = self.hlsl_resource_pointer_offset_for_name(resource_name)
+    def hlsl_resource_pointer_offset_index(self, resource_name, index, source=None):
+        pointer_offset = self.hlsl_resource_pointer_offset_for_name(
+            resource_name, source
+        )
         if pointer_offset:
             return f"({pointer_offset} + {index})"
         return index
@@ -31721,7 +31733,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         source_type = self.map_type(self.expression_result_type(index_expr))
         has_pointer_offset = (
             rendered_resource is not None
-            and self.hlsl_resource_pointer_offset_for_name(rendered_resource)
+            and self.hlsl_resource_pointer_offset_for_name(
+                rendered_resource, resource_expr
+            )
             is not None
         )
         needs_cast = has_pointer_offset or source_type in {"int64_t", "uint64_t"}
@@ -31952,7 +31966,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name in vector_load_methods and len(args) >= 2:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
-            index = self.hlsl_resource_pointer_offset_index(buffer, index)
+            index = self.hlsl_resource_pointer_offset_index(buffer, index, args[0])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             index = self.hlsl_resource_index_expression(
                 args[0],
@@ -31971,7 +31985,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name in vector_store_methods and len(args) >= 3:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
-            index = self.hlsl_resource_pointer_offset_index(buffer, index)
+            index = self.hlsl_resource_pointer_offset_index(buffer, index, args[0])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             index = self.hlsl_resource_index_expression(
                 args[0],
@@ -31986,7 +32000,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name == "buffer_load" and len(args) >= 2:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
-            index = self.hlsl_resource_pointer_offset_index(buffer, index)
+            index = self.hlsl_resource_pointer_offset_index(buffer, index, args[0])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             index = self.hlsl_resource_index_expression(
                 args[0],
@@ -32007,7 +32021,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name == "buffer_store" and len(args) >= 3:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
-            index = self.hlsl_resource_pointer_offset_index(buffer, index)
+            index = self.hlsl_resource_pointer_offset_index(buffer, index, args[0])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             source_element_type = self.hlsl_typed_buffer_element_type(
                 resource_type,

@@ -41,6 +41,7 @@ from crosstl.backend.Metal.function_specialization import (
     _normalize_metal_type_text,
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
+    unique_specialization_identifier,
 )
 from crosstl.backend.Metal.member_lowering_layers import (
     lower_members_with_late_specializations,
@@ -15378,6 +15379,8 @@ def _materialize_implicit_template_function_calls(
     ] = {}
     specializations: list[dict[str, Any]] = []
     seen_implicit_specializations: set[tuple[str, tuple[str, ...]]] = set()
+    implicit_names: dict[tuple[str, tuple[str, ...]], str] = {}
+    source_identifiers: set[str] | None = None
     for function_name, arguments, span in implicit_calls:
         template = templates_by_name.get(function_name)
         if template is None or not preprocessor._template_arguments_satisfy_parameters(
@@ -15409,11 +15412,26 @@ def _materialize_implicit_template_function_calls(
                 )
                 if inherited_key == key:
                     continue
-        materialized_name = preprocessor._template_specialization_identifier(
-            function_name,
-            list(key[1]),
-        )
-        materialized_name = known_materializations.get(key, materialized_name)
+        materialized_name = known_materializations.get(key) or implicit_names.get(key)
+        if materialized_name is None:
+            # A source function may already own the readable name, such as a
+            # concrete pick_float beside template pick; never define it twice.
+            if source_identifiers is None:
+                source_identifiers = set(
+                    re.findall(
+                        r"[A-Za-z_][A-Za-z0-9_]*",
+                        mask_comments_and_literals(materialized),
+                    )
+                )
+            materialized_name = unique_specialization_identifier(
+                preprocessor._template_specialization_identifier(
+                    function_name,
+                    list(key[1]),
+                ),
+                source_identifiers,
+                [*known_materializations.values(), *implicit_names.values()],
+            )
+            implicit_names[key] = materialized_name
         implicit_replacements.append((span[0], span[1], materialized_name))
         if key in seen_implicit_specializations:
             continue
