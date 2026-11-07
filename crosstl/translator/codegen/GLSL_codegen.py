@@ -50766,7 +50766,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_preserved_nonuniform_sampler_resources(self, ast, functions):
         global_samplers = set()
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = self.resource_node_name(node)
             if name and self.is_sampler_type(self.resource_node_type(node)):
                 global_samplers.add(name)
@@ -56225,7 +56228,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_unsized_sampled_texture_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             if name and self.is_unsized_sampled_texture_array_type(vtype):
@@ -56410,7 +56416,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_unsized_structured_buffer_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             base_type, declared_size = self.structured_buffer_array_base_type(vtype)
@@ -56425,7 +56434,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_fixed_resource_global_sizes(self, ast):
         global_arrays = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             size = self.fixed_resource_array_size(vtype)

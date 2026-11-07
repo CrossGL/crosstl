@@ -49618,3 +49618,23 @@ def test_glsl_non_square_matrix_subscripts_select_columns(tmp_path):
     assert_glsl_compute_validates_if_available(
         generated_code, tmp_path, "non_square_matrix_subscripts"
     )
+
+
+def test_opengl_verbatim_issue_3925_bounded_stage_texture_array():
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[0]) & 1;
+                outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "uniform sampler2D tex[2];" in code
