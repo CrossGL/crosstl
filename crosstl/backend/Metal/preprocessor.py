@@ -77,6 +77,10 @@ from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .reference_alias_arguments import call_argument_designates
 from .reopened_namespaces import ReopenedNamespaceIndex
+from .return_type_enablers import (
+    fold_concrete_enablers,
+    return_type_enabler_condition,
+)
 from .signed_type_spellings import fold_integer_type_spellings
 from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_assertion_sources import concrete_static_assertion_conditions
@@ -1273,6 +1277,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = self._fold_concrete_type_trait_values(
             processed, require_resolution=True
         )
+        # With the traits folded, a materialized return-type enabler names its type.
+        processed = fold_concrete_enablers(self, processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def preprocess_for_entry_discovery(
@@ -1716,8 +1722,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         context_end = len(code)
         namespace_visibility = self._metal_namespace_visibility(code)
         boolean_templates = self._find_boolean_variable_templates(code)
+        # A namespace-scope explicit specialization is no overload: it replaces the
+        # body of the primary it specializes once that primary is selected
+        # (C++14 [temp.expl.spec]/12), so it never competes with the primaries.
         explicit_specializations = (
-            self._find_explicit_template_function_specializations(code)
+            self._find_explicit_template_function_specializations(
+                code, include_namespaced=True
+            )
         )
         explicit_spans = sorted(
             specialization["span"]
@@ -1977,9 +1988,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 _explicit_template_function_specialization_for_selected_overload(
                     preprocessor=self,
                     explicit_specializations={
-                        key: value
+                        (str(value["name"]), key[1], key[2]): value
                         for key, value in explicit_specializations.items()
-                        if not template.namespace
+                        if value["namespace"] == template.namespace
                         and value["span"][0] <= instantiation_position
                     },
                     template=template,
@@ -24158,9 +24169,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         and parameter.declared_type is not None
                     },
                     template_type_traits=template_type_traits,
-                    template_constraints=self._template_parameter_constraints(
-                        parameter_text
-                    ),
+                    template_constraints=[
+                        *self._template_parameter_constraints(parameter_text),
+                        *filter(
+                            None,
+                            [
+                                return_type_enabler_condition(
+                                    self, header, function_name
+                                )
+                            ],
+                        ),
+                    ],
                     namespace=self._namespace_at(namespace_spans, start),
                     internal_linkage=any(
                         scope_start <= start < scope_end
@@ -27795,11 +27814,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             pos = declaration_start
         return spans
 
-    def _find_explicit_template_function_specializations(self, code: str) -> Dict[
+    def _find_explicit_template_function_specializations(
+        self, code: str, *, include_namespaced: bool = False
+    ) -> Dict[
         Tuple[str, Tuple[str, ...], Tuple[str, ...]],
         Dict[str, object],
     ]:
         """Return exact global free-function specializations with concrete bodies.
+
+        With ``include_namespaced``, a specialization declared directly in a
+        namespace body counts too, and its entry records the namespace; the
+        first key component is then the namespace-qualified name, so equal
+        signatures in two namespaces stay distinct. Every other entry records
+        the namespace ``""``.
 
         Direct Metal preprocessing intentionally preserves explicit specializations
         as source C++. Entry-scoped project translation targets template-hostile
@@ -27819,6 +27846,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             Dict[str, object],
         ] = {}
         masked_code = self._mask_comments_and_literals(code)
+        namespace_spans = self._find_namespace_spans(code) if include_namespaced else []
         scope_cursor = 0
         scope_depth = 0
         for match in re.finditer(r"\btemplate\s*<\s*>\s*", masked_code):
@@ -27828,8 +27856,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 elif character == "}":
                     scope_depth = max(0, scope_depth - 1)
             scope_cursor = match.start()
+            namespace = ""
             if scope_depth != 0:
-                continue
+                # Admitted only when every enclosing brace opens a namespace body.
+                enclosing = [
+                    span
+                    for span in namespace_spans
+                    if span[0] <= match.start() < span[1]
+                ]
+                if not include_namespaced or len(enclosing) != scope_depth:
+                    continue
+                namespace = self._namespace_at(namespace_spans, match.start())
 
             declaration_start = match.end()
             body_start = self._find_next_top_level_char(
@@ -27886,7 +27923,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
             parameter_types = tuple(self._function_parameter_type_texts(header))
             key = (
-                specialization_key[0],
+                (
+                    f"{namespace}::{specialization_key[0]}"
+                    if namespace
+                    else specialization_key[0]
+                ),
                 tuple(specialization_key[1]),
                 parameter_types,
             )
@@ -27924,6 +27965,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 "sourceLocation": source_location,
                 "source": source,
                 "nameSpan": (relative_name_start, relative_name_end),
+                "namespace": namespace,
             }
         return specializations
 
