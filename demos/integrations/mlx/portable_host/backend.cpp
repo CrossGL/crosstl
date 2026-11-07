@@ -1585,12 +1585,21 @@ void require_stream(Stream s) {
 } // namespace
 
 void init() {}
+// Until a runtime registers, the host is MLX without a GPU back end, and
+// streams, the device count and device_info behave as in no_gpu.
 void new_stream(Stream s) {
-  require_runtime();
+  if (!dispatch_callback.load()) {
+    throw std::invalid_argument(
+        "[new_stream] Cannot make gpu stream without gpu backend.");
+  }
   thread_streams().insert(s.index);
 }
 void new_thread_unsafe_stream(Stream s) {
-  require_runtime();
+  if (!dispatch_callback.load()) {
+    throw std::invalid_argument(
+        "[new_thread_unsafe_stream] Cannot make gpu stream without gpu "
+        "backend.");
+  }
   std::lock_guard<std::mutex> lock(global_streams_mutex);
   global_streams().insert(s.index);
 }
@@ -1602,12 +1611,18 @@ bool is_available() {
   return dispatch_callback.load() != nullptr;
 }
 int device_count() {
-  return 1;
+  return is_available() ? 1 : 0;
 }
 
 const std::unordered_map<std::string, std::variant<std::string, size_t>>&
 device_info(int index) {
-  require_runtime();
+  if (!is_available()) {
+    static const std::unordered_map<
+        std::string,
+        std::variant<std::string, size_t>>
+        empty;
+    return empty;
+  }
   if (index != 0) {
     throw std::invalid_argument("CrossTL host runtime has one device.");
   }

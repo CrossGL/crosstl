@@ -3,8 +3,9 @@
 Each tuple names unchanged methods of the pinned ``python/tests`` modules
 that reach the GPU through the portable host: every method of these modules
 that dispatches a translated kernel and passes on the native host, in the
-order unittest loads them. Methods that dispatch nothing, and methods that
-need a kernel family the host does not port yet, are not listed.
+order unittest loads them. Methods that dispatch nothing run in the
+``host-only`` group (HOST_ONLY_TESTS), which must dispatch nothing; methods
+that need a kernel family the host does not port yet are not listed.
 """
 
 from demos.integrations.mlx.portable_host import upstream_subtest_shards
@@ -564,6 +565,155 @@ QUANTIZED_GROUPS = (
     "quantized-matmul",
 )
 
+# The two leak tests compare MLX's active memory before and after compiling or
+# exporting closures only where mx.metal.is_available(); the native worker
+# runs them while it reports the host's GPU, whose allocator counts the
+# buffers, and the CPU worker runs them unchanged (verify_upstream_ops
+# METAL_SOURCE_TESTS).
+HOST_MEMORY_TESTS = (
+    "test_compile.TestCompile.test_leaks",
+    "test_export_import.TestExportImport.test_leaks",
+)
+# The device context and GPU device_info tests skip unless
+# mx.is_available(mx.gpu), so the CPU worker, whose host registers no runtime,
+# skips them, and the native worker runs them without a kernel.
+HOST_GPU_TESTS = (
+    "test_device.TestDevice.test_device_context",
+    "test_device.TestDeviceInfo.test_device_info_gpu",
+)
+# Methods of the routed modules that run on the portable host but reach no
+# kernel: they trace, transform, compile or export graphs whose shapes, types
+# and identities they check without evaluating them, reject invalid arguments
+# before building a graph, evaluate only on the CPU stream (the linear algebra
+# solvers, NumPy loads and their read errors), read constants, devices, streams
+# and buffer sizes, or construct modules, initializers, optimizers and
+# schedulers. The native worker must dispatch nothing for any of them
+# (verify_upstream_ops NO_DISPATCH_TESTS), so a lazy graph that starts to
+# evaluate fails the group.
+HOST_ONLY_TESTS = (
+    _tests(
+        "test_autograd",
+        "TestAutograd",
+        (
+            "conv_second_order_grad_with_padding",
+            "flatten_unflatten_vjps",
+            "grad_ids_pre_post",
+            "grad_with_copies",
+            "grad_with_inplace_update",
+            "index_vjp_requires_stop_gradient",
+            "jvp_comparison_tangent_dtype",
+            "leaks",
+            "vjp_types",
+        ),
+    )
+    + _tests("test_bf16", "TestBF16", ("arithmetic_reduction_ops",))
+    + _tests(
+        "test_compile",
+        "TestCompile",
+        (
+            "compile_donates_input_buffer",
+            "compile_rng_across_threads",
+            "compile_shapeless_with_broadcast",
+            "compile_without_captured_inputs",
+            "compiled_preserves_attributes",
+            "double_constant",
+            "enable_disable",
+            "leaks",
+            "shapeless_compile_full_like",
+            "shapeless_compile_gather",
+            "shapeless_compile_unflatten",
+            "shapeless_compile_with_reshape",
+            "unsupported_input_types",
+            "wrap_compiled",
+        ),
+    )
+    + _tests(
+        "test_constants",
+        "TestConstants",
+        ("constants_availability", "constants_values"),
+    )
+    + _tests("test_device", "TestDefaultDevice", ("mlx_default_device",))
+    + _tests("test_device", "TestDevice", ("device", "device_context"))
+    + _tests(
+        "test_device",
+        "TestDeviceInfo",
+        (
+            "device_count",
+            "device_info_cpu",
+            "device_info_default",
+            "device_info_gpu",
+        ),
+    )
+    + _tests("test_device", "TestStream", ("reentrant_stream_context", "stream"))
+    + _tests(
+        "test_eval",
+        "TestEval",
+        ("async_eval_error_in_synchronize", "async_eval_in_trace"),
+    )
+    + _tests(
+        "test_export_import", "TestExportImport", ("export_with_callback", "leaks")
+    )
+    + _tests(
+        "test_fast", "TestFast", ("cross_entropy_shape_checks", "rope_dims_validation")
+    )
+    + _tests(
+        "test_init",
+        "TestInit",
+        (
+            "constant",
+            "glorot_normal",
+            "glorot_uniform",
+            "he_normal",
+            "he_uniform",
+            "normal",
+        ),
+    )
+    + _tests("test_linalg", "TestLinalg", ("solve_triangular",))
+    + _tests(
+        "test_load",
+        "TestLoad",
+        (
+            "async_load_npy_read_error_across_streams",
+            "load_npy_dtype",
+            "load_npy_read_error",
+        ),
+    )
+    + _tests("test_memory", "TestMemory", ("array_buffer_size",))
+    + _tests("test_nn", "TestBase", ("chaining", "grad_of_module", "quantize"))
+    + _tests(
+        "test_nn",
+        "TestLayers",
+        (
+            "alibi",
+            "attention",
+            "bilinear",
+            "dropout",
+            "identity",
+            "linear",
+            "lstm",
+            "rnn",
+            "rope",
+            "set_dtype",
+            "transformer_encoder_layer",
+        ),
+    )
+    + _tests(
+        "test_optimizers",
+        "TestOptimizers",
+        ("epsilon_validation", "optimizer_state", "types_conserved"),
+    )
+    + _tests(
+        "test_optimizers",
+        "TestSchedulers",
+        ("exponential_decay", "init_from_state", "multi_optimizer", "step_decay"),
+    )
+    + _tests(
+        "test_quantized",
+        "TestQuantized",
+        ("fp_vjp_scales_throws", "mode_error_cases", "qmm_fp_type"),
+    )
+)
+
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.
 GROUPS = {
     "nn": NN_TESTS,
@@ -590,4 +740,5 @@ GROUPS = {
     "quantized-sorted": QUANTIZED_SORTED_TESTS,
     "quantized-fp-tails": QUANTIZED_FP_TAIL_TESTS,
     "quantized-matmul": QUANTIZED_MATMUL_TESTS,
+    "host-only": HOST_ONLY_TESTS,
 }

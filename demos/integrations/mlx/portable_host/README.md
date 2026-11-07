@@ -2602,13 +2602,24 @@ NumPy, safetensors and GGUF formats), `training` (19 `test_optimizers`
 methods, six `test_random` samplers, four `test_bf16` sweeps and the device,
 stream, memory and constant tests) and `rope` (the seven rotary embedding and
 fused transform methods of `test_fast` and the two antialiased `test_upsample`
-sweeps). A module's other
-methods dispatch nothing or need a kernel family the host does not port yet.
+sweeps). The `host-only` group runs 76 methods of these modules that reach
+no kernel: they trace, transform, compile or export graphs whose shapes, types
+and identities they check without evaluating them, reject invalid arguments,
+evaluate only on the CPU stream, read constants, devices, streams and buffer
+sizes, or construct modules, initializers, optimizers and schedulers. Its two
+leak tests compare MLX's active memory only where `mx.metal.is_available()`,
+so the native worker reports the host's GPU around them and the host's
+allocator counts their buffers. The CPU worker's host registers no runtime and
+behaves as MLX's `no_gpu` back end: new GPU streams raise `ValueError`, the GPU
+device count is 0 and its `device_info` is empty, which `test_stream` checks;
+`test_device_context` and `test_device_info_gpu` skip there. A module's other
+methods need a kernel family the host does not port yet, or skip on the host.
 Each runs once on the MLX
 CPU and once through the translated host, in separate processes, and every
-native run must dispatch, except `test_layer_norm_dim_check` and
-`test_fft_throws`, which reject their arguments before building a graph, and
-`test_zero_size`; these must dispatch nothing. The CPU worker must skip the tests that need a GPU, such as
+native run must dispatch, except the `host-only` methods,
+`test_layer_norm_dim_check` and `test_fft_throws`, which reject their
+arguments before building a graph, and `test_zero_size`; these must dispatch
+nothing, so a lazy graph that starts to evaluate fails its group. The CPU worker must skip the tests that need a GPU, such as
 `test_multistream_deadlock`, which the native worker runs. Every dispatch must
 belong to exactly one of the
 base, random, bitwise, selection, absolute-value, 64-bit integer or reduction

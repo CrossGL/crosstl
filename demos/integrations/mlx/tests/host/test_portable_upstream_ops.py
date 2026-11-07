@@ -62,7 +62,10 @@ def records(*, native):
 @pytest.mark.parametrize("native", [False, True])
 def test_upstream_gpu_only_tests_skip_only_on_the_cpu(native):
     assert ops.GPU_ONLY_TESTS <= set(ops.UPSTREAM_TESTS)
-    assert not ops.GPU_ONLY_TESTS & ops.NO_DISPATCH_TESTS
+    # Only the device tests that skip without a GPU dispatch nothing natively.
+    assert ops.GPU_ONLY_TESTS & ops.NO_DISPATCH_TESTS == set(
+        upstream_module_groups.HOST_GPU_TESTS
+    )
     record = records(native=native)
     ops.validate_upstream(record, native=native)
     for item in record["tests"]:
@@ -80,6 +83,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
         "test_reduce.TestReduce.test_zero_size",
         "test_fft.TestFFT.test_fft_throws",
         "test_fast_gated_delta.TestGatedDelta.test_gated_delta_dtypes",
+        *upstream_module_groups.HOST_ONLY_TESTS,
     }
     assert ops.NO_DISPATCH_TESTS <= set(ops.UPSTREAM_TESTS)
     for native in (True, False):
@@ -95,8 +99,45 @@ def test_upstream_op_tests_without_dispatches_are_exact():
             ops.validate_upstream(record, native=True)
 
 
+def test_upstream_host_only_group_runs_on_both_workers_without_kernels():
+    tests = upstream_module_groups.HOST_ONLY_TESTS
+    assert ops.GROUPS["host-only"] == tests and len(set(tests)) == len(tests)
+    # Both workers run every host-only test but the two device tests that skip
+    # without a GPU; neither worker may reach a kernel.
+    assert set(tests) & ops.GPU_ONLY_TESTS == set(upstream_module_groups.HOST_GPU_TESTS)
+    assert not set(tests) & ops.METAL_PATH_TESTS
+    for target in ("metal", "directx", "opengl"):
+        assert ops.upstream_tests(target, "host-only") == tests
+    # The leak tests read the active memory only while is_available holds, so
+    # the native worker reports the host's GPU around them alone.
+    leaks = upstream_module_groups.HOST_MEMORY_TESTS
+    assert set(leaks) <= set(tests) and set(leaks) <= ops.METAL_SOURCE_TESTS
+    assert set(tests) & ops.METAL_SOURCE_TESTS == set(leaks)
+
+    class Metal:
+        @staticmethod
+        def is_available():
+            return False
+
+    mx = SimpleNamespace(metal=Metal(), gpu="gpu", is_available=lambda device: True)
+    for name in leaks:
+        with ops.metal_source(mx, name, native=True):
+            assert mx.metal.is_available()
+        with ops.metal_source(mx, name, native=False):
+            assert not mx.metal.is_available()
+    with ops.metal_source(mx, tests[0], native=True):
+        assert not mx.metal.is_available()
+    # A host-only test that dispatches fails the native record.
+    record = records(native=True)
+    for item in record["tests"]:
+        if item["test"] == tests[0]:
+            item["dispatchCount"] = 3
+    with pytest.raises(ValueError, match=tests[0]):
+        ops.validate_upstream(record, native=True)
+
+
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 623
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 699
     assert all(
         name.startswith(
             (
@@ -128,7 +169,9 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_optimizers.TestOptimizers.test_",
                 "test_optimizers.TestSchedulers.test_",
                 "test_random.TestRandom.test_",
+                "test_device.TestDefaultDevice.test_",
                 "test_device.TestDevice.test_",
+                "test_device.TestDeviceInfo.test_",
                 "test_device.TestStream.test_",
                 "test_memory.TestMemory.test_",
                 "test_constants.TestConstants.test_",
@@ -141,6 +184,9 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_quantized.TestQuantized.test_qmm_small_m_block",
                 "test_quantized.TestQuantized.test_fp_qmm_non_multiple_of_32_vjp",
                 "test_quantized.TestQuantized.test_vjp_scales_biases",
+                "test_quantized.TestQuantized.test_fp_vjp_scales_throws",
+                "test_quantized.TestQuantized.test_mode_error_cases",
+                "test_quantized.TestQuantized.test_qmm_fp_type",
                 "test_fast_sdpa.TestFastSDPA.test_",
                 "test_fast_gated_delta.TestGatedDelta.test_",
             )
@@ -175,6 +221,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + upstream_module_groups.QUANTIZED_SORTED_TESTS
         + upstream_module_groups.QUANTIZED_FP_TAIL_TESTS
         + upstream_module_groups.QUANTIZED_MATMUL_TESTS
+        + upstream_module_groups.HOST_ONLY_TESTS
     )
     assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
@@ -260,7 +307,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 13
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 609 and not set(opengl) & set(excluded)
+    assert len(opengl) == 685 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -310,6 +357,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "quantized-sorted",
         "quantized-fp-tails",
         "quantized-matmul",
+        "host-only",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -426,6 +474,27 @@ def test_upstream_op_groups_partition_the_inventory():
         ("quantized-sorted", ("test_quantized.",), 2),
         ("quantized-fp-tails", ("test_quantized.",), 1),
         ("quantized-matmul", ("test_quantized.",), 3),
+        (
+            "host-only",
+            (
+                "test_autograd.",
+                "test_bf16.",
+                "test_compile.",
+                "test_constants.",
+                "test_device.",
+                "test_eval.",
+                "test_export_import.",
+                "test_fast.",
+                "test_init.",
+                "test_linalg.",
+                "test_load.",
+                "test_memory.",
+                "test_nn.",
+                "test_optimizers.",
+                "test_quantized.",
+            ),
+            76,
+        ),
     ):
         tests = upstream_module_groups.GROUPS[group]
         assert ops.GROUPS[group] == tests and len(tests) == count

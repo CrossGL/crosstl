@@ -2792,8 +2792,8 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # A hundred and thirteen jobs, thirty-nine of them on macOS: run them
-      # in twelve waves.
+      # A hundred and sixteen jobs, forty of them on macOS: run them in
+      # twelve waves.
       max-parallel: 10
       matrix:
         # verify_upstream_ops.GROUPS: each group runs in its own job on every
@@ -2839,6 +2839,7 @@ jobs:
             quantized-sorted,
             quantized-fp-tails,
             quantized-matmul,
+            host-only,
           ]
         target: [opengl, directx, metal]
         # gather_qmm_rhs's sorted products run on Metal alone (#2546).

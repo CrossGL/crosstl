@@ -177,6 +177,11 @@ from demos.integrations.mlx.portable_host.upstream_module_groups import (
     GROUPS as MODULE_GROUPS,
 )
 from demos.integrations.mlx.portable_host.upstream_module_groups import (
+    HOST_GPU_TESTS,
+    HOST_MEMORY_TESTS,
+    HOST_ONLY_TESTS,
+)
+from demos.integrations.mlx.portable_host.upstream_module_groups import (
     METAL_PATH_TESTS as MODULE_METAL_PATH_TESTS,
 )
 from demos.integrations.mlx.portable_host.upstream_module_groups import (
@@ -819,10 +824,12 @@ RETAINED_VALUES = (
     *wide_column_dispatch.ENTRIES,
 )
 # Tests that reject their arguments before building a graph, or whose every
-# result is empty. They dispatch no kernel on either worker, and the native
-# worker must dispatch none for them.
+# result is empty, and the host-only group's tests, which never evaluate a
+# graph on the GPU stream. They dispatch no kernel on either worker, and the
+# native worker must dispatch none for them.
 NO_DISPATCH_TESTS = frozenset(
     (
+        *HOST_ONLY_TESTS,
         "test_fast.TestFast.test_layer_norm_dim_check",
         "test_reduce.TestReduce.test_zero_size",
         # Rejects a zero-dimensional irfftn and an unknown norm.
@@ -844,8 +851,10 @@ METAL_PATH_TESTS = frozenset(MODULE_METAL_PATH_TESTS)
 # Tests whose bodies select their kernel's Metal source where
 # mx.metal.is_available(): the native worker runs each while is_available
 # reports the host's GPU (metal_source), and the CPU worker runs them
-# unchanged. All but METAL_SOURCE_CPU_TESTS skip there for want of a GPU.
-METAL_SOURCE_TESTS = frozenset(MODULE_METAL_SOURCE_TESTS)
+# unchanged. All but METAL_SOURCE_CPU_TESTS skip there for want of a GPU. The
+# leak tests (HOST_MEMORY_TESTS) compare MLX's active memory only while
+# is_available holds; the CPU worker runs them too.
+METAL_SOURCE_TESTS = frozenset((*MODULE_METAL_SOURCE_TESTS, *HOST_MEMORY_TESTS))
 # Tests that skip on the MLX CPU because they need a GPU: the CPU worker must
 # skip each of them and the native worker must run them. They compare the
 # products with NumPy's or the CPU stream's, so the CPU run is not their
@@ -871,6 +880,8 @@ GPU_ONLY_TESTS = frozenset(
         "test_quantized.TestQuantized.test_qqmm",
         "test_quantized.TestQuantized.test_gather_qqmm",
         "test_quantized.TestQuantized.test_gather_qqmm_global_scale_matrix_paths",
+        # Need a GPU device, though they dispatch nothing (NO_DISPATCH_TESTS).
+        *HOST_GPU_TESTS,
         # Skips on the CPU device: it covers qmm's GPU small-M blocks only.
         "test_quantized.TestQuantized.test_qmm_small_m_block",
         # Overrides the two-pass vector kernels' block count (sdpa.inc).
@@ -888,7 +899,7 @@ GPU_ONLY_TESTS = frozenset(
         ),
         *ATTENTION_SWEEP_TESTS,
         *METAL_PATH_TESTS,
-        *METAL_SOURCE_TESTS.difference(METAL_SOURCE_CPU_TESTS),
+        *METAL_SOURCE_TESTS.difference(METAL_SOURCE_CPU_TESTS, HOST_MEMORY_TESTS),
     )
 )
 # CI runs each group in its own job. The normalization gradients move tens of
@@ -1083,6 +1094,9 @@ def install(args, output):
             if host.lazy_arange(entry) and arange_evidence.recomputable(entry)
         ),
     )
+    # Records are appended as kernels dispatch. A group that dispatches none
+    # still leaves its trace, empty, for the parent to count and hash.
+    host.trace.write_bytes(b"")
     host.install()
     return host
 
