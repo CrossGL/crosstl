@@ -38,6 +38,7 @@ from .generic_emission_order import (
     reset_generic_function_emission,
 )
 from .generic_pointer_deduction import structured_buffer_element_type
+from .generic_result_types import reject_expression_result_type
 from .generic_specialization_names import (
     reserve_program_names,
     unique_specialization_name,
@@ -1052,6 +1053,7 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
         getattr(func, "return_type", "void"),
         substitutions,
     )
+    reject_expression_result_type(func, key, clone.return_type)
     for param in getattr(clone, "parameters", getattr(clone, "params", [])) or []:
         concrete_type = substituted_generic_type(
             generator,
