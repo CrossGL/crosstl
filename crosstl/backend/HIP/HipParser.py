@@ -2974,6 +2974,43 @@ class HipParser:
         self.consume("RPAREN")
         return args
 
+    def parse_line_split_type_qualifiers(self):
+        """Read qualifiers that a line break separates from the rest of a type.
+
+        In `const` / `float* in` or `__restrict__ const` / `float* in`, the
+        base type reader stops at the line break; read the qualifiers up to the
+        last break here and leave the rest of the type, and qualifiers on one
+        line with it, to the rest of :meth:`parse_type`.
+        """
+        end = self.line_split_type_qualifiers_end(self.pos)
+        qualifiers = []
+        while self.pos < end:
+            if not self.match("NEWLINE"):
+                qualifiers.append(self.current_token.value)
+            self.advance()
+        return qualifiers
+
+    def line_split_type_qualifiers_end(self, index):
+        """Index after the last line break that follows a type qualifier at ``index``, or ``index`` if none does.
+
+        A sign word whose next line starts the declarator, as in `unsigned` /
+        `n`, stays with the type reader, which reads it as `unsigned int`.
+        """
+        end = index
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS
+        ):
+            next_index = self.skip_newlines_at_pos(index + 1)
+            implicit_int = self.tokens[index].type in {
+                "SIGNED",
+                "UNSIGNED",
+            } and self.is_implicit_int_type_at_pos(next_index, True)
+            if next_index != index + 1 and not implicit_int:
+                end = next_index
+            index = next_index
+        return end
+
     def parse_type(self):
         type_parts = []
         saw_integral_sign = False
@@ -2982,12 +3019,18 @@ class HipParser:
         while self.match(*self.TYPE_PREFIX_TOKENS):
             self.advance()
 
+        for qualifier in self.parse_line_split_type_qualifiers():
+            if qualifier in {"signed", "unsigned"}:
+                saw_integral_sign = True
+            type_parts.append(qualifier)
+
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
             if self.current_token.type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
             type_parts.append(self.current_token.value)
             self.advance()
 
+        self.skip_newlines()
         self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
@@ -3036,12 +3079,18 @@ class HipParser:
         while self.match(*self.TYPE_PREFIX_TOKENS):
             self.advance()
 
+        for qualifier in self.parse_line_split_type_qualifiers():
+            if qualifier in {"signed", "unsigned"}:
+                saw_integral_sign = True
+            type_parts.append(qualifier)
+
         while self.match(*self.TYPE_QUALIFIER_TOKENS):
             if self.current_token.type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
             type_parts.append(self.current_token.value)
             self.advance()
 
+        self.skip_newlines()
         self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
@@ -3137,9 +3186,11 @@ class HipParser:
         return f"decltype({self.format_template_parts(parts)})"
 
     def parse_postfix_type_qualifiers(self, type_parts):
+        self.skip_newlines()
         while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
             type_parts.append(self.current_token.value)
             self.advance()
+            self.skip_newlines()
 
     def parse_type_name(self):
         if self.match(*self.ELABORATED_TYPE_TOKENS):
@@ -5079,9 +5130,17 @@ class HipParser:
     def is_cast_type_sequence(self, start, end):
         index = start
         saw_integral_sign = False
-        while index < end and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS:
+        while index < end:
+            if self.tokens[index].type == "NEWLINE":
+                index += 1
+                continue
+            if self.tokens[index].type not in self.TYPE_QUALIFIER_TOKENS:
+                break
             if self.tokens[index].type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
+            index += 1
+
+        while index < end and self.tokens[index].type == "NEWLINE":
             index += 1
 
         if index >= end:
@@ -5457,6 +5516,7 @@ class HipParser:
 
     def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
         saw_integral_sign = False
+        index = self.line_split_type_qualifiers_end(index)
         index = self.skip_cpp_attributes_at_pos(index)
         while (
             index < len(self.tokens)
@@ -5472,6 +5532,7 @@ class HipParser:
                 saw_integral_sign = True
             index += 1
 
+        index = self.skip_newlines_at_pos(index)
         index = self.skip_cpp_attributes_at_pos(index)
         if index >= len(self.tokens):
             return None
@@ -5710,11 +5771,13 @@ class HipParser:
         return isinstance(type_name, str) and type_name[:1].isupper()
 
     def skip_postfix_type_qualifiers_at_pos(self, index):
+        index = self.skip_newlines_at_pos(index)
         while (
             index < len(self.tokens)
             and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
         ):
             index += 1
+            index = self.skip_newlines_at_pos(index)
         return index
 
     def skip_linkage_specifier_at_pos(self, index):
