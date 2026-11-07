@@ -326,7 +326,7 @@ def buffers(dtype="float32", index_dtype="int32"):
         "idx0": (index_dtype, [3, 0]),
     }
     memory = {
-        name: (runtime.TYPES[kind] * len(values))(*values)
+        name: (gather_layout.TYPES[kind] * len(values))(*values)
         for name, (kind, values) in data.items()
     }
     supplied = {
@@ -364,7 +364,7 @@ def test_gather_layout_matches_all_supported_storage_types(dtype, index_dtype):
 
 def replace_buffer(supplied, memory, name, kind, values):
     size = values if isinstance(values, int) else len(values)
-    allocation = runtime.TYPES[kind] * size
+    allocation = gather_layout.TYPES[kind] * size
     memory[name] = allocation() if isinstance(values, int) else allocation(*values)
     supplied[name] = runtime.Buffer(
         name.encode(),
@@ -422,6 +422,60 @@ def test_gather_rejects_invalid_storage_before_dereferencing(name, fault):
 
 
 @pytest.mark.parametrize(
+    "fault", (None, "order", "missing", "position", "origin", "slab", "whole")
+)
+def test_gather_batch_audit_reconciles_split_slices(monkeypatch, fault):
+    import numpy as np
+
+    source = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    index = np.array([1, 0], dtype=np.int32)
+    expected = np.take(source, index, axis=0)
+    # Each index position launches its slice in two parts, rows 0-1 and row 2,
+    # from a source view rebased to the part's first row.
+    events = []
+    for position, value in enumerate(index.tolist()):
+        for start, rows in ((0, 2), (2, 1)):
+            events.append(
+                {
+                    "view": source[:, start:],
+                    "index": index[position : position + 1],
+                    "values": gather_workloads.words(
+                        np, source[value, start : start + rows]
+                    ),
+                    "gatherMetadata": {
+                        "sliceSizes": [1, rows, 4],
+                        "sourceStrides": [12, 4, 1],
+                        "indexStrides": [1],
+                    },
+                }
+            )
+    if fault == "order":
+        events[0], events[1] = events[1], events[0]
+    elif fault == "missing":
+        events.pop()
+    elif fault == "position":
+        events[1]["index"] = index[1:2]
+    elif fault == "origin":
+        events[1]["view"] = source[:, 2:] + 1
+    elif fault == "slab":
+        events[0]["index"] = index
+    elif fault == "whole":
+        events[0]["gatherMetadata"]["sliceSizes"] = [1, 3, 4]
+    monkeypatch.setattr(
+        gather_evidence,
+        "audit_event",
+        lambda np, event: (event["view"], (event["index"],), event["values"]),
+    )
+    if fault:
+        with pytest.raises(ValueError):
+            gather_evidence.audit_batches(np, events, source, (index,), expected)
+    else:
+        assert gather_evidence.audit_batches(
+            np, events, source, (index,), expected
+        ) == gather_workloads.words(np, expected)
+
+
+@pytest.mark.parametrize(
     "fault", (None, "missing", "duplicate", "reordered", "extra", "source", "index")
 )
 def test_gather_batch_audit_requires_complete_ordered_workload(tmp_path, fault):
@@ -463,11 +517,11 @@ def test_capacity_workloads_keep_existing_cases_and_cover_large_strided_views():
 
     cases = list(gather_capacity_workloads.cases())
     assert cases[:42] == list(gather_workloads.cases())
-    assert len(cases) == len({case["id"] for case in cases}) == 55
+    assert len(cases) == len({case["id"] for case in cases}) == 58
     assert verify_gather.selected_workloads(capacity=True) is gather_capacity_workloads
     with pytest.raises(ValueError, match="not GatherAxis"):
         verify_gather.selected_workloads(axis=True, capacity=True)
-    for case in cases[42:]:
+    for case in cases[42:55]:
         source, indices, expected = gather_capacity_workloads.reference(np, case)
         if case["layout"] == "large-table":
             assert source.size == 32 and indices[0].size == case["count"]
@@ -482,6 +536,26 @@ def test_capacity_workloads_keep_existing_cases_and_cover_large_strided_views():
             assert indices[0].strides[-1] == 8
         if case["layout"] == "large-row":
             assert indices[0].strides[0] // indices[0].itemsize > 65535
+    slices = cases[55:]
+    assert [case["layout"] for case in slices] == list(gather_capacity_workloads.SLICES)
+    for case in slices:
+        source, (index,), expected = gather_capacity_workloads.reference(np, case)
+        axis = gather_capacity_workloads.SLICES[case["layout"]][2]
+        # Each slice is wider than one launch axis, and every view is offset.
+        assert source.size // source.shape[axis] > 65535
+        assert source.base is not None and index.base is not None
+        assert (
+            np.any(index < 0)
+            and expected.size == index.size * source.size // source.shape[axis]
+        )
+    assert [
+        index.ndim
+        for _, (index,), _ in map(
+            lambda case: gather_capacity_workloads.reference(np, case), slices
+        )
+    ] == [0, 2, 1]
+    # The gathered middle axis reads a strided source.
+    assert gather_capacity_workloads.reference(np, slices[-1])[0].strides[-1] == 8
 
 
 @pytest.mark.parametrize(
@@ -724,7 +798,8 @@ def test_gather_cache_reuses_covering_range_and_rechecks_source(
         ),
     )
     first = cache.get(entry, 11)
-    capacity = gather_layout.MAX_STORAGE_ELEMENTS if entry == ENTRY else 65535
+    # Storage is bounded independently of each launch axis for every entry.
+    capacity = gather_layout.MAX_STORAGE_ELEMENTS
     for bound in (0, 11, 14, 19, 65534, capacity - 1):
         assert cache.get(entry, bound) == first and len(calls) == 1
     assert calls[0]["maximumIndex"] == capacity - 1
@@ -768,7 +843,7 @@ def test_gather_covering_assertion_matches_validated_host_capacity(
         raise RuntimeError("configuration captured")
 
     monkeypatch.setattr(gather_packages, "translate_project", translate)
-    capacity = gather_layout.MAX_STORAGE_ELEMENTS if entry == ENTRY else 65535
+    capacity = gather_layout.MAX_STORAGE_ELEMENTS
     with pytest.raises(RuntimeError, match="configuration captured"):
         cache._build(
             entry,

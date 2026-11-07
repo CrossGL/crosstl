@@ -7,9 +7,11 @@ reports no Apple GPU architecture and no NAX unit, so ``steel_matmul_axpby``
 compares against the split-K threshold of 1,024 tiles and otherwise dispatches
 ``steel_gemm_fused`` with ``GEMM_TPARAM_MACRO``'s medium-device tile: 64x64x16
 with 2x2 simdgroups. ``Matmul`` never reads ``C``, so ``use_out_source`` and
-``do_axpby`` stay false; the entry names carry the remaining function
-constants as matmul.cpp's hash name does. Split-K products take
-``gemm_splitk_layout``'s route.
+``do_axpby`` stay false. ``AddMM`` sets ``use_out_source`` unless
+``alpha == 0`` and ``beta == 1`` and ``do_axpby`` with it unless both are 1, and
+then binds ``C`` and ``GEMMAddMMParams`` (``addmm_layout``). The entry names
+carry the function constants as matmul.cpp's hash name does. Split-K products
+take ``gemm_splitk_layout``'s route.
 """
 
 import ctypes
@@ -55,7 +57,10 @@ PARAMETERS = (
 # when has_batch holds; the host always passes them and the kernel ignores
 # them otherwise.
 HOST_PARAMETERS = ("A", "B", "D", "params", "batch_shape", "batch_strides")
-MATRIX_PARAMETERS = ("A", "B", "D")
+# What backend.cpp binds in addition with use_out_source: addmm_params is the
+# GEMMAddMMParams struct's bytes.
+EPILOGUE_PARAMETERS = ("C", "addmm_params")
+MATRIX_PARAMETERS = ("A", "B", "C", "D")
 # GEMMParams in params.h order; backend.cpp passes each field as an int64.
 PARAMS_FIELDS = (
     "M",
@@ -80,6 +85,18 @@ INTEGER_TYPES = {"int32": ctypes.c_int32, "int64": ctypes.c_int64}
 INERT_ADDMM = {"ldc": 0, "fdc": 0, "batch_stride_c": 0, "alpha": 1.0, "beta": 0.0}
 
 
+class GEMMAddMMParams(ctypes.Structure):
+    """params.h's GEMMAddMMParams as matmul.cpp passes it with set_bytes."""
+
+    _fields_ = (
+        ("ldc", ctypes.c_int32),
+        ("fdc", ctypes.c_int32),
+        ("batch_stride_c", ctypes.c_int64),
+        ("alpha", ctypes.c_float),
+        ("beta", ctypes.c_float),
+    )
+
+
 def _flag(value):
     return "t" if value else "n"
 
@@ -95,8 +112,8 @@ def signature(entry):
     if model_entry is None or tile != HOST_TILE:
         raise ValueError("Steel GEMM entry is not the host's instantiated tile")
     constants = {name: flag == "t" for name, flag in zip(CONSTANTS, flags)}
-    if constants["use_out_source"] or constants["do_axpby"]:
-        raise ValueError("Matmul never computes a steel GEMM epilogue")
+    if constants["do_axpby"] and not constants["use_out_source"]:
+        raise ValueError("steel_matmul_regular_axpby scales C only when it reads C")
     bm, bn, bk, wm, wn = tile
     return {
         "source": base,
@@ -113,21 +130,41 @@ def signature(entry):
     }
 
 
+def host_parameters(entry):
+    """The buffers backend.cpp binds for ``entry``."""
+    if signature(entry)["constants"]["use_out_source"]:
+        return HOST_PARAMETERS + EPILOGUE_PARAMETERS
+    return HOST_PARAMETERS
+
+
+def epilogue(alpha=None, beta=None):
+    """steel_matmul_regular_axpby's use_out_source and do_axpby.
+
+    ``None`` stands for Matmul, which instantiates the route without C.
+    """
+    if alpha is None and beta is None:
+        return False, False
+    use_out_source = alpha != 0.0 or beta != 1.0
+    return use_out_source, use_out_source and (alpha != 1.0 or beta != 1.0)
+
+
 def workgroup_size(entry):
     info = signature(entry)
     return (SIMD_SIZE, info["wn"], info["wm"])
 
 
-def select(dtype, transpose_a, transpose_b, m, n, k, batch_ndim):
-    """steel_matmul_regular_axpby's hash name for one product without C."""
+def select(dtype, transpose_a, transpose_b, m, n, k, batch_ndim, alpha=None, beta=None):
+    """steel_matmul_regular_axpby's hash name for one product."""
     if dtype not in DTYPES:
         raise ValueError("Steel GEMM products support float32, float16 and bfloat16")
     bm, bn, bk, wm, wn = HOST_TILE
     transpose = ("t" if transpose_a else "n") + ("t" if transpose_b else "n")
+    use_out_source, do_axpby = epilogue(alpha, beta)
     return (
         f"steel_gemm_fused_{transpose}_{dtype}_{dtype}"
         f"_bm{bm}_bn{bn}_bk{bk}_wm{wm}_wn{wn}"
-        f"_has_batch_{_flag(batch_ndim > 1)}_use_out_source_n_do_axpby_n"
+        f"_has_batch_{_flag(batch_ndim > 1)}"
+        f"_use_out_source_{_flag(use_out_source)}_do_axpby_{_flag(do_axpby)}"
         f"_align_M_{_flag(m % bm == 0)}_align_N_{_flag(n % bn == 0)}"
         f"_align_K_{_flag(k % bk == 0)}"
     )
@@ -182,14 +219,20 @@ def route(dtype, a_shape, a_strides, b_shape, b_strides):
 
 
 def matmul_route(dtype, a_shape, a_strides, b_shape, b_strides):
-    """The gemv, steel GEMM or split-K route Matmul::eval_gpu takes, by family."""
-    from demos.integrations.mlx.portable_host import gemm_splitk_layout
+    """The dot, gemv, steel GEMM or split-K route Matmul::eval_gpu takes, by family."""
+    from demos.integrations.mlx.portable_host import dot_layout, gemm_splitk_layout
 
     operands = (dtype, a_shape, a_strides, b_shape, b_strides)
     prepared = gemv_layout.operands(a_shape, a_strides, b_shape, b_strides)
     m, n, k = prepared["M"], prepared["N"], prepared["K"]
-    if prepared["dot"] or min(m, n) == 1:
+    if prepared["dot"] and dtype != gemv_layout.COMPLEX:
+        return "dot", dot_layout.route(*operands)
+    if min(m, n) == 1:
         return "gemv", gemv_layout.route(*operands)
+    if dtype == gemv_layout.COMPLEX:
+        # The steel BlockMMA complex64 specialization does not translate yet
+        # (#2261), so the host refuses these products.
+        raise ValueError("complex64 matrix-matrix products are not translated yet")
     if split_k(m, n, k, prepared["batches"]):
         return "splitk", gemm_splitk_layout.route(*operands)
     return "gemm", route(*operands)
@@ -198,6 +241,8 @@ def matmul_route(dtype, a_shape, a_strides, b_shape, b_strides):
 def parameter_type(entry, name):
     if name in MATRIX_PARAMETERS:
         return signature(entry)["dtype"]
+    if name == "addmm_params":
+        return "uint8"
     return VECTOR_TYPES[name]
 
 
@@ -205,21 +250,28 @@ def read_storage(entry, buffers):
     """Check native buffer identity and read the integer parameters.
 
     Returns ``(counts, parameters)``: element counts of the matrix buffers and
-    the integer values of the vector parameters, ``params`` as a field map.
+    the values of the other parameters, ``params`` and ``addmm_params`` as
+    field maps.
     """
-    signature(entry)
-    if set(buffers) != set(HOST_PARAMETERS):
+    names = host_parameters(entry)
+    if set(buffers) != set(names):
         raise ValueError("Steel GEMM buffers do not match the entry")
     address_limit = 1 << (8 * ctypes.sizeof(ctypes.c_void_p))
     counts, parameters, spans = {}, {}, {}
-    for name in HOST_PARAMETERS:
+    for name in names:
         buffer, dtype = buffers[name], parameter_type(entry, name)
-        itemsize = ITEM_SIZES.get(dtype) or ctypes.sizeof(INTEGER_TYPES[dtype])
+        itemsize = (
+            1
+            if name == "addmm_params"
+            else ITEM_SIZES.get(dtype) or ctypes.sizeof(INTEGER_TYPES[dtype])
+        )
         count = buffer.count
         limit = {
             "params": len(PARAMS_FIELDS),
+            "addmm_params": ctypes.sizeof(GEMMAddMMParams),
             "batch_shape": MAX_BATCH_DIMENSIONS,
-            "batch_strides": 2 * MAX_BATCH_DIMENSIONS,
+            # AddMM appends C's batch strides to A's and B's.
+            "batch_strides": 3 * MAX_BATCH_DIMENSIONS,
         }.get(name, MAX_ELEMENTS)
         if (
             not buffer.data
@@ -234,6 +286,18 @@ def read_storage(entry, buffers):
         spans[name] = (buffer.data, buffer.data + count * itemsize)
         if name in MATRIX_PARAMETERS:
             counts[name] = count
+            continue
+        if name == "addmm_params":
+            if count != ctypes.sizeof(GEMMAddMMParams):
+                raise ValueError(
+                    "Steel GEMM AddMM parameters do not match GEMMAddMMParams"
+                )
+            record = GEMMAddMMParams.from_buffer_copy(
+                ctypes.string_at(buffer.data, count)
+            )
+            parameters[name] = {
+                field: getattr(record, field) for field, _ in GEMMAddMMParams._fields_
+            }
             continue
         parameters[name] = list(
             ctypes.cast(
@@ -257,24 +321,43 @@ def _batch_end(shape, strides):
     return sum((extent - 1) * stride for extent, stride in zip(shape, strides))
 
 
-def _check_params(info, params, shape, strides):
+def leading_dimension(value, minor, rows):
+    """Whether ``value`` is a stride matmul.cpp's check_transpose can pass.
+
+    check_transpose passes the stride of an operand's other axis as it is: it
+    covers the ``minor`` axis, or is zero when MLX broadcasts rows (a vector
+    folded into M), or is any bounded value when the operand has one row and
+    the kernel never steps by it. The callers bound every read by the
+    resulting extents separately.
+    """
+    return (
+        type(value) is int
+        and 0 <= value <= MAX_ELEMENTS
+        and (rows == 1 or value == 0 or value >= minor)
+    )
+
+
+def _check_params(info, params, shape, strides, groups=1):
     bm, bn, bk = info["bm"], info["bn"], info["bk"]
     if any(type(value) is not int for value in params.values()):
         raise ValueError("Steel GEMM parameters must be integers")
     m, n, k = params["M"], params["N"], params["K"]
     ndim = params["batch_ndim"]
+    # AddMM's C strides follow A's and B's; only use_out_source reads them.
+    operands = (3,) if info["constants"]["use_out_source"] else (2, 3)
     if (
         not 1 <= min(m, n, k) <= max(m, n, k) <= MAX_ELEMENTS
         or not 1 <= ndim <= MAX_BATCH_DIMENSIONS
         or len(shape) != ndim
-        or len(strides) != 2 * ndim
+        or len(strides) not in tuple(count * ndim for count in operands)
         or any(extent < 1 for extent in shape)
         or any(stride < 0 for stride in strides)
     ):
         raise ValueError("Steel GEMM dimensions are invalid")
-    # The leading dimensions cover the minor axis of each operand's layout.
-    minor_a = m if info["transposeA"] else k
-    minor_b = k if info["transposeB"] else n
+    leading = (
+        (params["lda"], m if info["transposeA"] else k, k if info["transposeA"] else m),
+        (params["ldb"], k if info["transposeB"] else n, n if info["transposeB"] else k),
+    )
     expected = {
         "ldd": n,
         "tiles_n": -(-n // bn),
@@ -285,12 +368,40 @@ def _check_params(info, params, shape, strides):
         "swizzle_log": 0,
         "gemm_k_iterations_aligned": k // bk,
     }
-    if (
-        any(params[name] != value for name, value in expected.items())
-        or not minor_a <= params["lda"] <= MAX_ELEMENTS
-        or not minor_b <= params["ldb"] <= MAX_ELEMENTS
+    if groups > 1:
+        expected.update(grouped_params(m, n, k, groups))
+        if (
+            info["transposeA"]
+            or not info["transposeB"]
+            or info["constants"]["use_out_source"]
+            or shape != [1]
+            or strides != [0, 0]
+        ):
+            raise ValueError("Grouped steel GEMM differs from conv.cpp's")
+    if any(params[name] != value for name, value in expected.items()) or not all(
+        leading_dimension(*operand) for operand in leading
     ):
         raise ValueError("Steel GEMM parameters differ from matmul.cpp's")
+
+
+def grouped_params(m, n, k, groups):
+    """conv.cpp explicit_gemm_conv_group_ND_gpu's steel_matmul_regular values.
+
+    Each of ``groups`` output batches multiplies one group's K-column slice
+    of the unfolded rows with that group's N x K weights and writes N columns
+    of rows ``ldd`` = groups * N apart; the kernel steps between groups by
+    GEMMParams' batch strides, since a batch shape of {1} leaves has_batch
+    false. The host passes A's and B's zero batch strides, which the kernel
+    reads only with has_batch.
+    """
+    return {
+        "lda": k * groups,
+        "ldb": k,
+        "ldd": n * groups,
+        "batch_stride_a": k,
+        "batch_stride_b": n * k,
+        "batch_stride_d": n,
+    }
 
 
 def plan(entry, counts, parameters, threads, execution):
@@ -301,14 +412,19 @@ def plan(entry, counts, parameters, threads, execution):
     strides = parameters.get("batch_strides")
     if not isinstance(params, dict) or set(params) != set(PARAMS_FIELDS):
         raise ValueError("Steel GEMM parameters are missing")
-    _check_params(info, params, shape, strides)
-    m, n, k, ndim = params["M"], params["N"], params["K"], params["batch_ndim"]
-    batches = math.prod(shape)
     if not isinstance(execution, dict) or set(execution) != {
         "workgroupCount",
         "workgroupSize",
     }:
         raise ValueError("Steel GEMM launch geometry is missing")
+    # More output batches than the batch shape holds: conv.cpp's grouped
+    # explicit GEMM, whose batch shape is {1}.
+    count = list(execution["workgroupCount"])
+    groups = count[2] if len(count) == 3 and type(count[2]) is int else 1
+    groups = groups if shape == [1] and groups > 1 else 1
+    _check_params(info, params, shape, strides, groups)
+    m, n, k, ndim = params["M"], params["N"], params["K"], params["batch_ndim"]
+    batches = groups if groups > 1 else math.prod(shape)
     if (
         list(execution["workgroupSize"]) != list(workgroup_size(entry))
         or list(execution["workgroupCount"])
@@ -316,8 +432,18 @@ def plan(entry, counts, parameters, threads, execution):
         or not max(params["tiles_n"], params["tiles_m"], batches) <= MAX_GROUPS
     ):
         raise ValueError("Steel GEMM launch does not match MLX's grid")
+    addmm = None
+    if info["constants"]["use_out_source"]:
+        addmm = _check_addmm(parameters.get("addmm_params"), strides[2 * ndim :])
     selected = select(
-        info["dtype"], info["transposeA"], info["transposeB"], m, n, k, ndim
+        info["dtype"],
+        info["transposeA"],
+        info["transposeB"],
+        m,
+        n,
+        k,
+        ndim,
+        *((addmm["alpha"], addmm["beta"]) if addmm else ()),
     )
     if selected != entry or split_k(m, n, k, batches):
         raise ValueError("Steel GEMM entry differs from MLX's routing")
@@ -325,16 +451,27 @@ def plan(entry, counts, parameters, threads, execution):
         raise ValueError("Steel GEMM output extent differs")
     # Without has_batch the kernel offsets each batch by GEMMParams' strides,
     # which _check_params ties to the last batch strides.
-    a_strides, b_strides = strides[:ndim], strides[ndim:]
+    # With use_out_source _check_addmm ties batch_stride_c to C's last batch
+    # stride in the same way.
     lda, ldb = params["lda"], params["ldb"]
     extents = {
         "A": (k - 1) * lda + m if info["transposeA"] else (m - 1) * lda + k,
         "B": (n - 1) * ldb + k if info["transposeB"] else (k - 1) * ldb + n,
     }
-    for name, values in (("A", a_strides), ("B", b_strides)):
-        if _batch_end(shape, values) + extents[name] > counts[name]:
+    operands = [("A", strides[:ndim]), ("B", strides[ndim : 2 * ndim])]
+    if addmm:
+        extents["C"] = (m - 1) * addmm["ldc"] + (n - 1) * addmm["fdc"] + 1
+        operands.append(("C", strides[2 * ndim :]))
+    for name, values in operands:
+        end = _batch_end(shape, values)
+        if groups > 1:
+            # The kernel offsets batch z by z times GEMMParams' batch stride.
+            end = (groups - 1) * params[f"batch_stride_{name.lower()}"]
+        if end + extents[name] > counts[name]:
             raise ValueError(f"Steel GEMM {name} batch exceeds its buffer")
-    return {
+    if groups > 1 and (groups - 1) * n + (m - 1) * params["ldd"] + n > counts["D"]:
+        raise ValueError("Steel GEMM D batch exceeds its buffer")
+    metadata = {
         "source": info["source"],
         "M": m,
         "N": n,
@@ -343,8 +480,27 @@ def plan(entry, counts, parameters, threads, execution):
         "ldb": ldb,
         "batches": batches,
         "constants": info["constants"],
-        "inert": dict(INERT_ADDMM),
     }
+    if groups > 1:
+        metadata["groups"] = groups
+    if addmm:
+        return {**metadata, "addmm": addmm}
+    return {**metadata, "inert": dict(INERT_ADDMM)}
+
+
+def _check_addmm(addmm, c_strides):
+    """GEMMAddMMParams as steel_matmul_regular_axpby fills it from C."""
+    if not isinstance(addmm, dict) or set(addmm) != set(INERT_ADDMM):
+        raise ValueError("Steel GEMM AddMM parameters are missing")
+    if (
+        any(type(addmm[name]) is not int for name in ("ldc", "fdc", "batch_stride_c"))
+        or any(type(addmm[name]) is not float for name in ("alpha", "beta"))
+        or not 0 <= addmm["ldc"] <= MAX_ELEMENTS
+        or not 0 <= addmm["fdc"] <= MAX_ELEMENTS
+        or addmm["batch_stride_c"] != c_strides[-1]
+    ):
+        raise ValueError("Steel GEMM AddMM parameters differ from matmul.cpp's")
+    return dict(addmm)
 
 
 def loader_access_assertions(entry):

@@ -126,6 +126,18 @@ def test_deadline_kills_the_worker(worker):
     assert not server.usable
 
 
+def test_refused_group_signal_kills_the_worker_itself(worker, monkeypatch):
+    # macOS answers EPERM for a group whose leader exited but is unreaped.
+    def refuse(pid, number):
+        raise PermissionError(1, "Operation not permitted")
+
+    server = MetalWorkerServer(worker)
+    monkeypatch.setattr(os, "killpg", refuse)
+    server._kill()
+    assert server.process.wait(timeout=30) == -9
+    server.terminate()
+
+
 def test_malformed_reply_is_rejected(worker):
     server = MetalWorkerServer(worker)
     with pytest.raises(RuntimeAdapterSetupError) as caught:

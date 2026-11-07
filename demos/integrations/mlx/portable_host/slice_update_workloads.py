@@ -28,7 +28,7 @@ LAYOUTS = (
 
 
 def cases():
-    for dtype in copies.DTYPES:
+    for dtype in copies.STORAGE_DTYPES:
         for operation in METHODS:
             for layout in LAYOUTS:
                 if layout == "special-storage" and dtype != "float32":

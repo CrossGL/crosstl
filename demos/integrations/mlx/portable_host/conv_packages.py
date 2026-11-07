@@ -1,0 +1,309 @@
+"""Cache translated MLX convolution entries: unfold, separable and implicit GEMM.
+
+``naive_unfold_nd``, ``naive_unfold_transpose_nd`` and ``depthwise_conv_1d``
+come from the pinned conv.metal with the options of its current-tree kernel
+gate (``test_current_conv``), at the one-thread workgroups conv_layout
+launches. ``depthwise_conv_2d`` comes from the same source at conv.cpp's
+threadgroups, one entry per conv.cpp pipeline with its function constants
+frozen. ``implicit_gemm_conv_2d`` and ``implicit_gemm_conv_3d`` come from
+steel_conv.metal and steel_conv_3d.metal with the options of
+``test_current_steel_conv``, and ``implicit_gemm_conv_2d_general`` from
+steel_conv_general.metal with those of ``test_current_steel_conv_general``,
+one entry per ``align_C`` value with the constant frozen. The Winograd weight,
+input and output transforms come from conv.metal with the options of
+``test_current_winograd``. Run as a module, it
+translates entries into a host package directory's cache ahead of execution,
+several processes at a time.
+"""
+
+import hashlib
+import sys
+from pathlib import Path
+
+from crosstl.project import ProjectConfig
+from demos.integrations.mlx.portable_host import conv_layout as layout
+from demos.integrations.mlx.portable_host import conv_winograd_layout as winograd
+from demos.integrations.mlx.portable_host.matmul_packages import (
+    TranslatedEntryCache,
+    build_record,
+    cli,
+    run_builds,
+)
+from demos.integrations.mlx.tests.kernels import steel_conv_general_model as general
+from demos.integrations.mlx.tests.kernels import steel_conv_model as steel
+
+# The directory under a host package root that HostRuntime caches entries in.
+CACHE_DIRECTORY = "conv"
+# depthwise_conv_2d indexes its threadgroup tile with simd_gid * 32 + simd_lid,
+# the linear thread index of 32-lane SIMD groups.
+SIMD_SIZE = 32
+# test_current_conv: the depthwise kernels accumulate into `float o = 0.`,
+# which GLSL and HLSL compilers may fold away; the software binary32 addition
+# keeps Metal's +0.0.
+ADDITIVE_PROFILE = "rne-flush"
+
+
+def implicit_project_config(root, output_dir, target, entry):
+    """One steel_conv entry with the current-tree steel_conv gate's options."""
+    model = layout.signature(entry)["model"]
+    return ProjectConfig(
+        root=root,
+        source_roots=("mlx/backend/metal/kernels",),
+        include_patterns=(model.source,),
+        include_dirs=(".",),
+        targets=(target,),
+        output_dir=output_dir,
+        entry_points={model.source: (entry,)},
+        entry_workgroup_size_rules={model.source: {entry: model.workgroup_size}},
+        index_range_assertions=(
+            steel.index_assertions(model) if target == "opengl" else ()
+        ),
+        source_options={"metal": steel.metal_source_options()},
+    )
+
+
+def general_project_config(root, output_dir, target, entry):
+    """One steel_conv_general entry with the current-tree gate's options."""
+    info = layout.signature(entry)
+    model = info["model"]
+    return ProjectConfig(
+        root=root,
+        source_roots=("mlx/backend/metal/kernels",),
+        include_patterns=(model.source,),
+        include_dirs=(".",),
+        targets=(target,),
+        output_dir=output_dir,
+        entry_points={model.source: (model.name,)},
+        specialization_constants=dict(info["constants"]),
+        freeze_specialization_constants=True,
+        entry_workgroup_size_rules={model.source: {model.name: model.workgroup_size}},
+        index_range_assertions=(
+            general.index_assertions(model) if target == "opengl" else ()
+        ),
+        source_options={"metal": steel.metal_source_options()},
+    )
+
+
+def winograd_project_config(root, output_dir, target, entry):
+    """One Winograd transform with the current-tree Winograd gate's options.
+
+    OpenGL and DirectX lower the SIMD-group products in software with the
+    gate's rounding profile and check the precondition that bounds the
+    transform's channel loop.
+    """
+    stage = winograd.signature(entry)["stage"]
+    metal = {
+        "max_template_specializations": 256,
+        "max_template_materialization_work": 16384,
+        "preserve_resource_origins": True,
+        "cooperative_matrix_fragment_mapping": winograd.FRAGMENT_MAPPING,
+        "cooperative_matrix_fragment_mapping_provenance": (
+            winograd.FRAGMENT_MAPPING_PROVENANCE
+        ),
+    }
+    preconditions = []
+    if target in {"opengl", "directx"}:
+        options = {
+            "cooperative_matrix_software_lowering": True,
+            "software_subgroup_width": winograd.SIMD_SIZE,
+            "cooperative_matrix_mma_profile": winograd.MMA_PROFILE,
+        }
+        if target == "directx":
+            options["relative_wave_shuffle_out_of_range"] = "self"
+        metal["target_options"] = {target: options}
+        preconditions = [
+            dict(
+                source=winograd.SOURCE,
+                entryPoint=entry,
+                **winograd.METADATA_PRECONDITIONS[stage],
+            )
+        ]
+    return ProjectConfig(
+        root=root,
+        source_roots=("mlx/backend/metal/kernels",),
+        include_patterns=(winograd.SOURCE,),
+        include_dirs=(".",),
+        targets=(target,),
+        output_dir=output_dir,
+        entry_points={winograd.SOURCE: (entry,)},
+        entry_workgroup_size_rules={
+            winograd.SOURCE: {entry: winograd.WORKGROUPS[stage]}
+        },
+        metadata_preconditions=preconditions,
+        index_range_assertions=[
+            {
+                "source": winograd.SOURCE,
+                "expression": expression,
+                "minimum": 0,
+                "maximum": winograd.SIGNED_MAX,
+            }
+            for expression in (
+                winograd.OPENGL_INDEX_RANGE_ASSERTIONS[stage]
+                if target == "opengl"
+                else ()
+            )
+        ],
+        source_options={"metal": metal},
+    )
+
+
+def project_config(root, output_dir, target, entry):
+    """One conv.metal entry with the current-tree conv gate's options."""
+    info = layout.signature(entry)
+    if "stage" in info:
+        return winograd_project_config(root, output_dir, target, entry)
+    if info["kind"] == "implicit":
+        return implicit_project_config(root, output_dir, target, entry)
+    if info["kind"] == "general":
+        return general_project_config(root, output_dir, target, entry)
+    target_options = {}
+    if info["kind"] in {"dw1", "dw2"} and target in {"opengl", "directx"}:
+        target_options[target] = {"binary32_additive_profile": ADDITIVE_PROFILE}
+    if info["kind"] == "dw2" and target in {"opengl", "directx"}:
+        target_options[target]["software_subgroup_width"] = SIMD_SIZE
+    source_entry = layout.source_entry(entry)
+    assertions = []
+    if target == "opengl":
+        assertions = [
+            {
+                "source": layout.SOURCE,
+                "expression": expression,
+                "minimum": 0,
+                "maximum": layout.SIGNED_MAX,
+            }
+            for expression in layout.OPENGL_INDEX_RANGE_ASSERTIONS[
+                layout.assertion_kind(entry)
+            ]
+        ]
+    return ProjectConfig(
+        root=root,
+        source_roots=("mlx/backend/metal/kernels",),
+        include_patterns=(layout.SOURCE,),
+        include_dirs=(".",),
+        targets=(target,),
+        output_dir=output_dir,
+        entry_points={layout.SOURCE: (source_entry,)},
+        entry_workgroup_size_rules={
+            layout.SOURCE: {source_entry: layout.workgroup_size(entry)}
+        },
+        specialization_constants=dict(info.get("constants", {})),
+        freeze_specialization_constants=info["kind"] == "dw2",
+        index_range_assertions=assertions,
+        source_options={
+            "metal": {
+                "preserve_resource_origins": True,
+                "max_template_specializations": 256,
+                "max_template_materialization_work": 16384,
+                **({"target_options": target_options} if target_options else {}),
+            }
+        },
+    )
+
+
+def _recipe_hashes():
+    here = Path(__file__)
+    return {
+        "recipeHash": hashlib.sha256(here.read_bytes()).hexdigest(),
+        "layoutHash": (
+            hashlib.sha256(here.with_name("conv_layout.py").read_bytes()).hexdigest()
+        ),
+    }
+
+
+class ConvPackageCache(TranslatedEntryCache):
+    LABEL = "Convolution"
+    SOURCE = layout.SOURCE
+    PREFIX = "conv"
+
+    def signature(self, entry):
+        return layout.signature(entry)
+
+    def source_path(self, entry):
+        return layout.source(entry)
+
+    def source_entry(self, entry):
+        return layout.source_entry(entry)
+
+    def workgroup_size(self, entry):
+        return layout.workgroup_size(entry)
+
+    def project_config(self, output_dir, entry):
+        return project_config(self.root, output_dir, self.target, entry)
+
+    def recipe_hashes(self):
+        return _recipe_hashes()
+
+
+def _build_one(root, packages, target, entry):
+    cache = ConvPackageCache(root, Path(packages) / CACHE_DIRECTORY, target)
+    return build_record(cache, entry)
+
+
+def build_entries(root, packages, target, entries, jobs):
+    """Translate ``entries`` into ``packages``' cache, ``jobs`` at a time."""
+    return run_builds(
+        _build_one,
+        layout.signature,
+        "Convolution",
+        root,
+        Path(packages).resolve(),
+        target,
+        entries,
+        jobs,
+    )
+
+
+def verification_entries():
+    """The entries verify_conv's cases dispatch."""
+    from demos.integrations.mlx.portable_host import verify_conv
+
+    entries = [
+        entry
+        for case in verify_conv.CASES
+        for entry in verify_conv.case_record(case)["convEntries"]
+    ]
+    return list(dict.fromkeys(entries))
+
+
+def build_products(root, packages, target, entries, jobs):
+    """Translate the explicit routes' steel GEMM and split-K entries."""
+    from demos.integrations.mlx.portable_host import gemm_packages, gemm_splitk_packages
+
+    regular = [entry for entry in entries if entry.startswith("steel_gemm_fused_")]
+    split = [entry for entry in entries if entry not in regular]
+    return [
+        *(
+            gemm_packages.build_entries(root, packages, target, regular, jobs)
+            if regular
+            else []
+        ),
+        *(
+            gemm_splitk_packages.build_entries(root, packages, target, split, jobs)
+            if split
+            else []
+        ),
+    ]
+
+
+def product_entries():
+    """The steel GEMM and split-K entries verify_conv's cases dispatch."""
+    from demos.integrations.mlx.portable_host import verify_conv
+
+    entries = [
+        entry
+        for case in verify_conv.CASES
+        for entry in verify_conv.case_record(case)["productEntries"]
+    ]
+    return list(dict.fromkeys(entries))
+
+
+def main(argv=None):
+    """Translate conv.metal entries, or with ``products`` first the GEMM entries."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["products"]:
+        return cli(argv[1:], __doc__, build_products, product_entries)
+    return cli(argv, __doc__, build_entries, verification_entries)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

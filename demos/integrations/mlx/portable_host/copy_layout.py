@@ -4,6 +4,8 @@ import ctypes
 import itertools
 import math
 
+from demos.integrations.mlx.portable_host.element_storage import CTYPES
+
 DTYPES = {
     "src": "uint32",
     "dst": "uint32",
@@ -46,6 +48,26 @@ def destination_indices(metadata):
             yield from range(base, base + length * stride, stride)
         else:
             yield from itertools.repeat(base, length)
+
+
+def distinct_by_strides(shape, strides):
+    """Whether the strides prove coordinates of ``shape`` reach distinct indices.
+
+    Ordered by stride magnitude over the axes longer than one, a stride that
+    exceeds the furthest reach of all smaller axes, ``sum((size - 1) * |s|)``,
+    cannot be cancelled by them, so two coordinates that differ map to
+    different indices. ``False`` decides nothing: such layouts may still be
+    one-to-one and need an enumeration.
+    """
+    reach = 0
+    for size, stride in sorted(
+        ((size, abs(stride)) for size, stride in zip(shape, strides) if size > 1),
+        key=lambda axis: axis[1],
+    ):
+        if stride <= reach:
+            return False
+        reach += (size - 1) * stride
+    return True
 
 
 def launch_regions(shape, source_strides, destination_strides, destination_offset):
@@ -91,7 +113,7 @@ def validate(buffers, logical_size, *, dtype="uint32"):
         or not 0 < logical_size <= MAX_DESTINATION_ELEMENTS
     ):
         raise ValueError("Native copy logical size exceeds signed index bounds")
-    if dtype not in {"uint32", "bool_", "int64", "uint64", "float16", "bfloat16"}:
+    if dtype not in CTYPES:
         raise ValueError("Unsupported native copy storage dtype")
     rank = buffers["src_shape"].count
     if not 2 <= rank <= 64:
@@ -152,9 +174,7 @@ def validate(buffers, logical_size, *, dtype="uint32"):
         or sum(abs(extent) for extent in extents) >= MAX_DESTINATION_ELEMENTS
     ):
         raise ValueError("Native copy destination addresses exceed its allocation")
-    itemsize = {"bool_": 1, "float16": 2, "bfloat16": 2, "int64": 8, "uint64": 8}.get(
-        dtype, 4
-    )
+    itemsize = ctypes.sizeof(CTYPES[dtype])
     source, destination = buffers["src"], buffers["dst"]
     if max(source.data, destination.data) < min(
         source.data + source.count * itemsize,
@@ -174,6 +194,8 @@ def validate(buffers, logical_size, *, dtype="uint32"):
     }
     if any(not 1 <= count <= 65535 for count in metadata["workgroupCount"]):
         raise ValueError("Native copy launch exceeds 65535 groups per axis")
-    if len(set(destination_indices(metadata))) != logical_size:
+    if not distinct_by_strides(shape, destination_strides) and (
+        len(set(destination_indices(metadata))) != logical_size
+    ):
         raise ValueError("Native copy destination elements overlap")
     return metadata

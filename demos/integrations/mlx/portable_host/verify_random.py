@@ -8,7 +8,11 @@ import sys
 import unittest
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import random_evidence, random_workloads
+from demos.integrations.mlx.portable_host import (
+    elementwise_evidence,
+    random_evidence,
+    random_workloads,
+)
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.random_packages import ENTRIES, load_index
 from demos.integrations.mlx.portable_host.reduction_packages import (
@@ -230,10 +234,22 @@ def verify(args):
             raise ValueError("Random proof requires both key layout entries")
         for event in random_events:
             random_evidence.audit_event(np, event)
-        verify_native_identity(
-            [event for event in trace if event["entry"] not in ENTRIES], target
+        installed = {*base["descriptors"], *random["descriptors"]}
+        # Scalar-operand kernels (sv_, vs_) no family installs run from the
+        # lazy cache, on the native runtime directly; their audit checks the
+        # native modules the parity adapter's identity steps cover otherwise.
+        lazy = elementwise_evidence.audit_lazy_events(
+            trace, args.mlx_root, args.packages, target, installed
         )
-        checked = 0
+        verify_native_identity(
+            [
+                event
+                for event in elementwise_evidence.remaining(trace, lazy)
+                if event["entry"] not in ENTRIES
+            ],
+            target,
+        )
+        checked = len(lazy)
         for directory, index, variants in (
             (args.packages, base, False),
             (args.random, random, False),

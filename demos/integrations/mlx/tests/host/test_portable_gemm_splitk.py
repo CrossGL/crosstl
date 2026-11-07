@@ -95,12 +95,15 @@ def test_signature_accepts_exactly_the_host_entries():
         assert info["kind"] == "splitk" and info["model"].name == name
         assert layout.workgroup_size(name) == (32, 2, 2)
     for oname in layout.DTYPES:
-        name = f"steel_gemm_splitk_accum_{oname}_float32"
-        assert layout.signature(name)["kind"] == "accum"
-        assert layout.workgroup_size(name) == (1, 1, 1)
+        for suffix, kind in (("", "accum"), ("_axbpy", "axbpy")):
+            name = f"steel_gemm_splitk_accum_{oname}_float32{suffix}"
+            assert layout.signature(name)["kind"] == kind
+            assert layout.signature(name)["model"].axpby == (kind == "axbpy")
+            assert layout.workgroup_size(name) == (1, 1, 1)
     for name in (
-        "steel_gemm_splitk_accum_float32_float32_axbpy",
+        "steel_gemm_splitk_accum_float32_float32_axpby",
         "steel_gemm_splitk_accum_complex64_complex64",
+        "steel_gemm_splitk_accum_complex64_complex64_axbpy",
         "steel_gemm_splitk_nn_complex64_complex64_bm16_bn16_bk16_wm2_wn2"
         "_MN_taligned_K_taligned",
         "steel_gemm_splitk_nn_float32_float32_bm64_bn16_bk16_wm2_wn2"
@@ -500,15 +503,16 @@ def test_package_configs_match_the_splitk_gate(tmp_path, kind):
 def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
     import concurrent.futures
 
-    from demos.integrations.mlx.portable_host import matmul_packages
+    from demos.integrations.mlx.portable_host import matmul_packages, verify_addmm
 
     entries = gemm_splitk_packages.verification_entries()
+    addmm = [verify_addmm.case_record(case) for case in verify_addmm.CASES]
     assert set(entries) == {
         name
-        for record in RECORDS
+        for record in RECORDS + [item for item in addmm if item["family"] == "splitk"]
         for name in (record["entry"], record["route"]["accum"])
     }
-    assert len(set(entries)) == 10
+    assert len(entries) == len(set(entries)) == 15
     calls = []
 
     def build(root, directory, target, entry):

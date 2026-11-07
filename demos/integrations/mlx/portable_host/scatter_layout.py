@@ -1,4 +1,10 @@
-"""Validate general-scatter storage, slice bounds and upstream launch planning."""
+"""Validate general-scatter storage, slice bounds and upstream launch planning.
+
+Storage follows the general gather's bound. Each launch keeps the per-axis
+workgroup limit: the update slice runs along x and the host splits index rows
+into launches of at most 65535 rows, each with MLX's work-per-thread choice
+for its own rows.
+"""
 
 import ctypes
 import itertools
@@ -7,6 +13,7 @@ import re
 
 from demos.integrations.mlx.portable_host.gather_layout import (
     MAX_ELEMENTS,
+    MAX_STORAGE_ELEMENTS,
     TYPES,
     values,
 )
@@ -61,13 +68,13 @@ def validate(entry, buffers, logical_size, execution):
         "out": dtype,
         **{f"idx{i}": index_dtype for i in range(count)},
     }
-    if set(buffers) != set(dtypes) or not 0 < logical_size <= MAX_ELEMENTS:
+    if set(buffers) != set(dtypes) or not 0 < logical_size <= MAX_STORAGE_ELEMENTS:
         raise ValueError("Native scatter buffers or output size do not match")
     for name, buffer in buffers.items():
         if (
             not buffer.data
             or buffer.dtype != dtypes[name].encode("ascii")
-            or not 0 < buffer.count <= MAX_ELEMENTS
+            or not 0 < buffer.count <= MAX_STORAGE_ELEMENTS
             or buffer.output != int(name == "out")
         ):
             raise ValueError("Native scatter buffer layout or direction is invalid")
@@ -82,7 +89,7 @@ def validate(entry, buffers, logical_size, execution):
         or not 0 <= index_rank <= 64
         or update_rank != rank + index_rank
         or update_rank > 64
-        or not 1 <= index_size <= MAX_ELEMENTS
+        or not 1 <= index_size <= MAX_STORAGE_ELEMENTS
         or not 1 <= slice_size <= MAX_ELEMENTS
     ):
         raise ValueError("Native scatter ranks or extents are invalid")
@@ -115,13 +122,15 @@ def validate(entry, buffers, logical_size, execution):
     slices = update_shape[index_rank:]
     index_shape = update_shape[:index_rank]
     if (
-        any(not 1 <= size <= MAX_ELEMENTS for size in shape + update_shape)
-        or any(not 0 <= step <= MAX_ELEMENTS for step in strides + update_strides)
+        any(not 1 <= size <= MAX_STORAGE_ELEMENTS for size in shape + update_shape)
+        or any(
+            not 0 <= step <= MAX_STORAGE_ELEMENTS for step in strides + update_strides
+        )
         or strides != [math.prod(shape[i + 1 :]) for i in range(rank)]
         or math.prod(shape) != logical_size
         or math.prod(index_shape) != index_size
         or math.prod(slices) != slice_size
-        or index_size * slice_size > MAX_ELEMENTS
+        or index_size * slice_size > MAX_STORAGE_ELEMENTS
         or any(size > extent for size, extent in zip(slices, shape))
         or len(set(axes)) != count
         or any(not 0 <= axis < rank for axis in axes)
@@ -138,7 +147,12 @@ def validate(entry, buffers, logical_size, execution):
         )
     ):
         raise ValueError("Native scatter update span or contiguity is invalid")
-    if work != work_per_thread(index_rank, index_size, logical_size) or execution != {
+    if (
+        work != work_per_thread(index_rank, index_size, logical_size)
+        or (index_size + work - 1) // work > MAX_ELEMENTS
+    ):
+        raise ValueError("Native scatter launch exceeds per-axis workgroup limits")
+    if execution != {
         "workgroupCount": [slice_size, (index_size + work - 1) // work, 1],
         "workgroupSize": [1, 1, 1],
     }:
@@ -149,7 +163,7 @@ def validate(entry, buffers, logical_size, execution):
         current_shape = shapes[i * index_rank : (i + 1) * index_rank]
         current_steps = steps[i * index_rank : (i + 1) * index_rank]
         if current_shape != index_shape or any(
-            not 0 <= step <= MAX_ELEMENTS for step in current_steps
+            not 0 <= step <= MAX_STORAGE_ELEMENTS for step in current_steps
         ):
             raise ValueError("Native scatter index layouts must have matching shapes")
         span = 1 + sum(
