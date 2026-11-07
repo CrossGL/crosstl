@@ -184,9 +184,14 @@ def test_mesh_without_a_thread_index_parameter_gains_one_for_the_index_copy(
     assert "if (output_invocation == 0u) {" in crossgl
 
 
-def test_mesh_stage_with_host_chosen_size_needs_the_threadgroup_size(tmp_path):
+def test_mesh_stage_with_host_chosen_size_takes_the_host_size(tmp_path):
     with pytest.raises(HostDefinedWorkgroupSizeError, match="Entry 'lines'"):
-        _translate(tmp_path, LINES, "directx")
+        _translate(tmp_path, LINES, "slang")
+    # HLSL reads the size from macros the host defines when it compiles the shader.
+    assert (
+        "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, CROSSGL_WORKGROUP_SIZE_Z)]"
+        in _translate(tmp_path, LINES, "directx")
+    )
     # SPIR-V lets the pipeline set the size the host chooses.
     spirv = _translate(tmp_path, LINES, "vulkan")
     assert "BuiltIn WorkgroupSize" in spirv

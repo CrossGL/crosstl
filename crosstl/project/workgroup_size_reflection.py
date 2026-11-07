@@ -12,7 +12,8 @@ A reflected ``executionConfig`` keeps the size a pipeline gets without specializ
 A kernel whose threadgroup size the source's host chooses at dispatch time has no size of its own. CrossTL gives it
 the specialization constants named in :data:`HOST_WORKGROUP_SIZE_CONSTANT_NAMES`, with a placeholder default of one,
 and its GLSL source reads the size from the :data:`HOST_WORKGROUP_SIZE_MACROS` when no specialization step runs.
-Such an entry reports ``host_workgroup_size`` with those ids and macros and no size, so that no consumer dispatches
+HLSL has no specialization constants, so its ``[numthreads]`` always names the macros, which the host defines when
+it compiles the shader. Such an entry reports ``host_workgroup_size`` with those ids and macros and no size, so that no consumer dispatches
 the placeholder: :func:`crosstl.translator.host_workgroup_size.require_static_workgroup_size` refuses it.
 """
 
@@ -30,6 +31,7 @@ __all__ = [
     "LOCAL_SIZE_ID_EXTENSION",
     "WorkgroupSizeReflectionError",
     "glsl_execution_config",
+    "hlsl_host_chosen_execution_config",
     "spirv_entry_execution_config",
     "spirv_workgroup_size_builtin",
 ]
@@ -137,6 +139,27 @@ def spirv_entry_execution_config(
 
 def _layout_values(layout: Mapping[str, Any], suffix: str) -> list[Any]:
     return [layout.get(f"local_size_{axis}{suffix}") for axis in _AXES]
+
+
+def hlsl_host_chosen_execution_config(
+    operands: Sequence[Any], *, entry: str
+) -> dict[str, Any] | None:
+    """The ``executionConfig`` of an HLSL entry whose ``[numthreads]`` names the host's size macros, else ``None``.
+
+    The entry has neither a size nor specialization ids, only the :data:`HOST_WORKGROUP_SIZE_MACROS` the host
+    defines when it compiles the shader.
+    """
+    if (
+        tuple(str(operand).strip() for operand in operands)
+        != HOST_WORKGROUP_SIZE_MACROS
+    ):
+        return None
+    record = {
+        "entry": entry,
+        "reason": HOST_CHOSEN_REASON,
+        "macros": list(HOST_WORKGROUP_SIZE_MACROS),
+    }
+    return {HOST_WORKGROUP_SIZE_KEY: record}
 
 
 def glsl_execution_config(

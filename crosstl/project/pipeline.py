@@ -65,6 +65,7 @@ from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
     dxc_file_path,
+    dxc_host_workgroup_size_check_arguments,
     dxc_library_command_tool,
     dxc_long_path_command,
     dxc_profile_for_source,
@@ -58609,7 +58610,10 @@ def _directx_dxc_smoke_commands(
         source = artifact_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         source = ""
-    compiler_arguments = dxc_compiler_arguments_for_source(source)
+    compiler_arguments = (
+        *dxc_compiler_arguments_for_source(source),
+        *dxc_host_workgroup_size_check_arguments(source),
+    )
     entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
         return [
