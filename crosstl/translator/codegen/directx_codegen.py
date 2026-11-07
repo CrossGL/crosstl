@@ -348,6 +348,7 @@ from .hlsl_refusals import (
 )
 from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
+from .hlsl_specialization_macros import render_hlsl_required_specialization_constant
 from .hlsl_storage_array_views import (
     storage_array_pointer_type,
     view_storage_array_parameters,
@@ -12391,19 +12392,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     source_location=source_location,
                 )
 
+            # A constant without a default reads a host macro (hlsl_specialization_macros).
             value = self.directx_specialization_constant_value(node)
-            if value is None:
-                raise DirectXSpecializationConstantError(
-                    f"DirectX specialization constant '{name}' (id {constant_id}, "
-                    f"type '{source_type}') has no concrete/default value; HLSL "
-                    "cannot preserve deferred specialization without a generated "
-                    "DirectX variant",
-                    constant_name=name,
-                    constant_id=constant_id,
-                    constant_type=source_type,
-                    reason="missing-required-value",
-                    source_location=source_location,
-                )
 
             previous = records_by_id.get(constant_id)
             if previous is not None:
@@ -12474,6 +12464,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def generate_directx_specialization_constant_declaration(self, record):
+        if record["value"] is None:
+            return render_hlsl_required_specialization_constant(
+                record["name"], record["id"], record["mapped_type"]
+            )
         declaration = format_c_style_array_declaration(
             record["mapped_type"], record["name"]
         )

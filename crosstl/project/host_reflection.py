@@ -35,6 +35,9 @@ from crosstl.project.workgroup_size_reflection import (
 from crosstl.translator.codegen.glsl_vulkan_descriptor_sets import (
     DESCRIPTOR_BINDING_MACRO,
 )
+from crosstl.translator.codegen.hlsl_specialization_macros import (
+    HLSL_SPECIALIZATION_MACRO_RE,
+)
 from crosstl.translator.codegen.stage_utils import compute_local_size
 from crosstl.translator.dispatch_region_contract import parse_dispatch_region_header
 from crosstl.translator.frozen_specializations import parse_frozen_specializations
@@ -1336,6 +1339,27 @@ def _reflect_hlsl_source(
             if resource.get("scalarLayout", {}).get("runtimeSized") is True
         },
     )
+    # A specialization constant without a default reads a host macro behind an #error guard
+    # (crosstl.translator.codegen.hlsl_specialization_macros); it is required, not a plain constant.
+    specialization_constants = []
+    specialization_spans = []
+    for match in HLSL_SPECIALIZATION_MACRO_RE.finditer(source):
+        specialization_spans.append(match.span())
+        specialization_constants.append(
+            {
+                "name": match.group("name"),
+                "kind": "preprocessor-macro",
+                "id": _int_value(match.group("id")),
+                "macro": match.group("macro"),
+                "dtype": match.group("type"),
+                "sourceType": match.group("type"),
+                "required": True,
+                "overridden": False,
+                "overrideStatus": "not-overridden",
+                "status": "required",
+                "source": "hlsl.preprocessor_macro",
+            }
+        )
     constants = [
         {
             "name": match.group("name"),
@@ -1346,6 +1370,7 @@ def _reflect_hlsl_source(
             "source": "hlsl.const",
         }
         for match in HLSL_CONSTANT_RE.finditer(source)
+        if not any(start <= match.start() < end for start, end in specialization_spans)
     ]
     return _finalize_reflection(
         parser="directx-reflection",
@@ -1353,6 +1378,7 @@ def _reflect_hlsl_source(
         entry_points=entry_points,
         resources=resources,
         constants=constants,
+        specialization_constants=specialization_constants,
         diagnostics=[],
     )
 
