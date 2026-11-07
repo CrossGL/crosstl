@@ -137,7 +137,7 @@ def test_upstream_host_only_group_runs_on_both_workers_without_kernels():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 785
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 790
     assert all(
         name.startswith(
             (
@@ -193,6 +193,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_quantized.TestQuantized.test_fp_vjp_scales_throws",
                 "test_quantized.TestQuantized.test_mode_error_cases",
                 "test_quantized.TestQuantized.test_qmm_fp_type",
+                "test_quantized.TestQuantized.test_quantize_strided",
                 "test_fast_sdpa.TestFastSDPA.test_",
                 "test_fast_gated_delta.TestGatedDelta.test_",
             )
@@ -313,7 +314,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 13
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 771 and not set(opengl) & set(excluded)
+    assert len(opengl) == 776 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -452,8 +453,9 @@ def test_upstream_op_groups_partition_the_inventory():
                 "test_device.",
                 "test_memory.",
                 "test_constants.",
+                "test_zero_copy.",
             ),
-            36,
+            37,
         ),
         ("rope", ("test_fast.", "test_upsample."), 9),
         # The Walsh-Hadamard transforms of test_ops run with the FFTs.
@@ -475,11 +477,18 @@ def test_upstream_op_groups_partition_the_inventory():
         ("torch-conv", ("test_conv.", "test_conv_transpose."), 18),
         (
             "torch-layers",
-            ("test_bf16.", "test_nn.", "test_optimizers.", "test_upsample."),
-            5,
+            (
+                "test_bf16.",
+                "test_autograd.",
+                "test_fft.",
+                "test_nn.",
+                "test_optimizers.",
+                "test_upsample.",
+            ),
+            8,
         ),
         ("torch-upsample", ("test_upsample.",), 2),
-        ("quantized-products", ("test_quantized.",), 11),
+        ("quantized-products", ("test_quantized.",), 12),
         ("quantized-sorted", ("test_quantized.",), 2),
         ("quantized-fp-tails", ("test_quantized.",), 1),
         ("quantized-matmul", ("test_quantized.",), 3),
@@ -1181,6 +1190,7 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
     torch = job["steps"][names.index("Install the pinned PyTorch CPU reference")]
     assert torch["if"] == "startsWith(matrix.group, 'torch-')"
     assert '"torch==2.14.1"' in torch["run"]
+    assert 'python -m pip install "ml_dtypes==0.6.0"' in torch["run"]
     assert "--index-url https://download.pytorch.org/whl/cpu" in torch["run"]
     assert "--extra-index-url" not in torch["run"]
     assert names.index(torch["name"]) < names.index("Build adapted upstream MLX")
@@ -1208,6 +1218,38 @@ def test_torch_reference_tests_refuse_to_run_without_torch(monkeypatch):
         )
     for group in ops.GROUPS:
         if group not in groups:
+            ops.require_reference_modules(ops.upstream_tests("opengl", group))
+
+
+def test_ml_dtypes_reference_test_refuses_to_run_without_ml_dtypes(monkeypatch):
+    # Every test that needs another reference module runs in a torch group.
+    needed = set().union(*ops.REFERENCE_MODULE_TESTS.values())
+    assert needed == {"test_bf16.TestBF16.test_conversion_ml_dtypes"}
+    assert needed <= ops.TORCH_TESTS
+    assert needed <= set(upstream_module_groups.TORCH_LAYER_TESTS)
+    find_spec = ops.importlib.util.find_spec
+    present = object()
+    monkeypatch.setattr(
+        ops.importlib.util,
+        "find_spec",
+        lambda name, *args: (
+            None
+            if name == "ml_dtypes"
+            else present if name == "torch" else find_spec(name, *args)
+        ),
+    )
+    with pytest.raises(RuntimeError, match="ml_dtypes reference tests need ml_dtypes"):
+        ops.require_reference_modules(ops.upstream_tests("directx", "torch-layers"))
+    # Without the test, ml_dtypes is not needed.
+    ops.require_reference_modules(
+        tuple(
+            name
+            for name in upstream_module_groups.TORCH_LAYER_TESTS
+            if name not in needed
+        )
+    )
+    for group in ops.GROUPS:
+        if group != "torch-layers":
             ops.require_reference_modules(ops.upstream_tests("opengl", group))
 
 

@@ -183,7 +183,8 @@ SERIALIZATION_TESTS = _tests(
 )
 
 # test_optimizers, the random samplers no other verifier runs, the bfloat16
-# operator sweeps, and the device, stream, memory and constant tests.
+# operator sweeps, and the device, stream, memory, constant and copying
+# asarray tests.
 TRAINING_TESTS = (
     _tests(
         "test_optimizers",
@@ -242,6 +243,8 @@ TRAINING_TESTS = (
     )
     + _tests("test_memory", "TestMemory", ("active_memory_count", "memory_info"))
     + _tests("test_constants", "TestConstants", ("newaxis_for_reshaping_arrays",))
+    # asarray's copy=True copy of a million int32s, read back through a gather.
+    + _tests("test_zero_copy", "TestZeroCopy", ("copy_true_copies",))
 )
 
 # test_fast's rotary embeddings and fused transforms, and the antialiased
@@ -273,7 +276,7 @@ ROPE_TESTS = _tests(
 # whose twiddles the generate_bluestein_twiddles kernel tabulates; it runs
 # only where mx.metal.is_available() (METAL_PATH_TESTS). The frequency and
 # shift tests run with the operations; test_fft_grads compares against
-# PyTorch, which the host environment does not install.
+# PyTorch and runs with the other PyTorch-reference tests (TORCH_LAYER_TESTS).
 FFT_TESTS = _tests(
     "test_fft",
     "TestFFT",
@@ -457,9 +460,11 @@ ATTENTION_SWEEP_TESTS = upstream_subtest_shards.shard_names(
 # 2-D, 3-D, depthwise, general and asymmetrically padded convolutions, the
 # transposed ones with and without output padding, and their gradients; then
 # batch normalization, AdamW, nearest, linear and cubic upsampling with and
-# without antialiasing, and bfloat16 conversions from torch tensors. They skip
-# themselves without torch, so only their jobs install the pinned CPU wheel,
-# and the worker refuses to run them without it (TORCH_GROUPS).
+# without antialiasing, bfloat16 conversions from torch tensors and ml_dtypes
+# arrays, the cumulative max and min VJPs and the FFT gradients. They skip
+# themselves without torch (or ml_dtypes), so only their jobs install the
+# pinned CPU wheel and ml_dtypes, and the worker refuses to run them without
+# those (TORCH_GROUPS, REFERENCE_MODULE_TESTS).
 TORCH_CONV_TESTS = _tests(
     "test_conv",
     "TestConv",
@@ -490,7 +495,9 @@ TORCH_CONV_TESTS = _tests(
     ),
 )
 TORCH_LAYER_TESTS = (
-    _tests("test_bf16", "TestBF16", ("conversion",))
+    _tests("test_bf16", "TestBF16", ("conversion", "conversion_ml_dtypes"))
+    + _tests("test_autograd", "TestAutograd", ("cummax_cummin_grad_vs_torch",))
+    + _tests("test_fft", "TestFFT", ("fft_grads",))
     + _tests("test_nn", "TestLayers", ("batch_norm_matches_torch",))
     + _tests("test_optimizers", "TestOptimizers", ("adamw_matches_pytorch",))
     + _tests(
@@ -510,10 +517,11 @@ TORCH_UPSAMPLE_TESTS = _tests(
 )
 TORCH_GROUPS = ("torch-conv", "torch-layers", "torch-upsample")
 
-# test_quantized's products whose operands QQMatmul and GatherQQMM quantize:
-# the block quantize and quantize-dequantize kernels, dispatch_qmv's mxfp8
-# and nvfp4 routes and gather_qmv's, among them the kernels that read the
-# weights' global scales, and qmm's for QQMatmul's globally scaled bfloat16
+# nvfp4 dequantization with broadcast, zero-stride scales against contiguous
+# ones (quantize_strided); then test_quantized's products whose operands
+# QQMatmul and GatherQQMM quantize: the block quantize and quantize-dequantize
+# kernels, dispatch_qmv's mxfp8 and nvfp4 routes and gather_qmv's, among them
+# the kernels that read the weights' global scales, and qmm's for QQMatmul's globally scaled bfloat16
 # matrix products (qqmm_global_scale_matrix_kernels, which runs only where
 # mx.metal.is_available(): METAL_PATH_TESTS). GatherQMM's gathered products
 # of quantized weights follow: gather_qmv, gather_qvm and gather_qmm for
@@ -525,6 +533,7 @@ QQ_MATMUL_TESTS = _tests(
     "test_quantized",
     "TestQuantized",
     (
+        "quantize_strided",
         "qqmm",
         "qqmv",
         "qqmm_global_scale_matrix_kernels",

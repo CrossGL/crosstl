@@ -616,13 +616,15 @@ UPSTREAM_TESTS = (
             # translated offset kernel turns into element offsets.
             "test_dynamic_slicing",
         )
-    ) + (
+    )
+    + (
         # These reach lazily translated arg reductions of every real dtype, and
         # of the flattened array in a threadgroup of thirteen simdgroups.
         "test_ops.TestOps.test_argmin_argmax",
         "test_reduce.TestReduce.test_arg_reduce",
         "test_bf16.TestBF16.test_arg_reduction_ops",
-    ) + (
+    )
+    + (
         # These reach lazily translated whole-array, row and column sums,
         # products and extrema of every integer, float and Boolean dtype, over
         # permuted, expanded and negative-stride views, and empty outputs.
@@ -644,13 +646,15 @@ UPSTREAM_TESTS = (
         "test_reduce.TestReduce.test_long_column",
         # This reaches Boolean all and any reductions of signed zeros.
         "test_reduce.TestReduce.test_and_or_negative_zero",
-    ) + (
+    )
+    + (
         # These reach lazily translated block and looped softmax and logsumexp
         # rows, precise 16-bit softmax, and transposed and broadcast inputs.
         "test_ops.TestOps.test_softmax",
         "test_ops.TestOps.test_logsumexp",
         "test_ops.TestOps.test_logsumexp_shape",
-    ) + (
+    )
+    + (
         # These reach lazily translated single-block sorts and argsorts of
         # contiguous, strided, broadcast and reversed views, and multi-block
         # tile sorts, partitions and merges up to a 2^22-element row.
@@ -663,7 +667,8 @@ UPSTREAM_TESTS = (
         # and float32 arrays over several axes, with NaN in any position.
         "test_ops.TestOps.test_median",
         "test_ops.TestOps.test_median_nan",
-    ) + (
+    )
+    + (
         # This reaches lazily translated binary searches of contiguous,
         # strided, reversed and empty sequences, and of transposed, sliced
         # and broadcast values, through searchsorted.metal.
@@ -676,7 +681,8 @@ UPSTREAM_TESTS = (
         # This reaches the translated masked_scatter kernels through boolean
         # masks of whole arrays and of leading dimensions.
         "test_ops.TestOps.test_masked_scatter",
-    ) + (
+    )
+    + (
         # These reach lazily translated contiguous and strided, forward and
         # reverse, inclusive and exclusive scans of float32, int32, int64 and
         # complex64, log-add-exp scans, and size-one axes of any stride.
@@ -684,7 +690,8 @@ UPSTREAM_TESTS = (
         "test_ops.TestOps.test_logcumsumexp",
         "test_ops.TestOps.test_scans_complex_exclusive",
         "test_ops.TestOps.test_scan_size_one_axis",
-    ) + (
+    )
+    + (
         # These reach lazily translated single-row and looped RMS and layer
         # normalization of every float dtype, their gradient kernels with and
         # without a weight, and the column sums of the weight gradients.
@@ -697,7 +704,8 @@ UPSTREAM_TESTS = (
         "test_fast.TestFast.test_layer_norm_grad_no_bias",
         "test_fast.TestFast.test_layer_norm_grad_no_params",
         "test_fast.TestFast.test_layer_norm_grad_params",
-    ) + tuple(
+    )
+    + tuple(
         # These reach lazily translated GEMV, dot-product, steel GEMM, split-K
         # and AddMM epilogues of every float dtype, complex64 GEMV, unaligned,
         # batched, broadcast, transposed and strided operands and empty
@@ -735,9 +743,13 @@ UPSTREAM_TESTS = (
             "test_segmented_mm",
             "test_gather_matmul_index_vjp_requires_stop_gradient",
         )
-    ) + MODULE_TESTS + CONV_TESTS + ARRAY_TESTS + AUTOGRAD_TESTS + COMPILE_TESTS + tuple(
-        name for tests in MODULE_GROUPS.values() for name in tests
     )
+    + MODULE_TESTS
+    + CONV_TESTS
+    + ARRAY_TESTS
+    + AUTOGRAD_TESTS
+    + COMPILE_TESTS
+    + tuple(name for tests in MODULE_GROUPS.values() for name in tests)
 )
 # Sorted right indices route a one-row product through gather_mm_rhs, or a
 # quantized one through gather_qmm_rhs, each of which finds its row tile with
@@ -1027,18 +1039,28 @@ def selected_tests(target, group):
 
 # The tests that compare with PyTorch and skip themselves without it.
 TORCH_TESTS = frozenset(name for group in TORCH_GROUPS for name in GROUPS[group])
+# The other reference modules whose absence makes a test skip itself, and the
+# tests that import them; every such test runs in a PyTorch-reference group.
+REFERENCE_MODULE_TESTS = {
+    "ml_dtypes": frozenset({"test_bf16.TestBF16.test_conversion_ml_dtypes"}),
+}
 
 
 def require_reference_modules(tests):
-    """Refuse to run PyTorch-reference tests where torch cannot be imported.
+    """Refuse to run reference tests where their reference module is missing.
 
-    Without torch they skip themselves, which the workers would only report
-    as unexpected skips after the whole group ran.
+    Without torch (or ml_dtypes) they skip themselves, which the workers would
+    only report as unexpected skips after the whole group ran.
     """
     if TORCH_TESTS.intersection(tests) and importlib.util.find_spec("torch") is None:
         raise RuntimeError(
             "The PyTorch reference tests need torch; install the pinned CPU wheel"
         )
+    for module, needed in sorted(REFERENCE_MODULE_TESTS.items()):
+        if needed.intersection(tests) and importlib.util.find_spec(module) is None:
+            raise RuntimeError(
+                f"The {module} reference tests need {module}; install the pinned wheel"
+            )
 
 
 def negative_checks(group):

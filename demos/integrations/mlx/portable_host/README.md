@@ -1158,7 +1158,7 @@ return early on their reduction, which DirectX and OpenGL software subgroups
 do not lower yet ([#2546](https://github.com/CrossGL/crosstl/issues/2546)),
 so the sorted tests run on Metal alone.
 
-`test_quantized.TestQuantized.test_qqmv`, `test_qqmm`,
+`test_quantized.TestQuantized.test_quantize_strided`, `test_qqmv`, `test_qqmm`,
 `test_qqmm_global_scale_matrix_kernels`, `test_gather_qqmm`,
 `test_gather_qmm`, `test_gather_matmul_grad`, `test_gather_qmm_matrix_path`,
 `test_gather_qmm_sorted_sliced_weight`, `test_gather_qmm_sorted_unaligned_k`,
@@ -2492,7 +2492,7 @@ Bluestein's twiddle-table plans (batches of 1,024 or more complex Bluestein
 transforms of 1,025 to 2,048 points) first run the translated
 `generate_bluestein_twiddles` kernel into the table past `w_q`'s spectrum,
 which the host checks with the other Bluestein tables. `test_fft_grads`
-compares against PyTorch, which the host environment does not install, and
+compares against PyTorch and runs in the `torch-layers` group, and
 `test_fft_too_large` runs only where `mx.metal.is_available()`, which the
 portable host is not. `test_batched_bluestein_twiddle_table`, the 1,023- and
 1,024-row transforms of 1,031 and 1,531 points, runs there too; the native
@@ -2594,12 +2594,14 @@ CPU: the `torch-conv` group runs the nine `test_conv` ones (the 1-D, 2-D,
 3-D, depthwise, general and asymmetrically padded convolutions and the
 gradients) and the nine `test_conv_transpose` ones (with and without output
 padding, and the gradients). The `torch-layers` group runs the bfloat16
-conversion from torch tensors, batch normalization, AdamW and the two
+conversions from torch tensors and `ml_dtypes` arrays, the cumulative max and
+min VJPs, the FFT gradients, batch normalization, AdamW and the two
 antialiased upscaling checks, and `torch-upsample` the nearest, linear and
 cubic upsampling sweeps with and without antialiasing (about 36,000
 launches). Only the jobs of these three groups (`TORCH_GROUPS`) install
-PyTorch, the pinned 2.14.1 CPU wheel, and the workers refuse to run them where
-torch cannot be imported, because the tests would skip themselves.
+PyTorch, the pinned 2.14.1 CPU wheel, and `ml_dtypes` 0.6.0, and the workers
+refuse to run them where torch (or, for `test_conversion_ml_dtypes`,
+`ml_dtypes`) cannot be imported, because the tests would skip themselves.
 The `array`, `autograd` and `compile` groups run the `test_array` (43),
 `test_autograd` (45) and `test_compile` (55) methods that reach the GPU. Five
 more groups run the GPU methods of whole modules (`upstream_module_groups`):
@@ -2610,8 +2612,9 @@ streams and transforms traced on three threads at once), `serialization` (18
 `test_export_import` methods, among them the shapeless convolution, and 15
 `test_load` methods, with the
 NumPy, safetensors and GGUF formats), `training` (19 `test_optimizers`
-methods, six `test_random` samplers, four `test_bf16` sweeps and the device,
-stream, memory and constant tests) and `rope` (the seven rotary embedding and
+methods, six `test_random` samplers, four `test_bf16` sweeps, the device,
+stream, memory and constant tests and `test_zero_copy`'s copying `asarray`)
+and `rope` (the seven rotary embedding and
 fused transform methods of `test_fast` and the two antialiased `test_upsample`
 sweeps). The `host-only` group runs 160 methods of these modules and of
 `test_array`, `test_double`, `test_graph`, `test_tree` and `test_zero_copy`
