@@ -504,9 +504,20 @@ TORCH_GROUPS = ("torch-conv", "torch-layers", "torch-upsample")
 # test_quantized's products whose operands QQMatmul and GatherQQMM quantize:
 # the block quantize and quantize-dequantize kernels, dispatch_qmv's mxfp8
 # and nvfp4 routes and gather_qmv's, among them the kernels that read the
-# weights' global scales.
+# weights' global scales. GatherQMM's gathered products of quantized weights
+# follow: gather_qmv, gather_qvm and gather_qmm for affine and block-scaled
+# weights, in float32 and, for the matrix path, bfloat16.
 QQ_MATMUL_TESTS = _tests(
-    "test_quantized", "TestQuantized", ("qqmm", "qqmv", "gather_qqmm")
+    "test_quantized",
+    "TestQuantized",
+    (
+        "qqmm",
+        "qqmv",
+        "gather_qqmm",
+        "gather_qmm",
+        "gather_matmul_grad",
+        "gather_qmm_matrix_path",
+    ),
 )
 
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.

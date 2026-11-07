@@ -3,7 +3,7 @@
 Scans, small row reductions, small and long column reductions, GEMV, dot-product,
 steel GEMM, split-K GEMM, GatherMM, SegmentedMM, BlockMaskedMM, convolution,
 Stockham FFT, affine and floating-point quantized matrix-vector and matrix-matrix
-kernels and gathered quantized matrix-vector kernels are translated from the
+kernels and their gathered forms are translated from the
 pinned sources on first use, so no static index lists their packages. Each
 dispatch is checked by deriving its package again from the same cache, from
 the event's entry, launch and metadata, and by comparing the recorded artifact
@@ -28,6 +28,7 @@ from demos.integrations.mlx.portable_host import (
     fp_qmm_layout,
     gather_mm_layout,
     gather_mv_layout,
+    gather_qmm_layout,
     gather_qmv_layout,
     gemm_layout,
     gemm_splitk_layout,
@@ -93,6 +94,12 @@ from demos.integrations.mlx.portable_host.gather_mm_packages import (
     GatherMmPackageCache,
     GatherMvPackageCache,
     GatherOffsetsPackageCache,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_packages import (
+    CACHE_DIRECTORY as GATHER_QUANTIZED_MM_CACHE,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_packages import (
+    GatherQuantizedQmmPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_qmv_packages import (
     CACHE_DIRECTORY as GATHER_QUANTIZED_MV_CACHE,
@@ -176,6 +183,7 @@ QUANTIZED_FAMILIES = {
     "quantized-mm": qmm_layout.ENTRY_PREFIXES,
     "fp-quantized-mm": fp_qmm_layout.ENTRY_PREFIXES,
     "gather-quantized-mv": gather_qmv_layout.ENTRY_PREFIXES,
+    "gather-quantized-mm": gather_qmm_layout.ENTRY_PREFIXES,
 }
 EXECUTED_FAMILIES = {**MATRIX_FAMILIES, **QUANTIZED_FAMILIES}
 FAMILIES = ("scan", "small-row", "small-column", "long-column", *EXECUTED_FAMILIES)
@@ -267,6 +275,9 @@ class LazyPackages:
             ),
             "gather-quantized-mv": GatherQuantizedMatmulPackageCache(
                 mlx_root, packages / GATHER_QUANTIZED_MV_CACHE, target
+            ),
+            "gather-quantized-mm": GatherQuantizedQmmPackageCache(
+                mlx_root, packages / GATHER_QUANTIZED_MM_CACHE, target
             ),
         }
 

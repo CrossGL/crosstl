@@ -1118,9 +1118,29 @@ gathered input rows, weights, scales and global scale lie inside their
 buffers, as do the offsets that OpenGL evaluates in 32 bits. The globally
 scaled bfloat16 matrix products that `quantized.cpp` sends to `gather_qmm` and
 `gather_qmm_rhs` are refused with a typed error.
-`test_quantized.TestQuantized.test_qqmv`, `test_qqmm` and `test_gather_qqmm`
-run in the `quantized-products` group; GatherQMM keeps MLX's unsupported-GPU
-error.
+The globally scaled bfloat16 matrix products are refused before either
+operand is quantized, so the refusal launches nothing.
+
+`GatherQMM::eval_gpu` (`gather_qmm.inc`) routes as `quantized.cpp` does on a
+device without NAX, for affine, MXFP4, MXFP8 and NVFP4 weights and NVFP4
+global scales. Products with at least the vector limit's rows go to
+`gather_qmm`: `gather_qmm_t` for transposed weights, named for whether `N`
+fills whole 32-column tiles, and `gather_qmm_n` otherwise, over
+`(N / 32, M / 32, B)` threadgroups of 128 lanes. Smaller products go to
+`gather_qmv` (or `gather_qmv_fast`) for transposed weights and to
+`gather_qvm` otherwise. Affine kernels come from `quantized.metal` and bind
+biases and their strides; the block-scaled ones come from
+`fp_quantized.metal`. Launches carry a `gather_qmm` route. `gather_qmv_layout`
+and `gather_qmm_layout` check each launch against that routing and the vector
+limit, read every batch's two indices and prove that the gathered inputs,
+weights, scales, biases and global scales lie inside their buffers. The
+matrix entries translate with the ungathered `qmm` entries' options and the
+OpenGL index assertions of the gathered matrix gate, which adds the `uint32`
+index reads. Single-row products with sorted right-hand indices, which
+`quantized.cpp` sends to `gather_qmm_rhs`, are refused with a typed error.
+`test_quantized.TestQuantized.test_qqmv`, `test_qqmm`, `test_gather_qqmm`,
+`test_gather_qmm`, `test_gather_matmul_grad` and `test_gather_qmm_matrix_path`
+run in the `quantized-products` group.
 
 ## General Gather
 
@@ -2989,7 +3009,8 @@ compares them in one vector-vector dispatch without copies. Any
 other traced entry must be a unary or binary vector that the native run
 translated from the pinned sources on first use, as the upstream tests do for
 scalar-vector binaries; the evidence lists these as `lazyEntries`.
-Separate negative processes reject an unsupported primitive (GatherQMM), an
+Separate negative processes reject an unsupported route (GatherQQMM's globally
+scaled bfloat16 matrix product), an
 oversized floating-point arange, a missing artifact, unary inputs with
 unsupported dtype, contiguous and
 strided unary inputs that exceed their allocations (including a large view), and

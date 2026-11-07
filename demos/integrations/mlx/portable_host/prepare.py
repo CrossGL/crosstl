@@ -168,6 +168,7 @@ def adapted_sources(original, primitives, events, metal_kernel):
         "QuantizedMatmul",
         "QQMatmul",
         "GatherQQMM",
+        "GatherQMM",
         "Matmul",
         "AddMM",
         "GatherMM",

@@ -271,14 +271,24 @@ def test_qq_products_run_in_their_own_upstream_group():
         "test_quantized.TestQuantized.test_qqmm",
         "test_quantized.TestQuantized.test_qqmv",
         "test_quantized.TestQuantized.test_gather_qqmm",
+        "test_quantized.TestQuantized.test_gather_qmm",
+        "test_quantized.TestQuantized.test_gather_matmul_grad",
+        "test_quantized.TestQuantized.test_gather_qmm_matrix_path",
     )
     # test_qqmm and test_gather_qqmm skip on MLX's CPU, which has neither
     # QQMatmul nor GatherQQMM, so the CPU worker must skip them and the
-    # native worker must run them; test_qqmv runs on both.
+    # native worker must run them; test_qqmv and MLX's CPU GatherQMM tests
+    # run on both.
     for name in ("test_qqmm", "test_gather_qqmm"):
         assert (
             f"test_quantized.TestQuantized.{name}" in verify_upstream_ops.GPU_ONLY_TESTS
         )
-    assert "test_quantized.TestQuantized.test_qqmv" not in (
-        verify_upstream_ops.GPU_ONLY_TESTS
-    )
+    for name in (
+        "test_qqmv",
+        "test_gather_qmm",
+        "test_gather_matmul_grad",
+        "test_gather_qmm_matrix_path",
+    ):
+        assert f"test_quantized.TestQuantized.{name}" not in (
+            verify_upstream_ops.GPU_ONLY_TESTS
+        )

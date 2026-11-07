@@ -1,9 +1,10 @@
 """Cache translated gathered quantized matrix-vector entries.
 
-Each entry of the unchanged pinned fp_quantized.metal is translated with the
-options of the floating-point qmv entries (fp_matmul_packages). Run as a
-module, it translates entries into a host package directory's cache ahead of
-execution, several processes at a time.
+Each entry of the unchanged pinned quantized.metal (affine weights) or
+fp_quantized.metal (mxfp4, mxfp8 and nvfp4 weights) is translated with the
+options of the quantized qmv entries (matmul_packages, fp_matmul_packages).
+Run as a module, it translates entries into a host package directory's cache
+ahead of execution, several processes at a time.
 """
 
 import hashlib
@@ -12,11 +13,13 @@ from pathlib import Path
 
 from crosstl.project import ProjectConfig
 from demos.integrations.mlx.portable_host.gather_qmv_layout import (
-    INDEX_EXPRESSIONS,
     MAX_ELEMENTS,
     SIMD_SIZE,
     SOURCE,
+    index_expressions,
+    select,
     signature,
+    source,
     workgroup_size,
 )
 from demos.integrations.mlx.portable_host.matmul_packages import (
@@ -43,11 +46,12 @@ def _recipe_hashes():
 
 
 def project_config(root, output_dir, target, entry):
-    """The translation of one entry, with the floating-point qmv entries' options.
+    """The translation of one entry, with the quantized qmv entries' options.
 
     Every gathered kernel computes adjust_matrix_offsets' index locations and
     batch offsets, so OpenGL asserts their range for each entry.
     """
+    path = source(entry)
     options = {
         "directx": {
             "software_subgroup_width": SIMD_SIZE,
@@ -58,15 +62,15 @@ def project_config(root, output_dir, target, entry):
     return ProjectConfig(
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
-        include_patterns=(SOURCE,),
+        include_patterns=(path,),
         include_dirs=(".",),
         targets=(target,),
         output_dir=output_dir,
-        entry_points={SOURCE: (entry,)},
-        entry_workgroup_size_rules={SOURCE: {entry: workgroup_size(entry)}},
+        entry_points={path: (entry,)},
+        entry_workgroup_size_rules={path: {entry: workgroup_size(entry)}},
         index_range_assertions=[
-            dict(source=SOURCE, expression=expression, minimum=0, maximum=MAX_ELEMENTS)
-            for expression in INDEX_EXPRESSIONS
+            dict(source=path, expression=expression, minimum=0, maximum=MAX_ELEMENTS)
+            for expression in index_expressions(entry)
             if target == "opengl"
         ],
         source_options={
@@ -90,6 +94,9 @@ class GatherQuantizedMatmulPackageCache(TranslatedEntryCache):
 
     def workgroup_size(self, entry):
         return workgroup_size(entry)
+
+    def source_path(self, entry):
+        return source(entry)
 
     def project_config(self, output_dir, entry):
         return project_config(self.root, output_dir, self.target, entry)
@@ -119,16 +126,29 @@ def build_entries(root, packages, target, entries, jobs):
 
 
 def verification_entries():
-    """The entries test_gather_qqmm routes, sorted.
+    """The entries test_gather_qqmm and test_gather_qmm route, sorted.
 
-    Its K of 32 and 256 aligns qmv_fast only for mxfp8's 8 bits, so nvfp4,
-    whose weights carry global scales, takes the _hgs qmv kernel alone.
+    test_gather_qqmm's K of 32 and 256 aligns qmv_fast only for mxfp8's 8
+    bits, so nvfp4, whose weights carry global scales, takes the _hgs qmv
+    kernel alone. test_gather_qmm's single rows take gather_qmv for K of 128,
+    256 and 512 and gather_qvm for K of 32, with affine weights of 4 bits in
+    groups of 64 and every block-scaled mode.
     """
-    return [
+    entries = {
         "mxfp8_gather_qmv_fast_float_gs_32_b_8",
         "mxfp8_gather_qmv_float_gs_32_b_8",
         "nvfp4_gather_qmv_float_gs_16_b_4_hgs",
-    ]
+    }
+    for mode, group, bits in (
+        ("affine", 64, 4),
+        ("mxfp4", 32, 4),
+        ("mxfp8", 32, 8),
+        ("nvfp4", 16, 4),
+    ):
+        for n, k in ((32, 128), (32, 256), (32, 512)):
+            entries.add(select(mode, "float32", n, k, False, True, group, bits))
+        entries.add(select(mode, "float32", 256, 32, False, False, group, bits))
+    return sorted(entries)
 
 
 def main(argv=None):

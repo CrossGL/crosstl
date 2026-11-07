@@ -111,7 +111,7 @@ COUNTS = (0, 1, 7, 257)
 # each dtype check proves that refusal happens with no native dispatch.
 FLOAT64_REFUSAL = "float64 is not supported on the GPU"
 NEGATIVE_CHECKS = {
-    "unsupported": "GatherQMM has no GPU implementation",
+    "unsupported": "does not yet route globally scaled bfloat16 matrix products",
     "over-limit": "Arange currently supports at most 65535 elements",
     "missing": "artifact",
     "unary-dtype": FLOAT64_REFUSAL,
@@ -191,16 +191,19 @@ def worker(args):
     if args.worker in checks:
         try:
             if args.worker == "unsupported":
-                # The host does not port GatherQMM. Dense float32 operands,
-                # packed affine weights and unsigned indices of the batch
-                # shape need no copy or cast before the primitive.
-                value = mx.gather_qmm(
-                    mx.array(np.ones((1, 1, 64), dtype=np.float32)),
+                # The host refuses the globally scaled bfloat16 matrix products
+                # GatherQQMM sends to gather_qmm before it quantizes anything.
+                # Quantized nvfp4 weights, constant operands of the output type
+                # and unsigned indices of the batch shape need no copy or cast.
+                value = mx.gather_qqmm(
+                    mx.array(np.ones((1, 32, 64), dtype=np.float32), dtype=mx.bfloat16),
                     mx.array(np.zeros((2, 32, 8), dtype=np.uint32)),
-                    mx.array(np.ones((2, 32, 1), dtype=np.float32)),
-                    mx.array(np.zeros((2, 32, 1), dtype=np.float32)),
+                    mx.array(np.full((2, 32, 4), 56, dtype=np.uint8)),
                     lhs_indices=mx.array([0], dtype=mx.uint32),
                     rhs_indices=mx.array([1], dtype=mx.uint32),
+                    mode="nvfp4",
+                    global_scale_x=mx.array(1.0, dtype=mx.float32),
+                    global_scale_w=mx.array([1.0, 1.0], dtype=mx.float32),
                     stream=mx.gpu,
                 )
             elif args.worker == "over-limit":

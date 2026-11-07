@@ -61,6 +61,7 @@ from demos.integrations.mlx.portable_host import (
     gated_delta_packages,
     gather_dispatch,
     gather_mm_dispatch,
+    gather_qmm_layout,
     gather_qmv_layout,
     gemm_dispatch,
     gemm_layout,
@@ -190,6 +191,12 @@ from demos.integrations.mlx.portable_host.gather_packages import (
 )
 from demos.integrations.mlx.portable_host.gather_packages import (
     signature as gather_signature,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_packages import (
+    CACHE_DIRECTORY as GATHER_QUANTIZED_QMM_CACHE,
+)
+from demos.integrations.mlx.portable_host.gather_qmm_packages import (
+    GatherQuantizedQmmPackageCache,
 )
 from demos.integrations.mlx.portable_host.gather_qmv_packages import (
     CACHE_DIRECTORY as GATHER_QUANTIZED_MATMUL_CACHE,
@@ -655,6 +662,13 @@ class HostRuntime:
             if mlx_root is not None
             else None
         )
+        self.gather_quantized_qmms = (
+            GatherQuantizedQmmPackageCache(
+                mlx_root, self.directory / GATHER_QUANTIZED_QMM_CACHE, self.target
+            )
+            if mlx_root is not None
+            else None
+        )
         self.gemvs = (
             GemvPackageCache(mlx_root, self.directory / GEMV_CACHE, self.target)
             if mlx_root is not None
@@ -1074,6 +1088,12 @@ class HostRuntime:
             ):
                 gather_qmv_layout.signature(name)
                 return 1
+            if (
+                name.startswith(gather_qmm_layout.ENTRY_PREFIXES)
+                and self.gather_quantized_qmms is not None
+            ):
+                gather_qmm_layout.signature(name)
+                return 1
             if name.startswith(gemv_layout.ENTRY_PREFIXES) and self.gemvs is not None:
                 gemv_layout.signature(name)
                 return 1
@@ -1296,6 +1316,17 @@ class HostRuntime:
                 self,
                 gather_qmv_layout,
                 self.gather_quantized_matmuls,
+                entry,
+                buffers,
+                count,
+                threads,
+                launch,
+            )
+        if entry.startswith(gather_qmm_layout.ENTRY_PREFIXES):
+            return matmul_dispatch.dispatch_with(
+                self,
+                gather_qmm_layout,
+                self.gather_quantized_qmms,
                 entry,
                 buffers,
                 count,

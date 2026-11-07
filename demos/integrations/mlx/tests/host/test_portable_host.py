@@ -88,6 +88,7 @@ def checkout(root, monkeypatch, newline=b"\n"):
                     "QQMatmul",
                     "GatherQQMM",
                     "GatherQMM",
+                    "Load",
                     *packages.UNARY_OPERATIONS,
                     *prepare.VIEW_PRIMITIVES,
                     *prepare.HOST_EVAL_PRIMITIVES,
@@ -257,8 +258,9 @@ def test_prepare_preserves_unimplemented_primitives_and_cpu_events(
     assert "NO_GPU(Hadamard)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(QQMatmul)" not in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(GatherQQMM)" not in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(GatherQMM)" not in (backend / "crosstl_primitives.cpp").read_text()
     # A primitive without a host port keeps MLX's explicit GPU error.
-    assert "NO_GPU(GatherQMM)" in (backend / "crosstl_primitives.cpp").read_text()
+    assert "NO_GPU(Load)" in (backend / "crosstl_primitives.cpp").read_text()
     assert "NO_GPU(Arange)" in (backend / "primitives.cpp").read_text()
     events = (backend / "crosstl_event.cpp").read_text()
     assert events.count("stream.device == Device::gpu") == 2

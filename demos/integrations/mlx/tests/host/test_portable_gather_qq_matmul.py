@@ -51,12 +51,14 @@ def test_signature_reads_the_instantiated_gather_kernels(entry, info):
 @pytest.mark.parametrize(
     "entry",
     (
-        # Only nvfp4 weights carry global scales.
+        # Only nvfp4 weights carry global scales, affine ones never.
         "mxfp8_gather_qmv_float_gs_32_b_8_hgs",
+        "affine_gather_qvm_float_gs_64_b_4_hgs",
         "nvfp4_gather_qmv_float_gs_32_b_4",
-        "mxfp8_gather_qvm_float_gs_32_b_8",
-        "affine_gather_qmv_float_gs_64_b_4",
+        "mxfp8_gather_qvm_float_gs_32_b_4",
+        "affine_gather_qmv_float_gs_16_b_4",
         "nvfp4_gather_qmv_float_gs_16_b_4_batch_0",
+        "nvfp4_gather_qmv_quad_float_gs_16_b_4",
     ),
 )
 def test_signature_refuses_entries_gather_qqmm_never_routes(entry):
@@ -381,21 +383,21 @@ def test_backend_ports_gather_qqmm_as_quantized_cpp_does():
     start = port.index("void GatherQQMM::eval_gpu(")
     body = port[start : port.index("\n}\n", start)]
     order = [
+        # Globally scaled bfloat16 matrix products are refused before any
+        # operand is quantized, so the refusal launches nothing.
+        "does not yet route globally",
         # quantize_input and quantize_dequantize_input, as QQMatmul's port.
         "qq_weights(stream(), inputs[1], scales, global_w, mode_, group_size_, bits_);",
         "qq_rounded_input(inputs[0], global_x, mode, group_size_, bits_);",
         # The weights' global scale is broadcast to one per matrix.
         "broadcast(*global_w, per_matrix);",
-        # Globally scaled bfloat16 matrix products are refused.
-        "does not yet route globally",
         '"gather_qqmm");',
     ]
     positions = [body.index(text) for text in order]
     assert positions == sorted(positions)
     for text in (
-        'buffers.push_back(\n        {"global_scale", "float32", data(*global_scale), '
-        "matmul_span(*global_scale), 0});",
-        "collapse_contiguous_dims(\n      lhs_indices.shape(), "
+        '{"global_scale", "float32", const_cast<void*>(global_scale->data<void>()),',
+        "collapse_contiguous_dims(\n        lhs_indices.shape(), "
         "{lhs_indices.strides(), rhs_indices.strides()});",
         "const CrosstlMlxLaunch launch{{uint32_t(M), tiles, uint32_t(B)}, {32, 2, 1}};",
     ):
