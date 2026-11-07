@@ -67,6 +67,7 @@ from .enum_utils import (
 )
 from .fragment_output_targets import frag_data_attribute_index
 from .generic_struct_utils import named_struct_constructor_arguments
+from .global_specialization_constants import split_global_specialization_constants
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .image_access_contracts import (
     explicit_image_access,
@@ -997,7 +998,7 @@ class WGSLCodeGen(
         structs, enums = split_enums(structs)
         self._enum_type_names = collect_enum_type_names(enums)
         self._enum_variant_constants = collect_enum_variant_constants(enums)
-        constants = list(getattr(ast, "constants", []) or [])
+        constants, _ = split_global_specialization_constants(ast)
         self._constant_values = self.constant_literal_values(constants)
         self._stage_output_lowerings = self.stage_output_lowerings(
             ast, target_stage, structs
@@ -8458,7 +8459,8 @@ class WGSLCodeGen(
         return self._dedupe_by_name(cbuffers)
 
     def _collect_global_variables(self, ast, target_stage):
-        variables = list(getattr(ast, "global_variables", []) or [])
+        # Specialization-id globals are declared with the constants.
+        _, variables = split_global_specialization_constants(ast)
         for stage_node in self._stage_nodes(ast, target_stage):
             lowered_output_name = self._stage_output_lowerings.get(
                 id(stage_node), {}
