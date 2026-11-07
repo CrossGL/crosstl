@@ -483,8 +483,10 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         assert "static const bool has_mask = false;" in generated
         assert generated.count("WaveActiveSum(") == 3
         assert generated.count("WaveActiveMax(") == 1
-        assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated
-        assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated
+        assert "groupshared uint __crossgl_physical_subgroup_leaders[32];" in generated
+        assert (
+            "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]" in generated
+        )
         assert "uint crossglPhysicalSubgroupID = " in generated
         _assert_directx_compiles(generated_path, work_dir)
     else:

@@ -240,8 +240,10 @@ def _translate_dot_artifact(
         assert generated.count("asfloat(asuint(a[uint(") >= 4
         assert generated.count("asfloat(asuint(b[uint(") >= 4
         assert generated.count("WaveActiveSum(sum)") == 2
-        assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated
-        assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated
+        assert "groupshared uint __crossgl_physical_subgroup_leaders[32];" in generated
+        assert (
+            "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]" in generated
+        )
         assert "uint crossglPhysicalSubgroupID = " in generated
     elif software_subgroups:
         assert "layout(local_size_x = 512" in generated

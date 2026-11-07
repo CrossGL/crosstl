@@ -447,11 +447,12 @@ def _build_runtime_package(mlx_root: Path, work_dir: Path) -> tuple[dict, Path]:
             assert "__crossgl_physical_subgroup" not in generated_source
         else:
             assert (
-                "groupshared uint __crossgl_physical_subgroup_counter;"
+                "groupshared uint __crossgl_physical_subgroup_leaders[32];"
                 in generated_source
             )
             assert (
-                "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated_source
+                "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]"
+                in generated_source
             )
             assert "uint crossglPhysicalSubgroupID = " in generated_source
     axis_32_artifact = next(
