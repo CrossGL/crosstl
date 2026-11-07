@@ -19,11 +19,17 @@ UPSTREAM_TESTS = ("test_array.TestArray.test_setitem_with_list",)
 
 
 def profile(args):
+    if args.small_int:
+        return "small-int"
     return "half" if args.half else "float32" if args.float32 else "integer"
 
 
-def validate_records(np, records, *, native, float32=False, half=False):
-    cases = list(workloads.profile_cases(float32=float32, half=half))
+def validate_records(
+    np, records, *, native, float32=False, half=False, small_int=False
+):
+    cases = list(
+        workloads.profile_cases(float32=float32, half=half, small_int=small_int)
+    )
     if len(records) != len(cases):
         raise ValueError("Scatter evidence does not cover every workload")
     cursor = 0
@@ -66,7 +72,9 @@ def worker(args):
         mx.set_default_device(mx.cpu)
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     records = []
-    for case in workloads.profile_cases(float32=args.float32, half=args.half):
+    for case in workloads.profile_cases(
+        float32=args.float32, half=args.half, small_int=args.small_int
+    ):
         start = host.dispatch_count if host else 0
         source, result = workloads.expression(mx, np, case)
         expected_source, _, _, expected = workloads.reference(np, case)
@@ -93,7 +101,12 @@ def worker(args):
             raise RuntimeError(f"Scatter numerical mismatch: {case['id']}")
         print(case["id"], flush=True)
     validate_records(
-        np, records, native=host is not None, float32=args.float32, half=args.half
+        np,
+        records,
+        native=host is not None,
+        float32=args.float32,
+        half=args.half,
+        small_int=args.small_int,
     )
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.defaultTestLoader.loadTestsFromNames(UPSTREAM_TESTS)
@@ -151,6 +164,8 @@ def verify(args):
             command.append("--float32")
         if args.half:
             command.append("--half")
+        if args.small_int:
+            command.append("--small-int")
         with (args.output_dir / f"{mode}.stdout").open("w") as stdout, (
             args.output_dir / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -169,6 +184,7 @@ def verify(args):
             native=mode == "native",
             float32=args.float32,
             half=args.half,
+            small_int=args.small_int,
         )
         upstream[mode] = json.loads(
             (args.output_dir / mode / "upstream.json").read_text()
@@ -185,6 +201,9 @@ def verify(args):
         upstream["native"],
         float32=args.float32,
         half=args.half,
+        small_int=args.small_int,
+        mlx_root=args.mlx_root,
+        packages=args.packages,
     )
     if (
         verify_prepared(args.mlx_root) != before
@@ -219,6 +238,8 @@ if __name__ == "__main__":
     profiles = parser.add_mutually_exclusive_group()
     profiles.add_argument("--float32", action="store_true")
     profiles.add_argument("--half", action="store_true")
+    # The 8- and 16-bit integers copy through lazily translated word copies.
+    profiles.add_argument("--small-int", action="store_true")
     args = parser.parse_args()
     if args.half and None in (args.half_packages, args.bfloat_packages):
         parser.error("--half requires --half-packages and --bfloat-packages")

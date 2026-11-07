@@ -4377,6 +4377,15 @@ jobs:
           - os: macos-26
             target: metal
             profile: half
+          - os: ubuntu-24.04
+            target: opengl
+            profile: small-int
+          - os: windows-2025
+            target: directx
+            profile: small-int
+          - os: macos-26
+            target: metal
+            profile: small-int
     defaults:
       run:
         shell: bash
@@ -4497,6 +4506,7 @@ jobs:
               --packages .mlx-portable-scatter/base/base/packages --integer64 .mlx-portable-scatter/base/integer64-packages \
               ${{ matrix.profile == 'float32' && '--float32' || '' }} \
               ${{ matrix.profile == 'half' && '--half --half-packages .mlx-portable-scatter/half-packages --bfloat-packages .mlx-portable-scatter/bfloat-packages' || '' }} \
+              ${{ matrix.profile == 'small-int' && '--small-int' || '' }} \
               --output-dir .mlx-portable-scatter/scatter-evidence \
               2>&1 | tee .mlx-portable-scatter/scatter-verification.log
       - name: Retain general scatter execution evidence

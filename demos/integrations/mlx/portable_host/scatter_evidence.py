@@ -3,35 +3,51 @@
 import ctypes
 import hashlib
 import math
+from pathlib import Path
 
 from crosstl.translator.resource_storage import encoded_storage_dtype
-from demos.integrations.mlx.portable_host import bfloat_storage, half_storage
+from demos.integrations.mlx.portable_host import (
+    bfloat_storage,
+    copy_evidence,
+    half_storage,
+)
 from demos.integrations.mlx.portable_host import scatter_workloads as workloads
+from demos.integrations.mlx.portable_host.copy_packages import CACHE as COPY_CACHE
+from demos.integrations.mlx.portable_host.copy_packages import (
+    ENTRIES as LAZY_COPY_ENTRIES,
+)
+from demos.integrations.mlx.portable_host.copy_packages import CopyPackageCache
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_input_bindings,
     audit_native_execution,
     require,
     view,
 )
+from demos.integrations.mlx.portable_host.gather_layout import TYPES
 from demos.integrations.mlx.portable_host.gather_workloads import words
 from demos.integrations.mlx.portable_host.runtime import (
     BFLOAT_COPY_ENTRY,
     COPY_GUARD,
     HALF_COPY_ENTRY,
-    TYPES,
     physical_dtype,
 )
 from demos.integrations.mlx.portable_host.scatter_layout import (
     ATOMIC_TYPES,
     ENCODINGS,
+    HALF_TYPES,
     METADATA,
     PACKED_TYPES,
     PADDING,
     atomic_storage_dtype,
+    lane_width,
     signature,
     storage_count,
     unpack_lanes,
 )
+from demos.integrations.mlx.portable_host.scatter_layout import (
+    update_lanes as carrier_lanes,
+)
+from demos.integrations.mlx.portable_host.scatter_layout import update_storage_dtype
 
 # The 16-bit general copies that initialize packed outputs keep their
 # retained native modules and report their storage beside the readback.
@@ -69,12 +85,17 @@ def audit_word_copy(event):
 
 
 def update_lanes(dtype, value, target):
-    """Recover raw 16-bit update words from their exact native carriers."""
-    storage = half_storage if dtype == "float16" else bfloat_storage
+    """Recover raw packed update lanes from their exact native carriers."""
     try:
-        return storage.unpack(value["values"], target)
+        return carrier_lanes(dtype, value["values"], target)
     except (TypeError, ValueError) as error:
-        raise ValueError("Scatter 16-bit update carriers changed") from error
+        raise ValueError("Scatter packed update carriers changed") from error
+
+
+def lane_array(np, dtype, lanes):
+    """Raw packed lanes as host storage: 16-bit floats stay raw words."""
+    raw = np.array(lanes, dtype=f"uint{lane_width(dtype)}")
+    return raw if dtype in HALF_TYPES else raw.view(dtype)
 
 
 def audit_event(np, event):
@@ -146,7 +167,7 @@ def audit_event(np, event):
         inputs[member] = value
     dtypes = {
         **METADATA,
-        "updates": physical_dtype(dtype, target) if packed else dtype,
+        "updates": update_storage_dtype(dtype, target) if packed else dtype,
         "out": atomic_storage_dtype(dtype, target),
         **{f"idx{i}": index_dtype for i in range(count)},
     }
@@ -164,7 +185,7 @@ def audit_event(np, event):
             # Validated as packed words once the output extent is known.
             arrays[name] = value["values"]
         elif packed and name == "updates":
-            arrays[name] = np.array(update_lanes(dtype, value, target), dtype=np.uint16)
+            arrays[name] = lane_array(np, dtype, update_lanes(dtype, value, target))
         elif dtype == "float32" and name in {"out", "updates"}:
             require(
                 isinstance(value["values"], list)
@@ -248,7 +269,7 @@ def audit_event(np, event):
             "Scatter output extent changed",
         )
         try:
-            lanes, padding = unpack_lanes(uploaded[:words_count], size)
+            lanes, padding = unpack_lanes(uploaded[:words_count], size, dtype)
         except ValueError as error:
             raise ValueError("Scatter packed output upload changed") from error
         require(
@@ -256,7 +277,7 @@ def audit_event(np, event):
             "Scatter packed padding lane changed",
         )
         guard_words = uploaded[words_count:]
-        arrays["out"] = np.array(lanes, dtype=np.uint16)
+        arrays["out"] = lane_array(np, dtype, lanes)
     else:
         require(
             arrays["out"].size == size + len(COPY_GUARD),
@@ -300,8 +321,12 @@ def audit_event(np, event):
         for offset in np.ndindex(tuple(slices)):
             destination = tuple(start + step for start, step in zip(starts, offset))
             value = updates[coordinate + offset]
-            if packed:
+            if dtype in HALF_TYPES:
                 expected[destination] = workloads.combine(
+                    np, dtype, operation, expected[destination], value
+                )
+            elif packed:
+                expected[destination] = workloads.integer_combine(
                     np, dtype, operation, expected[destination], value
                 )
             elif operation == "none":
@@ -354,12 +379,12 @@ def audit_event(np, event):
         "Scatter readback is outside its storage type",
     )
     if packed:
-        lanes, padding = unpack_lanes(readback, size)
+        lanes, padding = unpack_lanes(readback, size, dtype)
         require(
             padding == [PADDING[dtype]] * len(padding),
             "Scatter native readback changed its packed padding lane",
         )
-        raw = np.array(lanes, dtype=np.uint16)
+        raw = lane_array(np, dtype, lanes)
     else:
         raw = np.array(readback, dtype="uint32" if dtype == "float32" else dtype)
     actual = words(np, raw)
@@ -399,7 +424,18 @@ def audit_event(np, event):
     return initial, indices, updates, actual
 
 
-def validate(np, records, trace, upstream, *, float32=False, half=False):
+def validate(
+    np,
+    records,
+    trace,
+    upstream,
+    *,
+    float32=False,
+    half=False,
+    small_int=False,
+    mlx_root=None,
+    packages=None,
+):
     from demos.integrations.mlx.portable_host.verify_bitwise import (
         verify_native_identity,
     )
@@ -409,10 +445,12 @@ def validate(np, records, trace, upstream, *, float32=False, half=False):
         validate_records,
     )
 
-    validate_records(np, records, native=True, float32=float32, half=half)
+    validate_records(
+        np, records, native=True, float32=float32, half=half, small_int=small_int
+    )
     validate_upstream(upstream, native=True, tests=UPSTREAM_TESTS)
     cursor, count, targets = 0, 0, set()
-    cases = workloads.profile_cases(float32=float32, half=half)
+    cases = workloads.profile_cases(float32=float32, half=half, small_int=small_int)
     for case, record in zip(cases, records):
         end = cursor + record["dispatchCount"]
         require(end <= len(trace), "Scatter trace ends before its workload")
@@ -478,15 +516,31 @@ def validate(np, records, trace, upstream, *, float32=False, half=False):
     copies = [event for event in trace if event["entry"] in WORD_COPIES]
     for event in copies:
         audit_word_copy(event)
-    verify_native_identity(
-        [
-            event
-            for event in trace
-            if not event["entry"].startswith("scatter")
-            and event["entry"] not in WORD_COPIES
-        ],
-        target,
-    )
+    # The narrow integers copy their sources through lazily translated word
+    # copies (``<packages>/copies/<key>/package``): each is recomputed from its
+    # retained values and its package is derived again from the pinned source.
+    # Every other event must carry the installed packages' runtime identity.
+    lazy, installed = [], []
+    for event in trace:
+        if event["entry"].startswith("scatter") or event["entry"] in WORD_COPIES:
+            continue
+        root = event.get("packageRoot")
+        cached = (
+            packages is not None
+            and root is not None
+            and Path(root).parent.parent == Path(packages).resolve() / COPY_CACHE
+        )
+        (lazy if cached else installed).append(event)
+    if lazy:
+        require(mlx_root is not None, "Scatter lazy copies need their pinned source")
+        cache = CopyPackageCache(mlx_root, Path(packages) / COPY_CACHE, target)
+        for event in lazy:
+            require(
+                event["entry"] in LAZY_COPY_ENTRIES and event["target"] == target,
+                "Scatter lazy copy entry or target changed",
+            )
+            copy_evidence.audit_event(event, cache)
+    verify_native_identity(installed, target)
     return {
         "target": target,
         "scatterDispatchCount": count,

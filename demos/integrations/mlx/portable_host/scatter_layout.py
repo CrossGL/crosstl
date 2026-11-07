@@ -16,7 +16,11 @@ from crosstl.project.runtime_value_encoding import (
     FLOAT16_BITS,
     FLOAT32_BITS,
 )
-from demos.integrations.mlx.portable_host import bfloat_storage, half_storage
+from demos.integrations.mlx.portable_host import (
+    bfloat_storage,
+    element_storage,
+    half_storage,
+)
 from demos.integrations.mlx.portable_host.gather_layout import (
     MAX_ELEMENTS,
     MAX_STORAGE_ELEMENTS,
@@ -40,14 +44,32 @@ METADATA = {
     "idx_size": "uint64",
 }
 ATOMIC_TYPES = {"int32": "int", "uint32": "uint", "float32": "float"}
-# The pinned mlx_atomic<half> and mlx_atomic<bfloat16_t> are one atomic uint
-# that packs two elements, lowest lane first (kernels/atomic.h uint_or_packed).
-PACKED_TYPES = ("float16", "bfloat16")
-PACKING = 2
+# The pinned mlx_atomic<T> of every type narrower than 32 bits is one atomic
+# uint that packs ``sizeof(uint) / sizeof(T)`` elements, lowest lane first
+# (kernels/atomic.h packing_size and uint_or_packed).
+HALF_TYPES = ("float16", "bfloat16")
+SMALL_INTEGER_TYPES = ("int8", "uint8", "int16", "uint16")
+LANE_BITS = {
+    "float16": 16,
+    "bfloat16": 16,
+    "int16": 16,
+    "uint16": 16,
+    "int8": 8,
+    "uint8": 8,
+}
+PACKED_TYPES = (*HALF_TYPES, *SMALL_INTEGER_TYPES)
 # Host element types; binary16 and bfloat16 elements are raw 16-bit words.
 ELEMENT_TYPES = {**TYPES, "float16": ctypes.c_uint16, "bfloat16": ctypes.c_uint16}
-# An odd output's last word keeps this value in its unused high lane.
-PADDING = {"float16": half_storage.GUARD[0], "bfloat16": bfloat_storage.GUARD[0]}
+# A packed output's last word keeps this raw lane value in every unused lane:
+# the 16-bit float guards and the element_storage guards of the integers.
+PADDING = {
+    "float16": half_storage.GUARD[0],
+    "bfloat16": bfloat_storage.GUARD[0],
+    **{
+        dtype: element_storage.GUARDS[dtype] & ((1 << LANE_BITS[dtype]) - 1)
+        for dtype in SMALL_INTEGER_TYPES
+    },
+}
 # The wire encodings of float carriers; integer storage has none.
 ENCODINGS = {
     "float32": FLOAT32_BITS,
@@ -63,43 +85,109 @@ def atomic_storage_dtype(dtype, target):
     return "uint32" if dtype == "float32" and target == "opengl" else dtype
 
 
+def packing(dtype):
+    """Return how many ``dtype`` elements share one 32-bit atomic word."""
+    return 32 // LANE_BITS[dtype] if dtype in PACKED_TYPES else 1
+
+
 def storage_count(dtype, count):
     """Return the number of atomic words that hold ``count`` output elements."""
-    return -(-count // PACKING) if dtype in PACKED_TYPES else count
+    return -(-count // packing(dtype))
 
 
-def pack_lanes(lanes, padding):
-    """Pack 16-bit elements into atomic words; an odd tail pads its high lane."""
+def lane_width(dtype):
+    if dtype not in PACKED_TYPES:
+        raise ValueError(f"Unsupported packed scatter dtype: {dtype!r}")
+    return LANE_BITS[dtype]
+
+
+def pack_lanes(lanes, padding, dtype):
+    """Pack raw lanes into atomic words; a partial tail pads its high lanes."""
+    bits = lane_width(dtype)
+    limit = (1 << bits) - 1
     lanes = list(lanes)
-    if any(type(lane) is not int or not 0 <= lane <= 0xFFFF for lane in lanes) or (
-        type(padding) is not int or not 0 <= padding <= 0xFFFF
+    if any(type(lane) is not int or not 0 <= lane <= limit for lane in lanes) or (
+        type(padding) is not int or not 0 <= padding <= limit
     ):
-        raise ValueError("Packed scatter lanes must be unsigned 16-bit words")
-    if len(lanes) % PACKING:
-        lanes.append(padding)
-    return [low | (high << 16) for low, high in zip(lanes[::2], lanes[1::2])]
+        raise ValueError(f"Packed scatter lanes must be unsigned {bits}-bit words")
+    per_word = packing(dtype)
+    lanes += [padding] * (-len(lanes) % per_word)
+    return [
+        sum(
+            lane << (bits * index) for index, lane in enumerate(lanes[i : i + per_word])
+        )
+        for i in range(0, len(lanes), per_word)
+    ]
+
+
+def unpack_lanes(words, count, dtype):
+    """Return the ``count`` packed raw lanes and the padding lanes after them."""
+    bits = lane_width(dtype)
+    words = list(words)
+    if any(type(word) is not int or not 0 <= word <= 0xFFFFFFFF for word in words):
+        raise ValueError("Packed scatter words must be unsigned 32-bit values")
+    if len(words) != storage_count(dtype, count):
+        raise ValueError("Packed scatter word count does not match its elements")
+    mask = (1 << bits) - 1
+    lanes = [
+        (word >> (bits * index)) & mask
+        for word in words
+        for index in range(packing(dtype))
+    ]
+    return lanes[:count], lanes[count:]
+
+
+def lane_ctype(dtype):
+    """The unsigned host type that reads one packed element's raw bits."""
+    return ctypes.c_uint8 if lane_width(dtype) == 8 else ctypes.c_uint16
+
+
+def raw_lanes(dtype, logical):
+    """Two's-complement integer values as the raw unsigned lanes they occupy."""
+    mask = (1 << lane_width(dtype)) - 1
+    if any(
+        type(value) is not int or element_storage.CTYPES[dtype](value).value != value
+        for value in logical
+    ):
+        raise ValueError("Packed scatter integers must fit their storage type")
+    return [value & mask for value in logical]
+
+
+def logical_lanes(dtype, lanes):
+    """Raw unsigned lanes as the two's-complement values of a signed dtype."""
+    bits = lane_width(dtype)
+    if not dtype.startswith("int"):
+        return list(lanes)
+    return [lane - (1 << bits) if lane >> (bits - 1) else lane for lane in lanes]
+
+
+def update_storage_dtype(dtype, target):
+    """The reflected carrier type of a packed scatter's update elements."""
+    return element_storage.packet(dtype, target, [])["dtype"]
 
 
 def carriers(dtype, lanes, target):
-    """Return the native carriers of 16-bit update words, without rounding."""
+    """Return the native carriers of raw update lanes, without rounding."""
+    if dtype in SMALL_INTEGER_TYPES:
+        return element_storage.packet(dtype, target, logical_lanes(dtype, lanes))[
+            "values"
+        ]
     storage = half_storage if dtype == "float16" else bfloat_storage
     return storage.pack(lanes, target)
 
 
-def unpack_lanes(words, count):
-    """Return the ``count`` packed elements and the padding lanes after them."""
-    words = list(words)
-    if any(type(word) is not int or not 0 <= word <= 0xFFFFFFFF for word in words):
-        raise ValueError("Packed scatter words must be unsigned 32-bit values")
-    if len(words) != storage_count("float16", count):
-        raise ValueError("Packed scatter word count does not match its elements")
-    lanes = [lane for word in words for lane in (word & 0xFFFF, word >> 16)]
-    return lanes[:count], lanes[count:]
+def update_lanes(dtype, values, target):
+    """Recover raw update lanes from their exact native carriers."""
+    if dtype in SMALL_INTEGER_TYPES:
+        return raw_lanes(dtype, element_storage.unpack(dtype, target, values))
+    storage = half_storage if dtype == "float16" else bfloat_storage
+    return storage.unpack(values, target)
 
 
 def signature(entry):
     match = re.fullmatch(
-        r"scatter(int32|uint32|float32|float16|bfloat16)(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"
+        r"scatter(int32|uint32|float32|float16|bfloat16|int8|uint8|int16|uint16)"
+        r"(int32|uint32|int64|uint64)_(none|sum|prod|min|max)_"
         r"([1-9]|10)_updc_(true|false)_nwork(1|4|8|16|32)_int",
         entry,
     )

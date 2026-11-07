@@ -99,6 +99,9 @@ def test_float_scatter_requires_distinct_native_ci_profiles():
         ("metal", "half"),
         ("directx", "half"),
         ("opengl", "half"),
+        ("metal", "small-int"),
+        ("directx", "small-int"),
+        ("opengl", "small-int"),
     }
     assert (
         next(
@@ -335,9 +338,9 @@ def test_float_scatter_dispatch_preserves_raw_initialization(
     if fault == "member":
         next(value for value in descriptor["bindings"] if value["name"] == "out")[
             "scalarLayout"
-        ]["structMembers"][0][
-            "physicalType"
-        ] = "float" if target == "opengl" else "uint"
+        ]["structMembers"][0]["physicalType"] = (
+            "float" if target == "opengl" else "uint"
+        )
 
     def request(_descriptor, _directory, inputs, outputs, launch, **kwargs):
         assert inputs["out"]["values"] == words(np, arrays["out"]) + runtime.COPY_GUARD

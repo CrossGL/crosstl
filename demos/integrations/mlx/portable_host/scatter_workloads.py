@@ -19,6 +19,36 @@ LAYOUTS = (
 HALF_TYPES = ("float16", "bfloat16")
 FLOAT_TYPES = ("float32", *HALF_TYPES)
 HALF_LAYOUTS = (*LAYOUTS, "odd", "work4", "work8", "work16", "work32")
+# The 8- and 16-bit integers pack four or two elements into each atomic word.
+# The odd and tail outputs leave three and one unused 8-bit lanes (one and one
+# unused 16-bit lane) in their last word; extremes crosses every sign and wrap
+# boundary of the lane width.
+SMALL_INT_TYPES = ("int8", "uint8", "int16", "uint16")
+SIGNED_TYPES = ("int32", "int8", "int16")
+SMALL_INT_LAYOUTS = (*HALF_LAYOUTS, "tail", "extremes")
+# int8 and uint16 run every layout; uint8 and int16 run the layouts whose
+# updates share atomic words differently, which keeps the profile's native
+# translations within one CI leg.
+SMALL_INT_PACKING_LAYOUTS = (
+    *("dense", "odd", "tail", "alias", "work4", "work32", "extremes"),
+)
+# Raw (initial, update) lanes of the extremes layout for each lane width.
+SMALL_INT_EXTREMES = {
+    8: (
+        (0x00, 0x7F, 0x80, 0xFF, 0x01, 0xFE, 0x7E, 0x81, 0x40, 0xC0, 0x10, 0xF0),
+        (0xFF, 0x01, 0xFF, 0x01, 0x80, 0x7F, 0x82, 0x80, 0x02, 0x03, 0x00, 0x11),
+    ),
+    16: (
+        (
+            *(0x0000, 0x7FFF, 0x8000, 0xFFFF, 0x0001, 0xFFFE),
+            *(0x7FFE, 0x8001, 0x4000, 0xC000, 0x00FF, 0xFF00),
+        ),
+        (
+            *(0xFFFF, 0x0001, 0xFFFF, 0x0001, 0x8000, 0x7FFF),
+            *(0x8002, 0x8000, 0x0002, 0x0003, 0x0001, 0x0000),
+        ),
+    ),
+}
 # Signed zeros, the extreme finite values, infinities and quiet NaN payloads,
 # with binary16 subnormals. GLSL carries both formats in float registers, where
 # signaling NaNs need not be supported and float32 subnormals (which every
@@ -121,9 +151,36 @@ def half_cases():
         }
 
 
-def profile_cases(*, float32=False, half=False):
-    if float32 and half:
+def small_int_cases():
+    for dtype in SMALL_INT_TYPES:
+        layouts = (
+            SMALL_INT_LAYOUTS
+            if dtype in ("int8", "uint16")
+            else SMALL_INT_PACKING_LAYOUTS
+        )
+        for operation in ("none", "sum", "prod", "min", "max"):
+            for i, layout in enumerate(layouts):
+                yield {
+                    "id": f"{dtype}-{operation}-{layout}",
+                    "dtype": dtype,
+                    "operation": operation,
+                    "layout": layout,
+                    "index_dtype": ("int32", "uint32", "int64", "uint64")[i % 4],
+                }
+        yield {
+            "id": f"{dtype}-none-capacity",
+            "dtype": dtype,
+            "operation": "none",
+            "layout": "capacity",
+            "index_dtype": "int64",
+        }
+
+
+def profile_cases(*, float32=False, half=False, small_int=False):
+    if float32 + half + small_int > 1:
         raise ValueError("Choose one scatter workload profile")
+    if small_int:
+        return small_int_cases()
     return half_cases() if half else float_cases() if float32 else cases()
 
 
@@ -184,6 +241,43 @@ def combine(np, dtype, operation, current, update):
     return np.where(store, round_half(np, result, dtype), current).astype(np.uint16)
 
 
+def integer_combine(np, dtype, operation, current, update):
+    """Apply the pinned atomic.h ``op(update, current)`` to one narrow integer.
+
+    The operators return ``T``, so a sum or product converts back to the
+    element type modulo 2**bits. The conditions only skip stores that would
+    not change the element: a product with zero and a non-strict min or max.
+    """
+    a = np.asarray(update).astype(np.int64)
+    b = np.asarray(current).astype(np.int64)
+    result = {
+        "none": a,
+        "sum": a + b,
+        "prod": np.where(b != 0, a * b, b),
+        "min": np.where(a < b, a, b),
+        "max": np.where(a > b, a, b),
+    }[operation]
+    info = np.iinfo(dtype)
+    result = result & ((1 << info.bits) - 1)
+    if info.min < 0:
+        result = np.where(result >> (info.bits - 1), result - (1 << info.bits), result)
+    return result.astype(dtype)
+
+
+def small_int_extremes(xp, np, case, shape):
+    """Lanes on every sign and wrap boundary, each output row updated once."""
+    dtype = case["dtype"]
+    initial, update = (
+        np.array(lanes, dtype=f"uint{np.iinfo(dtype).bits}").view(dtype).reshape(shape)
+        for lanes in SMALL_INT_EXTREMES[np.iinfo(dtype).bits]
+    )
+    return (
+        xp.array(initial),
+        [xp.array(np.array([2, 0, 1], dtype=case["index_dtype"]))],
+        xp.array(update),
+    )
+
+
 def typed(xp, np, values, dtype):
     """Build ``dtype`` storage; 16-bit floats are built from their raw words."""
     values = np.asarray(values)
@@ -237,10 +331,14 @@ def arrays(xp, np, case):
     shape = (
         (2, 2) if layout.startswith("work") else (3, 3) if layout == "odd" else (3, 4)
     )
+    if layout == "tail":
+        shape = (3, 5)
     if layout == "capacity":
         shape = (65535,)
     if case["dtype"] in HALF_TYPES and layout in ("payloads", "rounding"):
         return half_layout(xp, np, case, shape)
+    if layout == "extremes":
+        return small_int_extremes(xp, np, case, shape)
     raw_source = np.arange(np.prod(shape)).reshape(shape)
     if case["dtype"] in FLOAT_TYPES:
         raw_source = (raw_source + 1) * np.where(raw_source % 2, -0.5, 0.5)
@@ -248,10 +346,12 @@ def arrays(xp, np, case):
         raw_source = raw_source + 10
     source = typed(xp, np, raw_source, case["dtype"])
     if layout == "capacity":
+        # The last replacement fits every integer width.
+        last = 101 if case["dtype"] in SMALL_INT_TYPES else 321
         return (
             source,
             [xp.array(np.array([65534, -1, 0], dtype=np.int64))],
-            xp.array(np.array([123, 123, 321], dtype=case["dtype"])),
+            xp.array(np.array([123, 123, last], dtype=case["dtype"])),
         )
     if layout == "payloads":
         payloads = (
@@ -325,7 +425,7 @@ def arrays(xp, np, case):
         positions = np.arange(update.size).reshape(update.shape)
         # Bound intermediate products independently of contending update order.
         update = np.where(positions < 8, 2, 1)
-        if case["dtype"] == "int32":
+        if case["dtype"] in SIGNED_TYPES:
             update = np.where(positions % 7 == 1, -update, update)
         update = np.where(positions == 0, 0, update)
         if case["dtype"] in FLOAT_TYPES:
@@ -380,6 +480,10 @@ def reference(np, case):
         destination = tuple(int(index[coordinate]) for index in indices)
         if case["dtype"] in HALF_TYPES:
             expected[destination] = combine(
+                np, case["dtype"], operation, expected[destination], updates[coordinate]
+            )
+        elif case["dtype"] in SMALL_INT_TYPES:
+            expected[destination] = integer_combine(
                 np, case["dtype"], operation, expected[destination], updates[coordinate]
             )
         elif operation == "none":

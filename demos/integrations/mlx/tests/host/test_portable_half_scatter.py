@@ -273,11 +273,11 @@ def test_half_scatter_combine_stores_only_while_the_condition_holds(dtype):
 
 
 def test_half_scatter_packs_low_lane_first_and_pads_odd_tails():
-    assert layout.pack_lanes([0x1111, 0x2222, 0x3333], 0xABCD) == [
+    assert layout.pack_lanes([0x1111, 0x2222, 0x3333], 0xABCD, "float16") == [
         0x22221111,
         0xABCD3333,
     ]
-    assert layout.unpack_lanes([0x22221111, 0xABCD3333], 3) == (
+    assert layout.unpack_lanes([0x22221111, 0xABCD3333], 3, "bfloat16") == (
         [0x1111, 0x2222, 0x3333],
         [0xABCD],
     )
@@ -286,10 +286,10 @@ def test_half_scatter_packs_low_lane_first_and_pads_odd_tails():
     assert layout.storage_count("float32", 3) == 3
     for lanes in ([-1], [0x10000], [True], [0.5]):
         with pytest.raises(ValueError):
-            layout.pack_lanes(lanes, 0)
+            layout.pack_lanes(lanes, 0, "float16")
     for words_, count in (([2**32], 1), ([-1], 1), ([True], 1), ([0, 0], 1)):
         with pytest.raises(ValueError):
-            layout.unpack_lanes(words_, count)
+            layout.unpack_lanes(words_, count, "float16")
     assert layout.PADDING["float16"] != layout.PADDING["bfloat16"]
 
 
@@ -472,7 +472,7 @@ def test_half_scatter_dispatch_round_trips_packed_words(
         next(value for value in descriptor["bindings"] if value["name"] == "out")[
             "scalarLayout"
         ]["structMembers"][0]["physicalType"] = "float"
-    packed = layout.pack_lanes(words(np, arrays["out"]), layout.PADDING[dtype])
+    packed = layout.pack_lanes(words(np, arrays["out"]), layout.PADDING[dtype], dtype)
 
     def request(_descriptor, _directory, inputs, outputs, launch, **kwargs):
         assert inputs["out"]["values"] == packed + runtime.COPY_GUARD
@@ -481,7 +481,7 @@ def test_half_scatter_dispatch_round_trips_packed_words(
         return SimpleNamespace(outputs=outputs)
 
     def execute(_host, request):
-        values = layout.pack_lanes(words(np, expected), layout.PADDING[dtype])
+        values = layout.pack_lanes(words(np, expected), layout.PADDING[dtype], dtype)
         output = {**request.outputs["out"], "values": values + runtime.COPY_GUARD}
         if fault == "padding":
             output["values"][len(values) - 1] ^= 0x10000
@@ -547,7 +547,12 @@ def test_half_scatter_records_require_the_complete_profile(native):
 
 
 def test_half_scatter_profile_names_its_evidence():
-    assert verify_scatter.profile(SimpleNamespace(half=True, float32=False)) == "half"
+    assert (
+        verify_scatter.profile(
+            SimpleNamespace(half=True, float32=False, small_int=False)
+        )
+        == "half"
+    )
     assert verify_scatter.UPSTREAM_TESTS == (
         "test_array.TestArray.test_setitem_with_list",
     )

@@ -240,17 +240,20 @@ std::vector<ScatterTile> scatter_runs(
 
 void Scatter::eval_gpu(const std::vector<array>& inputs, array& out) {
   require_runtime();
-  // Binary16 and bfloat16 outputs are the pinned packed mlx_atomic words: two
-  // elements per 32-bit word, updated by compare-and-swap.
+  // Binary16, bfloat16 and the 8- and 16-bit integer outputs are the pinned
+  // packed mlx_atomic words: four or two elements per 32-bit word, updated by
+  // compare-and-swap.
   if (inputs.size() < 3 || inputs.size() > 12 || axes_.size() != inputs.size() - 2 ||
       (out.dtype() != int32 && out.dtype() != uint32 && out.dtype() != float32 &&
-       out.dtype() != float16 && out.dtype() != bfloat16) ||
+       out.dtype() != float16 && out.dtype() != bfloat16 &&
+       out.dtype() != int8 && out.dtype() != uint8 &&
+       out.dtype() != int16 && out.dtype() != uint16) ||
       inputs[0].dtype() != out.dtype() || inputs.back().dtype() != out.dtype() ||
       inputs[0].shape() != out.shape() || out.ndim() == 0 || out.ndim() > 64 ||
       out.size() > max_scatter_storage || inputs.back().size() > max_scatter_storage ||
       (reduce_type_ != None && reduce_type_ != Sum && reduce_type_ != Prod &&
        reduce_type_ != Min && reduce_type_ != Max)) {
-    throw std::invalid_argument("CrossTL scatter requires bounded int32, uint32, float32, float16 or bfloat16 indexed updates.");
+    throw std::invalid_argument("CrossTL scatter requires bounded 8-, 16- or 32-bit integer, float32, float16 or bfloat16 indexed updates.");
   }
   const auto index_dtype = inputs[1].dtype();
   if (index_dtype != int32 && index_dtype != uint32 &&

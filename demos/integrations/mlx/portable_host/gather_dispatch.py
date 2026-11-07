@@ -12,6 +12,7 @@ from crosstl.project.runtime_verification import (
 )
 from crosstl.translator.resource_storage import encoded_storage_dtype
 from demos.integrations.mlx.portable_host import (
+    element_storage,
     gather_axis_layout,
     gather_layout,
     gather_storage,
@@ -120,15 +121,27 @@ def word_value(host, buffer, layout, name, scatter, guard):
 
 def packed_value(host, buffer, binding, name, guard):
     """A packed scatter buffer's value: atomic output words or update carriers."""
-    from demos.integrations.mlx.portable_host.runtime import physical_dtype
-
     layout = binding["scalarLayout"]
     kind = buffer.dtype.decode("ascii")
     output = name == "out"
+    lanes = list(
+        ctypes.cast(
+            buffer.data,
+            ctypes.POINTER(scatter_layout.lane_ctype(kind) * buffer.count),
+        ).contents
+    )
+    if not output and kind in scatter_layout.SMALL_INTEGER_TYPES:
+        # Narrow integer updates travel as exact element_storage carriers.
+        value = element_storage.packet(
+            kind, host.target, scatter_layout.logical_lanes(kind, lanes)
+        )
+        if not element_storage.reflected_layout_matches(layout, value, kind):
+            raise ValueError("Native and reflected gather layouts disagree")
+        return value
     storage = (
         scatter_layout.atomic_storage_dtype(kind, host.target)
         if output
-        else physical_dtype(kind, host.target)
+        else scatter_layout.update_storage_dtype(kind, host.target)
     )
     reflected = encoded_storage_dtype(
         layout,
@@ -139,9 +152,6 @@ def packed_value(host, buffer, binding, name, guard):
     size = ctypes.sizeof(gather_layout.TYPES[storage])
     if layout["elementType"] != reflected or layout["elementStrideBytes"] != size:
         raise ValueError("Native and reflected gather layouts disagree")
-    lanes = list(
-        ctypes.cast(buffer.data, ctypes.POINTER(ctypes.c_uint16 * buffer.count)).contents
-    )
     if not output:
         value = {
             "dtype": storage,
@@ -159,7 +169,9 @@ def packed_value(host, buffer, binding, name, guard):
         }
     ]:
         raise ValueError("Native scatter atomic storage layout does not match")
-    values = scatter_layout.pack_lanes(lanes, scatter_layout.PADDING[kind]) + guard
+    values = (
+        scatter_layout.pack_lanes(lanes, scatter_layout.PADDING[kind], kind) + guard
+    )
     return {"dtype": storage, "shape": [len(values), 1], "values": values}
 
 
@@ -178,7 +190,11 @@ def bind(host, entry, descriptor, supplied, dtype, scatter, guard):
             raise ValueError("Reflected gather binding identity does not match")
         matched.add(name)
         buffer = supplied[name]
-        if scatter and name in ("out", "updates") and dtype in scatter_layout.PACKED_TYPES:
+        if (
+            scatter
+            and name in ("out", "updates")
+            and dtype in scatter_layout.PACKED_TYPES
+        ):
             value = packed_value(host, buffer, binding, name, guard)
         elif name in gather_storage.VALUES and gather_storage.extended(dtype):
             value = gather_storage.bind_value(
@@ -255,10 +271,10 @@ def packed_readback(dtype, threads, guard, output):
         raise RuntimeError("Native gather readback is outside its storage type")
     if readback[words:] != guard:
         raise RuntimeError("Native gather changed the output buffer guard")
-    lanes, padding = scatter_layout.unpack_lanes(readback[:words], threads)
+    lanes, padding = scatter_layout.unpack_lanes(readback[:words], threads, dtype)
     if padding != [scatter_layout.PADDING[dtype]] * len(padding):
-        raise RuntimeError("Native scatter changed its packed padding lane")
-    return readback, words, (ctypes.c_uint16 * threads)(*lanes)
+        raise RuntimeError("Native scatter changed its packed padding lanes")
+    return readback, words, (scatter_layout.lane_ctype(dtype) * threads)(*lanes)
 
 
 def dispatch(host, entry, buffers, count, threads, launch):

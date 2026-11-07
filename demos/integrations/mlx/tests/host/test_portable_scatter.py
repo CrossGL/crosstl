@@ -10,6 +10,7 @@ import pytest
 
 from demos.integrations.mlx.portable_host import (
     gather_dispatch,
+    gather_layout,
     gather_packages,
     runtime,
     scatter_evidence,
@@ -481,7 +482,13 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
             if case["dtype"] == "float32"
             else (
                 layout.pack_lanes(
-                    expected.reshape(-1).tolist(), layout.PADDING[case["dtype"]]
+                    (
+                        layout.raw_lanes(case["dtype"], expected.reshape(-1).tolist())
+                        if case["dtype"] in layout.SMALL_INTEGER_TYPES
+                        else expected.reshape(-1).tolist()
+                    ),
+                    layout.PADDING[case["dtype"]],
+                    case["dtype"],
                 )
                 if packed
                 else expected.reshape(-1).tolist()
@@ -508,6 +515,8 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
     for name, buffer in supplied.items():
         kind = buffer.dtype.decode()
         storage = runtime.physical_dtype(kind, target)
+        if name == "updates" and kind in layout.PACKED_TYPES:
+            storage = layout.update_storage_dtype(kind, target)
         if name == "out":
             storage = layout.atomic_storage_dtype(kind, target)
         if kind == "float32":
@@ -519,11 +528,12 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         elif kind in layout.PACKED_TYPES:
             lanes = list(
                 ctypes.cast(
-                    buffer.data, ctypes.POINTER(ctypes.c_uint16 * buffer.count)
+                    buffer.data,
+                    ctypes.POINTER(layout.lane_ctype(kind) * buffer.count),
                 ).contents
             )
             values = (
-                layout.pack_lanes(lanes, layout.PADDING[kind])
+                layout.pack_lanes(lanes, layout.PADDING[kind], kind)
                 if name == "out"
                 else layout.carriers(kind, lanes, target)
             )
@@ -540,7 +550,7 @@ def scatter_event(tmp_path, case, target="metal", *, normalize_scalar=False):
         scalar = {
             "elementType": storage,
             "elementStrideBytes": (
-                1 if storage == "bool" else ctypes.sizeof(runtime.TYPES[storage])
+                1 if storage == "bool" else ctypes.sizeof(gather_layout.TYPES[storage])
             ),
         }
         if storage == "float16" and target == "directx":
