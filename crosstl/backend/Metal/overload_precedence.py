@@ -60,8 +60,9 @@ def _builtin_value_type(preprocessor, type_text: str | None) -> str | None:
     if decomposed is None:
         return None
     base, width = decomposed
-    base = _CANONICAL_SCALARS.get(base, base)
-    if base not in _KNOWN_SCALARS:
+    if base in _CANONICAL_SCALARS:
+        base = _CANONICAL_SCALARS[base]
+    elif base not in _KNOWN_SCALARS:
         return None
     return base if width == 1 else f"{base}{width}"
 
