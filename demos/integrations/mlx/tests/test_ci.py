@@ -4363,3 +4363,20 @@ def test_atomic_stores_and_pinned_scatter_are_required_on_each_native_target():
         timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
         assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow
+
+
+def test_metal_constant_initializers_execute_on_the_native_metal_leg():
+    from tests import workflow_text
+    from tests.test_translator.test_metal_constant_constructor_initializers import (
+        REQUIRE_ENV,
+    )
+
+    workflow = (
+        Path(__file__).resolve().parents[4]
+        / ".github/workflows/demo-project-testing.yml"
+    ).read_text()
+    step = workflow_text.workflow_step_section(
+        workflow, "Validate general gather and empty arrays"
+    )
+    assert f'{REQUIRE_ENV}: "1"' in step
+    assert "test_metal_constant_constructor_initializers.py" in step
