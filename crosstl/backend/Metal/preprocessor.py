@@ -71,6 +71,7 @@ from .namespaced_specializations import (
     specialization_namespaces,
     specialization_reference,
 )
+from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
 from .overload_ranking import shared_template_parameter_positions
 from .pattern_cache import pattern as _cached_pattern
 from .pointer_conversions import pointer_conversion_type
@@ -22591,6 +22592,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if not expr:
                 return None
 
+        def infer_operand(operand: str) -> Optional[str]:
+            return self._infer_argument_type(
+                operand,
+                buffer_element_types,
+                local_variable_types,
+                struct_field_types,
+                structs_by_name,
+            )
+
+        # A conditional expression has lower precedence than every shape below.
+        conditional = infer_conditional_type(self, expr, infer_operand)
+        if conditional is not None:
+            return conditional
+
         # Built-in scalar postfix updates retain the declared value type. Keep
         # the source expression unchanged so specialization does not consume or
         # duplicate its mutation; user-defined update operators remain unresolved.
@@ -22905,7 +22920,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if binary is not None:
             return binary
 
-        return None
+        return infer_unary_sign_type(self, expr, infer_operand)
 
     def _vector_local_component_type(
         self, base: str, local_variable_types: Dict[str, str]
