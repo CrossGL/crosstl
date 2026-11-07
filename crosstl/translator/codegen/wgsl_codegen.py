@@ -148,6 +148,11 @@ from .wgsl_primitive_index import (
     refuse_misplaced_primitive_index,
     refuse_primitive_index_write,
 )
+from .wgsl_read_only_globals import (
+    read_only_module_names,
+    validate_writable_module_root,
+)
+from .wgsl_reference_argument_copies import WGSLReferenceArgumentCopiesMixin
 from .wgsl_specialization_constants import (
     WGSLSpecializationPlan,
     plan_wgsl_specialization_constants,
@@ -206,6 +211,7 @@ class WGSLCodeGen(
     WGSLLoopContinuingMixin,
     WGSLValueSideEffectsMixin,
     WGSLConditionalEffectsMixin,
+    WGSLReferenceArgumentCopiesMixin,
     WGSLCompositeConditionalMixin,
     WGSLParameterLoweringMixin,
 ):
@@ -873,6 +879,7 @@ class WGSLCodeGen(
         self._uniform_scalar_array_wrappers = {}
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
+        self._read_only_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
@@ -956,6 +963,7 @@ class WGSLCodeGen(
         self._uniform_scalar_array_wrappers = {}
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
+        self._read_only_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
@@ -1130,6 +1138,9 @@ class WGSLCodeGen(
         )
         self._module_storage_access_modes = self.module_storage_access_modes(
             global_variable_nodes, stage_resource_parameters
+        )
+        self._read_only_module_names = read_only_module_names(
+            self, cbuffers, global_variable_nodes, stage_resource_parameters
         )
         self._inferred_storage_texture_access_modes = (
             self.inferred_storage_texture_access_modes(
@@ -2985,6 +2996,11 @@ class WGSLCodeGen(
                 self.generate_statement(statement, indent) for statement in lowered
             )
         lowered = self.lower_effectful_ternary(stmt)
+        if lowered is not None:
+            return "\n".join(
+                self.generate_statement(statement, indent) for statement in lowered
+            )
+        lowered = self.lower_reference_argument_copies(stmt)
         if lowered is not None:
             return "\n".join(
                 self.generate_statement(statement, indent) for statement in lowered
@@ -7642,6 +7658,7 @@ class WGSLCodeGen(
         return self._module_storage_access_modes.get(name)
 
     def validate_storage_assignment_target(self, target):
+        validate_writable_module_root(self, target)
         access_path = self.expression_access_path(target)
         if access_path is None:
             return
