@@ -55,6 +55,10 @@ from .barrier_import import metal_barrier_statements
 from .bit_scan_import import lower_scan as lower_bit_scan
 from .bit_scan_import import scan_function as bit_scan_function
 from .buffer_layout_import import MetalBufferLayoutImport
+from .call_template_deduction import (
+    TemplateDeductionConflict,
+    deduce_omitted_template_arguments,
+)
 from .color_attachments import (
     color_attachment_semantic,
     enumerator_index_values,
@@ -8513,6 +8517,7 @@ class MetalToCrossGLConverter(
         explicit_arguments,
         *,
         selected_call,
+        deduced_arguments=None,
     ):
         parameters = [
             entry
@@ -8520,6 +8525,7 @@ class MetalToCrossGLConverter(
             if isinstance(entry, (tuple, list)) and len(entry) >= 2 and entry[1]
         ]
         defaults = getattr(function, "template_parameter_defaults", {}) or {}
+        deduced_arguments = dict(deduced_arguments or {})
         explicit_arguments = list(explicit_arguments or [])
         if len(explicit_arguments) > len(parameters):
             raise MetalTemplateArgumentResolutionError(
@@ -8538,7 +8544,13 @@ class MetalToCrossGLConverter(
         type_bindings = {}
         for index, (kind, name) in enumerate(parameters):
             explicit = index < len(explicit_arguments)
-            expression = explicit_arguments[index] if explicit else defaults.get(name)
+            deduced = not explicit and name in deduced_arguments
+            if explicit:
+                expression = explicit_arguments[index]
+            elif deduced:
+                expression = deduced_arguments[name]
+            else:
+                expression = defaults.get(name)
             if expression is None:
                 raise MetalTemplateArgumentResolutionError(
                     function.name,
@@ -8557,7 +8569,7 @@ class MetalToCrossGLConverter(
                     function,
                     name,
                     selected_call,
-                    is_default=not explicit,
+                    is_default=not (explicit or deduced),
                 )
                 value_bindings[name] = resolved
             else:
@@ -8567,11 +8579,51 @@ class MetalToCrossGLConverter(
                     function,
                     name,
                     selected_call,
-                    is_default=not explicit,
+                    is_default=not (explicit or deduced),
                 )
                 type_bindings[name] = resolved
             all_bindings[name] = resolved
         return value_bindings, type_bindings
+
+    def deduce_omitted_call_template_arguments(
+        self,
+        function,
+        explicit_arguments,
+        call_arguments,
+        *,
+        selected_call,
+    ):
+        """Deduce the template arguments an explicit call list leaves out."""
+        template_parameters = [
+            (entry[0], entry[1])
+            for entry in getattr(function, "template_parameters", None) or []
+            if isinstance(entry, (tuple, list)) and len(entry) >= 2 and entry[1]
+        ]
+        explicit_count = len(explicit_arguments or [])
+        if explicit_count >= len(template_parameters):
+            return {}
+        parameters = getattr(function, "params", None) or []
+        argument_types = [
+            self.expression_metal_type(argument) for argument in call_arguments
+        ]
+        try:
+            return deduce_omitted_template_arguments(
+                template_parameters,
+                explicit_count,
+                [getattr(parameter, "vtype", None) for parameter in parameters],
+                argument_types,
+            )
+        except TemplateDeductionConflict as conflict:
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                conflict.parameter_name,
+                ", ".join(conflict.values),
+                selected_call,
+                str(conflict),
+                "deduced",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+            ) from conflict
 
     def resolve_concrete_template_type_argument(
         self,
@@ -8733,6 +8785,12 @@ class MetalToCrossGLConverter(
                     function,
                     arguments,
                     selected_call=str(name),
+                    deduced_arguments=self.deduce_omitted_call_template_arguments(
+                        function,
+                        arguments,
+                        call_arguments,
+                        selected_call=str(name),
+                    ),
                 )
             )
         except MetalTemplateArgumentResolutionError as error:
