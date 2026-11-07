@@ -9433,6 +9433,18 @@ class MetalToCrossGLConverter(
 
         return list(dict.fromkeys(qualifiers))
 
+    def metal_auto_pointer_object(self, var):
+        """Whether ``var`` is a plain ``auto`` local whose initializer deduced a pointer type."""
+        if self.metal_auto_pointer_depth(getattr(var, "vtype", None)):
+            return False
+        if not self.is_metal_auto_declaration_type(getattr(var, "vtype", None)):
+            return False
+        name = getattr(var, "name", None)
+        inferred_type = self.current_variable_types.get(
+            name, self.global_variable_types.get(name)
+        )
+        return self.metal_pointer_pointee_type_once(inferred_type) is not None
+
     def effective_declaration_qualifiers(self, var):
         qualifiers = self.resolved_declaration_qualifiers(var)
         if self.is_metal_auto_declaration_type(getattr(var, "vtype", None)):
@@ -9440,6 +9452,13 @@ class MetalToCrossGLConverter(
             inferred = self.current_variable_type_qualifiers.get(
                 name, self.global_variable_type_qualifiers.get(name, ())
             )
+            if self.metal_auto_pointer_object(var):
+                # ``const auto p = ptr`` is ``T* const``: the const is the pointer object's own, not the pointee's.
+                qualifiers = [
+                    qualifier
+                    for qualifier in qualifiers
+                    if str(qualifier).lower() not in {"const", "volatile"}
+                ]
             qualifiers.extend(inferred)
         return list(dict.fromkeys(qualifiers))
 
@@ -9627,6 +9646,9 @@ class MetalToCrossGLConverter(
             self.effective_metal_variable_type(var)
         )
         pointee_qualifiers = getattr(var, "pointee_qualifiers", None)
+        if self.metal_auto_pointer_object(var):
+            # The initializer's pointer type alone qualifies the pointee of ``const auto p = ptr``.
+            pointee_qualifiers = None
         pointee_qualifier_names = {
             str(qualifier).lower()
             for qualifier in (
@@ -9676,6 +9698,7 @@ class MetalToCrossGLConverter(
                 (
                     getattr(var, "is_const", False)
                     and not threadgroup_pointee_const_local
+                    and not self.metal_auto_pointer_object(var)
                 )
                 or (
                     "const" in qualifiers
@@ -21730,6 +21753,10 @@ float {scalar}(float value) {{
             and initializer is not None
             and self.metal_pointer_pointee_type_once(inferred_type) is not None
         ):
+            if not self.metal_auto_pointer_depth(declaration.vtype):
+                # ``const auto p = ptr`` deduces ``T* const`` ([dcl.type.auto.deduct]): the const qualifies the
+                # local pointer object, which CrossGL locals need not spell, not the storage it points to.
+                qualifiers.difference_update({"const", "volatile"})
             qualifiers.update(self.expression_metal_type_qualifiers(initializer))
             if self.metal_auto_pointer_depth(declaration.vtype):
                 return self.normalized_metal_address_qualifiers(
