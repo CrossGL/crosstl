@@ -13730,6 +13730,7 @@ def test_preprocessor_materializes_enabled_free_function_sfinae_fallback():
 
 def test_preprocessor_rejects_disabled_free_function_sfinae_for_native_overload():
     code = """
+    using namespace metal;
     template <
         typename T,
         metal::enable_if_t<metal::is_integral_v<T>, bool> = true>

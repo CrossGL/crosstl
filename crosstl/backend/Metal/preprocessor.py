@@ -30,6 +30,7 @@ from typing import (
 
 from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
+from crosstl.translator.codegen.metal_library_functions import MSL_LIBRARY_FUNCTIONS
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
 from .auto_placeholders import deduced_auto_type
@@ -65,6 +66,15 @@ from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
 )
+from .library_fallback_lookup import (
+    library_fallback_obstacle,
+    library_using_declaration_present,
+)
+from .library_overloads import (
+    LIBRARY_OVERLOAD_NAMES,
+    library_overload_precedence,
+    library_type_spelling,
+)
 from .local_decltypes import complete_declared_type, substitute_local_decltypes_in
 from .member_address_types import (
     addressed_member_pointer_type,
@@ -82,6 +92,7 @@ from .pointer_conversions import pointer_conversion_type
 from .qualified_member_types import resolve_qualified_struct_member_types
 from .reference_alias_arguments import call_argument_designates
 from .reopened_namespaces import ReopenedNamespaceIndex
+from .scope_qualifier_keywords import NON_SCOPE_KEYWORDS
 from .signed_type_spellings import fold_integer_type_spellings
 from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_assertion_sources import concrete_static_assertion_conditions
@@ -1790,6 +1801,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         deferred_call_ids: Set[int] = set()
         deferred_carrier_calls: List[_DeferredConstrainedCall] = []
         carrier_spans = {template.span for template in carriers}
+        unconstrained_template_names = {
+            template.name
+            for template in templates
+            if not template.template_constraints and template.span not in carrier_spans
+        }
         reserved_identifiers = set(IDENTIFIER_RE.findall(masked_code))
 
         # Append concrete bodies without rewriting the source until the worklist
@@ -1990,6 +2006,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 # Every recognized constrained candidate is disabled. Preserve
                 # the spelling so a native overload (such as metal::isnan) can
                 # resolve it after the fallback declaration is removed.
+                self._require_library_fallback_lookup(
+                    code,
+                    masked_code,
+                    call,
+                    lookup_position,
+                    visible_candidates,
+                    argument_types,
+                    namespace_visibility,
+                    has_other_declarations=bool(competing_declarations.get(call.name))
+                    or call.name in unconstrained_template_names,
+                )
                 native_fallback_names.add(call.name)
                 continue
 
@@ -2044,6 +2071,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     )
 
             template, bindings = enabled[0]
+            if self._library_overload_selected(
+                code,
+                masked_code,
+                call,
+                lookup_position,
+                visible_candidates,
+                argument_types,
+                namespace_visibility,
+                template,
+                bindings,
+            ):
+                # A non-template library overload matches as well as the
+                # template does and wins; the call stays for it.
+                native_fallback_names.add(call.name)
+                continue
             ordered_arguments = tuple(
                 bindings[name] for name in template.template_parameters
             )
@@ -2518,6 +2560,155 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             callee_template=call.name,
             requested_arguments=tuple(call.arguments),
         )
+
+    def _library_lookup_obstacle(
+        self,
+        masked_code: str,
+        call: _MetalConstexprCall,
+        lookup_position: int,
+        candidates: Sequence[_MetalTemplateFunction],
+        namespace_visibility: _MetalNamespaceVisibility,
+    ) -> Optional[str]:
+        """Why lookup at ``call`` misses the Metal library function, or ``None`` when it finds it."""
+        if library_using_declaration_present(masked_code, call.name):
+            return None
+        return library_fallback_obstacle(
+            name=call.name,
+            reference_namespace=self._metal_call_reference_namespace(
+                call.qualified_name
+            ),
+            call_namespace=self._namespace_at(
+                list(namespace_visibility.namespace_spans), lookup_position
+            ),
+            position=lookup_position,
+            candidate_namespaces=[template.namespace for template in candidates],
+            directives=namespace_visibility.using_namespace_directives,
+            directive_targets=lambda directive: self._metal_namespace_reference_candidates(
+                directive.target,
+                directive.declaration_namespace,
+                globally_qualified=directive.globally_qualified,
+            ),
+        )
+
+    def _library_argument_types(
+        self, argument_types: Sequence[Optional[str]]
+    ) -> Optional[List[str]]:
+        """The library spellings of scalar and vector argument types, or ``None`` if one is neither."""
+        spellings = []
+        for argument_type in argument_types:
+            decomposed = (
+                self._scalar_and_width(argument_type)
+                if argument_type is not None
+                else None
+            )
+            spelling = (
+                library_type_spelling(*decomposed) if decomposed is not None else None
+            )
+            if spelling is None:
+                return None
+            spellings.append(spelling)
+        return spellings
+
+    def _library_parameter_type(self, type_text: str) -> Optional[str]:
+        """The library spelling of a scalar or vector parameter, ``thread T &`` for a non-const reference."""
+        text = self._normalize_template_argument_text(type_text)
+        reference = text.endswith("&")
+        if reference:
+            text = text[:-1].strip()
+            # A const reference binds any argument as a by-value parameter does.
+            reference = "const" not in text.split(" ")
+        decomposed = self._scalar_and_width(text)
+        spelling = (
+            library_type_spelling(*decomposed) if decomposed is not None else None
+        )
+        if spelling is None:
+            return None
+        return f"thread {spelling} &" if reference else spelling
+
+    def _require_library_fallback_lookup(
+        self,
+        code: str,
+        masked_code: str,
+        call: _MetalConstexprCall,
+        lookup_position: int,
+        candidates: Sequence[_MetalTemplateFunction],
+        argument_types: Sequence[Optional[str]],
+        namespace_visibility: _MetalNamespaceVisibility,
+        *,
+        has_other_declarations: bool,
+    ) -> None:
+        """Refuse a call whose disabled templates hide the Metal library function it would fall back to."""
+        if (
+            has_other_declarations
+            or self._library_argument_types(argument_types) is None
+        ):
+            # Other declarations or argument-dependent lookup can still supply a viable function.
+            return
+        obstacle = self._library_lookup_obstacle(
+            masked_code, call, lookup_position, candidates, namespace_visibility
+        )
+        if obstacle is not None:
+            self._raise_constrained_free_function_error(
+                code,
+                call,
+                f"every constrained candidate is disabled and {obstacle}",
+            )
+
+    def _library_overload_selected(
+        self,
+        code: str,
+        masked_code: str,
+        call: _MetalConstexprCall,
+        lookup_position: int,
+        candidates: Sequence[_MetalTemplateFunction],
+        argument_types: Sequence[Optional[str]],
+        namespace_visibility: _MetalNamespaceVisibility,
+        template: _MetalTemplateFunction,
+        bindings: Mapping[str, str],
+    ) -> bool:
+        """Whether a Metal library overload, not the enabled ``template``, is the best function for ``call``."""
+        if (
+            call.name not in LIBRARY_OVERLOAD_NAMES
+            and call.name not in MSL_LIBRARY_FUNCTIONS
+        ):
+            return False
+        arguments = self._library_argument_types(argument_types)
+        if arguments is None:
+            return False
+        if (
+            self._library_lookup_obstacle(
+                masked_code, call, lookup_position, candidates, namespace_visibility
+            )
+            is not None
+        ):
+            return False
+        parameters = self._template_function_parameter_text(template) or ""
+        declarations = _metal_function_parameter_declarations(
+            self, f"{template.name}({parameters})"
+        )
+        parameter_types = [
+            (
+                None
+                if variadic
+                else self._library_parameter_type(
+                    self._substitute_static_type_bindings(type_text, bindings)
+                )
+            )
+            for type_text, _name, variadic in declarations
+        ]
+        precedence = (
+            library_overload_precedence(call.name, arguments, parameter_types)
+            if call.name in LIBRARY_OVERLOAD_NAMES
+            else "unproven"
+        )
+        if precedence == "unproven":
+            self._raise_constrained_free_function_error(
+                code,
+                call,
+                f"the enabled template competes with the Metal library's '{call.name}' "
+                "overloads, and which one overload resolution selects is unproven",
+            )
+        return precedence == "library"
 
     def _materialize_explicit_template_struct_instantiations(
         self,
@@ -28243,7 +28434,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 code[name_start - 1].isalnum() or code[name_start - 1] == "_"
             ):
                 name_start -= 1
-            if name_start == name_end:
+            if (
+                name_start == name_end
+                or code[name_start:name_end] in NON_SCOPE_KEYWORDS
+            ):
+                # A global qualifier, as in `return ::max(a, b)`.
                 start = separator_end - 2
                 break
             start = name_start

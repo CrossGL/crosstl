@@ -215,12 +215,16 @@ def test_function_reached_through_a_template_binds_the_constrained_template(
 def test_function_reached_through_a_template_keeps_a_disabled_call_native(
     tmp_path, backend
 ):
-    """max(int, int) disables the float-only template, so h keeps the library max."""
+    """max(int, int) disables the float-only template, so h keeps the library max.
+
+    The kernel's max(float, float) calls the library too: beside ``using namespace metal;`` the library's
+    non-template max(float, float) matches as well as the template and wins ([over.match.best]).
+    """
     code = _translate(tmp_path, DISABLED_THROUGH_TEMPLATE, backend)
 
     assert re.fullmatch(r"return max\(a, 4\);", _body(code, "h"))
-    assert "100" in _body(code, "max_float")
-    assert not re.search(r"\bmax_\w*int\b", code)
+    assert "100" not in code
+    assert not re.search(r"\bmax_\w+\(", code)
 
 
 @pytest.mark.parametrize(
