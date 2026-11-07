@@ -34,6 +34,10 @@ from crosstl.backend.Metal.auto_placeholders import (
     deduced_auto_type,
     is_auto_placeholder,
 )
+from crosstl.backend.Metal.deduction_operand_types import (
+    is_unary_sign_position,
+    operand_expression_type,
+)
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_declared_type_and_name,
@@ -18037,8 +18041,16 @@ def _metal_expression_type_or_placeholder(
         if base_type:
             return f"{base_type}*"
 
+    def infer_operand(operand: str) -> str | None:
+        return _metal_expression_type(
+            preprocessor, operand, type_environment, return_types
+        )
+
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
-        return type_environment.get(text)
+        declared = type_environment.get(text)
+        if declared is not None:
+            return declared
+        return operand_expression_type(preprocessor, text, infer_operand)
 
     brace_start = text.find("{")
     if brace_start > 0:
@@ -18078,7 +18090,7 @@ def _metal_expression_type_or_placeholder(
                 for part in parts
             ]
             return arithmetic_result_type(preprocessor, inferred, operator_text)
-    return None
+    return operand_expression_type(preprocessor, text, infer_operand)
 
 
 def _split_metal_expression_operator(expression: str, operator_text: str) -> list[str]:
@@ -18115,6 +18127,9 @@ def _split_metal_expression_operator(expression: str, operator_text: str) -> lis
             and bracket_depth == 0
             and angle_depth == 0
             and brace_depth == 0
+            and not (
+                operator_text in {"+", "-"} and is_unary_sign_position(expression, i)
+            )
         ):
             parts.append("".join(current).strip())
             current = []
