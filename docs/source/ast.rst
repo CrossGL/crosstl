@@ -109,6 +109,16 @@ function ``Owner_name`` whose first parameter is the receiver, ``inout`` when
 the body may write it and ``in`` otherwise, and rewrites ``recv.name(args)``
 into ``Owner_name(recv, args)``.
 
+A concrete function marked ``@explicit_specialization(twice, float)`` replaces
+the body of the generic function ``twice`` for ``T = float``, as a C++
+``template <> float twice<float>(float)`` does. The parser keeps the primary's
+name and the template arguments in the function's
+``annotations["explicit_specialization"]``; the attribute itself is never
+printed. Generators that monomorphize generics call the marked function for
+every ``twice<float>`` instantiation, including ones reached only through
+another generic, and Rust, whose output keeps native generics, refuses the
+program with a typed diagnostic.
+
 Statement and expression nodes
 ------------------------------
 
