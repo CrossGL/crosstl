@@ -12,7 +12,11 @@ from demos.integrations.mlx.portable_host import quantization_layout as quantiza
 from demos.integrations.mlx.portable_host import (
     runtime,
     upstream_module_groups,
+    verify_upstream_fp_qmm,
     verify_upstream_ops,
+    verify_upstream_qmm,
+    verify_upstream_qmm_shapes,
+    verify_upstream_qmm_vjp,
 )
 from demos.integrations.mlx.tests.host.test_portable_fp_quantized_matmul import (
     CTYPES,
@@ -345,3 +349,29 @@ def test_qq_products_run_in_their_own_upstream_group():
         assert f"test_quantized.TestQuantized.{name}" not in (
             verify_upstream_ops.GPU_ONLY_TESTS
         )
+
+
+def test_quantized_matmul_tails_run_in_their_own_upstream_group():
+    tests = upstream_module_groups.GROUPS["quantized-matmul"]
+    assert tests == (
+        "test_quantized.TestQuantized.test_qmm_small_m_block",
+        "test_quantized.TestQuantized.test_fp_qmm_non_multiple_of_32_vjp",
+        "test_quantized.TestQuantized.test_vjp_scales_biases",
+    )
+    assert "quantized-matmul" in upstream_module_groups.QUANTIZED_GROUPS
+    # The dedicated qmm verifiers run none of them.
+    for module in (
+        verify_upstream_fp_qmm,
+        verify_upstream_qmm,
+        verify_upstream_qmm_shapes,
+        verify_upstream_qmm_vjp,
+    ):
+        assert not set(tests) & set(module.UPSTREAM_TESTS)
+    # test_qmm_small_m_block skips on MLX's CPU device, so the CPU worker must
+    # skip it and the native worker must run it. The other two run on both;
+    # neither reads mx.metal.is_available() nor needs gather_qmm_rhs.
+    assert tests[0] in verify_upstream_ops.GPU_ONLY_TESTS
+    assert not set(tests[1:]) & verify_upstream_ops.GPU_ONLY_TESTS
+    assert not set(tests) & verify_upstream_ops.METAL_PATH_TESTS
+    for target in ("opengl", "directx", "metal"):
+        assert verify_upstream_ops.upstream_tests(target, "quantized-matmul") == tests

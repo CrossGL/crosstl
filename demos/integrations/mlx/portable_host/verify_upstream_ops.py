@@ -871,6 +871,8 @@ GPU_ONLY_TESTS = frozenset(
         "test_quantized.TestQuantized.test_qqmm",
         "test_quantized.TestQuantized.test_gather_qqmm",
         "test_quantized.TestQuantized.test_gather_qqmm_global_scale_matrix_paths",
+        # Skips on the CPU device: it covers qmm's GPU small-M blocks only.
+        "test_quantized.TestQuantized.test_qmm_small_m_block",
         # Overrides the two-pass vector kernels' block count (sdpa.inc).
         "test_fast_sdpa.TestFastSDPA.test_sdpa_blocks_env_override",
         # Full attention with head dims 72, 80 and 96, and the shards of

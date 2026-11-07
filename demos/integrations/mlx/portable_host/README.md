@@ -1173,6 +1173,13 @@ on the selected target, and CI excludes those jobs.
 `test_gather_qmm_sorted_nax_large_m` skip unless `mx.metal.is_available()`,
 so the native worker runs them while it reports the host's GPU.
 
+`test_qmm_small_m_block`, `test_fp_qmm_non_multiple_of_32_vjp` and
+`test_vjp_scales_biases` run in the `quantized-matmul` group on every target:
+qmm's batched affine and mxfp4 small-M blocks, the nvfp4 16-element K tail
+differentiated in both transpositions, and the gradient of an affine product
+with respect to its scales and biases. The first skips on MLX's CPU device,
+so the CPU worker expects it to skip and the native worker must run it.
+
 ## General Gather
 
 The adapter implements MLX's `Gather::eval_gpu` using the unchanged pinned JIT

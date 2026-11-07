@@ -547,7 +547,22 @@ QUANTIZED_SORTED_TESTS = _tests(
 QUANTIZED_FP_TAIL_TESTS = _tests(
     "test_quantized", "TestQuantized", ("fp_gather_qmm_non_multiple_of_32",)
 )
-QUANTIZED_GROUPS = ("quantized-products", "quantized-sorted", "quantized-fp-tails")
+# QuantizedMatmul's products that the dedicated qmm verifiers do not model:
+# the batched affine and mxfp4 small-M blocks of qmm (test_qmm_small_m_block,
+# which skips on MLX's CPU), the nvfp4 16-element K tail differentiated in
+# both transpositions, and the gradient of an affine product with respect to
+# its scales and biases. About 4,200 launches, in a job of their own.
+QUANTIZED_MATMUL_TESTS = _tests(
+    "test_quantized",
+    "TestQuantized",
+    ("qmm_small_m_block", "fp_qmm_non_multiple_of_32_vjp", "vjp_scales_biases"),
+)
+QUANTIZED_GROUPS = (
+    "quantized-products",
+    "quantized-sorted",
+    "quantized-fp-tails",
+    "quantized-matmul",
+)
 
 # verify_upstream_ops.GROUP_TESTS: each runs in a CI job of its own.
 GROUPS = {
@@ -574,4 +589,5 @@ GROUPS = {
     "quantized-products": QQ_MATMUL_TESTS,
     "quantized-sorted": QUANTIZED_SORTED_TESTS,
     "quantized-fp-tails": QUANTIZED_FP_TAIL_TESTS,
+    "quantized-matmul": QUANTIZED_MATMUL_TESTS,
 }

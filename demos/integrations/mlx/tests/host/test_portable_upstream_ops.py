@@ -96,7 +96,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
 
 
 def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
-    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 620
+    assert len(ops.UPSTREAM_TESTS) == len(set(ops.UPSTREAM_TESTS)) == 623
     assert all(
         name.startswith(
             (
@@ -138,6 +138,9 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
                 "test_quantized.TestQuantized.test_gather_qmm",
                 "test_quantized.TestQuantized.test_gather_matmul_grad",
                 "test_quantized.TestQuantized.test_fp_gather_qmm_",
+                "test_quantized.TestQuantized.test_qmm_small_m_block",
+                "test_quantized.TestQuantized.test_fp_qmm_non_multiple_of_32_vjp",
+                "test_quantized.TestQuantized.test_vjp_scales_biases",
                 "test_fast_sdpa.TestFastSDPA.test_",
                 "test_fast_gated_delta.TestGatedDelta.test_",
             )
@@ -171,6 +174,7 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
         + upstream_module_groups.QQ_MATMUL_TESTS
         + upstream_module_groups.QUANTIZED_SORTED_TESTS
         + upstream_module_groups.QUANTIZED_FP_TAIL_TESTS
+        + upstream_module_groups.QUANTIZED_MATMUL_TESTS
     )
     assert ops.UPSTREAM_TESTS[-len(tail) :] == tail
     elsewhere = (
@@ -256,7 +260,7 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     directx = ops.upstream_tests("directx")
     assert len(directx) == len(ops.UPSTREAM_TESTS) - 13
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 606 and not set(opengl) & set(excluded)
+    assert len(opengl) == 609 and not set(opengl) & set(excluded)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):
@@ -305,6 +309,7 @@ def test_upstream_op_groups_partition_the_inventory():
         "quantized-products",
         "quantized-sorted",
         "quantized-fp-tails",
+        "quantized-matmul",
     ]
     assert all(
         len(ops.GROUP_TESTS[group]) == 1
@@ -420,6 +425,7 @@ def test_upstream_op_groups_partition_the_inventory():
         ("quantized-products", ("test_quantized.",), 11),
         ("quantized-sorted", ("test_quantized.",), 2),
         ("quantized-fp-tails", ("test_quantized.",), 1),
+        ("quantized-matmul", ("test_quantized.",), 3),
     ):
         tests = upstream_module_groups.GROUPS[group]
         assert ops.GROUPS[group] == tests and len(tests) == count
