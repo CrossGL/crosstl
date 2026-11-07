@@ -68,6 +68,7 @@ from .dxr_ray_interfaces import (
 from .enum_values import lower_enum_values
 from .feedback_textures import FeedbackTextureUnsupportedError, refuse_feedback_textures
 from .fixed_samplers import bind_fixed_samplers
+from .float_relations import lower_float_relations
 from .fragment_colour_outputs import (
     FragmentColourOutputUnsupportedError,
     name_fragment_colour_outputs,
@@ -456,6 +457,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
     lower_metal_math_spellings(program, report.target)
+    lower_float_relations(program, report.target)
     lower_enum_values(program, report.target)
     lower_device_struct_references(program, report.target)
     separate_initializer_scopes(program, report.source, report.target)
