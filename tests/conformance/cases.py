@@ -406,6 +406,15 @@ def o_loop_wrap(inp):
     return np.array(out, np.int32)
 
 
+def o_step_values(inp):
+    """``y++``, ``--z`` and ``k++`` in a loop condition, as values, with two's-complement wrapping."""
+    out = []
+    for x in inp.astype(np.int64):
+        y = int(_wrap32(x + 1))
+        out += [int(_wrap32(x + y)), int(_wrap32(x - 1)), 2, int(_wrap32(x + 3))]
+    return np.array(out, np.int32)
+
+
 def _shift_pairs():
     return _pairs(
         [
@@ -896,6 +905,15 @@ CASES = [
         np.int32,
         o_loop_wrap,
         v1="int_loop_overflow",
+    ),
+    Case(
+        "g_step_values",
+        "H1",
+        "y++, --z and while (k++ != x + 2) used as values with x near INT_MAX or INT_MIN",
+        "GLSL 4.60 §4.1.3 WRAP; §5.9: a postfix step yields the old value, a prefix step the new one",
+        _i32_edge(),
+        np.int32,
+        o_step_values,
     ),
     Case(
         "h_add_wrap",
@@ -2008,6 +2026,18 @@ CASES = [
         np.int32,
         control_flow_cases.short_circuit_reference,
         threads=control_flow_cases.SHORT_CIRCUIT_THREADS,
+    ),
+    Case(
+        "g_for_header_lists",
+        "control",
+        "for headers with two declarations, two assignments, two updates and an update that stores through an "
+        "increment, and a do-while whose continue reaches a condition that decrements",
+        "GLSL 4.60 sections 5.9 and 6.3: the comma operator evaluates its operands left to right, and the loop "
+        "expression of a for, like the condition of a do-while, runs after every iteration, also one left by "
+        "continue",
+        control_flow_cases.for_header_list_inputs(),
+        np.int32,
+        control_flow_cases.for_header_list_reference,
     ),
     Case(
         "g_assignment_operand",

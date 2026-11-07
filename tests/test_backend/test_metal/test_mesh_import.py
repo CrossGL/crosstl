@@ -186,7 +186,11 @@ def test_mesh_without_a_thread_index_parameter_gains_one_for_the_index_copy(
 
 def test_mesh_stage_with_host_chosen_size_needs_the_threadgroup_size(tmp_path):
     with pytest.raises(HostDefinedWorkgroupSizeError, match="Entry 'lines'"):
-        _translate(tmp_path, LINES, "vulkan")
+        _translate(tmp_path, LINES, "directx")
+    # SPIR-V lets the pipeline set the size the host chooses.
+    spirv = _translate(tmp_path, LINES, "vulkan")
+    assert "BuiltIn WorkgroupSize" in spirv
+    assert "SpecId 0" in spirv
 
     crossgl = _translate(tmp_path, LINES, "cgl", SIZE)
     assert "@ host_workgroup_size(8, 1, 1)" in crossgl

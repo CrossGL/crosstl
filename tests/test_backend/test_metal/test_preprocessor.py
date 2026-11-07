@@ -12038,11 +12038,12 @@ def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():
         )
         == "half"
     )
+    # A scalar converts to the vector's element type: short2 * int is short2.
     assert (
         pp._infer_argument_type(
             "lane2 * stride", {}, {"lane2": "short2", "stride": "int"}
         )
-        is None
+        == "short2"
     )
     assert pp._infer_argument_type("input + other", buffers, locals_) is None
     assert pp._infer_argument_type("input - same_type_input", buffers, locals_) is None
@@ -12745,15 +12746,28 @@ def test_infer_argument_type_signed_numeric_literal(sign, literal, kind):
         "+value",
         "--1",
         "++2",
-        "-true",
         "-1.0f; extra",
-        "-as_type<float>(bits)",
     ),
 )
 def test_infer_argument_type_signed_literal_does_not_guess_operators(expression):
     assert (
         MetalPreprocessor()._infer_argument_type(expression, {}, {"value": "Custom"})
         is None
+    )
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    (
+        # Unary minus promotes a bool operand to int ([expr.unary.op]/8, [conv.prom]/6).
+        ("-true", "int"),
+        ("-as_type<float>(bits)", "float"),
+    ),
+)
+def test_infer_argument_type_built_in_unary_sign_of_typed_operand(expression, expected):
+    assert (
+        MetalPreprocessor()._infer_argument_type(expression, {}, {"value": "Custom"})
+        == expected
     )
 
 
@@ -12857,9 +12871,9 @@ def test_infer_argument_type_arithmetic_construction_and_functor_call():
     assert infer("buf[i] + 1.0") == "complex64_t"
     # A scalar keeps its type when the literal does not out-rank it.
     assert infer("f + 1") == "float"
-    # ...but a floating literal meeting an INTEGER scalar promotes to an unknown
-    # floating width, so we bail rather than mis-claim `int`.
-    assert infer("n + 1.0") is None
+    # ...but a floating literal converts an INTEGER scalar: an unsuffixed
+    # literal is float in Metal, so `int + 1.0` is float, not int.
+    assert infer("n + 1.0") == "float"
     # Two DIFFERENT concrete non-literal types are ambiguous -> never guess.
     assert infer("x + f") is None
     # Brace construction of a recognized type.

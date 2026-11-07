@@ -59,6 +59,7 @@ from crosstl.backend.Metal.variable_templates import (
     materialize_value_variable_templates,
 )
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project.arithmetic_result_types import arithmetic_result_type
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
@@ -17869,6 +17870,26 @@ def _metal_expression_type(
     type_environment: Mapping[str, str],
     return_types: Mapping[str, str],
 ) -> str | None:
+    """The concrete type of ``expression``, or None.
+
+    A local whose ``auto`` was not deduced keeps the placeholder in the type
+    environment; it is not a type, so it never types an expression (it would
+    otherwise become a template argument such as ``min<uint, auto>``).
+    """
+    inferred = _metal_expression_type_or_placeholder(
+        preprocessor, expression, type_environment, return_types
+    )
+    if inferred is None or is_auto_placeholder(inferred) or "decltype" in inferred:
+        return None
+    return inferred
+
+
+def _metal_expression_type_or_placeholder(
+    preprocessor: Any,
+    expression: str,
+    type_environment: Mapping[str, str],
+    return_types: Mapping[str, str],
+) -> str | None:
     text = _metal_strip_outer_parentheses(expression).rstrip(";").strip()
     if not text:
         return None
@@ -17971,8 +17992,23 @@ def _metal_expression_type(
                 indexed_type = element_type
             return indexed_type
 
+    # `x++`, `x--`, `++x` and `--x` have the type of `x` ([expr.post.incr],
+    # [expr.pre.incr]).
+    update_match = re.fullmatch(
+        r"(?:\+\+|--)\s*(?P<prefix>[A-Za-z_][A-Za-z0-9_]*)"
+        r"|(?P<postfix>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\+|--)",
+        text,
+    )
+    if update_match is not None:
+        return type_environment.get(
+            update_match.group("prefix") or update_match.group("postfix")
+        )
+    # `p + n` and `p - n` keep a pointer's type. Any other `a + b` is arithmetic
+    # and is typed by the operator rule below (`uint + long` is `long`).
     pointer_match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*[+\-]", text)
-    if pointer_match is not None and pointer_match.group("name") in type_environment:
+    if pointer_match is not None and "*" in type_environment.get(
+        pointer_match.group("name"), ""
+    ):
         return type_environment[pointer_match.group("name")]
 
     address_match = re.match(r"&\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b", text)
@@ -18021,18 +18057,7 @@ def _metal_expression_type(
                 )
                 for part in parts
             ]
-            for preferred in (
-                "double",
-                "float",
-                "half",
-                "ulong",
-                "uint",
-                "long",
-                "int",
-            ):
-                if preferred in inferred:
-                    return preferred
-            return next((item for item in inferred if item), None)
+            return arithmetic_result_type(preprocessor, inferred, operator_text)
     return None
 
 
@@ -18729,22 +18754,36 @@ def _metal_reachable_function_return_types(
     template_spans: Sequence[tuple[int, int]],
     reachable_function_spans: Sequence[tuple[int, int]],
 ) -> dict[str, str]:
+    # A call's type is its selected overload's return type. Without overload
+    # resolution here, a name is typed only when every definition of it states
+    # the same return type and no function template shares the name; otherwise
+    # the last definition would type calls that select another overload.
     reachable = set(reachable_function_spans)
-    return_types: dict[str, str] = {}
+    declared: dict[str, set[str | None]] = {}
+    reached: set[str] = set()
     for function in preprocessor._find_non_template_function_definitions(
         source,
         list(template_spans),
     ):
-        if function.span not in reachable:
-            continue
         return_type = _metal_function_return_type(
             preprocessor,
             _metal_function_header(source, function),
             function.name,
         )
-        if return_type:
-            return_types[function.name] = return_type
-    return return_types
+        declared.setdefault(function.name, set()).add(return_type or None)
+        if function.span in reachable:
+            reached.add(function.name)
+    template_names = {
+        template.name for template in preprocessor._find_template_functions(source)
+    }
+    return {
+        name: next(iter(return_types))
+        for name, return_types in sorted(declared.items())
+        if name in reached
+        and name not in template_names
+        and len(return_types) == 1
+        and None not in return_types
+    }
 
 
 def _materialize_plain_template_helper_calls(

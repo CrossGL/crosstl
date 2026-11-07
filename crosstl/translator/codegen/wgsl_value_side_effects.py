@@ -10,8 +10,9 @@ statement then reads the updated l-values, or a ``let`` copy of the prior value
 for a postfix operator. Reads that the source leaves unsequenced against those
 side effects (``i + i++``) are undefined in C, GLSL and HLSL, so any order is
 faithful. Conditional evaluation is not: a side effect in the right operand of
-``&&`` or ``||``, in a ternary branch, or in a ``for`` update raises
-``ValueError`` rather than running unconditionally. So does a side effect whose
+``&&`` or ``||`` or in a ternary branch raises ``ValueError`` rather than
+running unconditionally. A ``for`` update with such side effects runs in the
+``continuing`` block of a ``loop`` (``wgsl_loop_continuing``). So does a side effect whose
 l-value calls a function, because the lowering evaluates that l-value twice.
 
 WGSL has no comma operator either. A comma expression ``(a, b)`` is lowered the same way: ``a`` becomes a
@@ -37,6 +38,7 @@ from ..ast import (
     CastNode,
     CommaExpressionNode,
     ConstructorNode,
+    DoWhileNode,
     ExpressionStatementNode,
     ForNode,
     FunctionCallNode,
@@ -174,6 +176,8 @@ class WGSLValueSideEffectsMixin:
             return self.lower_while_statement(stmt)
         if isinstance(stmt, ForNode):
             return self.lower_for_statement(stmt)
+        if isinstance(stmt, DoWhileNode):
+            return self.lower_do_while_statement(stmt)
         return None
 
     def lower_value_field(self, stmt, field_name):
@@ -241,13 +245,13 @@ class WGSLValueSideEffectsMixin:
         return [LoopNode(body)]
 
     def lower_for_statement(self, stmt):
-        if statement_operand_side_effects(stmt.update):
-            raise ValueError(
-                "WGSL target cannot lower a for-loop update that uses an increment, "
-                "decrement or assignment as a value; WGSL has no such expressions "
-                "and the update runs after every continue"
-            )
-        prelude, init = self.lower_for_initializer(stmt.init)
+        if self.for_update_needs_continuing(stmt.update):
+            return self.lower_for_to_continuing_loop(stmt)
+        prelude = self.for_initializer_statements(stmt.init)
+        if prelude is None:
+            prelude, init = self.lower_for_initializer(stmt.init)
+        else:
+            init = None
         condition, body = stmt.condition, stmt.body
         if contains_value_side_effect(condition):
             body = BlockNode([*self.loop_guard(condition), body])

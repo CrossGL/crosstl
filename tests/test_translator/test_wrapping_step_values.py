@@ -152,7 +152,7 @@ def test_step_helpers_keep_inout_parameters(tmp_path, backend, parameter):
     assert "a++" not in output
 
 
-@pytest.mark.parametrize("backend", ["cuda", "hip", "mojo", "vulkan"])
+@pytest.mark.parametrize("backend", ["cuda", "hip", "mojo"])
 def test_increment_used_as_a_value_is_refused_without_inout_write_back(
     tmp_path, backend
 ):
@@ -163,6 +163,120 @@ def test_increment_used_as_a_value_is_refused_without_inout_write_back(
     assert (
         refusal.value.project_diagnostic_code == "project.translate.rule-inexpressible"
     )
+
+
+# Steps used as values on a buffer element, a struct member, a vector component, a shared array element and a local
+# in a loop condition: each argument lives in a different SPIR-V storage class.
+GLSL_STEP_LVALUES = """#version 450
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Inp { int seed[]; };
+layout(std430, binding = 1) buffer Outp { int o[]; };
+struct S { int m; ivec2 v; };
+shared int counts[2];
+void main() {
+    o[0] = seed[0];
+    int r0 = o[0]++;
+    S s;
+    s.m = -2147483647 - 1;
+    s.v = ivec2(5, 2147483647);
+    int r1 = s.m--;
+    int r2 = ++s.v.y;
+    counts[1] = 7;
+    int r3 = counts[1]++;
+    int k = 0;
+    int t = 0;
+    while (k++ < 3) { t += 10; }
+    o[1] = r0; o[2] = o[0]; o[3] = r1; o[4] = s.m; o[5] = r2; o[6] = s.v.y;
+    o[7] = r3; o[8] = counts[1]; o[9] = k; o[10] = t;
+}
+"""
+STEP_LVALUE_RESULTS = [
+    -(2**31),
+    2**31 - 1,
+    -(2**31),
+    -(2**31),
+    2**31 - 1,
+    -(2**31),
+    -(2**31),
+    7,
+    8,
+    4,
+    30,
+]
+
+
+def _assemble_spirv(tmp_path, assembly, name):
+    if not (shutil.which("spirv-as") and shutil.which("spirv-val")):
+        pytest.skip("spirv-as and spirv-val are not installed")
+    source, binary = tmp_path / f"{name}.spvasm", tmp_path / f"{name}.spv"
+    source.write_text(assembly)
+    _run(
+        ["spirv-as", "--target-env", "vulkan1.1", str(source), "-o", str(binary)],
+        tmp_path,
+    )
+    _run(["spirv-val", "--target-env", "vulkan1.1", str(binary)], tmp_path)
+    return binary
+
+
+@pytest.mark.parametrize(
+    ("source", "suffix"), [(HLSL_STEPS, ".hlsl"), (GLSL_STEP_LVALUES, ".comp")]
+)
+def test_spirv_step_helpers_validate(tmp_path, source, suffix):
+    assert "vulkan" in STEP_HELPER_TARGETS
+    assembly = translate(tmp_path, source, "vulkan", suffix)
+    _assemble_spirv(tmp_path, assembly, "steps")
+
+
+def _run_spirv_through_metal(tmp_path, source, suffix, inputs, output_count, threads):
+    """Run the SPIR-V for ``source`` on the Metal device after spirv-cross converts it to MSL."""
+    if os.environ.get(METAL_REQUIRE_ENV) != "1":
+        pytest.skip(f"set {METAL_REQUIRE_ENV}=1 to require native Metal execution")
+    assert sys.platform == "darwin", "Native Metal execution requires macOS"
+    assert shutil.which("spirv-cross"), "spirv-cross is required to run SPIR-V on Metal"
+    binary = _assemble_spirv(
+        tmp_path, translate(tmp_path, source, "vulkan", suffix), "steps"
+    )
+    msl = _run(
+        ["spirv-cross", str(binary), "--msl", "--msl-version", "20100"], tmp_path
+    )
+    library = _compile_metal(msl, tmp_path)
+    runner = tmp_path / "readback"
+    fixture = ROOT / "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
+    _run(["swiftc", str(fixture), "-o", str(runner)], tmp_path)
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(
+            {"inputs": inputs, "outputCount": output_count, "threadCount": threads}
+        )
+    )
+    readback = _run([str(runner), str(library), "main0", str(request)], tmp_path)
+    return json.loads(readback)["values"]
+
+
+def test_spirv_step_values_wrap_at_the_int32_edges(tmp_path):
+    expected = [word for value in STEP_INPUTS for word in step_reference(value)]
+    values = _run_spirv_through_metal(
+        tmp_path,
+        HLSL_STEPS,
+        ".hlsl",
+        [STEP_INPUTS],
+        len(expected) + len(GUARD),
+        len(STEP_INPUTS),
+    )
+    assert values[: len(expected)] == expected
+    assert values[len(expected) :] == GUARD
+
+
+def test_spirv_step_values_write_back_to_every_storage_class(tmp_path):
+    values = _run_spirv_through_metal(
+        tmp_path,
+        GLSL_STEP_LVALUES,
+        ".comp",
+        [[0x7FFFFFFF]],
+        len(STEP_LVALUE_RESULTS),
+        1,
+    )
+    assert values == [word & 0xFFFFFFFF for word in STEP_LVALUE_RESULTS]
 
 
 def test_step_of_an_lvalue_with_side_effects_is_refused(tmp_path):
