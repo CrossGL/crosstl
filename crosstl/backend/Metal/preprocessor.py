@@ -99,6 +99,7 @@ from .member_address_types import (
 )
 from .member_declarator_lists import split_member_declarator_list
 from .member_lowering_layers import lower_members_with_late_specializations
+from .method_arity import accepts_argument_count
 from .namespace_constants import NamespaceConstantValues
 from .namespaced_specializations import (
     place_in_namespace,
@@ -142,6 +143,7 @@ from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
 from .template_function_parameters import template_function_pointer_parameter
 from .template_overloads import declared_type_names, select_instantiated_overload
+from .template_reference_accessors import inline_template_reference_accessor
 from .text_scanners import (
     find_named_type_declarations,
     function_parameter_start,
@@ -15545,7 +15547,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 )
             owner_struct = structs_by_name.get(struct_type)
             reference_methods = (
-                self._concrete_reference_methods(owner_struct, member)
+                self._concrete_reference_methods(owner_struct, member, code, arg_open)
                 if owner_struct is not None
                 else []
             )
@@ -15829,7 +15831,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     receiver = f"{receiver}[0]"
                 owner_struct = structs_by_name.get(current_struct_name)
                 reference_methods = (
-                    self._concrete_reference_methods(owner_struct, member)
+                    self._concrete_reference_methods(
+                        owner_struct, member, code, arg_open
+                    )
                     if owner_struct is not None
                     else []
                 )
@@ -19390,6 +19394,20 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if len(candidates) != 1:
             return None
         selected = candidates[0]
+        # A reference accessor names storage, so it is inlined rather than lowered to a by-value function
+        # (template_reference_accessors.py).
+        inlined = inline_template_reference_accessor(
+            self,
+            struct,
+            enclosing_method,
+            selected,
+            body,
+            ident_end - len(ident),
+            arg_open,
+            explicit_arguments,
+        )
+        if inlined is not None:
+            return inlined
         self._reject_selected_reference_return(
             struct,
             selected,
@@ -19986,6 +20004,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             arguments.append(resolved_default)
         return ", ".join(arguments)
 
+    def _method_accepts_arguments(self, method: _MetalStructMethod, count: int) -> bool:
+        # parameter_names omits unnamed parameters (tag types such as
+        # metal::bool_constant<B>), so count the declared parameters instead.
+        return accepts_argument_count(
+            method.parameters,
+            count,
+            self._split_top_level_commas,
+            self._split_top_level_assignment,
+        )
+
     def _method_returns_lvalue_reference(self, method: _MetalStructMethod) -> bool:
         return bool(
             re.search(
@@ -19998,13 +20026,35 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self,
         struct: _MetalStructDefinition,
         method_name: str,
+        code: Optional[str] = None,
+        arg_open: Optional[int] = None,
     ) -> List[_MetalStructMethod]:
-        return [
+        methods = [
             method
             for method in struct.methods
             if method.name == method_name
             and self._method_returns_lvalue_reference(method)
         ]
+        if not methods or code is None or arg_open is None:
+            return methods
+        # A call no concrete reference overload can take (for example one that
+        # passes a tag argument to a member template) is resolved by the
+        # template path instead of being refused here.
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return methods
+        count = len(
+            [
+                argument
+                for argument in self._split_top_level_commas(
+                    code[arg_open + 1 : arg_close]
+                )
+                if argument.strip()
+            ]
+        )
+        if any(self._method_accepts_arguments(method, count) for method in methods):
+            return methods
+        return []
 
     def _select_direct_reference_method(
         self,
@@ -20035,7 +20085,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 if not method.is_static
                 and method.is_const
                 and re.search(r"\bconst\b", method.return_type) is not None
-                and len(method.parameter_names) == len(arguments)
+                and self._method_accepts_arguments(method, len(arguments))
             ]
         else:
             candidates = [
@@ -20044,7 +20094,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 if not method.is_static
                 and not method.is_const
                 and re.search(r"\bconst\b", method.return_type) is None
-                and len(method.parameter_names) == len(arguments)
+                and self._method_accepts_arguments(method, len(arguments))
             ]
         if receiver_is_const is not None and len(candidates) == 1:
             candidate = candidates[0]
@@ -20056,7 +20106,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 for method in [*struct.methods, *struct.template_methods]
                 if method is not candidate
                 and method.name == candidate.name
-                and len(method.parameter_names) == len(arguments)
+                and self._method_accepts_arguments(method, len(arguments))
             ]
             matching_counterparts = [
                 method
@@ -20277,6 +20327,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 reference_methods = self._concrete_reference_methods(
                     current_struct,
                     method_name,
+                    working,
+                    arg_open,
                 )
                 if not reference_methods:
                     continue
