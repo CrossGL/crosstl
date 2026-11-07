@@ -30,6 +30,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.backend.Metal.alias_template_types import fold_expression_decltypes
 from crosstl.backend.Metal.auto_placeholders import (
     deduced_auto_type,
     is_auto_placeholder,
@@ -23662,8 +23663,11 @@ def _project_template_materialization_for_artifact(
     ):
         return None
     # The source is parsed without preprocessing, so the materialized return-type enablers are folded to the
-    # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py).
-    materialized = fold_concrete_enablers(preprocessor, materialized)
+    # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py). Canonicalized
+    # alias templates can leave `decltype(float(0) + int(0))`, which names one built-in type (alias_template_types.py).
+    materialized = fold_expression_decltypes(
+        preprocessor, fold_concrete_enablers(preprocessor, materialized)
+    )
     materialized = prune_orphaned_explicit_specializations(preprocessor, materialized)
 
     if unsupported:

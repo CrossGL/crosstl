@@ -78,6 +78,10 @@ from .dependent_builtins import (
 )
 from .explicit_specialization_annotations import explicit_specialization_annotation
 from .external_functions import refuse_external_function_calls
+from .generic_call_return_types import (
+    deduced_call_return_type,
+    expression_call_return_type,
+)
 from .implicit_constructor_conversions import (
     convert_user_call_arguments,
     converted_assignment_value,
@@ -21943,6 +21947,10 @@ float {scalar}(float value) {{
             if selected_callable is not None
             else self.expression_metal_type(initializer)
         )
+        if selected_callable is not None:
+            return_type = deduced_call_return_type(
+                self, declaration, initializer, selected_callable, return_type
+            )
         inferred_type = self.metal_source_overload_value_type(return_type)
         if self.metal_auto_pointer_depth(declared_type):
             array_element = self.split_outer_metal_declarator_array_type(inferred_type)
@@ -23474,7 +23482,12 @@ float {scalar}(float value) {{
                 return constructor_type
             selected_callable = self.selected_metal_callable(expr)
             if selected_callable is not None:
-                return self.selected_metal_callable_return_type(selected_callable)
+                return expression_call_return_type(
+                    self,
+                    selected_callable,
+                    expr.args,
+                    self.selected_metal_callable_return_type(selected_callable),
+                )
             builtin_result_type = self.metal_math_builtin_result_type(expr)
             if builtin_result_type is not None:
                 return builtin_result_type
@@ -23517,7 +23530,12 @@ float {scalar}(float value) {{
                 if len(getattr(candidate, "params", []) or []) == len(expr.args)
             ]
             if len(arity_candidates) == 1:
-                return getattr(arity_candidates[0], "return_type", None)
+                return expression_call_return_type(
+                    self,
+                    arity_candidates[0],
+                    expr.args,
+                    getattr(arity_candidates[0], "return_type", None),
+                )
             if (
                 unscoped_name in self.metal_wave_intrinsics
                 or unscoped_name == "simd_shuffle_and_fill_up"
