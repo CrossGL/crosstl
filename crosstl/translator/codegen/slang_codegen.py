@@ -114,6 +114,7 @@ from .generic_function_utils import (
     reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import named_struct_constructor_arguments
+from .global_specialization_constants import split_global_specialization_constants
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
@@ -624,10 +625,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += self.generate_enum_support_code()
 
             structs = getattr(ast, "structs", [])
+            constants, global_vars = split_global_specialization_constants(ast)
             leading_constants, struct_dependent_constants = (
-                partition_constants_by_struct_dependency(
-                    getattr(ast, "constants", []) or [], structs
-                )
+                partition_constants_by_struct_dependency(constants, structs)
             )
             result += self.generate_constants(ast, leading_constants)
             for struct in structs:
@@ -639,7 +639,6 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += self.generate_constants(ast, struct_dependent_constants)
             result += self.slang_struct_dependent_helper_marker()
 
-            global_vars = getattr(ast, "global_variables", [])
             for node in global_vars:
                 result += self.generate_global_variable(node)
             result += self.generate_slang_lowered_struct_resource_member_globals()
@@ -1912,10 +1911,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         result += self.generate_enum_support_code()
 
         structs = getattr(node, "structs", [])
+        constants, global_vars = split_global_specialization_constants(node)
         leading_constants, struct_dependent_constants = (
-            partition_constants_by_struct_dependency(
-                getattr(node, "constants", []) or [], structs
-            )
+            partition_constants_by_struct_dependency(constants, structs)
         )
         result += self.generate_constants(node, leading_constants)
         for struct in structs:
@@ -1927,7 +1925,6 @@ class SlangCodeGen(LoweringRefusalMixin):
         result += self.generate_constants(node, struct_dependent_constants)
         result += self.slang_struct_dependent_helper_marker()
 
-        global_vars = getattr(node, "global_variables", [])
         for global_var in global_vars:
             result += self.generate_global_variable(global_var)
         result += self.generate_slang_lowered_struct_resource_member_globals()

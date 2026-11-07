@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ..ast import ArrayType, VariableNode
+from .global_specialization_constants import specialization_constant_declarations
 from .specialization_constants import (
     SpecializationConstantError,
     array_sizes_reading,
@@ -135,7 +136,7 @@ def plan_wgsl_specialization_constants(
     ``type_name_of`` renders a CrossGL type as its WGSL spelling. ``flattened_array_types`` are the array types of
     stage-interface members that WGSL declares one member per element; they never reach a WGSL array type.
     """
-    constants = list(getattr(ast, "constants", None) or [])
+    constants = specialization_constant_declarations(ast)
     ids = specialization_constant_ids(constants, _TARGET, _MAX_WGSL_ID)
     if not ids:
         return WGSLSpecializationPlan({}, set(), set())
