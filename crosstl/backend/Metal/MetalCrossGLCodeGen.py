@@ -51,6 +51,7 @@ from .aggregate_scalar_conversions import (
 )
 from .alignment_specifiers import MetalAlignmentSpecifiers
 from .array_designators import has_array_designators, positional_array_initializer
+from .atomic_result_conversions import convert_atomic_result, is_atomic_result_call
 from .barrier_import import metal_barrier_statements
 from .bit_scan_import import lower_scan as lower_bit_scan
 from .bit_scan_import import scan_function as bit_scan_function
@@ -66,6 +67,7 @@ from .color_attachments import (
 )
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
+from .const_cast_buffer_writes import mark_const_cast_written_buffers
 from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
@@ -3481,6 +3483,7 @@ class MetalToCrossGLConverter(
         resolve_namespace_scope_variables(ast)
         refuse_external_function_calls(ast)
         declare_referenced_library_structs(ast, parse_metal_structs)
+        mark_const_cast_written_buffers(ast)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
@@ -12103,6 +12106,12 @@ class MetalToCrossGLConverter(
             initializer_type = self.expression_metal_type(node.left)
         if self.binary16_widening_profile is not None and not initializer_type:
             initializer_type = self.expression_metal_type(node.left)
+        if (
+            not initializer_type
+            and node.operator == "="
+            and is_atomic_result_call(self, node.right)
+        ):
+            initializer_type = self.expression_metal_type(node.left)
         converted_rhs = None
         if component_info is None and lhs_info is None:
             converted_rhs = render_aggregate_scalar_conversion(
@@ -12367,6 +12376,8 @@ class MetalToCrossGLConverter(
                 expr, is_main, expected_type, expected_array
             )
         value = self.generate_expression(expr, is_main)
+        if not expected_array:
+            value = convert_atomic_result(self, expr, value, expected_type)
         if self.binary16_widening_profile is not None and not expected_array:
             value = self.render_metal_half_widening(
                 value,
@@ -13204,6 +13215,9 @@ class MetalToCrossGLConverter(
                 )
             return f"{condition} ? {true_expr} : {false_expr}"
         elif isinstance(expr, CastNode):
+            compound_literal = self.generate_metal_compound_literal(expr, is_main)
+            if compound_literal is not None:
+                return compound_literal
             profiled_constructor = self.generate_metal_half_widening_constructor(
                 expr.target_type, [expr.expression], is_main
             )
@@ -19032,6 +19046,27 @@ float {scalar}(float value) {{
             is_main,
         )
 
+    def generate_metal_compound_literal(self, expr, is_main):
+        """Render ``(T){...}`` as the braced initialization of a ``T`` temporary.
+
+        The Metal compiler accepts the C compound literal ``(float4x4){c0, c1, c2, c3}``
+        as a temporary initialized from the braced list, exactly as the declaration
+        ``float4x4 m = {c0, c1, c2, c3};`` would initialize it.
+        """
+        if not isinstance(expr.expression, InitializerListNode):
+            return None
+        target_type = expr.target_type
+        if (
+            not target_type
+            or "[" in str(target_type)
+            or self.metal_pointer_pointee_type_once(
+                self.resolve_type_alias(target_type)
+            )
+            is not None
+        ):
+            return None
+        return self.generate_initializer_value(expr.expression, is_main, target_type)
+
     def generate_cast_operand(self, operand, rendered_operand):
         if isinstance(operand, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
             return f"({rendered_operand})"
@@ -23681,11 +23716,12 @@ float {scalar}(float value) {{
         if not element_type:
             return None
         qualifiers = set(self.effective_declaration_qualifiers(var))
-        buffer_type = (
-            "StructuredBuffer"
-            if qualifiers.intersection({"constant", "const"})
-            else "RWStructuredBuffer"
+        # A ``device const`` buffer that the function stores through after a
+        # const cast is still bound writable: keep the store.
+        read_only = qualifiers.intersection({"constant", "const"}) and not getattr(
+            var, "metal_storage_written", False
         )
+        buffer_type = "StructuredBuffer" if read_only else "RWStructuredBuffer"
         mapped_element_type = self.map_resource_pointer_element_type(var, element_type)
         return f"{buffer_type}<{mapped_element_type}>"
 
@@ -23753,6 +23789,10 @@ float {scalar}(float value) {{
         )
         index = self.generate_expression(access.index, is_main)
         rendered_value = self.generate_expression(value, is_main)
+        if operator == "=" and is_atomic_result_call(self, value):
+            rendered_value = convert_atomic_result(
+                self, value, rendered_value, self.expression_metal_type(access)
+            )
         if self.binary16_widening_profile is not None:
             rendered_value = self.render_metal_half_widening(
                 rendered_value,
