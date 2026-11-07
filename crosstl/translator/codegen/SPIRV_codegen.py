@@ -257,11 +257,16 @@ from .spirv_struct_varyings import (
     store_flattened_struct_varying,
 )
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
+from .spirv_swizzle_reference_arguments import (
+    prepare_swizzle_reference_binding,
+    write_back_swizzle_reference_bindings,
+)
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_texture_residency import (
     spirv_texture_residency_call,
     spirv_texture_resident_call,
 )
+from .spirv_type_queries import type_query_pointer
 from .spirv_unavailable_inputs import unread_unavailable_builtin_input
 from .spirv_uniform_block_arrays import (
     declare_uniform_block_array,
@@ -15529,7 +15534,7 @@ class VulkanSPIRVCodeGen(
             # Collection runs before any variable is declared: resolving a pointer would lower the expression.
             return None
 
-        pointer = self.variable_pointer_from_expression(expr)
+        pointer = type_query_pointer(self, expr)
         if pointer is None:
             return None
         metadata = self.structured_buffer_metadata_for_pointer(pointer)
@@ -24330,6 +24335,7 @@ class VulkanSPIRVCodeGen(
                 self.local_variables[param_name] = parameter_value
 
             result = self.inline_function_body(function_node)
+            write_back_swizzle_reference_bindings(self, prepared_bindings)
             if result is not None:
                 return result
             return self.default_value_for_function(function_node)
@@ -24426,6 +24432,12 @@ class VulkanSPIRVCodeGen(
                     if param_type_name is not None
                     else None
                 )
+                swizzle_binding = prepare_swizzle_reference_binding(
+                    self, func_name, index, param, param_name, arg, param_value_type
+                )
+                if swizzle_binding is not None:
+                    prepared.append(swizzle_binding)
+                    continue
                 pointer_arg = self.assignable_pointer_from_expression(arg)
                 source_value_type = (
                     self.pointer_pointee_type(pointer_arg)
