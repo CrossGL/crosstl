@@ -87,6 +87,10 @@ from .namespaced_functions import (
     declared_in_several_namespaces,
     nominated_namespaces_in_scope,
 )
+from .narrow_float_constants import (
+    narrow_float_constant,
+    render_narrow_float_constant,
+)
 from .opaque_matrix_contracts import complete_opaque_matrix_contracts
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
@@ -2279,6 +2283,11 @@ class MetalToCrossGLConverter(
         ):
             # E::A of a declared enum is CrossGL's own spelling.
             return f"{scoped[0]}::{self.sanitize_identifier(scoped[1])}"
+        narrow_constant = narrow_float_constant(name)
+        if narrow_constant is not None and not self.unscoped_enumerator_is_shadowed(
+            name
+        ):
+            return render_narrow_float_constant(self, narrow_constant)
         return self.sanitize_identifier(name)
 
     def unscoped_enumerator_is_shadowed(self, name):
@@ -22322,6 +22331,9 @@ float {scalar}(float value) {{
         # INFINITY, NAN, FLT_MAX and the other binary32 limits are float constants (MSL section 6.6.1).
         if float_limit_constant(name) is not None:
             return "float"
+        narrow_constant = narrow_float_constant(name)
+        if narrow_constant is not None:
+            return narrow_constant.metal_type
         return None
 
     def metal_literal_string_type(self, value):

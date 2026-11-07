@@ -74,6 +74,7 @@ from .namespaced_specializations import (
     specialization_namespaces,
     specialization_reference,
 )
+from .narrow_float_constants import metal_predefined_constant_type
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
 from .overload_precedence import exact_template_outranks
 from .overload_ranking import shared_template_parameter_positions
@@ -22908,6 +22909,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # Bare local variable -> its declared type.
         if IDENTIFIER_RE.fullmatch(expr) and expr in local_variable_types:
             return self._normalize_inferred_expression_type(local_variable_types[expr])
+        # A predefined constant that no local declares has its library type.
+        if IDENTIFIER_RE.fullmatch(expr):
+            predefined = metal_predefined_constant_type(expr)
+            if predefined is not None:
+                return self._normalize_inferred_expression_type(predefined)
 
         # Member access `obj.member` / `obj->member` -> the declared field type.
         # Pointer fields are not value-typeable as a bare access, so a trailing
