@@ -33,6 +33,7 @@ from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 from .array_element_receivers import array_element_receiver_end, array_rank_at
 from .auto_placeholders import deduced_auto_type
+from .call_result_types import CallResultScope, infer_call_result_type
 from .concrete_free_operators import materialize_concrete_free_operators
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
@@ -1138,6 +1139,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             {}
         )
         self._known_member_function_return_types: Dict[str, str] = {}
+        self._call_result_scope = CallResultScope()
         # (source, rewrite) for each active call-site scan, innermost last;
         # rewrite(start, end) returns source[start:end] with its member calls
         # rewritten in place.
@@ -1653,6 +1655,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     def _materialize_inferred_constrained_template_function_calls(
         self, code: str
     ) -> str:
+        # Arguments that call source functions are typed from this source.
+        with self._call_result_scope.active(code):
+            return self._materialize_constrained_template_calls_in_scope(code)
+
+    def _materialize_constrained_template_calls_in_scope(self, code: str) -> str:
         """Resolve ordinary calls to constrained free function templates.
 
         Metal overload sets commonly provide an SFINAE fallback next to a native
@@ -22850,6 +22857,13 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         known_member_call = self._infer_known_member_function_call_type(expr)
         if known_member_call is not None:
             return known_member_call
+
+        # A call to a source function whose declarations agree on one return type.
+        call_result = infer_call_result_type(
+            self, expr, self._call_result_scope, local_variable_types, structs_by_name
+        )
+        if call_result is not None:
+            return call_result
 
         # Functional cast `T(expr)` where T is a recognized scalar/vector type.
         cast = re.match(r"(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s*\(", expr)
