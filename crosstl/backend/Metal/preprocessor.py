@@ -67,7 +67,10 @@ from .defaulted_template_arguments import canonical_struct_template_arguments
 from .dependent_result_templates import dependent_result_template_names
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
-from .forwarding_reference_accessors import forwarded_storage_expression
+from .forwarding_reference_accessors import (
+    forwarded_storage_expression,
+    selected_constexpr_body,
+)
 from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
@@ -93,7 +96,10 @@ from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
 )
-from .integral_constant_tags import concretize_integral_constant_tags
+from .integral_constant_tags import (
+    concretize_integral_constant_tags,
+    library_tag_value_type,
+)
 from .library_fallback_lookup import (
     library_fallback_obstacle,
     library_using_declaration_present,
@@ -110,7 +116,7 @@ from .member_address_types import (
 )
 from .member_declarator_lists import split_member_declarator_list
 from .member_lowering_layers import lower_members_with_late_specializations
-from .method_arity import accepts_argument_count
+from .method_arity import accepts_argument_count, named_parameter_arguments
 from .namespace_constants import NamespaceConstantValues
 from .namespaced_specializations import (
     place_in_namespace,
@@ -160,7 +166,10 @@ from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
 from .template_function_parameters import template_function_pointer_parameter
 from .template_overloads import declared_type_names, select_instantiated_overload
-from .template_reference_accessors import inline_template_reference_accessor
+from .template_reference_accessors import (
+    TemplateReferenceAccessor,
+    inline_template_reference_accessor,
+)
 from .text_scanners import (
     find_named_type_declarations,
     function_parameter_start,
@@ -15887,6 +15896,22 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     structs_by_name[struct_type],
                     template_overloads,
                     receiver=receiver,
+                    receiver_is_const=(
+                        None
+                        if receiver_contract is not None
+                        and "constant" in receiver_contract.address_spaces
+                        else (
+                            receiver_contract.is_readonly
+                            if receiver_contract is not None
+                            else self._simple_receiver_constness(
+                                code,
+                                struct_type,
+                                ident,
+                                ident_start,
+                                type_aliases=struct_type_aliases,
+                            )
+                        )
+                    ),
                     arg_open=arg_open,
                     buffer_element_types=buffer_element_types,
                     local_variable_types=local_variable_types,
@@ -16149,6 +16174,22 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         struct,
                         template_overloads,
                         receiver=receiver,
+                        receiver_is_const=(
+                            None
+                            if current_receiver_contract is not None
+                            and "constant" in current_receiver_contract.address_spaces
+                            else (
+                                current_receiver_contract.is_readonly
+                                if current_receiver_contract is not None
+                                else self._simple_receiver_constness(
+                                    code,
+                                    current_struct_name,
+                                    ident,
+                                    ident_start,
+                                    type_aliases=struct_type_aliases,
+                                )
+                            )
+                        ),
                         arg_open=arg_open,
                         buffer_element_types=buffer_element_types,
                         local_variable_types=local_variable_types,
@@ -17398,6 +17439,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ] = None,
         argument_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         argument_type_fallback_position: Optional[int] = None,
+        receiver_is_const: Optional[bool] = None,
     ) -> Optional[Tuple[int, str]]:
         # Instantiate a CALLED template member method from its call-site argument
         # types and rewrite the call to the concrete free function. `overloads`
@@ -17521,7 +17563,34 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 argument_type_aliases=argument_type_aliases,
                 argument_type_position=arg_open,
                 argument_type_fallback_position=argument_type_fallback_position,
+                inline_reference=True,
+                receiver_is_const=receiver_is_const,
             )
+        except TemplateReferenceAccessor as accessor:
+            try:
+                return self._build_direct_reference_accessor_rewrite(
+                    code,
+                    struct,
+                    accessor.method,
+                    receiver=receiver if receiver is not None else "self",
+                    arg_open=arg_open,
+                    call_start=call_start,
+                )
+            except MetalStructMethodError as refusal:
+                if (
+                    getattr(refusal, "reason", None)
+                    != "reference-return-identity-unsupported"
+                ):
+                    raise
+                # Report the refusal against the call as written, as the template path always has.
+                self._reject_selected_reference_return(
+                    struct,
+                    accessor.method,
+                    accessor.method.return_type,
+                    signature,
+                    source_location_factory=call_location,
+                )
+                raise
         except MetalStructMethodError as exc:
             if exc.source_location is None:
                 exc.source_location = call_location()
@@ -17573,6 +17642,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         argument_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         argument_type_position: Optional[int] = None,
         argument_type_fallback_position: Optional[int] = None,
+        inline_reference: bool = False,
+        receiver_is_const: Optional[bool] = None,
     ) -> str:
         # Bind, select the enabled overload, materialize it (recursively lowering
         # any internal template-member calls in its body), and return the
@@ -17610,6 +17681,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 ),
             )
 
+        if len(candidates) > 1 and receiver_is_const is not None:
+            # A const receiver binds only const overloads and a non-const one prefers the non-const overload
+            # ([over.match.funcs]), so const and non-const twins are not ambiguous.
+            same_constness = [
+                candidate
+                for candidate in candidates
+                if candidate[0].is_const == receiver_is_const
+            ]
+            if same_constness:
+                candidates = same_constness
         selected_candidate = self._select_constrained_overload(
             candidates,
             structs=list((rewrite_structs_by_name or {}).values()),
@@ -17646,6 +17727,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             struct,
             rewrite_structs_by_name,
         )
+        if inline_reference and self._method_returns_lvalue_reference(
+            replace(selected, return_type=resolved_return_type)
+        ):
+            # A reference accessor names storage; the caller inlines the instantiated method
+            # (template_reference_accessors.py).
+            raise TemplateReferenceAccessor(
+                self._instantiated_template_member_method(
+                    struct,
+                    selected,
+                    bindings,
+                    self._template_member_free_name(
+                        struct,
+                        selected,
+                        [bindings[name] for name in selected.template_parameters],
+                    ),
+                    rewrite_structs_by_name,
+                )
+            )
         self._reject_selected_reference_return(
             struct,
             selected,
@@ -17965,24 +18064,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         text = text.replace("*", " ptr ").replace("&", " ref ")
         return re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_")
 
-    def _emit_template_member_free_function(
+    def _instantiated_template_member_method(
         self,
         struct: _MetalStructDefinition,
         method: _MetalStructMethod,
         bindings: Dict[str, str],
         free_name: str,
-        instantiated_template_functions: Optional[Dict[str, str]] = None,
-        template_methods_by_struct: Optional[
-            Dict[str, Dict[str, List[_MetalStructMethod]]]
-        ] = None,
-        methods_by_struct: Optional[Dict[str, Dict[str, _MetalStructMethod]]] = None,
-        operator_call_structs: Optional[Set[str]] = None,
         rewrite_structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
-    ) -> str:
-        # Instantiate the template member method by substituting the bound
-        # template parameters into copies of its return type, parameters and
-        # body, then emit a concrete free function reusing the non-template
-        # lowering machinery (member references resolved to `self.x`).
+    ) -> _MetalStructMethod:
+        """The concrete method a template member method's ``bindings`` instantiate."""
         instantiated_return = self._replace_identifiers(method.return_type, bindings)
         instantiated_return = re.sub(r"\s+", " ", instantiated_return).strip()
         instantiated_parameters = self._replace_identifiers(method.parameters, bindings)
@@ -18018,6 +18108,29 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             ref_qualifier=method.ref_qualifier,
             receiver_address_spaces=method.receiver_address_spaces,
             trailing_qualifiers=method.trailing_qualifiers,
+        )
+        return concrete_method
+
+    def _emit_template_member_free_function(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        bindings: Dict[str, str],
+        free_name: str,
+        instantiated_template_functions: Optional[Dict[str, str]] = None,
+        template_methods_by_struct: Optional[
+            Dict[str, Dict[str, List[_MetalStructMethod]]]
+        ] = None,
+        methods_by_struct: Optional[Dict[str, Dict[str, _MetalStructMethod]]] = None,
+        operator_call_structs: Optional[Set[str]] = None,
+        rewrite_structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
+    ) -> str:
+        # Instantiate the template member method by substituting the bound
+        # template parameters into copies of its return type, parameters and
+        # body, then emit a concrete free function reusing the non-template
+        # lowering machinery (member references resolved to `self.x`).
+        concrete_method = self._instantiated_template_member_method(
+            struct, method, bindings, free_name, rewrite_structs_by_name
         )
         # Qualify owner fields before resolving nested calls, as for ordinary
         # methods. The instantiated signature supplies the lexical parameters.
@@ -21079,6 +21192,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         ]
         if argument_values is not None:
             raw_arguments = argument_values
+        elif len(raw_arguments) != len(method.parameter_names):
+            # Arguments for unnamed tag parameters are not read by the accessor (method_arity.py).
+            raw_arguments = (
+                named_parameter_arguments(
+                    method.parameters,
+                    raw_arguments,
+                    self._split_top_level_commas,
+                    self._declared_data_member_name,
+                )
+                or raw_arguments
+            )
         if len(raw_arguments) != len(method.parameter_names):
             self._reject_reference_returning_method_call(
                 code, struct, method, arg_open, arg_close
@@ -21102,7 +21226,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         method: _MetalStructMethod,
         depth: int = 0,
     ) -> Optional[str]:
-        body = self._rewrite_method_body(struct, method)
+        # An instantiated `if constexpr (true) { return at(j, i); } else ...` executes one return.
+        body = selected_constexpr_body(self, self._rewrite_method_body(struct, method))
         match = re.fullmatch(
             r"\s*return\s+(?P<expression>.+?)\s*;\s*",
             body,
@@ -22958,7 +23083,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         # ([dcl.type.auto.deduct]); `auto&` declarators are skipped.
         lexical_scopes = self._find_lexical_brace_scopes(code)
         pattern = re.compile(
-            r"(?:(?<=[;{}()])|^)\s*(?P<specifier>auto(?=\s)|(?:const\s+)?auto\s*\*)"
+            r"(?:(?<=[;{}()])|^)\s*(?P<specifier>(?:(?:static|constexpr|const)\s+)*auto(?=\s)"
+            r"|(?:const\s+)?auto\s*\*)"
             r"\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)",
             re.MULTILINE,
         )
@@ -23326,6 +23452,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             expr = expr[1:-1].strip()
             if not expr:
                 return None
+
+        # `metal::bool_constant<true>{}` has its library tag type (integral_constant_tags.py).
+        library_tag = library_tag_value_type(self, expr)
+        if library_tag is not None:
+            return library_tag
 
         def infer_operand(operand: str) -> Optional[str]:
             return self._infer_argument_type(

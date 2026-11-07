@@ -201,3 +201,34 @@ def concretize_integral_constant_tags(preprocessor: Any, code: str) -> str:
     )
     prelude = "".join(definitions[name] for name in sorted(definitions))
     return rewritten[:point] + prelude + rewritten[point:]
+
+
+_TAG_VALUE_RE = re.compile(
+    r"(?P<type>(?:(?:::\s*)?metal\s*::\s*)?(?:bool_constant|integral_constant)\s*<.*>"
+    r"|(?:(?:::\s*)?metal\s*::\s*)?(?:true_type|false_type))"
+    r"\s*(?:\{\s*\}|\(\s*\))",
+    re.DOTALL,
+)
+
+
+def library_tag_value_type(preprocessor: Any, expression: str) -> str | None:
+    """The tag type a value-initialized concrete library tag (``metal::bool_constant<true>{}``) has."""
+
+    match = _TAG_VALUE_RE.fullmatch(expression.strip())
+    if match is None:
+        return None
+    type_text = match.group("type")
+    name_match = _TAG_RE.match(type_text)
+    if name_match is None or name_match.group("qualifier") is None:
+        return None
+    arguments: list[str] = []
+    end = name_match.end()
+    if name_match.group("name") in {"bool_constant", "integral_constant"}:
+        angle = type_text.find("<", end)
+        close = preprocessor._find_matching_angle(type_text, angle)
+        if close != len(type_text.rstrip()) - 1:
+            return None
+        arguments = preprocessor._split_top_level_commas(type_text[angle + 1 : close])
+    if _tag_identity(preprocessor, name_match.group("name"), arguments) is None:
+        return None
+    return preprocessor._normalize_template_argument_text(type_text)
