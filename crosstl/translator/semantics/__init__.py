@@ -149,6 +149,7 @@ from .spirv_instructions import (
     SpirvOperationUnsupportedError,
     refuse_spirv_instructions,
 )
+from .stage_bound_functions import bind_stage_functions
 from .stage_constant_blocks import (
     StageConstantBlockConflictError,
     hoist_stage_constant_blocks,
@@ -292,6 +293,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
     Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
+    Shader-scope functions that name a stage's declarations become functions of the stages that call them
+    (:mod:`.stage_bound_functions`).
     Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
     A ``gl_`` built-in value attribute CrossGL does not define is refused with :class:`BuiltinValueUnsupportedError`,
     and the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` take their canonical names (:mod:`.builtin_names`).
@@ -412,6 +415,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     hoist_local_structs(program, report.target)
+    bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
     resolve_template_assertions(program, report.target)
