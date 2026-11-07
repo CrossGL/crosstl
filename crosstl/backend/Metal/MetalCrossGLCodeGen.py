@@ -70,6 +70,7 @@ from .dependent_builtins import (
     unbound_template_type_names,
 )
 from .external_functions import refuse_external_function_calls
+from .instance_static_members import render_instance_static_struct_member
 from .library_structs import declare_referenced_library_structs
 from .local_aggregate_declarators import (
     union_layout,
@@ -12978,6 +12979,9 @@ class MetalToCrossGLConverter(
                 if constant is not None:
                     return constant
             static_member = self.render_decltype_static_struct_member(expr)
+            if static_member is None:
+                # `t.value` for a static member names its constant (instance_static_members.py).
+                static_member = render_instance_static_struct_member(self, expr)
             if static_member is not None:
                 return static_member
             if matrix_columns_object(self, expr) is not None:
