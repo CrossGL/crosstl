@@ -13,6 +13,7 @@ from crosstl.translator.host_workgroup_size import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.spirv_friendly_names import translate_spirv
 
 SIZES = {
     "vulkan": r"OpExecutionMode %\S+ LocalSize (\d+) (\d+) (\d+)",
@@ -76,6 +77,9 @@ OPENCL_REQUIRED = (
 def _translate(tmp_path, source, suffix, backend, **options):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
+    if backend == "vulkan":
+        # Friendly ids whether or not SPIRV-Tools reformat the module.
+        return translate_spirv(path, source_options=options or None)
     return crosstl.translate(str(path), backend=backend, source_options=options or None)
 
 
@@ -85,7 +89,12 @@ def _size(code, backend):
     return tuple(int(value) for value in match.groups())
 
 
-@pytest.mark.parametrize("backend", sorted(SIZES) + ["wgsl"])
+# SPIR-V, GLSL and WGSL specialize a size the host chooses instead (test_spirv_entry_workgroup_sizes.py,
+# test_glsl_host_workgroup_size.py, test_wgsl_host_workgroup_size.py).
+SPECIALIZING_BACKENDS = {"vulkan", "opengl", "wgsl"}
+
+
+@pytest.mark.parametrize("backend", sorted(set(SIZES) - SPECIALIZING_BACKENDS))
 @pytest.mark.parametrize(
     "source, suffix, reason",
     [
@@ -141,7 +150,18 @@ def test_required_opencl_size_is_kept(tmp_path, backend):
 def test_grid_index_and_grid_stride_need_no_block_size(tmp_path, backend, source):
     """blockIdx * blockDim + threadIdx and blockDim * gridDim do not depend on how the grid is split."""
     if source is CUDA_BLOCK_INDEX:
-        # blockIdx alone does depend on the split.
+        # blockIdx alone does depend on the split, so SPIR-V and GLSL let the pipeline set the size.
+        if backend == "vulkan":
+            code = _translate(tmp_path, source, ".cu", backend)
+            assert "OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize" in code
+            assert "SpecId 0" in code
+            return
+        if backend == "opengl":
+            code = _translate(tmp_path, source, ".cu", backend)
+            assert (
+                "local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2" in code
+            )
+            return
         with pytest.raises(HostDefinedWorkgroupSizeError, match="gl_WorkGroupID"):
             _translate(tmp_path, source, ".cu", backend)
         return

@@ -159,10 +159,12 @@ class Annotator:
 
     def visit_for(self, node):
         self.scope.push()
-        if node.init is not None:
-            replacement = self.visit(node.init)
-            if replacement is not node.init:
-                set_child(node, "init", None, replacement)
+        # ``int i = 0, j = n`` and ``k = 0, m = 3`` are lists, visited in source order.
+        for slot in field_slots(node, "init"):
+            child = get_child(node, *slot)
+            replacement = self.visit(child)
+            if replacement is not child:
+                set_child(node, *slot, replacement)
         proven = self.counter_update_cannot_overflow(node)
         if proven is not None:
             self._proven.add(id(proven))
