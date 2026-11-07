@@ -136,6 +136,7 @@ from .texture_types import (
 )
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
+from .using_declared_library_names import using_declared_library_names
 
 _PLAIN_TYPE_NAME = re.compile(r"[A-Za-z_]\w*")
 
@@ -15110,6 +15111,10 @@ class MetalToCrossGLConverter(
         # These portable names are emitted by as_type and arithmetic helpers,
         # even without a qualified builtin call in the source AST.
         builtin_names = qualified_math_calls | {"asfloat", "asint", "asuint"}
+        self.metal_using_declared_library_names = using_declared_library_names(
+            ast, self.metal_library_function_names()
+        )
+        builtin_names |= self.metal_using_declared_library_names
         used_names = set(self.wide_vector_reserved_names)
         used_names.update(
             self.sanitize_identifier(name)
@@ -15714,7 +15719,12 @@ class MetalToCrossGLConverter(
     def resolve_transported_metal_source_overload(
         self, function_name, arguments, source_location=None
     ):
-        if self.qualified_metal_math_operation(function_name) in getattr(
+        library_operation = self.qualified_metal_math_operation(function_name)
+        if library_operation is None and str(function_name) in getattr(
+            self, "metal_using_declared_library_names", set()
+        ):
+            library_operation = str(function_name)
+        if library_operation in getattr(
             self, "metal_builtin_name_collision_groups", set()
         ):
             binding, function = self.resolve_metal_user_function_overload(

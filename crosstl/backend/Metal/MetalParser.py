@@ -440,6 +440,7 @@ class MetalParser:
         self.namespace_aliases = {}
         self.namespace_scope_stack = []
         self.using_namespace_directives = []
+        self.using_declarations = []
         self.last_struct_type_aliases = []
         self.last_struct_constructors = []
         self.last_struct_declares_assignment_operator = False
@@ -748,6 +749,7 @@ class MetalParser:
             self.template_specialization_limit_source
         )
         shader.using_namespace_directives = list(self.using_namespace_directives)
+        shader.using_declarations = list(self.using_declarations)
         shader.namespace_aliases = dict(self.namespace_aliases)
         shader.function_prototypes = dict(self.function_prototypes)
         self.associate_out_of_line_call_operators(shader)
@@ -1804,7 +1806,10 @@ class MetalParser:
                 )
             return None
         if self.is_using_declaration_start():
-            self.parse_using_declaration()
+            target_name = self.parse_using_declaration()
+            self.using_declarations.append(
+                {"namespace": self.current_namespace(), "target": target_name}
+            )
             return None
         alias_name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -1849,8 +1854,9 @@ class MetalParser:
         )
 
     def parse_using_declaration(self):
-        self.parse_scoped_identifier()
+        target_name = self.parse_scoped_identifier()
         self.eat("SEMICOLON")
+        return target_name
 
     def is_union_alias_start(self):
         return self.current_token == ("IDENTIFIER", "union")
