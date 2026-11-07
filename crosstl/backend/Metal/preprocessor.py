@@ -100,6 +100,7 @@ from .static_member_constants import (
     static_member_constant_substituter,
     substitute_parameter_extent_static_members,
 )
+from .swizzle_types import infer_swizzle_type
 from .template_argument_text import normalize_template_argument_text
 from .template_constants import unresolved_constant_references
 from .template_function_parameters import template_function_pointer_parameter
@@ -22906,6 +22907,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if vector_member_type is not None:
             return vector_member_type
+        swizzle_type = infer_swizzle_type(
+            self,
+            expr,
+            lambda base: self._infer_argument_type(
+                base,
+                buffer_element_types,
+                local_variable_types,
+                struct_field_types,
+                structs_by_name,
+            ),
+        )
+        if swizzle_type is not None:
+            return swizzle_type
 
         # Pointer offset `base + integer`, `integer + base`, or `base - integer`
         # preserves the pointer's complete qualified type for template deduction.
