@@ -74,6 +74,7 @@ from .namespaced_specializations import (
     specialization_reference,
 )
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
+from .overload_precedence import exact_template_outranks
 from .overload_ranking import shared_template_parameter_positions
 from .pattern_cache import pattern as _cached_pattern
 from .pointer_conversions import pointer_conversion_type
@@ -1987,6 +1988,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         and namespace in associated_namespaces
                     )
                     for namespace in namespaces
+                ) and not exact_template_outranks(
+                    self,
+                    self._template_function_parameter_text(enabled[0][0]),
+                    enabled[0][1],
+                    argument_types,
+                    declaration.arguments,
                 ):
                     self._raise_constrained_free_function_error(
                         code,
