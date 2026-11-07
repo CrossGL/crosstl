@@ -32,6 +32,7 @@ from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MA
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 from crosstl.translator.codegen.metal_library_functions import MSL_LIBRARY_FUNCTIONS
 
+from .alias_template_types import fold_expression_decltypes
 from .arithmetic_conversions import builtin_arithmetic_conversion
 from .array_element_receivers import (
     array_element_receiver_end,
@@ -57,6 +58,7 @@ from .constrained_template_retention import (
 )
 from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
+from .dependent_result_templates import dependent_result_template_names
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
 from .forwarding_reference_accessors import forwarded_storage_expression
@@ -1346,9 +1348,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = self._fold_concrete_type_trait_values(
             processed, require_resolution=True
         )
-        # With the traits folded, a materialized return-type enabler names its type, and a concrete library tag
-        # (metal::bool_constant<true>) a declared tag struct (integral_constant_tags.py).
-        processed = fold_concrete_enablers(self, processed)
+        # With the traits folded, a materialized return-type enabler names its type, and so does a decltype of
+        # built-in operands that a dependent result type leaves (dependent_result_templates.py). A concrete library
+        # tag (metal::bool_constant<true>) names a declared tag struct (integral_constant_tags.py).
+        processed = fold_expression_decltypes(
+            self, fold_concrete_enablers(self, processed)
+        )
         processed = concretize_integral_constant_tags(self, processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
@@ -1751,7 +1756,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         constrained = [
             template for template in templates if template.template_constraints
         ]
-        if not constrained:
+        # Templates whose result is a decltype of their parameters are carriers (dependent_result_templates.py).
+        dependent_results = dependent_result_template_names(self, code, templates)
+        if not constrained and not dependent_results:
             return code
 
         # A template method retained inside a residual aggregate declaration is
@@ -1765,7 +1772,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             for template in constrained
             if self._containing_span(template.span[0], aggregate_spans) is None
         ]
-        if not constrained:
+        if not constrained and not dependent_results:
             return code
 
         by_name: Dict[str, List[_MetalTemplateFunction]] = {}
@@ -1795,6 +1802,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     code, reference.span[0], set()
                 )
             ],
+            dependent_results,
         )
         carrier_names = {template.name for template in carriers}
         for template in carriers:
