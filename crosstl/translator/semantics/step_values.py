@@ -8,8 +8,10 @@ yields: the old value for a postfix operator, the new one for a prefix operator.
 that is copied in and out, so the operand is evaluated once and each emitter's handling of ``inout`` parameters
 applies unchanged.
 
-Only the targets in ``STEP_HELPER_TARGETS`` emit CrossGL ``inout`` parameters with write-back. The CUDA, HIP, Mojo
-and SPIR-V emitters pass them by value, so an increment used as a value is still refused for those targets.
+Only the targets in ``STEP_HELPER_TARGETS`` emit CrossGL ``inout`` parameters with write-back. The SPIR-V emitter
+inlines a function with an ``inout`` parameter at each call, with the parameter aliasing the argument's pointer, so
+its writes reach the argument in any storage class. The CUDA, HIP and Mojo emitters pass ``inout`` parameters by
+value, so an increment used as a value is still refused for those targets.
 """
 
 from __future__ import annotations
@@ -29,6 +31,9 @@ STEP_HELPER_TARGETS = {
     ),
     "directx": "HLSL inout parameters, copied in and out",
     "slang": "Slang inout parameters, copied in and out",
+    "vulkan": (
+        "SPIR-V inlining of functions with inout parameters, which alias the argument's pointer"
+    ),
 }
 _STEP_NAMES = {
     ("__cgl_wrap_add", True): "postinc",
