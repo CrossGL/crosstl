@@ -169,6 +169,9 @@ from .unreachable_constrained_callers import (
     materialize_with_unreachable_callers,
     unreachable_caller_scope,
 )
+from .unreferenced_constrained_templates import (
+    prune_unreferenced_constrained_templates,
+)
 from .unused_specialization_members import prune_unreferenced_specialization_members
 from .value_traits import (
     complete_template_arguments,
@@ -1334,6 +1337,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             processed
         )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
+        # A constrained overload nothing calls would reach CrossGL without its constraint.
+        processed = prune_unreferenced_constrained_templates(self, processed)
         processed = prune_unreferenced_specialization_members(self, processed)
         processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
