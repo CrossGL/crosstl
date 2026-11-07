@@ -69,8 +69,8 @@ def _wrap_materialization(monkeypatch, mutate):
 
 def test_subgroup_width_rules_without_a_workgroup_size_leave_it_to_the_host(tmp_path):
     # The lane index depends on how the host's threadgroup splits into SIMD-groups, so one-invocation
-    # workgroups would change every lane but the first. HLSL fixes the size in the shader and refuses the
-    # kernel; GLSL lets the host set it when it creates the pipeline.
+    # workgroups would change every lane but the first. HLSL reads the size from macros the host defines
+    # when it compiles the shader; GLSL lets the host set it when it creates the pipeline.
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_fixture(repo)
@@ -81,14 +81,25 @@ def test_subgroup_width_rules_without_a_workgroup_size_leave_it_to_the_host(tmp_
     ).to_json()
 
     by_target = payload["summary"]["artifactsByTarget"]
-    assert by_target["directx"]["translatedCount"] == 0
+    assert by_target["directx"]["failedCount"] == 0
+    assert (
+        by_target["directx"]["translatedCount"] == by_target["directx"]["artifactCount"]
+    )
     assert by_target["opengl"] == {
         "artifactCount": 2,
         "translatedCount": 2,
         "failedCount": 0,
     }
     codes = {item["code"] for item in payload["diagnostics"]}
-    assert codes == {"project.translate.workgroup-size-host-defined"}
+    assert "project.translate.workgroup-size-host-defined" not in codes
+    (hlsl,) = (repo / "out" / "directx").rglob("*.hlsl")
+    text = hlsl.read_text(encoding="utf-8")
+    numthreads = (
+        "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, "
+        "CROSSGL_WORKGROUP_SIZE_Z)]"
+    )
+    assert text.count(numthreads) == 2
+    assert "[WaveSize(32)]" in text and "[WaveSize(64)]" in text
 
 
 def test_subgroup_width_rules_emit_exact_directx_contract(

@@ -29,6 +29,7 @@ from crosstl.project.uniform_layout import (
 from crosstl.project.workgroup_size_reflection import (
     WorkgroupSizeReflectionError,
     glsl_execution_config,
+    hlsl_host_chosen_execution_config,
     spirv_entry_execution_config,
     spirv_workgroup_size_builtin,
 )
@@ -1239,9 +1240,10 @@ def _reflect_hlsl_source(
         execution_config = {}
         thread_match = HLSL_NUMTHREADS_RE.search(attributes)
         if thread_match:
-            execution_config["numthreads"] = [
-                _literal_value(thread_match.group(index)) for index in (1, 2, 3)
-            ]
+            operands = [thread_match.group(index) for index in (1, 2, 3)]
+            execution_config = hlsl_host_chosen_execution_config(
+                operands, entry=name
+            ) or {"numthreads": [_literal_value(operand) for operand in operands]}
         entry_points.append(
             {
                 "name": name,

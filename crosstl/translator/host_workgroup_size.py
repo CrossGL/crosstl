@@ -16,8 +16,9 @@ the mark names one; the host then dispatches whole workgroups of that size, as `
 any other kernel the mark records the first construct that depends on the size, and a code generator that needs
 the size raises :class:`HostDefinedWorkgroupSizeError` through :func:`require_static_workgroup_size`, unless an
 explicit ``@ workgroup_size`` or a project workgroup-size rule gives it. The Metal generator needs no size, so a
-Metal round trip keeps the host's choice, and the SPIR-V and GLSL generators make the size three specialization
-constants that the host sets when it creates the pipeline.
+Metal round trip keeps the host's choice, the SPIR-V and GLSL generators make the size three specialization
+constants that the host sets when it creates the pipeline, and the HLSL generator reads it from macros that the
+host defines when it compiles the shader.
 """
 
 from __future__ import annotations
@@ -486,12 +487,13 @@ def resolve_host_workgroup_sizes(shader: Any, render=str) -> Any:
     return shader
 
 
-# Targets that fix a workgroup's size in the shader: HLSL and Slang ``[numthreads]``. Their generators call
+# Targets that fix a workgroup's size in the shader: Slang ``[numthreads]``. Their generators call
 # :func:`require_static_workgroup_size` for every compute, mesh and task entry they emit. SPIR-V for Vulkan, GLSL
 # and WGSL let the pipeline specialize the size instead (specialization constants and WGSL overrides), and GLSL
 # source compiled by a driver reads it from macros the host defines (crosstl/translator/codegen/
-# host_workgroup_size_ids.py), so the host sets it when it creates the pipeline.
-STATIC_WORKGROUP_SIZE_TARGETS = frozenset({"directx", "slang"})
+# host_workgroup_size_ids.py), so the host sets it when it creates the pipeline. HLSL reads the same macros,
+# which the host defines when it compiles the shader (crosstl/translator/codegen/hlsl_host_workgroup_size.py).
+STATIC_WORKGROUP_SIZE_TARGETS = frozenset({"slang"})
 
 
 def refuse_host_defined_workgroup_sizes(shader: Any, target: str) -> None:

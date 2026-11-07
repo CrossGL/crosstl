@@ -5,6 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from crosstl.translator.codegen.host_workgroup_size_ids import (
+    HOST_WORKGROUP_SIZE_MACROS,
+)
+
 from .interface import hlsl_reflected_strides
 from .process import CommandResult, require_artifact, run
 from .toolchains import tool
@@ -20,13 +24,23 @@ ENVIRONMENTS = ("vulkan1.1", "vulkan1.2", "vulkan1.3")
 NATIVE_16_BIT = re.compile(r"\b(?:float16_t|int16_t|uint16_t)(?:[1-4](?:x[1-4])?)?\b")
 
 
+# A thread-group size the source's host chooses reads three macros that the host defines when it compiles the shader
+# (crosstl/translator/codegen/hlsl_host_workgroup_size.py); the check gives them the size of one invocation, as the
+# GLSL check does (corpus/checks.py).
+HOST_WORKGROUP_SIZE_DEFAULT = "1"
+
+
 def hlsl_arguments(path):
     """The DXC arguments an HLSL artifact needs beyond its profile and entry point."""
     try:
         text = Path(path).read_text(errors="replace")
     except OSError:
         return []
-    return ["-enable-16bit-types"] if NATIVE_16_BIT.search(text) else []
+    arguments = ["-enable-16bit-types"] if NATIVE_16_BIT.search(text) else []
+    if any(f"defined({macro})" in text for macro in HOST_WORKGROUP_SIZE_MACROS):
+        for macro in HOST_WORKGROUP_SIZE_MACROS:
+            arguments += ["-D", f"{macro}={HOST_WORKGROUP_SIZE_DEFAULT}"]
+    return arguments
 
 
 def _missing(name):
