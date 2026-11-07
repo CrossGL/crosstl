@@ -260,11 +260,11 @@ MODULE_TESTS = tuple(
 # Convolution tests whose every route the host ports: conv1d as conv2d over
 # expand_dims views, large filters over few channels, flipped and grouped 1-D
 # convolutions, NumPy's 1-D and 2-D convolutions of every float dtype,
-# repeated convolutions, the flipped and grouped gradients, the gradient
-# shapes of strided and dilated convolutions, unaligned 2-D channels and the
-# per-depth-tap 3-D decomposition, which reach the unfold, depthwise,
-# padded-channel, general and implicit GEMM and small-depth 3-D routes of
-# conv.cpp.
+# repeated convolutions, the flipped and grouped gradients, unaligned 2-D
+# channels and the per-depth-tap 3-D decomposition, which reach the unfold,
+# depthwise, padded-channel, general and implicit GEMM and small-depth 3-D
+# routes of conv.cpp. The gradient shapes of strided and grouped convolutions
+# build their graphs without evaluating them (NO_DISPATCH_TESTS).
 CONV_TESTS = tuple(
     "test_conv.TestConv.test_" + name
     for name in (
@@ -779,6 +779,8 @@ NO_DISPATCH_TESTS = frozenset(
         "test_reduce.TestReduce.test_zero_size",
         # Rejects a zero-dimensional irfftn and an unknown norm.
         "test_fft.TestFFT.test_fft_throws",
+        # Checks the shapes of convolution gradients it never evaluates.
+        "test_conv.TestConv.test_basic_grad_shapes",
     )
 )
 # Tests that skip on the MLX CPU because they need a GPU: the CPU worker must

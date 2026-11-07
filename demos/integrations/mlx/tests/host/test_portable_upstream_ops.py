@@ -79,6 +79,7 @@ def test_upstream_op_tests_without_dispatches_are_exact():
         "test_fast.TestFast.test_layer_norm_dim_check",
         "test_reduce.TestReduce.test_zero_size",
         "test_fft.TestFFT.test_fft_throws",
+        "test_conv.TestConv.test_basic_grad_shapes",
     }
     assert ops.NO_DISPATCH_TESTS <= set(ops.UPSTREAM_TESTS)
     for native in (True, False):
