@@ -192,6 +192,7 @@ from .crossgl_vector_names import (
     crossgl_named_vector_spelling,
     crossgl_named_vector_type,
 )
+from .directx_pointer_alias_errors import DirectXResourcePointerAliasError
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
@@ -23725,6 +23726,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         view_layout = scalar_storage_layout(view_type_name)
         source_layout = scalar_storage_layout(source_type_name)
         target_layout = scalar_storage_layout(target_type_name)
+        if view_layout is not None and target_layout == view_layout:
+            # A cast to the scalar type the pointer already views (such as one
+            # that only drops ``const``) keeps the binding's view unchanged.
+            return binding
         lane_gather = self.hlsl_same_scalar_lane_gather_binding(
             binding,
             target_type,
@@ -24638,10 +24643,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="element-type-mismatch",
                     node=node,
                 )
-            raise ValueError(
+            raise DirectXResourcePointerAliasError(
                 "DirectX resource pointer alias "
                 f"'{node.name}' changes element type from {backing_element_type} "
-                f"to {declared_element_type}"
+                f"to {declared_element_type}",
+                function_name=self.current_function_name,
+                pointer_name=node.name,
+                reason="element-type-mismatch",
+                source_location=getattr(node, "source_location", None),
             )
 
         qualifiers = {
@@ -24663,9 +24672,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="access-mismatch",
                     node=node,
                 )
-            raise ValueError(
+            raise DirectXResourcePointerAliasError(
                 "DirectX resource pointer alias "
-                f"'{node.name}' requires writable storage"
+                f"'{node.name}' requires writable storage",
+                function_name=self.current_function_name,
+                pointer_name=node.name,
+                reason="access-mismatch",
+                source_location=getattr(node, "source_location", None),
             )
 
         used_names = set(self.current_identifier_reserved_names)
@@ -24906,9 +24919,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="assignment-operator-unsupported",
                     node=target,
                 )
-            raise ValueError(
+            raise DirectXResourcePointerAliasError(
                 f"DirectX cannot lower resource pointer operator '{op}' for "
-                f"'{target_name}'"
+                f"'{target_name}'",
+                function_name=self.current_function_name,
+                pointer_name=target_name,
+                reason="assignment-operator-unsupported",
+                source_location=getattr(target, "source_location", None),
             )
 
         replacement = self.hlsl_materialized_resource_pointer_array_element(
@@ -24985,9 +25002,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="dynamic-backing-reassignment",
                     node=value,
                 )
-            raise ValueError(
+            raise DirectXResourcePointerAliasError(
                 "DirectX cannot dynamically change the backing buffer for resource "
-                f"pointer '{target_name}'"
+                f"pointer '{target_name}'",
+                function_name=self.current_function_name,
+                pointer_name=target_name,
+                reason="dynamic-backing-reassignment",
+                source_location=getattr(value, "source_location", None),
             )
         if replacement.get("element_type") != current.get("element_type"):
             if current.get("kind") == "workgroup-pointer":
@@ -24999,16 +25020,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="element-type-mismatch",
                     node=value,
                 )
-            raise ValueError(
+            raise DirectXResourcePointerAliasError(
                 "DirectX resource pointer assignment changes element type for "
-                f"'{target_name}'"
+                f"'{target_name}'",
+                function_name=self.current_function_name,
+                pointer_name=target_name,
+                reason="element-type-mismatch",
+                source_location=getattr(value, "source_location", None),
             )
         if (
             current.get("access") == "read_write"
             and replacement.get("access") != "read_write"
         ):
-            raise ValueError(
-                f"DirectX resource pointer '{target_name}' requires writable storage"
+            raise DirectXResourcePointerAliasError(
+                f"DirectX resource pointer '{target_name}' requires writable storage",
+                function_name=self.current_function_name,
+                pointer_name=target_name,
+                reason="access-mismatch",
+                source_location=getattr(value, "source_location", None),
             )
         self.current_hlsl_resource_pointer_aliases[target_name] = {
             **replacement,
@@ -25182,8 +25211,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="write-through-readonly-alias",
                 )
             name = getattr(pointer_expression, "name", None) or str(pointer_expression)
-            raise ValueError(
-                f"DirectX resource pointer '{name}' does not provide writable storage"
+            raise DirectXResourcePointerAliasError(
+                f"DirectX resource pointer '{name}' does not provide writable storage",
+                function_name=self.current_function_name,
+                pointer_name=name,
+                reason="write-through-readonly-pointer",
+                source_location=getattr(pointer_expression, "source_location", None),
             )
         if not require_write and binding_access == "write":
             name = getattr(pointer_expression, "name", None) or str(pointer_expression)
@@ -25225,9 +25258,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "RasterizerOrderedBuffer",
             "RasterizerOrderedStructuredBuffer",
         }:
-            raise ValueError(
+            raise DirectXResourcePointerAliasError(
                 "DirectX resource pointer dereference requires an indexable typed "
-                f"buffer, got {binding.get('resource_type') or 'unknown'}"
+                f"buffer, got {binding.get('resource_type') or 'unknown'}",
+                function_name=self.current_function_name,
+                pointer_name=self.expression_name(pointer_expression),
+                reason="non-indexable-backing",
+                source_location=getattr(pointer_expression, "source_location", None),
             )
 
         rendered_index = (
