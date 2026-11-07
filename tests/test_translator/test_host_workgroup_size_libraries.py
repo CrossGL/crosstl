@@ -66,7 +66,9 @@ def _write(tmp_path, name, source):
 @pytest.mark.parametrize(
     "backend", ["cuda", "directx", "metal", "opengl", "slang", "vulkan", "wgsl"]
 )
-@pytest.mark.parametrize("name, source", [("rotate.cgl", STAGE_BLOCK), ("kernels.metal", KERNELS)])
+@pytest.mark.parametrize(
+    "name, source", [("rotate.cgl", STAGE_BLOCK), ("kernels.metal", KERNELS)]
+)
 def test_no_target_refuses_a_host_sized_kernel(tmp_path, backend, name, source):
     assert crosstl.translate(_write(tmp_path, name, source), backend=backend)
 

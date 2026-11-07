@@ -26,7 +26,9 @@ DEFINED = (
     "defined(CROSSGL_WORKGROUP_SIZE_X) && defined(CROSSGL_WORKGROUP_SIZE_Y) && "
     "defined(CROSSGL_WORKGROUP_SIZE_Z)"
 )
-CONSTANTS = "crossgl_workgroup_size_x, crossgl_workgroup_size_y, crossgl_workgroup_size_z"
+CONSTANTS = (
+    "crossgl_workgroup_size_x, crossgl_workgroup_size_y, crossgl_workgroup_size_z"
+)
 HOST_NUMTHREADS = (
     f"#if {DEFINED}\n[numthreads({MACROS})]\n#else\n[numthreads({CONSTANTS})]\n#endif\n"
 )
@@ -59,9 +61,7 @@ shader main {
 
 HEADER = "#include <metal_stdlib>\nusing namespace metal;\n"
 
-METAL_KERNELS = (
-    HEADER
-    + """
+METAL_KERNELS = HEADER + """
 constant float first [[function_constant(0)]];
 constant float second [[function_constant(2)]];
 kernel void rotate(device float* data [[buffer(0)]],
@@ -85,7 +85,6 @@ kernel void scale(device float* data [[buffer(0)]], uint gid [[thread_position_i
     data[gid] = data[gid] * 2.0f;
 }
 """
-)
 
 SPECIALIZED_PAIR = """
 shader Probe {
@@ -256,7 +255,12 @@ def test_slangc_specializes_spirv_without_the_macros(tmp_path):
 @requires_slangc
 def test_slangc_fixes_the_macro_size_for_hlsl(tmp_path):
     result, output = _compile(
-        tmp_path, _translate(tmp_path, ROTATE), "hlsl", "-profile", "cs_6_0", *MACRO_DEFINES
+        tmp_path,
+        _translate(tmp_path, ROTATE),
+        "hlsl",
+        "-profile",
+        "cs_6_0",
+        *MACRO_DEFINES,
     )
     assert result.returncode == 0, result.stderr
     # The macros leave the constants undeclared, so slangc reports no implicit global shader parameter.

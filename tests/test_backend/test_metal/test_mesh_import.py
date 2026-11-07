@@ -188,7 +188,7 @@ def test_mesh_stage_with_host_chosen_size_takes_the_host_size(tmp_path):
     slang = _translate(tmp_path, LINES, "slang")
     assert (
         "#else\n[numthreads(crossgl_workgroup_size_x, crossgl_workgroup_size_y, "
-        "crossgl_workgroup_size_z)]\n#endif\n[outputtopology(\"line\")]\n[shader(\"mesh\")]\n"
+        'crossgl_workgroup_size_z)]\n#endif\n[outputtopology("line")]\n[shader("mesh")]\n'
     ) in slang
     # HLSL reads the size from macros the host defines when it compiles the shader.
     assert (

@@ -107,6 +107,8 @@ class SlangWorkgroupSizeConstants:
         code = "".join(specialized)
         if host:
             code += (
-                f"#if !({slang_host_size_macros_defined()})\n" + "".join(host) + "#endif\n"
+                f"#if !({slang_host_size_macros_defined()})\n"
+                + "".join(host)
+                + "#endif\n"
             )
         return code + "\n" if code else ""

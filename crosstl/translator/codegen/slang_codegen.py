@@ -6459,7 +6459,9 @@ class SlangCodeGen(LoweringRefusalMixin):
     def slang_workgroup_size_constants(self):
         constants = getattr(self, "workgroup_size_constants", None)
         if constants is None:
-            constants = self.workgroup_size_constants = SlangWorkgroupSizeConstants(None)
+            constants = self.workgroup_size_constants = SlangWorkgroupSizeConstants(
+                None
+            )
         return constants
 
     def generate_compute_numthreads(self, execution_config=None):
