@@ -30,8 +30,9 @@ METADATA_TYPES = {
 ARRAYS = {"shape", "strides", "reduce_shape", "reduce_strides"}
 # The largest input, output or logical size a column launch binds: the bound
 # the host's matrix products use, far below the INT32_MAX at which reduce.cpp
-# switches to 64-bit indexing. Each shape axis stays below 65536, each stride
-# inside that bound, and each launch axis at most 65535 workgroups.
+# switches to 64-bit indexing. Each outer shape axis stays below 65536, the
+# reduced axes the kernels loop over and each stride inside that bound, and
+# each launch axis at most 65535 workgroups.
 MAX_ELEMENTS = 2**28 - 1
 MAX_GROUPS = 65535
 
@@ -85,7 +86,10 @@ def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
     ndim, reduce_ndim = metadata["ndim"][0], metadata["reduce_ndim"][0]
     if not 0 <= ndim <= 64 or not 1 <= reduce_ndim <= 64:
         raise ValueError("Native column reduction rank exceeds its bounds")
-    for prefix, rank in (("", ndim), ("reduce_", reduce_ndim)):
+    for prefix, rank, limit in (
+        ("", ndim, 65535),
+        ("reduce_", reduce_ndim, MAX_ELEMENTS),
+    ):
         if any(
             buffers[prefix + name].count != max(1, rank)
             for name in ("shape", "strides")
@@ -96,7 +100,7 @@ def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
         if rank == 0:
             if shape != [0] or strides != [0]:
                 raise ValueError("Native column reduction empty metadata must be zero")
-        elif any(not 1 <= size <= 65535 for size in shape) or any(
+        elif any(not 1 <= size <= limit for size in shape) or any(
             not 0 <= stride <= MAX_ELEMENTS for stride in strides
         ):
             raise ValueError(
@@ -110,7 +114,7 @@ def read_metadata(entry, entries, spec, buffers, logical_size, outputs=None):
     total = size * non_columns
     output_size = outer * stride
     if (
-        not 1 <= size <= 65535
+        not 1 <= size <= MAX_ELEMENTS
         or not 1 <= stride <= MAX_ELEMENTS
         or reductions[-1] != size
         or metadata["non_col_reductions"] != [non_columns]

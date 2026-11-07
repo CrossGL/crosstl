@@ -518,4 +518,4 @@ def test_runtime_and_host_adapter_route_wide_columns():
         "if ((eight_byte || narrow || truth_test) && plan.type != ContiguousAllReduce &&\n"
         "      !small_rows && !small_columns) {" in adapter
     )
-    assert "column_shape_size(plan.shape) < 32;" in adapter
+    assert "column_shape_size(plan.shape, max_column_elements) < 32;" in adapter

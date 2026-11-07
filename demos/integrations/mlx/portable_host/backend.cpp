@@ -752,10 +752,13 @@ void dispatch_row_reduce(
   }
 }
 
-uint64_t column_shape_size(const mlx::core::Shape& shape) {
+// The product of a column plan's shape: at most 65535 for the outer axes a
+// launch axis carries, and at most ``maximum`` for the reduced axes the
+// kernels loop over.
+uint64_t column_shape_size(const mlx::core::Shape& shape, uint64_t maximum = 65535) {
   uint64_t size = 1;
   for (auto dimension : shape) {
-    if (dimension < 1 || uint64_t(dimension) > 65535 / size) {
+    if (dimension < 1 || uint64_t(dimension) > maximum / size) {
       throw std::invalid_argument("CrossTL column reduction shape exceeds its bounds.");
     }
     size *= dimension;
@@ -787,7 +790,7 @@ void dispatch_column_pass(
       reduce_shape.size() != reduce_strides.size()) {
     throw std::invalid_argument("CrossTL column reduction ranks do not match.");
   }
-  uint64_t total = column_shape_size(reduce_shape);
+  uint64_t total = column_shape_size(reduce_shape, max_column_elements);
   uint64_t outer = column_shape_size(shape);
   uint64_t reduction_size = reduce_shape.back();
   // The columns each output row spans: the last reduced axis's stride, or
@@ -797,6 +800,8 @@ void dispatch_column_pass(
   // The two-pass and long-column passes write partial results per output.
   const uint64_t partials = two_pass ? 32 : long_column ? long_column_blocks(total) : 1;
   if (reduction_stride < 1 || uint64_t(reduction_stride) > max_column_elements ||
+      outer * uint64_t(reduction_stride) > max_column_elements ||
+      total > max_column_elements / (outer * uint64_t(reduction_stride)) ||
       outer * reduction_stride * total != in.size() ||
       outer * reduction_stride * partials != out.size() ||
       in.size() > max_column_elements || out.size() > max_column_elements ||
@@ -925,7 +930,7 @@ void dispatch_column_reduce(
   if (plan.shape.empty() || plan.shape.size() != plan.strides.size()) {
     throw std::invalid_argument("CrossTL column reduction plan is empty or inconsistent.");
   }
-  const uint64_t total = column_shape_size(plan.shape);
+  const uint64_t total = column_shape_size(plan.shape, max_column_elements);
   const int64_t stride = plan.strides.back();
   auto [shape, strides] = shapes_without_reduction_axes(in, axes);
   // Follow upstream's shape product, including broadcast views with zero strides.
@@ -2667,7 +2672,7 @@ void Reduce::eval_gpu(const std::vector<array>& inputs, array& out) {
   // strided_reduce_small's plans: fewer than 32 reduced elements per output.
   const bool small_columns =
       (plan.type == ContiguousStridedReduce || plan.type == GeneralStridedReduce) &&
-      !plan.shape.empty() && column_shape_size(plan.shape) < 32;
+      !plan.shape.empty() && column_shape_size(plan.shape, max_column_elements) < 32;
   // 16-bit floats also run the looped row and the looped and two-pass column
   // instantiations; the 8-byte types have only the small and whole-array ones.
   if ((eight_byte || narrow || truth_test) && plan.type != ContiguousAllReduce &&

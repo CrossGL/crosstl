@@ -124,6 +124,22 @@ def test_valid_long_column_launch(dimension, rows):
     assert column_long_layout.validate(entry, buffers, count, execution)
 
 
+def test_long_column_reduces_more_rows_than_one_launch_axis_carries():
+    # mean(axis=0) of a (100000, 2) array, as test_multivariate_normal takes
+    # it: the kernel loops over the rows, so only the outer axes and the
+    # launch keep the 65,535 bound.
+    entry, buffers, count, execution, _ = _buffers(rows=100_000, columns=2, outer=1)
+    assert execution["workgroupCount"] == [1, 1, 128]
+    assert column_long_layout.validate(entry, buffers, count, execution)
+    backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
+    assert "column_shape_size(reduce_shape, max_column_elements);" in backend
+    assert "uint64_t outer = column_shape_size(shape);" in backend
+    assert (
+        "total > max_column_elements / (outer * uint64_t(reduction_stride)) ||"
+        in backend
+    )
+
+
 @pytest.mark.parametrize(
     "fault",
     ["short", "wide-stride", "blocks", "out-size", "grid", "rows", "template", "entry"],

@@ -1905,8 +1905,11 @@ and output geometry. Ranks, metadata array lengths, source spans and logical
 sizes are checked before dispatch. Two-pass plans write 32 intermediate rows;
 the second native dispatch consumes those actual results without host reduction
 arithmetic. Inputs, outputs and source spans hold at most 2^28 - 1 elements, far
-below the `INT32_MAX` at which MLX selects 64-bit index kernels; every shape axis
-and stride stays below 65,536 and every launch axis at most 65,535 workgroups.
+below the `INT32_MAX` at which MLX selects 64-bit index kernels. Every outer shape
+axis stays below 65,536 and every launch axis at most 65,535 workgroups; the
+reduced axes the kernels loop over, and every stride, share the element bound,
+so `test_random.TestRandom.test_multivariate_normal` takes the mean of 100,000
+rows in one long-column plan.
 Row plans share this element bound. The workloads
 include small, looped and two-pass plans over 76,800 to 131,072 elements, and
 long-column plans of every 32-bit and Boolean entry, whose partial blocks are

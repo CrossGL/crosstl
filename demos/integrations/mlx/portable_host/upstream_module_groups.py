@@ -221,6 +221,7 @@ TRAINING_TESTS = (
         (
             "bernoulli",
             "categorical",
+            "multivariate_normal",
             "normal_and_laplace",
             "permutation",
             "randint",
