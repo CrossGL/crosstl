@@ -23312,6 +23312,16 @@ float {scalar}(float value) {{
                 )
                 if atomic_result is not None:
                     return atomic_result
+            unscoped_name = str(expr.name).rsplit("::", 1)[-1]
+            if (
+                unscoped_name in self.metal_wave_intrinsics
+                and expr.args
+                and self.map_metal_wave_function_name(expr.name, expr.args) is not None
+            ):
+                # The call lowers to the builtin, which no user overload of
+                # its name matches: it has the builtin's type, not the type of
+                # a user overload of the same arity.
+                return self.expression_metal_type(expr.args[0])
             arity_candidates = [
                 candidate
                 for candidate in self.user_function_overloads_by_name.get(
@@ -23321,7 +23331,6 @@ float {scalar}(float value) {{
             ]
             if len(arity_candidates) == 1:
                 return getattr(arity_candidates[0], "return_type", None)
-            unscoped_name = str(expr.name).rsplit("::", 1)[-1]
             if (
                 unscoped_name in self.metal_wave_intrinsics
                 or unscoped_name == "simd_shuffle_and_fill_up"
