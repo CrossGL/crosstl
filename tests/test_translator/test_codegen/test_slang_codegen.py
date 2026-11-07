@@ -4082,10 +4082,11 @@ def test_wave_intrinsics_validate_target_result_types():
         "Slang wave intrinsic: WaveActiveBallot returns uint4 but target expects float"
         in refused.reasons
     )
-    assert "bool boolFromLane = false;" in generated_code
-    assert (
-        "Slang wave intrinsic: WaveGetLaneIndex returns uint but target expects bool"
-        in refused.reasons
+    # A same-shaped value converts implicitly, as ``bool b = lane;`` does in
+    # CrossGL (GLSL output spells it ``lane != 0u``); the conversion is explicit.
+    assert "bool boolFromLane = bool(WaveGetLaneIndex());" in generated_code
+    assert not any(
+        "WaveGetLaneIndex returns uint" in reason for reason in refused.reasons
     )
     assert "uint2 widthMismatch = uint2(0u);" in generated_code
     assert (
