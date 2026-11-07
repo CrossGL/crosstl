@@ -811,6 +811,14 @@ def o_mirror(inp):
     return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
 
 
+def o_return_reference_copy(inp):
+    """``return bump(tile[l])`` and ``return bump(v.y) + v.x``: the inout copy-back precedes the return."""
+    out = []
+    for x in inp.astype(np.int64):
+        out += [3 * x - 1, 3 * x + 1, 4 * x + 14, 3 * x + 16]
+    return np.array(out, np.int32)
+
+
 def o_array_constants(inp):
     """Constant arrays of floats, of structs and of two-element vector arrays, indexed by bits of the input."""
     weights = [1.0, 2.0, 4.0, 8.0]
@@ -1766,6 +1774,16 @@ CASES = [
         SMALL,
         np.int32,
         o_mirror,
+        threads=128,
+    ),
+    Case(
+        "g_return_reference_copy",
+        "H13",
+        "a returned call whose inout argument is a shared array element or a vector component",
+        "GLSL 4.60 section 6.1.1: inout arguments are copied back when the called function returns",
+        SMALL,
+        np.int32,
+        o_return_reference_copy,
         threads=128,
     ),
     Case(
