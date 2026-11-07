@@ -20,7 +20,12 @@ from fractions import Fraction
 
 from crosstl.project.runtime_values import exact_types_within
 from demos.integrations.mlx.portable_host import copy_layout
-from demos.integrations.mlx.portable_host.copy_packages import VECTOR, signature
+from demos.integrations.mlx.portable_host.copy_packages import (
+    VECTOR,
+    WIDE,
+    signature,
+    work_per_thread,
+)
 from demos.integrations.mlx.portable_host.element_storage import (
     COMPLEX,
     CTYPES,
@@ -37,6 +42,7 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
 from demos.integrations.mlx.portable_host.lazy_package_evidence import (
     require_unchanged,
 )
+from demos.integrations.mlx.portable_host.wide_vectors import grid
 
 # (width, exponent bits, fraction bits)
 FLOATS = {"float16": (16, 5, 10), "bfloat16": (16, 8, 7), "float32": (32, 8, 23)}
@@ -374,9 +380,21 @@ def audit_event(event, cache=None, *, native=True):
         require(value in uploads, "Copy upload differs from its retained values")
     threads = event["threads"]
     payload = None
-    if kernel == VECTOR:
+    if kernel in {VECTOR, WIDE}:
+        elements = threads
+        if kernel == WIDE:
+            elements = metadata.get("elements")
+            try:
+                expected_grid = [*grid(elements, work_per_thread(entry)), 1]
+            except ValueError:
+                expected_grid = None
+            columns, rows, _ = event["workgroupCount"]
+            require(
+                expected_grid == event["workgroupCount"] and threads == columns * rows,
+                "Wide cast launch differs from its size",
+            )
         require(
-            len(values) == len(initial) == len(outputs) == threads,
+            len(values) == len(initial) == len(outputs) == elements,
             "Cast readback extent differs",
         )
         if source in FLOATS and destination in FLOATS:

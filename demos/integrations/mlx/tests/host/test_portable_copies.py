@@ -19,6 +19,7 @@ from demos.integrations.mlx.portable_host import (
     copy_packages,
     element_storage,
     runtime,
+    wide_vectors,
 )
 
 ROOT = Path(__file__).resolve().parents[5]
@@ -43,8 +44,24 @@ WORDS = {"float16": np.uint16, "float32": np.uint32}
 def test_entries_are_pinned_copy_instantiations():
     pinned = set(json.loads(CONTRACT.read_text(encoding="utf-8"))["entries"])
     assert set(copy_packages.ENTRIES) <= pinned
-    assert len(copy_packages.ENTRIES) == 13 * 12 + 13
-    assert sum("complex64" in entry for entry in copy_packages.ENTRIES) == 25
+    assert len(copy_packages.ENTRIES) == 2 * 13 * 12 + 13
+    assert sum("complex64" in entry for entry in copy_packages.ENTRIES) == 49
+    assert copy_packages.signature("v2_copyuint32float32") == (
+        "v2_copy",
+        "uint32",
+        "float32",
+    )
+    # copy_v2's N is WorkPerThread<U>::n, eight bytes of the destination.
+    assert copy_packages.work_per_thread("v2_copyfloat32bool_") == 8
+    assert copy_packages.work_per_thread("v2_copyint8float16") == 4
+    assert copy_packages.work_per_thread("v2_copybool_float32") == 2
+    assert copy_packages.work_per_thread("v2_copyint32complex64") == 1
+    with pytest.raises(ValueError, match="Unknown wide copy"):
+        copy_packages.work_per_thread("v_copyint8float32")
+    wide = copy_packages.options("opengl", "v2_copyint8float32")
+    assert wide.count("[[project.index_range_assertions]]") == 1
+    assert 'expression = "offset + i"' in wide
+    assert "index_range" not in copy_packages.options("metal", "v2_copyint8float32")
     assert copy_packages.signature("v_copyint8float16") == (
         "v_copy",
         "int8",
@@ -57,6 +74,7 @@ def test_entries_are_pinned_copy_instantiations():
     )
     for entry in (
         "v_copyint8int8",
+        "v2_copyint8int8",
         "v_copycomplex64complex64",
         "v_copyfloat64complex64",
         "gg1_copyint8int8",
@@ -341,7 +359,7 @@ class FakeCache:
         kernel, source, destination = copy_packages.signature(entry)
         names = (
             ("src", "dst", "size")
-            if kernel == copy_packages.VECTOR
+            if kernel in {copy_packages.VECTOR, copy_packages.WIDE}
             else tuple(copy_layout.DTYPES)
         )
         bindings = []
@@ -352,7 +370,11 @@ class FakeCache:
                 else (
                     destination
                     if name == "dst"
-                    else copy_layout.DTYPES.get(name, "uint32")
+                    else (
+                        "int64"
+                        if kernel == copy_packages.WIDE
+                        else copy_layout.DTYPES.get(name, "uint32")
+                    )
                 )
             )
             value = (
@@ -385,6 +407,13 @@ def native_buffers(kernel, source, destination, values, shape=None, strides=None
         memory["size"] = (ctypes.c_uint32 * 1)(size)
         types = {"src": source, "dst": destination, "size": "uint32"}
         threads = size
+    elif kernel == copy_packages.WIDE:
+        memory["dst"] = (element_storage.CTYPES[destination] * size)()
+        memory["size"] = (ctypes.c_int64 * 1)(size)
+        types = {"src": source, "dst": destination, "size": "int64"}
+        per_thread = 8 // ctypes.sizeof(element_storage.CTYPES[destination])
+        columns, rows = wide_vectors.grid(size, per_thread)
+        threads = columns * rows
     else:
         threads = math.prod(shape)
         memory["dst"] = (element_storage.CTYPES[destination] * threads)()
@@ -439,11 +468,11 @@ def run(
         words = element_storage.unpack(
             source, target, request["inputs"]["srcBinding"]["values"]
         )
-        if kernel == copy_packages.VECTOR:
+        if kernel in {copy_packages.VECTOR, copy_packages.WIDE}:
             result = [
                 copy_evidence.cast_word(word, source, destination) for word in words
             ]
-            result += initial[threads:]
+            result += initial[len(words) :]
         else:
             metadata = copy_layout.validate(
                 {name: array[i] for i, name in enumerate(memory)}, threads, dtype=source
@@ -469,11 +498,12 @@ def run(
         },
     )
     monkeypatch.setattr(copy_dispatch, "execute", execute)
-    workgroups = (
-        [threads, 1, 1]
-        if kernel == copy_packages.VECTOR
-        else [(shape[-1] + 1) // 2, shape[-2], math.prod(shape[:-2])]
-    )
+    if kernel == copy_packages.VECTOR:
+        workgroups = [threads, 1, 1]
+    elif kernel == copy_packages.WIDE:
+        workgroups = copy_dispatch.wide_launch(entry, len(values))["workgroupCount"]
+    else:
+        workgroups = [(shape[-1] + 1) // 2, shape[-2], math.prod(shape[:-2])]
     launch = runtime.Launch(
         (ctypes.c_uint32 * 3)(*workgroups), (ctypes.c_uint32 * 3)(1, 1, 1)
     )
@@ -586,6 +616,96 @@ def test_vector_layout_rejections():
     memory["size"][0] = 2
     with pytest.raises(ValueError, match="size does not match"):
         copy_dispatch.validate_vector(supplied, 3, execution, "int8", "int16")
+
+
+@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize(
+    ("entry", "count", "grid"),
+    (
+        # Two uint32 elements per invocation, the last invocation partial.
+        ("v2_copyint8float32", 2 * 65535 + 7, [65535, 2, 1]),
+        # Eight Boolean destinations per invocation.
+        ("v2_copyint32bool_", 8 * 65535 + 1, [65535, 2, 1]),
+        # One complex64 per invocation: whole rows only.
+        ("v2_copyint16complex64", 2 * 65535, [65535, 2, 1]),
+    ),
+)
+def test_wide_casts_cover_their_int64_size_over_an_exact_grid(
+    monkeypatch, tmp_path, target, entry, count, grid
+):
+    _, source, destination = copy_packages.signature(entry)
+    values = [(index % 251) - 125 for index in range(count)]
+    words, event, host = run(monkeypatch, tmp_path, target, entry, values)
+    assert host.dispatch_count == 1
+    assert event["workgroupCount"] == grid
+    assert event["threads"] == grid[0] * grid[1]
+    assert event["copyMetadata"]["elements"] == count
+    source_words = element_storage.buffer_words(
+        SimpleNamespace(
+            data=ctypes.addressof((element_storage.CTYPES[source] * count)(*values)),
+            count=count,
+        ),
+        source,
+    )
+    expected = [
+        copy_evidence.cast_word(word, source, destination) for word in source_words
+    ]
+    assert event["outputValues"] == expected
+    assert len(words) == count
+    assert copy_evidence.audit_event(event, native=False) == count
+    moved = json.loads(json.dumps(event))
+    moved["workgroupCount"] = [grid[0], grid[1] + 1, 1]
+    with pytest.raises(ValueError, match="Wide cast launch"):
+        copy_evidence.audit_event(moved, native=False)
+    resized = json.loads(json.dumps(event))
+    resized["copyMetadata"]["elements"] = count - 1
+    with pytest.raises(ValueError, match="Wide cast launch|readback extent"):
+        copy_evidence.audit_event(resized, native=False)
+
+
+def test_wide_cast_layout_rejections():
+    count = 2 * 65535 + 3
+    array, memory, threads = native_buffers("v2_copy", "int8", "float32", [1] * count)
+    supplied = {name: array[i] for i, name in enumerate(memory)}
+    execution = copy_dispatch.wide_launch("v2_copyint8float32", count)
+    assert execution == {"workgroupCount": [65535, 2, 1], "workgroupSize": [1, 1, 1]}
+    assert threads == 2 * 65535
+    metadata = copy_dispatch.validate(
+        "v2_copyint8float32", supplied, threads, execution
+    )
+    assert metadata == {
+        "kernel": "v2_copy",
+        "source": "int8",
+        "destination": "float32",
+        "elements": count,
+        "workPerThread": 2,
+    }
+    with pytest.raises(ValueError, match="launch does not match"):
+        copy_dispatch.validate(
+            "v2_copyint8float32",
+            supplied,
+            threads,
+            {**execution, "workgroupCount": [65535, 3, 1]},
+        )
+    with pytest.raises(ValueError, match="size does not match"):
+        copy_dispatch.validate("v2_copyint8float32", supplied, threads - 1, execution)
+    # The narrow kernel's uint32 size is not a wide launch's int64 one.
+    with pytest.raises(ValueError, match="type, extent"):
+        copy_dispatch.validate("v_copyint8float32", supplied, 3, execution)
+    memory["size"][0] = count - 1
+    with pytest.raises(ValueError, match="type, extent"):
+        copy_dispatch.validate("v2_copyint8float32", supplied, threads, execution)
+    # A one-element destination covers whole rows of 65535 groups only.
+    array, memory, _ = native_buffers("v2_copy", "int8", "complex64", [0] * (2 * 65535))
+    supplied = {name: array[i] for i, name in enumerate(memory)}
+    memory["size"][0] = 2 * 65535 - 1
+    with pytest.raises(ValueError, match="whole rows"):
+        copy_dispatch.validate("v2_copyint8complex64", supplied, 2 * 65535, execution)
+    # Each launch stays within the host's sixteen rows.
+    with pytest.raises(ValueError, match="exceeds the host contract"):
+        copy_dispatch.wide_launch(
+            "v2_copyint8float32", wide_vectors.max_elements(2) + 1
+        )
 
 
 def test_audit_derives_the_cached_package_and_checks_native_modules(

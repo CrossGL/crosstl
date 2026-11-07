@@ -9,6 +9,10 @@ whether the promoted result is nonzero. Floating and complex operands are
 checked by package and native identity like the prebuilt float families;
 their values are compared with the CPU results by the upstream tests
 themselves.
+
+A wide (``v2``) dispatch records its element count and work per thread in its
+metadata; its geometry must be the exact grid ``wide_vectors`` derives from
+that count, and its operands and results are checked like a narrow launch's.
 """
 
 import ctypes
@@ -27,6 +31,7 @@ from demos.integrations.mlx.portable_host.elementwise_dispatch import (
     broadcast,
     extents,
     operands,
+    wide_launch,
 )
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     BINARY_KERNELS,
@@ -39,8 +44,10 @@ from demos.integrations.mlx.portable_host.elementwise_packages import (
 )
 from demos.integrations.mlx.portable_host.elementwise_packages import (
     ElementwisePackageCache,
+    is_wide,
     operand_types,
     signature,
+    work_per_thread,
 )
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_native_execution,
@@ -166,25 +173,35 @@ def audit_event(event, cache=None, *, native=True):
     entry, target = event["entry"], event["target"]
     kernel, operation, source, destination = signature(entry)
     metadata = event["elementwiseMetadata"]
+    threads = event["threads"]
+    expected = {
+        "kernel": kernel,
+        "operation": operation,
+        "source": source,
+        "destination": destination,
+    }
+    elements, launch = threads, [threads, 1, 1]
+    if is_wide(entry):
+        elements = metadata.get("elements")
+        expected.update(elements=elements, workPerThread=work_per_thread(entry))
+        launch = wide_launch(entry, elements)["workgroupCount"]
+        require(
+            threads == launch[0] * launch[1] and event["workgroupCount"] == launch,
+            "Elementwise wide launch does not match its size",
+        )
     require(
-        metadata == {
-            "kernel": kernel,
-            "operation": operation,
-            "source": source,
-            "destination": destination,
-        },
+        metadata == expected,
         "Elementwise event metadata does not match its entry",
     )
-    threads = event["threads"]
     if recomputable(entry):
         names, _ = operands(kernel)
-        counts = extents(kernel, threads)
+        counts = extents(kernel, elements)
         values, outputs = event["operandValues"], event["outputValues"]
         require(
             set(values) == set(names)
             and all(len(values[name]) == counts[name] for name in names)
-            and len(outputs) == threads
-            and event["initialValues"] == guard_words(destination, threads),
+            and len(outputs) == elements
+            and event["initialValues"] == guard_words(destination, elements),
             "Elementwise readback extent differs",
         )
         uploads = [*event["inputs"].values()]
@@ -194,19 +211,19 @@ def audit_event(event, cache=None, *, native=True):
             packet(
                 destination,
                 target,
-                guard_words(destination, threads) + guard_words(destination),
+                guard_words(destination, elements) + guard_words(destination),
             ),
         ):
             require(value in uploads, "Elementwise upload differs from its values")
         expected = expected_words(
-            kernel, operation, source, destination, broadcast(kernel, values, threads)
+            kernel, operation, source, destination, broadcast(kernel, values, elements)
         )
         for index, (actual, wanted) in enumerate(zip(outputs, expected)):
             require(
                 actual == wanted,
                 f"Elementwise result {index} of {entry} differs from its operands",
             )
-        payload = native_bytes(CTYPES[destination], threads, outputs)
+        payload = native_bytes(CTYPES[destination], elements, outputs)
         require(
             hashlib.sha256(payload).hexdigest() == event.get("outputHash"),
             "Elementwise host output hash changed",
@@ -227,7 +244,7 @@ def audit_event(event, cache=None, *, native=True):
             == {"opengl": "main", "directx": "CSMain"}.get(target, entry)
             and request["dispatch"]["workgroupCount"]
             == event["workgroupCount"]
-            == [threads, 1, 1]
+            == launch
             and request["dispatch"]["workgroupSize"]
             == event["workgroupSize"]
             == [1, 1, 1]
@@ -235,7 +252,7 @@ def audit_event(event, cache=None, *, native=True):
             "Elementwise native request changed",
         )
         audit_native_execution(event)
-    return threads
+    return elements
 
 
 def audit_lazy_events(trace, mlx_root, packages, target, installed):

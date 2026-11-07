@@ -1657,11 +1657,12 @@ def test_unary_adapter_definitions_match_packages():
         "void dispatch_copy_into(", 1
     )[0]
     assert "in.data_size() > 65535" not in unary
-    assert "first < in.data_size()" in unary
+    launches = "vector_launches(in.data_size(), per_thread, entry_available(wide))"
+    assert launches in unary
     assert "first * in.itemsize()" in unary
     assert "first * out.itemsize()" in unary
     assert unary.index("exceeds its allocation") < unary.index("require_entry(entry)")
-    assert unary.index("require_entry(entry)") < unary.index("first < in.data_size()")
+    assert unary.index("require_entry(entry)") < unary.index(launches)
     assert "!in.flags().contiguous" in source
 
 

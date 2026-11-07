@@ -18,6 +18,7 @@ from demos.integrations.mlx.portable_host import (
 )
 from demos.integrations.mlx.portable_host import selection_workloads as workloads
 from demos.integrations.mlx.portable_host import verify_selection as proof
+from demos.integrations.mlx.portable_host import wide_vectors
 from tests.ci_helpers import assert_paths_covered
 
 
@@ -348,14 +349,14 @@ def test_selection_callback_contract(host, monkeypatch, entry, fault):
     )
 
 
-def synthetic_evidence(target):
+def synthetic_evidence(target, wide=True):
     records, trace = [], []
     for case in workloads.cases():
         arrays = workloads.operands(np, case)
         result = np.where(
             arrays[0], arrays[1].astype(case["dtype"]), arrays[2].astype(case["dtype"])
         )
-        entries = workloads.expected_entries(np, case)
+        entries = workloads.expected_entries(np, case, wide=wide)
         records.append(
             {
                 **case,
@@ -379,10 +380,23 @@ def synthetic_evidence(target):
             elif case["dtype"] == "bool_" and target != "metal":
                 guard = [int(v) for v in guard]
             flat = result.reshape(-1)
-            chunks = -(-flat.size // workloads.CHUNK)
-            for index in range(chunks):
-                part = flat[index * workloads.CHUNK : (index + 1) * workloads.CHUNK]
-                trace[len(trace) - chunks + index].update(
+            launches = workloads.selection_launches(case, flat.size, wide=wide)
+            for index, (_, first, size, is_wide) in enumerate(launches):
+                part = flat[first : first + size]
+                event = trace[len(trace) - len(launches) + index]
+                if is_wide:
+                    columns, rows = wide_vectors.grid(size, 2)
+                    event.update(
+                        target=target,
+                        threads=columns * rows,
+                        workgroupCount=[columns, rows, 1],
+                        workgroupSize=[1, 1, 1],
+                        dispatchVersion=runtime.DISPATCH_VERSION,
+                        elementwiseMetadata={"elements": size, "workPerThread": 2},
+                        outputValues=workloads.words(np, part),
+                    )
+                    continue
+                event.update(
                     target=target,
                     threads=part.size,
                     workgroupCount=[part.size, 1, 1],
@@ -440,12 +454,49 @@ def test_selection_requires_exact_evidence(target, fault):
     else:
         workloads.validate(records, trace, native=True)
         assert len(records) == 46
-        # The chunked case runs as three consecutive v_Select launches.
+        # The chunked case runs as one wide v2_Select launch of 131077
+        # elements, two per invocation over a 65535 x 2 grid.
         chunked = next(item for item in records if item["layout"] == "chunked")
-        assert chunked["dispatchCount"] == 3
+        assert chunked["dispatchCount"] == 1
+        assert [event for event in trace if event["entry"] == "v2_Selectfloat32"] == [
+            trace[-1]
+        ]
+        assert trace[-1]["workgroupCount"] == [65535, 2, 1]
         for record in records:
             record["dispatchCount"] = 0
         workloads.validate(records, [], native=False)
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "values", "grid", "threads", "elements", "entry", "narrow"]
+)
+def test_wide_selection_requires_its_exact_grid_and_readback(fault):
+    records, trace = synthetic_evidence("metal")
+    wide = trace[-1]
+    if fault == "values":
+        wide["outputValues"][70000] ^= 1
+    elif fault == "grid":
+        wide["workgroupCount"] = [65535, 3, 1]
+    elif fault == "threads":
+        wide["threads"] -= 1
+    elif fault == "elements":
+        wide["elementwiseMetadata"]["elements"] -= 1
+    elif fault == "entry":
+        wide["entry"] = "v_Selectfloat32"
+    elif fault == "narrow":
+        # A host without the pinned source runs three narrow launches instead.
+        records, trace = synthetic_evidence("metal", wide=False)
+        chunked = next(item for item in records if item["layout"] == "chunked")
+        assert chunked["dispatchCount"] == 3
+        assert [event["threads"] for event in trace[-3:]] == [65535, 65535, 7]
+        with pytest.raises(ValueError, match="Selection"):
+            workloads.validate(records, trace, native=True)
+        return
+    if fault:
+        with pytest.raises(ValueError, match="Selection"):
+            workloads.validate(records, trace, native=True)
+    else:
+        workloads.validate(records, trace, native=True)
 
 
 def test_selection_float_contract_preserves_finite_bits_and_classifies_nan():
@@ -747,21 +798,40 @@ def test_parent_requires_complete_worker_evidence(tmp_path, monkeypatch, fault):
             )
         return SimpleNamespace(returncode=0)
 
+    audited = []
+
+    def audit_lazy(trace, root, packages, target, installed):
+        # test_portable_elementwise audits each wide event itself; the parent
+        # must hand it exactly the chunked case's wide selection and count it.
+        events = [
+            event
+            for event in trace
+            if event["entry"] in proof.elementwise_evidence.ENTRIES
+            and event["entry"] not in installed
+        ]
+        assert [event["entry"] for event in events] == ["v2_Selectfloat32"]
+        audited.extend(events)
+        return events
+
     monkeypatch.setattr(proof.subprocess, "run", execute)
+    monkeypatch.setattr(proof.elementwise_evidence, "audit_lazy_events", audit_lazy)
     if fault:
         with pytest.raises((RuntimeError, ValueError)):
             proof.verify(args)
         assert not (args.output_dir / "evidence.json").exists()
     else:
         evidence = proof.verify(args)
+        assert len(audited) == 1
         assert evidence["casesPerPath"] == 46 and evidence["absoluteCasesPerPath"] == 24
         assert (
             evidence["fullTranslatedBackend"] is False
             and evidence["fullUpstreamSuite"] is False
         )
+        # The wide selection is lazy: its audit checks its package and native
+        # modules in place of the installed families' identity checks.
         assert (
-            len(verified_identity)
-            == len(verified_artifacts)
+            len(verified_identity) + len(audited)
+            == len(verified_artifacts) + len(audited)
             == evidence["dispatchCount"]
         )
         assert set(evidence["negativeChecks"]) == set(proof.NEGATIVE_CHECKS)

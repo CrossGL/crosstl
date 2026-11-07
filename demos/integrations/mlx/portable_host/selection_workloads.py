@@ -2,13 +2,28 @@
 
 from collections import Counter
 
+from demos.integrations.mlx.portable_host import wide_vectors
 from demos.integrations.mlx.portable_host.binary_workloads import mlx_operand
 from demos.integrations.mlx.portable_host.packages import BOOLEAN_COPY_ENTRY, COPY_ENTRY
 
 # The host runs a selection as consecutive v_Select launches of at most this
-# many elements; the chunked case spans three of them.
-CHUNK = 65535
+# many elements, or, where it serves the pinned source, a longer one as wide
+# v2_Select launches (wide_vectors); the chunked case spans three narrow
+# launches or one wide one.
+CHUNK = wide_vectors.MAX_GROUPS
 CHUNKED_SIZE = 2 * CHUNK + 7
+# ternary_v2 reads WorkPerThread<T>::n elements of each type per invocation.
+PER_THREAD = {"float32": 2, "int32": 2, "uint32": 2, "bool_": 8}
+
+
+def selection_launches(case, count, *, wide):
+    """``(entry, first, elements, wide)`` of each selection launch of ``case``."""
+    return [
+        (("v2_Select" if is_wide else "v_Select") + case["dtype"], first, size, is_wide)
+        for first, size, is_wide in wide_vectors.launches(
+            count, PER_THREAD[case["dtype"]], wide=wide
+        )
+    ]
 
 
 def cases():
@@ -137,7 +152,12 @@ def equal_words(actual, expected, dtype):
     return True
 
 
-def expected_entries(np, case):
+def expected_entries(np, case, *, wide=True):
+    """The entries a native selection of ``case`` dispatches, in order.
+
+    ``wide`` says the host serves the wide selections, as a native host with
+    the pinned source does.
+    """
     arrays = operands(np, case)
     shape = np.broadcast_shapes(*(value.shape for value in arrays))
     if not np.prod(shape):
@@ -157,8 +177,8 @@ def expected_entries(np, case):
         for value in converted
         if not value.flags.c_contiguous
     )
-    chunks = -(-int(np.prod(shape)) // CHUNK)
-    return entries + ["v_Select" + case["dtype"]] * chunks
+    launches = selection_launches(case, int(np.prod(shape)), wide=wide)
+    return entries + [entry for entry, *_ in launches]
 
 
 def validate(records, trace, *, native):
@@ -198,8 +218,30 @@ def validate(records, trace, *, native):
         raise ValueError("Selection trace contains unexpected dispatches")
 
 
+def _validate_wide(np, case, event, entry, part):
+    """A wide v2_Select launch reads back its exact part over its exact grid."""
+    from demos.integrations.mlx.portable_host.runtime import DISPATCH_VERSION
+
+    columns, rows = wide_vectors.grid(part.size, PER_THREAD[case["dtype"]])
+    expected = words(np, part)
+    if case["dtype"] == "bool_":
+        expected = [int(value) for value in expected]
+    metadata = event.get("elementwiseMetadata", {})
+    if (
+        event["entry"] != entry
+        or event["threads"] != columns * rows
+        or event.get("dispatchVersion") != DISPATCH_VERSION
+        or event["workgroupCount"] != [columns, rows, 1]
+        or event["workgroupSize"] != [1, 1, 1]
+        or metadata.get("elements") != part.size
+        or metadata.get("workPerThread") != PER_THREAD[case["dtype"]]
+        or not equal_words(event.get("outputValues", []), expected, case["dtype"])
+    ):
+        raise ValueError("Selection native readback differs")
+
+
 def _validate_chunks(np, case, events, entries, expected):
-    """Each v_Select launch reads back its consecutive chunk of the result."""
+    """Each selection launch reads back its consecutive part of the result."""
     from demos.integrations.mlx.portable_host.runtime import (
         BOOLEAN_GUARD,
         COPY_GUARD,
@@ -207,9 +249,16 @@ def _validate_chunks(np, case, events, entries, expected):
     )
 
     flat = expected.reshape(-1)
-    chunks = -(-flat.size // CHUNK)
-    for index, event in enumerate(events[len(events) - chunks :]):
-        part = flat[index * CHUNK : (index + 1) * CHUNK]
+    launches = selection_launches(
+        case, flat.size, wide=any(entry.startswith("v2_") for entry in entries)
+    )
+    for event, (entry, first, size, wide) in zip(
+        events[len(events) - len(launches) :], launches
+    ):
+        part = flat[first : first + size]
+        if wide:
+            _validate_wide(np, case, event, entry, part)
+            continue
         guard = BOOLEAN_GUARD if case["dtype"] == "bool_" else COPY_GUARD
         if case["dtype"] == "float32":
             guard = np.asarray(guard, dtype="uint32").view("float32").tolist()
@@ -224,7 +273,7 @@ def _validate_chunks(np, case, events, entries, expected):
             else np.asarray(event["selectionValues"], dtype=case["dtype"])
         )
         if (
-            event["entry"] != entries[-1]
+            event["entry"] != entry
             or event["threads"] != part.size
             or event.get("dispatchVersion") != DISPATCH_VERSION
             or event.get("selectionGuardValues") != guard

@@ -15,16 +15,28 @@ float32 pair on every target) and the ``ToFP8`` and ``FromFP8`` conversions
 ``fast::ConvertFP8`` launches. The per-operation float profiles are the ones the complete
 binary and unary kernel proofs pin to reproduce Metal, including the atan2
 profile of the complex logarithms and inverse sines and cosines.
+
+Every one of these vectors, the four installed selections included, also has
+its wide instantiation: ``v2_``, ``vv2_``, ``sv2_``, ``vs2_`` and
+``v2_Select`` (``unary_v2``, ``binary_vv2``, ``binary_sv2``, ``binary_vs2``
+and ``ternary_v2``), which the host launches over 2-D grids for vectors of more
+than 65535 elements (``wide_vectors``). A wide entry has its narrow entry's
+signature and profiles; on OpenGL its int64 element offsets carry host-enforced
+``[0, INT32_MAX]`` bounds, which ``wide_vectors.max_elements`` keeps.
 """
+
+import ctypes
 
 from demos.integrations.mlx.portable_host.element_storage import (
     COMPLEX,
+    CTYPES,
     DTYPES,
     FLOATING,
 )
 from demos.integrations.mlx.portable_host.lazy_kernel_cache import (
     KernelRecipe,
     LazyKernelCache,
+    index_range_assertions,
 )
 from demos.integrations.mlx.portable_host.packages import (
     BINARY_SOURCE,
@@ -182,6 +194,37 @@ ENTRIES = {
         for dtype in TERNARY_TYPES
     },
 }
+# The wide instantiation's prefix of each narrow kernel; ternary vectors share
+# the unary prefix.
+WIDE_PREFIXES = {
+    UNARY: "v2_",
+    BINARY: "vv2_",
+    SCALAR_VECTOR: "sv2_",
+    VECTOR_SCALAR: "vs2_",
+    TERNARY: "v2_",
+}
+_NARROW_PREFIXES = {**{kernel: kernel for kernel in WIDE_PREFIXES}, TERNARY: UNARY}
+_NARROW = {
+    **ENTRIES,
+    **{
+        name: (TERNARY, "Select", dtype, dtype)
+        for name, dtype in SELECTION_ENTRIES.items()
+    },
+}
+# Each wide entry and the narrow entry it widens.
+WIDE_ENTRIES = {
+    WIDE_PREFIXES[kernel] + name[len(_NARROW_PREFIXES[kernel]) :]: name
+    for name, (kernel, *_) in _NARROW.items()
+}
+ENTRIES.update({wide: _NARROW[narrow] for wide, narrow in WIDE_ENTRIES.items()})
+_WIDE_BY_NARROW = {narrow: wide for wide, narrow in WIDE_ENTRIES.items()}
+# The subscripts of the wide kernels that OpenGL narrows to a signed int:
+# every element offset and, in ternary_v2, the operand indices it selects.
+WIDE_INDEX_EXPRESSIONS = {
+    **dict.fromkeys(BINARY_KERNELS, ("offset + i",)),
+    UNARY: ("offset + i",),
+    TERNARY: ("offset + i", "bidx", "cidx"),
+}
 PROFILES = (
     ("binary32_fma_profile", "rne-flush"),
     ("binary32_sqrt_profile", "flush-subnormals"),
@@ -246,12 +289,50 @@ def operation_profiles(kernel, operation, dtype):
 
 
 def options(target, entry):
-    """The project source options of ``entry``; every target shares them."""
+    """The project source options of ``entry``; every target shares them.
+
+    A wide entry adds OpenGL's host-enforced element offset bounds.
+    """
     kernel, operation, dtype, _ = signature(entry)
-    return "".join(
-        f'{option} = "{value}"\n'
-        for option, value in (*PROFILES, *operation_profiles(kernel, operation, dtype))
+    bounds = (
+        index_range_assertions(SOURCES[kernel], WIDE_INDEX_EXPRESSIONS[kernel])
+        if target == "opengl" and entry in WIDE_ENTRIES
+        else ""
     )
+    return (
+        "".join(
+            f'{option} = "{value}"\n'
+            for option, value in (
+                *PROFILES,
+                *operation_profiles(kernel, operation, dtype),
+            )
+        )
+        + bounds
+    )
+
+
+def is_wide(entry):
+    """Whether ``entry`` is a wide (``v2``) vector."""
+    return entry in WIDE_ENTRIES
+
+
+def wide_entry(entry):
+    """The wide entry that widens the narrow vector ``entry``."""
+    try:
+        return _WIDE_BY_NARROW[entry]
+    except (KeyError, TypeError) as error:
+        raise ValueError("Unknown narrow elementwise entry") from error
+
+
+def work_per_thread(entry):
+    """``WorkPerThread<T>::n`` of a wide entry: eight bytes of its operand type.
+
+    ``T`` is the input of a unary kernel and the operand of a binary or
+    ternary one.
+    """
+    if entry not in WIDE_ENTRIES:
+        raise ValueError("Unknown wide elementwise entry")
+    return 8 // ctypes.sizeof(CTYPES[signature(entry)[2]])
 
 
 def _kernel_signature(*kernels):

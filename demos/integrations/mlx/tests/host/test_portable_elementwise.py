@@ -40,10 +40,74 @@ def pinned_vectors():
     return names
 
 
-def pinned_selections():
+def pinned_selections(prefix="v_Select"):
     path = CONTRACTS / "ternary.current-tree.translation.json"
     entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
-    return {entry for entry in entries if entry.startswith("v_Select")}
+    return {entry for entry in entries if entry.startswith(prefix)}
+
+
+def pinned_wide_vectors():
+    names = set()
+    for source in ("unary", "binary"):
+        path = CONTRACTS / f"{source}.current-tree.translation.json"
+        entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
+        names |= {
+            entry for entry in entries if re.match(r"(?:v2|vv2|sv2|vs2)_[A-Z]", entry)
+        }
+    return names
+
+
+def test_wide_entries_are_every_pinned_wide_vector_instantiation():
+    wide = elementwise_packages.WIDE_ENTRIES
+    # unary_v2, binary_vv2/sv2/vs2 and ternary_v2 instantiate exactly the
+    # narrow operations and types, the installed selections included.
+    assert set(wide) == pinned_wide_vectors() | pinned_selections("v2_Select")
+    assert len(wide) == 910 and len(pinned_selections("v2_Select")) == 13
+    narrow = {
+        name: value
+        for name, value in elementwise_packages.ENTRIES.items()
+        if name not in wide
+    }
+    assert set(wide.values()) == set(narrow) | set(packages.SELECTION_ENTRIES)
+    for name, base in wide.items():
+        assert elementwise_packages.wide_entry(base) == name
+        assert elementwise_packages.is_wide(name) and not elementwise_packages.is_wide(
+            base
+        )
+        assert elementwise_packages.signature(name) == (
+            elementwise_packages.signature(base)
+            if base in narrow
+            else ("ternary_v", "Select", base[8:], base[8:])
+        )
+        for target in TARGETS:
+            base_options = (
+                elementwise_packages.options(target, base) if base in narrow else None
+            )
+            options = elementwise_packages.options(target, name)
+            if base_options is not None:
+                assert options.startswith(base_options)
+            bounds = "[[project.index_range_assertions]]" in options
+            assert bounds == (target == "opengl")
+    # WorkPerThread<T>::n: eight bytes of the unary input or the operand type.
+    work = elementwise_packages.work_per_thread
+    assert work("v2_Absint8int8") == 8 and work("v2_Realcomplex64float32") == 1
+    assert work("v2_ToFP8float32uint8") == 2 and work("v2_FromFP8uint8float32") == 8
+    assert work("vv2_Lessfloat16") == 4 and work("vs2_Addint64") == 1
+    assert work("v2_Selectbool_") == 8 and work("v2_Selectcomplex64") == 1
+    options = elementwise_packages.options("opengl", "v2_Selectint16")
+    assert [line for line in options.splitlines() if line.startswith("expression")] == [
+        'expression = "offset + i"',
+        'expression = "bidx"',
+        'expression = "cidx"',
+    ]
+    assert f"maximum = {2**31 - 1}" in options
+    for entry in ("v_Absint8int8", "sv2_Selectint8", "v2_copyint8int8", None):
+        with pytest.raises(ValueError, match="Unknown wide elementwise entry"):
+            work(entry)
+    with pytest.raises(ValueError, match="Unknown narrow elementwise entry"):
+        elementwise_packages.wide_entry("v2_Absint8int8")
+    # Every wide entry is on demand: only vectors over 65535 elements reach one.
+    assert not elementwise_warm.WARMED & set(wide)
 
 
 def test_entries_are_every_pinned_vector_instantiation():
@@ -52,9 +116,10 @@ def test_entries_are_every_pinned_vector_instantiation():
     selections = pinned_selections()
     assert len(selections) == 13
     lazy_selections = selections - set(packages.SELECTION_ENTRIES)
-    assert set(elementwise_packages.ENTRIES) == pinned | lazy_selections
+    narrow = set(elementwise_packages.ENTRIES) - set(elementwise_packages.WIDE_ENTRIES)
+    assert narrow == pinned | lazy_selections
     assert len(portable) == 891 and len(pinned) - len(portable) == 6
-    assert len(lazy_selections) == 9 and len(elementwise_packages.ENTRIES) == 906
+    assert len(lazy_selections) == 9 and len(narrow) == 906
     # binary_sv and binary_vs instantiate exactly the vv_ operations and types.
     binary = {name[3:] for name in pinned if name.startswith("vv_")}
     for kernel in ("sv_", "vs_"):
@@ -168,11 +233,18 @@ def test_profiles_follow_the_kernel_proofs(entry, profiles):
         assert "index_range" not in text
 
 
+def size_type(entry):
+    return "int64" if elementwise_packages.is_wide(entry) else "uint32"
+
+
 def native_buffers(entry, operands, *, donate=False):
-    """A callback's buffers for one vector: inputs, output and size."""
+    """A callback's buffers for one vector: inputs, output and size.
+
+    A wide entry's size is int64, as backend.cpp passes it.
+    """
     kernel, _, source, destination = elementwise_packages.signature(entry)
     names, output = elementwise_dispatch.operands(kernel)
-    types = {**elementwise_packages.operand_types(entry), "size": "uint32"}
+    types = {**elementwise_packages.operand_types(entry), "size": size_type(entry)}
     threads = max(len(operands[name]) for name in names)
     memory = {
         name: (element_storage.CTYPES[types[name]] * len(operands[name]))(
@@ -185,7 +257,7 @@ def native_buffers(entry, operands, *, donate=False):
     memory[output] = (
         memory[donor] if donate else (element_storage.CTYPES[destination] * threads)()
     )
-    memory["size"] = (ctypes.c_uint32 * 1)(threads)
+    memory["size"] = (element_storage.CTYPES[types["size"]] * 1)(threads)
     array = (runtime.Buffer * len(memory))(
         *(
             runtime.Buffer(
@@ -208,7 +280,7 @@ class FakeCache:
     def get(self, entry):
         kernel, _, _, _ = elementwise_packages.signature(entry)
         names, output = elementwise_dispatch.operands(kernel)
-        types = {**elementwise_packages.operand_types(entry), "size": "uint32"}
+        types = {**elementwise_packages.operand_types(entry), "size": size_type(entry)}
         prefix = "" if self.target == "metal" else entry.rstrip("_") + "_"
         bindings = []
         for name in (*names, output, "size"):
@@ -216,7 +288,7 @@ class FakeCache:
             physical = (
                 element_storage.packet(dtype, self.target, [])["dtype"]
                 if name != "size"
-                else "uint32"
+                else dtype
             )
             member = {"in": "in_", "out": "out_"}.get(name, name)
             layout = (
@@ -251,6 +323,12 @@ def run(
     kernel, operation, source, destination = elementwise_packages.signature(entry)
     names, output = elementwise_dispatch.operands(kernel)
     array, memory, threads = native_buffers(entry, operands, donate=donate)
+    # ``threads`` is the element count; a wide launch runs its exact grid.
+    geometry = (
+        elementwise_dispatch.wide_launch(entry, threads)["workgroupCount"]
+        if elementwise_packages.is_wide(entry)
+        else [threads, 1, 1]
+    )
     host = SimpleNamespace(
         elementwise=FakeCache(target),
         target=target,
@@ -316,9 +394,11 @@ def run(
     )
     monkeypatch.setattr(elementwise_dispatch, "execute", execute)
     launch = runtime.Launch(
-        (ctypes.c_uint32 * 3)(threads, 1, 1), (ctypes.c_uint32 * 3)(1, 1, 1)
+        (ctypes.c_uint32 * 3)(*geometry), (ctypes.c_uint32 * 3)(1, 1, 1)
     )
-    elementwise_dispatch.dispatch(host, entry, array, len(memory), threads, launch)
+    elementwise_dispatch.dispatch(
+        host, entry, array, len(memory), geometry[0] * geometry[1], launch
+    )
     event = json.loads(host.trace.read_text().splitlines()[-1])
     return list(memory[output]), event, host
 

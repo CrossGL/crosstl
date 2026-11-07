@@ -10,7 +10,8 @@ use, so they are never trusted on name alone.
 The ``sv_`` and ``vs_`` scalar-operand vectors instantiate the same operations
 and types from the same ``binary.h`` templates. A test group reaches only a
 few of their 476 entries, so they stay on demand rather than doubling the
-translation every upstream job runs before its tests.
+translation every upstream job runs before its tests. So do the wide ``v2``
+vectors, which only vectors of more than 65535 elements reach.
 """
 
 import argparse
@@ -23,15 +24,16 @@ from demos.integrations.mlx.portable_host.elementwise_packages import (
     ENTRIES,
     SCALAR_VECTOR,
     VECTOR_SCALAR,
+    WIDE_ENTRIES,
     ElementwisePackageCache,
 )
 from demos.integrations.mlx.portable_host.lazy_kernel_cache import TARGETS
 
-# Every entry except the on-demand scalar-operand vectors.
+# Every entry except the on-demand scalar-operand and wide vectors.
 WARMED = frozenset(
     entry
     for entry, (kernel, *_) in ENTRIES.items()
-    if kernel not in {SCALAR_VECTOR, VECTOR_SCALAR}
+    if kernel not in {SCALAR_VECTOR, VECTOR_SCALAR} and entry not in WIDE_ENTRIES
 )
 
 

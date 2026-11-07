@@ -1,6 +1,8 @@
 """Dispatch checked casts and general copies through lazily translated kernels.
 
-The native host passes ``v_copy`` conversions of contiguous vectors and
+The native host passes ``v_copy`` conversions of contiguous vectors, their
+wide ``v2_copy`` form for a vector of more than 65535 elements over the exact
+2-D grid ``wide_vectors`` derives from its int64 ``size``, and
 ``ggn2_dynamic_copy`` copies between strided layouts for every GPU dtype,
 including the narrow integers, the 16-bit float pairs and ``complex64`` that
 no prebuilt family covers. Every buffer is checked against its kernel's source contract
@@ -17,7 +19,9 @@ from demos.integrations.mlx.portable_host import copy_layout
 from demos.integrations.mlx.portable_host.copy_packages import (
     ENTRY_PREFIXES,
     VECTOR,
+    WIDE,
     signature,
+    work_per_thread,
 )
 from demos.integrations.mlx.portable_host.element_storage import (
     CTYPES,
@@ -32,9 +36,11 @@ from demos.integrations.mlx.portable_host.element_storage import (
 )
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.trace_records import write_trace
+from demos.integrations.mlx.portable_host.wide_vectors import grid
 
-__all__ = ("ENTRY_PREFIXES", "dispatch", "validate_vector")
-# backend.cpp splits casts into launches of at most 65535 one-thread groups.
+__all__ = ("ENTRY_PREFIXES", "dispatch", "validate_vector", "wide_launch")
+# backend.cpp splits narrow casts into launches of at most 65535 one-thread
+# groups.
 MAX_VECTOR = 65535
 METADATA_CTYPES = {
     "uint32": ctypes.c_uint32,
@@ -50,27 +56,66 @@ def _overlap(first, second, first_size, second_size):
     )
 
 
-def validate_vector(buffers, threads, execution, source, destination):
-    """Check a ``v_copy`` launch: one invocation per element of both vectors."""
-    if type(threads) is not int or not 0 < threads <= MAX_VECTOR:
+def wide_launch(entry, elements):
+    """The exact launch of wide cast ``entry`` over ``elements`` elements."""
+    columns, rows = grid(elements, work_per_thread(entry))
+    return {"workgroupCount": [columns, rows, 1], "workgroupSize": [1, 1, 1]}
+
+
+def _cast_elements(entry, size, threads):
+    """The elements of a cast and its exact launch, from its ``size`` buffer.
+
+    ``v_copy`` runs one invocation per element of a ``uint32`` size;
+    ``v2_copy`` runs every invocation of the grid ``wide_launch`` derives
+    from its ``int64`` size.
+    """
+    wide = signature(entry)[0] == WIDE
+    kind = "int64" if wide else "uint32"
+    if (
+        size.dtype != kind.encode("ascii")
+        or not size.data
+        or size.data % ctypes.sizeof(METADATA_CTYPES[kind])
+        or size.count != 1
+        or size.output != 0
+    ):
+        raise ValueError("Cast buffer type, extent, alignment or direction differs")
+    elements = ctypes.cast(size.data, ctypes.POINTER(METADATA_CTYPES[kind]))[0]
+    if not wide:
+        if elements != threads:
+            raise ValueError("Cast size does not match the launch")
+        return elements, {"workgroupCount": [threads, 1, 1], "workgroupSize": [1, 1, 1]}
+    launch = wide_launch(entry, elements)
+    columns, rows, _ = launch["workgroupCount"]
+    if threads != columns * rows:
+        raise ValueError("Cast size does not match the launch")
+    return elements, launch
+
+
+def validate_vector(buffers, threads, execution, source, destination, entry=None):
+    """Check a ``v_copy`` or ``v2_copy`` launch: every element exactly once.
+
+    ``v_copy`` covers at most 65535 elements, one per invocation; ``v2_copy``
+    covers its ``size`` over the grid ``wide_launch`` derives from it.
+    """
+    entry = entry or f"{VECTOR}{source}{destination}"
+    wide = signature(entry)[0] == WIDE
+    if type(threads) is not int or threads < 1 or (not wide and threads > MAX_VECTOR):
         raise ValueError("Cast size exceeds the host contract")
     if set(buffers) != {"src", "dst", "size"}:
         raise ValueError("Cast buffers do not match their kernel")
-    expected = {"src": (source, 0), "dst": (destination, 1), "size": ("uint32", 0)}
-    for name, buffer in buffers.items():
-        dtype, output = expected[name]
-        size = ctypes.sizeof(CTYPES.get(dtype) or METADATA_CTYPES[dtype])
+    elements, launch = _cast_elements(entry, buffers["size"], threads)
+    for name, (dtype, output) in {"src": (source, 0), "dst": (destination, 1)}.items():
+        buffer = buffers[name]
+        size = ctypes.sizeof(CTYPES[dtype])
         if (
             buffer.dtype != dtype.encode("ascii")
             or not buffer.data
             or buffer.data % size
-            or buffer.count != (1 if name == "size" else threads)
+            or buffer.count != elements
             or buffer.output != output
         ):
             raise ValueError("Cast buffer type, extent, alignment or direction differs")
-    if ctypes.cast(buffers["size"].data, ctypes.POINTER(ctypes.c_uint32))[0] != threads:
-        raise ValueError("Cast size does not match the launch")
-    if execution != {"workgroupCount": [threads, 1, 1], "workgroupSize": [1, 1, 1]}:
+    if execution != launch:
         raise ValueError("Cast launch does not match its vector")
     if _overlap(
         buffers["src"],
@@ -79,13 +124,18 @@ def validate_vector(buffers, threads, execution, source, destination):
         ctypes.sizeof(CTYPES[destination]),
     ):
         raise ValueError("Cast source and destination allocations overlap")
-    return {"kernel": VECTOR, "source": source, "destination": destination}
+    metadata = {"kernel": VECTOR, "source": source, "destination": destination}
+    if wide:
+        metadata.update(
+            kernel=WIDE, elements=elements, workPerThread=work_per_thread(entry)
+        )
+    return metadata
 
 
 def validate(entry, buffers, threads, execution):
     kernel, source, destination = signature(entry)
-    if kernel == VECTOR:
-        return validate_vector(buffers, threads, execution, source, destination)
+    if kernel in {VECTOR, WIDE}:
+        return validate_vector(buffers, threads, execution, source, destination, entry)
     if set(buffers) != set(copy_layout.DTYPES):
         raise ValueError("Copy buffers do not match their kernel")
     for name, buffer in buffers.items():
@@ -211,8 +261,8 @@ def dispatch(host, entry, buffers, count, threads, launch):
         raise RuntimeError("Native copy changed its output guard")
     words = words[: dst.count]
     written = (
-        range(threads)
-        if kernel == VECTOR
+        range(metadata.get("elements", threads))
+        if kernel in {VECTOR, WIDE}
         else set(copy_layout.destination_indices(metadata))
     )
     if len(written) != dst.count and any(

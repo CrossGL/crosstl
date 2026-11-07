@@ -55,6 +55,90 @@ CrosstlMlxLaunch elementwise_launch(uint64_t count) {
   return {{static_cast<uint32_t>(count), 1, 1}, {1, 1, 1}};
 }
 
+// Whether the host serves ``entry``; unlike require_entry, it does not refuse.
+bool entry_available(const std::string& entry) {
+  const auto available = entry_available_callback.load();
+  return available && available(entry.c_str()) == 1;
+}
+
+// unary_v2, binary_vv2/sv2/vs2 and ternary_v2 read N = WorkPerThread<T>::n
+// (eight bytes of T) elements per invocation from N * (x + grid.x * y) of a
+// 2-D grid and stop at their int64 size; with N == 1 an invocation writes its
+// element unconditionally. A wide launch covers at most 16 rows of 65535
+// one-thread groups, and a one-element kernel's whole rows only; the rest of
+// a vector, fewer than 65535 elements, runs through the narrow kernel.
+// wide_vectors.py mirrors this split exactly.
+constexpr uint64_t wide_max_groups = 65535;
+constexpr uint64_t wide_max_rows = 16;
+
+// One launch of a contiguous vector: its first element, its element count,
+// and whether it runs through the wide kernel.
+struct VectorLaunch {
+  uint64_t first;
+  uint64_t elements;
+  bool wide;
+};
+
+std::vector<VectorLaunch> vector_launches(uint64_t count, uint64_t per_thread, bool wide) {
+  if (per_thread != 1 && per_thread != 2 && per_thread != 4 && per_thread != 8) {
+    throw std::logic_error("CrossTL wide vectors read one, two, four or eight elements.");
+  }
+  std::vector<VectorLaunch> launches;
+  for (uint64_t first = 0; first < count;) {
+    const uint64_t remaining = count - first;
+    VectorLaunch launch{first, std::min(remaining, wide_max_groups), false};
+    if (wide && remaining > wide_max_groups) {
+      launch.wide = true;
+      launch.elements = std::min(remaining, wide_max_groups * wide_max_rows * per_thread);
+      if (per_thread == 1) {
+        launch.elements -= launch.elements % wide_max_groups;
+      }
+    }
+    launches.push_back(launch);
+    first += launch.elements;
+  }
+  return launches;
+}
+
+// The 2-D one-thread-group grid of a wide launch, and its invocation count.
+CrosstlMlxLaunch wide_launch(uint64_t elements, uint64_t per_thread, uint64_t& threads) {
+  const uint64_t needed = (elements + per_thread - 1) / per_thread;
+  const uint64_t columns = std::min(needed, wide_max_groups);
+  const uint64_t rows = (needed + columns - 1) / columns;
+  if (elements == 0 || rows > wide_max_rows || (per_thread == 1 && columns * rows != needed)) {
+    throw std::logic_error("CrossTL wide launch exceeds its bounds.");
+  }
+  threads = columns * rows;
+  return {{static_cast<uint32_t>(columns), static_cast<uint32_t>(rows), 1}, {1, 1, 1}};
+}
+
+// The size buffer of one vector launch: uint32 for the narrow kernels and
+// int64 for the wide ones, read from ``narrow`` or ``wide``.
+CrosstlMlxBuffer vector_size_buffer(const VectorLaunch& launch, uint32_t& narrow, int64_t& wide) {
+  narrow = static_cast<uint32_t>(launch.wide ? 0 : launch.elements);
+  wide = static_cast<int64_t>(launch.elements);
+  return launch.wide ? CrosstlMlxBuffer{"size", "int64", &wide, 1, 0}
+                     : CrosstlMlxBuffer{"size", "uint32", &narrow, 1, 0};
+}
+
+// Dispatches one vector launch of ``narrow`` or of its wide ``wide`` entry.
+int dispatch_vector(
+    const std::string& narrow,
+    const std::string& wide,
+    const VectorLaunch& launch,
+    uint64_t per_thread,
+    const CrosstlMlxBuffer* buffers,
+    uint32_t count,
+    char* error,
+    size_t capacity) {
+  uint64_t threads = launch.elements;
+  const auto geometry = launch.wide ? wide_launch(launch.elements, per_thread, threads)
+                                    : elementwise_launch(launch.elements);
+  return dispatch_callback.load()(
+      (launch.wide ? wide : narrow).c_str(), buffers, count, threads, &geometry, error,
+      capacity);
+}
+
 template <typename T>
 T scalar_cast(double value) {
   if constexpr (std::is_integral_v<T>) {
@@ -185,18 +269,23 @@ void dispatch_unary(
   require_entry(entry);
   mlx::core::set_unary_output_data(in, out);
   // Contiguous broadcasts and column-major arrays retain their stored layout.
-  for (uint64_t first = 0; first < in.data_size(); first += 65535) {
-    uint32_t size = static_cast<uint32_t>(
-        std::min<uint64_t>(65535, in.data_size() - first));
+  // unary_v2's T is the input type.
+  const std::string wide = std::string("v2_") + operation + dtype + out_type;
+  const uint64_t per_thread = 8 / in.itemsize();
+  for (const auto& launch :
+       vector_launches(in.data_size(), per_thread, entry_available(wide))) {
+    const uint64_t first = launch.first;
+    uint32_t size;
+    int64_t wide_size;
     CrosstlMlxBuffer buffers[] = {
-        {"in", dtype, const_cast<char*>(in.data<char>()) + first * in.itemsize(), size, 0},
-        {"out", out_type, out.data<char>() + first * out.itemsize(), size, 1},
-        {"size", "uint32", &size, 1, 0},
+        {"in", dtype, const_cast<char*>(in.data<char>()) + first * in.itemsize(),
+         launch.elements, 0},
+        {"out", out_type, out.data<char>() + first * out.itemsize(), launch.elements, 1},
+        vector_size_buffer(launch, size, wide_size),
     };
     char error[2048] = {};
-    const auto launch = elementwise_launch(size);
-    int status = dispatch_callback.load()(
-        entry.c_str(), buffers, 3, size, &launch, error, sizeof(error));
+    int status = dispatch_vector(
+        entry, wide, launch, per_thread, buffers, 3, error, sizeof(error));
     error[sizeof(error) - 1] = '\0';
     if (status != 0) {
       throw std::runtime_error(
@@ -1182,24 +1271,30 @@ void cast_elements(
   const char* destination_type = cast_type(out.dtype());
   std::string entry = std::string("v_copy") + source_type + destination_type;
   require_entry(entry);
-  // v_copy specializes one independent conversion per invocation.
-  for (uint64_t first = 0; first < count;) {
-    uint32_t size = static_cast<uint32_t>(
-        std::min<uint64_t>(count - first, 65535));
+  // v_copy specializes one independent conversion per invocation; a longer
+  // vector runs through copy_v2, whose N = WorkPerThread<U>::n is eight bytes
+  // of the destination type.
+  const std::string wide = std::string("v2_copy") + source_type + destination_type;
+  const uint64_t per_thread = 8 / out.itemsize();
+  for (const auto& launch :
+       vector_launches(count, per_thread, entry_available(wide))) {
+    uint32_t size;
+    int64_t wide_size;
     CrosstlMlxBuffer buffers[] = {
-        {"src", source_type, const_cast<uint8_t*>(in.data<uint8_t>()) + first * in.itemsize(), size, 0},
-        {"dst", destination_type, out.data<uint8_t>() + first * out.itemsize(), size, 1},
-        {"size", "uint32", &size, 1, 0},
+        {"src", source_type,
+         const_cast<uint8_t*>(in.data<uint8_t>()) + launch.first * in.itemsize(),
+         launch.elements, 0},
+        {"dst", destination_type, out.data<uint8_t>() + launch.first * out.itemsize(),
+         launch.elements, 1},
+        vector_size_buffer(launch, size, wide_size),
     };
     char error[2048] = {};
-    const auto launch = elementwise_launch(size);
-    int status = dispatch_callback.load()(
-        entry.c_str(), buffers, 3, size, &launch, error, sizeof(error));
+    int status = dispatch_vector(
+        entry, wide, launch, per_thread, buffers, 3, error, sizeof(error));
     error[sizeof(error) - 1] = '\0';
     if (status != 0) {
       throw std::runtime_error(std::string("CrossTL native cast failed: ") + error);
     }
-    first += size;
   }
 }
 
@@ -1414,25 +1509,30 @@ void dispatch_binary(
   }
   std::string entry = std::string(sv ? "sv_" : vs ? "vs_" : "vv_") + operation + dtype;
   require_entry(entry);
-  // Each launch specializes one independent element per invocation; a
-  // scalar operand is the same single element in every launch.
-  for (uint64_t first = 0; first < count;) {
-    uint32_t size = static_cast<uint32_t>(std::min<uint64_t>(count - first, 65535));
+  // Each launch specializes one independent element per invocation, or
+  // WorkPerThread<T>::n of the operand type in a wide launch; a scalar
+  // operand is the same single element in every launch.
+  const std::string wide = std::string(sv ? "sv2_" : vs ? "vs2_" : "vv2_") + operation + dtype;
+  const uint64_t per_thread = 8 / a.itemsize();
+  for (const auto& launch : vector_launches(count, per_thread, entry_available(wide))) {
+    const uint64_t first = launch.first;
+    const uint64_t elements = launch.elements;
+    uint32_t size;
+    int64_t wide_size;
     CrosstlMlxBuffer buffers[] = {
-        {"a", dtype, a.data<uint8_t>() + (sv ? 0 : first * a.itemsize()), sv ? 1u : size, 0},
-        {"b", dtype, b.data<uint8_t>() + (vs ? 0 : first * b.itemsize()), vs ? 1u : size, 0},
-        {"c", comparison ? "bool_" : dtype, out.data<uint8_t>() + first * out.itemsize(), size, 1},
-        {"size", "uint32", &size, 1, 0},
+        {"a", dtype, a.data<uint8_t>() + (sv ? 0 : first * a.itemsize()), sv ? 1u : elements, 0},
+        {"b", dtype, b.data<uint8_t>() + (vs ? 0 : first * b.itemsize()), vs ? 1u : elements, 0},
+        {"c", comparison ? "bool_" : dtype, out.data<uint8_t>() + first * out.itemsize(),
+         elements, 1},
+        vector_size_buffer(launch, size, wide_size),
     };
     char error[2048] = {};
-    const auto launch = elementwise_launch(size);
-    int status = dispatch_callback.load()(
-        entry.c_str(), buffers, 4, size, &launch, error, sizeof(error));
+    int status = dispatch_vector(
+        entry, wide, launch, per_thread, buffers, 4, error, sizeof(error));
     error[sizeof(error) - 1] = '\0';
     if (status != 0) {
       throw std::runtime_error(std::string("CrossTL native binary failed: ") + error);
     }
-    first += size;
   }
 }
 
@@ -3227,27 +3327,31 @@ void Select::eval_gpu(const std::vector<array>& inputs, array& out) {
   auto right = dense_input(inputs[2]);
   std::string entry = std::string("v_Select") + dtype;
   // v_Select reads one independent element per invocation, so a selection
-  // runs as consecutive launches of at most 65535 elements.
-  for (uint64_t first = 0; first < out.size();) {
-    uint32_t size =
-        static_cast<uint32_t>(std::min<uint64_t>(out.size() - first, 65535));
+  // runs as consecutive launches of at most 65535 elements, or of
+  // ternary_v2's WorkPerThread<T>::n value elements per invocation in wide
+  // launches.
+  const std::string wide = std::string("v2_Select") + dtype;
+  const uint64_t per_thread = 8 / out.itemsize();
+  for (const auto& launch : vector_launches(out.size(), per_thread, entry_available(wide))) {
+    const uint64_t first = launch.first;
+    const uint64_t elements = launch.elements;
+    uint32_t size;
+    int64_t wide_size;
     CrosstlMlxBuffer buffers[] = {
-        {"a", "bool_", condition.data<uint8_t>() + first * condition.itemsize(), size, 0},
-        {"b", dtype, left.data<uint8_t>() + first * left.itemsize(), size, 0},
-        {"c", dtype, right.data<uint8_t>() + first * right.itemsize(), size, 0},
-        {"d", dtype, out.data<uint8_t>() + first * out.itemsize(), size, 1},
-        {"size", "uint32", &size, 1, 0},
+        {"a", "bool_", condition.data<uint8_t>() + first * condition.itemsize(), elements, 0},
+        {"b", dtype, left.data<uint8_t>() + first * left.itemsize(), elements, 0},
+        {"c", dtype, right.data<uint8_t>() + first * right.itemsize(), elements, 0},
+        {"d", dtype, out.data<uint8_t>() + first * out.itemsize(), elements, 1},
+        vector_size_buffer(launch, size, wide_size),
     };
-    const auto launch = elementwise_launch(size);
     char error[2048] = {};
-    int status = dispatch_callback.load()(
-        entry.c_str(), buffers, 5, size, &launch, error, sizeof(error));
+    int status = dispatch_vector(
+        entry, wide, launch, per_thread, buffers, 5, error, sizeof(error));
     error[sizeof(error) - 1] = '\0';
     if (status != 0) {
       throw std::runtime_error(
           std::string("CrossTL native selection failed: ") + error);
     }
-    first += size;
   }
 }
 

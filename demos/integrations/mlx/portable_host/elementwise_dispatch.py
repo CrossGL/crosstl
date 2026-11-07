@@ -3,7 +3,9 @@
 The native host passes ``v_<op>``, ``vv_<op>``, ``sv_<op>``, ``vs_<op>`` and
 ``v_Select`` launches of at most 65535 one-thread groups for every dtype MLX
 instantiates on the GPU; ``sv_`` and ``vs_`` read their first or second operand
-from one scalar element. Each buffer is checked
+from one scalar element. A vector of more than 65535 elements runs through the
+wide ``v2`` kernels instead, over the exact 2-D grid ``wide_vectors`` derives
+from its int64 ``size``. Each buffer is checked
 against its kernel's source contract before upload: one element per invocation
 in every vector, the reflected storage of every binding, and an output that
 either has its own allocation or is exactly a donated input. The output
@@ -44,8 +46,10 @@ from demos.integrations.mlx.portable_host.elementwise_packages import (
     SCALAR_VECTOR,
     UNARY,
     VECTOR_SCALAR,
+    is_wide,
     operand_types,
     signature,
+    work_per_thread,
 )
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.trace_records import (
@@ -54,15 +58,18 @@ from demos.integrations.mlx.portable_host.trace_records import (
     retains_values,
     write_trace,
 )
+from demos.integrations.mlx.portable_host.wide_vectors import grid
 
 __all__ = (
     "ENTRIES",
     "bind",
     "broadcast",
     "dispatch",
+    "element_count",
     "extents",
     "operands",
     "validate",
+    "wide_launch",
 )
 # backend.cpp splits unary and binary vectors into launches of 65535 groups.
 MAX_VECTOR = 65535
@@ -133,23 +140,70 @@ def require_defined(operation, dtype, values):
             )
 
 
+def wide_launch(entry, elements):
+    """The exact launch of wide ``entry`` over ``elements`` elements."""
+    columns, rows = grid(elements, work_per_thread(entry))
+    return {"workgroupCount": [columns, rows, 1], "workgroupSize": [1, 1, 1]}
+
+
+def element_count(metadata, threads):
+    """The elements a validated launch covers: a wide launch's size, else ``threads``."""
+    return metadata.get("elements", threads)
+
+
+def _launch_elements(entry, size, threads):
+    """The elements of a launch and its exact geometry, from its ``size`` buffer.
+
+    A narrow launch runs one invocation per element and passes a ``uint32``
+    size; a wide one passes an ``int64`` size and runs every invocation of
+    the grid ``wide_launch`` derives from it.
+    """
+    wide = is_wide(entry)
+    size_type = "int64" if wide else "uint32"
+    if (
+        size.dtype != size_type.encode("ascii")
+        or not size.data
+        or size.data % ctypes.sizeof(CTYPES[size_type])
+        or size.count != 1
+        or size.output != 0
+    ):
+        raise ValueError(
+            "Elementwise buffer type, extent, alignment or direction differs"
+        )
+    elements = ctypes.cast(size.data, ctypes.POINTER(CTYPES[size_type]))[0]
+    if not wide:
+        if elements != threads:
+            raise ValueError("Elementwise size does not match the launch")
+        return elements, {"workgroupCount": [threads, 1, 1], "workgroupSize": [1, 1, 1]}
+    launch = wide_launch(entry, elements)
+    columns, rows, _ = launch["workgroupCount"]
+    if threads != columns * rows:
+        raise ValueError("Elementwise size does not match the launch")
+    return elements, launch
+
+
 def validate(entry, buffers, threads, execution):
-    """Check a vector launch: one invocation per element of every vector."""
+    """Check a vector launch: every element of every vector, exactly once.
+
+    A narrow launch covers at most 65535 elements, one per invocation; a wide
+    one covers its ``size`` over the grid ``wide_launch`` derives from it.
+    """
     kernel, operation, source, destination = signature(entry)
     inputs, output = operands(kernel)
     types = operand_types(entry)
-    if type(threads) is not int or not 0 < threads <= MAX_VECTOR:
+    limit = MAX_VECTOR if not is_wide(entry) else None
+    if type(threads) is not int or threads < 1 or (limit and threads > limit):
         raise ValueError("Elementwise size exceeds the host contract")
-    counts = {**extents(kernel, threads), "size": 1}
     if set(buffers) != {*inputs, output, "size"}:
         raise ValueError("Elementwise buffers do not match their kernel")
+    elements, launch = _launch_elements(entry, buffers["size"], threads)
+    counts = extents(kernel, elements)
     expected = {
         **{name: (types[name], 0) for name in inputs},
         output: (destination, 1),
-        "size": ("uint32", 0),
     }
-    for name, buffer in buffers.items():
-        dtype, direction = expected[name]
+    for name, (dtype, direction) in expected.items():
+        buffer = buffers[name]
         size = ctypes.sizeof(CTYPES[dtype])
         if (
             buffer.dtype != dtype.encode("ascii")
@@ -161,9 +215,7 @@ def validate(entry, buffers, threads, execution):
             raise ValueError(
                 "Elementwise buffer type, extent, alignment or direction differs"
             )
-    if ctypes.cast(buffers["size"].data, ctypes.POINTER(ctypes.c_uint32))[0] != threads:
-        raise ValueError("Elementwise size does not match the launch")
-    if execution != {"workgroupCount": [threads, 1, 1], "workgroupSize": [1, 1, 1]}:
+    if execution != launch:
         raise ValueError("Elementwise launch does not match its vector")
     written = _span(buffers[output], destination)
     for name in inputs:
@@ -171,19 +223,23 @@ def validate(entry, buffers, threads, execution):
         # MLX donates an input to the output only as the identical allocation.
         if read != written and max(read[0], written[0]) < min(read[1], written[1]):
             raise ValueError("Elementwise input and output allocations overlap")
-    return {
+    metadata = {
         "kernel": kernel,
         "operation": operation,
         "source": source,
         "destination": destination,
     }
+    if is_wide(entry):
+        metadata.update(elements=elements, workPerThread=work_per_thread(entry))
+    return metadata
 
 
 def bind(entry, descriptor, supplied, uploads, output, types):
     """Map reflected bindings to the source parameters and their packets.
 
     ``types`` names each parameter's logical element type; ``size`` is the
-    vectors' ``uint32`` element count.
+    vectors' element count, ``uint32`` for a narrow launch and ``int64`` for
+    a wide one.
     """
     # Direct3D prefixes constants with the entry; "in" and "out" are keywords.
     prefix = entry.rstrip("_") + "_"
@@ -201,16 +257,17 @@ def bind(entry, descriptor, supplied, uploads, output, types):
             value = uploads[name]
         else:
             buffer = supplied[name]
+            kind = "int64" if name == "size" and buffer.dtype == b"int64" else "uint32"
             value = {
-                "dtype": "uint32",
+                "dtype": kind,
                 "shape": [buffer.count],
                 "values": list(
                     ctypes.cast(
-                        buffer.data, ctypes.POINTER(ctypes.c_uint32 * buffer.count)
+                        buffer.data, ctypes.POINTER(CTYPES[kind] * buffer.count)
                     ).contents
                 ),
             }
-        logical = "uint32" if name == "size" else types[name]
+        logical = value["dtype"] if name == "size" else types[name]
         if not reflected_layout_matches(scalar, value, logical):
             raise ValueError(
                 "Reflected elementwise storage differs from the native buffer"
@@ -257,15 +314,16 @@ def _dispatch_packed(host, entry, supplied, threads, execution, metadata):
     names, output = operands(kernel)
     target = host.target
     types = operand_types(entry)
+    elements = element_count(metadata, threads)
     storage = {name: buffer_storage(supplied[name], types[name]) for name in names}
     if operation in CHECKED_OPERATIONS:
         words = {
             name: memoryview(storage[name]).cast(STORAGE_CODES[types[name]]).tolist()
             for name in names
         }
-        require_defined(operation, source, broadcast(kernel, words, threads))
+        require_defined(operation, source, broadcast(kernel, words, elements))
     size = ctypes.sizeof(CTYPES[destination])
-    initial = storage_bytes(destination, guard_words(destination, threads))
+    initial = storage_bytes(destination, guard_words(destination, elements))
     tail = storage_bytes(destination, guard_words(destination))
     uploads = {
         **{
@@ -289,11 +347,11 @@ def _dispatch_packed(host, entry, supplied, threads, execution, metadata):
     )
     result = execute(host, request)
     data = _returned(result, outputs, matched[output])
-    if type(data) is not bytes or len(data) != (threads + GUARD_COUNT) * size:
+    if type(data) is not bytes or len(data) != (elements + GUARD_COUNT) * size:
         raise RuntimeError("Native elementwise output extent differs")
-    if data[threads * size :] != tail:
+    if data[elements * size :] != tail:
         raise RuntimeError("Native elementwise kernel changed its output guard")
-    payload = data[: threads * size]
+    payload = data[: elements * size]
     if destination == "bool_" and payload.translate(None, b"\x00\x01"):
         raise ValueError("Native readback returned a non-canonical Boolean")
     code = STORAGE_CODES[destination]
@@ -356,10 +414,11 @@ def dispatch(host, entry, buffers, count, threads, launch):
         return _dispatch_packed(host, entry, supplied, threads, execution, metadata)
     target = host.target
     types = operand_types(entry)
+    elements = element_count(metadata, threads)
     values = {name: buffer_words(supplied[name], types[name]) for name in names}
-    require_defined(metadata["operation"], source, broadcast(kernel, values, threads))
+    require_defined(metadata["operation"], source, broadcast(kernel, values, elements))
     # A fresh output is filled with guards, so the readback is never stale.
-    initial = guard_words(destination, threads)
+    initial = guard_words(destination, elements)
     tail = guard_words(destination)
     uploads = {
         **{name: packet(types[name], target, words) for name, words in values.items()},
@@ -383,12 +442,12 @@ def dispatch(host, entry, buffers, count, threads, launch):
     if not isinstance(words, list):
         raise RuntimeError("Native elementwise output extent differs")
     words = unpack(destination, target, words)
-    if len(words) != threads + GUARD_COUNT:
+    if len(words) != elements + GUARD_COUNT:
         raise RuntimeError("Native elementwise output extent differs")
-    if words[threads:] != tail:
+    if words[elements:] != tail:
         raise RuntimeError("Native elementwise kernel changed its output guard")
-    words = words[:threads]
-    payload = native_bytes(CTYPES[destination], threads, words)
+    words = words[:elements]
+    payload = native_bytes(CTYPES[destination], elements, words)
     event = {
         "entry": entry,
         "target": target,
