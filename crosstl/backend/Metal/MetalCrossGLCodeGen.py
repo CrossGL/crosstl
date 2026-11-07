@@ -69,6 +69,7 @@ from .dependent_builtins import (
     dependent_builtin_result_type,
     unbound_template_type_names,
 )
+from .explicit_specialization_calls import explicit_specialization_call
 from .external_functions import refuse_external_function_calls
 from .instance_static_members import render_instance_static_struct_member
 from .library_structs import declare_referenced_library_structs
@@ -12609,6 +12610,7 @@ class MetalToCrossGLConverter(
                         right = f"int({right})"
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            expr = explicit_specialization_call(self, expr) or expr
             filled_matrix = self.generate_metal_make_filled_matrix(expr, is_main)
             if filled_matrix is not None:
                 return filled_matrix
