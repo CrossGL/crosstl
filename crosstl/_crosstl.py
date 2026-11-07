@@ -28,7 +28,6 @@ from .translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
 )
 from .translator.default_arguments import lower_default_arguments
-from .translator.host_workgroup_size import refuse_host_defined_workgroup_sizes
 from .translator.plugin_loader import discover_backend_plugins
 from .translator.semantics import apply_rule_carrying
 from .translator.source_licenses import source_license_comments
@@ -334,10 +333,6 @@ def _translate_with_codegen(
             generated_code = shader_code
         else:
             codegen = get_codegen(requested_backend)
-            if entry_point is None:
-                # A library whose entries are all emitted is refused for a
-                # host-sized entry before the whole program is rewritten.
-                refuse_host_defined_workgroup_sizes(ast, normalized_backend)
             apply_rule_carrying(ast, source_spec.name, normalized_backend)
             lower_default_arguments(ast)
             selected_ast, remaining_entry_point = prepare_entry_scoped_target(
@@ -403,10 +398,6 @@ def _translate_with_codegen(
             if source_spec.name == "hip" and normalized_backend == "directx":
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
-            if entry_point is None:
-                # A library whose entries are all emitted is refused for a
-                # host-sized entry before the whole program is rewritten.
-                refuse_host_defined_workgroup_sizes(cgl_ast, normalized_backend)
             apply_rule_carrying(cgl_ast, source_spec.name, normalized_backend)
             lower_default_arguments(cgl_ast)
             selected_ast, remaining_entry_point = prepare_entry_scoped_target(

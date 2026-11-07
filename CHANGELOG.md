@@ -101,6 +101,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Added
 
+- HLSL output of a compute, mesh or amplification entry whose result depends on a threadgroup size that the source's host chooses at dispatch time, such as a Metal kernel with `threadgroup` memory and no `threadgroup_size` source option, reads the size from the `CROSSGL_WORKGROUP_SIZE_X`, `_Y` and `_Z` macros, which the host defines when it compiles the shader (`dxc -D CROSSGL_WORKGROUP_SIZE_X=64 ...`), as GLSL output does without SPIR-V specialization: `[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, CROSSGL_WORKGROUP_SIZE_Z)]`, behind an `#error` that names the macros when they are missing. `gl_WorkGroupSize` and `[[threads_per_threadgroup]]` read the same macros, and host reflection reports the entry's `host_workgroup_size` with the macros and no size. Such an entry used to be refused with `HostDefinedWorkgroupSizeError`, which Slang output still raises.
 - `crosstl doctor` lists, for each backend, the validation tools CrossTL looks for and which of them are on `PATH`. A validation that cannot run now names the missing tool.
 - CrossGL `textureResidency(read, texel)` and `textureResident(code)` query sparse texture residency on GLSL, Metal, HLSL and SPIR-V.
 - `metal_sizeof(x)` measures a type with Metal's layout rules. The Metal importer writes it for operands it cannot size, such as template parameters.

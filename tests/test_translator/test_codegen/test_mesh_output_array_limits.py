@@ -18,7 +18,10 @@ import crosstl.translator
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
-from crosstl.translator.host_workgroup_size import HostDefinedWorkgroupSizeError
+from crosstl.translator.host_workgroup_size import (
+    HostDefinedWorkgroupSizeError,
+    require_static_workgroup_size,
+)
 
 MESH = """
 shader DynamicMeshCounts {
@@ -100,10 +103,18 @@ def test_mesh_stage_takes_the_host_workgroup_size():
     assert "[numthreads(4, 1, 1)]" in code
 
 
-def test_size_dependent_mesh_stage_without_a_host_size_is_refused():
+def test_size_dependent_mesh_stage_without_a_host_size_reads_the_host_macros():
     shader = MESH.replace("@ host_workgroup_size(4, 1, 1)", "@ host_workgroup_size")
+    (stage,) = crosstl.translator.parse(shader).stages.values()
     with pytest.raises(HostDefinedWorkgroupSizeError, match="Entry 'main'"):
-        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+        require_static_workgroup_size(stage.execution_config)
+    # HLSL reads the size from macros the host defines when it compiles the shader.
+    code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "#if !defined(CROSSGL_WORKGROUP_SIZE_X)" in code
+    assert (
+        "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, "
+        "CROSSGL_WORKGROUP_SIZE_Z)]\n[outputtopology" in code
+    )
 
 
 def test_size_independent_mesh_stage_drops_the_host_mark():
