@@ -99,6 +99,10 @@ from .narrow_float_constants import (
     render_narrow_float_constant,
 )
 from .opaque_matrix_contracts import complete_opaque_matrix_contracts
+from .partial_struct_specializations import (
+    UndecidedPartialSpecialization,
+    partial_specialization_for_owner,
+)
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
     MetalPreprocessor,
@@ -2376,7 +2380,10 @@ class MetalToCrossGLConverter(
         alias_target = self.local_struct_type_aliases.get(struct_name)
         resolved_struct = self.resolve_local_type_aliases(alias_target or struct_name)
         if resolved_struct not in self.struct_name_map:
-            match = self.struct_templates_for_dependent_owner(resolved_struct)
+            try:
+                match = self.struct_templates_for_dependent_owner(resolved_struct)
+            except UndecidedPartialSpecialization:
+                match = None
             if match is not None and match[2]:
                 candidates = match[0]
                 if len(candidates) != 1:
@@ -6910,6 +6917,18 @@ class MetalToCrossGLConverter(
             matches = exact or primary
             if not matches:
                 continue
+            if not exact:
+                # [temp.spec.partial.match]: the primary applies only when no partial specialization does.
+                specialization = partial_specialization_for_owner(
+                    self, owner, tier, arguments, primary
+                )
+                if specialization is not None:
+                    node, bound_arguments = specialization
+                    return (
+                        [node],
+                        bound_arguments,
+                        not getattr(node, "template_parameters", None),
+                    )
             return matches, arguments, bool(exact)
         return None
 
@@ -7132,7 +7151,19 @@ class MetalToCrossGLConverter(
 
     def resolve_dependent_alias_contract(self, owner, member, required):
         resolved_owner = self.materialize_alias_template_type(owner, required=required)
-        match = self.struct_templates_for_dependent_owner(resolved_owner)
+        try:
+            match = self.struct_templates_for_dependent_owner(resolved_owner)
+        except UndecidedPartialSpecialization as undecided:
+            if not required:
+                return None
+            raise MetalStructAliasResolutionError(
+                resolved_owner,
+                member,
+                undecided.reason,
+                source_location=getattr(
+                    self.current_type_resolution_context, "source_location", None
+                ),
+            ) from undecided
         if match is None:
             return None
         struct_nodes, arguments, exact_specialization = match
