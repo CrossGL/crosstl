@@ -36,6 +36,7 @@ from .byte_address_methods import byte_address_method_expression
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
+from .discarded_values import discarded_cast_operand
 from .hlsl_matrix_import import (
     HLSLMatrixImportMixin,
     crossgl_matrix_type_name,
@@ -4500,6 +4501,9 @@ class HLSLToCrossGLConverter(
             self.current_resource_array_dims = dict(previous_dims)
         code = ""
         for stmt in body:
+            stmt = discarded_cast_operand(stmt)
+            if stmt is None:
+                continue
             if isinstance(stmt, FunctionCallNode):
                 code += self.generate_function_call_statement(stmt, indent, is_main)
                 continue
@@ -4573,7 +4577,9 @@ class HLSLToCrossGLConverter(
             elif isinstance(stmt, StructNode):
                 code += self.generate_local_struct(stmt, indent, is_main)
             else:
-                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                code += self.refuse_import(
+                    f"statement {type(stmt).__name__} has no CrossGL form"
+                )
         self.current_variable_types = previous_types
         self.current_resource_array_dims = previous_dims
         return code

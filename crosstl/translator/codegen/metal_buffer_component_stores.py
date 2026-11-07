@@ -92,7 +92,9 @@ def _swizzle(member):
 def _vector_access(codegen, base):
     access = codegen.glsl_buffer_block_array_access(base)
     if access is not None:
-        return access, access["offset_expr"]
+        # The access describes the array member; ``base`` is one of its elements, which is not an array (a block
+        # member's element type is a value or struct type).
+        return {**access, "is_array": False}, access["offset_expr"]
     access = codegen.glsl_buffer_block_member_access(base)
     if access is None or access.get("is_array"):
         return None, None

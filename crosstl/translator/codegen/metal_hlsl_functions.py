@@ -103,6 +103,8 @@ class MetalHlslFunctionMixin:
         name = self.expression_name(node)
         if not isinstance(name, str) or name not in self.local_variable_types:
             return False
+        if self.current_address_space_variables.get(name, "thread") != "thread":
+            return False
         local_type = self.type_name_string(self.local_variable_types.get(name))
         return not (
             local_type
@@ -254,6 +256,13 @@ class MetalHlslFunctionMixin:
                 prologue += f"{indent_str}{declared_type} {name} = {source};\n"
             else:
                 prologue += f"{indent_str}{declared_type} {name};\n"
+            substitutions[id(argument)] = name
+            # A GLSL buffer block held as bytes is read through a const pointer, so its element is stored back
+            # through the block's own store (which also refuses a readonly block).
+            block_store = self.generate_glsl_buffer_block_store(argument, name, "=")
+            if block_store is not None:
+                epilogue += self.generate_statement_code(block_store, indent)
+                continue
             target, value = source, name
             layout_store = self.metal_hlsl_layout_store_target(argument)
             if layout_store is not None:
@@ -263,7 +272,6 @@ class MetalHlslFunctionMixin:
                 if write_conversion:
                     value = f"{write_conversion}({name})"
             epilogue += f"{indent_str}{target} = {value};\n"
-            substitutions[id(argument)] = name
         previous = self.metal_argument_substitutions
         self.metal_argument_substitutions = {**previous, **substitutions}
         self.metal_writeback_statement_ids.add(id(stmt))
@@ -490,8 +498,11 @@ class MetalHlslFunctionMixin:
         if not forwarded:
             return params_str
         declarations = [declaration for _name, declaration, _vtype in forwarded]
-        for name, _declaration, vtype in forwarded:
+        for name, declaration, vtype in forwarded:
             self.local_variable_types[name] = self.type_name_string(vtype)
+            # A forwarded threadgroup variable keeps its address space, so a reference argument
+            # taken from it is copied in and out rather than bound to a thread reference.
+            self.current_address_space_variables[name] = declaration.split(" ", 1)[0]
         if params_str:
             return f"{params_str}, {', '.join(declarations)}"
         return ", ".join(declarations)

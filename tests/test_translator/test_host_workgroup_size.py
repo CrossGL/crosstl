@@ -59,11 +59,16 @@ def _translate(tmp_path, source, backend, **options):
     return crosstl.translate(str(path), backend=backend, source_options=options or None)
 
 
+# SPIR-V and GLSL specialize a size the host chooses instead (test_spirv_entry_workgroup_sizes.py,
+# test_glsl_host_workgroup_size.py).
+FIXED_SIZE_BACKENDS = sorted(set(SIZES) - {"vulkan", "opengl"})
+
+
 def _size(code, backend):
     return tuple(int(value) for value in re.search(SIZES[backend], code).groups())
 
 
-@pytest.mark.parametrize("backend", sorted(SIZES))
+@pytest.mark.parametrize("backend", FIXED_SIZE_BACKENDS)
 @pytest.mark.parametrize(
     "source, entry, construct",
     [

@@ -59,6 +59,8 @@ TARGETS = (
             "d3d11",
             "d3d12",
             "slang",
+            "cuda",
+            "hip",
         }
     )
     | _HELPER_ONLY_TARGETS
