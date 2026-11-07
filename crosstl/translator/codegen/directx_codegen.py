@@ -624,6 +624,7 @@ from .stage_utils import (
     stage_layout_entry_value,
     stage_matches,
 )
+from .standard_constant_types import standard_constant_type
 from .storage_image_texels import (
     TEXEL_COMPONENTS,
     image_load_swizzle_extent,
@@ -18894,7 +18895,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             builtin_type = self.hlsl_graphics_builtin_result_type(name)
             if builtin_type is not None:
                 return builtin_type
-            return self.variable_type_by_name(name)
+            variable_type = self.variable_type_by_name(name)
+            if (
+                variable_type is None
+                and self.hlsl_standard_math_constant_expression(name) is not None
+            ):
+                return standard_constant_type(name)
+            return variable_type
         if isinstance(expr, bool):
             return "bool"
         if isinstance(expr, (int, float)):
