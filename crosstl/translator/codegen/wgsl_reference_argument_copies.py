@@ -27,9 +27,11 @@ Earlier arguments of the call that contain a call are first evaluated into a
 lowering moves the call ahead of the rest of its statement, so it raises
 ``ValueError`` when that would reorder it against another call with possible
 side effects, or when the call sits where the source may skip it (the right
-operand of ``&&``/``||``, a ternary branch, a ``for`` update or a
-``do``-``while`` condition). A ``while`` or ``for`` condition becomes a guard
-at the top of the loop body, so the copies still run once per test.
+operand of ``&&``/``||``, a ternary branch or a ``for`` update). A ``while``
+or ``for`` condition becomes a guard at the top of the loop body, so the copies
+still run once per test. A ``do``-``while`` condition is the ``break if`` of a
+``continuing`` block (``wgsl_loop_continuing``), which runs after every
+iteration and every ``continue``; its copies precede the ``break if`` there.
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ from ..ast import (
     VariableNode,
     WhileNode,
 )
+from .wgsl_loop_continuing import WGSLContinuingLoopNode
 from .wgsl_must_use import WGSL_MUST_USE_BUILTINS
 from .wgsl_parameter_lowering import lvalue_root, reference_parameter_qualifier
 from .wgsl_read_only_globals import validate_writable_module_root
@@ -180,15 +183,34 @@ class WGSLReferenceArgumentCopiesMixin:
             return self.lower_copied_while(stmt)
         if isinstance(stmt, ForNode):
             return self.lower_copied_for(stmt)
+        if isinstance(stmt, WGSLContinuingLoopNode):
+            return self.lower_copied_break_if(stmt)
         if isinstance(stmt, DoWhileNode) and self.contains_copied_reference_call(
             stmt.condition
         ):
+            # The WGSL emitter lowers every do-while to a continuing loop first.
             self.reject_conditional_copy(
                 "a do-while condition",
                 "the condition also runs after every continue, where no statement "
                 "can hold the copies",
             )
         return None
+
+    def lower_copied_break_if(self, stmt):
+        """``stmt`` with the copies of its ``break if`` condition last in its ``continuing`` block."""
+        if stmt.break_if is None or not self.contains_copied_reference_call(
+            stmt.break_if
+        ):
+            return None
+        walk = _Walk()
+        condition = self.rewrite_copied_calls(stmt.break_if, walk)
+        return [
+            replaced(
+                stmt,
+                continuing=[*stmt.continuing, *walk.prelude],
+                break_if=condition,
+            )
+        ]
 
     def lower_copied_statement_expression(self, stmt):
         expr = stmt.expression if isinstance(stmt, ExpressionStatementNode) else stmt

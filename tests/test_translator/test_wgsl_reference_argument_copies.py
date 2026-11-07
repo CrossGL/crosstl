@@ -167,6 +167,37 @@ def test_if_and_return_positions_are_copied():
     assert "return _crosstl_call_1;" in output
 
 
+def test_ternary_branch_copies_run_only_in_their_branch():
+    # The conditional becomes if/else first, so the branch holds its copies.
+    lines = main_lines(compute("int arr[2];\nint r = arr[0] > 0 ? bump(arr[1]) : 0;"))
+    assert lines[2:9] == [
+        "if ((arr[0] > 0))     {",
+        "var _crosstl_ref_0: i32 = arr[1];",
+        "let _crosstl_call_1: i32 = bump(&_crosstl_ref_0);",
+        "arr[1] = _crosstl_ref_0;",
+        "r = _crosstl_call_1;",
+        "} else     {",
+        "r = 0;",
+    ]
+
+
+def test_do_while_condition_copies_run_in_the_continuing_block():
+    # continuing runs after every iteration and every continue, as the condition does.
+    body = (
+        "int arr[2];\nint r = 0;\n"
+        "do { r = r + 1; if (r > 5) { continue; } } while (bump(arr[0]) < 3);"
+    )
+    lines = main_lines(compute(body))
+    start = lines.index("continuing {")
+    assert lines[start + 1 : start + 6] == [
+        "var _crosstl_ref_0: i32 = arr[0];",
+        "let _crosstl_call_1: i32 = bump(&_crosstl_ref_0);",
+        "arr[0] = _crosstl_ref_0;",
+        "break if !(_crosstl_call_1 < 3);",
+        "}",
+    ]
+
+
 @pytest.mark.parametrize(
     "body, message",
     [
@@ -174,14 +205,9 @@ def test_if_and_return_positions_are_copied():
             "int arr[2];\nint r = 0;\nif (r > 0 && bump(arr[0]) > 0) { r = 1; }",
             "in the right operand of && or ||, or a ternary branch",
         ),
-        ("int arr[2];\nint r = arr[0] > 0 ? bump(arr[1]) : 0;", "ternary branch"),
         (
             "int arr[2];\nint r = 0;\nfor (int k = 0; k < 2; k = k + bump(arr[0])) { r = r + 1; }",
             "in a for-loop update: the update also runs after every continue",
-        ),
-        (
-            "int arr[2];\nint r = 0;\ndo { r = r + 1; } while (bump(arr[0]) < 3);",
-            "in a do-while condition",
         ),
         (
             "int arr[2];\nint r = g() + bump(arr[0]);",
