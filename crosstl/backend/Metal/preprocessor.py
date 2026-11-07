@@ -152,6 +152,10 @@ from .text_scanners import (
     strip_comments_outside_strings,
     strip_top_level_default_value,
 )
+from .trait_alias_templates import (
+    expand_trait_alias_templates,
+    find_trait_alias_templates,
+)
 from .trait_operand_types import (
     METAL_MATRIX_TYPE_NAMES,
     canonical_matrix_type,
@@ -7797,7 +7801,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 for owner_name in owner_names:
                     qualified_alias_targets[f"{owner_name}::{alias}"] = target
 
+        # Alias templates (`Int<1>` for `integral_constant<int, 1>`) name the template-id they expand to
+        # (trait_alias_templates.py).
+        alias_templates = find_trait_alias_templates(self, code)
+
         def resolve_operand(operand: str, position: int) -> Optional[str]:
+            operand = expand_trait_alias_templates(self, operand, alias_templates)
             resolved = self._canonicalize_type_aliases_at(operand, aliases, position)
             if resolved is None:
                 return None
@@ -7805,6 +7814,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 previous = resolved
                 resolved = re.sub(r"\btypename\s+", "", resolved)
                 resolved = re.sub(r"::template\s+", "::", resolved)
+                resolved = expand_trait_alias_templates(self, resolved, alias_templates)
                 for qualified_alias, target in qualified_alias_targets.items():
                     resolved = re.sub(
                         rf"(?<![A-Za-z0-9_:]){re.escape(qualified_alias)}\b",
