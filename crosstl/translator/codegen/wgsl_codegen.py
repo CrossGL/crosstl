@@ -67,6 +67,7 @@ from .enum_utils import (
 )
 from .fragment_output_targets import frag_data_attribute_index
 from .generic_struct_utils import named_struct_constructor_arguments
+from .host_workgroup_size_ids import is_host_sized_workgroup
 from .image_access_contracts import (
     explicit_image_access,
     merge_image_access_requirement,
@@ -87,6 +88,7 @@ from .wgsl_boolean_xor import (
 )
 from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
 from .wgsl_composite_conditionals import WGSLCompositeConditionalMixin
+from .wgsl_conditional_effects import WGSLConditionalEffectsMixin
 from .wgsl_cube_texture_offsets import (
     OFFSET_TEXTURE_LOOKUPS,
     WGSLCubeTextureOffsetUnsupportedError,
@@ -98,11 +100,16 @@ from .wgsl_entry_outputs import (
     lower_entry_output_parameters,
 )
 from .wgsl_enums import generate_enum_constants, split_enums
+from .wgsl_float_classification import (
+    is_float_classification_call,
+    wgsl_float_classification_call,
+)
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
     wgsl_frexp_modf_helpers,
 )
+from .wgsl_function_behaviors import end_is_reachable
 from .wgsl_generic_functions import WGSLGenericFunctionSpecializer
 from .wgsl_image_atomics import WGSLImageAtomicUnsupportedError, is_image_atomic_name
 from .wgsl_integer_builtins import lower_integer_builtin_inputs
@@ -117,6 +124,7 @@ from .wgsl_integer_textures import (
     WGSLIntegerTextureSampleUnsupportedError,
     is_integer_sampler_type_name,
 )
+from .wgsl_loop_continuing import WGSLContinuingLoopNode, WGSLLoopContinuingMixin
 from .wgsl_must_use import wgsl_call_statement
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
@@ -139,7 +147,10 @@ from .wgsl_specialization_constants import (
     WGSLSpecializationPlan,
     plan_wgsl_specialization_constants,
 )
-from .wgsl_specialized_workgroup_size import specialized_workgroup_size
+from .wgsl_specialized_workgroup_size import (
+    WorkgroupSizeOverrides,
+    specialized_workgroup_size,
+)
 from .wgsl_stage_io import (
     entry_parameter_locations,
     interpolation_qualifiers,
@@ -161,6 +172,8 @@ from .wgsl_vector_initializers import (
     wgsl_vector_array_initializer,
     wgsl_vector_initializer,
 )
+from .wgsl_workgroup_locals import WORKGROUP_QUALIFIERS, hoist_workgroup_locals
+from .wgsl_workgroup_size_inputs import lower_workgroup_size_inputs
 
 
 class WGSLAggregateInitializerError(ValueError):
@@ -184,7 +197,9 @@ class WGSLAggregateInitializerError(ValueError):
 
 
 class WGSLCodeGen(
+    WGSLLoopContinuingMixin,
     WGSLValueSideEffectsMixin,
+    WGSLConditionalEffectsMixin,
     WGSLCompositeConditionalMixin,
     WGSLParameterLoweringMixin,
 ):
@@ -818,6 +833,7 @@ class WGSLCodeGen(
     def __init__(self):
         self._current_stage_name = None
         self._current_workgroup_size = None
+        self._workgroup_size_overrides = WorkgroupSizeOverrides(None)
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
         self._next_implicit_binding_by_group = {}
         self._cbuffer_member_accesses = {}
@@ -893,11 +909,14 @@ class WGSLCodeGen(
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
         ast = canonicalize_separate_textures(ast)
         lower_relational_builtins(ast)
+        lower_workgroup_size_inputs(ast)
+        hoist_workgroup_locals(ast, self._function_stage_name)
         lower_integer_builtin_inputs(
             ast, lambda name: self.BUILTIN_SEMANTICS.get(self.semantic_key(name))
         )
         self.validate_wgsl_stage_support(ast, target_stage)
         validate_recursion_free(ast, "wgsl")
+        self._workgroup_size_overrides = WorkgroupSizeOverrides(ast)
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
         self._next_implicit_binding_by_group = {}
         self._identifier_scopes = []
@@ -1301,6 +1320,11 @@ class WGSLCodeGen(
                     parameter_attributes=True,
                 )
                 body = self.generate_block(entry_point.body, indent=0)
+                body = self.add_generated_match_fallback_return(
+                    body,
+                    getattr(entry_point, "body", None),
+                    getattr(entry_point, "return_type", None),
+                )
                 body = self.prepend_parameter_copies(body, entry_point)
             finally:
                 self._entry_parameter_locations = previous_parameter_locations
@@ -1735,23 +1759,30 @@ class WGSLCodeGen(
             + ")"
         )
 
-    def stage_workgroup_size_values(self, stage_node):
+    def stage_workgroup_size_config(self, stage_node):
+        """The stage's execution metadata, specialized through overrides when the host chooses its size."""
         config = getattr(stage_node, "execution_config", {}) or {}
+        return self._workgroup_size_overrides.effective_config(config)
+
+    def stage_workgroup_size_values(self, stage_node):
         arguments, _ = specialized_workgroup_size(
-            config, self.stage_workgroup_size_defaults(stage_node)
+            self.stage_workgroup_size_config(stage_node),
+            self.stage_workgroup_size_defaults(stage_node),
         )
         return arguments
 
     def stage_workgroup_size_overrides(self, stage_node):
-        """Module-scope overrides of the workgroup dimensions the stage specializes."""
-        config = getattr(stage_node, "execution_config", {}) or {}
-        _, declarations = specialized_workgroup_size(
-            config, self.stage_workgroup_size_defaults(stage_node)
+        """Module-scope overrides of the workgroup dimensions the stage specializes that no entry declared yet."""
+        return self._workgroup_size_overrides.new_declarations(
+            self.stage_workgroup_size_config(stage_node),
+            self.stage_workgroup_size_defaults(stage_node),
         )
-        return declarations
 
     def stage_workgroup_size_defaults(self, stage_node):
         config = getattr(stage_node, "execution_config", {}) or {}
+        if is_host_sized_workgroup(config):
+            # The pipeline must set every dimension: its overrides have no initializer.
+            return (None, None, None)
         require_static_workgroup_size(config)
         values = config.get("numthreads") or [
             config.get("local_size_x", "1"),
@@ -1810,7 +1841,8 @@ class WGSLCodeGen(
         if not statements:
             return False
         if not self.contains_generated_rust_match_flag(statements):
-            return False
+            # WGSL rejects a value-returning body whose end it cannot rule out, as after a loop that returns.
+            return end_is_reachable(statements)
         return not self.statement_definitely_returns(statements[-1])
 
     def block_statements(self, body_node):
@@ -2652,7 +2684,7 @@ class WGSLCodeGen(
             attributes = (
                 self.explicit_binding_attributes(node) or self.next_binding_attributes()
             )
-        elif "workgroup" in qualifier_names or "shared" in qualifier_names:
+        elif qualifier_names & WORKGROUP_QUALIFIERS:
             address_space = "workgroup"
 
         initializer = ""
@@ -2923,6 +2955,11 @@ class WGSLCodeGen(
             return "\n".join(
                 self.generate_statement(statement, indent) for statement in lowered
             )
+        lowered = self.lower_effectful_ternary(stmt)
+        if lowered is not None:
+            return "\n".join(
+                self.generate_statement(statement, indent) for statement in lowered
+            )
         lowered = self.lower_composite_ternary(stmt)
         if lowered is not None:
             return "\n".join(
@@ -2961,6 +2998,12 @@ class WGSLCodeGen(
             user_functions.update(self._function_signature_identifier_names.values())
             user_functions.update(self._function_overloads_by_name)
             struct_types = set(self._type_identifier_names.values())
+            if not isinstance(
+                stmt.expression, (FunctionCallNode, ConstructorNode)
+            ) and not is_increment(stmt.expression):
+                # WGSL statements are calls, updates and assignments only (WGSL section 9); any other
+                # expression is evaluated and its value discarded with a phony assignment (section 9.2.1).
+                return f"{pad}_ = {expression};"
             statement = wgsl_call_statement(expression, user_functions, struct_types)
             return f"{pad}{statement};"
         if isinstance(stmt, AssignmentNode):
@@ -2986,8 +3029,8 @@ class WGSLCodeGen(
             return f"{pad}continue;"
         if isinstance(stmt, SwitchNode):
             return self.generate_switch(stmt, indent)
-        if isinstance(stmt, DoWhileNode):
-            raise ValueError("WGSL target does not support do-while statements")
+        if isinstance(stmt, WGSLContinuingLoopNode):
+            return self.generate_continuing_loop(stmt, indent)
         if isinstance(stmt, ForInNode):
             raise ValueError("WGSL target does not support for-in statements")
         if isinstance(stmt, MatchNode):
@@ -3699,6 +3742,7 @@ class WGSLCodeGen(
             return f"{expr.operator}{prefix_unary_operand(expr.operator, operand)}"
         if isinstance(expr, TernaryOpNode):
             self.require_select_operands(expr)
+            self.require_unconditional_branches(expr)
             return (
                 f"select({self.generate_expression(expr.false_expr)}, "
                 f"{self.generate_expression(expr.true_expr)}, "
@@ -3958,6 +4002,8 @@ class WGSLCodeGen(
             return self.generate_packed_dot4add_call(node, function_name, packed_dot)
         if is_two_argument_frexp_or_modf(self, node):
             return wgsl_frexp_modf_call(self, node)
+        if is_float_classification_call(self, node):
+            return wgsl_float_classification_call(self, node)
 
         if self.is_type_constructor_name(function_name):
             if len(node.arguments) == 1:

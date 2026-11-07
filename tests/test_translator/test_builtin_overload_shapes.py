@@ -138,3 +138,22 @@ def test_metal_output_compiles(tmp_path, name, source, options):
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_spirv_output_lowers_builtin_only_calls_to_the_instruction(tmp_path):
+    """SPIR-V calls a user function by id, so a built-in-only call must not become a call of the user ``dot``."""
+    code = _translate(tmp_path, "shapes.cgl", CROSSGL, backend="vulkan")
+    # dot(v, vec4(1.0)) and dot(values[i], values[i]) are OpDot; dot(f, f) and clamp(v.xy, ...) call the user code.
+    assert code.count(" OpDot ") == 2
+    assert code.count(" OpFunctionCall ") == 2
+    if shutil.which("spirv-as") is None or shutil.which("spirv-val") is None:
+        pytest.skip("needs SPIRV-Tools")
+    assembly = tmp_path / "out.spvasm"
+    assembly.write_text(code)
+    binary = tmp_path / "out.spv"
+    for command in (
+        ["spirv-as", "--target-env", "vulkan1.1", str(assembly), "-o", str(binary)],
+        ["spirv-val", "--target-env", "vulkan1.1", str(binary)],
+    ):
+        result = subprocess.run(command, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr

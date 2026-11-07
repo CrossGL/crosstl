@@ -11,6 +11,10 @@ import re
 import tempfile
 from pathlib import Path
 
+from crosstl.translator.codegen.host_workgroup_size_ids import (
+    HOST_WORKGROUP_SIZE_MACROS,
+)
+
 from ..process import run
 from ..toolchains import tool
 from ..validators import dxil_is_signed, hlsl_arguments
@@ -225,6 +229,10 @@ SPECIALIZATION_MACRO = re.compile(
     r"encoding_default=([^;\s]+);[\s*]*source_macro=(\w+)"
 )
 GLSL_VERSION_LINE = re.compile(r"^[ \t]*#[ \t]*version\b[^\n]*\n", re.M)
+# A workgroup size the source's host chooses reads its source-path value from three macros
+# (crosstl/translator/codegen/glsl_host_workgroup_size.py); the check gives them the size of one invocation that
+# the artifact's SPIR-V path encodes as their default.
+HOST_WORKGROUP_SIZE_DEFAULT = "1"
 
 
 def glsl_specialized_source(path, text, scratch):
@@ -232,6 +240,10 @@ def glsl_specialized_source(path, text, scratch):
     macros = {
         match.group(2): match.group(1) for match in SPECIALIZATION_MACRO.finditer(text)
     }
+    if any(f"defined({macro})" in text for macro in HOST_WORKGROUP_SIZE_MACROS):
+        macros.update(
+            dict.fromkeys(HOST_WORKGROUP_SIZE_MACROS, HOST_WORKGROUP_SIZE_DEFAULT)
+        )
     version = GLSL_VERSION_LINE.search(text)
     if not macros or version is None:
         return path
@@ -274,11 +286,22 @@ def spirv_environment(text):
     return SPIRV_ENVIRONMENT.get(match.group(1), "vulkan1.1") if match else "vulkan1.1"
 
 
+# An entry whose size the pipeline specializes, next to entries of other sizes, is sized by LocalSizeId, which Vulkan
+# accepts when the device enables VK_KHR_maintenance4 (crosstl/translator/codegen/spirv_entry_workgroup_sizes.py).
+LOCAL_SIZE_ID = re.compile(r"^\s*OpExecutionModeId\s+%\S+\s+LocalSizeId\b", re.M)
+
+
+def spirv_features(text):
+    """spirv-val options for the device features the module requires."""
+    return ["--allow-localsizeid"] if LOCAL_SIZE_ID.search(text) else []
+
+
 def check_spirv(path, scratch):
     missing = _missing("spirv-as", "spirv-val")
     if missing:
         return missing
-    environment = spirv_environment(Path(path).read_text(errors="replace"))
+    text = Path(path).read_text(errors="replace")
+    environment = spirv_environment(text)
     binary = Path(scratch) / "unit.spv"
     results = [
         run(
@@ -296,7 +319,13 @@ def check_spirv(path, scratch):
     if results[0].status == "accepted":
         results.append(
             run(
-                [*tool("spirv-val").command, "--target-env", environment, binary],
+                [
+                    *tool("spirv-val").command,
+                    "--target-env",
+                    environment,
+                    *spirv_features(text),
+                    binary,
+                ],
                 timeout=TIMEOUT,
             )
         )
