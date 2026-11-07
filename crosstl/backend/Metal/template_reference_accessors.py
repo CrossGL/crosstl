@@ -75,3 +75,16 @@ def inline_template_reference_accessor(
         arg_open=arg_open,
         argument_values=[argument.strip() for argument in explicit_arguments],
     )
+
+
+class TemplateReferenceAccessor(Exception):
+    """Raised by member-template overload selection when the selected overload returns a reference.
+
+    It carries the concrete (instantiated) method, so the caller can inline the
+    call as storage with the direct-accessor proof instead of emitting a
+    by-value function. Only callers that ask for it receive it.
+    """
+
+    def __init__(self, method) -> None:
+        super().__init__(method.name)
+        self.method = method
