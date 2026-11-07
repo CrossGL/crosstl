@@ -65,6 +65,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .buffer_member_layout import HlslLayoutError, member_explicit_offset
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .comma_expressions import (
@@ -3070,6 +3071,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             if str(getattr(attr, "name", "")).lower() == "precise":
                 # A modifier of the declaration, rendered before its type.
                 continue
+            if str(getattr(attr, "name", "")).lower() == "offset":
+                # An explicit member offset is a layout placement, not a semantic.
+                continue
             if str(getattr(attr, "name", "")).lower() in (
                 "ray_payload_read",
                 "ray_payload_write",
@@ -6065,11 +6069,34 @@ class SlangCodeGen(LoweringRefusalMixin):
             declaration = self.slang_interpolation_attribute_prefix(
                 member
             ) + self.format_declaration(member_type, member.name)
-            result += f"{self.indent()}{declaration}{semantic_str};\n"
+            result += (
+                f"{self.indent()}{self.slang_struct_member_offset(member)}"
+                f"{declaration}{semantic_str};\n"
+            )
 
         self.indent_level -= 1
         result += "};"
         return result
+
+    def slang_struct_member_offset(self, member):
+        """``[[vk::offset(N)]] `` for a struct member placed with ``@offset(N)``, else ``""``.
+
+        Slang spells an explicit member placement ``[[vk::offset(N)]]``; without it the struct lays its
+        members out by the default rules, so a push-constant block declared over the struct loses the
+        placement its author wrote.
+        """
+        if not any(
+            str(getattr(attribute, "name", "")).lower() == "offset"
+            for attribute in getattr(member, "attributes", None) or []
+        ):
+            return ""
+        try:
+            offset = member_explicit_offset(member)
+        except HlslLayoutError as exc:
+            return self.refuse_lowering(
+                f"struct member '{getattr(member, 'name', '')}' has a malformed offset: {exc}"
+            )
+        return f"[[vk::offset({offset})]] " if offset is not None else ""
 
     def generate_struct_definition(self, node):
         result = f"{node.name}\n{{\n"

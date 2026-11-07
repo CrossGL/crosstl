@@ -4,6 +4,11 @@ A CrossGL ``cbuffer`` or ``ConstantBuffer<T>`` marked ``@push_constant`` is read
 pushes, not from a descriptor. GLSL and Slang output declared it as an ordinary uniform buffer at binding 0, which
 the host never binds for push constants. GLSL output now declares a ``layout(push_constant)`` block when compiled
 for Vulkan and keeps the OpenGL uniform block otherwise; Slang output declares ``[[vk::push_constant]]``.
+
+HLSL and Slang input wrote the same blocks back as ordinary ones: a ``[[vk::offset(N)]]`` on a struct member was
+dropped, a ``[[vk::offset(N)]]`` on a cbuffer member came back as ``@ vk_offset(N)``, which no layout rule reads,
+and a push-constant cbuffer carried ``@ buffer_layout(hlsl_cbuffer)``, which every output backend refuses. The
+importers now keep the placement as ``@offset(N)`` and the block's std430 layout.
 """
 
 import re
@@ -313,3 +318,97 @@ def test_slang_refuses_a_push_constant_block_with_another_layout(tmp_path, layou
         raised.value.code == "project.translate.slang-push-constant-block-unsupported"
     )
     assert "std430 rules only" in str(raised.value)
+
+
+# HLSL and Slang input -------------------------------------------------------------------------------------
+
+HLSL_STRUCT_OFFSET = """struct Constants {
+    [[vk::offset(16)]] float scale;
+    float bias;
+};
+[[vk::push_constant]] ConstantBuffer<Constants> pc;
+RWStructuredBuffer<float> fin : register(u0);
+RWStructuredBuffer<float> outp : register(u1);
+[numthreads(1, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) { outp[id.x] = fin[id.x] * pc.scale + pc.bias; }
+"""
+
+HLSL_CBUFFER_OFFSET = """[[vk::push_constant]] cbuffer Constants {
+    float scale;
+    [[vk::offset(16)]] float bias;
+};
+RWStructuredBuffer<float> fin : register(u0);
+RWStructuredBuffer<float> outp : register(u1);
+[numthreads(1, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) { outp[id.x] = fin[id.x] * scale + bias; }
+"""
+
+SLANG_STRUCT_OFFSET = """struct Constants {
+    [[vk::offset(16)]] float scale;
+    float bias;
+};
+[[vk::push_constant]] ConstantBuffer<Constants> pc;
+RWStructuredBuffer<float> fin;
+RWStructuredBuffer<float> outp;
+[numthreads(1, 1, 1)]
+[shader("compute")]
+void main(uint3 id : SV_DispatchThreadID) { outp[id.x] = fin[id.x] * pc.scale + pc.bias; }
+"""
+
+
+@pytest.mark.parametrize(
+    "source, name",
+    [
+        (HLSL_STRUCT_OFFSET, "shader.hlsl"),
+        (SLANG_STRUCT_OFFSET, "shader.slang"),
+    ],
+)
+def test_push_constant_struct_offset_round_trips_through_hlsl_and_slang(
+    tmp_path, source, name
+):
+    crossgl = _translate(tmp_path, source, "cgl", name)
+    assert "float scale @offset(16);" in crossgl
+    assert "push_constant" in crossgl
+    hlsl = _translate(tmp_path, source, "directx", name)
+    assert "[[vk::push_constant]]" in hlsl
+    assert "[[vk::offset(16)]] float scale;" in hlsl
+    assert ": offset" not in hlsl
+    slang = _translate(tmp_path, source, "slang", name)
+    assert "[[vk::push_constant]] ConstantBuffer<Constants> pc;" in slang
+    assert "[[vk::offset(16)]] float scale;" in slang
+    assert " : offset" not in slang
+
+
+def test_hlsl_push_constant_cbuffer_round_trips(tmp_path):
+    crossgl = _translate(tmp_path, HLSL_CBUFFER_OFFSET, "cgl", "shader.hlsl")
+    assert "@ push_constant" in crossgl
+    assert "cbuffer Constants {" in crossgl
+    assert "float bias @offset(16);" in crossgl
+    # A push-constant block is laid out by the push-constant rules, not HLSL packing.
+    assert "hlsl_cbuffer" not in crossgl
+    hlsl = _translate(tmp_path, HLSL_CBUFFER_OFFSET, "directx", "shader.hlsl")
+    assert "[[vk::push_constant]]" in hlsl
+    assert "[[vk::offset(16)]] float bias;" in hlsl
+    glsl = _translate(tmp_path, HLSL_CBUFFER_OFFSET, "opengl", "shader.hlsl")
+    vulkan = glsl.split("#else\n", 1)[0]
+    assert "layout(push_constant) uniform Constants {" in vulkan
+    assert "layout(offset = 16) float bias;" in vulkan
+    slang = _translate(tmp_path, HLSL_CBUFFER_OFFSET, "slang", "shader.hlsl")
+    assert "[[vk::push_constant]] cbuffer Constants {" in slang
+    assert "[[vk::offset(16)]] float bias;" in slang
+
+
+def test_struct_member_offset_is_not_a_semantic(tmp_path):
+    source = """shader Probe {
+    struct Params {
+        float scale @offset(16);
+        float bias;
+    };
+    uniform Params params;
+""" + BODY % "params.scale + params.bias"
+    hlsl = _translate(tmp_path, source, "directx")
+    assert "float scale;" in hlsl
+    assert ": offset" not in hlsl
+    slang = _translate(tmp_path, source, "slang")
+    assert "[[vk::offset(16)]] float scale;" in slang
+    assert " : offset" not in slang
