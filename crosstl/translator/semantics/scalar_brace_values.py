@@ -67,13 +67,15 @@ _ZERO_LITERALS = {
 class ScalarBraceInitializerError(TranslationDiagnostic):
     """A scalar declaration has more than one brace-initializer value."""
 
+    # The program is invalid C and C++ whatever the target, so the code names no target.
+    code = CODE_PREFIX + "scalar-brace-initializer-invalid"
+
     def __init__(self, target, name, count, *, source_location=None):
         self.source_location = source_location
         self.missing_capabilities = ()
         super().__init__(
             f"scalar brace initializer for '{name}' requires at most one value, got {count}",
             target=target,
-            code=f"{CODE_PREFIX}{target}-scalar-brace-initializer",
         )
 
 
