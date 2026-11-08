@@ -10242,6 +10242,16 @@ class MetalToCrossGLConverter(
                     bound_value_names=active_value_bindings,
                 )
             )
+            if function_body is None and getattr(func, "is_template_prototype", False):
+                # A declaration-only primary that explicit specializations
+                # complete; generators select them per deduced argument tuple.
+                params = ", ".join(
+                    declaration for declaration in parameter_declarations if declaration
+                )
+                return (
+                    code
+                    + f"{generic_prefix}{return_type} {function_name}({params});\n\n"
+                )
             body = (
                 value_param_decls
                 + self.metal_mesh_body_prologue(func, indent + 1)

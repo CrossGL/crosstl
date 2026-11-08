@@ -25,6 +25,10 @@ from ..ast import (
 )
 from ..explicit_specializations import explicit_specializations
 from .enum_utils import generic_type_parts, sanitize_type_name
+from .generic_prototypes import (
+    declaration_only_generic_primaries,
+    reject_undefined_generic_instantiation,
+)
 from .wgsl_narrow_storage import (
     narrow_storage_element,
     refuse_narrow_generic_instantiation,
@@ -70,13 +74,27 @@ def generic_parameter_names(func):
     ]
 
 
+def _declared_primaries(ast):
+    if ast is None:
+        return []
+    functions = list(getattr(ast, "functions", None) or [])
+    for stage in (getattr(ast, "stages", None) or {}).values():
+        functions.extend(getattr(stage, "local_functions", None) or [])
+    return declaration_only_generic_primaries(
+        functions, lambda func: bool(generic_parameter_names(func))
+    )
+
+
 class WGSLGenericFunctionSpecializer:
     """Create the concrete WGSL functions a module's generic call sites need."""
 
-    def __init__(self, generator, functions):
+    def __init__(self, generator, functions, ast=None):
         self.generator = generator
         self.definitions = {}
-        for func in functions or []:
+        # Helpers arrive without prototypes, which WGSL cannot declare; a generic
+        # declared only by a prototype still names the primary its explicit
+        # specializations complete.
+        for func in list(functions or []) + _declared_primaries(ast):
             if generic_parameter_names(func) and getattr(func, "name", None):
                 self.definitions.setdefault(func.name, []).append(func)
         self.specializations = {}
@@ -281,6 +299,7 @@ class WGSLGenericFunctionSpecializer:
         explicit = self._explicit_specialization_name(func, concrete)
         if explicit is not None:
             return explicit
+        reject_undefined_generic_instantiation(func, (func.name, concrete))
         key = (id(func), concrete)
         existing = self.specializations.get(key)
         if existing is not None:

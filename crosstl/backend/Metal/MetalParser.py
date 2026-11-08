@@ -4,6 +4,7 @@ import re
 import sys
 
 from ..switch_clauses import record_default_position
+from .declared_template_primaries import retain_declared_template_primaries
 from .floating_point import reject_contraction_tokens
 from .local_aggregate_declarators import (
     split_block_aggregate_declaration,
@@ -738,7 +739,7 @@ class MetalParser:
 
         shader = ShaderNode(
             includes=preprocessors,
-            functions=functions,
+            functions=retain_declared_template_primaries(functions),
             structs=structs,
             global_variables=global_variables,
             constant=constants,
@@ -1157,7 +1158,7 @@ class MetalParser:
                 self.skip_template_declaration()
                 return None
 
-            function = self.parse_function()
+            function = self.parse_function_template_definition_or_prototype()
             if function is not None:
                 self.known_function_templates.add(function.name)
                 function.generics = [
@@ -1356,6 +1357,24 @@ class MetalParser:
             if end < len(self.tokens) and self.tokens[end][0] == "SEMICOLON"
             else None
         )
+
+    def parse_function_template_definition_or_prototype(self):
+        """Parse a function template, keeping ``R f(params);`` as a body-less node.
+
+        The prototype is recorded like any other dropped prototype, so calls of
+        a template nothing defines stay refused, and
+        :mod:`.declared_template_primaries` keeps the node only when explicit
+        specializations complete it.
+        """
+        function = self.parse_function(preserve_declaration=True)
+        if function is None or function.body is not None:
+            return function
+        self.function_prototypes.setdefault(
+            function.name, len(self.function_prototypes)
+        )
+        function.is_template_prototype = True
+        function.declaration_kind = "declaration"
+        return function
 
     def skip_template_declaration(self):
         paren_depth = 0
