@@ -220,6 +220,7 @@ from .for_in_utils import (
 )
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
+from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -38036,6 +38037,16 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.type_name_string(
                     getattr(resolved_overload, "return_type", None)
                 )
+            if getattr(
+                self, "collecting_generic_function_specializations", False
+            ) and concrete_overload_results_differ(
+                self,
+                func_name,
+                lambda generator, type_name: generator.map_type(type_name),
+            ):
+                # Generic deduction must not bind a type parameter to a guessed overload;
+                # it resolves the overload from the argument types it tracks.
+                return None
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
             componentwise_type = self.glsl_componentwise_unary_result_type(
