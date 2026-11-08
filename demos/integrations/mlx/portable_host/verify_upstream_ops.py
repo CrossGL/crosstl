@@ -84,6 +84,12 @@ REQUIRED_REDUCTIONS = frozenset(("w32/all_reduce_andbool_", "w256/all_reduce_and
 NEGATIVE_CHECKS = {"missing": "No translated package for vv_Equalint32"}
 # The CI step bounds the three workers and the audit at 1,680 seconds.
 TIMEOUTS = {"cpu": 120, "native": 1440, "missing": 60}
+# Seeds NumPy's global generator before each upstream test, so the CPU and
+# translated runs draw the same operands. ``test_divmod`` compares float16
+# floor quotients against NumPy, which floors the exact quotient, while MLX
+# floors the quotient rounded to float16; on unseeded operands about 2% of runs
+# disagree on any backend that follows MLX, including the MLX CPU.
+UPSTREAM_NUMPY_SEED = 0
 
 
 def write_json(path, value):
@@ -127,6 +133,16 @@ def reject(mx, host, output, check):
     raise RuntimeError("A comparison without its package was accepted")
 
 
+def run_upstream_test(name):
+    """Run one unchanged upstream test on operands drawn from a fixed NumPy seed."""
+    import numpy as np
+
+    np.random.seed(UPSTREAM_NUMPY_SEED)
+    return unittest.TextTestRunner(verbosity=2).run(
+        unittest.defaultTestLoader.loadTestsFromName(name)
+    )
+
+
 def worker(args):
     import mlx.core as mx
 
@@ -147,9 +163,7 @@ def worker(args):
     records = []
     for name in UPSTREAM_TESTS:
         start = host.dispatch_count if host else 0
-        result = unittest.TextTestRunner(verbosity=2).run(
-            unittest.defaultTestLoader.loadTestsFromName(name)
-        )
+        result = run_upstream_test(name)
         records.append(
             {
                 "test": name,
@@ -322,6 +336,21 @@ def run_worker(args, output, mode):
     return record
 
 
+def report_failed_workers(output, workers, lines=25):
+    """Print the stderr tail of each failed worker, so the job log names the failure."""
+    for mode, record in workers.items():
+        if not record["returncode"]:
+            continue
+        stderr = (output / f"{mode}.stderr").read_text(errors="replace").splitlines()
+        print(
+            f"MLX upstream ops {mode} worker exited {record['returncode']}; "
+            f"last {min(lines, len(stderr))} stderr lines:",
+            file=sys.stderr,
+        )
+        for line in stderr[-lines:]:
+            print(f"  {line}", file=sys.stderr)
+
+
 def verify(args):
     import numpy as np
 
@@ -347,6 +376,7 @@ def verify(args):
             evidence["workers"][mode] = run_worker(args, output, mode)
             write_json(output / "evidence.json", evidence)
         if any(value["returncode"] for value in evidence["workers"].values()):
+            report_failed_workers(output, evidence["workers"])
             raise RuntimeError("An upstream op worker failed; inspect retained logs")
         upstream = {}
         for mode in ("cpu", "native"):

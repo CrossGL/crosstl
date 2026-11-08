@@ -49,6 +49,17 @@ def _class_target_type(codegen, target_type):
     return target_type
 
 
+def _selected_value_type(codegen, value_type):
+    """``value_type`` with a ``conditional_t<C, A, B>`` spelling replaced by the branch ``C`` selects.
+
+    A value typed through such an alias has type ``A`` or ``B``, either of which may be the class itself. When
+    ``C`` does not fold to a constant, no conversion is proven to apply, so this returns ``None``.
+    """
+    if value_type is None or codegen.resolve_conditional_type(value_type) is None:
+        return value_type
+    return codegen.resolve_conditional_type(value_type, require_concrete=True)
+
+
 def converting_constructor_value(
     codegen, target_type, value, is_main, *, assignment=False
 ):
@@ -61,8 +72,9 @@ def converting_constructor_value(
     target_type = _class_target_type(codegen, target_type)
     if target_type is None or isinstance(value, InitializerListNode):
         return None
-    value_type = codegen.metal_source_overload_value_type(
-        codegen.expression_metal_type(value)
+    value_type = _selected_value_type(
+        codegen,
+        codegen.metal_source_overload_value_type(codegen.expression_metal_type(value)),
     )
     if value_type is None:
         return None

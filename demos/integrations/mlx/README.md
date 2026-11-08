@@ -4148,8 +4148,8 @@ launches `MTL::Size(thread_group_size, 1, 1)` with up to
 `maxTotalThreadsPerThreadgroup` threads, and any multiple of 32 keeps each
 group inside one SIMD-group. The project rules therefore give the entry
 `[numthreads(64, 1, 1)]` and `[WaveSize(32)]`, which requires Shader Model 6.6.
-The generated HLSL is 5,721 bytes with SHA-256
-`d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e`.
+The generated HLSL is 5,862 bytes with SHA-256
+`2d697ea546e481dbc20e5a4c13faaa4c8fab2946230be6f265edf6bbd2d79381`.
 This path verifies the completed template-member and owner-dependent `constexpr`
 work tracked by CrossGL/crosstl#1476 and CrossGL/crosstl#1672. After unreachable
 materializations are pruned, this selected float specialization contains no live
@@ -4203,8 +4203,8 @@ The pinned `gather_qmv` host dispatch in `mlx/backend/metal/quantized.cpp` sets
 `bk = 32` and `MTL::Size group_dims(bk, 2, 1)`. The project rule therefore
 emits `[numthreads(32, 2, 1)]`. The kernel's simdgroup indices require a
 32-lane subgroup, so the generated HLSL also emits `[WaveSize(32)]` and requires
-Shader Model 6.6. The resulting artifact is 17,917 bytes with SHA-256
-`4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a`.
+Shader Model 6.6. The resulting artifact is 18,052 bytes with SHA-256
+`b0c3238977654b03d610fae1e543e8be400eeb6589ef1ca522bd651747010542`.
 Windows CI compiles it with DXC profile `cs_6_6` and `-WX`. This is selected-entry
 evidence for the fixed-array alias work tracked by
 [#1497](https://github.com/CrossGL/crosstl/issues/1497) and the read-only storage
