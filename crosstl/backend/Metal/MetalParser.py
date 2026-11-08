@@ -9,6 +9,7 @@ from .local_aggregate_declarators import (
     split_block_aggregate_declaration,
     unnamed_aggregate_name,
 )
+from .member_enums import is_anonymous_member_enum_start, parse_anonymous_member_enum
 from .MetalAst import *
 from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
@@ -3164,6 +3165,9 @@ class MetalParser:
                 continue
             if self.current_token[0] == "STATIC_ASSERT":
                 members.append(self.parse_static_assert())
+                continue
+            if is_anonymous_member_enum_start(self.tokens, self.pos):
+                members.extend(parse_anonymous_member_enum(self))
                 continue
             if self.current_token[0] == "USING":
                 alias = self.parse_using_statement()
