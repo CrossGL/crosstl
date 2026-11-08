@@ -18549,6 +18549,10 @@ class MetalCodeGen(
             return self.argument_address_space(arg.operand)
         if isinstance(arg, ArrayAccessNode):
             return self.argument_address_space(arg.array)
+        if isinstance(arg, PointerReinterpretNode):
+            # A nested view names its address space; lowering that view proves
+            # it against the view's own source before this result is used.
+            return getattr(getattr(arg, "target_type", None), "address_space", None)
         if isinstance(arg, TernaryOpNode):
             if self.argument_address_space_conflict(arg) is not None:
                 return None
@@ -28713,6 +28717,17 @@ class MetalCodeGen(
     def metal_storage_pointer_reinterpret_source_is_readonly(
         self, expression, source_type
     ):
+        pointer_operand = self.pointer_arithmetic_operand(expression)
+        if pointer_operand is not None:
+            # Offsets add no storage; only the pointer operand can be const.
+            return self.metal_storage_pointer_reinterpret_source_is_readonly(
+                pointer_operand, self.expression_result_type(pointer_operand)
+            )
+        if isinstance(expression, PointerReinterpretNode):
+            # A nested view is lowered with its own constness proof.
+            return not getattr(
+                getattr(expression, "target_type", None), "is_mutable", True
+            )
         member = self.metal_storage_pointer_reinterpret_member_node(expression)
         if member is not None:
             raw_member_type = getattr(
@@ -28855,14 +28870,11 @@ class MetalCodeGen(
         ) or self.map_type(contract["targetType"])
         effective_is_mutable = contract["isMutable"]
         if source_is_readonly and contract["isMutable"]:
-            if (
-                contract.get("aggregateByteView")
-                or contract.get("aggregateHomogeneousScalarArrayRead")
-            ) and contract.get("usage") == "immediate-value-read":
-                # The source spelling may remove pointee constness before an
-                # immediate struct value load. Reconstruct the same native
-                # pointer identity as a const view because the validated AST
-                # cannot write through or escape this temporary pointer.
+            if contract.get("readOnlyUse"):
+                # The source spelling may remove pointee constness before a
+                # value load. Reconstruct the same native pointer identity as
+                # a const view because the validated AST cannot write through
+                # or escape this pointer.
                 effective_is_mutable = False
             else:
                 source_storage_type = self.metal_native_narrow_bitcast_storage_type(
