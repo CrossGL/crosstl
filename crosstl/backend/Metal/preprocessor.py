@@ -1344,9 +1344,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = self._materialize_explicit_template_function_calls(processed)
         # This source reaches the CrossGL generic path, which cannot defer a SIMD-group
         # overload to each instantiation; the project materializer binds its own.
+        constrained_source = processed
         processed = self._materialize_inferred_constrained_template_function_calls(
             processed, simd_group_overloads=True
         )
+        if processed != constrained_source:
+            # A materialized constrained helper spells the struct templates of its signature with the bound
+            # arguments (`device mlx_atomic<float>*`), which the struct pass above has not seen.
+            processed = self._materialize_explicit_template_struct_instantiations(
+                processed
+            )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
         # A constrained overload nothing calls would reach CrossGL without its constraint.
         processed = prune_unreferenced_constrained_templates(self, processed)
