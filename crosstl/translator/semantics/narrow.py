@@ -31,6 +31,7 @@ import re
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import HubType, TypeScope, call_name, iter_structs
+from .narrow_generic_calls import NarrowGenericCalls, call_names_narrow_type_arguments
 from .rewrite import (
     call,
     child_slots,
@@ -283,6 +284,7 @@ class NarrowLegalizer:
         for function in self._functions():
             self.functions.setdefault(function.name, []).append(function)
         self.return_type = None
+        self.generic_calls = None
 
     # Program structure ------------------------------------------------------------------------------------------
     def _functions(self):
@@ -318,6 +320,13 @@ class NarrowLegalizer:
         if not self._mentions_narrow():
             return
         program, scope = self.program, self.scope
+        stages = self._stages()
+        self.generic_calls = NarrowGenericCalls(
+            self,
+            [(getattr(program, "functions", None) or [], None)]
+            + [(getattr(s, "local_functions", None) or [], s) for s in stages],
+            narrow_of,
+        )
         for constant in getattr(program, "constants", None) or []:
             scope.declare(constant.name, constant.const_type)
             self._initializer(constant, "const_type", "value")
@@ -325,10 +334,11 @@ class NarrowLegalizer:
         for cbuffer in getattr(program, "cbuffers", None) or []:
             scope.declare_cbuffer(cbuffer)
         self._member_initializers()
-        for function in getattr(program, "functions", None) or []:
+        # Snapshots: instantiations of narrow generic calls join the lists and are legalized when drained.
+        for function in list(getattr(program, "functions", None) or []):
             if isinstance(function, A.FunctionNode):
                 self.function(function)
-        for stage in self._stages():
+        for stage in stages:
             scope.push()
             self._declare_variables(getattr(stage, "local_variables", None) or [])
             for cbuffer in getattr(stage, "local_cbuffers", None) or []:
@@ -338,7 +348,10 @@ class NarrowLegalizer:
             ]:
                 if isinstance(function, A.FunctionNode):
                     self.function(function)
+            self.generic_calls.drain(stage)
             scope.pop()
+        self.generic_calls.drain(None)
+        self.generic_calls.verify_drained()
         self.retype()
         self.verify()
 
@@ -353,8 +366,9 @@ class NarrowLegalizer:
             ):
                 if widened(getattr(node, field, None)) is not None:
                     return True
-            if isinstance(node, A.FunctionCallNode) and narrow_from_name(
-                call_name(node)
+            if isinstance(node, A.FunctionCallNode) and (
+                narrow_from_name(call_name(node))
+                or call_names_narrow_type_arguments(node, narrow_of)
             ):
                 return True
             if isinstance(node, A.CastNode) and narrow_of(node.target_type) is not None:
@@ -530,6 +544,8 @@ class NarrowLegalizer:
                 return normalized(arguments[0], narrow)
             vector = call(f"ivec{narrow.lanes}", arguments)
             return normalized(vector, narrow)
+        if self.generic_calls is not None:
+            name = self.generic_calls.resolve(node) or name
         callee = self._callee(name, len(arguments), node)
         if callee is not None:
             for index, parameter in enumerate(callee.parameters or []):
