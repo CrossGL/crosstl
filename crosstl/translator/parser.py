@@ -81,6 +81,10 @@ from .ast import (
     create_legacy_shader_node,
 )
 from .codegen.array_utils import evaluate_literal_int_expression
+from .explicit_specializations import (
+    EXPLICIT_SPECIALIZATION_ATTRIBUTE,
+    explicit_specialization_annotation,
+)
 from .host_workgroup_size import (
     HOST_WORKGROUP_SIZE_ATTRIBUTE,
     HOST_WORKGROUP_SIZE_KEY,
@@ -169,6 +173,9 @@ MESH_INTRINSICS = {
     "SetMeshOutputCounts",
     "DispatchMesh",
 }
+
+# Generic vector types whose braced initializer lists their components, as a constructor call does.
+_GENERIC_VECTOR_TYPE_NAMES = frozenset({"vec", "vector"})
 
 VARIABLE_QUALIFIER_TOKEN_TYPES = frozenset(
     {
@@ -1866,6 +1873,7 @@ class Parser:
         function_attributes = []
         linkage_qualifiers = set()
         source_licenses = set()
+        explicit_specialization = None
         for attribute in attributes + post_attributes:
             if attribute.name == "source_license":
                 arguments = attribute.arguments
@@ -1877,6 +1885,8 @@ class Parser:
                         "@source_license requires one registered license identifier"
                     )
                 source_licenses.add(license_name)
+            elif attribute.name == EXPLICIT_SPECIALIZATION_ATTRIBUTE:
+                explicit_specialization = explicit_specialization_annotation(attribute)
             elif attribute.name in {"metal_static", "metal_inline"}:
                 if attribute.arguments:
                     raise SyntaxError(f"@{attribute.name} does not accept arguments")
@@ -1898,9 +1908,19 @@ class Parser:
             linkage="internal" if "static" in linkage_qualifiers else "external",
             is_inline="inline" in linkage_qualifiers,
             annotations=(
-                {"source_licenses": tuple(sorted(source_licenses))}
-                if source_licenses
-                else None
+                {
+                    **(
+                        {"source_licenses": tuple(sorted(source_licenses))}
+                        if source_licenses
+                        else {}
+                    ),
+                    **(
+                        {EXPLICIT_SPECIALIZATION_ATTRIBUTE: explicit_specialization}
+                        if explicit_specialization
+                        else {}
+                    ),
+                }
+                or None
             ),
         )
 
@@ -4607,7 +4627,10 @@ class Parser:
                 if self.is_variable_declaration():
                     init = self.parse_for_loop_variable_declaration()
                 else:
-                    init = ExpressionStatementNode(self.parse_expression())
+                    # ``k = 0, m = 3`` gives the list of its expressions, like an update.
+                    init = self.parse_expression_sequence()
+                    if not isinstance(init, list):
+                        init = ExpressionStatementNode(init)
                 self.eat("SEMICOLON")
             else:
                 self.eat("SEMICOLON")
@@ -5435,7 +5458,17 @@ class Parser:
                     left = self.parse_cooperative_matrix_constructor(generic_args)
                     continue
                 args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
-                left = IdentifierNode(f"{left.name}<{args}>")
+                spelled_name = f"{left.name}<{args}>"
+                if (
+                    self.current_token[0] == "LBRACE"
+                    and not getattr(self, "suppress_braced_constructor", False)
+                    and self.is_struct_constructor_brace()
+                ):
+                    left = self.parse_generic_braced_constructor(
+                        NamedType(left.name, generic_args), spelled_name
+                    )
+                    continue
+                left = IdentifierNode(spelled_name)
             elif self.current_token[0] == "LPAREN":
                 if isinstance(left, IdentifierNode) and left.name == "lambda":
                     arguments = self.parse_lambda_call_arguments()
@@ -5659,7 +5692,11 @@ class Parser:
         saved_token = self.current_token
         token_mark = self.mark_token_edits()
         try:
-            self.parse_generic_arguments()
+            generic_args = self.parse_generic_arguments()
+            if self.current_token[0] == "LBRACE":
+                # ``vec<T, 2>{x, y}``: a braced constructor of a generic type, as MSL and HLSL write one. A
+                # relational chain is never followed by ``{``, but a single symbolic argument must name a type.
+                return self.generic_member_arguments_are_unambiguous(generic_args)
             return self.current_token[0] in {
                 "COMMA",
                 "DOT",
@@ -5743,9 +5780,28 @@ class Parser:
             break
 
         self.eat("RBRACE")
-        node = ConstructorNode(NamedType(type_name), arguments, named_arguments)
+        constructor_type = (
+            NamedType(type_name) if isinstance(type_name, str) else type_name
+        )
+        node = ConstructorNode(constructor_type, arguments, named_arguments)
         node.is_braced_constructor = True
         return node
+
+    def parse_generic_braced_constructor(self, generic_type, spelled_name):
+        """Parse ``Type<args>{...}``, the braced constructor of a generic type, after its type arguments.
+
+        A vector's braced list initializes its components in order, as its constructor does (MSL section 2.2.3), so
+        ``vec<T, 2>{x, y}`` reads as the call ``vec<T, 2>(x, y)``; any other type's is an aggregate constructor
+        that names the type as a declaration does.
+        """
+        constructor = self.parse_struct_constructor_expression(generic_type)
+        if (
+            generic_type.name in _GENERIC_VECTOR_TYPE_NAMES
+            and constructor.arguments
+            and not constructor.named_arguments
+        ):
+            return FunctionCallNode(IdentifierNode(spelled_name), constructor.arguments)
+        return constructor
 
     def is_constructor_shorthand_field(self):
         """Return whether the current token is a braced-constructor field shorthand."""

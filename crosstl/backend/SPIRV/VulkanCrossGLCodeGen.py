@@ -3,6 +3,11 @@
 from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
+from .statement_import import (
+    EXPRESSION_STATEMENT_TYPES,
+    unsupported_expression,
+    unsupported_statement,
+)
 from .tessellation_control_import import tessellation_control_mode_attributes
 from .VulkanAst import (
     ArrayAccessNode,
@@ -1415,6 +1420,13 @@ class VulkanToCrossGLConverter:
         )
         if storage_mapped_name:
             return f"@{storage_mapped_name}"
+        if (
+            str(builtin_name) == "PrimitiveId"
+            and storage_class == "Input"
+            and "geometry" in self.spirv_module_shader_stages
+        ):
+            # A geometry stage's incoming primitive ID is gl_PrimitiveIDIn; gl_PrimitiveID is the one it writes.
+            return "@gl_PrimitiveIDIn"
         mapped_name = mapped_builtins.get(str(builtin_name))
         if mapped_name:
             return f"@{mapped_name}"
@@ -1608,8 +1620,10 @@ class VulkanToCrossGLConverter:
                 code += "discard;\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
+            elif isinstance(stmt, EXPRESSION_STATEMENT_TYPES):
+                code += f"{self.generate_expression(stmt)};\n"
             else:
-                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                unsupported_statement(stmt)
         return code
 
     def generate_assignment(self, node):
@@ -1752,7 +1766,7 @@ class VulkanToCrossGLConverter:
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         else:
-            return str(expr)
+            unsupported_expression(expr)
 
     def generate_nested_expression(self, expr):
         rendered = self.generate_expression(expr)

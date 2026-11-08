@@ -1968,7 +1968,6 @@ def test_preprocessor_rejects_false_static_assertion_for_padded_struct_layout():
     "declaration",
     (
         "device float* value;",
-        "float first, second;",
         "alignas(16) float value;",
     ),
 )
@@ -1998,6 +1997,36 @@ def test_preprocessor_keeps_unsupported_struct_layout_assertions_fail_closed(
     assert error.reason == "condition-unresolved"
     assert error.resolved_expression == "sizeof(UnsupportedLayout) == 8"
     assert error.unresolved_dependencies == ("UnsupportedLayout",)
+
+
+@pytest.mark.parametrize(("size", "holds"), ((8, True), (4, False)))
+def test_preprocessor_lays_out_struct_member_declarator_lists(size, holds):
+    # ``float first, second;`` declares two members ([dcl.decl]/3), so the
+    # struct is 8 bytes; the layout used to be unknown.
+    code = f"""
+    struct ListLayout {{
+        float first, second;
+    }};
+
+    kernel void list_layout(device float* out [[buffer(0)]]) {{
+        static_assert(sizeof(ListLayout) == {size}, "Layout must be known.");
+        out[0] = 0.0f;
+    }}
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    if holds:
+        lowered = preprocessor._lower_struct_member_functions(materialized)
+        assert "static_assert" not in lowered
+        return
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+    assert exc_info.value.reason == "assertion-failed"
+    assert exc_info.value.resolved_expression == "8 == 4"
 
 
 def test_preprocessor_rejects_false_static_assertion_with_source_context():
@@ -3650,7 +3679,9 @@ def test_preprocessor_resolves_owner_alias_before_nested_struct_materialization(
     tile_body = output.split(f"struct {tile_name} {{", 1)[1].split("};", 1)[0]
     assert f"{tile_name} tile;" in output
     assert "BaseFrag_float_8_8::width" in tile_body
-    assert "BaseFrag_float_8_8::value_type" in tile_body
+    # The substituted `typename Frag::value_type` names the concrete owner's alias target.
+    assert "float values[4 * 1];" in tile_body
+    assert "value_type" not in tile_body
     assert "frag_t" not in tile_name
     assert "frag_t" not in tile_body
     assert preprocessor._materialized_struct_specializations[tile_name] == (
@@ -12038,11 +12069,12 @@ def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():
         )
         == "half"
     )
+    # A scalar converts to the vector's element type: short2 * int is short2.
     assert (
         pp._infer_argument_type(
             "lane2 * stride", {}, {"lane2": "short2", "stride": "int"}
         )
-        is None
+        == "short2"
     )
     assert pp._infer_argument_type("input + other", buffers, locals_) is None
     assert pp._infer_argument_type("input - same_type_input", buffers, locals_) is None
@@ -12745,15 +12777,28 @@ def test_infer_argument_type_signed_numeric_literal(sign, literal, kind):
         "+value",
         "--1",
         "++2",
-        "-true",
         "-1.0f; extra",
-        "-as_type<float>(bits)",
     ),
 )
 def test_infer_argument_type_signed_literal_does_not_guess_operators(expression):
     assert (
         MetalPreprocessor()._infer_argument_type(expression, {}, {"value": "Custom"})
         is None
+    )
+
+
+@pytest.mark.parametrize(
+    "expression,expected",
+    (
+        # Unary minus promotes a bool operand to int ([expr.unary.op]/8, [conv.prom]/6).
+        ("-true", "int"),
+        ("-as_type<float>(bits)", "float"),
+    ),
+)
+def test_infer_argument_type_built_in_unary_sign_of_typed_operand(expression, expected):
+    assert (
+        MetalPreprocessor()._infer_argument_type(expression, {}, {"value": "Custom"})
+        == expected
     )
 
 
@@ -12857,9 +12902,9 @@ def test_infer_argument_type_arithmetic_construction_and_functor_call():
     assert infer("buf[i] + 1.0") == "complex64_t"
     # A scalar keeps its type when the literal does not out-rank it.
     assert infer("f + 1") == "float"
-    # ...but a floating literal meeting an INTEGER scalar promotes to an unknown
-    # floating width, so we bail rather than mis-claim `int`.
-    assert infer("n + 1.0") is None
+    # ...but a floating literal converts an INTEGER scalar: an unsuffixed
+    # literal is float in Metal, so `int + 1.0` is float, not int.
+    assert infer("n + 1.0") == "float"
     # Two DIFFERENT concrete non-literal types are ambiguous -> never guess.
     assert infer("x + f") is None
     # Brace construction of a recognized type.
@@ -13730,6 +13775,7 @@ def test_preprocessor_materializes_enabled_free_function_sfinae_fallback():
 
 def test_preprocessor_rejects_disabled_free_function_sfinae_for_native_overload():
     code = """
+    using namespace metal;
     template <
         typename T,
         metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
@@ -13821,7 +13867,6 @@ def test_preprocessor_selects_unique_free_function_sfinae_overload_and_fails_amb
     [
         "int select_value(int value) { return 2; }",
         "int select_value(int value);",
-        "int select_value(float value);",
         "int select_value(int value, int other = 0);",
         "int select_value(int value, ...);",
         "template <typename T> int select_value(T value) { return 2; }",
@@ -13850,6 +13895,24 @@ def test_preprocessor_diagnoses_competing_free_function_sfinae_overloads(competi
     assert excinfo.value.callee_template == "select_value"
     assert excinfo.value.requested_signature == "select_value(value)"
     assert "distinct name" in excinfo.value.suggested_action
+
+
+def test_exact_constrained_template_outranks_a_converting_competitor():
+    # select_value<int>(int) is an exact match; select_value(float) needs an
+    # int-to-float conversion, so the template is the better function.
+    code = """
+    template <typename T,
+              metal::enable_if_t<metal::is_integral_v<T>, bool> = true>
+    int select_value(T value) { return 1; }
+    int select_value(float value);
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      int value = 1;
+      out[0] = select_value(value);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "out[0] = select_value_int(value);" in output
+    assert "int select_value_int(int value) { return 1; }" in output
 
 
 @pytest.mark.parametrize(

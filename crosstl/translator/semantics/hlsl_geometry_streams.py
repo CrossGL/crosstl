@@ -385,12 +385,17 @@ class _GeometryRaising:
         for function in self.other_stage_functions():
             others |= _identifier_names(function.body)
         inputs, outputs = {}, {}
+        self.declared_builtins = []
         local = list(getattr(self.stage, "local_variables", None) or [])
         shared = list(getattr(self.program, "global_variables", None) or [])
         single_stage = len(_stages(self.program)) == 1
         for variable in local + shared:
             direction = _direction(variable)
             if direction is None:
+                continue
+            if _is_declared_builtin(variable):
+                # The SPIR-V importer declares the built-ins a stage uses; they lower as the undeclared ones do.
+                self.declared_builtins.append(variable)
                 continue
             is_shared = any(variable is other for other in shared)
             # An unused varying still occupies its slot of the signature the neighbouring stages link with, so
@@ -749,7 +754,14 @@ class _GeometryRaising:
                     node.arguments = node.args = list(node.arguments or []) + extra
 
     def drop_interface_declarations(self, inputs, outputs):
-        gathered = {id(variable) for variable in [*inputs.values(), *outputs.values()]}
+        gathered = {
+            id(variable)
+            for variable in [
+                *inputs.values(),
+                *outputs.values(),
+                *getattr(self, "declared_builtins", ()),
+            ]
+        }
         self.stage.local_variables = [
             variable
             for variable in getattr(self.stage, "local_variables", None) or []
@@ -771,6 +783,24 @@ def _is_void(type_node):
     if type_node is None:
         return True
     return str(getattr(type_node, "name", type_node)) == "void"
+
+
+_LOWERED_BUILTINS = frozenset(
+    {*_OUTPUT_BUILTINS, *_PARAMETER_BUILTINS, *_REFUSED_BUILTINS}
+)
+
+
+def _is_declared_builtin(variable):
+    """Whether ``variable`` declares one of the built-ins this pass lowers, as a stage variable with its semantic.
+
+    GLSL reserves the ``gl_`` names (GLSL 4.60 section 3.7), so only a built-in carries one; a varying has a location.
+    """
+    if getattr(variable, "name", None) not in _LOWERED_BUILTINS:
+        return False
+    return not any(
+        str(getattr(attribute, "name", "")).lower() == "location"
+        for attribute in getattr(variable, "attributes", None) or []
+    )
 
 
 def _direction(variable):

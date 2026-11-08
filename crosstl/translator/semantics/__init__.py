@@ -53,6 +53,10 @@ from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
 )
+from .device_private_globals import (
+    DevicePrivateGlobalUnsupportedError,
+    lower_device_private_globals,
+)
 from .device_references import (
     DeviceReferenceUnsupportedError,
     lower_device_struct_references,
@@ -64,6 +68,7 @@ from .dxr_ray_interfaces import (
 from .enum_values import lower_enum_values
 from .feedback_textures import FeedbackTextureUnsupportedError, refuse_feedback_textures
 from .fixed_samplers import bind_fixed_samplers
+from .float_relations import lower_float_relations
 from .fragment_colour_outputs import (
     FragmentColourOutputUnsupportedError,
     name_fragment_colour_outputs,
@@ -149,6 +154,7 @@ from .spirv_instructions import (
     SpirvOperationUnsupportedError,
     refuse_spirv_instructions,
 )
+from .stage_bound_functions import bind_stage_functions
 from .stage_constant_blocks import (
     StageConstantBlockConflictError,
     hoist_stage_constant_blocks,
@@ -194,6 +200,8 @@ from .vertex_input_positions import (
     VertexInputPositionUnsupportedError,
     attribute_vertex_input_positions,
 )
+from .void_casts import VoidCastError, lower_void_casts
+from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 from .written_stage_inputs import copy_written_stage_inputs
 
@@ -206,6 +214,7 @@ __all__ = [
     "BuiltinValueUnsupportedError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
+    "DevicePrivateGlobalUnsupportedError",
     "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
@@ -259,6 +268,8 @@ __all__ = [
     "TypeAliasUnsupportedError",
     "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
+    "VoidCastError",
+    "VoidValueError",
     "apply_rule_carrying",
 ]
 
@@ -292,6 +303,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
     Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
+    Shader-scope functions that name a stage's declarations become functions of the stages that call them
+    (:mod:`.stage_bound_functions`).
     Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
     A ``gl_`` built-in value attribute CrossGL does not define is refused with :class:`BuiltinValueUnsupportedError`,
     and the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` take their canonical names (:mod:`.builtin_names`).
@@ -412,10 +425,13 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     hoist_local_structs(program, report.target)
+    bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
     resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
+    lower_void_casts(program, report.target)
+    refuse_void_values(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)
@@ -432,6 +448,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     rename_colliding_functions(program)
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
+    lower_device_private_globals(program, report.target)
     store_row_major_members_transposed(program, report.target)
     store_row_major_constant_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
@@ -440,6 +457,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
     lower_metal_math_spellings(program, report.target)
+    lower_float_relations(program, report.target)
     lower_enum_values(program, report.target)
     lower_device_struct_references(program, report.target)
     separate_initializer_scopes(program, report.source, report.target)

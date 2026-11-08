@@ -10,7 +10,9 @@ entry point, which compiles and reads and writes nothing; the HLSL emitter left 
 :func:`gather_stage_interface_variables` rewrites a vertex or fragment stage for those targets:
 
 - user inputs become members of a ``VertexInput``/``FragmentInput`` structure that the entry point takes as
-  ``input``; reads anywhere in the stage's functions become ``input.<name>``;
+  ``input``; reads anywhere in the stage's functions become ``input.<name>``, and every helper that reads one,
+  directly or through the helpers it calls, takes ``input`` as a parameter. Generators that matched helpers to
+  stages by name gave two stages' same-named helpers one stage's structure;
 - outputs, built-in ones included, become members of a ``VertexOutput``/``FragmentOutput`` structure. The entry
   point declares ``output``, returns it from every ``return``, and passes it ``inout`` to every helper that writes
   or reads an output, directly or through the helpers it calls;
@@ -168,6 +170,7 @@ class _Gatherer:
         input_struct_name, output_struct_name = _STRUCT_NAMES[self.stage_name]
         renames = {}
         parameters = []
+        tokens = {}
         if inputs:
             input_name = self._local_name("input")
             struct_name = self._struct_name(input_struct_name)
@@ -176,7 +179,7 @@ class _Gatherer:
             parameters.append(A.ParameterNode(input_name, A.NamedType(struct_name)))
             for variable in inputs:
                 renames[variable.name] = _member(input_name, members[variable.name])
-        tokens = {}
+                tokens[variable.name] = (input_name, A.NamedType(struct_name), None)
         conversions = []
         for variable in builtin_inputs:
             if variable.name not in used:

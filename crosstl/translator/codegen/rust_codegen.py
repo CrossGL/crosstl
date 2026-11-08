@@ -51,6 +51,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..explicit_specializations import explicit_specialization_refusals
 from ..matrix_shape import matrix_type_spelling
 from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .assignment_values import is_reevaluable_place
@@ -660,6 +661,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def generate_program(self, ast):
         """Render the Rust program; refusals recorded on the way are raised by :meth:`generate`."""
         self.validate_supported_stage_types(ast)
+        explicit_specialization_refusals(self, ast, "Rust")
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
