@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 16,
-        "endOffset": 263,
+        "endLine": 17,
+        "endOffset": 287,
         "file": "crosstl-out/cgl/triangle.frag.cgl",
-        "length": 263,
+        "length": 287,
         "line": 1,
         "offset": 0
       },

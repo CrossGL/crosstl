@@ -8,7 +8,9 @@ every narrow register a 32-bit ``int`` and keeps the invariant that it holds a v
 - a value written to a narrow register (initializer, assignment, compound assignment, increment, argument of a
   narrow parameter, return from a narrow function) and every conversion to a narrow type is normalized: unsigned
   ``int(e) & mask``, signed ``((int(e) & mask) ^ sign) - sign``, which is the value modulo 2^N (C++ [conv.integral]
-  and the explicit arithmetic types of GLSL, HLSL and SPIR-V);
+  and the explicit arithmetic types of GLSL, HLSL and SPIR-V). A floating ``e`` is converted with
+  ``clamp(int(e), min, max)`` instead: every source leaves a truncation outside the narrow range undefined, and
+  saturation is the result Metal, Direct3D and Apple GPUs give (see :mod:`.nan_conversions`);
 - reads need nothing: ``int`` represents every 8- and 16-bit value, so C, C++, MSL, OpenCL C and CUDA integer
   promotion (C++ [conv.prom]) computes exactly the promoted result;
 - arithmetic whose result keeps a narrow type is normalized as well: scalar operations of sources without integer
@@ -265,6 +267,25 @@ def normalized(expr, narrow: HubType):
     return result
 
 
+def _bound(value, lanes):
+    literal = A.LiteralNode(abs(value), A.PrimitiveType("int"))
+    scalar = literal if value >= 0 else A.UnaryOpNode("-", literal)
+    return scalar if lanes == 1 else call(f"ivec{lanes}", [scalar])
+
+
+def saturated(expr, narrow: HubType):
+    """A floating ``expr`` converted to ``int`` (lane-wise) and clamped to ``narrow``'s range."""
+    lanes = narrow.lanes
+    if narrow.kind == "u":
+        low, high = 0, (1 << narrow.bits) - 1
+    else:
+        low, high = -(1 << (narrow.bits - 1)), (1 << (narrow.bits - 1)) - 1
+    value = call("int" if lanes == 1 else f"ivec{lanes}", [expr])
+    result = call("clamp", [value, _bound(low, lanes), _bound(high, lanes)])
+    result.annotations["cgl_narrow"] = narrow
+    return result
+
+
 # The pass -------------------------------------------------------------------------------------------------------
 class NarrowLegalizer:
     def __init__(self, program, source, target):
@@ -482,7 +503,7 @@ class NarrowLegalizer:
         if isinstance(node, A.CastNode):
             narrow = narrow_of(node.target_type)
             if narrow is not None:
-                return normalized(node.expression, narrow)
+                return self.converted(node.expression, narrow)
             return node
         if isinstance(node, A.ReturnNode):
             if self.return_type is not None and node.value is not None:
@@ -517,7 +538,7 @@ class NarrowLegalizer:
             )
         self._require_pure(node.target, node)
         combined = A.BinaryOpNode(clone(node.target), operation, node.value)
-        replacement = A.AssignmentNode(node.target, normalized(combined, narrow))
+        replacement = A.AssignmentNode(node.target, self.converted(combined, narrow))
         replacement.source_location = node.source_location
         return replacement
 
@@ -527,7 +548,7 @@ class NarrowLegalizer:
         narrow = narrow_from_name(name)
         if narrow is not None:
             if len(arguments) == 1:
-                return normalized(arguments[0], narrow)
+                return self.converted(arguments[0], narrow)
             vector = call(f"ivec{narrow.lanes}", arguments)
             return normalized(vector, narrow)
         callee = self._callee(name, len(arguments), node)
@@ -592,7 +613,16 @@ class NarrowLegalizer:
     # Narrow typing of source expressions ------------------------------------------------------------------------
     def coerce(self, expr, narrow):
         """``expr`` as a value of ``narrow``: unchanged when it already is one, normalized otherwise."""
-        return expr if self.narrow_value(expr) == narrow else normalized(expr, narrow)
+        return (
+            expr if self.narrow_value(expr) == narrow else self.converted(expr, narrow)
+        )
+
+    def converted(self, expr, narrow):
+        """``expr`` converted to ``narrow``: saturated when it is floating, reduced modulo 2^N otherwise."""
+        operand = self.scope.infer(expr)
+        if operand is not None and operand.kind == "f":
+            return saturated(expr, narrow)
+        return normalized(expr, narrow)
 
     def narrow_lvalue(self, expr):
         if isinstance(expr, A.SwizzleNode):
