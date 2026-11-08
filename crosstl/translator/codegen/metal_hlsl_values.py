@@ -16,6 +16,31 @@ from .metal_narrow_builtin_arguments import (
     narrow_scalar_register_type,
 )
 
+# Floating-point builtins whose result has the shape and type of their unified arguments.
+METAL_COMPONENTWISE_RESULT_BUILTINS = frozenset(
+    {
+        "acos",
+        "asin",
+        "atan",
+        "atan2",
+        "ceil",
+        "cos",
+        "exp",
+        "exp2",
+        "floor",
+        "fract",
+        "log",
+        "log2",
+        "pow",
+        "round",
+        "rsqrt",
+        "sin",
+        "sqrt",
+        "tan",
+        "trunc",
+    }
+)
+
 
 class MetalHlslValueMixin:
     """HLSL value-conversion members of ``MetalCodeGen``."""
@@ -394,6 +419,23 @@ class MetalHlslValueMixin:
             )
             for argument in arguments
         ]
+
+    def metal_componentwise_builtin_result_type(self, func_name, arguments):
+        """Result type of a componentwise floating-point builtin such as ``exp(x)``, or ``None``.
+
+        The result has the type of the arguments after the integer-to-float unification above, so
+        ``1 + exp(x)`` with a ``float4`` ``x`` is a ``float4`` and not the ``int`` of its literal.
+        """
+        if (
+            func_name not in METAL_COMPONENTWISE_RESULT_BUILTINS
+            or func_name in self.user_function_names
+            or not arguments
+        ):
+            return None
+        unified = self.metal_unified_builtin_result_type(func_name, arguments)
+        if unified is not None:
+            return unified
+        return self.expression_result_type(arguments[0])
 
     def metal_unified_builtin_result_type(self, func_name, arguments):
         """Result type of a builtin whose arguments were unified, if any."""
