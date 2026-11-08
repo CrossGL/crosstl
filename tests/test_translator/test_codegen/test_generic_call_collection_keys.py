@@ -110,7 +110,10 @@ def test_spirv_calls_select_their_explicit_specializations(tmp_path):
     code = _translate(tmp_path, SOURCE, "vulkan")
 
     names = dict(re.findall(r'OpName (%\w+) "(\w+)"', code))
-    stored = {names.get(buffer, buffer): value for buffer, value in _spirv_stored_increments(code).items()}
+    stored = {
+        names.get(buffer, buffer): value
+        for buffer, value in _spirv_stored_increments(code).items()
+    }
     assert stored == {"p": "2", "s": "3", "q": "5"}, code
 
 
