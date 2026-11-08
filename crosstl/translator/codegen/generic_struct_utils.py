@@ -17,6 +17,7 @@ from .enum_utils import (
     generic_type_parts,
     sanitize_type_name,
     substitute_generic_type_name,
+    substitute_generic_value_names,
     type_node_contains_generic_parameter,
 )
 
@@ -636,7 +637,10 @@ def generic_struct_member_type_name(member, type_name_string):
 
 def substitute_generic_type_name_with_arrays(type_name, substitutions):
     base_type, array_suffix = split_array_type_suffix(str(type_name or ""))
-    return substitute_generic_type_name(base_type, substitutions) + array_suffix
+    # A dimension may be a value parameter: ``T items[N]`` in ``generic<T, N> struct Ring``.
+    return substitute_generic_type_name(
+        base_type, substitutions
+    ) + substitute_generic_value_names(array_suffix, substitutions)
 
 
 def generic_struct_specialization_name(type_name):

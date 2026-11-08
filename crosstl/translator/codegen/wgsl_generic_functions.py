@@ -86,6 +86,8 @@ class WGSLGenericFunctionSpecializer:
         self.specializations = {}
         self.pending = []
         self.explicit = explicit_specializations(functions)
+        # The generic parameters of the definition being matched, spelled as themselves by ``_spelling``.
+        self._open_parameters = set()
 
     def is_generic(self, func):
         return bool(generic_parameter_names(func))
@@ -185,8 +187,30 @@ class WGSLGenericFunctionSpecializer:
             return None
         return str(rendered).strip() if rendered else None
 
+    def _spelling(self, type_value):
+        """``_render``, except that an instance of a generic structure keeps its arguments: ``Box<f32>``, ``Box<T>``.
+
+        The generator names a concrete instance by its specialization (``Box_f32``) and cannot name one with an
+        unbound parameter at all, so neither spelling would unify with a parameter of type ``Box<T>``.
+        """
+        definitions = getattr(self.generator, "_generic_struct_definitions", None) or {}
+        arguments = getattr(type_value, "generic_args", None)
+        if (
+            isinstance(type_value, NamedType)
+            and arguments
+            and type_value.name in definitions
+        ):
+            spelled = [self._spelling(argument) for argument in arguments]
+            if any(argument is None for argument in spelled):
+                return None
+            return f"{type_value.name}<{', '.join(spelled)}>"
+        if isinstance(type_value, (NamedType, PrimitiveType)) and not arguments:
+            if type_value.name in self._open_parameters:
+                return type_value.name
+        return self._render(type_value)
+
     def _argument_type(self, argument):
-        return self._render(self.generator.expression_type(argument))
+        return self._spelling(self.generator.expression_type(argument))
 
     def _concrete_overloads(self, name, arguments):
         return [
@@ -237,8 +261,9 @@ class WGSLGenericFunctionSpecializer:
             zip(parameters, argument_types, literal_flags),
             key=lambda item: item[2],
         )
+        self._open_parameters = set(params)
         for parameter, actual, _literal in ordered:
-            expected = self._render(getattr(parameter, "param_type", None))
+            expected = self._spelling(getattr(parameter, "param_type", None))
             if expected is None:
                 return None
             # A parameter whose type is concrete, or fixed by explicit type
