@@ -17,7 +17,7 @@ one explicit specialization names it. Redeclarations with the same parameter typ
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable, List, Set, Tuple
+from typing import Any, Iterable
 
 __all__ = ["retain_declared_template_primaries"]
 
@@ -35,7 +35,7 @@ def _is_template(function: Any) -> bool:
     )
 
 
-def _specialized_primaries(functions: Iterable[Any]) -> Set[Tuple[str, str]]:
+def _specialized_primaries(functions: Iterable[Any]) -> set[tuple[str, str]]:
     """``(namespace, primary name)`` of each explicit specialization ``name<args>``."""
     found = set()
     for function in functions:
@@ -65,14 +65,14 @@ def _has_non_type_parameters(function: Any) -> bool:
     )
 
 
-def _signature(function: Any) -> Tuple[str, ...]:
+def _signature(function: Any) -> tuple[str, ...]:
     return tuple(
         str(getattr(parameter, "vtype", None))
         for parameter in getattr(function, "params", None) or ()
     )
 
 
-def retain_declared_template_primaries(functions: List[Any]) -> List[Any]:
+def retain_declared_template_primaries(functions: list[Any]) -> list[Any]:
     """Return ``functions`` keeping only the template prototypes explicit specializations need."""
     if not any(
         getattr(function, "is_template_prototype", False) for function in functions
@@ -87,7 +87,7 @@ def retain_declared_template_primaries(functions: List[Any]) -> List[Any]:
     }
     specialized = _specialized_primaries(functions)
     retained = []
-    declared: Set[Tuple[str, str, Tuple[str, ...]]] = set()
+    declared: set[tuple[str, str, tuple[str, ...]]] = set()
     for function in functions:
         if not getattr(function, "is_template_prototype", False):
             retained.append(function)
