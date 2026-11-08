@@ -208,3 +208,39 @@ def test_a_conditional_alias_argument_has_the_selected_type(tmp_path, backend):
     )
     if backend == "directx":
         assert "take_float_2(loader," in output
+
+
+SELECTED_SCALE_LOAD = """
+struct Wide {
+  uint8_t bits;
+  Wide(float v) thread { bits = uint8_t(v); }
+  operator float() thread { return float(bits); }
+};
+struct Narrow {
+  uint8_t bits;
+  Narrow(float v) thread { bits = uint8_t(v * 2.0f); }
+  operator float() thread { return float(bits) * 0.5f; }
+};
+template <typename T, int group_size>
+[[kernel]] void decode(const device uint8_t* scales [[buffer(0)]], device T* out [[buffer(1)]],
+                       uint tid [[thread_position_in_grid]]) {
+  constexpr bool wide = group_size == 32;
+  using Scale = metal::conditional_t<wide, Wide, Narrow>;
+  auto q = ((const device Scale*)(scales))[tid / group_size];
+  out[tid] = T(float(q));
+}
+template [[host_name("decode_float_32")]] [[kernel]] void decode<float, 32>(
+    const device uint8_t*, device float*, uint);
+"""
+
+
+@pytest.mark.parametrize("backend", ("cgl", "directx"))
+def test_a_conditional_alias_conversion_operator_receiver_is_not_converted(
+    tmp_path, backend
+):
+    # `float(q)` runs Wide::operator float on `q`, whose type is the selected
+    # Wide; the receiver is passed as it is.
+    output = _translate(tmp_path, SELECTED_SCALE_LOAD, backend)
+    if backend == "cgl":
+        assert "Wide__operator_float(q)" in output
+        assert "crosstl_ctor_Wide_1(q)" not in output
