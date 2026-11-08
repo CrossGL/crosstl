@@ -77,6 +77,29 @@ def test_struct_templates_become_generic_structures():
     CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
 
 
+def test_defaults_that_name_earlier_parameters_take_their_arguments():
+    crossgl = import_hlsl(textwrap.dedent("""
+        template <typename T, typename U = vector<T, 2>, typename V = T>
+        struct Lane {
+            T a;
+            U b;
+            V c;
+        };
+        RWStructuredBuffer<int> g : register(u0);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) {
+            Lane<int> lane;
+            lane.a = g[1];
+            lane.b = int2(lane.a, 2);
+            lane.c = lane.b.y;
+            g[0] = lane.a + lane.c;
+        }
+    """).strip())
+
+    assert "Lane<int, ivec2, int> lane;" in crossgl
+    CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
+
+
 def test_member_functions_are_generic_over_their_receiver():
     crossgl = import_hlsl(PROGRAM)
 

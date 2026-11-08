@@ -198,12 +198,12 @@ def _with_defaults(template, arguments):
         if parameter.default is None:
             break
         bound = dict(zip((item.name for item in template), arguments))
+        # Only the names of earlier parameters are replaced; every other word of the default is already HLSL.
+        earlier = r"\b(?:" + "|".join(re.escape(name) for name in bound) + r")\b"
         arguments.append(
-            re.sub(
-                r"\b[A-Za-z_]\w*\b",
-                lambda match: bound.get(match.group(0), match.group(0)),
-                parameter.default,
-            )
+            re.sub(earlier, lambda match: bound[match.group(0)], parameter.default)
+            if bound
+            else parameter.default
         )
     return arguments
 
