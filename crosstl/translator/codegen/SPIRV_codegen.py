@@ -22789,6 +22789,14 @@ class VulkanSPIRVCodeGen(
         if type_name is None:
             return None
         type_name = self.normalize_reference_type_name(type_name)
+        # Registered vector types are named ``v4float``; spell them as CrossGL
+        # does so call keys and declared signatures compare equal.
+        registered_vector = re.fullmatch(
+            r"v([234])(float|double|int|uint|bool)", str(type_name).strip()
+        )
+        if registered_vector is not None:
+            size, element = registered_vector.groups()
+            type_name = f"vec{size}<{element}>"
         type_name = self.normalize_generic_vector_type(type_name)
         type_name = self.normalize_hlsl_matrix_type(type_name)
         primitive_name = self.normalize_primitive_name(type_name)

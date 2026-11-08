@@ -42,6 +42,10 @@ from .generic_emission_order import (
     reset_generic_function_emission,
 )
 from .generic_pointer_deduction import structured_buffer_element_type
+from .generic_prototypes import (
+    reject_undefined_generic_instantiation,
+    without_forward_generic_prototypes,
+)
 from .generic_result_types import reject_expression_result_type
 from .generic_specialization_names import (
     reserve_program_names,
@@ -218,7 +222,9 @@ def prepare_generic_function_specializations(generator, functions, global_types=
     generator.generic_collection_global_types = dict(global_types or {})
     definitions = {}
     definition_ordinals = {}
-    for func in functions or []:
+    for func in without_forward_generic_prototypes(
+        functions, generic_function_parameters
+    ):
         func_name = getattr(func, "name", None)
         if (
             not func_name
@@ -1053,6 +1059,7 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
         generator.generic_function_specialized_names[key] = explicit.name
         return
     reject_late_generic_specialization(generator, func, key)
+    reject_undefined_generic_instantiation(func, key)
 
     clone = deepcopy(func)
     overload_ordinal = key[2] if len(key) > 2 else None
