@@ -231,6 +231,7 @@ from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
 )
+from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -19412,6 +19413,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if overloaded_return_type is not None:
                 return overloaded_return_type
+            if getattr(
+                self, "collecting_generic_function_specializations", False
+            ) and concrete_overload_results_differ(
+                self,
+                func_name,
+                lambda generator, type_name: generator.map_type(type_name),
+            ):
+                # Generic deduction must not bind a type parameter to a guessed overload;
+                # it resolves the overload from the argument types it tracks.
+                return None
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
             if func_name in {"isnan", "isinf", "isfinite"} and len(args) == 1:
