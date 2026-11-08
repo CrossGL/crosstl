@@ -1828,6 +1828,9 @@ class CudaCodeGen(
                 f"{qualifier_str}"
                 f"{self.format_typed_declarator(declaration_type, node.name)}"
             )
+            declaration = self.apply_restrict_qualifier_to_declaration(
+                declaration, node.name, node
+            )
             if initial_value is not None:
                 declaration += f" = {self.visit(initial_value)}"
             return declaration
@@ -11020,6 +11023,20 @@ class CudaCodeGen(
             if attr_name:
                 names.add(attr_name)
         return names
+
+    def apply_restrict_qualifier_to_declaration(self, declaration, name, node):
+        """Write a CrossGL ``restrict`` pointer declaration with ``__restrict__``, as HIP output does."""
+        if (
+            "*" not in declaration
+            or not name
+            or "__restrict__" in declaration
+            or "restrict" not in self.declaration_qualifier_names(node)
+        ):
+            return declaration
+        position = declaration.rfind(f" {name}")
+        if position < 0:
+            return declaration
+        return f"{declaration[:position]} __restrict__{declaration[position:]}"
 
     def apply_readonly_qualifier_to_type(self, type_name, node):
         """Apply readonly declaration qualifiers to pointer/reference types."""
