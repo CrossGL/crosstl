@@ -315,9 +315,10 @@ def test_separate_sampler_hlsl_validates(tmp_path):
     _validate_hlsl(tmp_path, hlsl, "vs_6_0", "VSMain")
 
 
-def test_compute_stages_are_left_to_the_emitters():
+@pytest.mark.parametrize("target", ["vulkan", "wgsl", "slang"])
+def test_compute_stages_are_left_to_the_emitters(target):
     program = _parse(COMPUTE_SAMPLING)
-    legalize_implicit_lod(program, "directx")
+    legalize_implicit_lod(program, target)
 
     names = [
         node.function.name
@@ -325,6 +326,103 @@ def test_compute_stages_are_left_to_the_emitters():
         if isinstance(node.function, A.IdentifierNode)
     ]
     assert "texture" in names and "textureLod" not in names
+
+
+def test_directx_compute_samples_take_level_zero():
+    # DXC accepts an implicit-LOD Sample in a compute shader only under Shader
+    # Model 6.6 with a quad-shaped thread group, and then takes quad derivatives;
+    # CrossGL samples the base level outside fragment shaders.
+    program = _parse(COMPUTE_SAMPLING)
+    legalize_implicit_lod(program, "directx")
+
+    calls = [
+        node
+        for node in _calls(_stage(program, "compute").entry_point)
+        if isinstance(node.function, A.IdentifierNode)
+        and node.function.name.startswith("texture")
+    ]
+    assert [call.function.name for call in calls] == ["textureLod"]
+    assert calls[0].arguments[2].value == 0.0
+
+
+COMPUTE_AND_FRAGMENT_HELPER = """
+shader ComputeAndFragmentHelper {
+    struct FragmentInput {
+        vec2 uv;
+    }
+
+    struct FragmentOutput {
+        vec4 color;
+    }
+
+    sampler2D heightMap;
+    buffer float values[];
+
+    float sampleHeight(vec2 uv) {
+        return texture(heightMap, uv).r;
+    }
+
+    float slope(float value) {
+        return dFdx(value);
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            values[0] = sampleHeight(vec2(0.5));
+        }
+    }
+
+    fragment {
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            output.color = vec4(sampleHeight(input.uv) + slope(input.uv.x));
+            return output;
+        }
+    }
+}
+"""
+
+
+def test_directx_compute_helper_is_cloned_and_fragment_keeps_implicit_lod(tmp_path):
+    hlsl = _translate(tmp_path, COMPUTE_AND_FRAGMENT_HELPER, "directx")
+
+    compute = _function_text(hlsl, "CSMain(")
+    assert "sampleHeight_base_lod(float2(0.5, 0.5))" in compute
+    clone = _function_text(hlsl, "float sampleHeight_base_lod(float2 uv) {")
+    assert "heightMap.SampleLevel(heightMapSampler, uv, 0.0)" in clone
+    original = _function_text(hlsl, "float sampleHeight(float2 uv) {")
+    assert "heightMap.Sample(heightMapSampler, uv)" in original
+    fragment = _function_text(hlsl, "PSMain(")
+    assert "sampleHeight(input.uv)" in fragment
+
+    _validate_hlsl(tmp_path, hlsl, "cs_6_0", "CSMain")
+    _validate_hlsl(tmp_path, hlsl, "ps_6_0", "PSMain")
+
+
+def test_directx_compute_derivative_functions_are_not_refused():
+    program = _parse(
+        COMPUTE_AND_FRAGMENT_HELPER.replace(
+            "values[0] = sampleHeight(vec2(0.5));",
+            "values[0] = sampleHeight(vec2(0.5)) + slope(values[1]);",
+        )
+    )
+    legalize_implicit_lod(program, "directx")
+
+    names = {
+        node.function.name
+        for node in _calls(_stage(program, "compute").entry_point)
+        if isinstance(node.function, A.IdentifierNode)
+    }
+    assert "sampleHeight_base_lod" in names
+    slope = next(name for name in names if name.startswith("slope"))
+    helper = next(function for function in program.functions if function.name == slope)
+    assert "dFdx" in {
+        node.function.name
+        for node in _calls(helper.body)
+        if isinstance(node.function, A.IdentifierNode)
+    }
 
 
 def test_clone_name_avoids_existing_names(tmp_path):

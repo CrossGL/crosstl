@@ -278,20 +278,22 @@ def test_variables_of_different_stages_do_not_collide(tmp_path):
     assert "float scale = 2.0;" in glsl and "int fragment_scale = 4;" in glsl
 
 
-def test_qualified_and_opaque_declarations_stay_in_the_stage():
+def test_storage_qualified_and_opaque_declarations_stay_in_the_stage():
     program = _parse(KEPT)
     stage = next(iter(program.stages.values()))
-    assert hoist_stage_private_variables(program, "opengl") == 1
+    # The constant K moves too (test_stage_constants.py); the others keep their storage.
+    assert hoist_stage_private_variables(program, "opengl") == 2
     assert [v.name for v in stage.local_variables] == [
         "outp",
         "u",
-        "K",
         "tile",
         "tex",
     ]
 
 
-@pytest.mark.parametrize("target", ["vulkan", "wgsl", "cuda", "cgl"])
+# CUDA and HIP have no per-thread namespace-scope storage; their stage-private variables move to module scope and
+# then become kernel locals (test_device_private_globals.py).
+@pytest.mark.parametrize("target", ["vulkan", "wgsl", "cgl"])
 def test_targets_with_their_own_private_storage_are_unchanged(target):
     program = _parse(COUNTER)
     assert hoist_stage_private_variables(program, target) == 0

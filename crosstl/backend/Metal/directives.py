@@ -21,6 +21,21 @@ from crosstl.backend.DirectX.preprocessor import PRESERVED_SYSTEM_INCLUDE_SENTIN
 # Directives the shared preprocessor deliberately leaves in its output.
 _PRESERVED_DIRECTIVES = frozenset({"", "include", "pragma"})
 _DIRECTIVE_LINE = re.compile(r"^\s*#\s*([A-Za-z_][A-Za-z0-9_]*)?(.*)$")
+# A string or character literal, or a comment; a block comment the text does not close runs to its end.
+_LITERAL_OR_COMMENT = re.compile(
+    r"\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'|//[^\n]*|/\*.*?(?:\*/|\Z)", re.S
+)
+
+
+def _blank_comments(text: str) -> str:
+    """``text`` with every comment's characters but its line breaks replaced by spaces: a ``#`` in a
+    comment starts no directive ([lex.phases]/1.3)."""
+
+    def blank(match: re.Match) -> str:
+        found = match.group(0)
+        return re.sub(r"[^\n]", " ", found) if found.startswith("/") else found
+
+    return _LITERAL_OR_COMMENT.sub(blank, text)
 
 
 class MetalPreprocessorDirectiveError(SyntaxError):
@@ -88,6 +103,8 @@ def reject_unknown_directives(processed: str) -> None:
     """Raise :class:`MetalPreprocessorDirectiveError` for any directive line the preprocessor left uninterpreted."""
     if "#" not in processed:
         return
+    if "/" in processed:
+        processed = _blank_comments(processed)
     for line in processed.splitlines():
         match = _DIRECTIVE_LINE.match(line)
         if match is None:

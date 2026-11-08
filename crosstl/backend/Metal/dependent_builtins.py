@@ -29,6 +29,7 @@ __all__ = [
     "NOT_DEPENDENT",
     "dependent_access",
     "dependent_builtin_result_type",
+    "dependent_subscript_selection",
     "unbound_template_type_names",
 ]
 
@@ -110,3 +111,37 @@ def dependent_builtin_result_type(
     if result_kind == "bool_reduction":
         return "bool"
     return None
+
+
+def dependent_subscript_selection(
+    base, base_type, type_of, unbound_names, aggregates=()
+):
+    """The indexed-type selection for subscripting the dependent value ``base``, or ``None``.
+
+    ``reg[i]`` for a parameter ``thread T& reg`` is type-dependent ([temp.dep.expr]/1): ``T = float4`` selects a vector
+    lane, ``T = half4`` converts what is assigned to ``half``, and ``T = float4x4`` selects a column that ``reg[i][j]``
+    subscripts again. Overload resolution for the subscript happens per instantiation, so the selection is
+    ``dependent`` and selects no type, like a member of a dependent value. The importer emits the subscript unchanged,
+    and every target generator types it, and refuses it if the instantiation has no such subscript, once it has
+    substituted ``T``.
+
+    ``base_type`` is the value type of ``base`` with references and cv-qualifiers removed, or ``None`` when the
+    importer inferred none, which a member or element of a dependent value has (:func:`dependent_access`).
+
+    When one of the program's ``aggregates`` declares ``operator[]``, an instantiation may select it ([over.sub]).
+    The importer does not lower user subscript operators, and the generic body would reach a target that cannot
+    subscript the aggregate, so the subscript is not reported as dependent and is refused as before.
+    """
+    if not unbound_names:
+        return None
+    if any(
+        getattr(aggregate, "declares_subscript_operator", False)
+        for aggregate in aggregates
+    ):
+        return None
+    if base_type is None:
+        if not dependent_access(base, type_of, unbound_names):
+            return None
+    elif str(base_type).strip() not in unbound_names:
+        return None
+    return {"kind": "dependent", "base_type": base_type, "selected_type": None}

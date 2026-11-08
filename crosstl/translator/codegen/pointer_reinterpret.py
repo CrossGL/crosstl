@@ -3,6 +3,8 @@
 import re
 from dataclasses import dataclass
 
+from .pointer_view_uses import metal_pointer_view_is_read_only_use
+
 
 @dataclass(frozen=True)
 class ScalarStorageLayout:
@@ -177,6 +179,8 @@ class PointerReinterpretationError(ValueError):
 
 METAL_LOCAL_SINGLE_FIELD_READ_ANNOTATION = "metalLocalSingleFieldReinterpretRead"
 METAL_STORAGE_POINTER_REINTERPRET_ANNOTATION = "metalStoragePointerReinterpret"
+# Enough parents to see a view through nested pointer arithmetic to its use.
+_VIEW_USE_ANCESTOR_DEPTH = 15
 
 
 def metal_local_single_field_reinterpret_contract(expression):
@@ -457,7 +461,7 @@ def _metal_vector_pointee_name(pointee):
 
 
 def _metal_storage_pointer_reinterpret_contract(
-    expression, structs_by_name, parent=None, grandparent=None
+    expression, structs_by_name, parent=None, grandparent=None, ancestors=()
 ):
     """Admit only explicitly qualified, layout-proven storage pointer views.
 
@@ -539,6 +543,10 @@ def _metal_storage_pointer_reinterpret_contract(
         "isMutable": is_mutable,
         "accessMode": access_mode,
         "usage": usage,
+        "readOnlyUse": (
+            immediate_value_read
+            or metal_pointer_view_is_read_only_use(expression, ancestors)
+        ),
     }
     if byte_view_contract is not None:
         contract.update(
@@ -577,7 +585,7 @@ def validate_pointer_reinterpretation_target(ast, target):
     seen = set()
     unsupported = []
 
-    def walk(value, parent=None, grandparent=None, function=None):
+    def walk(value, parent=None, grandparent=None, function=None, ancestors=()):
         if value is None or isinstance(value, (str, int, float, bool)):
             return
         value_id = id(value)
@@ -599,7 +607,7 @@ def validate_pointer_reinterpretation_target(ast, target):
                 )
                 if local_contract is None:
                     storage_contract = _metal_storage_pointer_reinterpret_contract(
-                        value, structs_by_name, parent, grandparent
+                        value, structs_by_name, parent, grandparent, ancestors
                     )
             if local_contract is not None:
                 value.annotations[METAL_LOCAL_SINGLE_FIELD_READ_ANNOTATION] = (
@@ -623,8 +631,9 @@ def validate_pointer_reinterpretation_target(ast, target):
             )
         else:
             return
+        child_ancestors = (value, *ancestors[:_VIEW_USE_ANCESTOR_DEPTH])
         for child in children:
-            walk(child, value, parent, function)
+            walk(child, value, parent, function, child_ancestors)
 
     walk(ast)
     if not unsupported:

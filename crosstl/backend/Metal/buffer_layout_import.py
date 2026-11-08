@@ -4,7 +4,9 @@ A ``device`` or ``constant`` buffer of MSL holds its elements in their natural l
 ``float3`` and ``float4`` 16-byte sized and aligned, a matrix is an array of such columns, a struct aligns each
 member to its own alignment and rounds its size to the widest, and ``bool`` takes one byte (MSL 3.2 section 2.2 and
 table 2.4). The packed vector types are storage forms of the vector types with scalar alignment and no padding
-(MSL 3.2 section 2.2.3), and CrossGL spells ``packed_float3`` as ``vec3``.
+(MSL 3.2 section 2.2.3), and CrossGL spells ``packed_float3`` as ``vec3``. A struct's ``alignas`` raises its
+alignment and rounds its size (see :mod:`.alignment_specifiers`); CrossGL keeps it as ``@metal_alignas(N)``, which
+only the MSL rules read.
 
 The HLSL structured-buffer rules lay out every 32-bit scalar and vector at four-byte alignment with no padding
 (D3D11.3 functional specification section 5.3.7), and GLSL's std430 rules size ``vec3`` 12 bytes with 16-byte
@@ -63,6 +65,10 @@ class _Unknown(Exception):
     """The element type has a part this module does not model."""
 
 
+class _UnfoldedAlignment(_Unknown):
+    """A struct of the element type has an ``alignas`` that does not fold to a power of two."""
+
+
 @dataclass(frozen=True)
 class _Type:
     form: str  # scalar, vector, matrix, array or struct
@@ -74,6 +80,9 @@ class _Type:
     element: _Type | None = None
     count: int = 0
     members: tuple = ()
+    # A struct's ``alignas`` alignment (0 for none), which only MSL lays out: the CrossGL struct carries it as
+    # ``@metal_alignas(N)``, which the other targets' own rules do not read.
+    alignment: int = 0
 
 
 def _round(value, alignment):
@@ -129,6 +138,8 @@ def _place(node, rules):
             offsets.extend(offset + inner for inner in member_offsets)
             offset += member_size
             alignment = max(alignment, member_alignment)
+        if rules == "metal":
+            alignment = max(alignment, node.alignment)
         return _round(offset, alignment), alignment, tuple(offsets)
     raise _Unknown(node.form)
 
@@ -185,6 +196,12 @@ class MetalBufferLayoutImport:
         fits."""
         try:
             node = self.metal_layout_type(str(element_type), ())
+        except _UnfoldedAlignment as error:
+            self.refuse_import(
+                f"{context}: the alignas alignment of struct {error} in element type {element_type} is not a "
+                "constant power of two, so its Metal layout cannot be determined"
+            )
+            return None
         except _Unknown:
             if "packed_" in str(element_type):
                 self.refuse_import(
@@ -354,7 +371,6 @@ class MetalBufferLayoutImport:
             or any(
                 getattr(struct, attribute, None)
                 for attribute in (
-                    "alignas",
                     "attributes",
                     "template_parameters",
                     "generics",
@@ -365,6 +381,11 @@ class MetalBufferLayoutImport:
             )
         ):
             raise _Unknown(text)
+        alignment = self.metal_alignment_specifier_value(
+            getattr(struct, "alignas", None)
+        )
+        if alignment is None:
+            raise _UnfoldedAlignment(name)
         members = []
         for member in getattr(struct, "members", None) or []:
             if not isinstance(member, VariableNode):
@@ -391,4 +412,4 @@ class MetalBufferLayoutImport:
             members.append(node)
         if not members:
             raise _Unknown(text)
-        return _Type("struct", members=tuple(members))
+        return _Type("struct", members=tuple(members), alignment=alignment)

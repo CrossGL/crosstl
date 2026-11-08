@@ -16791,8 +16791,8 @@ def test_translate_project_reports_unsupported_concrete_metal_sizeof(tmp_path):
     repo.mkdir()
     (repo / "aggregate_size.metal").write_text(
         textwrap.dedent("""
-            struct alignas(16) Payload {
-                float value;
+            struct Payload {
+                alignas(16) float value;
             };
 
             kernel void payload_size(device int* output [[buffer(0)]]) {
@@ -58731,7 +58731,7 @@ def test_translate_project_reports_non_bitcast_compile_time_global_contract(
         textwrap.dedent("""
             shader RuntimeCompileTimeCall {
                 float buildValue() {
-                    return 2.0;
+                    return sin(2.0);
                 }
 
                 constant float invalidValue = buildValue();

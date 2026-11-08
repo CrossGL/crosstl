@@ -1013,10 +1013,10 @@ def test_parse_repeated_layout_qualifiers_from_slang_glsl():
     block_var = next(var for var in ast.uniforms if var.name == "C_0")
     image_var = next(var for var in ast.uniforms if var.name == "t_0")
 
-    assert ast.layouts[0] == {"layout": {"row_major": None}, "qualifiers": ["uniform"]}
-    assert ast.layouts[1] == {"layout": {"row_major": None}, "qualifiers": ["buffer"]}
-    assert block.interface_layout == {"binding": "0", "std140": None}
-    assert block_var.layout == {"binding": "0", "std140": None}
+    # The default block layouts reach the blocks declared after them (GLSL 4.60 section 4.4.5).
+    assert ast.layouts == []
+    assert block.interface_layout == {"row_major": None, "binding": "0", "std140": None}
+    assert block_var.layout == {"row_major": None, "binding": "0", "std140": None}
     assert image_var.layout == {"r32ui": None, "binding": "1"}
 
 

@@ -2578,7 +2578,8 @@ class RustToCrossGLConverter:
             return ""
 
         alias_type = self.map_type(alias.alias_type)
-        return f"    typedef {alias.name} = {alias_type};\n"
+        # CrossGL spells an alias like C: ``typedef <type> <name>;``.
+        return f"    typedef {alias_type} {alias.name};\n"
 
     def generate_function(self, func, indent=1, struct_name=None):
         """Render one Rust function node as a CrossGL function."""

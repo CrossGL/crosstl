@@ -2402,9 +2402,9 @@ def test_wgsl_codegen_rejects_non_webgpu_stage_targets(stage):
         WGSLCodeGen().generate_program(ast, target_stage=stage)
 
 
-def test_wgsl_codegen_rejects_do_while_statement():
+def test_wgsl_codegen_lowers_do_while_statement_to_loop_with_break_if():
     shader = """
-    shader WGSLUnsupported {
+    shader WGSLDoWhile {
         fragment {
             vec4 main() @ gl_FragColor {
                 do {
@@ -2415,11 +2415,13 @@ def test_wgsl_codegen_rejects_do_while_statement():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match="WGSL target does not support do-while statements",
-    ):
-        WGSLCodeGen().generate(parse_shader(shader))
+    code = WGSLCodeGen().generate(parse_shader(shader))
+    entry = code[code.index("fn fragment_main") :]
+    lines = [line.strip() for line in entry.splitlines()]
+    assert lines[1:4] == ["loop {", "{", "return vec4<f32>(1.0);"]
+    assert "break if !false;" in lines
+    # WGSL's behavior analysis gives the loop Next, so the body ends with an unreachable return.
+    assert lines[-3:] == ["}", "return vec4<f32>();", "}"]
 
 
 @pytest.mark.parametrize(

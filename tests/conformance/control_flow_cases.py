@@ -111,3 +111,38 @@ def short_circuit_reference(inputs):
             + guarded * 4
         )
     return np.array(out, np.int32)
+
+
+def for_header_list_inputs():
+    """64 words whose low seven bits, which set the trip counts, take many patterns."""
+    return (np.arange(64, dtype=np.int32) * 37) % 128
+
+
+def for_header_list_reference(inputs):
+    """Six words per thread: comma-separated for headers, a for update that stores, and a do-while with continue."""
+    out = []
+    for x in np.asarray(inputs, np.int32).tolist():
+        acc, i, j = 0, 0, x & 15
+        while i < j:
+            if i != 1:
+                acc += i * 16 + j
+            i, j = i + 1, j - 1
+        total, k, m = 0, 0, (x >> 4) & 7
+        while k < m:
+            total += k + 1
+            k, m = k + 1, m - 1
+        vals, q, z = [0, 0, 0, 0], 0, 0
+        while z < (x & 3) + 1:
+            vals[q] = z * 3 + 1
+            q, z = q + 1, z + 1
+        c, steps = (x >> 2) & 7, 0
+        while True:
+            steps += c
+            if c != 2:
+                steps += 100
+            c -= 1
+            if c <= 0:
+                break
+        packed = vals[0] + vals[1] * 16 + vals[2] * 256 + vals[3] * 4096
+        out.extend([acc, total * 100 + k * 10 + m, packed, q, steps, c])
+    return np.array(out, np.int32)

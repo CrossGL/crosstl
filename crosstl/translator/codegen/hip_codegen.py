@@ -3528,12 +3528,12 @@ class HipCodeGen(
         )
         if (
             initial_value is not None
-            and "const" in self.declaration_qualifier_names(node)
+            and self.declaration_qualifier_names(node) & {"const", "constant"}
             and "*" not in declaration
             and not declaration.startswith("const ")
         ):
-            # A CrossGL constant stays one: file-scope device code can read a const scalar with a constant
-            # initializer, but not a mutable host variable.
+            # A CrossGL constant, or an MSL program-scope ``constant`` value, stays one: file-scope device code
+            # can read a const scalar with a constant initializer, but not a mutable host variable.
             declaration = f"const {declaration}"
 
         qualifiers = self.variable_memory_qualifiers(node, declaration)

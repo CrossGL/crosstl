@@ -7530,8 +7530,9 @@ def test_codegen_byte_address_interlocked_compare_store_roundtrip():
 
     assert "RWByteAddressBuffer rawBytes;" in crossgl
     assert "@ register(u4)" in crossgl
-    assert "rawBytes.InterlockedCompareStore(offset, compare, 7u);" in crossgl
-    assert "atomicCompareExchange(rawBytes" not in crossgl
+    # CrossGL spells it as the byte-address compare-exchange whose previous value is unused.
+    assert "atomicCompareExchange(rawBytes, offset, compare, 7u);" in crossgl
+    assert "InterlockedCompareStore" not in crossgl
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "RWByteAddressBuffer rawBytes : register(u4);" in regenerated_hlsl
