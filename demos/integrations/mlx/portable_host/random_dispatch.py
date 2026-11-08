@@ -3,9 +3,12 @@
 import ctypes
 import hashlib
 import math
+import struct
+import sys
 
 from crosstl.project import build_native_loader_dispatch_request
 from crosstl.project.runtime_values import exact_types_within
+from demos.integrations.mlx.portable_host import trace_records
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
 from demos.integrations.mlx.portable_host.random_layout import (
     GUARD_COUNT,
@@ -15,12 +18,18 @@ from demos.integrations.mlx.portable_host.random_layout import (
 )
 from demos.integrations.mlx.portable_host.random_packages import ENTRIES
 from demos.integrations.mlx.portable_host.trace_records import (
+    compact_storage,
     compact_trace_values,
     retains_values,
     write_trace,
 )
 
 GUARD = [91] * GUARD_COUNT
+# The ``struct`` code of each native carrier of the output's signed bytes:
+# Metal stores them as bytes, DirectX and OpenGL one per 32-bit word.
+CARRIER_CODES = {"int8": "b", "int32": "i"}
+# The sign-extension byte of each two's-complement low byte.
+_SIGN_BYTES = bytes(0 if byte < 0x80 else 0xFF for byte in range(256))
 INT_TYPES = frozenset({int})
 TYPES = {
     "keys": ("uint32", ctypes.c_uint32),
@@ -148,6 +157,7 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
         metadata["keyCount"], layout.native_bytes_per_key, execution
     )
     descriptor = descriptors[entry]
+    packed = packed_output(host, entry, layout)
     inputs, outputs, matched = {}, {}, set()
     for binding in descriptor["bindings"]:
         if "executionInput" in binding.get("provenance", {}):
@@ -160,7 +170,12 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
         matched.add(name)
         if name == "out":
             dtype, size = ("int8", 1) if host.target == "metal" else ("int32", 4)
-            data = [91] * (layout.native_byte_count + len(GUARD))
+            length = layout.native_byte_count + len(GUARD)
+            data = (
+                struct.pack("<" + CARRIER_CODES[dtype], GUARD[0]) * length
+                if packed
+                else [GUARD[0]] * length
+            )
         elif name == "odd":
             dtype, size = ("bool", 1) if host.target == "metal" else ("uint32", 4)
             data = (
@@ -175,7 +190,11 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
             raise ValueError("Unexpected random reflected binding")
         if scalar["elementType"] != dtype or scalar["elementStrideBytes"] != size:
             raise ValueError("Native and reflected random layouts disagree")
-        value = {"dtype": dtype, "shape": [len(data)], "values": data}
+        value = {
+            "dtype": dtype,
+            "shape": [length if name == "out" else len(data)],
+            "values": data,
+        }
         inputs[binding["name"]] = value
         if name == "out":
             outputs[binding["name"]] = value
@@ -198,6 +217,96 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
         or output.get("encoding") is not None
     ):
         raise RuntimeError("Native random readback layout differs")
+    read = packed_readback if packed else word_readback
+    logical, native_values, guard_values, recorded_inputs = read(
+        host, entry, layout, output, inputs, outputs
+    )
+    event = {
+        "entry": entry,
+        "target": host.target,
+        "threads": byte_count,
+        **execution,
+        "dispatchVersion": DISPATCH_VERSION,
+        "artifact": descriptor["artifact"],
+        "packageRoot": str(directory),
+        "details": result.details,
+        "randomMetadata": metadata,
+        "inputs": recorded_inputs,
+        "randomValues": native_values,
+        "randomGuardValues": guard_values,
+        "outputHash": hashlib.sha256(logical).hexdigest(),
+    }
+    write_trace(host, event, prepared=True)
+    ctypes.memmove(supplied["out"].data, logical, len(logical))
+    host.dispatch_count += 1
+
+
+def packed_output(host, entry, layout):
+    """Whether this dispatch carries its output as packed storage.
+
+    A record that keeps none of ``entry``'s values digests the native storage
+    and its guard initialization once they are longer than
+    ``COMPACT_TRACE_LIMIT``. Their packed bytes then give the record the word
+    lists would, without a Python integer per native byte at upload and at
+    readback.
+    """
+    return (
+        sys.byteorder == "little"
+        and not retains_values(host, entry)
+        and layout.native_byte_count > trace_records.COMPACT_TRACE_LIMIT
+    )
+
+
+def storage_readback(data, dtype, layout):
+    """The native bytes of a packed readback, checked with its guard.
+
+    Every 32-bit carrier must hold a signed byte, so its upper three bytes
+    repeat the sign of its low byte, as ``RandomOutputLayout.unpack`` requires
+    of a word list's values.
+    """
+    width = struct.calcsize("<" + CARRIER_CODES[dtype])
+    count = layout.native_byte_count
+    if type(data) is not bytes or len(data) != (count + GUARD_COUNT) * width:
+        raise RuntimeError("Native random readback or its guard differs")
+    low = data
+    if width > 1:
+        low = data[::width]
+        signs = low.translate(_SIGN_BYTES)
+        if any(data[offset::width] != signs for offset in range(1, width)):
+            raise ValueError(
+                "Random readback must contain the exact signed byte storage"
+            )
+    if low[count:] != bytes(GUARD):
+        raise RuntimeError("Native random readback or its guard differs")
+    return memoryview(low)[:count]
+
+
+def packed_readback(host, entry, layout, output, inputs, outputs):
+    """The logical bytes and record fields of a packed random readback."""
+    raw = storage_readback(output.get("values"), output["dtype"], layout)
+    recorded_inputs = {
+        name: (
+            {
+                **value,
+                "values": compact_storage(
+                    value["values"], CARRIER_CODES[value["dtype"]]
+                ),
+            }
+            if name in outputs
+            else value
+        )
+        for name, value in inputs.items()
+    }
+    return (
+        layout.unpack_storage(raw),
+        compact_storage(raw, "b"),
+        list(GUARD),
+        recorded_inputs,
+    )
+
+
+def word_readback(host, entry, layout, output, inputs, outputs):
+    """The logical bytes and record fields of a word-list random readback."""
     readback = output.get("values", [])
     if (
         not isinstance(readback, list)
@@ -222,21 +331,4 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
             )
             for name, value in inputs.items()
         }
-    event = {
-        "entry": entry,
-        "target": host.target,
-        "threads": byte_count,
-        **execution,
-        "dispatchVersion": DISPATCH_VERSION,
-        "artifact": descriptor["artifact"],
-        "packageRoot": str(directory),
-        "details": result.details,
-        "randomMetadata": metadata,
-        "inputs": recorded_inputs,
-        "randomValues": native_values,
-        "randomGuardValues": readback[layout.native_byte_count :],
-        "outputHash": hashlib.sha256(logical).hexdigest(),
-    }
-    write_trace(host, event, prepared=True)
-    ctypes.memmove(supplied["out"].data, logical, len(logical))
-    host.dispatch_count += 1
+    return logical, native_values, readback[layout.native_byte_count :], recorded_inputs

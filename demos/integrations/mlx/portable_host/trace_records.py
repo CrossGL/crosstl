@@ -145,33 +145,64 @@ _STORAGE_SIZES = {
 }
 
 
+# Items per chunk of the int64 words ``compact_storage`` hashes: 8 MiB of
+# words at a time, however long the storage.
+_STORAGE_CHUNK = 1 << 20
+# The sign-extension byte of each two's-complement high byte.
+_SIGN_BYTES = bytes(0 if byte < 0x80 else 0xFF for byte in range(256))
+
+
+def _int64_storage_words(data, size, signed):
+    """The little-endian int64 words of ``data``'s ``size``-byte integers.
+
+    Each item's bytes fill the low end of its 64-bit slot, and the rest of
+    the slot holds zeros, or copies of the sign bit for ``signed`` items.
+    """
+    count = len(data) // size
+    for start in range(0, count, _STORAGE_CHUNK):
+        part = bytes(data[start * size : min(count, start + _STORAGE_CHUNK) * size])
+        if size == 8:
+            yield part
+            continue
+        items = len(part) // size
+        wide = bytearray(8 * items)
+        for offset in range(size):
+            wide[offset::8] = part[offset::size]
+        if signed:
+            signs = part[size - 1 :: size].translate(_SIGN_BYTES)
+            for offset in range(size, 8):
+                wide[offset::8] = signs
+        yield wide
+
+
 def compact_storage(data, code):
     """``compact_trace_values`` of the items of native storage ``data``.
 
     ``data`` holds this host's native-order items of the exact-width
     ``memoryview`` format ``code``; the result is that of compacting
-    ``memoryview(data).cast(code).tolist()``. A long list of unsigned words
-    hashes its zero-extended int64 words and a long Boolean list its bytes,
-    which are exactly the encodings ``value_digest`` hashes for those lists,
-    without building the list. Other long lists are built and compacted.
+    ``memoryview(data).cast(code).tolist()``. A long list of integers of at
+    most 32 bits, or of signed 64-bit integers, hashes their int64 words, and
+    a long Boolean list its bytes, which are exactly the encodings
+    ``value_digest`` hashes for those lists, without building the list. The
+    words are hashed a chunk at a time. Long unsigned 64-bit lists, whose
+    items may not fit int64, are built and compacted.
     """
     size = _STORAGE_SIZES[code]
     if len(data) % size:
         raise ValueError("Native storage is not whole items of its format")
     count = len(data) // size
-    if count <= COMPACT_TRACE_LIMIT or sys.byteorder != "little":
+    if count <= COMPACT_TRACE_LIMIT or sys.byteorder != "little" or code == "Q":
         return compact_trace_values(memoryview(data).cast(code).tolist())
     if code == "?":
         if bytes(data).translate(None, b"\x00\x01"):
             raise ValueError("Boolean storage must contain canonical zero or one bytes")
         digest = hashlib.sha256(b"bool\0" + data)
-    elif code in "BHI":
-        wide = bytearray(8 * count)
-        for offset in range(size):
-            wide[offset::8] = data[offset::size]
-        digest = hashlib.sha256(b"int64\0" + wide)
     else:
-        return compact_trace_values(memoryview(data).cast(code).tolist())
+        digest = hashlib.sha256(b"int64\0")
+        for words in _int64_storage_words(
+            memoryview(data).cast("B"), size, code in "bhiq"
+        ):
+            digest.update(words)
     return {"compactedValues": {"length": count, "sha256": digest.hexdigest()}}
 
 

@@ -3,6 +3,7 @@ import ctypes
 import hashlib
 import json
 import math
+import struct
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
@@ -764,45 +765,90 @@ def test_random_audit_accepts_digests_of_long_native_storage(
         assert len(random_evidence.audit_event(np, record)) == 300
 
 
-def test_random_dispatch_digests_native_storage_unless_the_host_keeps_values(
-    tmp_path, monkeypatch
-):
-    target, entry = "metal", "rbits"
-    supplied, memory, launch = buffers()
-    desc = descriptor(target, entry)
-    native = [3] * 12
+def packed_carriers(target, values):
+    """The packed storage a native runtime returns for a packed random output."""
+    code = "b" if target == "metal" else "i"
+    return struct.pack(f"<{len(values)}{code}", *values)
+
+
+def random_executor(target, native, fault=None):
+    """A runtime that mirrors its request: packed storage in, packed out."""
 
     def execute(host, request):
-        output = dict(request.outputs["out"], values=native + random_dispatch.GUARD)
+        values = native + random_dispatch.GUARD
+        if type(request.outputs["out"]["values"]) is bytes:
+            values = packed_carriers(target, values)
+            width = 1 if target == "metal" else 4
+            if fault == "guard":
+                # The last guard carrier reads back zero.
+                values = values[:-width] + bytes(width)
+            elif fault == "short":
+                values = values[:-1]
+            elif fault == "list":
+                values = list(values)
+            elif fault == "carrier":
+                # A 32-bit carrier whose value is not a signed byte.
+                values = struct.pack("<i", 128) + values[4:]
+        output = dict(request.outputs["out"], values=values)
         return SimpleNamespace(status="ok", outputs={"out": output}, details={})
 
-    monkeypatch.setattr(
-        random_dispatch,
-        "build_native_loader_dispatch_request",
-        lambda descriptor, directory, inputs, outputs, execution, **kwargs: (
-            SimpleNamespace(inputs=inputs, outputs=outputs)
+    return execute
+
+
+def random_host(tmp_path, target, entry, desc, retain, name):
+    return SimpleNamespace(
+        target=target,
+        randoms=SimpleNamespace(
+            get=lambda *args: ({entry: desc}, tmp_path / "package")
         ),
+        descriptors={entry: desc},
+        dispatch_count=0,
+        trace=tmp_path / f"trace-{name}.jsonl",
+        trace_values=retain,
     )
-    monkeypatch.setattr(random_dispatch, "execute", execute)
+
+
+@pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
+def test_random_dispatch_digests_native_storage_unless_the_host_keeps_values(
+    tmp_path, monkeypatch, target
+):
+    entry = "rbits"
+    desc = descriptor(target, entry)
+    native = [3, -128, -1, 0, 127, 91, 5, 6, 7, 8, 9, 10]
+    requests = []
+
+    def request(descriptor, directory, inputs, outputs, execution, **kwargs):
+        requests.append(outputs["out"]["values"])
+        return SimpleNamespace(inputs=inputs, outputs=outputs)
+
+    monkeypatch.setattr(
+        random_dispatch, "build_native_loader_dispatch_request", request
+    )
+    monkeypatch.setattr(random_dispatch, "execute", random_executor(target, native))
     monkeypatch.setattr(trace_records, "COMPACT_TRACE_LIMIT", 4)
-    records = {}
-    for retain in (True, ()):
-        host = SimpleNamespace(
-            target=target,
-            randoms=SimpleNamespace(
-                get=lambda *args: ({entry: desc}, tmp_path / "package")
-            ),
-            descriptors={entry: desc},
-            dispatch_count=0,
-            trace=tmp_path / f"trace-{bool(retain)}.jsonl",
-            trace_values=retain,
-        )
-        table = (runtime.Buffer * len(supplied))(*supplied.values())
-        random_dispatch.dispatch(
-            host, entry, table, len(table), len(memory["out"]), launch
-        )
-        records[bool(retain)] = json.loads(host.trace.read_text())
-    kept, digested = records[True], records[False]
+    records, written, traces = {}, {}, {}
+    for name, retain in (("kept", True), ("packed", ()), ("words", ())):
+        with monkeypatch.context() as patch:
+            if name == "words":
+                # The word-list transport of a host that keeps no values.
+                patch.setattr(random_dispatch, "packed_output", lambda *args: False)
+            supplied, memory, launch = buffers()
+            host = random_host(tmp_path, target, entry, desc, retain, name)
+            table = (runtime.Buffer * len(supplied))(*supplied.values())
+            random_dispatch.dispatch(
+                host, entry, table, len(table), len(memory["out"]), launch
+            )
+        written[name] = bytes(memory["out"])
+        traces[name] = host.trace.read_text()
+        records[name] = json.loads(traces[name])
+    # Only the host that keeps no values uploads its guard fill packed, in the
+    # target's carrier of a signed byte.
+    assert requests[0] == [91] * 29 == requests[2]
+    assert requests[1] == packed_carriers(target, [91] * 29)
+    # Both transports write the same bytes and byte-identical records.
+    assert traces["packed"] == traces["words"]
+    assert written["kept"] == written["packed"] == written["words"]
+    kept, digested = records["kept"], records["packed"]
     assert kept["randomValues"] == native
     assert digested["randomValues"] == compacted(native)
     assert digested["randomGuardValues"] == kept["randomGuardValues"]
@@ -817,6 +863,74 @@ def test_random_dispatch_digests_native_storage_unless_the_host_keeps_values(
     } == {
         key: digested[key] for key in digested if key not in {"inputs", "randomValues"}
     }
+
+
+@pytest.mark.parametrize(
+    "target, fault",
+    [
+        (target, fault)
+        for target in ("metal", "directx", "opengl")
+        for fault in ("guard", "short", "list", "carrier")
+        # An int8 carrier holds a signed byte by construction.
+        if (target, fault) != ("metal", "carrier")
+    ],
+)
+def test_packed_random_readbacks_require_exact_storage_and_guard(
+    tmp_path, monkeypatch, target, fault
+):
+    entry = "rbits"
+    desc = descriptor(target, entry)
+    monkeypatch.setattr(
+        random_dispatch,
+        "build_native_loader_dispatch_request",
+        lambda descriptor, directory, inputs, outputs, execution, **kwargs: (
+            SimpleNamespace(inputs=inputs, outputs=outputs)
+        ),
+    )
+    monkeypatch.setattr(
+        random_dispatch, "execute", random_executor(target, [3] * 12, fault)
+    )
+    monkeypatch.setattr(trace_records, "COMPACT_TRACE_LIMIT", 4)
+    supplied, memory, launch = buffers()
+    original = bytes(memory["out"])
+    host = random_host(tmp_path, target, entry, desc, (), "fault")
+    table = (runtime.Buffer * len(supplied))(*supplied.values())
+    with pytest.raises((ValueError, RuntimeError)):
+        random_dispatch.dispatch(
+            host, entry, table, len(table), len(memory["out"]), launch
+        )
+    assert bytes(memory["out"]) == original and host.dispatch_count == 0
+    assert not host.trace.exists()
+
+
+def test_random_outputs_travel_packed_only_past_the_compaction_limit(monkeypatch):
+    layout = random_layout.RandomOutputLayout(3, 4)
+    host = SimpleNamespace(trace_values=())
+    monkeypatch.setattr(trace_records, "COMPACT_TRACE_LIMIT", 12)
+    assert not random_dispatch.packed_output(host, "rbits", layout)
+    monkeypatch.setattr(trace_records, "COMPACT_TRACE_LIMIT", 11)
+    assert random_dispatch.packed_output(host, "rbits", layout)
+    # A host that keeps the entry's values records the word lists.
+    assert not random_dispatch.packed_output(
+        SimpleNamespace(trace_values=True), "rbits", layout
+    )
+    assert not random_dispatch.packed_output(
+        SimpleNamespace(trace_values=("rbits",)), "rbits", layout
+    )
+    assert random_dispatch.packed_output(
+        SimpleNamespace(trace_values=("rbitsc",)), "rbits", layout
+    )
+
+
+def test_random_storage_unpacks_like_its_word_list():
+    for keys, per_key in ((1, 4), (3, 3), (2, 1), (4, 9)):
+        layout = random_layout.RandomOutputLayout(keys, per_key)
+        values = [(index * 37) % 256 - 128 for index in range(layout.native_byte_count)]
+        raw = struct.pack(f"<{len(values)}b", *values)
+        assert layout.unpack_storage(raw) == layout.unpack(values)
+        assert layout.unpack_storage(memoryview(raw)) == layout.unpack(values)
+        with pytest.raises(ValueError, match="every native byte"):
+            layout.unpack_storage(raw[:-1])
 
 
 @pytest.mark.parametrize("native", [True, False])

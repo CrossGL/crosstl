@@ -92,9 +92,17 @@ class RandomOutputLayout:
         if not self.bytes_per_key:
             return b""
         # Signed bytes in [-128, 127] pack to the same bits as ``value & 255``.
-        raw = struct.pack(f"<{len(values)}b", *values)
+        return self.unpack_storage(struct.pack(f"<{len(values)}b", *values))
+
+    def unpack_storage(self, raw):
+        """Copy logical bytes from the native per-key storage bytes ``raw``."""
+        if len(raw) != self.native_byte_count:
+            raise ValueError("Random storage must hold every native byte")
+        if self.bytes_per_key == self.native_bytes_per_key:
+            return bytes(raw)
+        view = memoryview(raw)
         return b"".join(
-            raw[start : start + self.bytes_per_key]
+            view[start : start + self.bytes_per_key]
             for start in (
                 key * self.native_bytes_per_key for key in range(self.key_count)
             )

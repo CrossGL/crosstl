@@ -290,3 +290,45 @@ def test_digests_from_known_item_types_equal_the_scanned_digests():
                 "sha256": trace_records.value_digest(tuple(values)),
             }
         }
+
+
+@pytest.mark.parametrize("code", ["?", "b", "B", "h", "H", "i", "I", "q", "Q"])
+@pytest.mark.parametrize("count", [3, 300, 1001])
+def test_storage_compaction_matches_its_value_list_chunk_by_chunk(
+    monkeypatch, code, count
+):
+    # Chunks of seven items split the words mid-storage.
+    monkeypatch.setattr(trace_records, "_STORAGE_CHUNK", 7)
+    size = struct.calcsize(code)
+    if code == "?":
+        values = [index % 3 == 0 for index in range(count)]
+    elif code.islower():
+        low, high = -(1 << (8 * size - 1)), (1 << (8 * size - 1)) - 1
+        values = [
+            low,
+            high,
+            -1,
+            0,
+            *((index * 7919) % 255 - 127 for index in range(count)),
+        ]
+    else:
+        values = [
+            0,
+            (1 << (8 * size)) - 1,
+            *((index * 7919) % 65536 for index in range(count)),
+        ]
+        values = [value % (1 << (8 * size)) for value in values]
+    values = values[:count]
+    data = struct.pack(f"<{count}{code}", *values)
+    assert trace_records.compact_storage(data, code) == (
+        trace_records.compact_trace_values(values)
+    )
+    if count > trace_records.COMPACT_TRACE_LIMIT and code not in "?Q":
+        assert trace_records.compact_storage(data, code) == {
+            "compactedValues": {"length": count, "sha256": _int64_digest(values)}
+        }
+
+
+def test_storage_compaction_refuses_partial_items():
+    with pytest.raises(ValueError, match="whole items"):
+        trace_records.compact_storage(b"\0" * 7, "i")
