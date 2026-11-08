@@ -14,6 +14,7 @@ import subprocess
 import pytest
 
 import crosstl
+from tests.spirv_friendly_names import friendly_spirv
 
 KERNEL = """shader S {{
     struct P {{ float v; vec2 w; }}
@@ -55,7 +56,10 @@ def validate(tmp_path, output):
 def translate(tmp_path, source, suffix):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
-    output = crosstl.translate(str(path), backend="vulkan")
+    # Friendly ids (``%uint``) whether or not SPIRV-Tools formats the output.
+    output = friendly_spirv(
+        crosstl.translate(str(path), backend="vulkan", format_output=False)
+    )
     validate(tmp_path, output)
     return output
 
