@@ -20,6 +20,7 @@ from crosstl.translator.codegen.generic_concrete_call_results import (
     concrete_call_result_type_name,
     record_concrete_function_overloads,
 )
+from tests.spirv_friendly_names import friendly_spirv
 
 BACKENDS = ["opengl", "directx", "metal", "vulkan"]
 
@@ -117,7 +118,8 @@ def test_helper_result_binds_the_type_parameter(tmp_path, case, backend):
 
 
 def test_spirv_specializes_for_each_helper_result(tmp_path):
-    code = _translate(tmp_path, COMBINED, "vulkan", format_output=True)
+    # Friendly ids (``%float``) whether or not SPIRV-Tools formats the output.
+    code = friendly_spirv(_translate(tmp_path, COMBINED, "vulkan"))
 
     definitions = [line for line in code.splitlines() if "OpFunction " in line]
     float_results = [line for line in definitions if "OpFunction %float " in line]
