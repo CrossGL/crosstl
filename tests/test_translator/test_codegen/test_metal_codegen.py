@@ -34976,5 +34976,73 @@ def test_metal_crossgl_local_pointer_local_keeps_threadgroup_initializer(tmp_pat
     compile_with_metal_if_available(generated)
 
 
+def test_metal_verbatim_issue_3925_bounded_stage_texture_array():
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[0]) & 1;
+                outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert "array<texture2d<float>, 2> tex" in code
+
+
+def stage_block_texture_array_shader(body):
+    return f"""
+    shader StageBlockTextureArray {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                {body}
+            }}
+        }}
+    }}
+    """
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "outp[i] = textureLod(tex[3], vec2(fin[i], 0.5), 0.0).x;",
+        "float acc = 0.0;"
+        " for (int j = 0; j < 4; j++) {"
+        " acc += textureLod(tex[j], vec2(fin[i], 0.5), 0.0).x; }"
+        " outp[i] = acc;",
+    ],
+    ids=["constant-index", "loop-index"],
+)
+def test_metal_stage_block_texture_array_is_sized_from_its_indices(body):
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(stage_block_texture_array_shader(body))
+    )
+
+    assert "array<texture2d<float>, 4> tex" in code
+    compile_with_metal_if_available(code)
+
+
+def test_metal_stage_block_texture_array_refuses_an_unbounded_index():
+    shader = stage_block_texture_array_shader(
+        "int k = int(fin[0]);"
+        " outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;"
+    )
+
+    # As for a shader-scope array, no bound reaches the index.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="tex"):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
 if __name__ == "__main__":
     pytest.main()
