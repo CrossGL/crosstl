@@ -15,6 +15,7 @@ import pytest
 import crosstl
 from crosstl.translator.semantics import NarrowIntegerUnsupportedError
 from crosstl.translator.semantics.narrow import NARROW_TARGETS
+from tests.spirv_friendly_names import friendly_spirv
 
 TARGETS = sorted(NARROW_TARGETS)
 
@@ -43,7 +44,10 @@ NESTED = """
 def translate(tmp_path, helpers, body, target):
     path = tmp_path / "kernel.cgl"
     path.write_text(KERNEL.format(helpers=helpers, body=body))
-    output = crosstl.translate(str(path), backend=target)
+    output = crosstl.translate(str(path), backend=target, format_output=False)
+    if target == "vulkan":
+        # Friendly ids (``%int_255``) whether or not SPIRV-Tools formats the output.
+        output = friendly_spirv(output)
     validate(tmp_path, output, target)
     return output
 
