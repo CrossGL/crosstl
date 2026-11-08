@@ -59,6 +59,7 @@ from .constrained_template_retention import (
 )
 from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
+from .defaulted_template_arguments import canonical_struct_template_arguments
 from .dependent_result_templates import dependent_result_template_names
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
@@ -26336,6 +26337,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     selected_partial_specializations[selection_key] = matching_partials[
                         0
                     ]
+                written_arguments = template_arguments
+                if not (matching_partials or has_unmaterializable_partial):
+                    template_arguments = canonical_struct_template_arguments(
+                        self, primary_template, template_arguments
+                    )
                 span_start = self._scoped_identifier_start(code, i)
                 instantiations.append(
                     (ident, template_arguments, (span_start, angle_end + 1))
@@ -26346,11 +26352,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     specialization_key = self._template_specialization_key(
                         ident, template_arguments
                     )
-                    discovered_materialized_structs.setdefault(ident, {})[
-                        specialization_key[1]
-                    ] = self._template_specialization_identifier(
+                    specialized_identifier = self._template_specialization_identifier(
                         ident, list(specialization_key[1])
                     )
+                    discovered = discovered_materialized_structs.setdefault(ident, {})
+                    discovered[specialization_key[1]] = specialized_identifier
+                    discovered[
+                        self._template_specialization_key(ident, written_arguments)[1]
+                    ] = specialized_identifier
                 i = angle_end + 1
                 continue
             i = self._next_scan_stop(code, i + 1, excluded_spans)

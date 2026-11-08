@@ -4314,6 +4314,21 @@ class MetalCodeGen(
             if definition is not None:
                 definitions.append(definition)
 
+        # A generic struct specialized here and a concrete struct the importer
+        # already materialized for the same template-id share a name. Emit an
+        # identical definition once; a differing one still reaches the compiler.
+        emitted_code = {}
+        unique_definitions = []
+        for definition in definitions:
+            name = definition.get("name")
+            code = " ".join(definition["code"].split())
+            if name and emitted_code.get(name) == code:
+                continue
+            if name:
+                emitted_code.setdefault(name, code)
+            unique_definitions.append(definition)
+        definitions = unique_definitions
+
         self.metal_generated_struct_names = {
             definition["name"] for definition in definitions if definition.get("name")
         }
