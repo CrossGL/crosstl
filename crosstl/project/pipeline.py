@@ -30,9 +30,14 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.backend.Metal.alias_template_types import fold_expression_decltypes
 from crosstl.backend.Metal.auto_placeholders import (
     deduced_auto_type,
     is_auto_placeholder,
+)
+from crosstl.backend.Metal.deduction_operand_types import (
+    is_unary_sign_position,
+    operand_expression_type,
 )
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
@@ -43,8 +48,14 @@ from crosstl.backend.Metal.function_specialization import (
     _template_parameter_values_from_arguments,
     unique_specialization_identifier,
 )
+from crosstl.backend.Metal.integral_constant_tags import (
+    concretize_integral_constant_tags,
+)
 from crosstl.backend.Metal.member_lowering_layers import (
     lower_members_with_late_specializations,
+)
+from crosstl.backend.Metal.orphaned_explicit_specializations import (
+    prune_orphaned_explicit_specializations,
 )
 from crosstl.backend.Metal.pointer_conversions import pointer_conversion_type
 from crosstl.backend.Metal.return_type_enablers import fold_concrete_enablers
@@ -18037,8 +18048,16 @@ def _metal_expression_type_or_placeholder(
         if base_type:
             return f"{base_type}*"
 
+    def infer_operand(operand: str) -> str | None:
+        return _metal_expression_type(
+            preprocessor, operand, type_environment, return_types
+        )
+
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
-        return type_environment.get(text)
+        declared = type_environment.get(text)
+        if declared is not None:
+            return declared
+        return operand_expression_type(preprocessor, text, infer_operand)
 
     brace_start = text.find("{")
     if brace_start > 0:
@@ -18078,7 +18097,7 @@ def _metal_expression_type_or_placeholder(
                 for part in parts
             ]
             return arithmetic_result_type(preprocessor, inferred, operator_text)
-    return None
+    return operand_expression_type(preprocessor, text, infer_operand)
 
 
 def _split_metal_expression_operator(expression: str, operator_text: str) -> list[str]:
@@ -18115,6 +18134,9 @@ def _split_metal_expression_operator(expression: str, operator_text: str) -> lis
             and bracket_depth == 0
             and angle_depth == 0
             and brace_depth == 0
+            and not (
+                operator_text in {"+", "-"} and is_unary_sign_position(expression, i)
+            )
         ):
             parts.append("".join(current).strip())
             current = []
@@ -23573,6 +23595,9 @@ def _project_template_materialization_for_artifact(
         materialized = preprocessor._prune_unreferenced_template_struct_declarations(
             materialized
         )
+    # Every tag argument is bound now; a concrete metal::bool_constant<true> becomes a declared tag struct
+    # (integral_constant_tags.py).
+    materialized = concretize_integral_constant_tags(preprocessor, materialized)
     unsupported_target_artifact = (
         target_artifact if post_materialization_unsupported else None
     )
@@ -23638,8 +23663,12 @@ def _project_template_materialization_for_artifact(
     ):
         return None
     # The source is parsed without preprocessing, so the materialized return-type enablers are folded to the
-    # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py).
-    materialized = fold_concrete_enablers(preprocessor, materialized)
+    # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py). Canonicalized
+    # alias templates can leave `decltype(float(0) + int(0))`, which names one built-in type (alias_template_types.py).
+    materialized = fold_expression_decltypes(
+        preprocessor, fold_concrete_enablers(preprocessor, materialized)
+    )
+    materialized = prune_orphaned_explicit_specializations(preprocessor, materialized)
 
     if unsupported:
         message = _template_materialization_unsupported_message(

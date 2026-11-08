@@ -32,6 +32,7 @@ from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MA
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 from crosstl.translator.codegen.metal_library_functions import MSL_LIBRARY_FUNCTIONS
 
+from .alias_template_types import fold_expression_decltypes
 from .arithmetic_conversions import builtin_arithmetic_conversion
 from .array_element_receivers import (
     array_element_receiver_end,
@@ -43,7 +44,9 @@ from .auto_integral_constants import deduced_integral_auto_type
 from .auto_placeholders import deduced_auto_type
 from .call_result_types import CallResultScope, infer_call_result_type
 from .category_traits import CATEGORY_TRAITS, evaluate_category_trait
+from .class_argument_precedence import class_identity_template_outranks
 from .concrete_free_operators import materialize_concrete_free_operators
+from .concrete_qualified_aliases import resolve_concrete_qualified_type_aliases
 from .conditional_types import select_conditional_type, select_nested_conditional_types
 from .constant_bit_builtins import BIT_BUILTIN_WIDTHS, fold_bit_builtin
 from .constrained_call_carriers import constrained_call_carriers
@@ -56,8 +59,10 @@ from .constrained_template_retention import (
 )
 from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
+from .dependent_result_templates import dependent_result_template_names
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
+from .forwarding_reference_accessors import forwarded_storage_expression
 from .function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
     _metal_function_parameter_declarations,
@@ -83,6 +88,7 @@ from .integral_constant_arithmetic import (
     fold_integral_constant_function_arithmetic,
     fold_integral_constant_parameter_arithmetic,
 )
+from .integral_constant_tags import concretize_integral_constant_tags
 from .library_fallback_lookup import (
     library_fallback_obstacle,
     library_using_declaration_present,
@@ -125,6 +131,12 @@ from .return_type_enablers import (
 )
 from .scope_qualifier_keywords import NON_SCOPE_KEYWORDS
 from .signed_type_spellings import fold_integer_type_spellings
+from .simd_group_template_overloads import (
+    canonicalize_struct_template_ids,
+    only_simd_group_overloads,
+    overloads_simd_group_function,
+    simd_group_library_overload_selected,
+)
 from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_assertion_sources import concrete_static_assertion_conditions
 from .static_member_constants import (
@@ -165,6 +177,9 @@ from .type_layout import metal_type_layout, metal_type_size
 from .unreachable_constrained_callers import (
     materialize_with_unreachable_callers,
     unreachable_caller_scope,
+)
+from .unreferenced_constrained_templates import (
+    prune_unreferenced_constrained_templates,
 )
 from .unused_specialization_members import prune_unreferenced_specialization_members
 from .value_traits import (
@@ -1296,6 +1311,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
         self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
+        # Assertions over constexpr aggregates and operators, such as MLX's
+        # `(complex_t<half>{1, 2} * complex_t<half>{3, 4}).real == -5`, are decided while the struct templates and
+        # their operators are still spelled as in the source, as template materialization decides them; an
+        # undecided one is left for the translator's check (translator/semantics/static_assertions.py).
+        processed = self._evaluate_static_assertions(processed, keep_unresolved=True)
         processed = self._materialize_project_template_instantiations(processed)
         # Concrete helper bodies must exist while their receiver's methods are
         # still present; lowering the struct first loses those later call sites.
@@ -1322,21 +1342,33 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             MetalStructMethodError,
         )
         processed = self._materialize_explicit_template_function_calls(processed)
+        # This source reaches the CrossGL generic path, which cannot defer a SIMD-group
+        # overload to each instantiation; the project materializer binds its own.
         processed = self._materialize_inferred_constrained_template_function_calls(
-            processed
+            processed, simd_group_overloads=True
         )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
+        # A constrained overload nothing calls would reach CrossGL without its constraint.
+        processed = prune_unreferenced_constrained_templates(self, processed)
         processed = prune_unreferenced_specialization_members(self, processed)
         processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
+        # A dependent member type substituted before its owner was materialized
+        # names a concrete struct's alias now; spell the alias target instead.
+        processed = resolve_concrete_qualified_type_aliases(self, processed)
         # Materialized instantiations are concrete: fold their type traits (is_same<float4, T0>::value with T0
         # bound) as for the source's own concrete code. No later stage folds a trait, so one left in concrete
         # code is refused for every target rather than reaching the parser as an identifier.
         processed = self._fold_concrete_type_trait_values(
             processed, require_resolution=True
         )
-        # With the traits folded, a materialized return-type enabler names its type.
-        processed = fold_concrete_enablers(self, processed)
+        # With the traits folded, a materialized return-type enabler names its type, and so does a decltype of
+        # built-in operands that a dependent result type leaves (dependent_result_templates.py). A concrete library
+        # tag (metal::bool_constant<true>) names a declared tag struct (integral_constant_tags.py).
+        processed = fold_expression_decltypes(
+            self, fold_concrete_enablers(self, processed)
+        )
+        processed = concretize_integral_constant_tags(self, processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
     def preprocess_for_entry_discovery(
@@ -1702,19 +1734,29 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     working += "\n"
 
     def _materialize_inferred_constrained_template_function_calls(
-        self, code: str
+        self, code: str, *, simd_group_overloads: bool = False
     ) -> str:
         return materialize_with_unreachable_callers(
-            self, code, self._materialize_constrained_template_calls_in_source
+            self,
+            code,
+            lambda source: self._materialize_constrained_template_calls_in_source(
+                source, simd_group_overloads=simd_group_overloads
+            ),
         )
 
-    def _materialize_constrained_template_calls_in_source(self, code: str) -> str:
+    def _materialize_constrained_template_calls_in_source(
+        self, code: str, *, simd_group_overloads: bool = False
+    ) -> str:
         # Arguments that call source functions are typed from this source, which includes the
         # instantiations an earlier round appended.
         with self._call_result_scope.active(code):
-            return self._materialize_constrained_template_calls_in_scope(code)
+            return self._materialize_constrained_template_calls_in_scope(
+                code, simd_group_overloads=simd_group_overloads
+            )
 
-    def _materialize_constrained_template_calls_in_scope(self, code: str) -> str:
+    def _materialize_constrained_template_calls_in_scope(
+        self, code: str, *, simd_group_overloads: bool = False
+    ) -> str:
         """Resolve ordinary calls to constrained free function templates.
 
         Metal overload sets commonly provide an SFINAE fallback next to a native
@@ -1735,10 +1777,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         """
 
         templates = self._find_template_functions(code)
+        # A template named like a SIMD-group function competes with the library per
+        # instantiation too; deduction is its only constraint.
         constrained = [
-            template for template in templates if template.template_constraints
+            template
+            for template in templates
+            if template.template_constraints
+            or (simd_group_overloads and overloads_simd_group_function(template))
         ]
-        if not constrained:
+        # Templates whose result is a decltype of their parameters are carriers (dependent_result_templates.py).
+        dependent_results = dependent_result_template_names(self, code, templates)
+        if not constrained and not dependent_results:
             return code
 
         # A template method retained inside a residual aggregate declaration is
@@ -1752,7 +1801,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             for template in constrained
             if self._containing_span(template.span[0], aggregate_spans) is None
         ]
-        if not constrained:
+        if not constrained and not dependent_results:
             return code
 
         by_name: Dict[str, List[_MetalTemplateFunction]] = {}
@@ -1782,6 +1831,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     code, reference.span[0], set()
                 )
             ],
+            dependent_results,
         )
         carrier_names = {template.name for template in carriers}
         for template in carriers:
@@ -1870,7 +1920,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         unconstrained_template_names = {
             template.name
             for template in templates
-            if not template.template_constraints and template.span not in carrier_spans
+            if not template.template_constraints
+            and template.span not in carrier_spans
+            and not (simd_group_overloads and overloads_simd_group_function(template))
         }
         reserved_identifiers = set(IDENTIFIER_RE.findall(masked_code))
 
@@ -1949,6 +2001,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if any(argument_type is None for argument_type in argument_types):
                 if call.name in carrier_names:
                     # The generic path instantiates it; templates it needs stay.
+                    continue
+                if owner_key is None and only_simd_group_overloads(visible_candidates):
+                    # Unconstrained templates keep this call for a later binder,
+                    # such as the project materializer, which types it.
+                    deferred_call_ids.add(id(call))
                     continue
                 if (
                     owner_key is None
@@ -2135,12 +2192,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         and namespace in associated_namespaces
                     )
                     for namespace in namespaces
-                ) and not exact_template_outranks(
-                    self,
-                    self._template_function_parameter_text(enabled[0][0]),
-                    enabled[0][1],
-                    argument_types,
-                    declaration.arguments,
+                ) and not (
+                    exact_template_outranks(
+                        self,
+                        self._template_function_parameter_text(enabled[0][0]),
+                        enabled[0][1],
+                        argument_types,
+                        declaration.arguments,
+                    )
+                    or class_identity_template_outranks(
+                        self,
+                        code,
+                        context,
+                        enabled[0][0],
+                        enabled[0][1],
+                        argument_types,
+                        declaration,
+                        call.argument_open,
+                    )
                 ):
                     self._raise_constrained_free_function_error(
                         code,
@@ -2272,6 +2341,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         call,
                         "the uniquely enabled overload could not be materialized",
                     )
+                # Type the body's arguments from the structs the source declares.
+                materialized = canonicalize_struct_template_ids(
+                    self,
+                    materialized,
+                    {struct.name for struct in structs},
+                )
                 reserved_identifiers.add(specialized_name)
                 generated_name_owners[preferred_name] = key
                 materialized_names[key] = specialized_name
@@ -2759,6 +2834,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         bindings: Mapping[str, str],
     ) -> bool:
         """Whether a Metal library overload, not the enabled ``template``, is the best function for ``call``."""
+        simd_group_selected = simd_group_library_overload_selected(
+            self, code, call, argument_types, template, bindings
+        )
+        if simd_group_selected is not None:
+            return simd_group_selected
         if (
             call.name not in LIBRARY_OVERLOAD_NAMES
             and call.name not in MSL_LIBRARY_FUNCTIONS
@@ -6533,7 +6613,8 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             set(method.parameter_names) | self._local_variable_names(body)
         )
         # Lowered methods leave the struct's type scope before explicit helper
-        # templates are materialized, so resolve only their argument lists here.
+        # templates are materialized and type traits are folded, so resolve
+        # only their argument lists here.
         replacements: List[Tuple[int, int, str]] = []
         index = 0
         while index < len(body):
@@ -6545,7 +6626,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 index += 1
                 continue
 
-            _identifier, consumed = self._read_identifier(body, index)
+            identifier, consumed = self._read_identifier(body, index)
             identifier_end = index + consumed
             angle_start = identifier_end
             while angle_start < len(body) and body[angle_start].isspace():
@@ -6560,7 +6641,15 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             call_start = angle_end + 1
             while call_start < len(body) and body[call_start].isspace():
                 call_start += 1
-            if call_start >= len(body) or body[call_start] != "(":
+            # A type trait's operands are types in every position, e.g. the
+            # owner alias in `is_same_v<scalar_T, float>`, so its argument list
+            # leaves the struct's type scope too even though no call follows.
+            is_type_trait = (
+                identifier.removesuffix("_v") in self._METAL_TYPE_TRAIT_ARITIES
+            )
+            if not is_type_trait and (
+                call_start >= len(body) or body[call_start] != "("
+            ):
                 index = identifier_end
                 continue
 
@@ -9515,7 +9604,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             return code
         return self._apply_text_replacements(code, replacements)
 
-    def _evaluate_static_assertions(self, code: str) -> str:
+    def _evaluate_static_assertions(
+        self, code: str, *, keep_unresolved: bool = False
+    ) -> str:
+        # With keep_unresolved only assertions over constexpr aggregates are decided here: a proven one is removed
+        # and a false one raises. Integral and undecided conditions stay in the source for the translator's own
+        # check (crosstl/translator/semantics/static_assertions.py), and CrossGL keeps their declarations.
         code = self._fold_concrete_type_trait_values(code)
         if "static_assert" not in code:
             return code
@@ -9645,6 +9739,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             folded, value = self._evaluate_static_integral_expression(
                 evaluation_condition
             )
+            if keep_unresolved and folded:
+                # An integral condition is the translator's to check, and CrossGL keeps the declaration.
+                assertion_index += 1
+                continue
             if not folded:
                 if constexpr_binary_operators is None:
                     constexpr_binary_operators = (
@@ -9684,6 +9782,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 constexpr_index_built = True
                 continue
 
+            if keep_unresolved and not folded:
+                assertion_index += 1
+                continue
             source_message = (
                 self._evaluate_metal_string_expression(assertion.message)
                 if assertion.message is not None
@@ -20791,6 +20892,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         receiver: str,
         arg_open: int,
         argument_values: Optional[List[str]] = None,
+        depth: int = 0,
     ) -> Tuple[int, str]:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -20799,7 +20901,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
             raise AssertionError("reference-return rejection must raise")
 
-        expression = self._direct_reference_return_expression(struct, method)
+        expression = self._direct_reference_return_expression(struct, method, depth)
         if expression is None:
             self._reject_reference_returning_method_call(
                 code, struct, method, arg_open, arg_close
@@ -20874,6 +20976,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         self,
         struct: _MetalStructDefinition,
         method: _MetalStructMethod,
+        depth: int = 0,
     ) -> Optional[str]:
         body = self._rewrite_method_body(struct, method)
         match = re.fullmatch(
@@ -20883,7 +20986,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if match is None:
             return None
-        return self._strip_enclosing_parens(match.group("expression").strip())
+        expression = self._strip_enclosing_parens(match.group("expression").strip())
+        # `return at(j, i);` forwards another accessor's storage (forwarding_reference_accessors.py).
+        forwarded = forwarded_storage_expression(
+            self, struct, method, expression, depth
+        )
+        return expression if forwarded is None else forwarded
 
     @staticmethod
     def _direct_reference_expression_is_safe(expression: str) -> bool:

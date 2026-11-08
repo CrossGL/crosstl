@@ -14,11 +14,14 @@ Such a template is a carrier: the pass materializes its reachable calls like tho
 every constraint holds, and binds the calls in each materialized body. A template whose body calls a carrier is a
 carrier too.
 
+A template whose result type the generic path cannot carry is a carrier as well, whatever its body calls
+(dependent_result_templates.py).
+
 Only an unambiguous template can be a carrier: one free function template of its name, no constrained template of
 the same name and no concrete overload. Anything else stays with the generic path, as before.
 """
 
-from typing import Any, Iterable, List, Sequence, Set
+from typing import AbstractSet, Any, Iterable, List, Sequence, Set
 
 __all__ = ["constrained_call_carriers"]
 
@@ -28,12 +31,13 @@ def constrained_call_carriers(
     constrained_names: Set[str],
     overloaded_names: Set[str],
     references: Iterable[Any],
+    required_names: AbstractSet[str] = frozenset(),
 ) -> List[Any]:
     """The carrier templates among ``templates``, in source order.
 
     ``templates`` are the free function templates outside aggregates. ``overloaded_names`` are names that also
     declare a concrete free function. ``references`` are the call references of every candidate and constrained
-    name, outside member calls.
+    name, outside member calls. ``required_names`` name templates that are carriers by themselves.
     """
     counts: dict = {}
     for template in templates:
@@ -50,8 +54,10 @@ def constrained_call_carriers(
     for reference in references:
         positions_by_name.setdefault(reference.name, []).append(reference.span[0])
 
-    needed = set(constrained_names)
-    carriers: List[Any] = []
+    carriers: List[Any] = [
+        template for template in candidates if template.name in required_names
+    ]
+    needed = set(constrained_names) | {template.name for template in carriers}
     changed = True
     while changed:
         changed = False

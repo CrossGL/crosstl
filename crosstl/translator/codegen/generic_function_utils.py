@@ -21,6 +21,10 @@ from ..ast import (
     ReturnNode,
     VariableNode,
 )
+from ..explicit_specializations import (
+    explicit_specialization_for,
+    explicit_specialization_index,
+)
 from .builtin_result_types import swizzle_access_type
 from .enum_utils import (
     generic_type_parts,
@@ -28,6 +32,11 @@ from .enum_utils import (
     substitute_generic_type_name,
 )
 from .generic_body_types import substitute_body_types
+from .generic_call_collection_keys import (
+    collected_generic_call_key,
+    remember_collected_generic_call_key,
+    reset_collected_generic_call_keys,
+)
 from .generic_call_results import (
     generic_call_argument_type_name,
     generic_call_result_type_name,
@@ -38,6 +47,7 @@ from .generic_emission_order import (
     reset_generic_function_emission,
 )
 from .generic_pointer_deduction import structured_buffer_element_type
+from .generic_result_types import reject_expression_result_type
 from .generic_specialization_names import (
     reserve_program_names,
     unique_specialization_name,
@@ -225,6 +235,9 @@ def prepare_generic_function_specializations(generator, functions, global_types=
         definitions[func_name].append(func)
     generator.generic_function_definitions = definitions
     generator.generic_function_definition_ordinals = definition_ordinals
+    generator.explicit_generic_specializations = explicit_specialization_index(
+        generator, functions
+    )
     generator.concrete_function_names = {
         func.name
         for func in functions or []
@@ -236,6 +249,7 @@ def prepare_generic_function_specializations(generator, functions, global_types=
     generator.generic_function_specializations = {}
     generator.generic_function_specialized_names = {}
     generator.generic_function_resolved_call_ids = set()
+    reset_collected_generic_call_keys(generator)
     reset_generic_function_emission(generator)
 
     if not definitions:
@@ -501,6 +515,10 @@ def generic_function_value_arguments(generator, func_name, args):
 def generic_function_call_key(generator, func_name, args):
     if is_reserved_generic_function_builtin_name(func_name):
         return None
+    if not getattr(generator, "collecting_generic_function_specializations", False):
+        collected = collected_generic_call_key(generator, func_name, args)
+        if collected is not None:
+            return collected
 
     definitions = getattr(generator, "generic_function_definitions", {}) or {}
     explicit_types = None
@@ -1008,12 +1026,15 @@ def _analyze_expression(generator, expr, substitutions):
         args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
         for arg in args:
             _analyze_expression(generator, arg, substitutions)
-        if (
-            func_name is not None
-            and generic_function_call_key(generator, func_name, args) is not None
-        ):
+        key = (
+            generic_function_call_key(generator, func_name, args)
+            if func_name is not None
+            else None
+        )
+        if key is not None:
             # Remember the call: later passes walk it without its function's local types.
             generator.generic_function_resolved_call_ids.add(id(expr))
+            remember_collected_generic_call_key(generator, func_name, args, key)
         return
     if isinstance(expr, ConstructorNode):
         for arg in getattr(expr, "arguments", []) or []:
@@ -1038,6 +1059,12 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
     specializations = generator.generic_function_specializations
     if key in specializations:
         return
+    explicit = explicit_specialization_for(generator, key)
+    if explicit is not None:
+        # The specialization is a concrete function of the program; calls name it instead of a clone.
+        specializations[key] = explicit
+        generator.generic_function_specialized_names[key] = explicit.name
+        return
     reject_late_generic_specialization(generator, func, key)
 
     clone = deepcopy(func)
@@ -1052,6 +1079,7 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
         getattr(func, "return_type", "void"),
         substitutions,
     )
+    reject_expression_result_type(func, key, clone.return_type)
     for param in getattr(clone, "parameters", getattr(clone, "params", [])) or []:
         concrete_type = substituted_generic_type(
             generator,

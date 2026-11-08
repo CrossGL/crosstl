@@ -81,6 +81,10 @@ from .ast import (
     create_legacy_shader_node,
 )
 from .codegen.array_utils import evaluate_literal_int_expression
+from .explicit_specializations import (
+    EXPLICIT_SPECIALIZATION_ATTRIBUTE,
+    explicit_specialization_annotation,
+)
 from .host_workgroup_size import (
     HOST_WORKGROUP_SIZE_ATTRIBUTE,
     HOST_WORKGROUP_SIZE_KEY,
@@ -1869,6 +1873,7 @@ class Parser:
         function_attributes = []
         linkage_qualifiers = set()
         source_licenses = set()
+        explicit_specialization = None
         for attribute in attributes + post_attributes:
             if attribute.name == "source_license":
                 arguments = attribute.arguments
@@ -1880,6 +1885,8 @@ class Parser:
                         "@source_license requires one registered license identifier"
                     )
                 source_licenses.add(license_name)
+            elif attribute.name == EXPLICIT_SPECIALIZATION_ATTRIBUTE:
+                explicit_specialization = explicit_specialization_annotation(attribute)
             elif attribute.name in {"metal_static", "metal_inline"}:
                 if attribute.arguments:
                     raise SyntaxError(f"@{attribute.name} does not accept arguments")
@@ -1901,9 +1908,19 @@ class Parser:
             linkage="internal" if "static" in linkage_qualifiers else "external",
             is_inline="inline" in linkage_qualifiers,
             annotations=(
-                {"source_licenses": tuple(sorted(source_licenses))}
-                if source_licenses
-                else None
+                {
+                    **(
+                        {"source_licenses": tuple(sorted(source_licenses))}
+                        if source_licenses
+                        else {}
+                    ),
+                    **(
+                        {EXPLICIT_SPECIALIZATION_ATTRIBUTE: explicit_specialization}
+                        if explicit_specialization
+                        else {}
+                    ),
+                }
+                or None
             ),
         )
 
