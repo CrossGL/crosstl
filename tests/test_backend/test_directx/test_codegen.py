@@ -7670,11 +7670,11 @@ def test_codegen_dependent_typename_scoped_template_traits_are_refused():
         }
     """).strip()
 
-    # ``enable_if`` and ``is_arithmetic`` are type traits computed through a value parameter and specializations,
+    # ``enable_if`` and ``is_arithmetic`` are type traits computed through partial and explicit specializations,
     # which CrossGL cannot express; the importer used to emit ``Wrapper wf;`` with an undeclared ``T`` member.
     with pytest.raises(
         DirectXImportRefused,
-        match=r"HLSL struct template 'hlsl::enable_if' declares the value parameter 'bool B'",
+        match=r"HLSL struct 'hlsl::enable_if' is a partial specialization",
     ):
         generate_crossgl(code)
 

@@ -90,6 +90,7 @@ The [full 3.6.0 notes](https://github.com/CrossGL/crosstl/blob/v3.6.0/CHANGELOG.
 
 ### Added
 
+- HLSL import translates template value parameters (`template <typename T, uint N>`) on function and struct templates, including templates inside namespaces, to CrossGL generic parameters bound at each use (`sum<uint, 5u>`, `Ring<float, 4u>`, with defaults of struct templates spelled out). A defaulted value parameter of a function template is still refused with `DirectXImportRefused`.
 - A compute, mesh or task entry whose threadgroup size the host chooses at dispatch time, such as a Metal kernel that reads `threads_per_threadgroup`, translates to SPIR-V, GLSL, WGSL, HLSL and Slang. The size comes from specialization constants or WGSL overrides, or from `CROSSGL_WORKGROUP_SIZE_X`, `_Y` and `_Z` macros that the host defines when it compiles the shader.
 - HLSL output reads a specialization constant without a default from a `CROSSGL_SPECIALIZE_<name>` macro.
 - `@explicit_specialization(primary, types)` replaces the body of a generic function for the given type arguments.
