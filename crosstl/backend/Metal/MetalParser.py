@@ -444,6 +444,7 @@ class MetalParser:
         self.last_struct_type_aliases = []
         self.last_struct_constructors = []
         self.last_struct_declares_assignment_operator = False
+        self.last_struct_declares_subscript_operator = False
         self.last_struct_call_operator_declarations = []
         self.last_struct_nested_aggregates = []
         self.last_type_specifier_qualifier_contract = {
@@ -2893,6 +2894,9 @@ class MetalParser:
         struct_node.declares_assignment_operator = (
             self.last_struct_declares_assignment_operator
         )
+        struct_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
+        )
         struct_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -2956,6 +2960,9 @@ class MetalParser:
         class_node.constructors = list(self.last_struct_constructors)
         class_node.declares_assignment_operator = (
             self.last_struct_declares_assignment_operator
+        )
+        class_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
         )
         class_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
@@ -3042,6 +3049,9 @@ class MetalParser:
         union_node.declares_assignment_operator = (
             self.last_struct_declares_assignment_operator
         )
+        union_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
+        )
         union_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -3123,6 +3133,7 @@ class MetalParser:
         call_operator_declarations = []
         nested_aggregates = []
         declares_assignment_operator = False
+        declares_subscript_operator = False
 
         def capture_nested_aggregate(nested):
             if nested is None:
@@ -3181,6 +3192,9 @@ class MetalParser:
                 declares_assignment_operator |= (
                     self.skipped_member_declares_assignment_operator()
                 )
+                declares_subscript_operator |= (
+                    self.skipped_member_declares_subscript_operator()
+                )
                 self.skip_template_declaration()
                 continue
             member_alignas = self.parse_alignas_specifiers()
@@ -3220,6 +3234,9 @@ class MetalParser:
                 declares_assignment_operator |= (
                     self.skipped_member_declares_assignment_operator()
                 )
+                declares_subscript_operator |= (
+                    self.skipped_member_declares_subscript_operator()
+                )
                 self.skip_struct_method()
                 continue
             qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
@@ -3227,6 +3244,10 @@ class MetalParser:
             member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             if var_name == "operator":
                 declares_assignment_operator |= self.current_token[0] == "EQUALS"
+                # The declarator parser reads ``operator[]`` as an array of unknown bound.
+                declares_subscript_operator |= bool(array_sizes) or (
+                    self.current_token[0] == "LBRACKET"
+                )
                 self.skip_struct_method()
                 continue
             if self.current_token[0] == "LPAREN":
@@ -3265,6 +3286,7 @@ class MetalParser:
         self.last_struct_call_operator_declarations = call_operator_declarations
         self.last_struct_nested_aggregates = nested_aggregates
         self.last_struct_declares_assignment_operator = declares_assignment_operator
+        self.last_struct_declares_subscript_operator = declares_subscript_operator
         return members
 
     def skipped_member_declares_assignment_operator(self):
@@ -3283,6 +3305,26 @@ class MetalParser:
                 "operator",
             )
             if names_operator and self.tokens[index + 1][0] == "EQUALS":
+                return True
+            index += 1
+        return False
+
+    def skipped_member_declares_subscript_operator(self):
+        """Whether the member declaration at the cursor declares ``operator[]``.
+
+        The struct parser skips member operators, but a subscript of a dependent value may select a user-declared
+        subscript operator when its template is instantiated ([over.sub]), which the importer has to know.
+        """
+        index = self.pos
+        while index + 2 < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type in {"LBRACE", "SEMICOLON", "EOF"}:
+                return False
+            if (
+                self.tokens[index] == ("IDENTIFIER", "operator")
+                and self.tokens[index + 1][0] == "LBRACKET"
+                and self.tokens[index + 2][0] == "RBRACKET"
+            ):
                 return True
             index += 1
         return False
