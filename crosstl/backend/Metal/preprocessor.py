@@ -3332,6 +3332,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if qualifiers & {"extern", "typedef", "thread_local", "volatile"}:
                 continue
             namespace = self._namespace_at(namespace_spans, match.start())
+            if self._defines_function_after(code, match.end("name")):
+                # `constexpr T name() { ... }` is a function, whatever the scope of `T`.
+                continue
             source_type = re.sub(r"\s*::\s*", "::", match.group("type"))
             if source_type.startswith("::"):
                 source_type = source_type[2:]
@@ -3447,6 +3450,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if "::" not in struct.qualified_name:
             return ""
         return struct.qualified_name.rsplit("::", 1)[0]
+
+    def _defines_function_after(self, code: str, name_end: int) -> bool:
+        """Whether the declarator ending at ``name_end`` has a parameter list followed by a function body."""
+        cursor = self._skip_cpp_trivia(code, name_end)
+        if cursor >= len(code) or code[cursor] != "(":
+            return False
+        end = self._find_matching_delimiter(code, cursor, "(", ")")
+        if end is None:
+            return False
+        after = self._skip_cpp_trivia(code, end + 1)
+        return bool(
+            re.match(
+                r"(?:(?:const|noexcept|thread|device)\b\s*)*(?:\{|->)", code[after:]
+            )
+        )
 
     def _parse_compile_time_global_initializer(
         self, code: str, name_end: int, expected_type_names: Set[str]
