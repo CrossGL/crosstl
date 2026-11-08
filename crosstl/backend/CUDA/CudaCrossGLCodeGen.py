@@ -2,6 +2,7 @@
 
 import re
 
+from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..namespace_constants import is_c_family_namespace_constant
@@ -14,6 +15,7 @@ from .buffer_layout_import import EmittedBufferLayouts
 from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
+    BinaryOpNode,
     BlockNode,
     CastNode,
     DesignatedInitializerNode,
@@ -29,6 +31,18 @@ from .CudaAst import (
 from .keyword_renames import source_identifier_names, unused_identifier_name
 from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
+
+
+class CudaSurfaceByteOffsetError(TranslationDiagnostic):
+    """A CUDA surface call whose x byte offset cannot be shown to be a multiple of the element size.
+
+    CUDA surface functions take x as a byte offset while CrossGL ``imageLoad``/``imageStore``
+    take a texel coordinate, so the frontend must divide the offset by the element size. When
+    the offset cannot be proven to be a multiple of that size, passing it through unchanged
+    would silently address the wrong texel, so the call is refused instead.
+    """
+
+    code = CODE_PREFIX + "cuda-surface-byte-offset-unproven"
 
 
 class CudaToCrossGLConverter:
@@ -234,6 +248,7 @@ class CudaToCrossGLConverter:
         "float4": 16,
         "double4": 32,
     }
+    CUDA_SURFACE_VECTOR_COMPONENTS = ("x", "y", "z", "w")
     CUDA_DEVICE_GRAPH_LAUNCH_MODES = {
         "cudaStreamGraphFireAndForget": "fire-and-forget",
         "cudaStreamGraphTailLaunch": "tail",
@@ -263,6 +278,7 @@ class CudaToCrossGLConverter:
         self.vector1_name_scopes = [{}]
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
+        self.struct_member_types = {}
         self.struct_resource_member_hints = {}
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
@@ -295,6 +311,7 @@ class CudaToCrossGLConverter:
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
         )
+        self.struct_member_types = self.collect_struct_member_types(ast_node)
         self.struct_resource_member_hints = self.collect_struct_resource_member_hints(
             ast_node
         )
@@ -5954,7 +5971,9 @@ class CudaToCrossGLConverter:
                 "surfCubemapread": 3,
                 "surfCubemapLayeredread": 3,
             }[base_name]
-            return self.format_cuda_surface_read(args, dimensions, value_type)
+            return self.format_cuda_surface_read(
+                args, dimensions, value_type, base_name, raw_args
+            )
 
         if base_name in {
             "surf1Dwrite",
@@ -5975,7 +5994,7 @@ class CudaToCrossGLConverter:
                 "surfCubemapLayeredwrite": 3,
             }[base_name]
             return self.format_cuda_surface_write(
-                args, dimensions, value_type, raw_args
+                args, dimensions, value_type, base_name, raw_args
             )
 
         return None
@@ -6080,78 +6099,273 @@ class CudaToCrossGLConverter:
             "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
         )
 
-    def format_cuda_surface_read(self, args, dimensions, value_type):
+    def format_cuda_surface_read(
+        self, args, dimensions, value_type, function_name, raw_args=None
+    ):
         if len(args) < dimensions + 1:
             return None
         surface_name = args[0]
-        coord_args = [self.strip_surface_byte_offset(args[1], value_type)]
+        coord_args = [
+            self.scale_cuda_surface_byte_offset(
+                raw_args[1] if raw_args else None, value_type, function_name
+            )
+        ]
         coord_args.extend(args[2 : dimensions + 1])
         return f"imageLoad({surface_name}, {self.format_vector_constructor(f'vec{dimensions}', coord_args, 'i32')})"
 
-    def format_cuda_surface_write(self, args, dimensions, value_type, raw_args=None):
+    def format_cuda_surface_write(
+        self, args, dimensions, value_type, function_name, raw_args=None
+    ):
         if len(args) < dimensions + 2:
             return None
         if value_type is None and raw_args:
             value_type = self.infer_cuda_surface_value_type(raw_args[0])
         value = args[0]
         surface_name = args[1]
-        coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
+        coord_args = [
+            self.scale_cuda_surface_byte_offset(
+                raw_args[2] if raw_args else None, value_type, function_name
+            )
+        ]
         coord_args.extend(args[3 : dimensions + 2])
         coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
         return f"imageStore({surface_name}, {coord}, {value})"
 
-    def strip_surface_byte_offset(self, expression, value_type):
-        text = str(expression).strip()
-        if text.startswith("(") and text.endswith(")"):
-            text = text[1:-1].strip()
+    def scale_cuda_surface_byte_offset(self, raw_offset, value_type, function_name):
+        """Scale a CUDA surface x byte offset down to a texel coordinate.
 
-        if value_type:
-            suffix = f" * sizeof({value_type})"
-            if text.endswith(suffix):
-                return text[: -len(suffix)].strip()
+        CUDA surface functions take x as a byte offset while CrossGL
+        ``imageLoad``/``imageStore`` take a texel coordinate, so the offset is divided by
+        the element size. The quotient is folded when the offset is provably a multiple of
+        the element size (``x * 4 + 4`` with a 4-byte element becomes ``x + 1``). Anything
+        else is refused: passing an unscaled byte offset through would silently address
+        the wrong texel.
+        """
+        offset_text = self.visit(raw_offset) if raw_offset is not None else "?"
+        if value_type is None:
+            raise CudaSurfaceByteOffsetError(
+                f"{function_name} cannot scale its x byte offset {offset_text}: "
+                "the element type is unknown, so the offset cannot be shown to be "
+                "a multiple of the element size"
+            )
+        byte_size = self.cuda_surface_value_byte_size(value_type)
+        if byte_size is None:
+            raise CudaSurfaceByteOffsetError(
+                f"{function_name} cannot scale its x byte offset {offset_text}: "
+                f"element type {value_type!r} has no known size, so the offset cannot "
+                "be shown to be a multiple of the element size"
+            )
+        linear = self.cuda_surface_byte_offset_linear_form(raw_offset)
+        if linear is None:
+            raise CudaSurfaceByteOffsetError(
+                f"{function_name} x byte offset {offset_text} is not provably a multiple "
+                f"of sizeof({value_type}) ({byte_size} bytes); write the offset as a "
+                f"multiple of the element size, for example x * sizeof({value_type})"
+            )
+        base, coeff, const = linear
+        if coeff % byte_size != 0 or const % byte_size != 0:
+            raise CudaSurfaceByteOffsetError(
+                f"{function_name} x byte offset {offset_text} is not provably a multiple "
+                f"of sizeof({value_type}) ({byte_size} bytes); write the offset as a "
+                f"multiple of the element size, for example x * sizeof({value_type})"
+            )
+        coeff //= byte_size
+        const //= byte_size
+        if base is None or coeff == 0:
+            return str(const)
+        base_text = self.visit(base)
+        if coeff == 1 and const == 0:
+            return base_text
+        if coeff == 1:
+            return f"{base_text} + {const}" if const > 0 else f"{base_text} - {-const}"
+        if const == 0:
+            return f"{base_text} * {coeff}"
+        return (
+            f"{base_text} * {coeff} + {const}"
+            if const > 0
+            else f"{base_text} * {coeff} - {-const}"
+        )
 
-            byte_size = self.cuda_surface_value_byte_size(value_type)
-            if byte_size is not None:
-                for literal in self.cuda_byte_size_literals(byte_size):
-                    suffix = f" * {literal}"
-                    if text.endswith(suffix):
-                        return text[: -len(suffix)].strip()
-                    prefix = f"{literal} * "
-                    if text.startswith(prefix):
-                        return text[len(prefix) :].strip()
+    def cuda_surface_byte_offset_linear_form(self, expression):
+        """Reduce an offset expression to ``(base, coeff, const)`` with ``offset == coeff * base + const``.
 
-        marker = " * sizeof("
-        if marker in text and text.endswith(")"):
-            return text.split(marker, 1)[0].strip()
+        ``base`` is the remaining AST node (``None`` for a pure constant) and ``coeff``/``const``
+        are integers. Returns ``None`` when the expression cannot be written in that form, for
+        example a product of two non-constant expressions.
+        """
+        if expression is None:
+            return None
+        if isinstance(expression, CastNode):
+            return self.cuda_surface_byte_offset_linear_form(expression.expression)
+        if isinstance(expression, str):
+            literal = self.parse_cuda_surface_integer_literal(expression)
+            if literal is not None:
+                return (None, 0, literal)
+            if re.fullmatch(r"[A-Za-z_]\w*(?:::\w+)*", expression):
+                return (expression, 1, 0)
+            return None
+        if isinstance(expression, UnaryOpNode):
+            if expression.op in {"-", "+"}:
+                inner = self.cuda_surface_byte_offset_linear_form(expression.operand)
+                if inner is None:
+                    return None
+                base, coeff, const = inner
+                if expression.op == "-":
+                    return (base, -coeff, -const)
+                return inner
+            return (expression, 1, 0)
+        if isinstance(expression, FunctionCallNode):
+            raw_name = expression.name if isinstance(expression.name, str) else None
+            if (
+                raw_name == "sizeof"
+                and len(expression.args) == 1
+                and isinstance(expression.args[0], str)
+            ):
+                size = self.cuda_surface_value_byte_size(expression.args[0])
+                if size is None:
+                    return None
+                return (None, 0, size)
+            return (expression, 1, 0)
+        if isinstance(expression, BinaryOpNode):
+            left = self.cuda_surface_byte_offset_linear_form(expression.left)
+            right = self.cuda_surface_byte_offset_linear_form(expression.right)
+            if left is None or right is None:
+                return None
+            left_base, left_coeff, left_const = left
+            right_base, right_coeff, right_const = right
+            if expression.op == "*":
+                if left_base is None:
+                    return (
+                        right_base,
+                        right_coeff * left_const,
+                        right_const * left_const,
+                    )
+                if right_base is None:
+                    return (
+                        left_base,
+                        left_coeff * right_const,
+                        left_const * right_const,
+                    )
+                return None
+            if expression.op in {"+", "-"}:
+                sign = 1 if expression.op == "+" else -1
+                if left_base is None and right_base is None:
+                    return (None, 0, left_const + sign * right_const)
+                if left_base is None:
+                    return (
+                        right_base,
+                        sign * right_coeff,
+                        left_const + sign * right_const,
+                    )
+                if right_base is None:
+                    return (
+                        left_base,
+                        left_coeff,
+                        left_const + sign * right_const,
+                    )
+                if repr(left_base) == repr(right_base):
+                    return (
+                        left_base,
+                        left_coeff + sign * right_coeff,
+                        left_const + sign * right_const,
+                    )
+                return None
+            return None
+        return (expression, 1, 0)
 
-        return expression
+    def parse_cuda_surface_integer_literal(self, text):
+        """Parse a CUDA integer literal to an int, or return None when it is not one."""
+        cleaned = str(text).replace("'", "")
+        match = re.fullmatch(
+            r"(?i)(0x[0-9a-f]+|0b[01]+|0[0-7]*|[1-9][0-9]*)(u|l|ul|lu|ull|llu)?",
+            cleaned,
+        )
+        if match is None:
+            return None
+        digits = match.group(1)
+        try:
+            if digits.lower().startswith("0x"):
+                return int(digits, 16)
+            if digits.lower().startswith("0b"):
+                return int(digits, 2)
+            if len(digits) > 1 and digits.startswith("0"):
+                return int(digits, 8)
+            return int(digits, 10)
+        except ValueError:
+            return None
 
     def infer_cuda_surface_value_type(self, expression):
+        """Element type of a ``surf*write`` value, including member and array accesses."""
+        value_type = self.cuda_surface_expression_type(expression)
+        return self.cuda_surface_element_type(value_type)
+
+    def cuda_surface_expression_type(self, expression):
+        """CUDA type of a value expression, or None when it cannot be inferred."""
+        if isinstance(expression, str):
+            return self.lookup_variable_type(expression)
         if isinstance(expression, CastNode):
             return self.strip_type_qualifiers(expression.target_type)
         if isinstance(expression, ArrayAccessNode):
-            array_type = self.cuda_surface_value_source_type(expression.array)
+            array_type = self.cuda_surface_expression_type(expression.array)
             return self.cuda_surface_element_type(array_type)
-        if isinstance(expression, str):
-            return self.cuda_surface_element_type(self.lookup_variable_type(expression))
+        if isinstance(expression, MemberAccessNode):
+            return self.cuda_surface_member_type(expression)
         if isinstance(expression, UnaryOpNode) and expression.op == "*":
-            return self.cuda_surface_element_type(
-                self.cuda_surface_value_source_type(expression.operand)
-            )
+            operand_type = self.cuda_surface_expression_type(expression.operand)
+            return self.cuda_surface_element_type(operand_type)
         return None
 
-    def cuda_surface_value_source_type(self, expression):
-        if isinstance(expression, str):
-            return self.lookup_variable_type(expression)
-        if isinstance(expression, ArrayAccessNode):
-            return self.cuda_surface_element_type(
-                self.cuda_surface_value_source_type(expression.array)
-            )
-        if isinstance(expression, CastNode):
-            return expression.target_type
-        if isinstance(expression, UnaryOpNode):
-            return self.cuda_surface_value_source_type(expression.operand)
-        return None
+    def cuda_surface_member_type(self, expression):
+        """Type of a member access, from the struct definition or a vector component."""
+        object_type = self.cuda_surface_expression_type(expression.object)
+        named_type = self.cuda_surface_named_type(object_type)
+        if named_type is None:
+            return None
+        member_types = self.struct_member_types.get(named_type)
+        if member_types is not None:
+            member_type = member_types.get(expression.member)
+            if member_type is not None:
+                return self.strip_type_qualifiers(member_type)
+            return None
+        return self.cuda_vector_component_scalar_type(named_type, expression.member)
+
+    def cuda_surface_named_type(self, type_name):
+        """Strip qualifiers, aliases, pointers and array suffixes to a plain type name."""
+        if not type_name:
+            return None
+        type_name = self.strip_type_qualifiers(self.resolve_type_alias(type_name))
+        type_name = type_name.replace("*", "").split("[", 1)[0].strip()
+        for prefix in ("struct ", "union "):
+            if type_name.startswith(prefix):
+                type_name = type_name[len(prefix) :].strip()
+        return type_name or None
+
+    def cuda_vector_component_scalar_type(self, base_type, member):
+        """Scalar type of a single-component access such as ``float4.x``."""
+        scalars = {
+            "char": "char",
+            "uchar": "unsigned char",
+            "short": "short",
+            "ushort": "unsigned short",
+            "int": "int",
+            "uint": "unsigned int",
+            "longlong": "long long",
+            "ulonglong": "unsigned long long",
+            "half": "half",
+            "__half": "half",
+            "float": "float",
+            "double": "double",
+        }
+        match = re.fullmatch(r"([A-Za-z_]+)(\d)", base_type)
+        if match is None:
+            return None
+        scalar = scalars.get(match.group(1))
+        if scalar is None:
+            return None
+        dimension = int(match.group(2))
+        if member not in self.CUDA_SURFACE_VECTOR_COMPONENTS[:dimension]:
+            return None
+        return scalar
 
     def cuda_surface_element_type(self, type_name):
         if not type_name:
@@ -6169,10 +6383,6 @@ class CudaToCrossGLConverter:
         value_type = self.strip_type_qualifiers(self.resolve_type_alias(value_type))
         value_type = value_type.replace("*", "").strip()
         return self.CUDA_SURFACE_VALUE_BYTE_SIZES.get(value_type)
-
-    def cuda_byte_size_literals(self, byte_size):
-        text = str(byte_size)
-        return (text, f"{text}u", f"{text}U", f"{text}ul", f"{text}UL")
 
     def format_unsupported_cuda_resource_expression(self, kind, member, fallback):
         return (
