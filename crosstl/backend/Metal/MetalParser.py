@@ -4,6 +4,10 @@ import re
 import sys
 
 from ..switch_clauses import record_default_position
+from .explicit_entry_instantiations import (
+    instantiated_entry_name,
+    refuse_unmaterialized_entry_instantiations,
+)
 from .floating_point import reject_contraction_tokens
 from .local_aggregate_declarators import (
     split_block_aggregate_declaration,
@@ -334,6 +338,7 @@ class MetalParser:
         self.tokens = tokens
         self.pos = 0
         self.file_path = file_path
+        self.explicit_entry_instantiations = []
         self.max_template_specializations = (
             DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
             if max_template_specializations is None
@@ -586,6 +591,11 @@ class MetalParser:
         try:
             shader = self.parse_shader()
             self.eat("EOF")
+            refuse_unmaterialized_entry_instantiations(
+                self.explicit_entry_instantiations,
+                getattr(shader, "functions", None),
+                self.max_template_specializations,
+            )
             return shader
         except (MetalParserError, MetalCallOperatorAssociationError):
             raise
@@ -1088,6 +1098,10 @@ class MetalParser:
 
     def parse_template_declaration(self):
         start_token = self.current_token
+        if self.peek(1)[0] != "LESS_THAN":
+            instantiation = instantiated_entry_name(self.tokens, self.pos + 1)
+            if instantiation is not None:
+                self.explicit_entry_instantiations.append(instantiation)
         template_parameters = self.parse_template_prefix()
         template_parameter_defaults = dict(
             getattr(self, "last_template_parameter_defaults", {}) or {}
