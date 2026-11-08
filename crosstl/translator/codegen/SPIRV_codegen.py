@@ -259,6 +259,10 @@ from .spirv_standard_constants import (
     spirv_non_finite_float_literal,
     spirv_standard_float_constant,
 )
+from .spirv_storage_subscripts import (
+    reads_storage_buffer_element,
+    storage_buffer_subscript_element_type_name,
+)
 from .spirv_struct_varyings import (
     flatten_struct_varying,
     load_flattened_struct_varying,
@@ -20203,6 +20207,9 @@ class VulkanSPIRVCodeGen(
                 return self.infer_expression_result_type(expr.args[0])
             return spirv_pack_result_type(self, callee_name)
         if isinstance(expr, ArrayAccessNode):
+            buffer_element_type = storage_buffer_subscript_element_type_name(self, expr)
+            if buffer_element_type is not None:
+                return self.map_crossgl_type(buffer_element_type)
             array_type = self.infer_expression_result_type(expr.array)
             if array_type is None:
                 return None
@@ -22797,6 +22804,9 @@ class VulkanSPIRVCodeGen(
         return re.sub(r"\s+", "", str(type_name))
 
     def call_argument_type_name(self, arg) -> Optional[str]:
+        if reads_storage_buffer_element(self, arg):
+            inferred_type = self.infer_expression_result_type(arg)
+            return None if inferred_type is None else inferred_type.type.base_type
         storage_buffer_type = self.storage_buffer_expression_type_name(arg)
         if storage_buffer_type is not None:
             return storage_buffer_type
