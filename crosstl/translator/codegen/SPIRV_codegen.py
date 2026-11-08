@@ -1536,14 +1536,18 @@ class VulkanSPIRVCodeGen(
             return self.vector_constants[key]
 
         id_value = self.get_id()
+        is_specialized = any(
+            self.is_specialization_constant_value(component) for component in components
+        )
+        opcode = "OpSpecConstantComposite" if is_specialized else "OpConstantComposite"
 
         component_list = " ".join([f"%{component.id}" for component in components])
-        self.emit(
-            f"%{id_value} = OpConstantComposite %{vector_type.id} {component_list}"
-        )
+        self.emit(f"%{id_value} = {opcode} %{vector_type.id} {component_list}")
 
         spirv_id = SpirvId(id_value, vector_type.type)
         self.value_types[id_value] = vector_type
+        if is_specialized:
+            self.specialization_constant_result_ids.add(id_value)
         self.vector_constants[key] = spirv_id
         return spirv_id
 
@@ -1560,13 +1564,17 @@ class VulkanSPIRVCodeGen(
             return self.composite_constants[key]
 
         id_value = self.get_id()
-        component_list = " ".join(f"%{component.id}" for component in components)
-        self.emit(
-            f"%{id_value} = OpConstantComposite %{composite_type.id} {component_list}"
+        is_specialized = any(
+            self.is_specialization_constant_value(component) for component in components
         )
+        opcode = "OpSpecConstantComposite" if is_specialized else "OpConstantComposite"
+        component_list = " ".join(f"%{component.id}" for component in components)
+        self.emit(f"%{id_value} = {opcode} %{composite_type.id} {component_list}")
 
         spirv_id = SpirvId(id_value, composite_type.type)
         self.value_types[id_value] = composite_type
+        if is_specialized:
+            self.specialization_constant_result_ids.add(id_value)
         self.composite_constants[key] = spirv_id
         return spirv_id
 
