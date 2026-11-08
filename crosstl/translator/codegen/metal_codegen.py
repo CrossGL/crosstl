@@ -10985,6 +10985,11 @@ class MetalCodeGen(
                 and func_name not in self.user_function_names
             ):
                 return self.expression_result_type(args[0])
+            componentwise_type = self.metal_componentwise_builtin_result_type(
+                func_name, args
+            )
+            if componentwise_type is not None:
+                return componentwise_type
             if (
                 func_name in {"inverseSqrt", "inversesqrt", "roundEven"}
                 and args
