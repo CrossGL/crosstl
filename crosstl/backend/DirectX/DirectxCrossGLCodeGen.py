@@ -37,6 +37,14 @@ from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
 from .discarded_values import VALUE_STATEMENT_TYPES, discarded_cast_operand
+from .function_templates import (
+    explicit_specialization_annotation,
+    specialization_identifier_renames,
+    template_call_result_raw_type,
+    template_function_generic_prefix,
+    template_type_parameter_names,
+    templated_call_name,
+)
 from .hlsl_matrix_import import (
     HLSLMatrixImportMixin,
     crossgl_matrix_type_name,
@@ -2492,6 +2500,9 @@ class HLSLToCrossGLConverter(
     def function_call_value_raw_type(self, expr):
         if not isinstance(expr.name, MemberAccessNode):
             if isinstance(expr.name, str):
+                deduced = template_call_result_raw_type(self, expr)
+                if deduced is not None:
+                    return deduced
                 type_name = self.resolve_integer_alias(expr.name)
                 if source_integer_shape(type_name) is not None:
                     return type_name
@@ -3717,6 +3728,12 @@ class HLSLToCrossGLConverter(
         self.function_identifier_renames = self.collect_function_identifier_renames(
             ast.functions
         )
+        self.specialization_identifiers = specialization_identifier_renames(
+            self,
+            ast.functions,
+            set(self.source_function_names)
+            | set(self.function_identifier_renames.values()),
+        )
         self.type_identifier_renames = self.collect_type_identifier_renames(ast)
         self.global_identifier_renames = self.collect_global_identifier_renames(ast)
         self.flattened_stage_struct_names = self.collect_flattened_stage_struct_names(
@@ -4349,7 +4366,9 @@ class HLSLToCrossGLConverter(
         )
         if precise_as_attribute:
             code += "    " * indent + "@ precise\n"
-        code += "    " * indent
+        previous_template_type_names = getattr(self, "current_template_type_names", ())
+        self.current_template_type_names = template_type_parameter_names(func)
+        code += "    " * indent + template_function_generic_prefix(self, func)
         previous_variable_types = self.current_variable_types
         previous_resource_array_dims = self.current_resource_array_dims
         previous_identifier_renames = self.current_identifier_renames
@@ -4391,7 +4410,10 @@ class HLSLToCrossGLConverter(
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
         stage_entry_attribute = " @ stage_entry" if stage_entry else ""
-        function_name = self.render_function_identifier(entry_name or func.name)
+        stage_entry_attribute += explicit_specialization_annotation(self, func)
+        function_name = getattr(self, "specialization_identifiers", {}).get(
+            id(func)
+        ) or self.render_function_identifier(entry_name or func.name)
         precise_prefix = (
             "" if precise_as_attribute else self.format_precise_qualifier_prefix(func)
         )
@@ -4408,6 +4430,7 @@ class HLSLToCrossGLConverter(
         self.current_variable_types = previous_variable_types
         self.current_resource_array_dims = previous_resource_array_dims
         self.current_identifier_renames = previous_identifier_renames
+        self.current_template_type_names = previous_template_type_names
         self.current_struct_method = previous_struct_method
         self.current_struct_method_locals = previous_struct_method_locals
         self.current_stage_struct_parameter_member_aliases = (
@@ -5481,6 +5504,8 @@ class HLSLToCrossGLConverter(
                 and func_name not in self.source_function_names
             ):
                 func_name = self.map_type(self.resolve_integer_alias(func_name))
+            if isinstance(func_name, str) and "<" in func_name:
+                func_name = templated_call_name(self, func_name)
             func_name = self.render_function_identifier(func_name)
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
@@ -5925,6 +5950,9 @@ class HLSLToCrossGLConverter(
         }
         prefix = prefixes.get(scalar)
         if prefix is None:
+            if scalar in getattr(self, "current_template_type_names", ()):
+                # ``vector<T, 3>`` of a function template is CrossGL's ``vec3<T>``.
+                return f"vec{components}<{scalar}>"
             return None
         return f"{prefix}{components}"
 

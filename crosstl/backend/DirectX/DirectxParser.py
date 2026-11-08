@@ -41,6 +41,13 @@ from .DirectxAst import (
     WhileNode,
 )
 from .entry_stage_hints import demote_name_hinted_helpers, entry_name_stage_hint
+from .function_templates import (
+    begin_template_declaration,
+    expire_template_declaration,
+    parse_specialization_declarator_arguments,
+    skip_specialization_declarator_arguments_at,
+    take_template_parameters,
+)
 from .matrix_pack_pragma import apply_matrix_orientation, pack_matrix_orientation
 
 TYPE_TOKENS = {
@@ -393,6 +400,7 @@ class HLSLParser:
         typedefs = []
 
         while self.current_token[0] != "EOF":
+            expire_template_declaration(self)
             if self.current_token_is_keyword("USING", "using"):
                 alias = self.parse_using_directive()
                 if alias is not None:
@@ -449,7 +457,7 @@ class HLSLParser:
                 continue
 
             if self.is_template_declaration_prefix():
-                self.parse_template_declaration_prefix()
+                begin_template_declaration(self)
                 continue
 
             if self.is_effect_metadata_block():
@@ -500,7 +508,9 @@ class HLSLParser:
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
-            name = self.parse_function_declarator_name()
+            name = parse_specialization_declarator_arguments(
+                self, self.parse_function_declarator_name()
+            )
 
             if self.current_token[0] == "LPAREN":
                 synthetic_start = len(self.synthetic_structs)
@@ -1495,6 +1505,8 @@ class HLSLParser:
     def parse_struct(self, declaration_qualifiers=None, declaration_attributes=None):
         declaration_qualifiers = list(declaration_qualifiers or [])
         declaration_attributes = list(declaration_attributes or [])
+        # Struct templates are not imported as generics yet; their members must not take the prefix.
+        take_template_parameters(self)
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
         name = None
@@ -2154,6 +2166,7 @@ class HLSLParser:
         return name
 
     def parse_function(self, return_type, name, qualifiers, attributes):
+        template_parameters = take_template_parameters(self)
         params = self.parse_parameters()
         qualifiers = qualifiers + self.parse_trailing_function_qualifiers()
         return_array_sizes = self.parse_array_suffixes()
@@ -2199,6 +2212,7 @@ class HLSLParser:
             array_sizes=return_array_sizes,
         )
         function.is_prototype = is_prototype
+        function.template_parameters = template_parameters
         return function
 
     def parse_trailing_function_qualifiers(self):
@@ -2951,7 +2965,7 @@ class HLSLParser:
         if not self.is_declarator_identifier_token_at(idx):
             return False
 
-        idx += 1
+        idx = skip_specialization_declarator_arguments_at(self, idx + 1)
         idx = self.skip_array_suffixes_at(idx)
         if idx is None or idx >= len(self.tokens):
             return False
