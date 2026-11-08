@@ -23744,9 +23744,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_type_name, self.structs_by_name
         )
         target_layout = scalar_storage_layout(target_type_name)
-        if view_layout is not None and target_layout == view_layout:
+        if (
+            view_layout is not None
+            and target_layout == view_layout
+            and scalar_storage_layout(view_type_name) == view_layout
+        ):
             # A cast to the scalar type the pointer already views (such as one
-            # that only drops ``const``) keeps the binding's view unchanged.
+            # that only drops ``const``) keeps the binding's view unchanged. A
+            # one-scalar wrapper record's view still becomes its member's words.
             return binding
         lane_gather = self.hlsl_same_scalar_lane_gather_binding(
             binding,
