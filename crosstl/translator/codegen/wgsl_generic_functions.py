@@ -29,6 +29,10 @@ from .generic_prototypes import (
     declaration_only_generic_primaries,
     reject_undefined_generic_instantiation,
 )
+from .wgsl_narrow_storage import (
+    narrow_storage_element,
+    refuse_narrow_generic_instantiation,
+)
 
 # CrossGL primitive spellings for the scalar types WGSL renders.
 _WGSL_SCALAR_SOURCE_NAMES = {
@@ -186,6 +190,10 @@ class WGSLGenericFunctionSpecializer:
         return str(rendered).strip() if rendered else None
 
     def _argument_type(self, argument):
+        # A narrow storage load is a 32-bit word in WGSL but binds its CrossGL element type.
+        narrow = narrow_storage_element(self.generator, argument)
+        if narrow is not None:
+            return self._render(narrow)
         return self._render(self.generator.expression_type(argument))
 
     def _concrete_overloads(self, name, arguments):
@@ -302,6 +310,7 @@ class WGSLGenericFunctionSpecializer:
                 f"'{func.name}' after {_MAX_SPECIALIZATIONS} instantiations; "
                 "the generic instantiates itself without bound"
             )
+        refuse_narrow_generic_instantiation(func, concrete)
         generator = self.generator
         candidate = "_".join(
             [sanitize_type_name(func.name)]

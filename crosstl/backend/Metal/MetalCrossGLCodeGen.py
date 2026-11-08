@@ -74,6 +74,7 @@ from .dependent_builtins import (
     NOT_DEPENDENT,
     dependent_access,
     dependent_builtin_result_type,
+    dependent_subscript_selection,
     unbound_template_type_names,
 )
 from .explicit_specialization_annotations import explicit_specialization_annotation
@@ -22333,6 +22334,22 @@ float {scalar}(float value) {{
         base_type = self.expression_metal_type(expr.array)
         source_location = getattr(expr, "source_location", None)
         index_expression = self.metal_index_expression_text(expr.index)
+        dependent = dependent_subscript_selection(
+            expr.array,
+            (
+                None
+                if base_type is None
+                else self.metal_source_overload_value_type(base_type)
+            ),
+            self.expression_metal_type,
+            unbound_template_type_names(
+                self.current_function,
+                set(self.type_aliases).union(*self.template_type_bindings),
+            ),
+            self.struct_declarations.values(),
+        )
+        if dependent is not None:
+            return dependent
         if base_type is None:
             raise MetalIndexedComponentTypeResolutionError(
                 None,
