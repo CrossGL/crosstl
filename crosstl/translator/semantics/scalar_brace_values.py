@@ -1,4 +1,4 @@
-"""Empty brace initializers of scalars: ``float one = {};`` becomes ``float one = 0.0;``.
+"""Scalar brace initializers: ``float one = {};`` becomes ``float one = 0.0;``.
 
 C and C++ value-initialize a scalar from an empty brace list, so ``float one = {};`` and ``int n = {};`` are zero.
 CUDA and HIP input import them as ``var one: f32 = {};``. Only Metal reads an empty brace list as a scalar's zero:
@@ -7,6 +7,10 @@ HLSL copied it, which DXC rejects, WGSL wrote ``array()``, and GLSL refused it a
 in variable and constant declarations whose type is ``float``, ``double``, ``half``, ``int``, ``uint``, ``bool``, an
 8-, 16- or 64-bit integer (``i16 s = {};`` becomes ``i16 s = 0;``, as written by hand), or an alias of one
 (``typedef float real_t; real_t one = {};``).
+
+A singleton scalar list becomes its sole value, converted to the destination type.
+Nested singleton lists are unwrapped too; an empty inner list is zero. More than one
+value is refused with :class:`ScalarBraceInitializerError` before code generation.
 
 An enumeration is value-initialized to zero as well. For a plain enumeration, whose variants carry no data,
 ``Mode m = {};`` becomes ``Mode m = 0;``: the generators write a variable of a plain enumeration as ``int`` (``i32``
@@ -20,8 +24,9 @@ from __future__ import annotations
 
 from .. import ast as A
 from ..codegen.enum_utils import collect_plain_enums
+from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 
-__all__ = ["zero_empty_scalar_initializers"]
+__all__ = ["ScalarBraceInitializerError", "zero_empty_scalar_initializers"]
 
 _SKIPPED_FIELDS = frozenset({"parent", "annotations", "source_location"})
 # CrossGL output keeps the program as written.
@@ -59,8 +64,21 @@ _ZERO_LITERALS = {
 }
 
 
+class ScalarBraceInitializerError(TranslationDiagnostic):
+    """A scalar declaration has more than one brace-initializer value."""
+
+    def __init__(self, target, name, count, *, source_location=None):
+        self.source_location = source_location
+        self.missing_capabilities = ()
+        super().__init__(
+            f"scalar brace initializer for '{name}' requires at most one value, got {count}",
+            target=target,
+            code=f"{CODE_PREFIX}{target}-scalar-brace-initializer",
+        )
+
+
 def zero_empty_scalar_initializers(program, target) -> int:
-    """Replace each empty brace initializer of a scalar declaration with the scalar's zero; return how many."""
+    """Normalize scalar declaration brace lists to zero or one converted value; return how many."""
     target = str(target or "").lower()
     if target in _CARRYING:
         return 0
@@ -72,10 +90,11 @@ def zero_empty_scalar_initializers(program, target) -> int:
         and getattr(node, "is_type_alias", False)
         and isinstance(node.name, str)
     }
+    empty_aliases = dict(aliases)
     if target not in _ENUM_TYPED_TARGETS:
         for enum in collect_plain_enums(nodes):
             if isinstance(enum.name, str):
-                aliases.setdefault(enum.name, "int")
+                empty_aliases.setdefault(enum.name, "int")
     count = 0
     for node in nodes:
         if isinstance(node, A.VariableNode) and not getattr(
@@ -87,19 +106,45 @@ def zero_empty_scalar_initializers(program, target) -> int:
         else:
             continue
         value = getattr(node, value_field, None)
-        if not isinstance(value, A.ArrayLiteralNode) or value.elements:
+        if not isinstance(value, A.ArrayLiteralNode):
             continue
-        scalar = _scalar_name(getattr(node, type_field, None), aliases)
-        if scalar is None:
+        declared = getattr(node, type_field, None)
+        # Only empty enum lists are integers on enum-erasing targets. Non-empty
+        # enum lists retain their existing semantics, including CUDA and Rust.
+        scalar_type = _scalar_type(
+            declared, aliases if value.elements else empty_aliases
+        )
+        if scalar_type is None:
             continue
-        zero = A.LiteralNode(_ZERO_LITERALS[scalar], A.PrimitiveType(scalar))
-        setattr(node, value_field, zero)
+        scalar = _SCALAR_NAMES[scalar_type.name]
+        while isinstance(value, A.ArrayLiteralNode):
+            if len(value.elements) > 1:
+                raise ScalarBraceInitializerError(
+                    target,
+                    node.name,
+                    len(value.elements),
+                    source_location=getattr(value, "source_location", None),
+                )
+            if not value.elements:
+                value = A.LiteralNode(_ZERO_LITERALS[scalar], A.PrimitiveType(scalar))
+                break
+            value = value.elements[0]
+        else:
+            # A constructor preserves the destination's width and signedness;
+            # later target legalization handles half and narrow integer types.
+            value_type = _scalar_type(getattr(value, "literal_type", None), {})
+            if (
+                not isinstance(value_type, A.PrimitiveType)
+                or value_type.name != scalar_type.name
+            ):
+                value = A.FunctionCallNode(A.IdentifierNode(scalar_type.name), [value])
+        setattr(node, value_field, value)
         count += 1
     return count
 
 
-def _scalar_name(type_node, aliases):
-    """The CrossGL scalar ``type_node`` names, through aliases, or None when it is not a scalar."""
+def _scalar_type(type_node, aliases):
+    """Resolve a scalar through aliases without losing its width or signedness."""
     seen = set()
     while True:
         if isinstance(type_node, str):
@@ -113,7 +158,11 @@ def _scalar_name(type_node, aliases):
         if not isinstance(name, str):
             return None
         if name in _SCALAR_NAMES:
-            return _SCALAR_NAMES[name]
+            return A.PrimitiveType(
+                name
+                if name in {"i8", "i16", "i64", "u8", "u16", "u64"}
+                else _SCALAR_NAMES[name]
+            )
         if name in seen or name not in aliases:
             return None
         seen.add(name)
