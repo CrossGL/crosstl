@@ -132,6 +132,7 @@ from .wgsl_integer_textures import (
 )
 from .wgsl_loop_continuing import WGSLContinuingLoopNode, WGSLLoopContinuingMixin
 from .wgsl_must_use import wgsl_call_statement
+from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
     unsupported_wgsl_numeric_family,
@@ -4277,10 +4278,7 @@ class WGSLCodeGen(
             )
         resource, index, value = node.arguments
         self.require_writable_structured_buffer_resource(resource, "buffer_store")
-        return (
-            f"{self.structured_buffer_index_expression(resource, index)} = "
-            f"{self.generate_expression(value)}"
-        )
+        return self.structured_buffer_store_expression(resource, index, value)
 
     def generate_structured_buffer_member_helper_call(self, node, helper_name):
         receiver = node.function.object_expr
@@ -4299,10 +4297,46 @@ class WGSLCodeGen(
                 f"2 arguments; got {len(node.arguments)}"
             )
         self.require_writable_structured_buffer_resource(receiver, "Store")
+        return self.structured_buffer_store_expression(receiver, *node.arguments)
+
+    def structured_buffer_store_expression(self, resource, index, value):
+        """``buffer[index] = value``, the value converted to the element type as an assignment converts it.
+
+        WGSL has no implicit conversions (section 15.7), so an ``int`` stored into a ``uint`` buffer needs ``u32()``.
+        """
+        element_type = self.expression_type(ArrayAccessNode(resource, index))
         return (
-            f"{self.structured_buffer_index_expression(receiver, node.arguments[0])} = "
-            f"{self.generate_expression(node.arguments[1])}"
+            f"{self.structured_buffer_index_expression(resource, index)} = "
+            f"{self.generate_expression_for_target(value, element_type)}"
         )
+
+    def structured_buffer_load_access(self, node, function_name):
+        """``buffer[index]`` for ``buffer_load(buffer, index)`` or ``buffer.Load(index)``, as generation emits it.
+
+        Typing the load as that subscript lets callers such as generic deduction see the element type.
+        """
+        if isinstance(node.function, MemberAccessNode):
+            if (
+                self.semantic_key(node.function.member) != "load"
+                or len(node.arguments) != 1
+            ):
+                return None
+            resource, index = node.function.object_expr, node.arguments[0]
+        elif (
+            self.semantic_key(function_name or "") == "buffer_load"
+            and len(node.arguments) == 2
+            and not self.is_user_function_name(function_name)
+        ):
+            resource, index = node.arguments
+        else:
+            return None
+        resource_type = self.expression_type(resource)
+        if self.structured_buffer_element_type(resource_type) is None and not (
+            isinstance(resource, IdentifierNode)
+            and self.is_pointer_identifier(resource.name)
+        ):
+            return None
+        return ArrayAccessNode(resource, index)
 
     def structured_buffer_index_expression(self, resource, index):
         if isinstance(resource, IdentifierNode) and self.is_pointer_identifier(
@@ -5803,7 +5837,8 @@ class WGSLCodeGen(
                         "WGSL target only supports StructuredBuffer resources as "
                         "module-scope storage bindings"
                     )
-                return f"array<{self.type_name_string(storage_element)}>"
+                word = narrow_storage_word_type(storage_element)
+                return f"array<{self.type_name_string(word or storage_element)}>"
             generic_vector = self.generic_vector_type_name(vtype)
             if generic_vector is not None:
                 return generic_vector
@@ -6519,7 +6554,10 @@ class WGSLCodeGen(
         return vtype.pointee_type
 
     def buffer_pointer_storage_type(self, vtype):
-        element_type = self.type_name_string(self.buffer_pointer_element_type(vtype))
+        element = self.buffer_pointer_element_type(vtype)
+        element_type = self.type_name_string(
+            narrow_storage_word_type(element) or element
+        )
         return f"array<{element_type}>"
 
     def buffer_pointer_parameter_type(self, vtype):
@@ -7352,6 +7390,9 @@ class WGSLCodeGen(
                 return array_type
             if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
                 return "uint"
+            loaded = self.structured_buffer_load_access(expr, function_name)
+            if loaded is not None:
+                return self.expression_type(loaded)
             packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(
                 self.semantic_key(function_name)
             )
@@ -7422,10 +7463,11 @@ class WGSLCodeGen(
             if isinstance(array_type, ArrayType):
                 return array_type.element_type
             storage_element = self.structured_buffer_element_type(array_type)
+            if storage_element is None and isinstance(array_type, PointerType):
+                storage_element = array_type.pointee_type
             if storage_element is not None:
-                return storage_element
-            if isinstance(array_type, PointerType):
-                return array_type.pointee_type
+                # Narrow storage holds one 32-bit word per element (:mod:`.wgsl_narrow_storage`).
+                return narrow_storage_word_type(storage_element) or storage_element
             # Indexing a matrix gives a column and indexing a vector a component.
             matrix = self.matrix_shape(array_type)
             if matrix is not None:
