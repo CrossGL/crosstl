@@ -24,14 +24,14 @@ class RustLoweringRefused(LoweringRefused):
 
 
 class RustEnumEmptyBraceError(TranslationDiagnostic):
-    """An empty brace initializer of a plain enumeration with no zero-valued variant."""
+    """An empty brace initializer of an enumeration with no zero-valued plain variant."""
 
-    def __init__(self, enum_name):
+    def __init__(self, enum_name, detail):
         self.enum_name = enum_name
         self.missing_capabilities = ("rust.enum-empty-brace",)
         super().__init__(
             f"Rust target cannot write the empty brace initializer of enumeration "
-            f"'{enum_name}': no variant has the value 0",
+            f"'{enum_name}': {detail}",
             target="rust",
             code=f"{CODE_PREFIX}rust-enum-empty-brace-unsupported",
         )

@@ -6,7 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
-- Rust output writes an empty brace initializer of a plain enumeration, such as `Mode m = {};` for `enum Mode { First, Second }`, as the variant whose discriminant is 0: `let m: Mode = Mode::First;`. An enumeration with no zero-valued variant, such as `enum Mode { First = 3, Second = 5 }`, is refused with `RustEnumEmptyBraceError` (`project.translate.rust-enum-empty-brace-unsupported`). It used to write `let m: Mode = [];`, which rustc rejects (#3820).
+- Rust output writes an empty brace initializer of a plain enumeration, such as `Mode m = {};` for `enum Mode { First, Second }`, as the variant whose discriminant is 0: `let m: Mode = Mode::First;`. An enumeration with no zero-valued variant, such as `enum Mode { First = 3, Second = 5 }`, is refused with `RustEnumEmptyBraceError` (`project.translate.rust-enum-empty-brace-unsupported`), as is one whose variants carry data, such as `enum MaybeInt { Value(int), Missing }`. It used to write `let m: Mode = [];`, which rustc rejects (#3820).
 
 ### Breaking Changes
 

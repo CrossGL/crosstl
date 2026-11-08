@@ -628,7 +628,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.enum_variant_field_types = {}
         self.enum_variant_payload_type_map = {}
         self.enum_generic_params = {}
-        self.plain_enum_nodes = {}
+        self.enum_nodes_by_name = {}
         self.non_copy_type_names = set()
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
@@ -698,7 +698,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             ast
         )
         self.enum_generic_params = self.collect_enum_generic_params(ast)
-        self.plain_enum_nodes = self.collect_plain_enum_nodes(ast)
+        self.enum_nodes_by_name = self.collect_enum_nodes_by_name(ast)
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.register_constant_types(ast)
         self.current_mutated_names = set()
@@ -2446,15 +2446,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         collect(node)
         return variants
 
-    def collect_plain_enum_nodes(self, node):
-        """Map each plain enumeration name to its AST node for empty brace initializers."""
+    def collect_enum_nodes_by_name(self, node):
+        """Map each enumeration name to its AST node for empty brace initializers."""
         enums = {}
 
         def add_enum(name, enum_node):
             if not name or enum_node is None:
-                return
-            variants = getattr(enum_node, "variants", []) or []
-            if any(self.enum_variant_data(variant) for variant in variants):
                 return
             enums[name] = enum_node
 
@@ -11014,30 +11011,32 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def rust_empty_brace_enum_initializer(self, target_type):
         """``Mode::First`` for ``Mode m = {};`` when a plain variant's discriminant is 0.
 
-        Returns ``None`` when ``target_type`` is not a plain enumeration. Raises
-        :class:`RustEnumEmptyBraceError` when none of the variants is the value 0.
+        Returns ``None`` when ``target_type`` is not an enumeration. Raises
+        :class:`RustEnumEmptyBraceError` when none of the variants is the value 0, or
+        when the variants carry data, so that the enumeration has no zero value.
         """
         type_name = self.type_name_string(target_type)
         if not type_name:
             return None
         base_name = type_name.split("<", 1)[0].strip()
-        enum_node = self.plain_enum_nodes.get(base_name)
+        enum_node = self.enum_nodes_by_name.get(base_name)
         if enum_node is None:
             return None
 
+        variants = getattr(enum_node, "variants", []) or []
+        if any(self.enum_variant_data(variant) for variant in variants):
+            raise RustEnumEmptyBraceError(enum_node.name, "its variants carry data")
+
         next_value = 0
-        for variant in getattr(enum_node, "variants", []) or []:
+        for variant in variants:
             value = next_value
             if getattr(variant, "value", None) is not None:
                 value = self.literal_int_value(variant.value)
-                if value is None:
-                    next_value = None
-                    continue
             if value == 0:
                 return self.enum_variant_call_path(enum_node.name, variant.name)
-            next_value = None if next_value is None else value + 1
+            next_value = None if value is None else value + 1
 
-        raise RustEnumEmptyBraceError(enum_node.name)
+        raise RustEnumEmptyBraceError(enum_node.name, "no variant has the value 0")
 
     def enum_variant_call_path(self, enum_type, variant_name):
         rust_type = self.map_type(enum_type)
