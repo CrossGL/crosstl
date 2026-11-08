@@ -135,6 +135,7 @@ from .relative_vertex_ids import (
 )
 from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
+from .rule_pragmas import take_declared_families
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
 from .scalar_brace_values import (
@@ -428,6 +429,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    declared_families = take_declared_families(program, report.target)
     hoist_local_structs(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
@@ -534,7 +536,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_narrow_integers(program, report.source, report.target)
     wrap_narrow_arithmetic(program, report.source, report.target)
     refuse_spirv_instructions(program, report.target)
-    Annotator(program, report.source, report).run()
+    Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)
     if isinstance(annotations, dict):
