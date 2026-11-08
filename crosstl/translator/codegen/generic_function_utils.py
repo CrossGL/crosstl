@@ -37,6 +37,12 @@ from .generic_call_collection_keys import (
     remember_collected_generic_call_key,
     reset_collected_generic_call_keys,
 )
+from .generic_call_dependencies import (
+    begin_generic_callee_recording,
+    end_generic_callee_recording,
+    record_generic_callee,
+    reset_generic_callees,
+)
 from .generic_call_results import (
     generic_call_argument_type_name,
     generic_call_result_type_name,
@@ -250,6 +256,7 @@ def prepare_generic_function_specializations(generator, functions, global_types=
     generator.generic_function_specialized_names = {}
     generator.generic_function_resolved_call_ids = set()
     reset_collected_generic_call_keys(generator)
+    reset_generic_callees(generator)
     reset_generic_function_emission(generator)
 
     if not definitions:
@@ -948,9 +955,14 @@ def _collect_from_function(generator, func, substitutions):
                 substitutions,
             )
         before = set(getattr(generator, "generic_function_specializations", {}) or {})
-        _analyze_statement(generator, getattr(func, "body", None), substitutions)
-        after = set(getattr(generator, "generic_function_specializations", {}) or {})
-        return [*after - before]
+        recording = begin_generic_callee_recording(generator)
+        try:
+            _analyze_statement(generator, getattr(func, "body", None), substitutions)
+        finally:
+            end_generic_callee_recording(generator, func, recording)
+        # The new keys in creation order: a set difference would order them by hash seed.
+        after = getattr(generator, "generic_function_specializations", {}) or {}
+        return [key for key in after if key not in before]
     finally:
         generator.local_variable_types = previous_local_variable_types
         generator.current_expression_expected_type = previous_expected_type
@@ -1035,6 +1047,7 @@ def _analyze_expression(generator, expr, substitutions):
             # Remember the call: later passes walk it without its function's local types.
             generator.generic_function_resolved_call_ids.add(id(expr))
             remember_collected_generic_call_key(generator, func_name, args, key)
+            record_generic_callee(generator, key)
         return
     if isinstance(expr, ConstructorNode):
         for arg in getattr(expr, "arguments", []) or []:

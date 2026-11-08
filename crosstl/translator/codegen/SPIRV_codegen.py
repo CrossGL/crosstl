@@ -93,6 +93,7 @@ from .extended_arithmetic_builtins import (
     spirv_extended_arithmetic_call,
 )
 from .fixed_sampler_contracts import fixed_sampler_records, with_spirv_fixed_samplers
+from .generic_call_dependencies import generic_callee_names
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generic_function_call_name,
@@ -23016,6 +23017,8 @@ class VulkanSPIRVCodeGen(
             FunctionCallNode,
             include_overloads=True,
             keep_overload_family_order=True,
+            # A specialization's calls still spell the generic name (``twice``), not ``twice_float``.
+            extra_callee_names=lambda func: generic_callee_names(self, func),
         )
 
     def walk_ast_nodes(self, root):
