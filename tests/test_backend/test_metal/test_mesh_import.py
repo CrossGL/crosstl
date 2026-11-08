@@ -17,7 +17,6 @@ import crosstl
 import crosstl.translator
 from crosstl.backend.import_refusals import MetalImportRefused
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from crosstl.translator.host_workgroup_size import HostDefinedWorkgroupSizeError
 
 TRIANGLES = """#include <metal_stdlib>
 using namespace metal;
@@ -185,8 +184,12 @@ def test_mesh_without_a_thread_index_parameter_gains_one_for_the_index_copy(
 
 
 def test_mesh_stage_with_host_chosen_size_takes_the_host_size(tmp_path):
-    with pytest.raises(HostDefinedWorkgroupSizeError, match="Entry 'lines'"):
-        _translate(tmp_path, LINES, "slang")
+    # Slang reads the macros when the host defines them and specialization constants otherwise.
+    slang = _translate(tmp_path, LINES, "slang")
+    assert (
+        "#else\n[numthreads(crossgl_workgroup_size_x, crossgl_workgroup_size_y, "
+        'crossgl_workgroup_size_z)]\n#endif\n[outputtopology("line")]\n[shader("mesh")]\n'
+    ) in slang
     # HLSL reads the size from macros the host defines when it compiles the shader.
     assert (
         "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, CROSSGL_WORKGROUP_SIZE_Z)]"

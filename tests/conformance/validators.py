@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from crosstl.translator.codegen.hlsl_specialization_macros import (
+    HLSL_SPECIALIZATION_MACRO_RE,
+)
 from crosstl.translator.codegen.host_workgroup_size_ids import (
     HOST_WORKGROUP_SIZE_MACROS,
 )
@@ -28,6 +31,11 @@ NATIVE_16_BIT = re.compile(r"\b(?:float16_t|int16_t|uint16_t)(?:[1-4](?:x[1-4])?
 # (crosstl/translator/codegen/hlsl_host_workgroup_size.py); the check gives them the size of one invocation, as the
 # GLSL check does (corpus/checks.py).
 HOST_WORKGROUP_SIZE_DEFAULT = "1"
+# A specialization constant without a default reads its value from a macro the host defines
+# (crosstl/translator/codegen/hlsl_specialization_macros.py) and casts it to the constant's scalar type. The check
+# defines each macro as 0, the zero of that type, which is the value the GLSL check encodes (corpus/checks.py) and the
+# default a SPIR-V module is validated under.
+HLSL_SPECIALIZATION_DEFAULT = "0"
 
 
 def hlsl_arguments(path):
@@ -40,6 +48,11 @@ def hlsl_arguments(path):
     if any(f"defined({macro})" in text for macro in HOST_WORKGROUP_SIZE_MACROS):
         for macro in HOST_WORKGROUP_SIZE_MACROS:
             arguments += ["-D", f"{macro}={HOST_WORKGROUP_SIZE_DEFAULT}"]
+    specialization_macros = sorted(
+        {match["macro"] for match in HLSL_SPECIALIZATION_MACRO_RE.finditer(text)}
+    )
+    for macro in specialization_macros:
+        arguments += ["-D", f"{macro}={HLSL_SPECIALIZATION_DEFAULT}"]
     return arguments
 
 

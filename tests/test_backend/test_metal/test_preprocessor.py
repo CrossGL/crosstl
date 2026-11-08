@@ -3679,7 +3679,9 @@ def test_preprocessor_resolves_owner_alias_before_nested_struct_materialization(
     tile_body = output.split(f"struct {tile_name} {{", 1)[1].split("};", 1)[0]
     assert f"{tile_name} tile;" in output
     assert "BaseFrag_float_8_8::width" in tile_body
-    assert "BaseFrag_float_8_8::value_type" in tile_body
+    # The substituted `typename Frag::value_type` names the concrete owner's alias target.
+    assert "float values[4 * 1];" in tile_body
+    assert "value_type" not in tile_body
     assert "frag_t" not in tile_name
     assert "frag_t" not in tile_body
     assert preprocessor._materialized_struct_specializations[tile_name] == (
