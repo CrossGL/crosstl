@@ -78,19 +78,29 @@ def _completed(parameters, arguments):
     return arguments
 
 
-def _spelling(type_node):
-    """The CrossGL spelling of a default argument for a constructor's callee, or ``None``."""
+def _spelling(type_node, bound):
+    """The CrossGL spelling of a default argument for a constructor's callee, or ``None``.
+
+    A bare parameter name in ``bound`` is spelled as that parameter's argument, also inside a default such as
+    ``vec2<T>`` or ``Box<T>``.
+    """
+    if (
+        isinstance(type_node, (A.NamedType, A.PrimitiveType))
+        and not getattr(type_node, "generic_args", None)
+        and type_node.name in bound
+    ):
+        return bound[type_node.name]
     if isinstance(type_node, A.PrimitiveType):
         return type_node.name
     if isinstance(type_node, A.NamedType):
-        arguments = [_spelling(item) for item in type_node.generic_args or []]
+        arguments = [_spelling(item, bound) for item in type_node.generic_args or []]
         if any(item is None for item in arguments):
             return None
         return (
             f"{type_node.name}<{', '.join(arguments)}>" if arguments else type_node.name
         )
     if isinstance(type_node, A.VectorType):
-        element = _spelling(type_node.element_type)
+        element = _spelling(type_node.element_type, bound)
         if element is None:
             return None
         return (
@@ -100,7 +110,7 @@ def _spelling(type_node):
         )
     if (
         isinstance(type_node, A.MatrixType)
-        and _spelling(type_node.element_type) == "float"
+        and _spelling(type_node.element_type, bound) == "float"
     ):
         rows, cols = type_node.rows, type_node.cols
         return f"mat{cols}" if rows == cols else f"mat{cols}x{rows}"
@@ -194,11 +204,11 @@ class _Filler:
             default = getattr(parameter, "default_type", None)
             if default is None:
                 self._refuse(base, len(arguments))
-            text = _spelling(default)
+            bound = dict(zip((item.name for item in parameters), spelled))
+            text = _spelling(default, bound)
             if text is None:
                 return
-            bound = dict(zip((item.name for item in parameters), spelled))
-            spelled.append(bound.get(text, text))
+            spelled.append(text)
         name = f"{base}<{', '.join(spelled)}>"
         callee.name = name
         if getattr(callee, "identifier", None) is not None:

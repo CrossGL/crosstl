@@ -160,6 +160,30 @@ def test_the_pass_completes_types_and_constructor_callees():
     assert initializer.function.name == "Pair<vec2, vec2>"
 
 
+def test_constructor_callee_defaults_take_earlier_arguments():
+    source = PROGRAM.replace(
+        "generic<T = float> struct Cell {",
+        "generic<T, U = vec2<T>> struct Lane {\n            T a;\n            U b;\n        }\n"
+        "        generic<T = float> struct Cell {",
+    ).replace(
+        "Twin<int> t;",
+        "Twin<int> t = Twin<int>(1, 2);\n                Lane<int> l = Lane<int>(1, ivec2(2));",
+    )
+    program = Parser(Lexer(source).get_tokens()).parse()
+
+    fill_generic_struct_defaults(program)
+
+    entry = next(iter(program.stages.values())).entry_point
+    callees = {
+        statement.name: statement.initial_value.function.name
+        for statement in entry.body.statements
+        if isinstance(statement, A.VariableNode)
+        and isinstance(statement.initial_value, A.FunctionCallNode)
+    }
+    # ``U = T`` and ``U = vec2<T>`` both take the argument given for ``T``.
+    assert callees == {"t": "Twin<int, int>", "l": "Lane<int, vec2<int>>"}
+
+
 @pytest.mark.parametrize("backend", ["opengl", "metal", "directx"])
 @pytest.mark.parametrize(
     ("use", "given"), [("Pair<float> p;", 1), ("Pair<float, int, int> p;", 3)]
