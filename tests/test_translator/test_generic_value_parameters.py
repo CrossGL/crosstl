@@ -18,6 +18,7 @@ from crosstl.translator.codegen.enum_utils import substitute_generic_type_name
 from crosstl.translator.codegen.generic_value_arguments import (
     value_argument_expression,
 )
+from tests.spirv_friendly_names import friendly_spirv
 
 PROGRAM = textwrap.dedent("""
     shader main {
@@ -63,10 +64,9 @@ TARGETS = ["opengl", "metal", "directx", "vulkan", "wgsl", "slang"]
 def translate(tmp_path, code, backend):
     path = tmp_path / "values.cgl"
     path.write_text(code)
-    # SPIR-V keeps its formatted output for the readable ``%int_3`` and ``OpName`` spellings.
-    return crosstl.translate(
-        str(path), backend=backend, format_output=backend == "vulkan"
-    )
+    output = crosstl.translate(str(path), backend=backend, format_output=False)
+    # Friendly SPIR-V ids (``%int``) whether or not SPIRV-Tools formats the output.
+    return friendly_spirv(output) if backend == "vulkan" else output
 
 
 def _validate(tmp_path, backend, output):
