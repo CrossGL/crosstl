@@ -36663,8 +36663,8 @@ class TestSpirvShaderValidation:
         spv_file = tmp_path / "spec_steps.spvasm"
         spv_file.write_text(spv_code, encoding="utf-8")
         reparsed_cgl = crosstl.translate(str(spv_file), backend="crossgl")
-        assert "steps" in reparsed_cgl
-        assert "scale" in reparsed_cgl
+        assert "const int scale @constant_id(0) = 3;" in reparsed_cgl
+        assert "const int2 steps = int2(scale, 1);" in reparsed_cgl
 
         assert_spirv_module_validates(spv_code, tmp_path)
 
