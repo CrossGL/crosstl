@@ -988,7 +988,8 @@ def test_parse_global_scope_hlsl_namespace_intrinsic_calls():
     ]
 
     assert "hlsl::saturate" in calls
-    assert "hlsl::lerp" in calls
+    # The parser keeps the global scope qualifier, which namespace resolution reads.
+    assert "::hlsl::lerp" in calls
 
 
 def test_parse_clip_intrinsic_expression_statement():
