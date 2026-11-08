@@ -137,3 +137,73 @@ def test_arithmetic_result_types():
         assert (
             arithmetic_result_type(preprocessor, operands, operator) == expected
         ), operands
+
+
+def test_pointer_arithmetic_result_types():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+    from crosstl.project.arithmetic_result_types import arithmetic_result_type
+
+    preprocessor = MetalPreprocessor()
+    cases = (
+        # A pointer plus an offset has the pointer's type; an offset of `+` is
+        # integral even when it is untyped, because pointer + pointer is
+        # ill-formed.
+        (["threadgroup float*", None], "+", "threadgroup float*"),
+        ([None, "device float*"], "+", "device float*"),
+        (["device float*", "int", None], "+", "device float*"),
+        (["device half* const&", "uint"], "+", "device half*"),
+        (["device float*", "int"], "-", "device float*"),
+        # `p - q` of two pointers is a ptrdiff_t, so a subtrahend must be typed.
+        (["device float*", None], "-", None),
+        (["device float*", "device float*"], "-", None),
+        (["int", "device float*"], "-", None),
+        (["device float*", "float"], "+", None),
+        (["device float*", "device float*"], "+", None),
+        (["device float*", "int"], "*", None),
+    )
+    for operands, operator, expected in cases:
+        assert arithmetic_result_type(preprocessor, operands, operator) == expected, (
+            operands,
+            operator,
+        )
+
+
+MEMBER_POINTER_OFFSET = """#include <metal_stdlib>
+using namespace metal;
+template <typename T, int N, typename W>
+inline void fill(T value, W out) {
+  for (int i = 0; i < N; i++) {
+    out[i] = value;
+  }
+}
+template <typename T>
+struct Loader {
+  threadgroup T* dst;
+  void load() const thread {
+    for (int i = 0; i < 2; i++) {
+      fill<T, 4>(T(1), dst + i * 4);
+    }
+  }
+};
+kernel void k(device float* out [[buffer(0)]], uint tid [[thread_position_in_grid]],
+              uint lid [[thread_index_in_threadgroup]]) {
+  threadgroup float scratch[64];
+  Loader<float> loader{scratch + lid * 8};
+  loader.load();
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  out[tid] = scratch[lid];
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ("directx", "vulkan"))
+def test_a_member_pointer_offset_deduces_the_pointer_type(tmp_path, backend):
+    # `dst + i * 4` is `self.dst + ...` inside the method; the loop variable is
+    # untyped there, and the argument still has the member's pointer type.
+    path = tmp_path / "member_pointer_offset.metal"
+    path.write_text(MEMBER_POINTER_OFFSET)
+    output = crosstl.translate(str(path), backend=backend, format_output=False)
+    if backend == "directx":
+        assert "fill_float_4_threadgroup_float(" in output
+    else:
+        assert "OpFunctionCall" in output
