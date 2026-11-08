@@ -37,6 +37,10 @@ from .generic_call_results import (
     generic_call_result_type_name,
     generic_calls_read_by,
 )
+from .generic_concrete_call_results import (
+    concrete_call_result_type_name,
+    record_concrete_function_overloads,
+)
 from .generic_emission_order import (
     reject_late_generic_specialization,
     reset_generic_function_emission,
@@ -243,6 +247,9 @@ def prepare_generic_function_specializations(generator, functions, global_types=
         for func in functions or []
         if getattr(func, "name", None) and not generic_function_parameters(func)
     }
+    record_concrete_function_overloads(
+        generator, functions, generic_function_parameters
+    )
     reserve_program_names(
         generator, functions, generator.generic_collection_global_types
     )
@@ -1185,7 +1192,15 @@ def _safe_expression_result_type(generator, expr):
             return inferred_type
     if result_type:
         return result_type
-    return _infer_generic_constructor_type_name(generator, expr)
+    inferred_type = _infer_generic_constructor_type_name(generator, expr)
+    if inferred_type or not isinstance(expr, FunctionCallNode):
+        return inferred_type
+    return concrete_call_result_type_name(
+        generator,
+        expr,
+        _safe_call_argument_type_name,
+        _normalize_signature_type_name,
+    )
 
 
 def _fallback_expression_result_type(generator, expr):
