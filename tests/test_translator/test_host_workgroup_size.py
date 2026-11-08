@@ -63,7 +63,6 @@ def _size(code, backend):
     return tuple(int(value) for value in re.search(SIZES[backend], code).groups())
 
 
-@pytest.mark.parametrize("backend", sorted(SIZES))
 @pytest.mark.parametrize(
     "source, entry, construct",
     [
@@ -72,10 +71,16 @@ def _size(code, backend):
     ],
 )
 def test_size_dependent_kernel_is_refused_without_the_host_size(
-    tmp_path, backend, source, entry, construct
+    tmp_path, source, entry, construct
 ):
+    """A target that fixes the size in the shader, such as Slang, refuses the entry's execution metadata.
+
+    SPIR-V and GLSL specialize the size instead, and HLSL reads it from macros (test_spirv_entry_workgroup_sizes.py,
+    test_glsl_host_workgroup_size.py, test_hlsl_host_workgroup_size.py).
+    """
+    stage = _compute_stage(_translate(tmp_path, source, "cgl"))
     with pytest.raises(HostDefinedWorkgroupSizeError) as raised:
-        _translate(tmp_path, source, backend)
+        compute_local_size(stage.execution_config)
     assert raised.value.entry == entry
     assert construct in str(raised.value)
     assert raised.value.project_diagnostic_code == (

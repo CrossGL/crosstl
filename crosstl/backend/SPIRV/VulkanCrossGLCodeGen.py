@@ -1,7 +1,14 @@
 """Reverse code generator that emits CrossGL from Vulkan SPIR-V AST nodes."""
 
 from ..common_ast import InitializerListNode
+from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
+from .statement_import import (
+    EXPRESSION_STATEMENT_TYPES,
+    unsupported_expression,
+    unsupported_statement,
+)
+from .tessellation_control_import import tessellation_control_mode_attributes
 from .VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -122,7 +129,7 @@ class VulkanToCrossGLConverter:
             "subpassInput": "subpassInput",
             "subpassInputMS": "subpassInputMS",
             "sampler": "sampler",
-            "sampler2D": "Texture2D",
+            "sampler2D": "sampler2D",
             "isampler1D": "isampler1D",
             "isampler1DArray": "isampler1DArray",
             "isampler2D": "isampler2D",
@@ -143,45 +150,14 @@ class VulkanToCrossGLConverter:
             "usamplerBuffer": "usamplerBuffer",
             "usamplerCube": "usamplerCube",
             "usamplerCubeArray": "usamplerCubeArray",
-            "samplerCube": "TextureCube",
-            "sampler3D": "Texture3D",
-            "sampler2DArray": "Texture2DArray",
-            "samplerCubeArray": "TextureCubeArray",
-            "sampler1D": "Texture1D",
-            "sampler1DArray": "Texture1DArray",
-            "sampler2DMS": "Texture2DMS",
-            "sampler2DMSArray": "Texture2DMSArray",
-            "samplerBuffer": "Buffer",
-            "image1D": "RWTexture1D",
-            "image1DArray": "RWTexture1DArray",
-            "image2D": "RWTexture2D",
-            "image2DArray": "RWTexture2DArray",
-            "image2DMS": "RWTexture2DMS",
-            "image2DMSArray": "RWTexture2DMSArray",
-            "image3D": "RWTexture3D",
-            "imageBuffer": "RWBuffer",
-            "imageCube": "RWTextureCube",
-            "imageCubeArray": "RWTextureCubeArray",
-            "iimage1D": "RWTexture1D<int>",
-            "iimage1DArray": "RWTexture1DArray<int>",
-            "iimage2D": "RWTexture2D<int>",
-            "iimage2DArray": "RWTexture2DArray<int>",
-            "iimage2DMS": "RWTexture2DMS<int>",
-            "iimage2DMSArray": "RWTexture2DMSArray<int>",
-            "iimage3D": "RWTexture3D<int>",
-            "iimageBuffer": "RWBuffer<int>",
-            "iimageCube": "RWTextureCube<int>",
-            "iimageCubeArray": "RWTextureCubeArray<int>",
-            "uimage1D": "RWTexture1D<uint>",
-            "uimage1DArray": "RWTexture1DArray<uint>",
-            "uimage2D": "RWTexture2D<uint>",
-            "uimage2DArray": "RWTexture2DArray<uint>",
-            "uimage2DMS": "RWTexture2DMS<uint>",
-            "uimage2DMSArray": "RWTexture2DMSArray<uint>",
-            "uimage3D": "RWTexture3D<uint>",
-            "uimageBuffer": "RWBuffer<uint>",
-            "uimageCube": "RWTextureCube<uint>",
-            "uimageCubeArray": "RWTextureCubeArray<uint>",
+            "samplerCube": "samplerCube",
+            "sampler3D": "sampler3D",
+            "sampler2DArray": "sampler2DArray",
+            "samplerCubeArray": "samplerCubeArray",
+            "sampler1D": "sampler1D",
+            "sampler1DArray": "sampler1DArray",
+            "sampler2DMS": "sampler2DMS",
+            "sampler2DMSArray": "sampler2DMSArray",
             "atomic_uint": "RWStructuredBuffer<uint>",
         }
         self.semantic_map = {
@@ -1023,7 +999,9 @@ class VulkanToCrossGLConverter:
                     if "readonly" in getattr(node, "declaration_qualifiers", [])
                     else "RWStructuredBuffer"
                 )
-                attributes = self.uniform_block_attribute_suffix(node)
+                attributes = self.uniform_block_attribute_suffix(
+                    node
+                ) + storage_buffer_memory_attribute_suffix(node)
                 if block_name not in self.emitted_storage_buffer_type_names:
                     code += f"    struct {block_name} {{\n"
                     for field_type, field_name in node.struct_fields:
@@ -1348,7 +1326,7 @@ class VulkanToCrossGLConverter:
             if qualifier_name in suppressed_qualifiers:
                 continue
             if (
-                qualifier_name in {"location", "component", "index"}
+                qualifier_name in {"location", "component", "index", "stream"}
                 and value is not None
             ):
                 attributes.append(f"@{qualifier_name}({value})")
@@ -1442,6 +1420,13 @@ class VulkanToCrossGLConverter:
         )
         if storage_mapped_name:
             return f"@{storage_mapped_name}"
+        if (
+            str(builtin_name) == "PrimitiveId"
+            and storage_class == "Input"
+            and "geometry" in self.spirv_module_shader_stages
+        ):
+            # A geometry stage's incoming primitive ID is gl_PrimitiveIDIn; gl_PrimitiveID is the one it writes.
+            return "@gl_PrimitiveIDIn"
         mapped_name = mapped_builtins.get(str(builtin_name))
         if mapped_name:
             return f"@{mapped_name}"
@@ -1557,10 +1542,18 @@ class VulkanToCrossGLConverter:
         return code
 
     def function_attribute_suffix(self, node):
-        """Return CrossGL attributes needed to preserve stage entry identity."""
-        if self.function_shader_stage(node) is not None and node.name != "main":
-            return " @stage_entry"
-        return ""
+        """Return CrossGL attributes needed to preserve stage entry identity and modes."""
+        stage = self.function_shader_stage(node)
+        attributes = []
+        if stage is not None and node.name != "main":
+            attributes.append("@stage_entry")
+        if stage == "tessellation_control":
+            attributes.extend(
+                tessellation_control_mode_attributes(
+                    getattr(node, "spirv_execution_modes", None)
+                )
+            )
+        return "".join(f" {attribute}" for attribute in attributes)
 
     def generate_function_parameter(self, node):
         type_name, ray_attributes = self.ray_storage_qualified_type_parts(
@@ -1627,8 +1620,10 @@ class VulkanToCrossGLConverter:
                 code += "discard;\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
+            elif isinstance(stmt, EXPRESSION_STATEMENT_TYPES):
+                code += f"{self.generate_expression(stmt)};\n"
             else:
-                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                unsupported_statement(stmt)
         return code
 
     def generate_assignment(self, node):
@@ -1771,7 +1766,7 @@ class VulkanToCrossGLConverter:
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         else:
-            return str(expr)
+            unsupported_expression(expr)
 
     def generate_nested_expression(self, expr):
         rendered = self.generate_expression(expr)

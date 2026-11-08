@@ -10,12 +10,14 @@ They operate on the ``MetalPreprocessor`` passed in, whose source scanners and c
 """
 
 import re
+import weakref
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .constexpr_branches import (
     discarded_constexpr_branch_spans,
     substitute_static_member_constants,
 )
+from .signed_type_spellings import fold_integer_type_spellings
 
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -169,28 +171,47 @@ def materialized_struct_for_template_id(
     if template_id is None:
         return None
     name, arguments = template_id
-    key = (
+    key = _specialization_key(preprocessor, name, arguments)
+    matches = _specialization_index(preprocessor).get(key, ())
+    return matches[0] if len(matches) == 1 else None
+
+
+def _specialization_key(
+    preprocessor: Any, name: str, arguments: Any
+) -> Tuple[str, Tuple[str, ...]]:
+    return (
         name.lstrip(":"),
         tuple(
             preprocessor._normalize_template_argument_text(item) for item in arguments
         ),
     )
-    matches = [
-        concrete
-        for concrete, (
-            template_name,
-            template_arguments,
-        ) in preprocessor._materialized_struct_specializations.items()
-        if (
-            template_name.lstrip(":"),
-            tuple(
-                preprocessor._normalize_template_argument_text(item)
-                for item in template_arguments
-            ),
-        )
-        == key
-    ]
-    return matches[0] if len(matches) == 1 else None
+
+
+# Per preprocessor: the specializations an index was built from, and the index from a specialization's normalized
+# template-id to its materialized names in insertion order.
+_SPECIALIZATION_INDEXES: "weakref.WeakKeyDictionary[Any, tuple]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _specialization_index(preprocessor: Any) -> Dict[tuple, Tuple[str, ...]]:
+    """The materialized structs of each normalized template-id, rebuilt whenever the specializations change.
+
+    Comparing the specializations with the ones the index was built from costs one pass over identical entries,
+    while building the index normalizes every template argument of every specialization.
+    """
+    items = tuple(preprocessor._materialized_struct_specializations.items())
+    cached = _SPECIALIZATION_INDEXES.get(preprocessor)
+    if cached is not None and cached[0] == items:
+        return cached[1]
+    index: Dict[tuple, List[str]] = {}
+    for concrete, (template_name, template_arguments) in items:
+        index.setdefault(
+            _specialization_key(preprocessor, template_name, template_arguments), []
+        ).append(concrete)
+    frozen = {key: tuple(names) for key, names in index.items()}
+    _SPECIALIZATION_INDEXES[preprocessor] = (items, frozen)
+    return frozen
 
 
 def static_member_constant_value(
@@ -212,11 +233,13 @@ def static_member_constant_value(
     declared = next((item for item in struct.data_members if item.name == member), None)
     if declared is None or declared.array_suffix:
         return None
-    value_types = [
-        token
-        for token in IDENTIFIER_RE.findall(declared.type_text)
-        if token not in {"static", "constexpr", "constant", "const"}
-    ]
+    value_types = fold_integer_type_spellings(
+        [
+            token
+            for token in IDENTIFIER_RE.findall(declared.type_text)
+            if token not in {"static", "constexpr", "constant", "const"}
+        ]
+    )
     if len(value_types) != 1 or value_types[0] not in (
         preprocessor._METAL_INTEGRAL_SCALAR_TYPES
     ):

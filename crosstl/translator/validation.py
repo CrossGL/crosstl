@@ -498,6 +498,9 @@ STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
     "local_size_x": "in",
     "local_size_y": "in",
     "local_size_z": "in",
+    "local_size_x_id": "in",
+    "local_size_y_id": "in",
+    "local_size_z_id": "in",
     "invocations": "in",
     "max_vertices": "out",
     "maxvertexcount": "out",
@@ -1571,12 +1574,20 @@ _GEOMETRY_STREAM_TYPES = frozenset({"PointStream", "LineStream", "TriangleStream
 
 
 def _stream_parameter_stage_interface_entries(function, struct_map, stage_name):
-    """Members of the vertex structure an HLSL-style geometry entry point appends to its output stream."""
+    """Members of the vertex structure an HLSL-style geometry entry point appends to its output stream.
+
+    Of several streams only the first, stream 0, is rasterized by default and links to the next stage; the others
+    feed stream output alone.
+    """
     entries = []
-    for parameter in getattr(function, "parameters", []) or []:
+    streams = [
+        parameter
+        for parameter in getattr(function, "parameters", []) or []
+        if getattr(getattr(parameter, "param_type", None), "name", None)
+        in _GEOMETRY_STREAM_TYPES
+    ]
+    for parameter in streams[:1]:
         parameter_type = getattr(parameter, "param_type", None)
-        if getattr(parameter_type, "name", None) not in _GEOMETRY_STREAM_TYPES:
-            continue
         for element_type in getattr(parameter_type, "generic_args", None) or []:
             element_struct = _resolve_stage_interface_struct(element_type, struct_map)
             if element_struct is None:

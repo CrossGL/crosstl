@@ -19,10 +19,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .glsl_vulkan_descriptor_sets import DESCRIPTOR_BINDING_MACRO
+
 __all__ = [
+    "ARRAYS_OF_ARRAYS",
     "GLSLRequirement",
     "VARIABLE_GATHER_OFFSET",
     "ES_OPAQUE_TYPES",
+    "declares_array_of_arrays",
     "generated_program_requirements",
     "parse_version_line",
     "resolve_version_line",
@@ -204,6 +208,20 @@ _BUILTIN_FUNCTION_GROUPS = (
     ),
     (
         (
+            "atomicCounterAdd",
+            "atomicCounterSubtract",
+            "atomicCounterMin",
+            "atomicCounterMax",
+            "atomicCounterAnd",
+            "atomicCounterOr",
+            "atomicCounterXor",
+            "atomicCounterExchange",
+            "atomicCounterCompSwap",
+        ),
+        (460, None, (), ()),
+    ),
+    (
+        (
             "atomicAdd",
             "atomicMin",
             "atomicMax",
@@ -360,6 +378,44 @@ _STAGE_REQUIREMENTS = {
     "compute": GLSLRequirement("the compute stage", 430, 310, _COMPUTE),
 }
 
+# Arrays of arrays arrived in GLSL 4.30 and GLSL ES 3.10 (section 4.1.9 of both); GLSL ES has no extension for
+# them, so WebGL 2's fixed GLSL ES 3.00 refuses one.
+ARRAYS_OF_ARRAYS = GLSLRequirement(
+    "an array of arrays", 430, 310, ("GL_ARB_arrays_of_arrays",)
+)
+_BUILTIN_TYPE_NAME = re.compile(
+    r"(?:void|bool|int|uint|float|double|atomic_uint|[bdiu]?vec[234]|d?mat[234](?:x[234])?"
+    r"|u?int(?:8|16|64)_t|float(?:16|64)_t|(?:f16|f64|i8|i16|i64|u8|u16|u64)vec[234]"
+    r"|f(?:16|64)mat[234](?:x[234])?|[iu]?(?:sampler|image|texture|subpassInput)\w*)\Z"
+)
+_STRUCT_NAME = re.compile(r"\bstruct\s+([A-Za-z_]\w*)")
+_SUBSCRIPT = r"\[[^\[\]]*\]\s*\["
+# ``T name[A][B]`` (a declarator) and ``T[A][B]`` (an array type, in a constructor, declaration or return type).
+_ARRAY_DECLARATOR = re.compile(r"\b([A-Za-z_]\w*)\s+[A-Za-z_]\w*\s*" + _SUBSCRIPT)
+_ARRAY_TYPE = re.compile(r"\b([A-Za-z_]\w*)\s*" + _SUBSCRIPT)
+# ``} instance[A][B];`` closes an interface block that declares an array of arrays of instances.
+_BLOCK_INSTANCE_ARRAY = re.compile(r"^\}\s*[A-Za-z_]\w*\s*" + _SUBSCRIPT)
+
+
+def _is_type_name(name, struct_names):
+    return name in struct_names or _BUILTIN_TYPE_NAME.match(name) is not None
+
+
+def declares_array_of_arrays(stripped, struct_names=()):
+    """Whether a rendered GLSL line declares or constructs an array of arrays.
+
+    A subscript chain such as ``a[1][1]`` only counts after a type name, since GLSL ES 3.00 indexes a matrix or
+    an array of vectors that way.
+    """
+    if _BLOCK_INSTANCE_ARRAY.match(stripped):
+        return True
+    return any(
+        _is_type_name(match.group(1), struct_names)
+        for pattern in (_ARRAY_DECLARATOR, _ARRAY_TYPE)
+        for match in pattern.finditer(stripped)
+    )
+
+
 _UNKNOWN_STAGE = object()
 _INTERFACE_QUALIFIERS = {
     "flat",
@@ -452,6 +508,9 @@ def _split_layout(stripped):
                     for part in inner.split(",")
                     if part.strip()
                 }
+                if any(part.startswith(f"{DESCRIPTOR_BINDING_MACRO}(") for part in ids):
+                    # The Vulkan/OpenGL binding macro expands to a binding qualifier.
+                    ids.add("binding")
                 return ids, stripped[index + 1 :].strip()
     return None, None
 
@@ -530,11 +589,14 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
 
     found = {}
     body = _COMMENTS.sub("", str(code or ""))
+    struct_names = frozenset(_STRUCT_NAME.findall(body))
     for line in body.splitlines():
         stripped = line.strip()
         stage = stage_of(stripped)
         if stage is None:
             continue
+        if declares_array_of_arrays(stripped, struct_names):
+            found.setdefault(ARRAYS_OF_ARRAYS, None)
         if stripped.startswith("layout"):
             ids, declaration = _split_layout(stripped)
             if ids is not None:

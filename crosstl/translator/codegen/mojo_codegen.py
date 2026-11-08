@@ -57,6 +57,7 @@ from .array_utils import (
     get_array_size_from_node,
 )
 from .comma_expressions import is_comma_expression, refuse_comma_expression
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -82,6 +83,7 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .image_access_contracts import (
     explicit_image_format,
@@ -1543,6 +1545,7 @@ class MojoCodeGen:
 
     def generate(self, ast):
         """Generate complete Mojo-like shader source for a CrossGL AST."""
+        refuse_cooperative_matrices(ast, label="Mojo", target="mojo")
         # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
         ast = canonicalize_separate_textures(ast)
         self.struct_types = {}
@@ -8424,12 +8427,20 @@ class MojoCodeGen:
     def generate_for(self, node, indent):
         indent_str = "    " * indent
 
-        init = self.generate_statement(node.init, 0).strip()
+        if isinstance(node.init, list):
+            # ``int i = 0, j = 10`` and ``k = 0, m = 3`` run in source order before the loop.
+            code = "".join(
+                f"{indent_str}{self.generate_statement(item, 0).strip()}\n"
+                for item in node.init
+                if item is not None
+            )
+        else:
+            init = self.generate_statement(node.init, 0).strip()
+            code = f"{indent_str}{init}\n"
         condition = self.generate_expression(node.condition)
         self.validate_condition_scalar(node.condition, "for condition")
         entry_alias_state = self.resource_access_alias_state()
 
-        code = f"{indent_str}{init}\n"
         code += f"{indent_str}while {condition}:\n"
 
         self.loop_depth += 1
@@ -8459,6 +8470,12 @@ class MojoCodeGen:
     def generate_for_update_statement(self, update, indent):
         if update is None:
             return ""
+
+        if isinstance(update, list):
+            # ``i++, j--``: the updates run left to right.
+            return "".join(
+                self.generate_for_update_statement(item, indent) for item in update
+            )
 
         if isinstance(update, ExpressionStatementNode):
             update = update.expression
@@ -9015,7 +9032,7 @@ class MojoCodeGen:
                 func_name = specialized_func_name
                 callee = specialized_func_name
             else:
-                raise_unresolved_generic_function_call(self, func_name, "Mojo")
+                reject_unresolved_generic_function_call(self, func_name, "Mojo")
 
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)

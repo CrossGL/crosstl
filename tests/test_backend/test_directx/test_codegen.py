@@ -814,7 +814,12 @@ def test_uint_vertex_id_import_uses_glsl_builtin_cast_alias():
             }
         """).strip()
 
-    generated = GLSLCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+    # Under a declared zero base vertex SV_VertexID is gl_VertexID; the default, gl_RelativeVertexID, is spelled
+    # for each target by the semantic passes (tests/test_translator/test_relative_vertex_ids.py).
+    tokens = HLSLLexer(hlsl).tokenize()
+    converter = DirectxCrossGLCodeGen.HLSLToCrossGLConverter(zero_base_vertex=True)
+    crossgl = converter.generate(HLSLParser(tokens).parse())
+    generated = GLSLCodeGen().generate(parse_crossgl(crossgl))
 
     assert "uint VertID = uint(gl_VertexID);" in generated
     assert "gl_Position = vec4(float(VertID), 0.0, 0.0, 1.0);" in generated
@@ -2411,7 +2416,8 @@ def test_codegen_template_method_arguments_closed_by_shift_right_token_from_dxc(
 
     output = generate_crossgl(hlsl)
 
-    assert "return buffer_load(BAB, offset);" in output
+    # Load<T> moves sizeof(T) bytes as they are: four words, reinterpreted as floats.
+    assert "return uintBitsToFloat(buffer_load4(BAB, offset));" in output
     parse_crossgl(output)
 
 
@@ -4353,7 +4359,7 @@ def test_codegen_preserves_uav_coherency_and_register_space():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
 
     assert (
-        "globallycoherent RWTexture2D<uint4> counters : register(u4, space2);"
+        "globallycoherent RWTexture2D<uint> counters : register(u4, space2);"
         in regenerated_hlsl
     )
     assert "RWTexture2D<float4> outImage : register(u5, space2);" in regenerated_hlsl
@@ -7524,8 +7530,9 @@ def test_codegen_byte_address_interlocked_compare_store_roundtrip():
 
     assert "RWByteAddressBuffer rawBytes;" in crossgl
     assert "@ register(u4)" in crossgl
-    assert "rawBytes.InterlockedCompareStore(offset, compare, 7u);" in crossgl
-    assert "atomicCompareExchange(rawBytes" not in crossgl
+    # CrossGL spells it as the byte-address compare-exchange whose previous value is unused.
+    assert "atomicCompareExchange(rawBytes, offset, compare, 7u);" in crossgl
+    assert "InterlockedCompareStore" not in crossgl
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "RWByteAddressBuffer rawBytes : register(u4);" in regenerated_hlsl

@@ -33,8 +33,8 @@ def test_explicit_constant_memory_ast_nodes_emit_uniform_declarations():
     )
 
     assert "@group(0) @binding(0) var<uniform> flags: u32;" in code
-    assert "@group(0) @binding(0) var<uniform> scale: f32 = 0.5;" in code
-    assert "@group(0) @binding(0) var<uniform> zero: i32 = 0;" in code
+    assert "@group(0) @binding(1) var<uniform> scale: f32 = 0.5;" in code
+    assert "@group(0) @binding(2) var<uniform> zero: i32 = 0;" in code
     assert "ConstantMemoryNode(" not in code
 
 

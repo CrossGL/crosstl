@@ -251,6 +251,26 @@ class TestHipCodeGen:
         assert "return fallback_zero(value, false);" not in hip_code
         assert "T::zero" not in hip_code
 
+    def test_generic_function_array_parameter_is_specialized_for_hip_codegen(self):
+        source_code = """
+        shader GenericArrayParameter {
+            buffer float* results;
+            T first<T>(in T v[2]) { return v[0] + v[1]; }
+            compute {
+                @ numthreads(1, 1, 1)
+                void main() {
+                    float a[2] = {1.0, 2.0};
+                    results[0] = first<float>(a);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "float first_float(float v[2])" in hip_code
+        assert "T v[2]" not in hip_code
+
     def test_simple_function_generation(self):
         source_code = """
         shader TestShader {

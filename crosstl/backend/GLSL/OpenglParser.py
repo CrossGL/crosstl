@@ -3,6 +3,10 @@
 import re
 
 from ..switch_clauses import record_default_position
+from .default_block_layouts import (
+    DefaultBlockLayouts,
+    member_layouts_with_block_matrix_order,
+)
 from .interface_block_locations import anonymous_block_member_layouts
 from .OpenglAst import (
     ArrayAccessNode,
@@ -451,6 +455,8 @@ class GLSLParser:
         self.known_type_names = set()
         self.current_xfb_output_buffer = None
         self.xfb_output_stride_by_buffer = {}
+        self.current_output_stream = None
+        self.default_block_layouts = DefaultBlockLayouts()
 
     def is_auto_shader_type(self, shader_type):
         return shader_type in AUTO_SHADER_TYPES
@@ -548,6 +554,12 @@ class GLSLParser:
 
             if layout is not None and self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
+                block_interface = self.default_block_layouts.default_interface(
+                    qualifiers, layout
+                )
+                if block_interface is not None:
+                    self.default_block_layouts.declare(block_interface, layout)
+                    continue
                 layout = self.consume_standalone_xfb_output_layout(qualifiers, layout)
                 if layout is not None:
                     layouts.append({"layout": layout, "qualifiers": qualifiers})
@@ -878,6 +890,10 @@ class GLSLParser:
         if not self.has_out_qualifier(qualifiers):
             return layout
 
+        stream = self.get_layout_key(layout, "stream")
+        if stream is not None:
+            self.current_output_stream = stream
+
         remaining = dict(layout)
         xfb_buffer = self.pop_layout_key(remaining, "xfb_buffer")
         if xfb_buffer is not None:
@@ -917,6 +933,23 @@ class GLSLParser:
             if stride is not None:
                 merged["xfb_stride"] = stride
 
+        return merged
+
+    def output_layout_with_stream_default(self, qualifiers, layout):
+        """An output's layout, given the stream that a standalone ``layout(stream = N) out;`` last made the default.
+
+        GLSL 4.60 section 4.4.2.2: an output declared without a stream belongs to the current default stream.
+        Stream 0 is every output's stream unless it names another, so it is not spelled out.
+        """
+        stream = self.current_output_stream
+        if stream is None or not self.has_out_qualifier(qualifiers):
+            return layout
+        if str(self.layout_value_key(stream)) == "0":
+            return layout
+        if self.get_layout_key(layout, "stream") is not None:
+            return layout
+        merged = dict(layout or {})
+        merged["stream"] = stream
         return merged
 
     def apply_variable_io_type(self, var, qualifiers):
@@ -1540,6 +1573,9 @@ class GLSLParser:
             variable_layout = self.output_layout_with_xfb_defaults(
                 qualifiers, variable_layout
             )
+            variable_layout = self.output_layout_with_stream_default(
+                qualifiers, variable_layout
+            )
 
             var = VariableNode(
                 declarator_type,
@@ -1668,6 +1704,9 @@ class GLSLParser:
         if register_layout:
             layout = self.merge_layout_qualifiers(layout, register_layout)
         layout = self.output_layout_with_xfb_defaults(qualifiers, layout)
+        layout = self.output_layout_with_stream_default(qualifiers, layout)
+        if not hlsl_cbuffer:
+            layout = self.default_block_layouts.block_layout(qualifiers, layout)
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1701,6 +1740,15 @@ class GLSLParser:
 
         self.eat("RBRACE")
         self.skip_newlines()
+        if "uniform" in {str(qualifier).lower() for qualifier in qualifiers or []}:
+            member_layouts = member_layouts_with_block_matrix_order(
+                layout,
+                members,
+                [member.interface_member_layout for member in members],
+                self.known_type_names,
+            )
+            for member, member_layout in zip(members, member_layouts):
+                member.interface_member_layout = member_layout
 
         instance_name = None
         array_size = None
@@ -2439,7 +2487,15 @@ class GLSLParser:
                 elif init_decls:
                     init = init_decls
             else:
-                init = self.parse_assignment_expression()
+                # ``k = 0, m = 3``: a comma expression, kept as the list of its operands like the update.
+                inits = [self.parse_assignment_expression()]
+                self.skip_newlines()
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    self.skip_newlines()
+                    inits.append(self.parse_assignment_expression())
+                    self.skip_newlines()
+                init = inits[0] if len(inits) == 1 else inits
 
         self.eat("SEMICOLON")
         self.skip_newlines()

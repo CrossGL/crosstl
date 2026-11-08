@@ -32,14 +32,16 @@
            Text="ProbeRuntime must be directx or portable (got '$(ProbeRuntime)')." />
   </Target>
 
+  <!-- The upstream projects are built without ComputeSharpRoot, as the portable runtime
+       references ComputeSharp.Core, so that each one has a single build instance. -->
   <ItemGroup>
-    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core/ComputeSharp.Core.csproj" />
-    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core.SourceGenerators/ComputeSharp.Core.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="contentfiles;build" />
-    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.SourceGenerators/ComputeSharp.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="contentfiles;build" />
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core/ComputeSharp.Core.csproj" GlobalPropertiesToRemove="ComputeSharpRoot" />
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.Core.SourceGenerators/ComputeSharp.Core.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="contentfiles;build" GlobalPropertiesToRemove="ComputeSharpRoot" />
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp.SourceGenerators/ComputeSharp.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="contentfiles;build" GlobalPropertiesToRemove="ComputeSharpRoot" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(ProbeRuntime)' == 'directx'">
-    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp/ComputeSharp.csproj" />
+    <ProjectReference Include="$(ComputeSharpRoot)/src/ComputeSharp/ComputeSharp.csproj" GlobalPropertiesToRemove="ComputeSharpRoot" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(ProbeRuntime)' == 'portable'">

@@ -51,11 +51,13 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..explicit_specializations import explicit_specialization_refusals
 from ..matrix_shape import matrix_type_spelling
 from .array_utils import get_array_size_from_node, prepend_array_dimension
 from .assignment_values import is_reevaluable_place
 from .c_reference_parameters import is_output_parameter
 from .comma_expressions import is_comma_expression, refuse_comma_expression
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_output_parameters import RustOutputParameterMixin
@@ -653,12 +655,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         then refused as a whole with every reason listed (:class:`RustLoweringRefused`).
         """
         # Rust GPU images are separate from their samplers: a separate CrossGL texture is the same image.
+        refuse_cooperative_matrices(ast, label="Rust", target="rust")
         ast = canonicalize_separate_textures(ast)
         return self.refusals.run(self.generate_program, ast)
 
     def generate_program(self, ast):
         """Render the Rust program; refusals recorded on the way are raised by :meth:`generate`."""
         self.validate_supported_stage_types(ast)
+        explicit_specialization_refusals(self, ast, "Rust")
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
@@ -12387,7 +12391,34 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         segments = head.split("::")
         if not all(segment.isidentifier() for segment in segments):
             return name
-        return f"{head}::<{type_arguments}"
+        return f"{head}::<{self.rust_explicit_type_arguments(type_arguments)}"
+
+    def rust_explicit_type_arguments(self, type_arguments):
+        """Spell the CrossGL type arguments ``float, vec3>`` of a call as Rust types.
+
+        ``type_arguments`` is the text after the call's ``<``, closing ``>``
+        included.  Each top-level argument goes through ``map_type``, so
+        ``pick<float>`` becomes ``pick::<f32>`` rather than naming ``float``,
+        which Rust does not have.  Text that is not a closed argument list is
+        returned unchanged.
+        """
+        if not type_arguments.endswith(">"):
+            return type_arguments
+        arguments, depth, start = [], 0, 0
+        body = type_arguments[:-1]
+        for index, character in enumerate(body):
+            if character in "<[(":
+                depth += 1
+            elif character in ">])":
+                depth -= 1
+            elif character == "," and depth == 0:
+                arguments.append(body[start:index])
+                start = index + 1
+        if depth != 0:
+            return type_arguments
+        arguments.append(body[start:])
+        mapped = [self.map_type(argument.strip()) for argument in arguments]
+        return ", ".join(mapped) + ">"
 
     def rust_reserved_identifiers(self):
         return {
@@ -14413,8 +14444,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if matrix_alias != vtype_str:
             return self.map_type(matrix_alias)
 
-        if "[" in vtype_str and "]" in vtype_str:
-            base_type, sizes = self.c_array_type_parts(vtype_str)
+        base_type, sizes = self.c_array_type_parts(vtype_str)
+        # Brackets that do not end the name, as in the callee ``pick<float[2]>``,
+        # are not an array suffix; the generic mapping below spells its argument.
+        if sizes:
             base_mapped = self.map_type(base_type)
             rust_type = self.qualify_colliding_runtime_type(base_mapped)
             for size in reversed(sizes):

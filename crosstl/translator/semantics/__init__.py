@@ -29,6 +29,7 @@ from .builtin_output_writes import (
     convert_signed_builtin_outputs,
     declare_builtin_outputs,
 )
+from .builtin_stage_identifiers import refuse_misplaced_builtin_identifiers
 from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
 from .colour_attachment_inputs import refuse_colour_attachment_inputs
@@ -38,6 +39,7 @@ from .constant_buffer_size import (
     ConstantBufferTooLargeError,
     refuse_large_constant_buffers,
 )
+from .constant_calls import fold_constant_calls
 from .constant_extents import fold_constant_extents, fold_stage_layout_counts
 from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
@@ -51,6 +53,10 @@ from .descriptor_arrays import (
     DescriptorArrayUnsupportedError,
     flatten_descriptor_arrays,
 )
+from .device_private_globals import (
+    DevicePrivateGlobalUnsupportedError,
+    lower_device_private_globals,
+)
 from .device_references import (
     DeviceReferenceUnsupportedError,
     lower_device_struct_references,
@@ -62,6 +68,7 @@ from .dxr_ray_interfaces import (
 from .enum_values import lower_enum_values
 from .feedback_textures import FeedbackTextureUnsupportedError, refuse_feedback_textures
 from .fixed_samplers import bind_fixed_samplers
+from .float_relations import lower_float_relations
 from .fragment_colour_outputs import (
     FragmentColourOutputUnsupportedError,
     name_fragment_colour_outputs,
@@ -114,15 +121,23 @@ from .metal_runtime_types import (
     MetalRuntimeTypeUnsupportedError,
     refuse_metal_runtime_types,
 )
+from .metal_vector_scalar_operands import convert_metal_vector_scalar_operands
 from .module_stage_outputs import adopt_module_stage_outputs
 from .narrow import NarrowIntegerUnsupportedError, legalize_narrow_integers
+from .narrow_arithmetic import wrap_narrow_arithmetic
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .push_constant_layouts import mark_push_constant_layouts
+from .relative_vertex_ids import (
+    RelativeVertexIdUnsupportedError,
+    lower_relative_vertex_ids,
+)
 from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
+from .scalar_brace_values import zero_empty_scalar_initializers
 from .scalar_swizzles import expand_scalar_swizzles
 from .shader_execution_reordering import (
     ShaderExecutionReorderingUnsupportedError,
@@ -134,6 +149,12 @@ from .shader_records import (
 )
 from .shadow_samples import ShadowSampleUnsupportedError, legalize_shadow_samples
 from .sizeof_values import SizeofUnsupportedError, fold_sizeof_values
+from .slang_vertex_indices import spell_slang_vertex_indices
+from .spirv_instructions import (
+    SpirvOperationUnsupportedError,
+    refuse_spirv_instructions,
+)
+from .stage_bound_functions import bind_stage_functions
 from .stage_constant_blocks import (
     StageConstantBlockConflictError,
     hoist_stage_constant_blocks,
@@ -144,6 +165,11 @@ from .stage_interface_structs import (
 )
 from .stage_io_arrays import PerVertexInputUnsupportedError, refuse_per_vertex_inputs
 from .stage_private_variables import hoist_stage_private_variables
+from .static_assertions import (
+    StaticAssertionFailedError,
+    StaticAssertionUnresolvedError,
+    resolve_static_assertions,
+)
 from .static_locals import StaticLocalUnsupportedError, hoist_static_locals
 from .storage_blocks import (
     SpirvArrayLengthUnsupportedError,
@@ -158,6 +184,7 @@ from .structured_layouts import (
 )
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
 from .task_payload_storage import declare_task_payload_storage
+from .template_assertions import resolve_template_assertions
 from .tessellation_patches import (
     TessellationPatchUnsupportedError,
     lower_tessellation_patches,
@@ -173,6 +200,8 @@ from .vertex_input_positions import (
     VertexInputPositionUnsupportedError,
     attribute_vertex_input_positions,
 )
+from .void_casts import VoidCastError, lower_void_casts
+from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 from .written_stage_inputs import copy_written_stage_inputs
 
@@ -185,6 +214,7 @@ __all__ = [
     "BuiltinValueUnsupportedError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
+    "DevicePrivateGlobalUnsupportedError",
     "PackedMemberLayoutError",
     "StageInterfaceUnsupportedError",
     "TessFactorUnsupportedError",
@@ -215,6 +245,7 @@ __all__ = [
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
+    "RelativeVertexIdUnsupportedError",
     "RuleInexpressibleError",
     "RowMajorMemberError",
     "RuleReport",
@@ -223,7 +254,10 @@ __all__ = [
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
     "SizeofUnsupportedError",
+    "StaticAssertionFailedError",
+    "StaticAssertionUnresolvedError",
     "SpirvArrayLengthUnsupportedError",
+    "SpirvOperationUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
     "StructMethodUnsupportedError",
@@ -234,6 +268,8 @@ __all__ = [
     "TypeAliasUnsupportedError",
     "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
+    "VoidCastError",
+    "VoidValueError",
     "apply_rule_carrying",
 ]
 
@@ -267,12 +303,20 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
     Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
+    Shader-scope functions that name a stage's declarations become functions of the stages that call them
+    (:mod:`.stage_bound_functions`).
     Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
     A ``gl_`` built-in value attribute CrossGL does not define is refused with :class:`BuiltinValueUnsupportedError`,
     and the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` take their canonical names (:mod:`.builtin_names`).
     A ``gl_`` built-in used in a stage or direction GLSL does not declare it for is refused (:mod:`.builtin_stages`).
+    So is one that a function body of the stage names directly (:mod:`.builtin_stage_identifiers`).
+    Direct3D's base-exclusive vertex ID ``gl_RelativeVertexID`` (HLSL ``SV_VertexID``) is then spelled for the
+    target: ``SV_VertexID`` on Direct3D and Slang, the vertex index minus the base vertex elsewhere
+    (:mod:`.relative_vertex_ids`).
     Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
     :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
+    Calls of program functions in compile-time initializers and ``static_assert`` conditions become their values,
+    evaluated at translation time (:mod:`.constant_calls`).
     Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
     ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
@@ -282,7 +326,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
-    (:mod:`.type_aliases`). GLSL's
+    (:mod:`.type_aliases`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
+    refused with :class:`StaticAssertionFailedError` or :class:`StaticAssertionUnresolvedError`
+    (:mod:`.static_assertions`). An empty brace initializer of a scalar, ``float one = {};``, its zero
+    (:mod:`.scalar_brace_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
     structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
@@ -316,7 +363,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
     ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
     (:mod:`.buffer_strides`), ``ConstantBuffer<T>`` declarations with a layout the target's constant buffers do not
-    give constant blocks holding one ``T`` (:mod:`.constant_buffer_layouts`), and constant
+    give constant blocks holding one ``T`` (:mod:`.constant_buffer_layouts`), push-constant blocks keeping their std430
+    layout for HLSL (:mod:`.push_constant_layouts`), and constant
     references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
     storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
     only in aggregate initializers, other array constructors become initializer lists or named locals
@@ -365,7 +413,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
-    registers. The AST is rewritten in place. Raises :class:`RuleInexpressibleError` when the target
+    registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
+    non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
+    operation the importer kept as a call is then refused with :class:`SpirvOperationUnsupportedError` for every
+    target but CrossGL (:mod:`.spirv_instructions`). The AST is
+    rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
     exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
     :class:`CudaWarpIntrinsicUnsupportedError` for a CUDA warp intrinsic it cannot compute with CUDA's lanes.
@@ -373,15 +425,22 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     hoist_local_structs(program, report.target)
+    bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
+    resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
+    lower_void_casts(program, report.target)
+    refuse_void_values(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
+    refuse_misplaced_builtin_identifiers(program, report.target)
+    lower_relative_vertex_ids(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
+    fold_constant_calls(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
     fold_stage_layout_counts(program, report.target)
@@ -389,12 +448,16 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     rename_colliding_functions(program)
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
+    lower_device_private_globals(program, report.target)
     store_row_major_members_transposed(program, report.target)
     store_row_major_constant_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    resolve_static_assertions(program, report.target)
+    zero_empty_scalar_initializers(program, report.target)
     lower_metal_math_spellings(program, report.target)
+    lower_float_relations(program, report.target)
     lower_enum_values(program, report.target)
     lower_device_struct_references(program, report.target)
     separate_initializer_scopes(program, report.source, report.target)
@@ -410,6 +473,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     lower_shading_rate_flags(program, report.target)
     refuse_mixed_metal_barycentrics(program, report.target)
     declare_builtin_outputs(program, report.target)
+    spell_slang_vertex_indices(program, report.target)
     pass_builtin_inputs(program, report.target)
     name_fragment_colour_outputs(program, report.target)
     attribute_vertex_input_positions(program, report.target)
@@ -421,6 +485,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     gather_stage_interface_variables(program, report.target)
     fit_tess_factors_to_domain(program, report.target)
     expand_struct_scalar_splats(program, report.source, report.target)
+    convert_metal_vector_scalar_operands(program, report.source)
     convert_struct_constructor_arguments(program)
     lower_tessellation_patches(program, report.target)
     lower_geometry_streams(program, report.target)
@@ -435,6 +500,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
+    mark_push_constant_layouts(program, report.target)
     hoist_constant_buffer_layouts(program, report.target)
     hoist_constant_reference_layouts(program, report.target)
     refuse_unplaced_packed_members(program, report.target)
@@ -462,6 +528,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
+    wrap_narrow_arithmetic(program, report.source, report.target)
+    refuse_spirv_instructions(program, report.target)
     Annotator(program, report.source, report).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)

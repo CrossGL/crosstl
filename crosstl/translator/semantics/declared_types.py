@@ -6,6 +6,8 @@ the generators would copy it into the target verbatim, where it is at best a com
 type of the same spelling. :func:`refuse_undeclared_types` raises :class:`UndeclaredTypeError` for the first such
 name, so the translation fails with a typed diagnostic instead.
 
+The element type of a vector (``foo`` in ``vec2<foo>``) is checked the same way.
+
 Only plain names in code a stage entry can reach are checked (every function of a program without entries), and
 trait bounds of generic parameters are not types. Neither is ``SAMPLER_FEEDBACK_MIN_MIP`` or
 ``SAMPLER_FEEDBACK_MIP_REGION_USED`` as the argument of a sampler feedback texture (``FeedbackTexture2D<KIND>``): any
@@ -36,6 +38,8 @@ __all__ = [
 ]
 
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# The sizes of an array type argument, ``[2]`` in ``pick<foo[2]>``.
+_ARRAY_SUFFIXES = re.compile(r"(?:\s*\[[^\[\]]*\])+\Z")
 # Built-in types whose template arguments are values rather than types.
 VALUE_TEMPLATE_TYPES = frozenset({"RayQuery"})
 # Targets whose generators emit a generic structure only through the instantiations the program names.
@@ -231,6 +235,62 @@ def _uninstantiated_templates(program, skip):
     return every - live
 
 
+def _generic_function_names(program):
+    """The names of the program's generic functions, whose explicit type arguments are types."""
+    return {
+        function.name
+        for functions in _function_lists(program)
+        for function in functions
+        if isinstance(function, A.FunctionNode)
+        and isinstance(function.name, str)
+        and getattr(function, "generic_params", None)
+    }
+
+
+def _declared_value_names(program):
+    """The names ``program`` declares as values: constants, variables and parameters.
+
+    A generic call may pass one as an explicit argument, as in ``scaled<float, K>(x)`` for ``const int K``, which WGSL
+    output substitutes into the specialization. Such a name is declared, so it is not an undeclared type.
+    """
+    return frozenset(
+        node.name
+        for node in _nodes(program)
+        if isinstance(node, (A.ConstantNode, A.VariableNode, A.ParameterNode))
+        and isinstance(node.name, str)
+        and not getattr(node, "is_type_alias", False)
+    )
+
+
+def _call_type_argument_names(call, generic_functions):
+    """The plain names among the explicit type arguments of ``call``, such as ``foo`` in ``pick<foo>(x)`` or
+    ``pick<foo[2]>(a)``.
+
+    The parser keeps a call's type arguments in the callee name. Only calls of the program's own generic functions
+    are read: the arguments of built-in calls, such as ``subgroup_broadcast_const<_, 0>``, may be values.
+    """
+    callee = call.function
+    name = callee.name if isinstance(callee, A.IdentifierNode) else callee
+    if not isinstance(name, str) or "<" not in name or not name.endswith(">"):
+        return []
+    base, arguments = name[:-1].split("<", 1)
+    if base.strip() not in generic_functions:
+        return []
+    names, depth, start = [], 0, 0
+    for index, character in enumerate(arguments):
+        if character in "<[(":
+            depth += 1
+        elif character in ">])":
+            depth -= 1
+        elif character == "," and depth == 0:
+            names.append(arguments[start:index].strip())
+            start = index + 1
+    names.append(arguments[start:].strip())
+    # An array type argument, such as ``foo[2]``, uses its element type.
+    names = [_ARRAY_SUFFIXES.sub("", name) for name in names]
+    return [name for name in names if _PLAIN_NAME.fullmatch(name)]
+
+
 def undeclared_type_uses(program, target=None):
     """``(name, node)`` for each plain type name in ``program`` that is neither declared nor built in.
 
@@ -260,7 +320,31 @@ def undeclared_type_uses(program, target=None):
     skip = _dead_functions(program) | bounds | values
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
+    generic_functions = _generic_function_names(program)
+    value_names = _declared_value_names(program) if generic_functions else frozenset()
     for node in _nodes(program, skip):
+        if isinstance(node, A.FunctionCallNode):
+            uses.extend(
+                (name, node)
+                for name in _call_type_argument_names(node, generic_functions)
+                if name not in declared
+                and name not in BUILTIN_TYPE_NAMES
+                and name not in value_names
+            )
+            continue
+        if isinstance(node, A.VectorType) and isinstance(
+            node.element_type, A.PrimitiveType
+        ):
+            # ``vec2<foo>``: the parser keeps an element type it does not know as a primitive of that name.
+            name = node.element_type.name
+            if (
+                isinstance(name, str)
+                and _PLAIN_NAME.fullmatch(name)
+                and name not in declared
+                and name not in BUILTIN_TYPE_NAMES
+            ):
+                uses.append((name, node))
+            continue
         if not isinstance(node, A.NamedType) or node.generic_args:
             continue
         name = node.name

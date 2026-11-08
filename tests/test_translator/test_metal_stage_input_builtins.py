@@ -106,10 +106,19 @@ shader S {
 """
 
 
+# The HLSL sources declare a zero base vertex, under which SV_VertexID is [[vertex_id]]; the base-vertex rewrite has
+# its own tests (test_relative_vertex_ids.py).
+_ZERO_BASE_VERTEX = {"zero_base_vertex": True}
+
+
 def _translate(tmp_path, source, suffix):
     path = tmp_path / f"shader{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend="metal")
+    return crosstl.translate(
+        str(path),
+        backend="metal",
+        source_options=_ZERO_BASE_VERTEX if suffix == ".hlsl" else None,
+    )
 
 
 def _compile(tmp_path, code):
@@ -152,11 +161,14 @@ def test_vertex_and_instance_ids_become_entry_parameters(tmp_path):
         assert "vertex_id" not in _struct_body(code, name)
         assert "instance_id" not in _struct_body(code, name)
     assert "float3 pos [[attribute(0)]];" in _struct_body(code, "VSIn_StageIn")
+    # SV_InstanceID leaves out the base instance that [[instance_id]] includes.
     assert _entry_signature(code, "vertex") == (
         "VSIn_StageIn input_stage_in [[stage_in]], uint input_id [[vertex_id]], "
-        "uint input_inst [[instance_id]]"
+        "uint _crossglInstanceIndex [[instance_id]], "
+        "uint _crossglBaseInstance [[base_instance]]"
     )
     for line in (
+        "uint input_inst = uint(_crossglInstanceIndex - _crossglBaseInstance);",
         "VSIn input;",
         "input.pos = input_stage_in.pos;",
         "input.id = input_id;",
@@ -172,7 +184,11 @@ def test_structure_of_only_builtins_takes_no_stage_input(tmp_path):
     assert "[[stage_in]]" not in code
     assert "VSIn_StageIn" not in code
     assert _entry_signature(code, "vertex") == (
-        "uint input_id [[vertex_id]], uint input_inst [[instance_id]]"
+        "uint input_id [[vertex_id]], uint _crossglInstanceIndex [[instance_id]], "
+        "uint _crossglBaseInstance [[base_instance]]"
+    )
+    assert (
+        "uint input_inst = uint(_crossglInstanceIndex - _crossglBaseInstance);" in code
     )
     _compile(tmp_path, code)
 
@@ -188,7 +204,8 @@ def test_split_members_helpers_and_taken_names(tmp_path):
     assert " id" not in stage_in
     signature = _entry_signature(code, "vertex")
     assert "[[vertex_id]]" in signature
-    assert "uint input_id [[instance_id]]" in signature
+    assert "uint _crossglInstanceIndex [[instance_id]]" in signature
+    assert "uint input_id = uint(_crossglInstanceIndex - _crossglBaseInstance);" in code
     # The `int` vertex index arrives as `uint` and is converted once, under a name no local takes.
     assert re.search(r"int input_id3 = int\(\w+\);", code)
     assert "input.id = input_id3;" in code
@@ -217,7 +234,9 @@ def test_fragment_amplification_id_becomes_a_parameter(tmp_path):
 def test_other_targets_keep_the_input_structure(tmp_path, backend):
     path = tmp_path / "shader.hlsl"
     path.write_text(_VERTEX_IDS)
-    code = crosstl.translate(str(path), backend=backend)
+    code = crosstl.translate(
+        str(path), backend=backend, source_options=_ZERO_BASE_VERTEX
+    )
 
     assert "_StageIn" not in code
     assert "input_stage_in" not in code

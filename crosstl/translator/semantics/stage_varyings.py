@@ -52,7 +52,7 @@ __all__ = [
 GLSL_TARGETS = frozenset({"opengl", "glsl"})
 SPIRV_TARGETS = frozenset({"vulkan", "spirv"})
 INTERPOLATION = frozenset({"flat", "noperspective", "centroid", "sample", "smooth"})
-_LAYOUT_ATTRIBUTES = frozenset({"location", "component"})
+_LAYOUT_ATTRIBUTES = frozenset({"location", "component", "stream"})
 
 
 def stages(program):
@@ -88,6 +88,15 @@ def literal_int(node):
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return None
+
+
+def attribute_text(argument):
+    """The text of a string or bare-identifier attribute argument: ``"tri"`` and ``tri`` both give ``tri``."""
+    if isinstance(argument, A.IdentifierNode):
+        text = argument.name
+    else:
+        text = getattr(argument, "value", argument)
+    return str(text).strip().strip("\"'")
 
 
 def semantic(node):

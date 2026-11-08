@@ -68,7 +68,7 @@ _RULE_TEXT = (
     # GLSL 4.60 section 7.1.1, vertex inputs; GL_ARB_shader_draw_parameters; GL_EXT_mesh_shader for gl_DrawID.
     (
         "gl_VertexID gl_VertexIndex gl_InstanceIndex gl_BaseVertex gl_BaseInstance gl_BaseVertexARB "
-        "gl_BaseInstanceARB",
+        "gl_BaseInstanceARB gl_RelativeVertexID",
         "V",
         "",
     ),

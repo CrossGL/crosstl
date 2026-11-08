@@ -14,13 +14,23 @@ gives the entry point its own copy of the others. A name that another declaratio
 or that a function of the stage redeclares, is replaced by a fresh one in that stage's functions and initializers.
 An initializer that is not a constant expression of module-scope values becomes an assignment at the start of the
 entry point, where stage-scope initializers take effect, so it can still read the stage's other values; GLSL
-requires module-scope initializers to be constant expressions (GLSL 4.60 section 4.3). Declarations whose types
-are not plain values (opaque types, pointers, unsized arrays, stage-local structures) are left to the generators.
+requires module-scope initializers to be constant expressions (GLSL 4.60 section 4.3). A type named through a
+program or stage ``typedef`` (``real scratch;`` for ``typedef float real;``) is judged, and declared at module scope,
+as the type the alias names. Declarations whose types are not plain values (opaque types, pointers, unsized arrays,
+stage-local structures, aliases carrying a qualifier) are left to the generators.
+
+A stage-scope constant (``const``, ``static const`` or MSL's ``constant``, with an initializer) was dropped by the
+same generators, and declared as a uniform by the Slang one. It moves as well, as a module-scope ``constant``, which
+each generator declares as its constant (a GLSL ``const``, an HLSL and Slang ``static const``, an MSL ``constant``).
+Its initializer may read the program's constants and the stage constants declared before it. A constant whose
+initializer reads anything else moves as a private variable that the entry point assigns first, which is the value
+every function of the stage then reads.
 """
 
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 
 from .. import ast as A
 from .static_locals import (
@@ -49,6 +59,8 @@ TARGETS = (
             "d3d11",
             "d3d12",
             "slang",
+            "cuda",
+            "hip",
         }
     )
     | _HELPER_ONLY_TARGETS
@@ -57,6 +69,7 @@ TARGETS = (
 _SCALAR_NAMES = frozenset({"bool", "int", "uint", "float", "half", "double"})
 _SIZED_SCALAR = re.compile(r"u?int(?:8|16|32|64)_t|float(?:16|32|64)_t")
 _PRIVATE_QUALIFIERS = frozenset({"static"})
+_CONSTANT_QUALIFIERS = frozenset({"const", "constant"})
 
 
 def hoist_stage_private_variables(program, target) -> int:
@@ -69,6 +82,7 @@ def hoist_stage_private_variables(program, target) -> int:
         getattr(struct, "name", None): struct
         for struct in getattr(program, "structs", None) or []
     }
+    program_aliases = _aliases(getattr(program, "global_variables", None), {})
     module_names = _module_names(program)
     constants = _constant_names(program)
     taken = _declared_names(program)
@@ -80,15 +94,23 @@ def hoist_stage_private_variables(program, target) -> int:
         if entry is None:
             continue
         functions = [entry] + list(getattr(stage, "local_functions", None) or [])
+        aliases = _aliases(getattr(stage, "local_variables", None), program_aliases)
         candidates = [
             variable
             for variable in getattr(stage, "local_variables", None) or []
-            if _is_private(variable, structs)
+            if (
+                _is_private(variable, structs, aliases)
+                or _is_constant_value(variable, structs, aliases)
+            )
             and (
                 target not in _HELPER_ONLY_TARGETS
                 or _helpers_use(functions[1:], variable.name)
             )
         ]
+        for variable in candidates:
+            variable.var_type = variable.vtype = _without_aliases(
+                variable.var_type, aliases, frozenset()
+            )
         if candidates:
             plans.append((stage, entry, functions, candidates))
     other_names = _stage_declaration_names(
@@ -109,16 +131,22 @@ def hoist_stage_private_variables(program, target) -> int:
                 variable.name = new_name
             hoisted_names.add(variable.name)
             value = getattr(variable, "initial_value", None)
+            constant = bool(_qualifiers(variable) & _CONSTANT_QUALIFIERS)
             if value is not None and not _is_constant(value, constants):
+                # The entry point computes the value before any function of the stage reads it, so a constant
+                # whose initializer reads the stage's values becomes a private variable nothing else writes.
                 variable.initial_value = None
+                variable.is_mutable = True
+                constant = False
                 initializations.append(
                     A.AssignmentNode(A.IdentifierNode(variable.name), value, "=")
                 )
-            variable.qualifiers = ["static"] + [
-                qualifier
-                for qualifier in getattr(variable, "qualifiers", None) or []
-                if str(qualifier).lower() != "static"
-            ]
+            if constant:
+                # CrossGL's module-scope constant, which every generator declares as one.
+                variable.qualifiers = ["constant"]
+                constants.add(variable.name)
+            else:
+                variable.qualifiers = ["static"]
             variable.parent = program
             hoisted.append(variable)
         candidate_ids = {id(variable) for variable in candidates}
@@ -151,7 +179,7 @@ def _qualifiers(node):
     return {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
 
 
-def _is_private(variable, structs):
+def _is_private(variable, structs, aliases):
     """A mutable stage-scope value with no storage, interface or resource qualifier."""
     if type(variable) is not A.VariableNode or not getattr(variable, "name", None):
         return False
@@ -166,30 +194,104 @@ def _is_private(variable, structs):
         or getattr(variable, "is_type_alias", False)
     ):
         return False
-    return _is_value_type(getattr(variable, "var_type", None), structs, set())
+    return _is_value_type(getattr(variable, "var_type", None), structs, aliases, set())
 
 
-def _is_value_type(type_node, structs, visiting):
+def _is_constant_value(variable, structs, aliases):
+    """A stage-scope constant of a value type: ``const``, ``static const`` or ``constant`` with an initializer."""
+    if type(variable) is not A.VariableNode or not getattr(variable, "name", None):
+        return False
+    qualifiers = _qualifiers(variable)
+    if not qualifiers & _CONSTANT_QUALIFIERS or not qualifiers <= (
+        _PRIVATE_QUALIFIERS | _CONSTANT_QUALIFIERS
+    ):
+        return False
+    if getattr(variable, "initial_value", None) is None or (
+        getattr(variable, "semantic", None)
+        or getattr(variable, "attributes", None)
+        or getattr(variable, "resource_qualifiers", None)
+        or getattr(variable, "is_type_alias", False)
+    ):
+        return False
+    return _is_value_type(getattr(variable, "var_type", None), structs, aliases, set())
+
+
+def _is_value_type(type_node, structs, aliases, visiting):
+    if isinstance(type_node, A.PrimitiveType) and type_node.name in _SCALAR_NAMES:
+        return True
     if isinstance(type_node, A.PrimitiveType):
-        return type_node.name in _SCALAR_NAMES
+        # ``vec2<real>`` reads its element type as a primitive named ``real``.
+        aliased = (
+            None if type_node.name in visiting else _aliased_type(type_node, aliases)
+        )
+        return aliased is not None and _is_value_type(
+            aliased, structs, aliases, visiting | {type_node.name}
+        )
     if isinstance(type_node, (A.VectorType, A.MatrixType)):
-        return _is_value_type(type_node.element_type, structs, visiting)
+        return _is_value_type(type_node.element_type, structs, aliases, visiting)
     if isinstance(type_node, A.ArrayType):
         return type_node.size is not None and _is_value_type(
-            type_node.element_type, structs, visiting
+            type_node.element_type, structs, aliases, visiting
         )
     if isinstance(type_node, A.NamedType) and not type_node.generic_args:
         if _SIZED_SCALAR.fullmatch(type_node.name):
             return True
-        struct = structs.get(type_node.name)
-        if struct is None or type_node.name in visiting:
+        if type_node.name in visiting:
             return False
         visiting = visiting | {type_node.name}
+        struct = structs.get(type_node.name)
+        if struct is None:
+            aliased = _aliased_type(type_node, aliases)
+            return aliased is not None and _is_value_type(
+                aliased, structs, aliases, visiting
+            )
+        # A program structure sees the program's aliases, never a stage's.
+        program_aliases = aliases.get(_PROGRAM_ALIASES, aliases)
         return all(
-            _is_value_type(_member_type(member), structs, visiting)
+            _is_value_type(_member_type(member), structs, program_aliases, visiting)
             for member in getattr(struct, "members", None) or []
         )
     return False
+
+
+_PROGRAM_ALIASES = object()
+
+
+def _aliases(declarations, program_aliases):
+    """Alias names to their declarations, extending ``program_aliases`` (``{}`` for the program's own)."""
+    aliases = dict(program_aliases)
+    for node in declarations or []:
+        if type(node) is A.VariableNode and getattr(node, "is_type_alias", False):
+            aliases[node.name] = node
+    aliases[_PROGRAM_ALIASES] = program_aliases.get(_PROGRAM_ALIASES, aliases)
+    return aliases
+
+
+def _aliased_type(type_node, aliases):
+    """The type a plain alias name stands for, or ``None`` when it names no alias without qualifiers."""
+    if isinstance(type_node, A.NamedType) and type_node.generic_args:
+        return None
+    if not isinstance(type_node, (A.NamedType, A.PrimitiveType)):
+        return None
+    alias = aliases.get(type_node.name)
+    if alias is None or any(
+        getattr(alias, field, None)
+        for field in ("qualifiers", "attributes", "semantic", "resource_qualifiers")
+    ):
+        return None
+    return getattr(alias, "var_type", None)
+
+
+def _without_aliases(type_node, aliases, visiting):
+    """``type_node`` with every alias it names, directly or as an element type, replaced by the aliased type."""
+    aliased = _aliased_type(type_node, aliases)
+    if aliased is not None and type_node.name not in visiting:
+        return _without_aliases(deepcopy(aliased), aliases, visiting | {type_node.name})
+    if isinstance(type_node, (A.VectorType, A.MatrixType, A.ArrayType)):
+        type_node.element_type = _without_aliases(
+            type_node.element_type, aliases, visiting
+        )
+    return type_node
 
 
 def _member_type(member):

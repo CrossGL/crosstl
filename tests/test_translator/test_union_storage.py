@@ -35,6 +35,14 @@ Bits make_bits(uint word) { Bits value; value.words = uint2(word, 0x88776655u); 
 Bits copy_bits(Bits value) { value.bytes[1] = uchar4(9u, 10u, 11u, 12u); return value; }
 uint next_index(thread uint& count) { uint old = count; count += 1u; return old; }
 """
+# A template whose block-scope union depends on its parameter; only the cases that call it declare it.
+PACK_ENDS = """template <typename T> uint pack_ends(T first, T last) {
+    constexpr auto lanes = sizeof(uint) / sizeof(T);
+    union { uint word; T values[lanes]; } bits;
+    bits.word = 0u; bits.values[0] = first; bits.values[lanes - 1] = last;
+    return bits.word;
+}
+"""
 CASES = {
     "unpack": (
         "Bits value; value.words = uint2(0x04030201u, 0xff807f00u);",
@@ -156,6 +164,25 @@ CASES = {
         ],
         [0x3C003800, 8, 2],
     ),
+    "bfloat_lanes": (
+        "BfLanes value; value.word = 0x3F80C000u; uint count = 0u; value.floats[next_index(count)] = bfloat(0.5f); uint before = uint(float(value.floats[count]) * 4.0f); value.floats[count] = value.floats[0] + bfloat(0.25f);",
+        ["value.word", "before", "count"],
+        [0x3F403F00, 4, 1],
+        "union BfLanes { uint word; bfloat floats[2]; };\n",
+    ),
+    # 1 + 3/256 and 1 + 1/256 need eight mantissa bits; stores round to nearest even.
+    "bfloat_lane_rounding": (
+        "BfLanes value; value.word = 0u; uint count = 0u; uint first = next_index(count); value.floats[count] = bfloat(1.0f) + bfloat(0.01171875f); value.floats[first] = bfloat(1.0f) + bfloat(0.00390625f);",
+        ["value.word", "count"],
+        [0x3F823F80, 1],
+        "union BfLanes { uint word; bfloat floats[2]; };\n",
+    ),
+    "bool_lanes": (
+        "BoolLanes value; value.word = 0x00010001u; uint count = 0u; value.flags[next_index(count) + 1u] = true; uint lane2 = uint(value.flags[count + 1u]); value.flags[count + 1u] = false;",
+        ["value.word", "lane2", "uint(value.flags[3])"],
+        [0x00000101, 1, 0],
+        "union BoolLanes { uint word; bool flags[4]; };\n",
+    ),
     "wide_lanes": (
         "WideLanes value; value.words = uint2(0x04030201u, 0x08070605u); value.bytes[6] = 0xAAu; uint selected = value.bytes[4];",
         ["value.words.x", "value.words.y", "selected"],
@@ -176,6 +203,36 @@ CASES = {
         ["lanes.word", "box.bits", "box.other"],
         [0x04030202, 8, 9],
     ),
+    "block_union": (
+        "union LocalBits { uint word; uchar bytes[4]; } value; value.word = 0x04030201u; LocalBits other; other.bytes[0] = 7u; other.bytes[1] = 0u; other.bytes[2] = 0u; other.bytes[3] = 0x80u;",
+        ["uint(value.bytes[0])", "uint(value.bytes[3])", "other.word"],
+        [1, 4, 0x80000007],
+    ),
+    "unnamed_block_union": (
+        "union { uint word; half halves[2]; } value, copy; value.halves[0] = half(1.0); value.halves[1] = half(-2.0); copy.word = 0x3C00C000u;",
+        [
+            "value.word",
+            "uint(copy.halves[0] < half(0.0))",
+            "uint(copy.halves[1] > half(0.0))",
+        ],
+        [0xC0003C00, 1, 1],
+    ),
+    "typedef_block_union": (
+        "typedef union { uint word; ushort halves[2]; } Pair; Pair value; value.halves[0] = ushort(0x1234u); value.halves[1] = ushort(0xABCDu);",
+        ["value.word"],
+        [0xABCD1234],
+    ),
+    "unnamed_block_struct": (
+        "struct { uint first; uint second; } pair; pair.first = 3u; pair.second = pair.first + 4u;",
+        ["pair.first", "pair.second"],
+        [3, 7],
+    ),
+    "template_block_union": (
+        "uint halves = pack_ends<ushort>(ushort(0x1234u), ushort(0xABCDu)); uint bytes = pack_ends<uchar>(uchar(1u), uchar(4u));",
+        ["halves", "bytes"],
+        [0xABCD1234, 0x04000001],
+        PACK_ENDS,
+    ),
     "read_selector": (
         "Holder holder; holder.values[0] = make_bits(0x04030201u); uint count = 0u; uint selected = holder.values[next_index(count)].bytes[1][2];",
         ["selected", "count"],
@@ -185,12 +242,13 @@ CASES = {
 
 
 def _case(root, target, case):
-    body, expressions, values = CASES[case]
+    body, expressions, values, *declarations = CASES[case]
     writes = "\n".join(
         f"results[{index + 1}] = {expr};" for index, expr in enumerate(expressions)
     )
     source = (
         HEADER
+        + "".join(declarations)
         + f"\nkernel void union_values(device uint* results [[buffer(0)]]) {{\n{body}\n{writes}\n}}\n"
     )
     _, descriptor, package = _package(

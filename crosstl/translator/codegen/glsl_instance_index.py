@@ -15,12 +15,13 @@ core API can issue.
 
 from __future__ import annotations
 
-__all__ = ["INSTANCE_INDEX", "instance_index_expression"]
+__all__ = ["INSTANCE_INDEX", "desktop_glsl_version", "instance_index_expression"]
 
 INSTANCE_INDEX = "gl_InstanceIndex"
 
 
-def _desktop_version(codegen):
+def desktop_glsl_version(codegen):
+    """The desktop GLSL version ``codegen`` emits, or ``None`` for GLSL ES."""
     version_line = getattr(codegen, "current_glsl_version_line", None)
     if codegen.glsl_version_is_es(version_line):
         return None
@@ -29,7 +30,7 @@ def _desktop_version(codegen):
 
 def instance_index_expression(codegen):
     """The OpenGL spelling of ``gl_InstanceIndex`` for the version ``codegen`` emits."""
-    version = _desktop_version(codegen)
+    version = desktop_glsl_version(codegen)
     if version is None:
         return "gl_InstanceID"
     base = "gl_BaseInstance" if version >= 460 else "gl_BaseInstanceARB"

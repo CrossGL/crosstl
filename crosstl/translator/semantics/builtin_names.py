@@ -16,8 +16,9 @@ member and stage or module variable:
   attributes, NV SM built-ins and EXT and NV ray tracing) nor a CrossGL extension of that namespace is refused with
   :class:`~.builtin_values.BuiltinValueUnsupportedError`. The CrossGL extensions are the indexed colour outputs
   ``gl_FragColorN`` and ``gl_FragData[N]``, the indexed distance members ``gl_ClipDistanceN`` and
-  ``gl_CullDistanceN`` (HLSL ``SV_ClipDistanceN``), and Metal's quad-group indices ``gl_QuadGroupID`` and
-  ``gl_QuadGroupInvocationID``. Names are matched without regard to case, as the generators match them;
+  ``gl_CullDistanceN`` (HLSL ``SV_ClipDistanceN``), Metal's quad-group indices ``gl_QuadGroupID`` and
+  ``gl_QuadGroupInvocationID``, and Direct3D's base-exclusive vertex ID ``gl_RelativeVertexID`` (HLSL
+  ``SV_VertexID``, see :mod:`.relative_vertex_ids`). Names are matched without regard to case, as the generators match them;
 * the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` are rewritten to ``gl_FrontFacing`` and
   ``gl_FragStencilRefEXT``, the spellings every generator reads.
 
@@ -78,7 +79,8 @@ _GLSL_EXTENSIONS = (
     "gl_LaunchIDNV gl_LaunchSizeNV"
 )
 _CROSSGL_EXTENSIONS = (
-    "gl_FragStencilRefEXT gl_IsFrontFace gl_QuadGroupID gl_QuadGroupInvocationID"
+    "gl_FragStencilRefEXT gl_IsFrontFace gl_QuadGroupID gl_QuadGroupInvocationID "
+    "gl_RelativeVertexID"
 )
 
 CROSSGL_GL_BUILTIN_NAMES = frozenset(

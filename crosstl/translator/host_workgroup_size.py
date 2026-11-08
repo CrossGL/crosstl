@@ -16,7 +16,10 @@ the mark names one; the host then dispatches whole workgroups of that size, as `
 any other kernel the mark records the first construct that depends on the size, and a code generator that needs
 the size raises :class:`HostDefinedWorkgroupSizeError` through :func:`require_static_workgroup_size`, unless an
 explicit ``@ workgroup_size`` or a project workgroup-size rule gives it. The Metal generator needs no size, so a
-Metal round trip keeps the host's choice.
+Metal round trip keeps the host's choice, the SPIR-V and GLSL generators make the size three specialization
+constants that the host sets when it creates the pipeline, the HLSL generator reads it from macros that the
+host defines when it compiles the shader, and the Slang generator reads those macros or, without them, three
+specialization constants.
 """
 
 from __future__ import annotations
@@ -388,8 +391,8 @@ def _is_workgroup_stage(stage: Any) -> bool:
     return str(getattr(kind, "value", kind)).lower() in _WORKGROUP_STAGES
 
 
-def _is_compute_function(function: Any) -> bool:
-    """Whether a top-level function is a compute entry, as ``@ compute fn`` or a ``compute`` qualifier declares it."""
+def _function_stage(function: Any) -> str | None:
+    """The stage a top-level entry function declares, as ``@ compute fn`` or a ``compute`` qualifier does."""
     qualifiers = list(getattr(function, "qualifiers", None) or [])
     names = qualifiers[:1] + [
         getattr(attribute, "name", attribute)
@@ -398,8 +401,13 @@ def _is_compute_function(function: Any) -> bool:
     for name in names:
         stage = normalize_stage_name(name)
         if stage in STAGE_QUALIFIER_NAMES:
-            return stage == "compute"
-    return False
+            return stage
+    return None
+
+
+def _is_compute_function(function: Any) -> bool:
+    """Whether a top-level function is a compute entry, as ``@ compute fn`` or a ``compute`` qualifier declares it."""
+    return _function_stage(function) == "compute"
 
 
 def _resolve_mark(entry: Any, mark: Any, config: dict, dependence) -> None:

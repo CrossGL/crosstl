@@ -7109,24 +7109,24 @@ def test_metal_glsl_buffer_block_fixed_width_aliases_lower_to_pointer_offsets():
 
     assert "device uchar* aliasBlock" in generated_code
     assert (
-        "uint word = uint(ushort((*reinterpret_cast<const device uint*>(aliasBlock + 4))));"
+        "uint word = uint(ushort((*reinterpret_cast<const device ushort*>(aliasBlock + 2))));"
         in generated_code
     )
     assert (
-        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (8 + index * 4))))"
+        "uint64_t((*reinterpret_cast<const device uint*>(aliasBlock + (4 + index * 4))))"
         in generated_code
     )
     assert "void writeAlias(uint index, uint word, uint64_t offset" in generated_code
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 4)) = uint(uint(ushort(word)));"
+        "(*reinterpret_cast<device ushort*>(aliasBlock + 2)) = uint(ushort(word));"
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + (8 + index * 4))) = uint(offset);"
+        "(*reinterpret_cast<device uint*>(aliasBlock + (4 + index * 4))) = uint(offset);"
         in generated_code
     )
     assert (
-        "(*reinterpret_cast<device uint*>(aliasBlock + 0)) = uint(((*reinterpret_cast<const device uint*>(aliasBlock + 0)) + uint(ushort(uint(1u)))));"
+        "(*reinterpret_cast<device ushort*>(aliasBlock + 0)) = ((*reinterpret_cast<const device ushort*>(aliasBlock + 0)) + uint(ushort(uint(1u))));"
         in generated_code
     )
     assert "unsupported Metal GLSL buffer block" not in generated_code
@@ -16507,7 +16507,13 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
 
     vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
     assert "uint vertexID [[vertex_id]]" in vertex_code
-    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "uint _crossglInstanceIndex [[instance_id]]" in vertex_code
+    assert "uint _crossglBaseInstance [[base_instance]]" in vertex_code
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in vertex_code
+    )
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "uint primitiveID [[primitive_id]]" in fragment_code
@@ -16541,7 +16547,13 @@ def test_graphics_hlsl_vertex_system_value_aliases_lower_to_metal_builtins():
     generated = MetalCodeGen().generate_stage(ast, "vertex")
 
     assert "uint vertexID [[vertex_id]]" in generated
-    assert "uint instanceID [[instance_id]]" in generated
+    assert "uint _crossglInstanceIndex [[instance_id]]" in generated
+    assert "uint _crossglBaseInstance [[base_instance]]" in generated
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in generated
+    )
     assert "SV_VertexID" not in generated
     assert "SV_InstanceID" not in generated
 
@@ -16578,7 +16590,13 @@ def test_graphics_hlsl_system_value_semantic_alias_variants_lower_to_metal_built
 
     vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
     assert "uint vertexID [[vertex_id]]" in vertex_code
-    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "uint _crossglInstanceIndex [[instance_id]]" in vertex_code
+    assert "uint _crossglBaseInstance [[base_instance]]" in vertex_code
+    # gl_InstanceID and SV_InstanceID leave out the base instance that instance_id includes.
+    assert (
+        "uint instanceID = uint(_crossglInstanceIndex - _crossglBaseInstance);"
+        in vertex_code
+    )
     assert "sv_vertex_id" not in vertex_code
     assert "SV_InstanceId" not in vertex_code
 
@@ -16643,11 +16661,12 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
     ("stage", "param_type", "semantic", "metal_semantic", "expected_type"),
     [
         ("vertex", "float", "gl_InstanceID", "instance_id", "uint"),
-        ("fragment", "int", "gl_PrimitiveID", "primitive_id", "uint"),
+        # GLSL's int forms of these are accepted (test_metal_signed_builtins.py); a float is not.
+        ("fragment", "float", "gl_PrimitiveID", "primitive_id", "uint"),
         ("fragment", "int", "gl_FrontFacing", "front_facing", "bool"),
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
-        ("fragment", "int", "gl_SampleID", "sample_id", "uint"),
+        ("fragment", "float", "gl_SampleID", "sample_id", "uint"),
         ("fragment", "int", "gl_SampleMaskIn", "sample_mask", "uint"),
     ],
 )
@@ -16819,9 +16838,9 @@ def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
         ("vec2 depth @ gl_FragDepth", "depth\\(any\\)", "float"),
         ("int frontFacing @ gl_FrontFacing", "front_facing", "bool"),
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
-        ("int primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
+        ("float primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
         ("vec2 pointSize @ gl_PointSize", "point_size", "float"),
-        ("int sampleID @ gl_SampleID", "sample_id", "uint"),
+        ("float sampleID @ gl_SampleID", "sample_id", "uint"),
         ("int sampleMask @ gl_SampleMask", "sample_mask", "uint"),
     ],
 )
@@ -34761,6 +34780,200 @@ def test_scalar_geometric_builtins_lower_to_scalar_expressions(tmp_path):
     assert "results[0]=abs(x)+((x)*(y))+abs((x)-(y))+sign(x);" in compact
     assert "counts[0]=((a)*(b));" in compact
     assert "results[3]=length(v)+dot(v,v)+distance(v,v)+normalize(v).x;" in compact
+
+
+def test_metal_crossgl_pointer_local_declares_device_pointer(tmp_path):
+    source_path = tmp_path / "k.cl"
+    source_path.write_text(
+        """
+        __kernel void first(__global float* out, __global const float* in) {
+            __global const float *src = in;
+            size_t i = get_global_id(0);
+            out[i] = src[i];
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    # The local aliases a read-only device buffer, so it keeps its constness.
+    assert "const device float* src = in_;" in generated
+    assert "ptr<" not in generated
+
+
+def test_metal_crossgl_pointer_local_to_mutable_buffer_has_no_const(tmp_path):
+    source_path = tmp_path / "k.cl"
+    source_path.write_text(
+        """
+        __kernel void second(__global float* out, __global float* in) {
+            __global float *dst = out;
+            size_t i = get_global_id(0);
+            dst[i] = in[i];
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opencl",
+    )
+
+    assert "device float* dst = out;" in generated
+    assert "ptr<" not in generated
+
+
+def _translate_pointer_local_kernel(tmp_path, source, suffix=".cl"):
+    source_path = tmp_path / f"k{suffix}"
+    source_path.write_text(source, encoding="utf-8")
+    return crosstl.translate(
+        str(source_path),
+        backend="metal",
+        format_output=False,
+        source_backend="opencl" if suffix == ".cl" else "cuda",
+    )
+
+
+def test_metal_crossgl_pointer_local_keeps_const_through_other_locals(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __kernel void k(__global float* out, __global const float* in,
+                        __global const float* in2) {
+            __global const float *a = in;
+            __global const float *b = a + 1;
+            size_t i = get_global_id(0);
+            __global const float *c = (i > 4) ? b : out;
+            if (i > 8) c = in2;
+            out[i] = c[i];
+        }
+        """,
+    )
+
+    # Each local points into a read-only buffer, directly, through another
+    # local or through one branch of a conditional, so each keeps `const`.
+    assert "const device float* a = in_;" in generated
+    assert "const device float* b = a + 1;" in generated
+    assert "const device float* c = i > 4 ? b : out;" in generated
+    # Pointing a const local at another buffer is still allowed.
+    assert "c = in2;" in generated
+    compile_with_metal_if_available(generated)
+
+
+def test_metal_crossgl_pointer_local_keeps_native_narrow_pointee(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __kernel void k(__global uint* out, __global const uchar* in,
+                        __global short* s) {
+            __global const uchar *src = in;
+            __global short *dst = s;
+            size_t i = get_global_id(0);
+            out[i] = src[i];
+            dst[i] = (short)i;
+        }
+        """,
+    )
+
+    # The buffers keep their native widths, so the pointers into them do too.
+    assert "const device uchar* src = in_;" in generated
+    assert "device short* dst = s;" in generated
+    compile_with_metal_if_available(generated)
+
+
+def test_metal_crossgl_pointer_local_to_private_value_is_thread_pointer(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __global__ void k(float* out) {
+            float x = 2.0f;
+            float* p = &x;
+            *p += 1.0f;
+            out[threadIdx.x] = *p;
+        }
+        """,
+        ".cu",
+    )
+
+    assert "thread float* p = &x;" in generated
+    compile_with_metal_if_available(generated)
+
+
+@pytest.mark.parametrize(
+    "source, suffix, message",
+    [
+        (
+            """
+            __kernel void k(__global float* out, __global const float* in) {
+                __global const float *p;
+                p = in;
+                out[get_global_id(0)] = p[get_global_id(0)];
+            }
+            """,
+            ".cl",
+            r"pointer local: 'p' has no initializer",
+        ),
+        (
+            """
+            __global__ void k(float* out, const float* in) {
+                __shared__ float tile[64];
+                tile[threadIdx.x] = in[threadIdx.x];
+                __syncthreads();
+                const float* p = in;
+                if (threadIdx.x > 4) p = tile;
+                out[threadIdx.x] = p[threadIdx.x];
+            }
+            """,
+            ".cu",
+            r"address-space assignment: value 'tile' uses threadgroup address "
+            r"space but target 'p' uses device",
+        ),
+        (
+            """
+            __global__ void k(float* out, const float* in) {
+                float x = 2.0f;
+                const float* p = &x;
+                if (threadIdx.x > 4) p = in;
+                out[threadIdx.x] = p[threadIdx.x];
+            }
+            """,
+            ".cu",
+            r"address-space assignment: value 'in_' uses device address space "
+            r"but target 'p' uses thread",
+        ),
+    ],
+    ids=["uninitialized", "to-shared", "to-device"],
+)
+def test_metal_refuses_crossgl_pointer_local_of_unknown_address_space(
+    tmp_path, source, suffix, message
+):
+    with pytest.raises(MetalLoweringRefused, match=message):
+        _translate_pointer_local_kernel(tmp_path, source, suffix)
+
+
+def test_metal_crossgl_local_pointer_local_keeps_threadgroup_initializer(tmp_path):
+    generated = _translate_pointer_local_kernel(
+        tmp_path,
+        """
+        __kernel void k(__global float* out, __local float* scratch) {
+            __local float *t = scratch;
+            t[get_local_id(0)] = 1.0f;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[get_global_id(0)] = t[0];
+        }
+        """,
+    )
+
+    assert "threadgroup float* t = scratch;" in generated
+    compile_with_metal_if_available(generated)
 
 
 if __name__ == "__main__":

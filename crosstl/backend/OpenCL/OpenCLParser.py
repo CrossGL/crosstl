@@ -230,6 +230,9 @@ class OpenCLParser(HipParser):
         super().__init__(tokens)
         self.opencl_type_alias_targets = {}
 
+    def reject_disallowed_local_memory_space(self, qualifiers, name):
+        """Keep OpenCL ``__constant`` locals: it names an address space, so ``__constant float *p`` is a valid local."""
+
     def parse(self):
         previous_recursion_limit = sys.getrecursionlimit()
         if len(self.tokens) > previous_recursion_limit:
@@ -551,7 +554,10 @@ class OpenCLParser(HipParser):
 
     def parse_type(self):
         self.parse_type_attribute_prefixes()
+        split_qualifiers = self.parse_line_split_type_qualifiers()
         type_name = super().parse_type()
+        if split_qualifiers:
+            type_name = " ".join([*split_qualifiers, type_name])
 
         if "pipe" in str(type_name).split() and self.is_current_token_type_start():
             element_type = super().parse_type()
@@ -559,10 +565,47 @@ class OpenCLParser(HipParser):
 
         return type_name
 
+    def parse_line_split_type_qualifiers(self):
+        """Read qualifiers that a line break separates from the rest of a type.
+
+        In `const` / `__global float* in` or `const __global` / `float* in`,
+        the base parser stops at the line break; read the qualifiers up to the
+        last break here and leave the rest of the type, and qualifiers on one
+        line with it, to the base parser.
+        """
+        end = self.line_split_type_qualifiers_end(self.pos)
+        qualifiers = []
+        while self.pos < end:
+            if not self.match("NEWLINE"):
+                qualifiers.append(self.current_token.value)
+            self.advance()
+        return qualifiers
+
+    def line_split_type_qualifiers_end(self, index):
+        """Index after the last line break that follows a type qualifier at ``index``, or ``index`` if none does.
+
+        A sign word whose next line starts the declarator, as in `unsigned` /
+        `n`, stays with the base parser, which reads it as `unsigned int`.
+        """
+        end = index
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS
+        ):
+            next_index = self.skip_newlines_at_pos(index + 1)
+            implicit_int = self.tokens[index].type in {
+                "SIGNED",
+                "UNSIGNED",
+            } and self.is_implicit_int_type_at_pos(next_index, True)
+            if next_index != index + 1 and not implicit_int:
+                end = next_index
+            index = next_index
+        return end
+
     def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
         original_index = index
         index = super().skip_type_at_pos(
-            index,
+            self.line_split_type_qualifiers_end(index),
             allow_unknown_identifier_pointers=allow_unknown_identifier_pointers,
         )
         if index is None:
@@ -642,26 +685,54 @@ class OpenCLParser(HipParser):
             return index
         return None
 
+    def parse_declaration_qualifiers(self):
+        qualifiers = []
+
+        while True:
+            if self.match(*self.DECLARATION_QUALIFIER_TOKENS):
+                qualifiers.append(self.current_token.value)
+                self.advance()
+                continue
+            next_index = self.skip_newlines_at_pos(self.pos)
+            if (
+                next_index != self.pos
+                and next_index < len(self.tokens)
+                and self.tokens[next_index].type in self.DECLARATION_QUALIFIER_TOKENS
+            ):
+                self.skip_newlines()
+                continue
+            break
+
+        return qualifiers
+
     def parse_variable_declaration_type(self, qualifiers, attributes=None):
         attributes = attributes if attributes is not None else []
         saved_pos = self.pos
         saved_token = self.current_token
         type_prefixes = []
+        interleaved_qualifiers = []
         saw_integral_sign = False
 
         self.skip_newlines()
         self.skip_cpp_attributes()
         parsed_attributes = self.parse_type_attribute_prefixes()
 
-        while self.match(*self.TYPE_QUALIFIER_TOKENS):
-            if self.current_token.type in {"SIGNED", "UNSIGNED"}:
-                saw_integral_sign = True
-            type_prefixes.append(self.current_token.value)
+        while self.match(
+            *self.TYPE_QUALIFIER_TOKENS,
+            *self.DECLARATION_QUALIFIER_TOKENS,
+        ):
+            if self.match(*self.DECLARATION_QUALIFIER_TOKENS):
+                interleaved_qualifiers.append(self.current_token.value)
+            else:
+                if self.current_token.type in {"SIGNED", "UNSIGNED"}:
+                    saw_integral_sign = True
+                type_prefixes.append(self.current_token.value)
             self.advance()
             self.skip_newlines()
+            self.skip_cpp_attributes()
+            parsed_attributes.extend(self.parse_type_attribute_prefixes())
 
-        self.skip_cpp_attributes()
-        interleaved_qualifiers = self.parse_declaration_qualifiers()
+        interleaved_qualifiers.extend(self.parse_declaration_qualifiers())
         if type_prefixes or interleaved_qualifiers:
             qualifiers.extend(interleaved_qualifiers)
             self.skip_newlines()

@@ -5,11 +5,16 @@ import sys
 
 from ..switch_clauses import record_default_position
 from .floating_point import reject_contraction_tokens
+from .local_aggregate_declarators import (
+    split_block_aggregate_declaration,
+    unnamed_aggregate_name,
+)
 from .MetalAst import *
 from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
 from .signed_type_spellings import fold_signed_type_spellings
 from .simd_aliases import SIMD_TYPE_ALIASES
+from .string_literals import concatenate_string_literals
 
 MIN_METAL_PARSE_RECURSION_LIMIT = 10000
 
@@ -435,8 +440,11 @@ class MetalParser:
         self.namespace_aliases = {}
         self.namespace_scope_stack = []
         self.using_namespace_directives = []
+        self.using_declarations = []
         self.last_struct_type_aliases = []
         self.last_struct_constructors = []
+        self.last_struct_declares_assignment_operator = False
+        self.last_struct_declares_subscript_operator = False
         self.last_struct_call_operator_declarations = []
         self.last_struct_nested_aggregates = []
         self.last_type_specifier_qualifier_contract = {
@@ -677,7 +685,9 @@ class MetalParser:
                     self.annotate_declaration_scope(typedef)
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
-                global_variables.append(self.parse_static_assert())
+                global_variables.append(
+                    self.annotate_declaration_scope(self.parse_static_assert())
+                )
             elif self.is_conversion_operator_fragment():
                 self.skip_struct_method()
             elif self.is_operator_function_definition():
@@ -740,6 +750,7 @@ class MetalParser:
             self.template_specialization_limit_source
         )
         shader.using_namespace_directives = list(self.using_namespace_directives)
+        shader.using_declarations = list(self.using_declarations)
         shader.namespace_aliases = dict(self.namespace_aliases)
         shader.function_prototypes = dict(self.function_prototypes)
         self.associate_out_of_line_call_operators(shader)
@@ -1581,6 +1592,10 @@ class MetalParser:
         if tok_type == "IDENTIFIER" and self.tokens[idx][1] in SIGNED_TYPE_PREFIXES:
             idx = self.skip_signed_type_prefix_at(idx)
             type_name = "int"
+        elif self.is_decltype_start_at(idx):
+            # ``decltype(e) f(...)``: parse_type_specifier reads the decltype return type.
+            type_name = "decltype"
+            idx = self.skip_decltype_type_at(idx)
         elif (
             tok_type in {"STRUCT", "ENUM"}
             and idx + 1 < len(self.tokens)
@@ -1796,7 +1811,10 @@ class MetalParser:
                 )
             return None
         if self.is_using_declaration_start():
-            self.parse_using_declaration()
+            target_name = self.parse_using_declaration()
+            self.using_declarations.append(
+                {"namespace": self.current_namespace(), "target": target_name}
+            )
             return None
         alias_name = self.current_token[1]
         self.eat("IDENTIFIER")
@@ -1841,8 +1859,9 @@ class MetalParser:
         )
 
     def parse_using_declaration(self):
-        self.parse_scoped_identifier()
+        target_name = self.parse_scoped_identifier()
         self.eat("SEMICOLON")
+        return target_name
 
     def is_union_alias_start(self):
         return self.current_token == ("IDENTIFIER", "union")
@@ -2206,6 +2225,17 @@ class MetalParser:
         self.register_known_type(alias_name)
         return TypeAliasNode(f"struct {tag_name}", alias_name)
 
+    def parse_string_literal_run(self):
+        """Parse adjacent string literals as the one literal C++ joins them into."""
+        spellings = []
+        while self.current_token[0] == "STRING":
+            spellings.append(self.current_token[1])
+            self.eat("STRING")
+        try:
+            return concatenate_string_literals(spellings)
+        except ValueError as exc:
+            raise SyntaxError(f"Invalid string literal concatenation: {exc}") from exc
+
     def parse_static_assert(self):
         self.eat("STATIC_ASSERT")
         self.eat("LPAREN")
@@ -2214,8 +2244,7 @@ class MetalParser:
         if self.current_token[0] == "COMMA":
             self.eat("COMMA")
             if self.current_token[0] == "STRING":
-                message = self.current_token[1]
-                self.eat("STRING")
+                message = self.parse_string_literal_run()
             else:
                 message = self.parse_expression()
         self.eat("RPAREN")
@@ -2420,6 +2449,11 @@ class MetalParser:
             else:
                 base_type = self.current_token[1]
                 self.eat(self.current_token[0])
+        elif self.current_token[0] == "MESH" and self.peek(1)[0] == "LESS_THAN":
+            # ``mesh<V, P, NV, NP, topology>`` after ``using namespace metal``: the
+            # lexer reads ``mesh`` as the stage keyword of ``[[mesh]]``.
+            base_type = self.current_token[1]
+            self.eat("MESH")
         elif self.current_token[0] not in TYPE_TOKENS:
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
         elif (
@@ -2816,7 +2850,7 @@ class MetalParser:
 
         return array_sizes
 
-    def parse_struct(self, pre_alignas=None):
+    def parse_struct(self, pre_alignas=None, allow_unnamed=False):
         start_token = self.current_token
         alignas_specs = (
             list(pre_alignas)
@@ -2827,11 +2861,15 @@ class MetalParser:
         struct_attributes = self.parse_attributes()
         alignas_specs.extend(self.parse_alignas_specifiers())
         self.skip_aggregate_alignment_macros()
-        if not self.is_current_name_token():
+        unnamed = allow_unnamed and self.current_token[0] == "LBRACE"
+        if unnamed:
+            name = self.reserve_unnamed_aggregate_name("struct")
+        elif not self.is_current_name_token():
             raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
-        name = self.current_token[1]
-        self.eat(self.current_token[0])
-        self.register_known_type(name)
+        else:
+            name = self.current_token[1]
+            self.eat(self.current_token[0])
+            self.register_known_type(name)
         if self.current_token[0] == "LESS_THAN":
             template_args = self.parse_template_argument_suffix()
             name = f"{name}<{self.format_generic_type_tokens(template_args)}>"
@@ -2853,6 +2891,12 @@ class MetalParser:
         struct_node.base_types = base_types
         struct_node.type_aliases = list(self.last_struct_type_aliases)
         struct_node.constructors = list(self.last_struct_constructors)
+        struct_node.declares_assignment_operator = (
+            self.last_struct_declares_assignment_operator
+        )
+        struct_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
+        )
         struct_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -2868,6 +2912,8 @@ class MetalParser:
         struct_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
         )
+        if unnamed:
+            self.require_unnamed_aggregate_declarators(struct_node, "struct")
         struct_node.declaration_source_location = self.source_span_from_tokens(
             start_token, self.tokens[self.pos - 1]
         )
@@ -2912,6 +2958,12 @@ class MetalParser:
         class_node.aggregate_kind = "class"
         class_node.type_aliases = list(self.last_struct_type_aliases)
         class_node.constructors = list(self.last_struct_constructors)
+        class_node.declares_assignment_operator = (
+            self.last_struct_declares_assignment_operator
+        )
+        class_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
+        )
         class_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -2969,7 +3021,7 @@ class MetalParser:
             bases.append(self.format_generic_type_tokens(parts))
         return bases
 
-    def parse_union(self):
+    def parse_union(self, allow_unnamed=False):
         start_token = self.current_token
         self.skip_gnu_extension_prefix_tokens()
         self.eat("IDENTIFIER")
@@ -2980,6 +3032,9 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        unnamed = not name and allow_unnamed and self.current_token[0] == "LBRACE"
+        if unnamed:
+            name = self.reserve_unnamed_aggregate_name("union")
         if not name:
             raise SyntaxError("Expected union name")
         self.push_declaration_context(f"union {name}")
@@ -2991,6 +3046,12 @@ class MetalParser:
         union_node.aggregate_kind = "union"
         union_node.type_aliases = list(self.last_struct_type_aliases)
         union_node.constructors = list(self.last_struct_constructors)
+        union_node.declares_assignment_operator = (
+            self.last_struct_declares_assignment_operator
+        )
+        union_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
+        )
         union_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -3006,11 +3067,29 @@ class MetalParser:
         union_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
         )
+        if unnamed:
+            self.require_unnamed_aggregate_declarators(union_node, "union")
         union_node.declaration_source_location = self.source_span_from_tokens(
             start_token, self.tokens[self.pos - 1]
         )
         self.pop_declaration_context()
         return union_node
+
+    def reserve_unnamed_aggregate_name(self, kind):
+        self.unnamed_aggregate_count = getattr(self, "unnamed_aggregate_count", 0) + 1
+        name = unnamed_aggregate_name(kind, self.unnamed_aggregate_count)
+        self.register_known_type(name)
+        return name
+
+    def require_unnamed_aggregate_declarators(self, aggregate, kind):
+        aggregate.unnamed_aggregate_kind = kind
+        if not aggregate.trailing_declarations:
+            # [class.union.anon]: the members of an anonymous union join the
+            # enclosing scope, which hoisting cannot represent.
+            raise SyntaxError(
+                f"An unnamed block-scope {kind} must declare an object; "
+                f"anonymous {kind} members of a block are not supported"
+            )
 
     def parse_trailing_aggregate_declarations(self, aggregate_type):
         declarations = []
@@ -3053,6 +3132,8 @@ class MetalParser:
         constructors = []
         call_operator_declarations = []
         nested_aggregates = []
+        declares_assignment_operator = False
+        declares_subscript_operator = False
 
         def capture_nested_aggregate(nested):
             if nested is None:
@@ -3108,6 +3189,12 @@ class MetalParser:
                         self.parse_template_constructor_declaration(owner_name)
                     )
                     continue
+                declares_assignment_operator |= (
+                    self.skipped_member_declares_assignment_operator()
+                )
+                declares_subscript_operator |= (
+                    self.skipped_member_declares_subscript_operator()
+                )
                 self.skip_template_declaration()
                 continue
             member_alignas = self.parse_alignas_specifiers()
@@ -3144,12 +3231,23 @@ class MetalParser:
                 continue
             vtype, qualifiers = self.parse_type_specifier()
             if self.current_token[0] == "OPERATOR":
+                declares_assignment_operator |= (
+                    self.skipped_member_declares_assignment_operator()
+                )
+                declares_subscript_operator |= (
+                    self.skipped_member_declares_subscript_operator()
+                )
                 self.skip_struct_method()
                 continue
             qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
             var_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
             member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             if var_name == "operator":
+                declares_assignment_operator |= self.current_token[0] == "EQUALS"
+                # The declarator parser reads ``operator[]`` as an array of unknown bound.
+                declares_subscript_operator |= bool(array_sizes) or (
+                    self.current_token[0] == "LBRACKET"
+                )
                 self.skip_struct_method()
                 continue
             if self.current_token[0] == "LPAREN":
@@ -3187,7 +3285,49 @@ class MetalParser:
         self.last_struct_constructors = constructors
         self.last_struct_call_operator_declarations = call_operator_declarations
         self.last_struct_nested_aggregates = nested_aggregates
+        self.last_struct_declares_assignment_operator = declares_assignment_operator
+        self.last_struct_declares_subscript_operator = declares_subscript_operator
         return members
+
+    def skipped_member_declares_assignment_operator(self):
+        """Whether the member declaration at the cursor declares ``operator=``.
+
+        The struct parser skips member operators, but a user-declared copy assignment operator replaces the
+        member-wise assignment an implicit conversion would otherwise feed ([class.copy.assign]).
+        """
+        index = self.pos
+        while index + 1 < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type in {"LBRACE", "SEMICOLON", "EOF"}:
+                return False
+            names_operator = token_type == "OPERATOR" or self.tokens[index] == (
+                "IDENTIFIER",
+                "operator",
+            )
+            if names_operator and self.tokens[index + 1][0] == "EQUALS":
+                return True
+            index += 1
+        return False
+
+    def skipped_member_declares_subscript_operator(self):
+        """Whether the member declaration at the cursor declares ``operator[]``.
+
+        The struct parser skips member operators, but a subscript of a dependent value may select a user-declared
+        subscript operator when its template is instantiated ([over.sub]), which the importer has to know.
+        """
+        index = self.pos
+        while index + 2 < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type in {"LBRACE", "SEMICOLON", "EOF"}:
+                return False
+            if (
+                self.tokens[index] == ("IDENTIFIER", "operator")
+                and self.tokens[index + 1][0] == "LBRACKET"
+                and self.tokens[index + 2][0] == "RBRACKET"
+            ):
+                return True
+            index += 1
+        return False
 
     def is_struct_call_operator_declaration_start(self):
         if not self.is_operator_function_definition():
@@ -4215,12 +4355,18 @@ class MetalParser:
             alias = self.parse_typedef()
             return alias if isinstance(alias, (TypeAliasNode, StructNode)) else None
         if self.is_nested_aggregate_declaration_start():
+            # A block-scope class definition may also declare objects of it; the
+            # importer hoists the class, so its objects become later statements.
             if self.current_token[0] == "STRUCT":
-                return self.parse_struct()
+                return split_block_aggregate_declaration(
+                    self.parse_struct(allow_unnamed=True)
+                )
             if self.current_token[0] == "CLASS":
                 return self.parse_class()
             if self.is_union_alias_start():
-                return self.parse_union()
+                return split_block_aggregate_declaration(
+                    self.parse_union(allow_unnamed=True)
+                )
             self.skip_nested_aggregate_declaration()
             return None
         if self.current_token[0] == "LBRACE":
@@ -5099,18 +5245,24 @@ class MetalParser:
         if idx >= len(self.tokens) or self.tokens[idx][0] != "LESS_THAN":
             return False
         depth = 0
+        grouped_depth = 0
         saw_value_token = False
         while idx < len(self.tokens):
             token_type, token_value = self.tokens[idx]
             if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
                 return False
-            if token_type == "LESS_THAN":
+            grouping = self.template_argument_grouping(token_type, depth, grouped_depth)
+            if grouping is None:
+                return False
+            nested = grouping or grouped_depth
+            grouped_depth = grouping
+            if not nested and token_type == "LESS_THAN":
                 depth += 1
-            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+            elif not nested and token_type == "SHIFT_RIGHT" and depth >= 2:
                 depth -= 2
                 if depth == 0:
                     return saw_value_token
-            elif token_type == "GREATER_THAN":
+            elif not nested and token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     return saw_value_token
@@ -5126,6 +5278,22 @@ class MetalParser:
             idx += 1
         return False
 
+    @staticmethod
+    def template_argument_grouping(token_type, depth, grouped_depth):
+        """Return the parenthesis depth after ``token_type`` inside a template argument list.
+
+        A ``<`` or ``>`` nested in parentheses or brackets neither opens nor closes the list (C++
+        [temp.names]), and a closer with no opener inside the list means the ``<`` was a comparison, as in
+        ``i < ((a) > (b) ? (a) : (b))``; that case returns ``None``.
+        """
+        if depth == 0:
+            return grouped_depth
+        if token_type in {"LPAREN", "LBRACKET"}:
+            return grouped_depth + 1
+        if token_type in {"RPAREN", "RBRACKET"}:
+            return grouped_depth - 1 if grouped_depth else None
+        return grouped_depth
+
     def is_variable_template_name(self, name):
         if not isinstance(name, str):
             return False
@@ -5139,14 +5307,20 @@ class MetalParser:
         follow_token_types = follow_token_types or {"LPAREN"}
         idx = self.pos
         depth = 0
+        grouped_depth = 0
         saw_type_like = False
         while idx < len(self.tokens):
             token_type = self.tokens[idx][0]
             if depth > 0 and token_type in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
                 return False
-            if token_type == "LESS_THAN":
+            grouping = self.template_argument_grouping(token_type, depth, grouped_depth)
+            if grouping is None:
+                return False
+            nested = grouping or grouped_depth
+            grouped_depth = grouping
+            if not nested and token_type == "LESS_THAN":
                 depth += 1
-            elif token_type == "SHIFT_RIGHT" and depth >= 2:
+            elif not nested and token_type == "SHIFT_RIGHT" and depth >= 2:
                 depth -= 2
                 if depth == 0:
                     if require_type_like_argument and not saw_type_like:
@@ -5155,7 +5329,7 @@ class MetalParser:
                         idx + 1 < len(self.tokens)
                         and self.tokens[idx + 1][0] in follow_token_types
                     )
-            elif token_type == "GREATER_THAN":
+            elif not nested and token_type == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     if require_type_like_argument and not saw_type_like:
@@ -5232,12 +5406,7 @@ class MetalParser:
             self.eat("CHAR_LITERAL")
             return value
         if self.current_token[0] == "STRING":
-            value = self.current_token[1]
-            self.eat("STRING")
-            while self.current_token[0] == "STRING":
-                value += self.current_token[1]
-                self.eat("STRING")
-            return value
+            return self.parse_string_literal_run()
         if self.current_token[0] == "LPAREN":
             open_token = self.current_token
             self.eat("LPAREN")

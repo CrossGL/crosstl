@@ -93,6 +93,21 @@ def wgsl_line(output, needle):
     return next(line.strip() for line in output.splitlines() if needle in line)
 
 
+def spirv_masks(output, mask):
+    """The number of ``OpBitwiseAnd`` instructions with a constant operand ``mask``."""
+    lines = [line.split() for line in output.splitlines()]
+    constants = {
+        words[0]
+        for words in lines
+        if len(words) == 5 and words[2] == "OpConstant" and words[4] == str(mask)
+    }
+    return sum(
+        1
+        for words in lines
+        if len(words) > 2 and words[2] == "OpBitwiseAnd" and words[-1] in constants
+    )
+
+
 # Types and normalization ----------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("name", "kind", "bits", "lanes"),
@@ -203,6 +218,41 @@ def test_explicit_narrow_glsl_arithmetic_wraps_at_its_width(tmp_path, target):
 
 
 @pytest.mark.parametrize("target", TARGETS)
+def test_glsl_shift_keeps_its_left_operand_type(tmp_path, target):
+    # GLSL section 5.9: a shift has the type of its left operand, whatever the count's type.
+    body = """    uint16_t v = uint16_t(a[i]);
+    int k = a[i + 1];
+    o[i] = int(v << 12) + int(v << k);"""
+    output = translate(
+        tmp_path, GLSL_KERNEL.format(helpers="", body=body), target, ".comp"
+    )
+    if target == "wgsl":
+        line = wgsl_line(output, "o[i]")
+        assert line.count("& 65535") == 2, line
+    else:
+        # The initializer of v and both shifts.
+        assert spirv_masks(output, 65535) == 3
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_in_range_glsl_operations_keep_their_narrow_type(tmp_path, target):
+    # ``v & w`` stays a uint16_t, so the enclosing sum wraps at 16 bits as well.
+    body = """    uint16_t v = uint16_t(a[i]);
+    uint16_t w = uint16_t(a[i + 1]);
+    o[i] = int((v & w) + v) + int((v >> 1) * w);"""
+    output = translate(
+        tmp_path, GLSL_KERNEL.format(helpers="", body=body), target, ".comp"
+    )
+    if target == "wgsl":
+        line = wgsl_line(output, "o[i]")
+        assert "(i32(((v & w) + v)) & 65535)" in line, line
+        assert "(i32(((v >> 1) * w)) & 65535)" in line, line
+    else:
+        # The initializers of v and w, the sum and the product.
+        assert spirv_masks(output, 65535) == 4
+
+
+@pytest.mark.parametrize("target", TARGETS)
 def test_narrow_increment_statement_wraps(tmp_path, target):
     body = """    uchar v = uchar(a[i]);
     v++;
@@ -308,3 +358,17 @@ def test_initializers_outside_function_bodies_are_legalized(tmp_path, target):
         )
     else:
         assert "OpTypeInt 8" not in output
+
+
+def test_for_header_declaring_several_narrow_variables(tmp_path):
+    # WGSL has no for-header declaring several variables, whatever their type.
+    body = """    int result = 0;
+    for (short j = 0, step = 3; j < a[i]; ++j) {
+        result += j * step;
+    }
+    o[i] = result;"""
+    output = translate(
+        tmp_path, METAL_KERNEL.format(helpers="", body=body), "vulkan", ".metal"
+    )
+    assert "OpTypeInt 16" not in output
+    assert "OpBitwiseAnd" in output

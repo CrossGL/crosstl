@@ -201,7 +201,10 @@ def test_numthreads_without_shader_attribute_codegen_emits_compute_layout():
         in generated_code
     )
     assert "uvec3 dispatchThreadId @ gl_GlobalInvocationID" in generated_code
-    assert "gStatsRayCountTotal[dispatchThreadId.xy] = totalRays;" in generated_code
+    assert (
+        "imageStore(gStatsRayCountTotal, dispatchThreadId.xy, "
+        "uvec4(totalRays, 0u, 0u, 1u));" in generated_code
+    )
     cgl_translator.parse(generated_code)
 
 
@@ -331,7 +334,6 @@ def test_uninitialized_global_const_codegen_reparse_from_slang_bug_fixture():
     # tests/bugs/static-const-without-default-value.slang
     code = """
     static const int globalVar;
-    extern static const int externVar;
     static const int initializedVar = 42;
     const int nonStaticVar;
     static int nonConstVar;
@@ -347,7 +349,6 @@ def test_uninitialized_global_const_codegen_reparse_from_slang_bug_fixture():
     generated_code = generate_code(ast)
 
     assert "static const int globalVar;" in generated_code
-    assert "extern static const int externVar;" in generated_code
     assert "static const int initializedVar = 42;" in generated_code
     assert "int nonStaticVar;" in generated_code
     assert "static int nonConstVar;" in generated_code
@@ -888,7 +889,7 @@ def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_inse
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "uint vertexId @ gl_VertexID" in generated_code
+    assert "uint vertexId @ gl_RelativeVertexID" in generated_code
     assert "uint instanceId @ gl_InstanceID" in generated_code
     assert "bool frontFace @ gl_FrontFacing" in generated_code
     assert "uint sampleIndex @ gl_SampleID" in generated_code
@@ -2499,11 +2500,12 @@ def test_namespace_global_resource_array_codegen_from_current_slang_spirv_test()
 
     assert "ComputePush p @push_constant;" in generated_code
     assert (
-        "image2D test_namespace_textureTable[] @set(0) @binding(0);" in generated_code
+        "image2D test_namespace_textureTable[] @set(0) @binding(0) @format(unknown);"
+        in generated_code
     )
     assert (
-        "test_namespace_textureTable[p.image_id][pixel_i.xy] = "
-        "vec4(0, 1, 0, 0);" in generated_code
+        "imageStore(test_namespace_textureTable[p.image_id], pixel_i.xy, "
+        "vec4(0, 1, 0, 0));" in generated_code
     )
     assert "test_namespace.textureTable" not in generated_code
     cgl_translator.parse(generated_code)
@@ -2529,8 +2531,14 @@ def test_dotted_namespace_global_resource_codegen_from_namespace_import_sample()
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D ns1_ns2_textureTable[] @set(0) @binding(0);" in generated_code
-    assert "ns1_ns2_textureTable[0][pixel_i.xy] = vec4(0, 1, 0, 0);" in generated_code
+    assert (
+        "image2D ns1_ns2_textureTable[] @set(0) @binding(0) @format(unknown);"
+        in generated_code
+    )
+    assert (
+        "imageStore(ns1_ns2_textureTable[0], pixel_i.xy, vec4(0, 1, 0, 0));"
+        in generated_code
+    )
     assert "ns1.ns2.textureTable" not in generated_code
     cgl_translator.parse(generated_code)
 
@@ -2594,7 +2602,7 @@ def test_parameter_attribute_codegen_from_cuda_format_docs_reparses():
     generated_code = generate_code(ast)
 
     assert "vec2 getValue(image2D t)" in generated_code
-    assert "return t[ivec2(0, 0)];" in generated_code
+    assert "return imageLoad(t, ivec2(0, 0)).xy;" in generated_code
     assert "[format" not in generated_code
     cgl_translator.parse(generated_code)
 
@@ -3411,21 +3419,25 @@ def test_const_static_globals_codegen_canonicalizes_for_crossgl_reparse():
     cgl_translator.parse(generated_code)
 
 
-def test_extern_static_const_globals_codegen_from_link_time_constant_tests():
-    # Source: shader-slang/slang link-time constant tests.
-    code = """
-    extern static const bool turnOnFeature;
-    extern static const float constValue;
-    extern static const uint numthread = 0;
-    """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        # shader-slang/slang link-time constant tests.
+        "extern static const bool turnOnFeature;",
+        "extern static const float constValue;",
+        "extern static const uint numthread = 0;",
+        # shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+        # tests/bugs/static-const-without-default-value.slang
+        "extern static const int externVar;",
+    ],
+)
+def test_extern_static_const_link_time_constants_are_refused(declaration):
+    # Another module supplies the value when the program is linked. Before, CrossGL dropped
+    # the ``extern`` and kept an ordinary constant with the default or a zero value.
+    ast = parse_code(tokenize_code(declaration))
 
-    assert "extern static const bool turnOnFeature;" in generated_code
-    assert "extern static const float constValue;" in generated_code
-    assert "extern static const uint numthread = 0;" in generated_code
-    cgl_translator.parse(generated_code)
+    with pytest.raises(SlangImportRefused, match="link-time constant"):
+        generate_code(ast)
 
 
 def test_initializer_list_declaration_codegen():
@@ -4442,7 +4454,7 @@ def test_rwtexture_load_codegen_from_official_texture_capability_sample():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D texHandle;" in generated_code
+    assert "image2D texHandle @format(unknown);" in generated_code
     assert "ret = int(imageLoad(texHandle, ivec2(0, 0)).x);" in generated_code
     assert "RWTexture2D<float4> texHandle;" not in generated_code
     assert ".Load(" not in generated_code
@@ -4466,7 +4478,7 @@ def test_rwtexture_store_codegen_from_slang_stdlib_texture_store_docs():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "image2D texHandle;" in generated_code
+    assert "image2D texHandle @format(unknown);" in generated_code
     assert "imageStore(texHandle, pixel, color);" in generated_code
     assert "RWTexture2D<float4> texHandle;" not in generated_code
     assert ".Store(" not in generated_code
@@ -4488,7 +4500,10 @@ def test_parenthesized_expression_swizzle_codegen_from_autodiff_texture_learnmip
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 color = vec4((dstTexture[p] - val).xyz, 1.0);" in generated_code
+    assert (
+        "vec4 color = vec4((imageLoad(dstTexture, p) - val).xyz, 1.0);"
+        in generated_code
+    )
     assert "dstTexture[p] - val.xyz" not in generated_code
 
 

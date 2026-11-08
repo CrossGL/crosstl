@@ -2,6 +2,7 @@ from crosstl import translate
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from crosstl.backend.CUDA.local_memory_spaces import crossgl_zero_value
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -314,6 +315,58 @@ class TestCudaCodeGen:
         assert "__constant__" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_cuda_static_constant_local_without_initializer_is_zero_initialized(self):
+        code = """
+        extern "C" __global__ void first(float* out) {
+            static __constant__ float local_table[4];
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            out[i] = local_table[i % 4];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "let local_table: array<f32, 4> = {0.0, 0.0, 0.0, 0.0};" in result
+        assert "var<uniform> local_table" not in result
+        assert result.count("@group(0) @binding(0)") == 1
+        assert "__constant__" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_cuda_block_scope_extern_constant_is_not_zero_initialized(self):
+        # The extern declaration names the namespace-scope table, which the host
+        # writes with cudaMemcpyToSymbol, so its values are not zeros.
+        code = """
+        __constant__ float table[4];
+
+        __global__ void first(float* out) {
+            extern __constant__ float table[4];
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            out[i] = table[i % 4];
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "let table" not in result
+        assert "{0.0, 0.0, 0.0, 0.0}" not in result
+
+    def test_crossgl_zero_value_spells_each_type_family(self):
+        assert crossgl_zero_value("u64") == "0"
+        assert crossgl_zero_value("bool") == "false"
+        assert crossgl_zero_value("vec2<i32>") == "vec2<i32>(0, 0)"
+        assert crossgl_zero_value("mat2x2<f32>") == (
+            "mat2x2<f32>(vec2<f32>(0.0, 0.0), vec2<f32>(0.0, 0.0))"
+        )
+        assert crossgl_zero_value("array<array<f32, 3>, 2>") == (
+            "{{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}}"
+        )
+        assert crossgl_zero_value("array<Pair, 2>") == "{{}, {}}"
+
     def test_fixed_width_pointer_declaration_list_conversion(self):
         code = """
         __global__ void bit_extract_kernel(
@@ -620,6 +673,24 @@ class TestCudaCodeGen:
         assert "var d: vec2<f64> = vec2<f64>(1.0, 2.0);" in result
         assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
         assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
+
+    def test_braced_and_default_dim3_fill_missing_components_with_one(self):
+        # CUDA sets every dim3 component that is not given to 1 (#3562).
+        code = """
+        __global__ void k(unsigned int* out) {
+            const dim3 block = {16, 16};
+            const dim3 unit;
+            dim3 full = {2, 3, 4};
+            out[0] = block.z + unit.x + full.z;
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var block: vec3<u32> = vec3<u32>(16, 16, 1);" in result
+        assert "var unit: vec3<u32> = vec3<u32>(1, 1, 1);" in result
+        assert "var full: vec3<u32> = vec3<u32>(2, 3, 4);" in result
+        assert "{16, 16}" not in result
 
     def test_namespace_scope_constants_import_as_crossgl_constants(self, tmp_path):
         # A kernel reads namespace-scope constexpr and const constants directly,

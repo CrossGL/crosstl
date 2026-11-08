@@ -1918,6 +1918,32 @@ class OpenGLComputeRuntime:
         return outputs
 
 
+_VK_PORTABILITY_ENUMERATION = "VK_KHR_portability_enumeration"
+_VK_PORTABILITY_SUBSET = "VK_KHR_portability_subset"
+_VK_GET_PHYSICAL_DEVICE_PROPERTIES_2 = "VK_KHR_get_physical_device_properties2"
+
+
+def _vulkan_extension_names(properties: Any) -> set[str]:
+    return {str(item.extensionName) for item in properties or ()}
+
+
+def _vulkan_driver_missing(vk: Any, exc: Exception) -> bool:
+    # The loader reports VK_ERROR_INCOMPATIBLE_DRIVER when it finds no driver at all,
+    # portability drivers included once portability enumeration is requested.
+    incompatible_driver = getattr(vk, "VkErrorIncompatibleDriver", None)
+    return isinstance(incompatible_driver, type) and isinstance(
+        exc, incompatible_driver
+    )
+
+
+def _vulkan_device_name(vk: Any, physical_device: Any) -> str | None:
+    get_properties = getattr(vk, "vkGetPhysicalDeviceProperties", None)
+    if not callable(get_properties):
+        return None
+    name = getattr(get_properties(physical_device), "deviceName", None)
+    return str(name) if name else None
+
+
 class VulkanComputeRuntime:
     """Reference Vulkan compute runtime for simple storage-buffer fixtures.
 
@@ -1959,17 +1985,25 @@ class VulkanComputeRuntime:
             )
 
         instance = None
+        portability = False
         try:
+            portability = self._portability_enumeration_available(vk)
             instance = self._create_instance(vk)
             physical_device, queue_family = self._select_compute_device(vk, instance)
-        except Exception as exc:  # pragma: no cover - depends on local Vulkan loader
+            device_name = _vulkan_device_name(vk, physical_device)
+        except Exception as exc:
+            error = str(exc) or type(exc).__name__
+            reason_kind = "vulkan-runtime-unavailable"
+            if portability and instance is None and not _vulkan_driver_missing(vk, exc):
+                reason_kind = "portability-enumeration-failed"
             return RuntimeExecutorAvailability(
                 False,
-                reason=f"Vulkan runtime is unavailable: {exc}",
+                reason=f"Vulkan runtime is unavailable: {error}",
                 details={
-                    "reasonKind": "vulkan-runtime-unavailable",
+                    "reasonKind": reason_kind,
                     "target": "vulkan",
-                    "error": str(exc),
+                    "error": error,
+                    "portabilityEnumeration": portability,
                 },
             )
         finally:
@@ -1982,8 +2016,9 @@ class VulkanComputeRuntime:
                 "reasonKind": "available",
                 "target": "vulkan",
                 "runtime": self.name,
-                "physicalDevice": str(physical_device),
+                "physicalDevice": device_name or str(physical_device),
                 "queueFamilyIndex": queue_family,
+                "portabilityEnumeration": portability,
             },
         )
 
@@ -2059,11 +2094,36 @@ class VulkanComputeRuntime:
             engineVersion=1,
             apiVersion=getattr(vk, "VK_API_VERSION_1_1", vk.VK_API_VERSION_1_0),
         )
+        options: dict[str, Any] = {}
+        instance_extensions = self._instance_extension_names(vk)
+        if _VK_PORTABILITY_ENUMERATION in instance_extensions:
+            # Portability drivers such as MoltenVK are only enumerated on request.
+            extensions = [_VK_PORTABILITY_ENUMERATION]
+            if _VK_GET_PHYSICAL_DEVICE_PROPERTIES_2 in instance_extensions:
+                # VK_KHR_portability_subset requires it on a Vulkan 1.0 instance.
+                extensions.append(_VK_GET_PHYSICAL_DEVICE_PROPERTIES_2)
+            options = {
+                "flags": vk.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,
+                "enabledExtensionCount": len(extensions),
+                "ppEnabledExtensionNames": extensions,
+            }
         create_info = vk.VkInstanceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             pApplicationInfo=application_info,
+            **options,
         )
         return vk.vkCreateInstance(create_info, None)
+
+    def _portability_enumeration_available(self, vk: Any) -> bool:
+        return _VK_PORTABILITY_ENUMERATION in self._instance_extension_names(vk)
+
+    def _instance_extension_names(self, vk: Any) -> set[str]:
+        enumerate_extensions = getattr(
+            vk, "vkEnumerateInstanceExtensionProperties", None
+        )
+        if not callable(enumerate_extensions):
+            return set()
+        return _vulkan_extension_names(enumerate_extensions(None))
 
     def _destroy_instance(self, vk: Any, instance: Any) -> None:
         destroy = getattr(vk, "vkDestroyInstance", None)
@@ -2144,7 +2204,9 @@ class _VulkanDispatchContext:
         self.physical_device, self.queue_family = self.runtime._select_compute_device(
             vk, self.instance
         )
-        limits = vk.vkGetPhysicalDeviceProperties(self.physical_device).limits
+        # Keep the properties alive: cffi frees it, and its nested limits, once unreferenced.
+        properties = vk.vkGetPhysicalDeviceProperties(self.physical_device)
+        limits = properties.limits
         _validate_dispatch_limits(
             self.workgroup_count,
             self.workgroup_size,
@@ -2160,10 +2222,19 @@ class _VulkanDispatchContext:
             queueCount=1,
             pQueuePriorities=priority,
         )
+        extensions = []
+        enumerate_extensions = getattr(vk, "vkEnumerateDeviceExtensionProperties", None)
+        if callable(enumerate_extensions) and _VK_PORTABILITY_SUBSET in (
+            _vulkan_extension_names(enumerate_extensions(self.physical_device, None))
+        ):
+            # The Vulkan spec requires enabling this extension whenever a device exposes it.
+            extensions.append(_VK_PORTABILITY_SUBSET)
         device_info = vk.VkDeviceCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             queueCreateInfoCount=1,
             pQueueCreateInfos=[queue_info],
+            enabledExtensionCount=len(extensions),
+            ppEnabledExtensionNames=extensions,
         )
         self.device = vk.vkCreateDevice(self.physical_device, device_info, None)
         self.queue = vk.vkGetDeviceQueue(self.device, self.queue_family, 0)

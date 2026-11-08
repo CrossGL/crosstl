@@ -90,5 +90,7 @@ def test_fixed_cbuffer_register_is_reserved_before_push_constants(tmp_path):
     hlsl = crosstl.translate(str(source), backend="directx", format_output=False)
 
     assert re.search(r"cbuffer ubo : register\(b0\)", hlsl)
-    push = re.search(r"pushConsts : register\(b(\d+)\)", hlsl)
+    # Direct3D reads the push constants from a constant buffer of their own; SPIR-V pushes them.
+    push = re.search(r"pushConsts_block : register\(b(\d+)\)", hlsl)
     assert push is not None and push.group(1) != "0"
+    assert "[[vk::push_constant]] ConstantBuffer<" in hlsl

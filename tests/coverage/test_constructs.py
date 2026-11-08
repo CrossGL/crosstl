@@ -15,11 +15,23 @@ from tools.coverage import (
 )
 from tools.coverage.model import Feature, Result
 from tools.coverage.templates import (
+    bindings,
+    draws,
+    extensions,
     fragments,
     interfaces,
+    meshes,
     pipeline,
+    primitives,
+    qualifiers,
     rasterization,
+    rays,
     relations,
+    specializations,
+    subgroups,
+    tasks,
+    tessellation,
+    textures,
     vertices,
 )
 from tools.coverage.templates.base import ABSENT, OPERATORS
@@ -55,6 +67,7 @@ def _grammar(drop: str = "") -> str:
         "Decoration": [],
         "ExecutionModel": [],
         "ExecutionMode": [],
+        "Dim": [],
     }
     instructions = []
     for anchor in sorted(anchors - {drop}):
@@ -82,6 +95,446 @@ GRAMMAR = _grammar()
 def _feature(language: str, name: str) -> Feature:
     (feature,) = (f for f in constructs.features(language, GRAMMAR) if f.name == name)
     return feature
+
+
+def test_tessellation_probes_state_each_languages_domain_spacing_and_patch_values():
+    feature = _feature("glsl", "tessellation-domain-quads")
+    assert (feature.category, feature.stage) == ("graphics", "tessellation-evaluation")
+    assert feature.group == "ExecutionMode.Quads"
+    assert _feature("hlsl", "tessellation-control-winding-ccw").stage == (
+        "tessellation-control"
+    )
+    assert _feature("glsl", "tessellation-level-input").group == (
+        "BuiltIn.TessLevelOuter BuiltIn.TessLevelInner"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "tessellation-domain-isolines",
+            "layout(isolines, equal_spacing, ccw) in;\n",
+        ),
+        (
+            "glsl",
+            "tessellation-spacing-fractional-odd",
+            "layout(triangles, fractional_odd_spacing, ccw) in;\n",
+        ),
+        ("glsl", "tessellation-point-mode", "equal_spacing, ccw, point_mode) in;\n"),
+        (
+            "glsl",
+            "tessellation-patch-input",
+            "layout(location = 1) patch in vec4 extra;\n",
+        ),
+        ("glsl", "tessellation-patch-vertices", "* float(gl_PatchVerticesIn);\n"),
+        ("glsl", "tessellation-level-input", "position[1] * gl_TessLevelInner[0]"),
+        (
+            "hlsl",
+            "tessellation-domain-quads",
+            "    float inside[2] : SV_InsideTessFactor;\n",
+        ),
+        ("hlsl", "tessellation-domain-quads", "float2 coord : SV_DomainLocation"),
+        (
+            "hlsl",
+            "tessellation-domain-isolines",
+            "const OutputPatch<ControlPoint, 2> patch",
+        ),
+        ("hlsl", "tessellation-level-input", "patch[1].position * constants.inside"),
+        ("hlsl", "tessellation-control-point-mode", '[outputtopology("point")]\n'),
+        (
+            "hlsl",
+            "tessellation-patch-output",
+            "    output.extra = patch[0].position;\n",
+        ),
+        (
+            "slang",
+            "tessellation-domain-quads",
+            '[shader("domain")]\n[domain("quad")]\n',
+        ),
+        (
+            "slang",
+            "tessellation-control-spacing-fractional-even",
+            '[shader("hull")]\n[domain("tri")]\n[partitioning("fractional_even")]\n',
+        ),
+        ("metal", "tessellation-domain-quads", "[[patch(quad, 4)]]\n"),
+        ("metal", "tessellation-patch-input", "    float4 extra [[attribute(1)]];\n"),
+        (
+            "rust",
+            "tessellation-domain-quads",
+            "#[spirv(tessellation_evaluation(quads, spacing_equal, vertex_order_ccw))]",
+        ),
+        (
+            "rust",
+            "tessellation-level-input",
+            "#[spirv(tess_level_inner)] inner: [f32; 2]",
+        ),
+        (
+            "rust",
+            "tessellation-control-spacing-fractional-odd",
+            "tessellation_control(output_vertices = 3, spacing_fraction_odd, vertex_order_cw)",
+        ),
+        ("rust", "tessellation-patch-vertices", "#[spirv(patch_vertices)] count: u32"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert (
+        probes.build(_feature("glsl", "tessellation-winding-cw"), "glsl").suffix
+        == ".tese"
+    )
+    crossgl = probes.build(
+        _feature("glsl", "tessellation-winding-cw"), "crossgl"
+    ).source
+    assert "        layout(triangles, equal_spacing, cw) in;\n" in crossgl
+    crossgl = probes.build(
+        _feature("hlsl", "tessellation-domain-quads"), "crossgl"
+    ).source
+    assert "OutputPatch<ControlPoint, 4> patch) @domain(quad) {\n" in crossgl
+    crossgl = probes.build(
+        _feature("hlsl", "tessellation-control-point-mode"), "crossgl"
+    )
+    assert "            @outputtopology(point)\n" in crossgl.source
+    # HLSL and Slang state spacing, winding and points only on the hull shader, and GLSL only on the evaluation
+    # shader. Metal has quads and per-patch inputs alone, rust-gpu no Patch decoration, and GLSL ES 3.00, WGSL and the
+    # kernel languages no tessellation.
+    names = set(tessellation.NAMES)
+    evaluation_layouts = {
+        "tessellation-spacing-fractional-odd",
+        "tessellation-spacing-fractional-even",
+        "tessellation-winding-cw",
+        "tessellation-point-mode",
+    }
+    hull = {name for name in names if name.startswith("tessellation-control-")}
+    absent = {
+        "glsl": hull,
+        "hlsl": evaluation_layouts | {"tessellation-patch-vertices"},
+        "slang": evaluation_layouts | {"tessellation-patch-vertices"},
+        "metal": names - {"tessellation-domain-quads", "tessellation-patch-input"},
+        "rust": {"tessellation-patch-input", "tessellation-patch-output"},
+        **dict.fromkeys(("wgsl", "webgl"), names),
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_mesh_probes_state_each_languages_topology_primitive_values_and_payload():
+    feature = _feature("glsl", "mesh-output-lines")
+    assert (feature.category, feature.stage) == ("graphics", "mesh")
+    assert feature.group == (
+        "ExecutionMode.OutputLinesEXT BuiltIn.PrimitiveLineIndicesEXT"
+    )
+    assert _feature("hlsl", "mesh-task-payload").group == (
+        "StorageClass.TaskPayloadWorkgroupEXT"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "mesh-output-points",
+            "layout(points, max_vertices = 1, max_primitives = 1) out;\n",
+        ),
+        ("glsl", "mesh-output-points", "    gl_PrimitivePointIndicesEXT[0] = 0u;\n"),
+        (
+            "glsl",
+            "mesh-per-primitive-output",
+            "layout(location = 0) perprimitiveEXT out vec4 color[];\n",
+        ),
+        (
+            "glsl",
+            "mesh-cull-primitive",
+            "    gl_MeshPrimitivesEXT[0].gl_CullPrimitiveEXT = true;\n",
+        ),
+        ("glsl", "mesh-task-payload", "taskPayloadSharedEXT Payload payload;\n"),
+        ("hlsl", "mesh-output-lines", '[outputtopology("line")]\n'),
+        ("hlsl", "mesh-output-lines", "out indices uint2 lines[1]) {\n"),
+        ("hlsl", "mesh-layer", "    uint layer : SV_RenderTargetArrayIndex;\n"),
+        ("hlsl", "mesh-cull-primitive", ", out primitives Primitive prims[1]) {\n"),
+        ("hlsl", "mesh-task-payload", ", in payload Payload payload) {\n"),
+        ("slang", "mesh-output-points", '[shader("mesh")]\n[numthreads(1, 1, 1)]\n'),
+        ("slang", "mesh-output-points", "out indices uint points[1]) {\n"),
+        ("metal", "mesh-output-lines", "mesh<Vertex, void, 2, 1, topology::line>"),
+        ("metal", "mesh-cull-primitive", "    bool culled [[primitive_culled]];\n"),
+        (
+            "metal",
+            "mesh-viewport-index",
+            "    uint viewport [[viewport_array_index]];\n",
+        ),
+        (
+            "metal",
+            "mesh-task-payload",
+            "const object_data Payload& payload [[payload]]",
+        ),
+        ("rust", "mesh-output-points", "output_primitives_ext = 1, output_points))]"),
+        (
+            "rust",
+            "mesh-primitive-id",
+            "#[spirv(primitive_id, per_primitive_ext)] id: &mut [i32; 1]",
+        ),
+        (
+            "rust",
+            "mesh-task-payload",
+            "#[spirv(task_payload_workgroup_ext)] payload: &Payload",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert probes.build(_feature("glsl", "mesh-layer"), "glsl").suffix == ".mesh"
+    crossgl = probes.build(_feature("glsl", "mesh-output-points"), "crossgl").source
+    assert "@ indices out uint points[1])\n" in crossgl
+    assert "            @outputtopology(point) {\n" in crossgl
+    crossgl = probes.build(_feature("hlsl", "mesh-task-payload"), "crossgl").source
+    assert ", @ mesh_payload in Payload payload)\n" in crossgl
+    crossgl = probes.build(_feature("hlsl", "mesh-primitive-id"), "crossgl").source
+    assert "        uint id @ gl_PrimitiveID;\n" in crossgl
+    # DXC accepts no point topology, and WGSL, GLSL ES 3.00 and the kernel languages have no mesh stage.
+    names = set(meshes.NAMES)
+    absent = {
+        "glsl": set(),
+        "hlsl": {"mesh-output-points"},
+        "slang": set(),
+        "metal": set(),
+        "rust": set(),
+        **dict.fromkeys(("wgsl", "webgl"), names),
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_mesh_and_task_probes_read_their_workgroup_and_invocation_ids():
+    assert _feature("glsl", "mesh-workgroup-id").group == "BuiltIn.WorkgroupId"
+    feature = _feature("hlsl", "task-local-invocation-index")
+    assert (feature.category, feature.stage) == ("graphics", "task")
+    assert feature.group == "BuiltIn.LocalInvocationIndex OpTypeArray"
+    for language, name, line in (
+        (
+            "glsl",
+            "mesh-workgroup-id",
+            "vec4(float(gl_WorkGroupID.x), 0.0, 0.0, 1.0);\n",
+        ),
+        ("glsl", "mesh-local-invocation-index", "layout(local_size_x = 3) in;\n"),
+        (
+            "glsl",
+            "mesh-local-invocation-index",
+            "    if (gl_LocalInvocationIndex == 0u) {\n",
+        ),
+        ("glsl", "task-payload-array", "    uint values[2];\n"),
+        ("glsl", "task-workgroup-id", "    payload.value = gl_WorkGroupID.x;\n"),
+        (
+            "glsl",
+            "task-local-invocation-index",
+            "    payload.values[gl_LocalInvocationIndex] = 1u;\n",
+        ),
+        ("hlsl", "mesh-workgroup-id", ", uint3 group : SV_GroupID) {\n"),
+        ("hlsl", "mesh-local-invocation-index", ", uint index : SV_GroupIndex) {\n"),
+        ("hlsl", "task-workgroup-id", "void main(uint3 group : SV_GroupID) {\n"),
+        ("hlsl", "task-local-invocation-index", "[numthreads(2, 1, 1)]\n"),
+        (
+            "slang",
+            "task-payload-array",
+            '[shader("amplification")]\n[numthreads(1, 1, 1)]\n',
+        ),
+        (
+            "metal",
+            "mesh-workgroup-id",
+            "uint3 group [[threadgroup_position_in_grid]]",
+        ),
+        (
+            "metal",
+            "mesh-local-invocation-index",
+            "    output.set_vertex(index, Vertex{float4(float(index), 0.0, 0.0, 1.0)});\n",
+        ),
+        (
+            "metal",
+            "task-local-invocation-index",
+            "uint index [[thread_index_in_threadgroup]]",
+        ),
+        ("rust", "mesh-workgroup-id", "#[spirv(workgroup_id)] group: UVec3"),
+        ("rust", "task-payload-array", "    pub values: [u32; 2],\n"),
+        (
+            "rust",
+            "task-local-invocation-index",
+            "#[spirv(task_ext(threads(2)))]\n",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert probes.build(_feature("glsl", "task-workgroup-id"), "glsl").suffix == ".task"
+    crossgl = probes.build(_feature("hlsl", "task-local-invocation-index"), "crossgl")
+    assert (
+        "void main(uint index @ gl_LocalInvocationIndex) @numthreads(2, 1, 1) {\n"
+        in crossgl.source
+    )
+    crossgl = probes.build(_feature("hlsl", "mesh-workgroup-id"), "crossgl").source
+    assert ", uvec3 group @ gl_WorkGroupID)\n" in crossgl
+    # WGSL, GLSL ES 3.00 and the kernel languages have no mesh or task stage.
+    names = {"mesh-workgroup-id", "mesh-local-invocation-index", *tasks.NAMES}
+    for language in ("glsl", "hlsl", "slang", "metal", "rust"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    for language in ("wgsl", "webgl", "cuda", "hip", "opencl", "mojo"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not listed & names, language
+
+
+def test_ray_tracing_probes_hand_payloads_callable_data_attributes_and_records_over():
+    feature = _feature("glsl", "ray-payload")
+    assert (feature.category, feature.stage) == ("graphics", "ray-generation")
+    assert feature.group == "StorageClass.RayPayloadKHR OpTraceRayKHR"
+    assert _feature("hlsl", "ray-custom-attributes").stage == "closest-hit"
+    assert _feature("slang", "ray-reported-attributes").stage == "intersection"
+    assert _feature("rust", "ray-shader-record").group == (
+        "StorageClass.ShaderRecordBufferKHR"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "ray-payload",
+            "layout(location = 0) rayPayloadEXT Payload payload;\n",
+        ),
+        ("glsl", "ray-callable-data", "    executeCallableEXT(0u, 0);\n"),
+        ("glsl", "ray-reported-attributes", "hitAttributeEXT Attributes attributes;\n"),
+        (
+            "glsl",
+            "ray-custom-attributes",
+            "    payload.color = vec4(attributes.normal, 1.0);\n",
+        ),
+        (
+            "glsl",
+            "ray-shader-record",
+            "layout(shaderRecordEXT, std430) buffer Record {\n",
+        ),
+        (
+            "hlsl",
+            "ray-payload",
+            "    TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);\n",
+        ),
+        ("hlsl", "ray-payload", "write(caller, anyhit, closesthit, miss);\n"),
+        ("hlsl", "ray-callable-data", "    CallShader(0, data);\n"),
+        ("hlsl", "ray-reported-attributes", "    ReportHit(1.0, 0, attributes);\n"),
+        (
+            "hlsl",
+            "ray-custom-attributes",
+            "void main(inout Payload payload, in Attributes attributes) {\n",
+        ),
+        (
+            "hlsl",
+            "ray-shader-record",
+            "[[vk::shader_record_ext]] ConstantBuffer<Record> record;\n",
+        ),
+        (
+            "slang",
+            "ray-shader-record",
+            "[[vk::shader_record]] ConstantBuffer<Record> record;\n",
+        ),
+        ("rust", "ray-payload", "#[spirv(ray_payload)] payload: &mut Payload"),
+        (
+            "rust",
+            "ray-callable-data",
+            "spirv_std::arch::execute_callable::<_, 0>(data);\n",
+        ),
+        (
+            "rust",
+            "ray-reported-attributes",
+            "#[spirv(hit_attribute)] attributes: &mut Attributes",
+        ),
+        ("rust", "ray-shader-record", "#[spirv(shader_record_buffer)] record: &Record"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert (
+        probes.build(_feature("glsl", "ray-shader-record"), "glsl").suffix == ".rmiss"
+    )
+    assert (
+        probes.build(_feature("glsl", "ray-reported-attributes"), "glsl").suffix
+        == ".rint"
+    )
+    crossgl = probes.build(_feature("hlsl", "ray-custom-attributes"), "crossgl").source
+    assert (
+        "void main(Payload payload @ payload, Attributes attributes @ hit_attribute) {\n"
+        in crossgl
+    )
+    crossgl = probes.build(_feature("hlsl", "ray-shader-record"), "crossgl").source
+    assert (
+        "    Record record @glsl_buffer_block(shaderRecordEXT, std430);\n    ray_miss {\n"
+        in crossgl
+    )
+    crossgl = probes.build(_feature("glsl", "ray-payload"), "crossgl").source
+    assert "        uniform accelerationStructureEXT scene;\n" in crossgl
+    assert (
+        "TraceRay(scene, RAY_FLAG_NONE, 255u, 0u, 1u, 0u, ray, payload);\n" in crossgl
+    )
+    # Metal has no ray-generation, hit, miss or callable stage and no shader binding table; WGSL, GLSL ES 3.00 and
+    # the kernel languages have no ray-tracing stages.
+    names = set(rays.NAMES)
+    for language in ("glsl", "hlsl", "slang", "rust"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    for language in ("metal", "wgsl", "webgl", "cuda", "hip", "opencl", "mojo"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not listed & names, language
+
+
+def test_binding_probes_push_constants_and_bind_a_block_in_another_set():
+    feature = _feature("glsl", "push-constant")
+    assert (feature.category, feature.target) == ("resource", "vulkan")
+    assert feature.group == "StorageClass.PushConstant"
+    assert _feature("hlsl", "push-constant-offset").group == (
+        "StorageClass.PushConstant Decoration.Offset"
+    )
+    assert _feature("wgsl", "descriptor-set").group == "Decoration.DescriptorSet"
+    assert _feature("glsl", "descriptor-set").target == "vulkan"
+    for language, name, line in (
+        ("glsl", "push-constant", "layout(push_constant) uniform Constants {\n"),
+        ("glsl", "push-constant-offset", "    layout(offset = 16) float scale;\n"),
+        (
+            "glsl",
+            "descriptor-set",
+            "layout(std140, set = 1, binding = 3) uniform Params {\n",
+        ),
+        (
+            "hlsl",
+            "push-constant",
+            "[[vk::push_constant]] ConstantBuffer<Constants> pc;\n",
+        ),
+        ("hlsl", "push-constant-offset", "    [[vk::offset(16)]] float scale;\n"),
+        ("slang", "descriptor-set", "cbuffer Params : register(b3, space1) {\n"),
+        (
+            "wgsl",
+            "descriptor-set",
+            "@group(1) @binding(3) var<uniform> params: Params;\n",
+        ),
+        ("rust", "push-constant", "#[spirv(push_constant)] pc: &Constants"),
+        (
+            "rust",
+            "descriptor-set",
+            "#[spirv(uniform, descriptor_set = 1, binding = 3)] scale: &f32",
+        ),
+        ("glsl", "push-constant", "    outp[i] = fin[i] * pc.scale + pc.bias;\n"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    for name, line in (
+        ("push-constant", "    cbuffer Constants @push_constant {\n"),
+        ("push-constant-offset", "        float scale @offset(16);\n"),
+        ("descriptor-set", "    cbuffer Params @set(1) @binding(3) {\n"),
+    ):
+        assert line in probes.build(_feature("glsl", name), "crossgl").source, name
+    # Metal binds every argument at an index of one table per resource kind, WGSL has no push-constant address
+    # space, rust-gpu places no push-constant member, and GLSL ES 3.00 and the kernel languages have neither.
+    names = set(bindings.NAMES)
+    for language in ("glsl", "hlsl", "slang"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    assert {f.name for f in constructs.features("wgsl", GRAMMAR)} & names == {
+        "descriptor-set"
+    }
+    assert {f.name for f in constructs.features("rust", GRAMMAR)} & names == {
+        "push-constant",
+        "descriptor-set",
+    }
+    for language in ("metal", "webgl", "cuda", "hip", "opencl", "mojo"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not listed & names, language
 
 
 def test_stages_are_the_shader_execution_models():
@@ -346,7 +799,7 @@ def test_native_templates_are_valid(language):
     for feature in _templated(language):
         probe = probes.build(feature, language)
         verdict = validators.validate(
-            language, probe.source, feature.stage, probe.entry
+            language, probe.source, feature.stage, probe.entry, feature.target
         )
         if not verdict.accepted:
             rejected.append(f"{feature.name}: {verdict.log[:200]}")
@@ -765,6 +1218,45 @@ def test_vertex_probes_use_each_languages_built_ins():
         assert listed & set(vertices.NAMES) == set(vertices.NAMES) - names, language
 
 
+def test_draw_parameter_probes_use_each_languages_built_ins():
+    feature = _feature("glsl", "base-vertex")
+    assert (feature.category, feature.stage) == ("graphics", "vertex")
+    assert feature.group == "BuiltIn.BaseVertex Capability.DrawParameters"
+    for language, name, line in (
+        ("glsl", "draw-index", "vec4(float(gl_DrawID), 0.0, 0.0, 0.0)"),
+        ("glsl", "base-instance", "vec4(float(gl_BaseInstance), 0.0, 0.0, 0.0)"),
+        ("glsl", "cull-distance", "gl_CullDistance[0] = position.x;"),
+        ("hlsl", "base-vertex", "int base : SV_StartVertexLocation"),
+        ("hlsl", "cull-distance", "float cull : SV_CullDistance0;"),
+        ("slang", "draw-index", "uint base : SV_DrawIndex"),
+        ("slang", "cull-distance", "float cull[1] : SV_CullDistance;"),
+        ("metal", "base-instance", "uint base [[base_instance]]"),
+        ("rust", "draw-index", "#[spirv(draw_index)] base: u32"),
+        ("rust", "cull-distance", "#[spirv(cull_distance)] cull: &mut [f32; 1]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "base-vertex"), "crossgl").source
+    assert (
+        "        int base @ gl_BaseVertex;\n" in crossgl and "    vertex {\n" in crossgl
+    )
+    crossgl = probes.build(_feature("glsl", "cull-distance"), "crossgl").source
+    assert "float cull @ gl_CullDistance;" in crossgl
+    # HLSL has no draw index, Metal neither a draw index nor cull distances, and GLSL ES 3.00 and WGSL none of the four.
+    names = set(draws.NAMES)
+    absent = {
+        "hlsl": {"draw-index"},
+        "slang": set(),
+        "metal": {"draw-index", "cull-distance"},
+        "wgsl": names,
+        "webgl": names,
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
 def test_rasterization_probes_read_the_primitive_and_sample_or_write_coverage():
     feature = _feature("glsl", "sample-index")
     assert (feature.category, feature.stage) == ("graphics", "fragment")
@@ -855,6 +1347,381 @@ def test_pipeline_probes_use_each_languages_fragment_built_ins_and_modes():
         "wgsl": names,
         "webgl": names - {"point-coordinate"},
         **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_extension_probes_read_each_languages_fragment_built_ins():
+    feature = _feature("glsl", "barycentric-coordinate")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    assert feature.group == "BuiltIn.BaryCoordKHR Capability.FragmentBarycentricKHR"
+    assert _feature("hlsl", "stencil-export").group == (
+        "BuiltIn.FragStencilRefEXT Capability.StencilExportEXT"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "barycentric-coordinate",
+            "#extension GL_EXT_fragment_shader_barycentric : require\n",
+        ),
+        ("glsl", "shading-rate", "float(gl_ShadingRateEXT)"),
+        ("glsl", "view-index", "#extension GL_EXT_multiview : require\n"),
+        ("glsl", "stencil-export", "gl_FragStencilRefARB = int(uv.x * 255.0);"),
+        ("webgl", "view-index", "float(gl_ViewID_OVR)"),
+        ("hlsl", "barycentric-coordinate", "float3 bary : SV_Barycentrics"),
+        ("hlsl", "shading-rate", "uint rate : SV_ShadingRate"),
+        ("hlsl", "stencil-export", "uint stencil : SV_StencilRef;"),
+        ("slang", "view-index", '[shader("fragment")]\nfloat4 main('),
+        (
+            "slang",
+            "stencil-export",
+            '};\n\n[shader("fragment")]\nFragmentOutput main(',
+        ),
+        ("metal", "barycentric-coordinate", "float3 bary [[barycentric_coord]]"),
+        ("metal", "view-index", "uint view [[amplification_id]]"),
+        ("metal", "stencil-export", "uint stencil [[stencil]];"),
+        ("rust", "view-index", "#[spirv(view_index, flat)] view: u32"),
+        ("rust", "stencil-export", "#[spirv(fragment(stencil_ref_replacing_ext))]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "barycentric-coordinate"), "crossgl").source
+    assert "        vec3 bary @ gl_BaryCoordEXT;\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "stencil-export"), "crossgl").source
+    assert "        int stencil @ gl_FragStencilRefARB;\n" in crossgl
+    # Metal has no shading-rate input and rust-gpu no shading-rate built-in, WGSL none of the four, GLSL ES 3.00 only
+    # the view index, and the kernel languages no fragment stage.
+    names = set(extensions.NAMES)
+    absent = {
+        "glsl": set(),
+        "hlsl": set(),
+        "slang": set(),
+        "metal": {"shading-rate"},
+        "rust": {"shading-rate"},
+        "wgsl": names,
+        "webgl": names - {"view-index"},
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_geometry_probes_state_each_languages_primitives_instances_and_streams():
+    feature = _feature("glsl", "geometry-input-lines")
+    assert (feature.category, feature.stage) == ("graphics", "geometry")
+    assert feature.group == "ExecutionMode.InputLines"
+    assert _feature("hlsl", "geometry-invocations").group == (
+        "ExecutionMode.Invocations BuiltIn.InvocationId"
+    )
+    assert _feature("slang", "geometry-streams").group == (
+        "Decoration.Stream Capability.GeometryStreams"
+    )
+    for language, name, line in (
+        ("glsl", "geometry-input-lines", "layout(lines) in;\n"),
+        (
+            "glsl",
+            "geometry-input-triangles-adjacency",
+            "layout(triangles_adjacency) in;\n",
+        ),
+        (
+            "glsl",
+            "geometry-output-line-strip",
+            "layout(line_strip, max_vertices = 2) out;\n",
+        ),
+        ("glsl", "geometry-invocations", "layout(points, invocations = 2) in;\n"),
+        (
+            "glsl",
+            "geometry-streams",
+            "layout(stream = 1, location = 0) out vec4 extra;\n",
+        ),
+        ("glsl", "geometry-streams", "    EmitStreamVertex(1);\n"),
+        (
+            "hlsl",
+            "geometry-input-lines-adjacency",
+            "void main(lineadj float4 position[4] : POSITION",
+        ),
+        (
+            "hlsl",
+            "geometry-output-triangle-strip",
+            "inout TriangleStream<GeometryOut> stream",
+        ),
+        ("hlsl", "geometry-invocations", "[instance(2)]\n[maxvertexcount(1)]\n"),
+        ("hlsl", "geometry-invocations", "uint id : SV_GSInstanceID"),
+        ("hlsl", "geometry-streams", "inout PointStream<ExtraOut> extras"),
+        (
+            "slang",
+            "geometry-input-triangles",
+            '[shader("geometry")]\n[maxvertexcount(1)]\n',
+        ),
+        ("slang", "geometry-invocations", '[shader("geometry")]\n[instance(2)]\n'),
+        (
+            "rust",
+            "geometry-input-triangles",
+            "#[spirv(geometry(triangles = 3, output_points = 1",
+        ),
+        (
+            "rust",
+            "geometry-output-line-strip",
+            "output_line_strip = 2, output_vertices = 2",
+        ),
+        ("rust", "geometry-invocations", "#[spirv(invocation_id)] id: u32"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    assert (
+        probes.build(_feature("glsl", "geometry-input-lines"), "glsl").suffix == ".geom"
+    )
+    crossgl = probes.build(
+        _feature("glsl", "geometry-input-triangles"), "crossgl"
+    ).source
+    assert "    in vec4 inPosition[3] @location(0);\n" in crossgl
+    assert "        layout(triangles) in;\n" in crossgl
+    crossgl = probes.build(_feature("glsl", "geometry-streams"), "crossgl").source
+    assert "    out vec4 extra @location(0) @stream(1);\n" in crossgl
+    # rust-gpu has no Stream decoration; Metal, WGSL and GLSL ES 3.00 have no geometry stage, and the kernel languages
+    # no graphics stages.
+    names = set(primitives.NAMES)
+    absent = {
+        "glsl": set(),
+        "hlsl": set(),
+        "slang": set(),
+        "rust": {"geometry-streams"},
+        **dict.fromkeys(("metal", "wgsl", "webgl"), names),
+        **dict.fromkeys(("cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_subgroup_probes_read_each_languages_built_ins():
+    feature = _feature("glsl", "subgroup-invocation-id")
+    assert (feature.category, feature.stage) == ("compute", "compute")
+    assert feature.group == "BuiltIn.SubgroupLocalInvocationId"
+    for language, name, line in (
+        ("glsl", "subgroup-size", "#extension GL_KHR_shader_subgroup_basic : require"),
+        ("glsl", "subgroup-id", "outp[i] = float(gl_SubgroupID);"),
+        ("glsl", "workgroup-size", "outp[i] = float(gl_WorkGroupSize.x);"),
+        ("hlsl", "subgroup-invocation-id", "outp[i] = float(WaveGetLaneIndex());"),
+        ("slang", "num-subgroups", "outp[i] = float(WaveGetNumWaves());"),
+        ("slang", "workgroup-size", "outp[i] = float(WorkgroupSize().x);"),
+        ("metal", "subgroup-size", "uint width [[threads_per_simdgroup]]"),
+        ("metal", "subgroup-id", "uint group [[simdgroup_index_in_threadgroup]]"),
+        ("metal", "workgroup-size", "uint3 size [[threads_per_threadgroup]]"),
+        (
+            "wgsl",
+            "subgroup-invocation-id",
+            "@builtin(subgroup_invocation_id) lane: u32",
+        ),
+        (
+            "rust",
+            "subgroup-invocation-id",
+            "#[spirv(subgroup_local_invocation_id)] lane: u32",
+        ),
+        ("cuda", "subgroup-invocation-id", "outp[i] = float(index % warpSize);"),
+        ("hip", "subgroup-invocation-id", "outp[i] = float(__lane_id());"),
+        ("opencl", "num-subgroups", "outp[i] = (float)get_num_sub_groups();"),
+        ("mojo", "subgroup-id", "outp[i] = Float32(warp_id())"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "num-subgroups"), "crossgl").source
+    assert "outp[i] = float(gl_NumSubgroups);" in crossgl
+    # naga accepts the subgroup built-ins only without the enable directive it has not implemented.
+    wgsl = probes.build(_feature("wgsl", "subgroup-size"), "wgsl").source
+    assert "enable subgroups" not in wgsl
+    # HLSL has no built-in for the waves in a group or the group's size, WGSL and Rust none for the group's size, and
+    # WebGL 2 no compute stage.
+    names = set(subgroups.NAMES)
+    absent = {
+        "hlsl": {"num-subgroups", "subgroup-id", "workgroup-size"},
+        "wgsl": {"workgroup-size"},
+        "rust": {"workgroup-size"},
+        "webgl": names,
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_specialization_probes_declare_each_languages_pipeline_constants():
+    feature = _feature("glsl", "specialization-constant")
+    assert (feature.category, feature.stage) == ("compute", "compute")
+    assert feature.group == "OpSpecConstant Decoration.SpecId"
+    # Only GLSL for Vulkan has constant_id, so the GLSL probes are checked for Vulkan and the others for their usual
+    # target.
+    assert feature.target == "vulkan"
+    assert _feature("slang", "specialization-constant").target == ""
+    for language, name, line in (
+        (
+            "glsl",
+            "specialization-constant",
+            "layout(constant_id = 0) const int scale = 3;",
+        ),
+        (
+            "glsl",
+            "specialization-constant-expression",
+            "const int doubled = scale * 2 + 1;",
+        ),
+        (
+            "glsl",
+            "specialization-workgroup-size",
+            "layout(local_size_x_id = 0, local_size_y = 1",
+        ),
+        (
+            "slang",
+            "specialization-constant-bool",
+            "[vk::constant_id(0)] const bool negate = true;",
+        ),
+        ("slang", "specialization-workgroup-size", "[numthreads(size, 1, 1)]"),
+        (
+            "metal",
+            "specialization-constant",
+            "constant int scale = is_function_constant_defined(scale_value) ? scale_value : 3;",
+        ),
+        (
+            "metal",
+            "specialization-constant-bool",
+            "constant bool negate_value [[function_constant(0)]];",
+        ),
+        (
+            "wgsl",
+            "specialization-constant-expression",
+            "override doubled: i32 = scale * 2 + 1;",
+        ),
+        (
+            "wgsl",
+            "specialization-workgroup-size",
+            "@compute @workgroup_size(size, 1, 1)",
+        ),
+        (
+            "rust",
+            "specialization-constant",
+            "#[spirv(spec_constant(id = 0, default = 3))] scale: u32",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(
+        _feature("glsl", "specialization-constant-bool"), "crossgl"
+    ).source
+    assert "const bool negate @constant_id(0) = true;" in crossgl
+    # HLSL for Direct3D, GLSL ES 3.00 and the kernel languages have no specialization constants, Metal no specialized
+    # threadgroup size, and rust-gpu only u32 parameters.
+    names = set(specializations.NAMES)
+    absent = {
+        "glsl": set(),
+        "slang": set(),
+        "wgsl": set(),
+        "metal": {"specialization-workgroup-size"},
+        "rust": names - {"specialization-constant"},
+        **dict.fromkeys(("hlsl", "webgl", "cuda", "hip", "opencl", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_qualifier_probes_give_their_buffers_each_languages_memory_qualifiers():
+    feature = _feature("glsl", "coherent-buffer")
+    assert (feature.category, feature.stage) == ("compute", "compute")
+    assert feature.group == "StorageClass.StorageBuffer Decoration.Coherent"
+    for language, name, line in (
+        ("glsl", "restrict-buffer", "layout(std430, binding = 0) restrict buffer B0"),
+        (
+            "glsl",
+            "write-only-buffer",
+            "layout(std430, binding = 1) writeonly buffer B1",
+        ),
+        ("hlsl", "coherent-buffer", "globallycoherent RWStructuredBuffer<float> outp"),
+        (
+            "slang",
+            "coherent-buffer",
+            "globallycoherent RWStructuredBuffer<float> outp;",
+        ),
+        ("metal", "restrict-buffer", "device float* __restrict outp [[buffer(1)]]"),
+        ("metal", "coherent-buffer", "coherent(device) device float* outp"),
+        ("metal", "volatile-buffer", "volatile device float* outp"),
+        (
+            "cuda",
+            "restrict-buffer",
+            "float* __restrict__ fin, float* __restrict__ outp",
+        ),
+        ("hip", "volatile-buffer", "float* fin, volatile float* outp"),
+        ("opencl", "restrict-buffer", "__global float* restrict outp"),
+        ("opencl", "volatile-buffer", "__global volatile float* outp"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "volatile-buffer"), "crossgl").source
+    assert "volatile buffer float* outp;" in crossgl
+    # HLSL and Slang have only coherent buffers, Metal no write-only device memory, the kernel languages no coherent
+    # or write-only buffers, and WGSL, GLSL ES 3.00, rust-gpu and Mojo no buffer memory qualifiers.
+    names = set(qualifiers.NAMES)
+    kernels = {"restrict-buffer", "volatile-buffer"}
+    absent = {
+        "glsl": set(),
+        "hlsl": names - {"coherent-buffer"},
+        "slang": names - {"coherent-buffer"},
+        "metal": {"write-only-buffer"},
+        **dict.fromkeys(("cuda", "hip", "opencl"), names - kernels),
+        **dict.fromkeys(("wgsl", "webgl", "rust", "mojo"), names),
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_texture_probes_read_each_shape_of_texture_per_language():
+    feature = _feature("glsl", "texture-1d")
+    assert (feature.category, feature.stage) == ("resource", "compute")
+    assert feature.group == "OpTypeImage Dim.1D Capability.Sampled1D"
+    assert _feature("hlsl", "texture-cube-array").group == "OpTypeImage Dim.Cube"
+    for language, name, line in (
+        ("glsl", "texture-1d", "layout(binding = 3) uniform sampler1D tex;"),
+        (
+            "glsl",
+            "texture-cube-array",
+            "textureLod(tex, vec4(fin[i], 0.5, 1.0, 1.0), 0.0)",
+        ),
+        ("glsl", "texel-buffer", "texelFetch(tex, int(fin[i]))"),
+        ("webgl", "texture-2d-array", "uniform highp sampler2DArray tex;"),
+        ("hlsl", "texture-cube", "TextureCube<float4> tex : register(t1);"),
+        ("hlsl", "texel-buffer", "tex.Load(int(fin[i]))"),
+        ("slang", "texture-3d", "Texture3D<float4> tex;"),
+        ("metal", "texture-1d", "tex.sample(smp, fin[i]).x"),
+        ("metal", "texture-2d-array", "texture2d_array<float> tex [[texture(0)]]"),
+        ("metal", "texel-buffer", "texture_buffer<float> tex [[texture(0)]]"),
+        ("wgsl", "texture-1d", "textureLoad(tex, i32(fin[i]), 0)"),
+        ("wgsl", "texture-cube-array", "var tex: texture_cube_array<f32>;"),
+        (
+            "cuda",
+            "texture-2d-array",
+            "tex2DLayeredLod<float4>(tex, fin[i], 0.5f, 1, 0.0f)",
+        ),
+        ("hip", "texel-buffer", "tex1Dfetch<float4>(tex, int(fin[i]))"),
+        ("opencl", "texel-buffer", "__read_only image1d_buffer_t tex"),
+        ("rust", "texture-cube-array", "&Image!(cube, type=f32, sampled, arrayed)"),
+        ("rust", "texel-buffer", "OpImageFetch typeof*{color} %image %coordinate"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "texture-cube"), "crossgl").source
+    assert "uniform samplerCube tex;" in crossgl
+    # WGSL has no buffer textures, OpenCL C no cube images, GLSL ES 3.00 no 1D, cube-array or buffer textures, and
+    # Mojo's kernels no textures.
+    names = set(textures.NAMES)
+    absent = {
+        **dict.fromkeys(
+            ("glsl", "hlsl", "slang", "metal", "cuda", "hip", "rust"), set()
+        ),
+        "wgsl": {"texel-buffer"},
+        "opencl": {"texture-cube", "texture-cube-array"},
+        "webgl": {"texture-1d", "texture-cube-array", "texel-buffer"},
+        "mojo": names,
     }
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}

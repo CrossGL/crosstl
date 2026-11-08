@@ -41,6 +41,7 @@ from .array_utils import (
 from .assignment_values import assignment_value_expression
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .c_float_literals import c_float_literal_text
+from .c_narrow_integer_vectors import generic_narrow_vector_spelling
 from .c_pointer_math import generate_pointer_math_call
 from .c_reference_parameters import (
     is_output_parameter,
@@ -58,6 +59,7 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_refusals import CudaLoweringRefused
 from .float_remainder_assignment import float_remainder_assignment
@@ -74,11 +76,13 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .gpu_device_globals import (
     at_file_scope,
     constant_in_device_memory,
     file_scope_placement,
+    is_constant_value_declaration,
 )
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
@@ -403,6 +407,7 @@ class CudaCodeGen(
         A construct with no faithful CUDA lowering is refused; no program is returned while a refusal is
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
+        refuse_cooperative_matrices(ast_node, label="CUDA", target="cuda")
         return self.refusals.run(self.render_program, ast_node)
 
     def render_program(self, ast_node):
@@ -1797,8 +1802,16 @@ class CudaCodeGen(
             if hasattr(node, "qualifiers"):
                 for qualifier in node.qualifiers:
                     qualifier = str(qualifier).lower()
-                    if qualifier == "const":
-                        qualifiers.append("const")
+                    if qualifier == "const" or (
+                        qualifier == "constant"
+                        and is_constant_value_declaration(node)
+                        and self.cuda_pointer_or_reference_type_info(
+                            self.type_name_string(var_type)
+                        )
+                        is None
+                    ):
+                        if "const" not in qualifiers:
+                            qualifiers.append("const")
                     elif qualifier == "static":
                         qualifiers.append("static")
                     elif "workgroup" in qualifier or "shared" in qualifier:
@@ -2758,9 +2771,7 @@ class CudaCodeGen(
             return None
         if len(components) == 1:
             return vector_info["component_type"]
-        return self.vector_type_for_components(
-            vector_info["component_type"], len(components)
-        )
+        return self.swizzle_vector_type(vector_info, len(components))
 
     def cuda_stage_builtin_alias_expression(self, name, component=None):
         role = self.stage_builtin_aliases.get(name)
@@ -3149,9 +3160,7 @@ class CudaCodeGen(
         )
         if object_info is None:
             return None
-        result_type = self.vector_type_for_components(
-            object_info["component_type"], len(components)
-        )
+        result_type = self.swizzle_vector_type(object_info, len(components))
         result_info = self.swizzle_result_vector_info(result_type)
         if result_info is None:
             return None
@@ -3459,7 +3468,7 @@ class CudaCodeGen(
         if specialized_func_name is not None:
             func_name = specialized_func_name
         else:
-            raise_unresolved_generic_function_call(self, func_name, "CUDA")
+            reject_unresolved_generic_function_call(self, func_name, "CUDA")
 
         args = [self.visit(arg) for arg in raw_args]
 
@@ -6431,9 +6440,7 @@ class CudaCodeGen(
         if len(components) == 1:
             return f"{object_expr}.{components[0]}"
 
-        result_type = self.vector_type_for_components(
-            vector_info["component_type"], len(components)
-        )
+        result_type = self.swizzle_vector_type(vector_info, len(components))
         result_info = self.swizzle_result_vector_info(result_type)
         if result_info is None:
             return None
@@ -6826,6 +6833,7 @@ class CudaCodeGen(
         crossgl_type = self.type_name_string(crossgl_type)
         if crossgl_type is None:
             return "void"
+        crossgl_type = generic_narrow_vector_spelling(crossgl_type) or crossgl_type
 
         geometry_stream_type = self.cuda_geometry_stream_mapped_type(crossgl_type)
         if geometry_stream_type is not None:
@@ -10164,6 +10172,7 @@ class CudaCodeGen(
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
+        func_name = generic_narrow_vector_spelling(func_name) or func_name
         wide_vector_constructor = wide_integer_vector_constructor(func_name)
         if wide_vector_constructor is not None:
             return wide_vector_constructor
@@ -11395,6 +11404,7 @@ class CudaCodeGen(
             return None
 
         compact_type = "".join(str(type_text).split())
+        compact_type = generic_narrow_vector_spelling(compact_type) or compact_type
         if (
             len(compact_type) < 8
             or not compact_type.startswith("vec")
@@ -11422,6 +11432,7 @@ class CudaCodeGen(
             "constructor": f"make_{vector_type}",
             "component_type": component_type,
             "components": components,
+            "vector_element": scalar_type,
         }
 
     def require_cuda_half3_helper(self):

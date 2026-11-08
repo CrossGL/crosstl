@@ -43,11 +43,14 @@ from .templates.base import (
     POSE,
     SPREAD,
 )
+from .templates.bindings import CROSSGL as BINDINGS
 from .templates.blocks import CROSSGL as BLOCKS_CROSSGL
 from .templates.booleans import CROSSGL as BOOLEANS_CROSSGL
 from .templates.columns import CROSSGL as COLUMNS_CROSSGL
+from .templates.draws import CROSSGL as DRAWS
 from .templates.edges import FAMILY as EDGES
 from .templates.elements import CROSSGL as ELEMENTS_CROSSGL
+from .templates.extensions import CROSSGL as EXTENSIONS
 from .templates.forms import FAMILY as FORMS
 from .templates.fragments import CROSSGL as FRAGMENTS
 from .templates.helpers import CROSSGL as HELPERS_CROSSGL
@@ -68,6 +71,7 @@ from .templates.layouts import CROSSGL as LAYOUTS_CROSSGL
 from .templates.lexical import CROSSGL_NAMES
 from .templates.lexical import FAMILY as LEXICAL
 from .templates.lexical import FILL, SPREAD4, reserved
+from .templates.meshes import CROSSGL as MESHES
 from .templates.orientation import CROSSGL as ORIENTATION_CROSSGL
 from .templates.packing import CROSSGL as PACKING_CROSSGL
 from .templates.pipeline import CROSSGL as PIPELINE
@@ -79,10 +83,18 @@ from .templates.portability import (
     constants,
     intrinsic_names,
 )
+from .templates.primitives import CROSSGL as PRIMITIVES
+from .templates.qualifiers import CROSSGL as QUALIFIERS
 from .templates.rasterization import CROSSGL as RASTERIZATION
+from .templates.rays import CROSSGL as RAYS
 from .templates.records import CROSSGL as RECORDS_CROSSGL
 from .templates.relations import CROSSGL as RELATIONS
 from .templates.rows import CROSSGL as ROWS_CROSSGL
+from .templates.specializations import CROSSGL as SPECIALIZATIONS
+from .templates.subgroups import CROSSGL as SUBGROUPS
+from .templates.tasks import CROSSGL as TASKS
+from .templates.tessellation import CROSSGL as TESSELLATION
+from .templates.textures import CROSSGL as TEXTURES
 from .templates.values import BASIS
 from .templates.values import FAMILY as VALUES
 from .templates.vectors import GLSL as VECTORS
@@ -631,8 +643,20 @@ CONSTRUCTS: dict[str, Template] = {
     **FRAGMENTS,
     **INTERFACES,
     **VERTICES,
+    **DRAWS,
     **RASTERIZATION,
     **PIPELINE,
+    **EXTENSIONS,
+    **PRIMITIVES,
+    **TESSELLATION,
+    **MESHES,
+    **TASKS,
+    **RAYS,
+    **BINDINGS,
+    **SUBGROUPS,
+    **SPECIALIZATIONS,
+    **QUALIFIERS,
+    **TEXTURES,
     "struct": Template(C_FAMILY["struct"].body, prelude=PAIR),
     "array-of-structs": Template(C_FAMILY["array-of-structs"].body, prelude=PAIR),
     "nested-struct": Template(C_FAMILY["nested-struct"].body, prelude=NESTED_STRUCTS),

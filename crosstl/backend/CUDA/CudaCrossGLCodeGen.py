@@ -27,6 +27,7 @@ from .CudaAst import (
     VariableNode,
 )
 from .keyword_renames import source_identifier_names, unused_identifier_name
+from .local_memory_spaces import crossgl_zero_value
 from .reference_parameters import ReferenceParameters
 
 
@@ -273,6 +274,7 @@ class CudaToCrossGLConverter:
         self.source_identifier_names = frozenset()
         self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
+        self.function_body_depth = 0
         self.anonymous_enum_count = 0
         self.namespace_scope_variable = False
         self.namespace_constant_names = set()
@@ -304,6 +306,7 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
+        self.function_body_depth = 0
         self.anonymous_enum_count = 0
         self.namespace_constant_names = set()
         self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
@@ -474,7 +477,7 @@ class CudaToCrossGLConverter:
     def sanitize_crossgl_type_identifier(self, name):
         parts = []
         for char in str(name):
-            if char.isalnum() or char == "_":
+            if char.isascii() and (char.isalnum() or char == "_"):
                 parts.append(char)
             elif char == ":":
                 if not parts or parts[-1] != "_":
@@ -482,7 +485,11 @@ class CudaToCrossGLConverter:
             elif not parts or parts[-1] != "_":
                 parts.append("_")
 
-        sanitized = "".join(parts).strip("_") or "anonymous"
+        raw_name = str(name)
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw_name):
+            sanitized = raw_name
+        else:
+            sanitized = "".join(parts).strip("_") or "anonymous"
         if sanitized[0].isdigit():
             sanitized = f"type_{sanitized}"
         return self.sanitize_identifier_name(sanitized)
@@ -4217,9 +4224,11 @@ class CudaToCrossGLConverter:
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
+                self.function_body_depth += 1
                 for stmt in node.body:
                     self.emit_statement(stmt)
             finally:
+                self.function_body_depth -= 1
                 self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
@@ -4319,9 +4328,11 @@ class CudaToCrossGLConverter:
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
             try:
+                self.function_body_depth += 1
                 for stmt in kernel.body:
                     self.emit_statement(stmt)
             finally:
+                self.function_body_depth -= 1
                 self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
@@ -4396,6 +4407,15 @@ class CudaToCrossGLConverter:
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
+        dim3_value = self.format_cuda_dim3_initializer(node)
+        if dim3_value is not None:
+            self.register_warp_mask_value(node.name, output_name, None)
+            if self.is_namespace_scope_constant(node):
+                self.namespace_constant_names.add(node.name)
+                self.emit(f"const {var_type} {output_name} = {dim3_value};")
+                return
+            self.emit(f"var {output_name}: {var_type} = {dim3_value};")
+            return
         if node.value:
             runtime_expression = self.format_cuda_runtime_expression(node.value)
             if runtime_expression is not None:
@@ -4416,6 +4436,28 @@ class CudaToCrossGLConverter:
         else:
             self.register_warp_mask_value(node.name, output_name, None)
             self.emit(f"var {output_name}: {var_type};")
+
+    def format_cuda_dim3_initializer(self, node):
+        """Return a ``vec3<u32>`` for a defaulted or braced ``dim3`` declaration.
+
+        CUDA sets every ``dim3`` component that is not given to 1, so
+        ``dim3 unit;`` is (1, 1, 1) and ``dim3 block = {16, 16};`` is (16, 16, 1).
+        Return None for any other declaration.
+        """
+        if (
+            self.strip_type_qualifiers(getattr(node, "vtype", "") or "").strip()
+            != "dim3"
+        ):
+            return None
+        value = getattr(node, "value", None)
+        if value is None:
+            args = []
+        elif isinstance(value, InitializerListNode) and len(value.elements) <= 3:
+            args = [self.visit(element) for element in value.elements]
+        else:
+            return None
+        padded_args = list(args) + ["1"] * (3 - len(args))
+        return f"vec3<u32>({', '.join(padded_args)})"
 
     def is_namespace_scope_constant(self, node):
         """Return whether a namespace-scope declaration is a ``const``/``constexpr`` constant.
@@ -4723,6 +4765,21 @@ class CudaToCrossGLConverter:
         # Convert to uniform buffer in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         self.register_vector1_name(node.name, node.vtype)
+        if (
+            node.value is None
+            and self.function_body_depth > 0
+            and "static" in node.qualifiers
+        ):
+            # A function-scope static __constant__ local has static storage,
+            # so without an initializer every element is zero, and device
+            # code cannot write constant memory. Emit it as a function-scope
+            # constant of zeros: it must neither take a resource binding
+            # (which would also collide with the kernel parameters) nor be
+            # read uninitialized by a later backend. A block-scope extern
+            # declaration names a namespace-scope variable the host may have
+            # written, so it is not one.
+            self.emit(f"let {node.name}: {var_type} = {crossgl_zero_value(var_type)};")
+            return
         binding = self.allocate_global_resource_binding()
         if node.value:
             value = self.visit(node.value)

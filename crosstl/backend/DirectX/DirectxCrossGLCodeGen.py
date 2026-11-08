@@ -30,10 +30,13 @@ from ..common_ast import (
     TextureSampleNode,
 )
 from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
+from ..storage_image_texels import IMAGE_FORMAT_ATTRIBUTES
 from ..switch_clauses import ordered_switch_clauses
+from .byte_address_methods import byte_address_method_expression
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
+from .discarded_values import VALUE_STATEMENT_TYPES, discarded_cast_operand
 from .hlsl_matrix_import import (
     HLSLMatrixImportMixin,
     crossgl_matrix_type_name,
@@ -110,6 +113,7 @@ class HLSLToCrossGLConverter(
         trigonometric_reduction=None,
         floating_point_contraction=None,
         unorm_store_rounding=None,
+        zero_base_vertex=False,
     ):
         """Create a converter.
 
@@ -149,6 +153,15 @@ class HLSLToCrossGLConverter(
         ``"single_precision"`` converts as Direct3D does, scaling in single
         precision and rounding halfway cases to even, with channel scales the
         host binds per view (see ``unorm_store_rounding``).
+
+        ``zero_base_vertex`` declares that every draw the shader runs in has
+        a zero base vertex (``StartVertexLocation`` and ``BaseVertexLocation``
+        0). ``SV_VertexID`` excludes the base vertex, which the vertex index
+        of OpenGL, Vulkan and Metal includes, so by default it imports as
+        ``gl_RelativeVertexID`` and other targets subtract their base vertex
+        from their index. Under the declaration both agree, and it imports as
+        ``gl_VertexID``, which targets without a base vertex (GLSL ES, WGSL)
+        can also express.
         """
         if matrix_packing is not None and matrix_packing not in self.MATRIX_PACKINGS:
             raise ValueError(
@@ -423,6 +436,7 @@ class HLSLToCrossGLConverter(
             "InterlockedMax": "atomicMax",
             "InterlockedExchange": "atomicExchange",
             "InterlockedCompareExchange": "atomicCompareExchange",
+            "InterlockedCompareStore": "atomicCompareExchange",
         }
         self.texture_method_map = {
             "Sample": "texture",
@@ -483,10 +497,18 @@ class HLSLToCrossGLConverter(
             "GetDimensions": "buffer_dimensions",
         }
         self.semantic_map = {
-            # System-value semantics - Vertex inputs
-            "SV_VertexID": "gl_VertexID",
+            # System-value semantics - Vertex inputs. SV_VertexID excludes the
+            # draw's base vertex, which gl_VertexID includes; see
+            # crosstl.translator.semantics.relative_vertex_ids.
+            "SV_VertexID": "gl_RelativeVertexID",
             "SV_InstanceID": "gl_InstanceID",
+            # Shader Model 6.8 draw parameters; DXC lowers them to SPIR-V's
+            # BuiltIn BaseVertex and BaseInstance.
+            "SV_StartVertexLocation": "gl_BaseVertex",
+            "SV_StartInstanceLocation": "gl_BaseInstance",
             "SV_PrimitiveID": "gl_PrimitiveID",
+            # A mesh primitive's cull flag (GL_EXT_mesh_shader's built-in).
+            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             # System-value semantics - Vertex outputs
             "SV_POSITION": "gl_Position",
             "SV_Position": "gl_Position",
@@ -556,7 +578,7 @@ class HLSLToCrossGLConverter(
             "FRONT_FACE": "gl_FrontFacing",
             "PRIMITIVE_ID": "gl_PrimitiveID",
             "INSTANCE_ID": "gl_InstanceID",
-            "VERTEX_ID": "gl_VertexID",
+            "VERTEX_ID": "gl_RelativeVertexID",
             # User-defined semantics
             "POSITION": "Position",
             "POSITION0": "Position",
@@ -583,6 +605,9 @@ class HLSLToCrossGLConverter(
             "PSIZE": "gl_PointSize",
             "FOG": "Fog",
         }
+        if zero_base_vertex:
+            for semantic in ("SV_VertexID", "VERTEX_ID"):
+                self.semantic_map[semantic] = "gl_VertexID"
         self.semantic_map_upper = {
             str(key).upper(): value for key, value in self.semantic_map.items()
         }
@@ -1123,9 +1148,10 @@ class HLSLToCrossGLConverter(
                 descriptor["dropped_parameters"] = ["status output"]
             return descriptor
 
-        byte_address_interlocked_args = (
-            {4} if member == "InterlockedCompareExchange" else {2, 3}
-        )
+        byte_address_interlocked_args = {
+            "InterlockedCompareExchange": {4},
+            "InterlockedCompareStore": {3},
+        }.get(member, {2, 3})
         if (
             member in self.byte_address_interlocked_method_map
             and self.is_byte_address_buffer_type(resource_type)
@@ -1133,6 +1159,8 @@ class HLSLToCrossGLConverter(
         ):
             if member == "InterlockedCompareExchange":
                 byte_address_operation = "atomic_compare_exchange"
+            elif member == "InterlockedCompareStore":
+                byte_address_operation = "atomic_compare_store"
             elif member == "InterlockedAdd":
                 byte_address_operation = "atomic_add"
             else:
@@ -1245,6 +1273,11 @@ class HLSLToCrossGLConverter(
     ):
         if not descriptor.get("byte_address_atomic") or len(rendered_args) < 2:
             return None
+
+        if descriptor.get("operation") == "atomic_compare_store":
+            # InterlockedCompareStore is a compare-exchange whose previous value is not returned.
+            offset, compare, value = rendered_args[:3]
+            return f"{descriptor['function']}({obj}, {offset}, {compare}, {value})"
 
         if descriptor.get("operation") == "atomic_compare_exchange":
             if len(rendered_args) < 4:
@@ -4081,7 +4114,16 @@ class HLSLToCrossGLConverter(
                 getattr(node, "attributes", []), 1
             )
         else:
-            code = self.format_attributes(getattr(node, "attributes", []), 1)
+            # A typed storage texture's format attribute becomes ``@ format`` below.
+            format_attributes = (
+                IMAGE_FORMAT_ATTRIBUTES
+                if self.raw_type_base(getattr(node, "vtype", None))
+                in self.RUNTIME_FORMAT_STORAGE_TEXTURES
+                else None
+            )
+            code = self.format_attributes(
+                getattr(node, "attributes", []), 1, skip_names=format_attributes
+            )
         if id(node) in self.hlsl_program_constant_global_ids:
             code += "    @ hlsl_program_constant\n"
         code += self.format_resource_qualifier_attributes(node, 1)
@@ -4089,8 +4131,7 @@ class HLSLToCrossGLConverter(
         code += self.format_matrix_layout_attributes(node, 1)
         if self.is_structured_buffer_resource_type(getattr(node, "vtype", None)):
             code += f"    @ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_STRUCTURED_LAYOUT})\n"
-        if self.is_runtime_format_storage_texture(node):
-            code += "    @ format(unknown)\n"
+        code += self.format_storage_image_format_attributes(node, 1)
         storage_prefix = self.format_global_storage_qualifier_prefix(node)
         precise_prefix = self.format_precise_qualifier_prefix(node)
         array_suffix = self.format_array_suffixes(node)
@@ -4460,6 +4501,9 @@ class HLSLToCrossGLConverter(
             self.current_resource_array_dims = dict(previous_dims)
         code = ""
         for stmt in body:
+            stmt = discarded_cast_operand(stmt)
+            if stmt is None or isinstance(stmt, (bool, int, float)):
+                continue  # nothing to evaluate, as in ``(void)x;`` or ``1;``
             if isinstance(stmt, FunctionCallNode):
                 code += self.generate_function_call_statement(stmt, indent, is_main)
                 continue
@@ -4532,8 +4576,12 @@ class HLSLToCrossGLConverter(
                 code += f"{self.generate_type_alias_declaration(stmt)}\n"
             elif isinstance(stmt, StructNode):
                 code += self.generate_local_struct(stmt, indent, is_main)
+            elif isinstance(stmt, VALUE_STATEMENT_TYPES):
+                code += f"{self.generate_expression(stmt, is_main)};\n"
             else:
-                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                code += self.refuse_import(
+                    f"statement {type(stmt).__name__} has no CrossGL form"
+                )
         self.current_variable_types = previous_types
         self.current_resource_array_dims = previous_dims
         return code
@@ -5274,6 +5322,11 @@ class HLSLToCrossGLConverter(
                 args = ", ".join(rendered_args)
                 resource_type = self.expression_raw_type(expr.name.object)
                 resource_base = self.raw_type_base(resource_type)
+                byte_address_access = byte_address_method_expression(
+                    self, member, obj, rendered_args, expr.args, resource_type
+                )
+                if byte_address_access is not None:
+                    return byte_address_access
                 if (
                     method_member == "GatherCmpRed"
                     and len(rendered_args) in {7, 8}

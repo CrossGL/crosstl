@@ -1,4 +1,4 @@
-"""GLSL-style mesh and task stages rewritten into the entry-parameter form for HLSL and Metal targets.
+"""GLSL-style mesh and task stages rewritten into the entry-parameter form for HLSL, Slang and Metal targets.
 
 The GLSL importer, and CrossGL written the GLSL way, declares a mesh stage's outputs as module-scope arrays and
 its launch shape as stage layouts (GL_EXT_mesh_shader; GLSL 4.60 with that extension, sections 4.3.4, 4.3.6 and
@@ -36,9 +36,10 @@ parameters instead::
   ``meshVertices[i].member``. A plain output keeps its location; a block member takes the block's location plus the
   locations of the members before it, unless it carries its own (GLSL 4.60 section 4.4.2.1). Interpolation
   qualifiers are kept;
-* ``perprimitiveEXT`` outputs and ``gl_MeshPrimitivesEXT[i].gl_PrimitiveID``, ``gl_Layer`` and
-  ``gl_ViewportIndex`` become members of a ``MeshPrimitive`` structure. HLSL and MSL declare those three built-ins
-  ``uint`` and GLSL ``int``, so a write converts its value and a read converts back;
+* ``perprimitiveEXT`` outputs and ``gl_MeshPrimitivesEXT[i].gl_PrimitiveID``, ``gl_Layer``, ``gl_ViewportIndex``
+  and ``gl_CullPrimitiveEXT`` become members of a ``MeshPrimitive`` structure. HLSL and MSL declare the first three
+  built-ins ``uint`` and GLSL ``int``, so a write converts its value and a read converts back; the cull flag is
+  ``bool`` in all three;
 * ``gl_PrimitivePointIndicesEXT``, ``gl_PrimitiveLineIndicesEXT`` or ``gl_PrimitiveTriangleIndicesEXT`` becomes the
   ``@indices`` array of the topology's index type;
 * the ``taskPayloadSharedEXT`` variable becomes the ``@mesh_payload in`` parameter, read-only in both languages.
@@ -47,7 +48,7 @@ A task stage's ``taskPayloadSharedEXT`` variable becomes ``groupshared`` storage
 passes as its payload, which is how HLSL amplification shaders and the Metal emitter's object functions take it.
 
 Built-ins that the HLSL or Metal output does not carry yet (``gl_PointSize``, clip and cull distances,
-``gl_CullPrimitiveEXT``, ``gl_PrimitiveShadingRateEXT``), other uses of the output arrays, helpers that use the
+``gl_PrimitiveShadingRateEXT``), other uses of the output arrays, helpers that use the
 mesh interface, a payload shared by a task and a mesh stage, and layouts with no HLSL or Metal form are refused
 with :class:`GlslMeshStageUnsupportedError`.
 """
@@ -73,7 +74,8 @@ from .stage_varyings import stages as _stages
 __all__ = ["GlslMeshStageUnsupportedError", "raise_glsl_mesh_stages"]
 
 _HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
-_TARGETS = _HLSL_TARGETS | {"metal"}
+# Slang declares mesh and task stages as HLSL does (out vertices/indices/primitives, DispatchMesh).
+_TARGETS = _HLSL_TARGETS | {"metal", "slang"}
 _TASK_STAGES = frozenset({"task", "amplification", "object"})
 _MESH_ROLES = frozenset({"vertices", "indices", "primitives"})
 _TASK_PAYLOAD = frozenset({"taskpayloadsharedext", "taskpayloadsharednv"})
@@ -91,6 +93,8 @@ _PRIMITIVE_BUILTINS = {
     "gl_PrimitiveID": ("primitiveID", "uint", True),
     "gl_Layer": ("layer", "uint", True),
     "gl_ViewportIndex": ("viewportIndex", "uint", True),
+    # HLSL's SV_CullPrimitive and MSL's [[primitive_culled]] are bool, as GLSL's is.
+    "gl_CullPrimitiveEXT": ("culled", "bool", False),
 }
 _BUILTIN_BLOCKS = frozenset({"gl_MeshPerVertexEXT", "gl_MeshPerPrimitiveEXT"})
 _BUILTIN_ARRAYS = _INDEX_ARRAYS | {_VERTICES, _PRIMITIVES}
@@ -176,10 +180,11 @@ def _pass_compute_builtins(program, stage, target):
                 "a parameter",
                 "helper-builtin",
             )
-    if "gl_NumWorkGroups" in used and target in _HLSL_TARGETS:
+    if "gl_NumWorkGroups" in used and target != "metal":
         _refuse(
             target,
-            f"the {_stage_name(stage)} stage reads gl_NumWorkGroups, for which HLSL has no system value",
+            f"the {_stage_name(stage)} stage reads gl_NumWorkGroups, for which {_label(target)} has no "
+            "system value",
             "num-work-groups",
         )
     fresh = FreshNames(program)
@@ -235,7 +240,7 @@ def _layout_sizes(stage, target):
 
 
 def _label(target):
-    return "Metal" if target == "metal" else "HLSL"
+    return {"metal": "Metal", "slang": "Slang"}.get(target, "HLSL")
 
 
 def _refuse(target, detail, reason):
@@ -286,16 +291,29 @@ def _payload_variables(program, stage):
 
 
 def _payload_users(program):
-    """``id(payload variable) -> names of the stages whose functions use it``."""
+    """``id(payload variable) -> names of the stages whose functions use it``.
+
+    Only stages that see a payload variable are scanned, and each function body is scanned once however many
+    stages share it.
+    """
     users = {}
+    names_by_function = {}
     for stage in _stages(program):
         if getattr(stage, "entry_point", None) is None:
+            continue
+        variables = _payload_variables(program, stage)
+        if not variables:
             continue
         used = set()
         for function in _stage_functions(program, stage):
             if getattr(function, "body", None) is not None:
-                used |= _identifier_names(function.body)
-        for variable in _payload_variables(program, stage):
+                names = names_by_function.get(id(function))
+                if names is None:
+                    names = names_by_function[id(function)] = _identifier_names(
+                        function.body
+                    )
+                used |= names
+        for variable in variables:
             if variable.name in used:
                 users.setdefault(id(variable), set()).add(_stage_name(stage))
     return users

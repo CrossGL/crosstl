@@ -51,6 +51,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.builtin_names import is_crossgl_gl_builtin
 from ..semantics.builtin_values import glsl_builtin_name
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
 from .array_utils import (
@@ -72,6 +73,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .constant_ordering import partition_constants_by_struct_dependency
+from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -109,8 +111,10 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
     raise_unresolved_generic_function_call,
+    reject_unresolved_generic_function_call,
 )
 from .generic_struct_utils import named_struct_constructor_arguments
+from .global_specialization_constants import split_global_specialization_constants
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
@@ -121,6 +125,20 @@ from .glsl_buffer_layout import (
     matrix_column_offsets,
     std430_layout_type_name,
     vector_component_offsets,
+)
+from .hlsl_buffer_component_stores import slang_buffer_component_store
+from .hlsl_byteaddress_typed_access import (
+    hlsl_byteaddress_component_refusal,
+    hlsl_byteaddress_is_typed_access,
+    hlsl_byteaddress_typed_load,
+    hlsl_byteaddress_typed_store,
+)
+from .hlsl_image_formats import (
+    declared_texel_type,
+    normalized_texel_type,
+    slang_image_format_prefix,
+    texel_attribute,
+    texel_shape,
 )
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .image_access_contracts import numeric_expression_component_count
@@ -133,19 +151,36 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .matrix_compound_assignment import matrix_product_assignment
+from .push_constant_blocks import (
+    slang_push_constant_cbuffer,
+    slang_push_constant_declaration,
+)
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .slang_constant_references import slang_constant_reference_parameter
+from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
     generate_slang_projected_compare,
     is_slang_projected_compare,
 )
 from .slang_refusals import SlangLoweringRefused
+from .slang_specialization_constants import plan_slang_specialization_constants
+from .slang_wave_shuffles import (
+    SLANG_WAVE_SHUFFLE_ARITIES,
+    as_type_target,
+    render_slang_wave_shuffle_helper,
+    slang_subgroup_parameter_alias,
+    slang_wave_shuffle_helper_name,
+)
+from .slang_workgroup_atomics import SlangWorkgroupAtomics, workgroup_variable_names
+from .slang_workgroup_locals import slang_workgroup_local_prefix
+from .slang_workgroup_size import SlangWorkgroupSizeConstants
 from .stage_utils import (
-    compute_local_size,
     is_fragment_output_parameter,
     normalize_stage_name,
 )
+from .storage_parameter_texels import StorageParameterTexels
 
 
 class SlangCodeGen(LoweringRefusalMixin):
@@ -240,6 +275,7 @@ class SlangCodeGen(LoweringRefusalMixin):
     def __init__(self):
         """Initialize Slang generation state and helper caches."""
         self.indent_level = 0
+        self.workgroup_atomics = SlangWorkgroupAtomics(self, ())
         self.indent_str = "    "
         self.variable_types = {}
         self.local_variable_types = self.variable_types
@@ -322,9 +358,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             "gl_InstanceID": "SV_InstanceID",
             "gl_BaseVertex": "SV_StartVertexLocation",
             "gl_BaseInstance": "SV_StartInstanceLocation",
-            "gl_DrawID": "SV_DrawID",
+            "gl_DrawID": "SV_DrawIndex",
             "gl_PrimitiveID": "SV_PrimitiveID",
             "gl_PrimitiveIDIn": "SV_PrimitiveID",
+            "gl_CullPrimitiveEXT": "SV_CullPrimitive",
             "gl_TessCoord": "SV_DomainLocation",
             "gl_TessLevelOuter": "SV_TessFactor",
             "gl_TessLevelInner": "SV_InsideTessFactor",
@@ -394,6 +431,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         """
         if self._generating:
             return self.generate_program(ast)
+        refuse_cooperative_matrices(ast, label="Slang", target="slang")
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         try:
@@ -414,6 +452,14 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.buffer_resource_accesses = {}
             self.helper_functions = {}
             self.hlsl_matrix_orientation = HLSLMatrixOrientation(self)
+            self.storage_parameter_texels = StorageParameterTexels(
+                self.resource_base_type
+            )
+            self.storage_parameter_texels.prepare(ast)
+            self.workgroup_atomics = SlangWorkgroupAtomics(
+                self, workgroup_variable_names(ast)
+            )
+            self.workgroup_size_constants = SlangWorkgroupSizeConstants(ast)
             self.helper_name_aliases = {}
             self.user_symbol_names = self.collect_user_symbol_names(ast)
             self.current_function_return_type = None
@@ -589,10 +635,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += self.generate_enum_support_code()
 
             structs = getattr(ast, "structs", [])
+            constants, global_vars = split_global_specialization_constants(ast)
             leading_constants, struct_dependent_constants = (
-                partition_constants_by_struct_dependency(
-                    getattr(ast, "constants", []) or [], structs
-                )
+                partition_constants_by_struct_dependency(constants, structs)
             )
             result += self.generate_constants(ast, leading_constants)
             for struct in structs:
@@ -604,7 +649,6 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += self.generate_constants(ast, struct_dependent_constants)
             result += self.slang_struct_dependent_helper_marker()
 
-            global_vars = getattr(ast, "global_variables", [])
             for node in global_vars:
                 result += self.generate_global_variable(node)
             result += self.generate_slang_lowered_struct_resource_member_globals()
@@ -669,7 +713,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             struct_helpers = ""
         helpers = self.emit_helper_functions()
         self._generating = False
-        generated = helpers + struct_helpers + result
+        constants = self.slang_workgroup_size_constants().declarations()
+        generated = constants + helpers + struct_helpers + result
         self.reject_unresolved_generic_output(generated)
         return generated
 
@@ -1434,6 +1479,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             unsupported_type_message=(
                 "type is not supported by Slang ByteAddressBuffer lowering"
             ),
+            component_refusal=lambda info: hlsl_byteaddress_component_refusal(
+                self, info
+            ),
         )
         scalar_blocks, scalar_failures, scalar_struct_failures = (
             self.collect_scalar_glsl_buffer_blocks(declarations)
@@ -1874,10 +1922,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         result += self.generate_enum_support_code()
 
         structs = getattr(node, "structs", [])
+        constants, global_vars = split_global_specialization_constants(node)
         leading_constants, struct_dependent_constants = (
-            partition_constants_by_struct_dependency(
-                getattr(node, "constants", []) or [], structs
-            )
+            partition_constants_by_struct_dependency(constants, structs)
         )
         result += self.generate_constants(node, leading_constants)
         for struct in structs:
@@ -1889,7 +1936,6 @@ class SlangCodeGen(LoweringRefusalMixin):
         result += self.generate_constants(node, struct_dependent_constants)
         result += self.slang_struct_dependent_helper_marker()
 
-        global_vars = getattr(node, "global_variables", [])
         for global_var in global_vars:
             result += self.generate_global_variable(global_var)
         result += self.generate_slang_lowered_struct_resource_member_globals()
@@ -1919,6 +1965,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.validate_slang_tessellation_stage_shapes(stages)
         self.slang_mesh_payload_parameter_types = (
             self.collect_slang_mesh_payload_parameter_types(stages)
+        )
+        self.slang_program_has_mesh_stage = any(
+            str(getattr(stage_type, "value", stage_type)).lower() == "mesh"
+            for stage_type in stages
         )
         self.slang_ray_payload_parameter_types = (
             self.collect_slang_ray_payload_parameter_types(stages)
@@ -1956,7 +2006,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         return code
 
     def generate_constants(self, ast, constants=None):
-        """Emit CrossGL compile-time constants as Slang static constants."""
+        """Emit CrossGL compile-time constants as Slang static constants.
+
+        Specialization constants keep their id, and the constants that follow them are planned once per program by
+        :func:`plan_slang_specialization_constants`.
+        """
+        plan = self.slang_specialization_plan(ast)
         code = ""
         for node in (
             getattr(ast, "constants", []) or [] if constants is None else constants
@@ -1969,13 +2024,41 @@ class SlangCodeGen(LoweringRefusalMixin):
                 getattr(node, "const_type", getattr(node, "vtype", "float"))
             )
             self.register_variable_type(name, const_type_name, node)
-            value_code = self.generate_constant_expression(getattr(node, "value", None))
+            value = getattr(node, "value", None)
+            value_code = (
+                None if value is None else self.generate_constant_expression(value)
+            )
             declaration = format_c_style_array_declaration(
                 self.convert_type(const_type_name), name
             )
+            specialized = plan.declaration(name, declaration, value_code)
+            if specialized is not None:
+                code += f"{specialized}\n"
+                continue
             code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
+
+    def slang_interface_array_type(self, member):
+        """A stage-interface member's array type sized by its default, when a specialization constant sizes it."""
+        cached = getattr(self, "_slang_specialization_plan", None)
+        if cached is None:
+            return None
+        return cached[1].interface_array_type(getattr(member, "member_type", None))
+
+    def slang_specialization_plan(self, ast):
+        """The specialization plan of ``ast``, computed once for the program being generated."""
+        cached = getattr(self, "_slang_specialization_plan", None)
+        if cached is not None and cached[0] is ast:
+            return cached[1]
+        plan = plan_slang_specialization_constants(
+            ast,
+            lambda type_node: self.convert_type(
+                self.convert_type_node_to_string(type_node)
+            ),
+        )
+        self._slang_specialization_plan = (ast, plan)
+        return plan
 
     def generate_constant_expression(self, expr):
         value_code = self.generate_expression(expr)
@@ -3954,6 +4037,16 @@ class SlangCodeGen(LoweringRefusalMixin):
             "writeonly",
         }
 
+    def slang_storage_image_format_prefix(self, mapped_type, node):
+        if node is None:
+            return ""
+        base_type = self.resource_base_type(mapped_type)
+        if not isinstance(base_type, str) or not base_type.startswith(
+            ("RWTexture", "RasterizerOrderedTexture")
+        ):
+            return ""
+        return slang_image_format_prefix(self.explicit_image_format(node))
+
     def slang_resource_memory_qualifier_prefix(self, mapped_type, node):
         if node is None:
             return ""
@@ -4256,7 +4349,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
         if (
             expected_type == "uint3"
-            and mapped_semantic == "SV_DispatchThreadID"
+            and mapped_semantic in {
+                "SV_DispatchThreadID",
+                "SV_GroupThreadID",
+                "SV_GroupID",
+            }
             and not array_suffix
             and base_type in {"uint", "uint2"}
         ):
@@ -4341,7 +4438,22 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
 
     def semantic_suffix(self, semantic, shader_type=None):
+        """The ``: semantic`` a declaration takes; a built-in with no Slang system value is refused.
+
+        ``map_semantic`` returns such a ``gl_`` name unchanged, and slangc would read it as a user semantic, an
+        ordinary varying, so the declaration would not carry the built-in.
+        """
         mapped_semantic = self.map_semantic(semantic, shader_type)
+        name = str(mapped_semantic or "")
+        if (
+            name.startswith("gl_")
+            and is_crossgl_gl_builtin(name)
+            and not name.lower().startswith(("gl_fragcolor", "gl_fragdata"))
+        ):
+            self.refuse_lowering(
+                f"Slang has no system value for the built-in @{name}; "
+                "it would become a user varying, not the built-in"
+            )
         return f" : {mapped_semantic}" if mapped_semantic else ""
 
     def generate_stage(self, stage_type, stage):
@@ -4854,7 +4966,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         return " ".join(qualifiers) + " "
 
     def slang_static_storage_prefix(self, node, mapped_type=None):
-        """``static`` for a module-scope value with one copy per invocation.
+        """``static`` for a module-scope value with one copy per invocation, ``static const`` for a constant.
 
         As in HLSL, a Slang global without ``static`` is a uniform, so CrossGL's module-scope ``static`` values
         (SPIR-V ``Private`` storage) keep the keyword. Groupshared, uniform and resource declarations do not.
@@ -4863,8 +4975,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
         }
-        if "static" not in qualifiers or qualifiers & {
-            "const",
+        constant = bool(qualifiers & {"const", "constant"})
+        if not (constant or "static" in qualifiers) or qualifiers & {
             "uniform",
             "groupshared",
             "shared",
@@ -4877,7 +4989,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             and self.slang_register_prefix_for_type(mapped_type, node, None) is not None
         ):
             return ""
-        return "static "
+        # A module-scope constant (``const``, ``static const`` or MSL's ``constant``) is a compile-time value;
+        # without ``static`` Slang would make it a uniform parameter and drop its initializer.
+        return "static const " if constant else "static "
 
     def slang_parameter_qualifier_prefix(self, node):
         qualifiers = []
@@ -5739,6 +5853,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         forced_register_prefix=None,
         auto_assign=False,
     ):
+        push_constant = slang_push_constant_declaration(node, declaration)
+        if push_constant is not None:
+            return push_constant
         prefix, suffix = self.slang_resource_binding_decorations(
             node, type_name, forced_register_prefix, auto_assign
         )
@@ -5748,6 +5865,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         name = getattr(node, "name", None)
         if not name or not hasattr(node, "members"):
             return ""
+        push_constant = slang_push_constant_cbuffer(self, node)
+        if push_constant is not None:
+            return push_constant
         declaration = self.apply_slang_resource_binding_decorations(
             f"cbuffer {name}",
             node,
@@ -5868,7 +5988,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             placeholder_type = self.map_resource_type_with_format(vtype, node)
             placeholder = format_c_style_array_declaration(placeholder_type, node.name)
-            return diagnostic + f"{placeholder};\n"
+            # A block the byte-address lowering cannot lay out has no faithful Slang declaration.
+            return self.refuse_lowering(
+                diagnostic.removeprefix("// ").strip(), f"{placeholder};\n"
+            )
 
         if isinstance(node, ArrayNode):
             self.register_variable_type(node.name, node.element_type)
@@ -5894,7 +6017,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return ""
         declaration = self.format_declaration(vtype, node.name, node)
         declaration = (
-            self.slang_static_storage_prefix(node, mapped_type)
+            self.slang_storage_image_format_prefix(mapped_type, node)
+            + self.slang_static_storage_prefix(node, mapped_type)
             + self.slang_declaration_qualifier_prefix(node)
             + self.slang_resource_memory_qualifier_prefix(mapped_type, node)
             + declaration
@@ -5937,6 +6061,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             semantic = self.semantic_from_node(member)
             if semantic is None:
                 semantic = default_member_semantics.get(member.name)
+            interface_type = (
+                self.slang_interface_array_type(member) if semantic else None
+            )
+            if interface_type is not None:
+                member_type = self.convert_type(
+                    self.convert_type_node_to_string(interface_type)
+                )
             self.validate_slang_builtin_semantic_type(
                 semantic,
                 self.slang_tess_factor_member_type_name(member),
@@ -6128,11 +6259,19 @@ class SlangCodeGen(LoweringRefusalMixin):
                         if shader_type == "compute"
                         else None
                     )
-                    num_workgroups_alias = self.slang_num_workgroups_parameter_alias(
+                    intrinsic_alias = self.slang_num_workgroups_parameter_alias(
                         param, param_type, semantic, shader_type
                     )
-                    if num_workgroups_alias is not None:
-                        local_alias_declarations.append(num_workgroups_alias)
+                    if intrinsic_alias is None:
+                        intrinsic_alias = self.slang_helper_invocation_parameter_alias(
+                            param, param_type, semantic, shader_type
+                        )
+                    if intrinsic_alias is None:
+                        intrinsic_alias = slang_subgroup_parameter_alias(
+                            self, param, param_type, semantic
+                        )
+                    if intrinsic_alias is not None:
+                        local_alias_declarations.append(intrinsic_alias)
                         emitted_param_names.add(param.name)
                         continue
                     if dispatch_thread_id_bridge is not None:
@@ -6175,6 +6314,25 @@ class SlangCodeGen(LoweringRefusalMixin):
                     if mesh_output_declaration is not None:
                         params.append(mesh_output_declaration)
                         continue
+                    constant_reference = (
+                        slang_constant_reference_parameter(self, param)
+                        if shader_type is not None
+                        else None
+                    )
+                    if constant_reference is not None:
+                        declaration, value_type = constant_reference
+                        self.register_variable_type(param.name, value_type, param)
+                        params.append(declaration)
+                        emitted_param_names.add(param.name)
+                        continue
+                    if shader_type is not None and str(param_type).rstrip().endswith(
+                        "&"
+                    ):
+                        # A Metal ``constant T& x [[buffer(n)]]`` argument; ``T &x`` is no Slang entry parameter.
+                        self.refuse_lowering(
+                            f"Slang entry parameter '{param.name}' has the reference type "
+                            f"{param_type}, which a Slang entry point cannot take"
+                        )
                     declaration = (
                         self.slang_stage_parameter_qualifier_prefix(param, shader_type)
                         + declaration
@@ -6329,9 +6487,17 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         return result
 
+    def slang_workgroup_size_constants(self):
+        constants = getattr(self, "workgroup_size_constants", None)
+        if constants is None:
+            constants = self.workgroup_size_constants = SlangWorkgroupSizeConstants(
+                None
+            )
+        return constants
+
     def generate_compute_numthreads(self, execution_config=None):
-        x, y, z = compute_local_size(execution_config)
-        return f"[numthreads({x}, {y}, {z})]\n"
+        # Specialized and host-chosen sizes name module-scope constants (slang_workgroup_size.py).
+        return self.slang_workgroup_size_constants().numthreads(execution_config)
 
     def validate_slang_return_semantic(
         self, shader_type, semantic, stage_role, ret_type_name
@@ -6758,30 +6924,63 @@ class SlangCodeGen(LoweringRefusalMixin):
     def slang_num_workgroups_parameter_alias(
         self, parameter, param_type, semantic, shader_type
     ):
-        """Bind a ``gl_NumWorkGroups`` entry parameter from ``WorkgroupCount()``.
+        """Bind a ``gl_NumWorkGroups`` or ``gl_WorkGroupSize`` entry parameter from its Slang intrinsic.
 
-        Slang has no system-value semantic for the dispatch size, so the parameter becomes a local read from the
-        ``WorkgroupCount()`` intrinsic in a compute entry point and is refused in other entry points.
+        Slang has no system-value semantic for the dispatch size or the workgroup size, so the parameter becomes a
+        local read from ``WorkgroupCount()`` or ``WorkgroupSize()`` (the entry's ``numthreads`` as an ``int3``) in a
+        compute entry point and is refused in other entry points.
         """
-        if semantic is None or str(semantic).lower() != "gl_numworkgroups":
+        intrinsics = {
+            "gl_numworkgroups": ("gl_NumWorkGroups", "WorkgroupCount()", "{}"),
+            "gl_workgroupsize": ("gl_WorkGroupSize", "WorkgroupSize()", "uint3({})"),
+        }
+        if semantic is None or str(semantic).lower() not in intrinsics:
             return None
+        builtin, intrinsic, value = intrinsics[str(semantic).lower()]
         name = getattr(parameter, "name", None)
         if shader_type is None:
             return None
         if shader_type != "compute":
             self.refuse_lowering(
-                f"Slang has no system value for the gl_NumWorkGroups parameter '{name}' "
-                f"of a {shader_type} entry point; WorkgroupCount() is read in compute "
+                f"Slang has no system value for the {builtin} parameter '{name}' "
+                f"of a {shader_type} entry point; {intrinsic} is read in compute "
                 "entry points only"
             )
             return None
         base_type, array_suffix = split_array_type_suffix(str(param_type))
         if array_suffix or base_type != "uint3":
             self.refuse_lowering(
-                f"Slang gl_NumWorkGroups parameter '{name}' must be a uvec3, not {param_type}"
+                f"Slang {builtin} parameter '{name}' must be a uvec3, not {param_type}"
             )
             return None
-        return f"uint3 {name} = WorkgroupCount();"
+        return f"uint3 {name} = {value.format(intrinsic)};"
+
+    def slang_helper_invocation_parameter_alias(
+        self, parameter, param_type, semantic, shader_type
+    ):
+        """Bind a ``gl_HelperInvocation`` entry parameter from ``IsHelperLane()``.
+
+        Slang has no system-value semantic for it, so the parameter becomes a local read from the
+        ``IsHelperLane()`` intrinsic in a fragment entry point and is refused in other entry points.
+        """
+        if semantic is None or str(semantic).lower() != "gl_helperinvocation":
+            return None
+        name = getattr(parameter, "name", None)
+        if shader_type is None:
+            return None
+        if self.slang_shader_stage_name(shader_type) != "fragment":
+            self.refuse_lowering(
+                f"Slang has no system value for the gl_HelperInvocation parameter '{name}' "
+                f"of a {shader_type} entry point; IsHelperLane() is read in fragment "
+                "entry points only"
+            )
+            return None
+        if str(param_type) != "bool":
+            self.refuse_lowering(
+                f"Slang gl_HelperInvocation parameter '{name}' must be a bool, not {param_type}"
+            )
+            return None
+        return f"bool {name} = IsHelperLane();"
 
     def slang_unique_local_identifier(self, candidate, used_names):
         while candidate in used_names:
@@ -6813,16 +7012,21 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return_type, intrinsic = candidates[node.name]
                 aliases[node.name] = intrinsic
                 self.register_variable_type(node.name, return_type)
-            elif node.name == "gl_NumWorkGroups":
-                # Slang declares no gl_NumWorkGroups, and the WorkgroupCount()
-                # alias above is only made for a compute entry point.
+            elif node.name in ("gl_NumWorkGroups", "gl_WorkGroupSize"):
+                # Slang declares neither, and the WorkgroupCount() and WorkgroupSize()
+                # aliases above are only made for a compute entry point.
                 where = (
                     f"a {shader_type} entry point"
                     if shader_type
                     else "a helper function"
                 )
+                intrinsic = (
+                    "WorkgroupCount()"
+                    if node.name == "gl_NumWorkGroups"
+                    else "WorkgroupSize()"
+                )
                 self.refuse_lowering(
-                    "Slang gl_NumWorkGroups: lowered to WorkgroupCount() only "
+                    f"Slang {node.name}: lowered to {intrinsic} only "
                     f"in a compute entry point, not in {where}"
                 )
         return aliases
@@ -7937,7 +8141,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         if shader_stage == "compute":
             # Slang has no SV_ system value for the dispatch size; it exposes
             # the number of workgroups through the WorkgroupCount() intrinsic.
-            return {"gl_NumWorkGroups": ("uvec3", "WorkgroupCount()")}
+            return {
+                "gl_NumWorkGroups": ("uvec3", "WorkgroupCount()"),
+                # Slang declares no gl_WorkGroupSize; WorkgroupSize() is the entry's numthreads as an int3.
+                "gl_WorkGroupSize": ("uvec3", "uint3(WorkgroupSize())"),
+            }
         if shader_stage not in self.slang_ray_stage_types():
             return {}
 
@@ -7976,7 +8184,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 "gl_InstanceID": ("uint", "SV_InstanceID"),
                 "gl_BaseVertex": ("int", "SV_StartVertexLocation"),
                 "gl_BaseInstance": ("uint", "SV_StartInstanceLocation"),
-                "gl_DrawID": ("uint", "SV_DrawID"),
+                "gl_DrawID": ("uint", "SV_DrawIndex"),
             }
         if shader_stage == "fragment":
             return {
@@ -8426,7 +8634,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         mapped_type = self.map_resource_type_with_format(var_type, node)
         declaration = self.format_declaration(var_type, node.name, node)
         declaration = (
-            self.slang_declaration_qualifier_prefix(node)
+            # A function-scope groupshared variable is static (slang_workgroup_locals.py).
+            slang_workgroup_local_prefix(self, node, initial_value)
+            + self.slang_declaration_qualifier_prefix(node)
             + self.slang_resource_memory_qualifier_prefix(mapped_type, node)
             + declaration
         )
@@ -9214,6 +9424,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return self.slang_ray_tracing_result_type(operation)
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
+            bit_cast_type = as_type_target(func_name)
+            if bit_cast_type is not None:
+                return bit_cast_type
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type is not None:
                 return numeric_result_type
@@ -9246,9 +9459,14 @@ class SlangCodeGen(LoweringRefusalMixin):
                     element_type = self.structured_buffer_element_type(buffer_type)
                     return element_type if element_type in {"int", "uint"} else "uint"
             if func_name == "imageLoad" and getattr(expr, "args", None):
-                return self.image_resource_element_type(
+                element_type = self.image_resource_element_type(
                     self.image_resource_type(expr.args[0])
                 )
+                shape = texel_shape(element_type)
+                if shape is not None and shape[1] < 4:
+                    # image_load_expression fills a narrower texel to four.
+                    return f"{shape[0]}4"
+                return element_type
             if func_name == "buffer_load" and getattr(expr, "args", None):
                 buffer_type = self.structured_buffer_resource_type(expr.args[0])
                 if self.is_byte_address_buffer_resource_type(buffer_type):
@@ -9573,11 +9791,35 @@ class SlangCodeGen(LoweringRefusalMixin):
             return f"mul({left}, {right})"
         return f"{left} {node.op} {right}"
 
+    def slang_helper_invocation_expression(self):
+        """A read of ``gl_HelperInvocation`` as Slang's ``IsHelperLane()``, unless a variable of that name is in scope.
+
+        Slang declares no ``gl_HelperInvocation``; ``IsHelperLane()`` is available in fragment stages only, so it is
+        refused in another stage's entry point. A helper function is left to slangc, which checks the stages that
+        call it.
+        """
+        if "gl_HelperInvocation" in self.variable_types:
+            return "gl_HelperInvocation"
+        shader_type = self.current_shader_type
+        if (
+            shader_type is not None
+            and self.slang_shader_stage_name(shader_type) != "fragment"
+        ):
+            self.refuse_lowering(
+                "Slang gl_HelperInvocation: lowered to IsHelperLane() only in a "
+                f"fragment stage, not in a {shader_type} entry point"
+            )
+        return "IsHelperLane()"
+
     def generate_expression(self, node):
         """Render a CrossGL expression as Slang expression syntax."""
         if isinstance(node, VariableNode):
+            if node.name == "gl_HelperInvocation":
+                return self.slang_helper_invocation_expression()
             return node.name
         elif isinstance(node, IdentifierNode):
+            if node.name == "gl_HelperInvocation":
+                return self.slang_helper_invocation_expression()
             if isinstance(node.name, str) and "::" in node.name:
                 enum_value = enum_value_expression(self, node.name)
                 if enum_value != node.name:
@@ -9669,6 +9911,13 @@ class SlangCodeGen(LoweringRefusalMixin):
             if ray_tracing_call is not None:
                 operation, args = ray_tracing_call
                 return self.generate_slang_ray_tracing_call_expression(operation, args)
+            bit_cast_type = as_type_target(getattr(func_expr, "name", func_expr))
+            call_arguments = getattr(node, "arguments", getattr(node, "args", [])) or []
+            if bit_cast_type is not None and len(call_arguments) == 1:
+                return (
+                    f"bit_cast<{self.convert_type(bit_cast_type)}>"
+                    f"({self.generate_expression(call_arguments[0])})"
+                )
             if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
                 callee = func_expr.name
             elif isinstance(func_expr, str):
@@ -9689,7 +9938,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             if specialized_callee is not None:
                 callee = specialized_callee
             else:
-                raise_unresolved_generic_function_call(self, callee, "Slang")
+                reject_unresolved_generic_function_call(self, callee, "Slang")
             synchronization_call = self.generate_slang_synchronization_call(
                 callee, node.args, statement_context=False
             )
@@ -9979,7 +10228,79 @@ class SlangCodeGen(LoweringRefusalMixin):
             args = args[:6] + [ray_desc, args[10]]
         return f"{operation}({', '.join(args)})"
 
+    def generate_slang_wave_shuffle_expression(self, node):
+        """A relative wave shuffle as a call of its helper (see :mod:`.slang_wave_shuffles`)."""
+        operation = node.operation
+        arguments = list(node.arguments)
+        if len(arguments) not in SLANG_WAVE_SHUFFLE_ARITIES[operation]:
+            expected = " or ".join(
+                str(count) for count in sorted(SLANG_WAVE_SHUFFLE_ARITIES[operation])
+            )
+            return self.unsupported_slang_wave_op_expression(
+                operation, f"expects {expected} arguments, got {len(arguments)}"
+            )
+        value_type = self.slang_wave_argument_mapped_type(arguments[0])
+        if value_type is None or not self.is_slang_wave_value_type(value_type):
+            return self.unsupported_slang_wave_op_expression(
+                operation,
+                f"value must be a scalar or vector, got {value_type or 'an unknown type'}",
+            )
+        if operation == "WaveShuffleAndFillUp":
+            fill_type = self.slang_wave_argument_mapped_type(arguments[1])
+            if fill_type is not None and fill_type != value_type:
+                return self.unsupported_slang_wave_op_expression(
+                    operation, f"fill must be {value_type}, got {fill_type}"
+                )
+        conversion = self.slang_wave_result_conversion(value_type)
+        if conversion is None:
+            target_reason = self.slang_wave_target_type_rejection_reason(value_type)
+            if target_reason is not None:
+                return self.unsupported_slang_wave_op_expression(
+                    operation, target_reason
+                )
+        name = slang_wave_shuffle_helper_name(operation, value_type)
+        self.helper_functions.setdefault(
+            name, render_slang_wave_shuffle_helper(operation, value_type)
+        )
+        rendered = [self.generate_expression(argument) for argument in arguments]
+        if operation == "WaveShuffleAndFillUp":
+            modulo = (
+                f"uint({rendered[3]})" if len(rendered) == 4 else "WaveGetLaneCount()"
+            )
+            call = (
+                f"{name}({rendered[0]}, {rendered[1]}, uint({rendered[2]}), {modulo})"
+            )
+        else:
+            call = f"{name}({rendered[0]}, uint({rendered[1]}))"
+        return f"{conversion}({call})" if conversion else call
+
+    def slang_wave_result_conversion(self, result_type):
+        """The type a wave result converts to where it is used, when the use expects another value type.
+
+        Metal converts a returned or assigned value implicitly, as ``bool shuffle(bool b) { return
+        simd_shuffle(uint(b), lane); }`` does; the conversion is written out so slangc applies the same one.
+        ``None`` when no conversion is needed or the shapes differ.
+        """
+        expected = self.slang_wave_expected_target_type()
+        result = self.type_name_string(result_type)
+        if result:
+            result = self.convert_type(result)
+        if not expected or not result or expected == result:
+            return None
+        if not (
+            self.is_slang_wave_value_type(expected)
+            and self.is_slang_wave_value_type(result)
+        ):
+            return None
+        if self.is_vector_value_type(expected) != self.is_vector_value_type(result):
+            return None
+        if self.is_vector_value_type(expected) and expected[-1] != result[-1]:
+            return None
+        return expected
+
     def generate_slang_wave_op_expression(self, node):
+        if node.operation in SLANG_WAVE_SHUFFLE_ARITIES:
+            return self.generate_slang_wave_shuffle_expression(node)
         expected_arity = self.SLANG_WAVE_INTRINSIC_ARITIES.get(node.operation)
         if expected_arity is None:
             return self.unsupported_slang_wave_op_expression(
@@ -9999,14 +10320,17 @@ class SlangCodeGen(LoweringRefusalMixin):
                 node.operation, rejection_reason
             )
         result_type = self.slang_wave_result_type(node)
-        target_reason = self.slang_wave_target_type_rejection_reason(result_type)
-        if target_reason is not None:
-            return self.unsupported_slang_wave_op_expression(
-                node.operation, target_reason
-            )
+        conversion = self.slang_wave_result_conversion(result_type)
+        if conversion is None:
+            target_reason = self.slang_wave_target_type_rejection_reason(result_type)
+            if target_reason is not None:
+                return self.unsupported_slang_wave_op_expression(
+                    node.operation, target_reason
+                )
 
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
-        return f"{node.operation}({args})"
+        call = f"{node.operation}({args})"
+        return f"{conversion}({call})" if conversion else call
 
     def slang_wave_result_type(self, node):
         operation = getattr(node, "operation", None)
@@ -10386,6 +10710,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             return
 
         payload_types = sorted(self.slang_mesh_payload_parameter_types)
+        if not payload_types and not getattr(
+            self, "slang_program_has_mesh_stage", True
+        ):
+            # A task stage built alone: the mesh stage it launches is another program.
+            return
         if not payload_types:
             raise ValueError(
                 "Slang DispatchMesh payload argument requires a mesh stage "
@@ -11086,6 +11415,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         if type_name in self.enum_struct_type_names:
             return type_name
 
+        unrepresentable = slang_unrepresentable_type_reason(type_name)
+        if unrepresentable is not None:
+            return self.refuse_lowering(unrepresentable, type_name)
+
         type_map = {
             "f16": "half",
             "float16": "half",
@@ -11567,6 +11900,10 @@ class SlangCodeGen(LoweringRefusalMixin):
     def map_image_base_type_with_format(self, type_name, node=None):
         base_type = self.resource_base_type(type_name)
         explicit_format = self.explicit_image_format(node) if node is not None else None
+        if explicit_format is None:
+            parameter_type = self.storage_parameter_type(node)
+            if parameter_type is not None:
+                return parameter_type
         component_type = self.scalar_image_format_components().get(
             explicit_format
         ) or self.vector_image_format_components().get(explicit_format)
@@ -11600,9 +11937,43 @@ class SlangCodeGen(LoweringRefusalMixin):
             "uimage2DMSArray": "RWTexture2DMSArray",
         }
         texture_type = texture_types.get(base_type)
+        declared_texel = (
+            self.declared_storage_texel_type(node, base_type, explicit_format)
+            if texture_type
+            else None
+        )
         if component_type and texture_type:
-            return f"{texture_type}<{component_type}>"
+            texel_type = normalized_texel_type(explicit_format, component_type)
+            return f"{texture_type}<{texel_type}>"
+        if declared_texel:
+            return f"{texture_type}<{declared_texel}>"
         return self.convert_type(type_name)
+
+    def storage_parameter_type(self, node):
+        """The Slang type of the storage images a parameter receives, or ``None``."""
+        texels = getattr(self, "storage_parameter_texels", None)
+        if node is None or texels is None or texel_attribute(node) is not None:
+            return None
+        try:
+            return texels.parameter_type(
+                node,
+                lambda declaration: self.map_image_base_type_with_format(
+                    declaration.vtype, declaration
+                ),
+            )
+        except ValueError as error:
+            return self.refuse_lowering(f"Slang {error}", None)
+
+    def declared_storage_texel_type(self, node, image_type, explicit_format):
+        """The Slang texel type a storage image's ``@texel`` declares, or ``None``."""
+        if node is None:
+            return None
+        try:
+            return declared_texel_type(
+                node, image_type, explicit_format, self.attribute_value_to_string
+            )
+        except ValueError as error:
+            return self.refuse_lowering(f"Slang {error}", None)
 
     def map_buffer_base_type_with_access(self, type_name, node=None):
         access = self.explicit_resource_access(node)
@@ -11846,20 +12217,47 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.current_expression_expected_type
         ):
             return f"{load_expr}.x"
+        shape = texel_shape(element_type)
+        expected_type = self.current_expression_expected_type
+        expected_size = (
+            self.vector_size(self.convert_type(expected_type) or "")
+            if isinstance(expected_type, str)
+            else None
+        )
+        if (
+            shape is not None
+            and shape[1] < 4
+            and not self.is_scalar_value_type(self.current_expression_expected_type)
+            and not (expected_size and expected_size <= shape[1])
+        ):
+            # imageLoad returns four components; Slang returns the texel's own,
+            # so fill the missing ones as an image read does: zero, then one in w.
+            kind, count = shape
+            zero = self.vector_zero_value(kind)
+            one = {"float": "1.0", "int": "1", "uint": "1u"}[kind]
+            fill = ", ".join([zero] * (3 - count) + [one])
+            return f"{kind}4({load_expr}, {fill})"
         return load_expr
 
     def image_store_value_expression(self, image_arg, value_arg):
         value = self.generate_expression(value_arg)
         image_type = self.image_resource_type(image_arg)
         element_type = self.image_resource_element_type(image_type)
+        shape = texel_shape(element_type)
+        value_type = self.type_name_string(self.expression_result_type(value_arg))
+        value_size = self.vector_size(self.convert_type(value_type) or "")
+        if shape is not None and value_size and value_size > shape[1]:
+            # imageStore takes four components and writes the texel's own.
+            return f"({value}).{'xyzw'[: shape[1]]}"
         if not self.vector_size(element_type):
             return value
-        if not self.is_scalar_value_type(self.expression_result_type(value_arg)):
+        if not self.is_scalar_value_type(value_type):
             return value
 
+        texel_type = f"{shape[0]}{shape[1]}" if shape is not None else element_type
         if self.vector_size(element_type) == 2:
-            return f"{element_type}({value}, {self.vector_zero_value(element_type)})"
-        return f"{element_type}({value})"
+            return f"{texel_type}({value}, {self.vector_zero_value(texel_type)})"
+        return f"{texel_type}({value})"
 
     def image_store_expression(self, args):
         if len(args) < 3:
@@ -12258,6 +12656,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 columns.append(f"asfloat({load})")
             return f"{access['slang_type']}({', '.join(columns)})"
 
+        if hlsl_byteaddress_is_typed_access(access):
+            return hlsl_byteaddress_typed_load(self, buffer_name, offset, access)
+
         if access["component_type"] == "bool" and access["components"] > 1:
             values = []
             for _, component_offset in vector_component_offsets(
@@ -12472,6 +12873,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             return self.slang_byteaddress_matrix_store(
                 buffer_name, offset, value, access
             )
+        if hlsl_byteaddress_is_typed_access(access):
+            return hlsl_byteaddress_typed_store(
+                self, buffer_name, offset, value, access
+            )
         if access["component_type"] == "bool" and access["components"] > 1:
             return self.slang_byteaddress_bool_vector_store(
                 buffer_name, offset, value, access
@@ -12633,7 +13038,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
-                return None
+                return slang_buffer_component_store(self, target, value, op)
             offset = access["offset"]
         else:
             offset = access["offset_expr"]
@@ -13002,10 +13407,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                 "buffer_store", "requires RWStructuredBuffer resource"
             )
 
+        # Slang's RWStructuredBuffer has no Store method (slangc E30027): its elements are written by subscript.
         buffer = self.generate_expression(args[0])
         index = self.generate_expression(args[1])
         value = self.generate_expression(args[2])
-        return f"{buffer}.Store({index}, {value})"
+        store = f"{buffer}[{index}] = {value}"
+        return store if statement_context else f"({store})"
 
     def buffer_append_expression(self, args):
         if len(args) < 2:
@@ -13629,6 +14036,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
         if structured_buffer_atomic is not None:
             return structured_buffer_atomic
+
+        workgroup_atomic = self.workgroup_atomics.expression(
+            func_name, args, statement_context
+        )
+        if workgroup_atomic is not None:
+            return workgroup_atomic
 
         if func_name in {"texture", "textureLod", "textureGrad"}:
             sample_args = self.sampled_texture_operation_args(func_name, args)

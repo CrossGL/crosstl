@@ -22,6 +22,7 @@ from .translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from .translator.codegen.ast_text_leaks import refuse_ast_text
 from .translator.codegen.entry_selection import prepare_entry_scoped_target
 from .translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
@@ -35,6 +36,7 @@ from .translator.source_registry import (
     SOURCE_REGISTRY,
     register_default_sources,
 )
+from .translator.stage_feasibility import refuse_infeasible_entry_stages
 
 try:
     from .formatter import format_shader_code
@@ -283,6 +285,17 @@ def _translate_with_codegen(
             entry_point=selected_entry_point,
         )
 
+    refuse_infeasible_entry_stages(
+        source_spec,
+        shader_code,
+        normalized_backend,
+        file_path=file_path,
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+        entry_point=entry_point,
+    )
+
     if source_spec.name == "metal" and normalized_backend not in {
         "cgl",
         "crossgl",
@@ -431,6 +444,7 @@ def _generate_target_code(codegen, ast, entry_point, backend=None):
                 entry_point=entry_point,
             )
         code = generate_entry(ast, entry_point)
+    refuse_ast_text(code, backend)
     notices = source_license_comments(ast, backend)
     return code if not notices or notices in code else notices + code
 

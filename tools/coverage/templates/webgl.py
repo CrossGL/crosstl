@@ -12,15 +12,18 @@ from .abstractions import FAMILY as _ABSTRACTIONS
 from .abstractions import GLSL as _ABSTRACTIONS_GLSL
 from .aggregates import FAMILY as _AGGREGATES
 from .base import ABSENT, C_FAMILY, Template
+from .bindings import WEBGL as _BINDINGS
 from .blocks import WEBGL as _BLOCKS
 from .booleans import WEBGL as _BOOLEANS
 from .calls import WEBGL as _CALLS
 from .columns import WEBGL as _COLUMNS
 from .composites import WEBGL as _COMPOSITES
 from .constructors import GLSL as _CONSTRUCTORS
+from .draws import WEBGL as _DRAWS
 from .edges import FAMILY as _EDGES
 from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
+from .extensions import WEBGL as _EXTENSIONS
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
 from .fragments import WEBGL as _FRAGMENTS
@@ -35,17 +38,26 @@ from .interfaces import WEBGL as _INTERFACES
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
+from .meshes import WEBGL as _MESHES
 from .orientation import WEBGL as _ORIENTATION
 from .packing import WEBGL as _PACKING
 from .pipeline import WEBGL as _PIPELINE
 from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
+from .primitives import WEBGL as _PRIMITIVES
+from .qualifiers import WEBGL as _QUALIFIERS
 from .rasterization import WEBGL as _RASTERIZATION
+from .rays import WEBGL as _RAYS
 from .records import WEBGL as _RECORDS
 from .relations import GLSL as _RELATIONS
 from .rows import WEBGL as _ROWS
 from .scopes import WEBGL as _SCOPES
+from .specializations import WEBGL as _SPECIALIZATIONS
+from .subgroups import WEBGL as _SUBGROUPS
+from .tasks import WEBGL as _TASKS
+from .tessellation import WEBGL as _TESSELLATION
+from .textures import WEBGL as _TEXTURES
 from .values import FAMILY as _VALUES
 from .vectors import GLSL as _VECTORS
 from .vertices import WEBGL as _VERTICES
@@ -119,8 +131,20 @@ WEBGL = {
     **_FRAGMENTS,
     **_INTERFACES,
     **_VERTICES,
+    **_DRAWS,
     **_RASTERIZATION,
     **_PIPELINE,
+    **_EXTENSIONS,
+    **_PRIMITIVES,
+    **_TESSELLATION,
+    **_MESHES,
+    **_TASKS,
+    **_RAYS,
+    **_BINDINGS,
+    **_SUBGROUPS,
+    **_SPECIALIZATIONS,
+    **_QUALIFIERS,
+    **_TEXTURES,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

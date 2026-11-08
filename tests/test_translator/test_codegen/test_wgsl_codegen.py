@@ -15,6 +15,9 @@ from crosstl.translator.codegen.wgsl_cube_texture_offsets import (
 from crosstl.translator.codegen.wgsl_integer_textures import (
     WGSLIntegerTextureSampleUnsupportedError,
 )
+from crosstl.translator.codegen.wgsl_pointer_types import (
+    WGSLPointerTypeUnsupportedError,
+)
 from crosstl.translator.codegen.wgsl_texture_bias import (
     WGSLTextureBiasUnsupportedError,
 )
@@ -1850,6 +1853,34 @@ def test_wgsl_codegen_maps_buffer_lengths_to_array_length():
     assert ".length()" not in generated
 
 
+def test_wgsl_codegen_maps_structured_buffer_length_to_array_length(tmp_path):
+    # StructuredBuffer / RWStructuredBuffer are NamedType, not ArrayType, so
+    # `.length()` used to be copied unchanged and naga rejected it (#3582).
+    shader = """
+    shader Probe {
+        StructuredBuffer<float> values;
+        RWStructuredBuffer<float> outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(values.length()) + float(outp.length());
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var<storage, read> values: array<f32>;" in generated
+    assert "var<storage, read_write> outp: array<f32>;" in generated
+    assert (
+        "outp[0] = (f32(i32(arrayLength(&values))) + f32(i32(arrayLength(&outp))));"
+        in generated
+    )
+    assert ".length()" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_maps_pointer_buffer_length_to_array_length(tmp_path):
     # A `buffer float*` global is a PointerType, not an ArrayType, so its
     # `.length()` used to be copied unchanged and naga rejected it.
@@ -1896,6 +1927,89 @@ def test_wgsl_codegen_maps_struct_buffer_pointer_length_to_element_count(tmp_pat
     assert "var<storage, read_write> items: array<Item>;" in generated
     assert "items[0].weight = f32(i32(arrayLength(&items)));" in generated
     validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_buffer_length_to_expected_uint_type(tmp_path):
+    # `.length()` of a storage buffer or StructuredBuffer resolves as an integer
+    # expression, so assigning it to a uint converts the i32 to u32 (#3617).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer float* outp;
+        StructuredBuffer<float> items;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint n = values.length();
+                uint m = items.length();
+                outp[0] = float(n) + float(m);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var<storage, read_write> values: array<f32>;" in generated
+    assert "var<storage, read_write> outp: array<f32>;" in generated
+    assert "var<storage, read> items: array<f32>;" in generated
+    assert "var n: u32 = u32(i32(arrayLength(&values)));" in generated
+    assert "var m: u32 = u32(i32(arrayLength(&items)));" in generated
+    assert "outp[0] = (f32(n) + f32(m));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_buffer_length_to_uint_argument_and_return(tmp_path):
+    # A uint parameter and a uint return type expect a u32 as well (#3617).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer float* outp;
+        float scale(uint n) {
+            return float(n);
+        }
+        uint count() {
+            return values.length();
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = scale(values.length()) + float(count());
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "return u32(i32(arrayLength(&values)));" in generated
+    assert "scale(u32(i32(arrayLength(&values))))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_buffer_pointer_parameter_length_to_uint():
+    # A `buffer float*` helper parameter is passed to arrayLength as it is, and
+    # its length still converts to u32 for a uint local (#3617). naga 30 refuses
+    # storage pointer parameters, so only the text is pinned.
+    shader = """
+    shader Probe {
+        buffer float* outp;
+        uint count(buffer float* data) {
+            uint n = data.length();
+            return n;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(count(outp));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var n: u32 = u32(i32(arrayLength(data)));" in generated
 
 
 def test_wgsl_codegen_passes_buffer_pointer_parameter_to_array_length():
@@ -2288,9 +2402,9 @@ def test_wgsl_codegen_rejects_non_webgpu_stage_targets(stage):
         WGSLCodeGen().generate_program(ast, target_stage=stage)
 
 
-def test_wgsl_codegen_rejects_do_while_statement():
+def test_wgsl_codegen_lowers_do_while_statement_to_loop_with_break_if():
     shader = """
-    shader WGSLUnsupported {
+    shader WGSLDoWhile {
         fragment {
             vec4 main() @ gl_FragColor {
                 do {
@@ -2301,11 +2415,13 @@ def test_wgsl_codegen_rejects_do_while_statement():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match="WGSL target does not support do-while statements",
-    ):
-        WGSLCodeGen().generate(parse_shader(shader))
+    code = WGSLCodeGen().generate(parse_shader(shader))
+    entry = code[code.index("fn fragment_main") :]
+    lines = [line.strip() for line in entry.splitlines()]
+    assert lines[1:4] == ["loop {", "{", "return vec4<f32>(1.0);"]
+    assert "break if !false;" in lines
+    # WGSL's behavior analysis gives the loop Next, so the body ends with an unreachable return.
+    assert lines[-3:] == ["}", "return vec4<f32>();", "}"]
 
 
 @pytest.mark.parametrize(
@@ -2681,6 +2797,208 @@ def test_wgsl_codegen_refuses_texture_bias_in_compute():
             void main() {
                 uint i = gl_GlobalInvocationID.x;
                 outp[i] = texture(u0, vec2(0.5), fin[0]);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ImplicitLodStageUnsupportedError,
+        match=r"operation 'texture' is reached from the compute stage",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(code))
+
+    assert raised.value.code == (
+        "project.translate.wgsl-implicit-lod-stage-unsupported"
+    )
+
+
+def test_wgsl_codegen_lowers_explicit_sampler_texture_bias_to_texture_sample_bias(
+    tmp_path,
+):
+    # A four-argument texture() with an explicit sampler is the form HLSL
+    # SampleBias and Metal sample(s, uv, bias) import as; it goes to
+    # textureSampleBias with that sampler, not the split one (issue #3584).
+    shader = """
+    shader WGSLExplicitSamplerBias {
+        sampler2D colorTex;
+        sampler linearSampler;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorTex, linearSampler, uv, 0.5);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "textureSampleBias(colorTex, linearSampler, uv, 0.5)" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("sampler_type", "coord_type", "bias", "expected"),
+    [
+        ("sampler3D", "vec3", "0.5", "textureSampleBias(tex, s, uv, 0.5)"),
+        ("samplerCube", "vec3", "0.5", "textureSampleBias(tex, s, uv, 0.5)"),
+        (
+            "sampler2DArray",
+            "vec3",
+            "0.5",
+            "textureSampleBias(tex, s, uv.xy, i32(floor(uv.z + 0.5)), 0.5)",
+        ),
+        (
+            "samplerCubeArray",
+            "vec4",
+            "0.5",
+            "textureSampleBias(tex, s, uv.xyz, i32(floor(uv.w + 0.5)), 0.5)",
+        ),
+        ("sampler2D", "vec2", "level", "textureSampleBias(tex, s, uv, f32(level))"),
+    ],
+)
+def test_wgsl_codegen_lowers_explicit_sampler_texture_bias_on_every_biased_texture_type(
+    tmp_path, sampler_type, coord_type, bias, expected
+):
+    # The explicit sampler form passes the layer of an array texture as its
+    # own argument and converts an integer bias, as the split-sampler form does.
+    shader = f"""
+    shader WGSLExplicitSamplerBias {{
+        uniform {sampler_type} tex;
+        uniform sampler s;
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0, int level @ TEXCOORD1)
+                @ gl_FragColor {{
+                return texture(tex, s, uv, {bias});
+            }}
+        }}
+    }}
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert f"return {expected};" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "coord_type", "call", "message"),
+    [
+        (
+            "uniform sampler1D tex; uniform sampler s;",
+            "float",
+            "texture(tex, s, uv, 0.5)",
+            r"bias on tex: textureSampleBias has no overload for texture_1d<f32>",
+        ),
+        (
+            "uniform sampler2DShadow tex; uniform sampler s;",
+            "vec3",
+            "vec4(texture(tex, s, uv, 0.5))",
+            r"bias on tex: textureSampleBias has no overload for texture_depth_2d",
+        ),
+        (
+            "uniform sampler2D tex[2]; uniform sampler s;",
+            "vec2",
+            "texture(tex[layer], s, uv, 0.5)",
+            r"bias on tex\[layer\]: an element of a sampled texture array selected "
+            r"at run time",
+        ),
+        (
+            "uniform sampler2D tex; uniform comparison_sampler s;",
+            "vec2",
+            "texture(tex, s, uv, 0.5)",
+            r"bias on tex: textureSampleBias takes a sampler, but s is a comparison "
+            r"sampler",
+        ),
+        (
+            "uniform sampler2D tex; uniform sampler s;",
+            "vec2",
+            "texture(tex, s, uv, uv)",
+            r"bias on tex: the bias is a float scalar, but the fourth argument is "
+            r"vec2",
+        ),
+    ],
+)
+def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_without_a_wgsl_overload(
+    declaration, coord_type, call, message
+):
+    shader = f"""
+    shader WGSLExplicitSamplerBias {{
+        {declaration}
+        fragment {{
+            vec4 main({coord_type} uv @ TEXCOORD0, int layer @ TEXCOORD1)
+                @ gl_FragColor {{
+                return {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(WGSLTextureBiasUnsupportedError, match=message) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_translate_hlsl_sample_bias_to_wgsl_texture_sample_bias(tmp_path):
+    # HLSL SampleBias imports as texture(t, s, coords, bias) (issue #3584).
+    source_path = tmp_path / "sample_bias.hlsl"
+    source_path.write_text(
+        """
+        Texture2D colorMap : register(t0);
+        Texture2DArray layers : register(t1);
+        SamplerState samp : register(s0);
+
+        float4 main(float3 uvw : TEXCOORD0) : SV_Target {
+            return colorMap.SampleBias(samp, uvw.xy, 1)
+                + layers.SampleBias(samp, uvw, 0.5);
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="wgsl")
+
+    assert "textureSampleBias(colorMap, samp, uvw.xy, f32(1))" in generated
+    assert (
+        "textureSampleBias(layers, samp, uvw.xy, i32(floor(uvw.z + 0.5)), 0.5)"
+        in generated
+    )
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_without_a_sampler():
+    shader = """
+    shader WGSLExplicitSamplerBias {
+        sampler2D colorTex;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(colorTex, uv, vec2(0.5, 0.0), 0.5);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLTextureBiasUnsupportedError,
+        match=r"texture\(\) with four arguments takes texture/sampler/coords/bias",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_in_compute():
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer vec4* outp;
+            uniform sampler2D u0;
+            uniform sampler linearSampler;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outp[i] = texture(u0, linearSampler, vec2(0.5), fin[0]);
             }
         }
     }
@@ -3456,6 +3774,27 @@ def test_wgsl_codegen_rejects_nonzero_shadow_compare_lod():
         WGSLCodeGen().generate(parse_shader(shader))
 
 
+def test_wgsl_codegen_lowers_fmod_builtin_to_truncated_remainder_operator():
+    shader = """
+    shader WGSLFmodBuiltin {
+        compute {
+            void main() {
+                vec3 v = vec3(-1.25, 2.75, 7.5);
+                vec3 wrapped = fmod(v * 4.0, 1.0);
+                float scalar = fmod(v.x, v.y);
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var wrapped: vec3<f32> = (((v * 4.0)) % (1.0));" in generated
+    assert "var scalar: f32 = ((v.x) % (v.y));" in generated
+    assert "fmod(" not in generated
+
+
 def test_wgsl_codegen_lowers_mod_builtin_to_floor_semantics_expression():
     shader = """
     shader WGSLModBuiltin {
@@ -3851,6 +4190,403 @@ def test_wgsl_codegen_lowers_matrix_scalar_arithmetic_by_column(tmp_path):
     assert "var scaled: mat2x2<f32> = (m * 2.0);" in generated
     assert "var added: mat2x2<f32> = (m + n);" in generated
     validate_wgsl_with_naga(tmp_path, generated)
+
+
+WGSL_MATRIX_COMPOUND_SHADER = """
+shader WGSLMatrixCompound {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            mat2 m = mat2(fin[i], 2.0, 3.0, 4.0);
+            mat2 n = mat2(1.0, 2.0, 3.0, fin[i]);
+            mat3x2 k = mat3x2(fin[i], 2.0, 3.0, 4.0, 5.0, 6.0);
+            m += 1.0;
+            m -= 1.0;
+            m /= 2.0;
+            k -= 2.0;
+            m += n;
+            outp[i] = m[1].x + k[2].y;
+        }
+    }
+}
+"""
+
+
+def test_wgsl_codegen_lowers_matrix_scalar_compound_assignment_by_column(tmp_path):
+    generated = WGSLCodeGen().generate(parse_shader(WGSL_MATRIX_COMPOUND_SHADER))
+
+    assert "m = mat2x2<f32>(m[0] + 1.0, m[1] + 1.0);" in generated
+    assert "m = mat2x2<f32>(m[0] - 1.0, m[1] - 1.0);" in generated
+    assert "m = mat2x2<f32>(m[0] / 2.0, m[1] / 2.0);" in generated
+    assert "k = mat3x2<f32>(k[0] - 2.0, k[1] - 2.0, k[2] - 2.0);" in generated
+    # WGSL applies `+=` to two matrices component by component, so it stays as written.
+    assert "m += n;" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_rejects_matrix_compound_assignment_it_cannot_lower():
+    shader = """
+    shader WGSLMatrixCompoundUnsupported {
+        compute {
+            buffer float* outp;
+            void main() {
+                mat2 m = mat2(1.0);
+                mat2 n = mat2(2.0);
+                m /= n;
+                outp[0] = m[1].x;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target lowers matrix /= only with a scalar operand",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+WGSL_STAGE_MATRIX_COMPOUND_SHADER = """
+shader WGSLStageMatrixCompound {
+    struct VSOut {
+        vec4 position @ gl_Position;
+        mat2 m @ TEXCOORD0;
+    }
+    vertex {
+        VSOut main(vec2 p @ POSITION) {
+            VSOut o;
+            o.position = vec4(p, 0.0, 1.0);
+            mat2 n = mat2(p.x, 1.0, 2.0, p.y);
+            o.m = mat2(p.x);
+            %s
+            return o;
+        }
+    }
+}
+"""
+
+
+def _stage_matrix_compound_temp(generated, declaration):
+    line = next(
+        line.strip()
+        for line in generated.splitlines()
+        if line.strip().endswith(declaration)
+    )
+    return line.removeprefix("let ").split(":")[0].strip()
+
+
+def test_wgsl_codegen_lowers_stage_interface_matrix_compound_assignment(
+    tmp_path,
+):
+    multiplied = WGSLCodeGen().generate(
+        parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m *= n;")
+    )
+    temp = _stage_matrix_compound_temp(multiplied, "mat2x2<f32>(o.m_0, o.m_1) * n;")
+    assert f"o.m_0 = {temp}[0];" in multiplied
+    assert f"o.m_1 = {temp}[1];" in multiplied
+    # The product is computed once, not once per column.
+    assert multiplied.count(" * n;") == 1
+    validate_wgsl_with_naga(tmp_path, multiplied)
+
+    added = WGSLCodeGen().generate(
+        parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m += 1.0;")
+    )
+    temp = _stage_matrix_compound_temp(added, "f32 = 1.0;")
+    assert f"o.m_0 += {temp};" in added
+    assert f"o.m_1 += {temp};" in added
+    # A scalar is never declared as a matrix temporary.
+    assert "mat2x2<f32> = 1.0;" not in added
+    validate_wgsl_with_naga(tmp_path, added)
+
+    divided = WGSLCodeGen().generate(
+        parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m /= 2.0;")
+    )
+    temp = _stage_matrix_compound_temp(divided, "f32 = 2.0;")
+    assert f"o.m_0 /= {temp};" in divided
+    assert f"o.m_1 /= {temp};" in divided
+    validate_wgsl_with_naga(tmp_path, divided)
+
+    # `+=` with a matrix stays column by column, as WGSL defines it.
+    matrix_added = WGSLCodeGen().generate(
+        parse_shader(WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m += n;")
+    )
+    temp = _stage_matrix_compound_temp(matrix_added, "mat2x2<f32> = n;")
+    assert f"o.m_0 += {temp}[0];" in matrix_added
+    assert f"o.m_1 += {temp}[1];" in matrix_added
+    validate_wgsl_with_naga(tmp_path, matrix_added)
+
+
+def test_wgsl_codegen_refuses_stage_interface_matrix_division_by_matrix():
+    shader = WGSL_STAGE_MATRIX_COMPOUND_SHADER % "o.m /= n;"
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target lowers matrix /= only with a scalar operand",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    "statement, operator",
+    [
+        ("outs[next_index()].m *= n;", r"\*="),
+        ("outs[next_index()].m += 1.0;", r"\+="),
+        ("outs[next_index()].m -= n;", "-="),
+    ],
+    ids=["product", "scalar", "matrix"],
+)
+def test_wgsl_codegen_refuses_stage_interface_matrix_compound_with_side_effects(
+    statement, operator
+):
+    shader = f"""
+    shader WGSLStageMatrixCompoundSideEffects {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+            mat2 m @ TEXCOORD0;
+        }}
+        int next_index() {{
+            return 1;
+        }}
+        vertex {{
+            VSOut main(vec2 p @ POSITION) {{
+                VSOut outs[2];
+                mat2 n = mat2(p.x);
+                outs[1].position = vec4(p, 0.0, 1.0);
+                outs[1].m = n;
+                {statement}
+                return outs[1];
+            }}
+        }}
+    }}
+    """
+
+    # Each column would call next_index() again.
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target lowers matrix {operator} on a split stage-interface "
+        "member one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    "statement, operation",
+    [
+        ("outs[next_index()].m = n;", "assignment to"),
+        ("mat2 r = outs[next_index()].m;", "read of"),
+    ],
+    ids=["write", "read"],
+)
+def test_wgsl_codegen_refuses_stage_interface_matrix_with_side_effect_object(
+    statement, operation
+):
+    shader = f"""
+    shader WGSLStageMatrixSideEffectObject {{
+        struct VSOut {{
+            vec4 position @ gl_Position;
+            mat2 m @ TEXCOORD0;
+        }}
+        int next_index() {{
+            return 1;
+        }}
+        vertex {{
+            VSOut main(vec2 p @ POSITION) {{
+                VSOut outs[2];
+                mat2 n = mat2(p.x);
+                outs[1].position = vec4(p, 0.0, 1.0);
+                {statement}
+                return outs[1];
+            }}
+        }}
+    }}
+    """
+
+    # Each column would call next_index() again.
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target lowers {operation} a split stage-interface "
+        "member one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_refuses_stage_interface_matrix_for_update_with_side_effect_object():
+    shader = """
+    shader WGSLStageMatrixForUpdateSideEffects {
+        struct VSOut {
+            vec4 position @ gl_Position;
+            mat2 m @ TEXCOORD0;
+        }
+        int next_index() {
+            return 1;
+        }
+        vertex {
+            VSOut main(vec2 p @ POSITION) {
+                VSOut outs[2];
+                mat2 n = mat2(p.x);
+                outs[1].position = vec4(p, 0.0, 1.0);
+                int t = 0;
+                for (t = 0; t < 1; outs[next_index()].m = n) {
+                }
+                return outs[1];
+            }
+        }
+    }
+    """
+
+    # A for-loop update bypasses the statement path, so it needs its own check.
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target lowers assignment to a split stage-interface "
+        "member one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_lowers_stage_interface_matrix_with_repeatable_object(tmp_path):
+    generated = WGSLCodeGen().generate(parse_shader("""
+    shader WGSLStageMatrixRepeatableObject {
+        struct VSOut {
+            vec4 position @ gl_Position;
+            mat2 m @ TEXCOORD0;
+        }
+        vertex {
+            VSOut main(vec2 p @ POSITION) {
+                VSOut outs[2];
+                mat2 n = mat2(p.x);
+                outs[1].position = vec4(p, 0.0, 1.0);
+                outs[1].m = n;
+                mat2 r = outs[1].m;
+                outs[0].m = r;
+                int k = 0;
+                outs[k + 1].m = n;
+                outs[k > 0 ? 0 : 1].m = r;
+                return outs[1];
+            }
+        }
+    }
+    """))
+
+    assert "outs[1].m_0 = m[0];" in generated
+    assert "outs[1].m_1 = m[1];" in generated
+    assert "mat2x2<f32>(outs[1].m_0, outs[1].m_1)" in generated
+    assert "outs[(k + 1)].m_1 = " in generated
+    assert "outs[select(1, 0, (k > 0))].m_1 = " in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize(
+    "statement, operator",
+    [("m += next_scalar();", r"\+="), ("ms[next_index()] -= 1.0;", "-=")],
+    ids=["value", "target"],
+)
+def test_wgsl_codegen_rejects_matrix_compound_assignment_with_side_effects(
+    statement, operator
+):
+    shader = f"""
+    shader WGSLMatrixCompoundSideEffects {{
+        float next_scalar() {{
+            return 1.0;
+        }}
+        int next_index() {{
+            return 1;
+        }}
+        compute {{
+            buffer float* outp;
+            void main() {{
+                mat2 m = mat2(1.0);
+                mat2 ms[2];
+                {statement}
+                outp[0] = m[1].x + ms[1][1].x;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target lowers matrix-scalar {operator} one column at a time",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_lowers_matrix_compound_assignment_after_its_index_increment(
+    tmp_path,
+):
+    shader = """
+    shader WGSLMatrixCompoundIndexIncrement {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                mat2 ms[2];
+                int c = 0;
+                ms[c++] += 1.0;
+                outp[0] = ms[0][1].x + float(c);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+    lines = [line.strip() for line in generated.splitlines()]
+
+    # The index is read and incremented once, before the columns are built.
+    start = lines.index("let _crosstl_prior_0: i32 = c;")
+    assert lines[start + 1 : start + 3] == [
+        "c += 1;",
+        "ms[_crosstl_prior_0] = mat2x2<f32>(ms[_crosstl_prior_0][0] + 1.0, "
+        "ms[_crosstl_prior_0][1] + 1.0);",
+    ]
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_lowers_matrix_scalar_compound_assignment_in_a_for_update(
+    tmp_path,
+):
+    shader = """
+    shader WGSLMatrixCompoundLoop {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* outp;
+            void main() {
+                mat2 m = mat2(1.0);
+                for (int j = 0; j < 2; m += 1.0) {
+                    j = j + 1;
+                }
+                outp[0] = m[1].x;
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "(j < 2); m = mat2x2<f32>(m[0] + 1.0, m[1] + 1.0))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_rejects_matrix_compound_assignment_to_a_read_only_buffer():
+    shader = """
+    shader WGSLMatrixCompoundReadOnly {
+        layout(std430, binding = 0) readonly buffer ReadBlock {
+            mat2 mats[];
+        } readBlock;
+        compute {
+            void main() {
+                readBlock.mats[0] += 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"cannot write read-only GLSL buffer block resource readBlock",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
 
 
 def test_wgsl_codegen_lowers_matrix_comp_mult_and_outer_product_by_column(tmp_path):
@@ -4449,3 +5185,23 @@ def test_wgsl_codegen_refuses_one_scalar_matrix_constructor_with_side_effects():
 
     with pytest.raises(ValueError, match="one-scalar matrix constructor"):
         WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_refuses_crossgl_pointer_local_with_typed_diagnostic():
+    shader = """
+    shader WGSLPointerLocal {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* in_;
+            buffer float* outp;
+            void main() {
+                var src: ptr<f32> = in_;
+                outp[0] = src[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WGSLPointerTypeUnsupportedError) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+    assert raised.value.code == "project.translate.wgsl-pointer-type-unsupported"

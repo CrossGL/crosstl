@@ -16791,8 +16791,8 @@ def test_translate_project_reports_unsupported_concrete_metal_sizeof(tmp_path):
     repo.mkdir()
     (repo / "aggregate_size.metal").write_text(
         textwrap.dedent("""
-            struct alignas(16) Payload {
-                float value;
+            struct Payload {
+                alignas(16) float value;
             };
 
             kernel void payload_size(device int* output [[buffer(0)]]) {
@@ -53058,9 +53058,9 @@ def test_translate_project_preserves_qualified_metal_storage_pointer_view(tmp_pa
     assert_metal_validates_if_available(generated, tmp_path)
 
 
-@pytest.mark.parametrize(
-    "target", ["cuda", "hip", "mojo", "rust", "slang", "webgl", "wgsl"]
-)
+# WebGL refuses this compute kernel for its stage before the pointer is reached
+# (tests/test_translator/test_webgl_stage_precheck.py).
+@pytest.mark.parametrize("target", ["cuda", "hip", "mojo", "rust", "slang", "wgsl"])
 def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering(
     tmp_path, target
 ):
@@ -58731,7 +58731,7 @@ def test_translate_project_reports_non_bitcast_compile_time_global_contract(
         textwrap.dedent("""
             shader RuntimeCompileTimeCall {
                 float buildValue() {
-                    return 2.0;
+                    return sin(2.0);
                 }
 
                 constant float invalidValue = buildValue();
