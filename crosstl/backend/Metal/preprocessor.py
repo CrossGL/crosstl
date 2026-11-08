@@ -159,6 +159,7 @@ from .template_reference_accessors import inline_template_reference_accessor
 from .text_scanners import (
     find_named_type_declarations,
     function_parameter_start,
+    mask_comments_and_literals,
     split_top_level_assignment,
     split_top_level_commas,
     strip_comments_outside_strings,
@@ -28292,7 +28293,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         name=function_name,
                         span=(declaration_start, body_end),
                         body_span=(body_start + 1, body_end - 1),
-                        is_entry=METAL_ENTRY_FUNCTION_RE.search(header) is not None,
+                        is_entry=self._header_declares_entry(header),
                     )
                 )
                 pos = body_end
@@ -30360,6 +30361,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if paren_end is None:
             return None
         return paren_start, paren_end
+
+    def _header_declares_entry(self, header: str) -> bool:
+        """Whether a function definition's header declares a stage entry point.
+
+        A stage qualifier (``kernel``, ``vertex``, ...) or ``[[kernel]]`` precedes the parameter list. A parameter
+        named like a qualifier (``device mlx_atomic<T>* object``), a comment before the header and a string
+        literal (``[[host_name("vertex_copy")]]``) are not qualifiers, so only the masked declaration text before
+        the parameter list is searched.
+        """
+        masked = mask_comments_and_literals(header)
+        parameter_start = self._function_parameter_start(masked)
+        declaration = masked if parameter_start is None else masked[:parameter_start]
+        return METAL_ENTRY_FUNCTION_RE.search(declaration) is not None
 
     def _function_name_from_header(self, header: str) -> Optional[str]:
         paren_index = self._function_parameter_start(header)
