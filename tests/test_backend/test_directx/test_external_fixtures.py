@@ -1025,40 +1025,6 @@ EXTERNAL_FIXTURES = [
             "return vec4(component, component, component, component);",
         ),
     ),
-    ExternalFixture(
-        name="directx_shader_compiler_template_value_path_reparse",
-        repo=DIRECTX_SHADER_COMPILER_REPO,
-        commit=DIRECTX_SHADER_COMPILER_TEMPLATE_VALUE_PATH_COMMIT,
-        path="tools/clang/test/HLSLFileCheck/hlsl/template/ackermann.hlsl",
-        code=textwrap.dedent("""
-            template<unsigned int M, unsigned int N>
-            struct Ackermann {
-              enum {
-                value = Ackermann<M - 1, Ackermann<M, N - 1>::value>::value
-              };
-            };
-
-            template<unsigned int M> struct Ackermann<M, 0> {
-              enum {
-                value = Ackermann<M - 1, 1>::value
-              };
-            };
-
-            template<> struct Ackermann<0, 0> {
-              enum {
-                value = 1
-              };
-            };
-
-            int main(int a : A) : SV_Target {
-              return Ackermann<3, 4>::value;
-            }
-        """).strip(),
-        contains=(
-            "value = Ackermann_M_1_Ackermann_M_N_1__value__value,",
-            "return Ackermann_3_4__value;",
-        ),
-    ),
     # Source repo: https://github.com/microsoft/DirectXShaderCompiler
     # Source commit: d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
     # Source path: tools/clang/test/HLSLFileCheck/hlsl/types/matrix/unsignedShortHandMatrixVector.hlsl
@@ -1922,6 +1888,42 @@ def test_parse_external_directx_fixture(fixture):
 
 # A block-scope alias reaches CrossGL as a ``typedef``, so the 16-lane vector it
 # names must be refused rather than narrowed to ``vec4`` (#3309).
+TEMPLATE_VALUE_PATH_FIXTURE = ExternalFixture(
+    name="directx_shader_compiler_template_value_path_reparse",
+    repo=DIRECTX_SHADER_COMPILER_REPO,
+    commit=DIRECTX_SHADER_COMPILER_TEMPLATE_VALUE_PATH_COMMIT,
+    path="tools/clang/test/HLSLFileCheck/hlsl/template/ackermann.hlsl",
+    code=textwrap.dedent("""
+            template<unsigned int M, unsigned int N>
+            struct Ackermann {
+              enum {
+                value = Ackermann<M - 1, Ackermann<M, N - 1>::value>::value
+              };
+            };
+
+            template<unsigned int M> struct Ackermann<M, 0> {
+              enum {
+                value = Ackermann<M - 1, 1>::value
+              };
+            };
+
+            template<> struct Ackermann<0, 0> {
+              enum {
+                value = 1
+              };
+            };
+
+            int main(int a : A) : SV_Target {
+              return Ackermann<3, 4>::value;
+            }
+        """).strip(),
+    contains=(
+        "value = Ackermann_M_1_Ackermann_M_N_1__value__value,",
+        "return Ackermann_3_4__value;",
+    ),
+)
+
+
 LONG_VECTOR_TYPEDEF_FIXTURE = ExternalFixture(
     name="directx_shader_compiler_block_scope_typedef_linalg_vector",
     repo=DIRECTX_SHADER_COMPILER_REPO,
@@ -1950,6 +1952,16 @@ def test_codegen_dxc_block_scope_long_vector_typedef_is_refused():
         DirectXImportRefused, match=r"vector<half, 16> has 16 components"
     ):
         generate_crossgl(LONG_VECTOR_TYPEDEF_FIXTURE.code)
+
+
+def test_codegen_dxc_template_value_path_is_refused():
+    # A value template computed through partial and explicit specializations has no CrossGL form; the importer
+    # used to emit the undeclared identifier ``Ackermann_3_4__value``.
+    with pytest.raises(
+        DirectXImportRefused,
+        match=r"HLSL struct template 'Ackermann' declares the value parameter 'unsigned int M'",
+    ):
+        generate_crossgl(TEMPLATE_VALUE_PATH_FIXTURE.code)
 
 
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)

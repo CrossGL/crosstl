@@ -59,6 +59,14 @@ from .struct_methods import (
     collect_struct_methods,
     method_local_names,
 )
+from .struct_templates import (
+    name_explicit_struct_specializations,
+    refuse_struct_template_references,
+    struct_template_parameters,
+    struct_template_prefix,
+    struct_template_type_names,
+    unsupported_struct_templates,
+)
 from .subpass_inputs import SUBPASS_INPUT_TYPES
 from .texel_access import HLSLTexelAccessMixin
 from .texel_buffers import HLSLTexelBufferMixin
@@ -3619,6 +3627,22 @@ class HLSLToCrossGLConverter(
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
+        structs = [
+            struct
+            for struct in getattr(ast, "structs", []) or []
+            if isinstance(struct, StructNode)
+        ]
+        self.unsupported_struct_templates = unsupported_struct_templates(structs)
+        refuse_struct_template_references(self, ast, self.unsupported_struct_templates)
+        self.struct_templates = {
+            struct.name: struct_template_parameters(struct)
+            for struct in structs
+            if struct_template_parameters(struct)
+            and struct.name not in self.unsupported_struct_templates
+        }
+        self.explicit_struct_specializations = name_explicit_struct_specializations(
+            self, structs
+        )
         self.struct_methods = collect_struct_methods(
             getattr(ast, "structs", []) or [], ast.functions
         )
@@ -3756,8 +3780,17 @@ class HLSLToCrossGLConverter(
                 continue
             if getattr(node, "name", None) in self.flattened_stage_struct_names:
                 continue
+            if getattr(node, "name", None) in self.unsupported_struct_templates:
+                continue
             if isinstance(node, StructNode):
-                code += f"    struct {self.render_type_identifier(node.name)} {{\n"
+                prefix = struct_template_prefix(self, node)
+                code += (
+                    f"    {prefix}struct {self.render_type_identifier(node.name)} {{\n"
+                )
+                previous_template_type_names = getattr(
+                    self, "current_template_type_names", ()
+                )
+                self.current_template_type_names = struct_template_type_names(node)
                 for member in node.members:
                     if isinstance(member, EnumNode):
                         code += self.generate_enum(member, 2)
@@ -3773,6 +3806,7 @@ class HLSLToCrossGLConverter(
                         f"{self.render_identifier(member.name)}"
                         f"{array_suffix}{attributes};\n"
                     )
+                self.current_template_type_names = previous_template_type_names
                 code += "    }\n"
             elif isinstance(node, PragmaNode):
                 value = f" {node.value}" if node.value else ""

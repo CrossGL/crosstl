@@ -225,8 +225,11 @@ def test_struct_template_prefix_does_not_reach_member_functions():
         float4 main() : SV_Target { return float4(helper(1.0), 0.0, 0.0, 1.0); }
     """))
 
-    assert "generic<" not in crossgl
-    assert "float helper(float x)" in crossgl
+    # The struct template and its member function are generic; the function after them is not.
+    assert "generic<T> struct Box {" in crossgl
+    assert "generic<T> float Box_get(in Box<T> __this)" in crossgl
+    assert "    float helper(float x)" in crossgl
+    assert "generic<T> float helper" not in crossgl
 
 
 @pytest.mark.parametrize(

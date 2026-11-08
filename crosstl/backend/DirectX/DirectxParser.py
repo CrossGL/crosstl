@@ -1505,15 +1505,20 @@ class HLSLParser:
     def parse_struct(self, declaration_qualifiers=None, declaration_attributes=None):
         declaration_qualifiers = list(declaration_qualifiers or [])
         declaration_attributes = list(declaration_attributes or [])
-        # Struct templates are not imported as generics yet; their members must not take the prefix.
-        take_template_parameters(self)
+        # A struct template's parameters belong to the struct, not to its members (see .struct_templates).
+        template_parameters = take_template_parameters(self)
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
         name = None
+        specialization_arguments = None
         if self.is_identifier_token(self.current_token[0]):
             name = self.parse_identifier()
-            if self.current_token[0] == "LESS_THAN":
+            if self.current_token[0] == "LESS_THAN" and template_parameters == []:
+                # ``template <> struct Box<float>``: an explicit specialization keeps its arguments.
+                specialization_arguments = self.parse_generic_arguments()
+            elif self.current_token[0] == "LESS_THAN":
                 self.skip_template_argument_list()
+                specialization_arguments = True
 
         semantic = None
         base_classes = []
@@ -1609,6 +1614,8 @@ class HLSLParser:
         struct_node.semantic = semantic
         struct_node.base_classes = base_classes
         struct_node.methods = methods
+        struct_node.template_parameters = template_parameters
+        struct_node.specialization_arguments = specialization_arguments
         return struct_node
 
     def parse_nested_struct_member(
