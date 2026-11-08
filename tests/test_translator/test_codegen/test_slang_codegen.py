@@ -145,6 +145,101 @@ def test_generic_function_call_emits_concrete_specialization_for_slang_codegen()
     assert "T::zero" not in generated
 
 
+def test_generic_struct_is_specialized_for_slang_codegen():
+    code = """
+    shader GenericStructSpecialization {
+        struct Box<T> { T x; };
+        buffer float* results;
+        T get<T>(Box<T> b) { return b.x; }
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                Box<float> b;
+                b.x = 1.0;
+                results[0] = get<float>(b);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Box_float {" in generated
+    assert "float x;" in generated
+    assert "float get_float(Box_float b)" in generated
+    assert "Box_float b;" in generated
+    assert "results[0] = get_float(b);" in generated
+    assert "struct Box\n{" not in generated
+    assert "Box<float>" not in generated
+    assert "T x;" not in generated
+
+
+def test_generic_struct_array_member_is_specialized_for_slang_codegen():
+    code = """
+    shader GenericStructArrayMember {
+        struct Pair<T> { T v[2]; };
+        struct Outer { Pair<float> p; float y; };
+        buffer float* results;
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                Pair<float> p;
+                p.v[0] = 1.0;
+                p.v[1] = 2.0;
+                Outer o;
+                o.p = p;
+                results[0] = o.p.v[0] + o.p.v[1];
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Pair_float {" in generated
+    assert "float v[2];" in generated
+    assert "Pair_float p;" in generated
+    assert generated.index("struct Pair_float {") < generated.index("struct Outer")
+    assert "Pair<float>" not in generated
+    assert "T v[2];" not in generated
+
+
+def test_generic_struct_constructor_is_specialized_for_slang_codegen():
+    code = """
+    shader GenericStructConstructor {
+        generic<T> struct Vec3 { T x; T y; T z; };
+        Vec3<float> make_vec(float x, float y, float z) {
+            return Vec3 { x: x, y: y, z: z };
+        }
+        vertex {
+            struct VertexInput { position: vec3; normal: vec3; }
+            uniform mat3 normal_matrix;
+            void main(VertexInput input) {
+                let world_normal = normalize(normal_matrix * input.normal);
+                let normal_vec3 = Vec3 {
+                    x: world_normal.x,
+                    y: world_normal.y,
+                    z: world_normal.z
+                };
+                vec3 outv = vec3(normal_vec3.x, normal_vec3.y, normal_vec3.z);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Vec3_float {" in generated
+    assert "float3 world_normal = " in generated
+    assert (
+        "Vec3_float normal_vec3 = "
+        "Vec3_float(world_normal.x, world_normal.y, world_normal.z);"
+        in generated
+    )
+    assert "Vec3(" not in generated
+    assert "Vec3_T" not in generated
+
+
 def compile_generated_slang(
     generated_code,
     tmp_path,
@@ -11039,9 +11134,11 @@ def test_generic_struct_member_enum_match_lowers_for_slang():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct RenderState" in generated_code
+    assert "struct RenderState_float {" in generated_code
     assert "Option_int material_id;" in generated_code
-    assert "bool validate(RenderState<float> state)" in generated_code
+    assert "float weight;" in generated_code
+    assert "bool validate(RenderState_float state)" in generated_code
+    assert "RenderState<float>" not in generated_code
     assert "if ((state.material_id.variant == Option_Some))" in generated_code
     assert "int id = state.material_id.Some_0;" in generated_code
     assert "return id >= 0;" in generated_code

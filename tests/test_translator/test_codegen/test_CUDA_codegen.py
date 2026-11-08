@@ -224,6 +224,98 @@ class TestCudaCodeGen:
         assert "float first_float(float v[2])" in cuda_code
         assert "T v[2]" not in cuda_code
 
+    def test_generic_struct_is_specialized_for_cuda_codegen(self):
+        source_code = """
+        shader GenericStructSpecialization {
+            struct Box<T> { T x; };
+            buffer float* results;
+            T get<T>(Box<T> b) { return b.x; }
+            compute {
+                @ numthreads(1, 1, 1)
+                void main() {
+                    Box<float> b;
+                    b.x = 1.0;
+                    results[0] = get<float>(b);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "struct Box_float {" in cuda_code
+        assert "float x;" in cuda_code
+        assert "__device__ float get_float(Box_float b)" in cuda_code
+        assert "Box_float b;" in cuda_code
+        assert "results[0] = get_float(b);" in cuda_code
+        assert "struct Box {" not in cuda_code
+        assert "Box<float>" not in cuda_code
+        assert "T x;" not in cuda_code
+
+    def test_generic_struct_array_member_is_specialized_for_cuda_codegen(self):
+        source_code = """
+        shader GenericStructArrayMember {
+            struct Pair<T> { T v[2]; };
+            struct Outer { Pair<float> p; float y; };
+            buffer float* results;
+            compute {
+                @ numthreads(1, 1, 1)
+                void main() {
+                    Pair<float> p;
+                    p.v[0] = 1.0;
+                    p.v[1] = 2.0;
+                    Outer o;
+                    o.p = p;
+                    results[0] = o.p.v[0] + o.p.v[1];
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "struct Pair_float {" in cuda_code
+        assert "float v[2];" in cuda_code
+        assert "Pair_float p;" in cuda_code
+        assert cuda_code.index("struct Pair_float {") < cuda_code.index(
+            "struct Outer {"
+        )
+        assert "Pair<float>" not in cuda_code
+        assert "T v[2];" not in cuda_code
+
+    def test_generic_struct_constructor_is_specialized_for_cuda_codegen(self):
+        source_code = """
+        shader GenericStructConstructor {
+            generic<T> struct Vec3 { T x; T y; T z; };
+            Vec3<float> make_vec(float x, float y, float z) {
+                return Vec3 { x: x, y: y, z: z };
+            }
+            vertex {
+                struct VertexInput { position: vec3; normal: vec3; }
+                uniform mat3 normal_matrix;
+                void main(VertexInput input) {
+                    let world_normal = normalize(normal_matrix * input.normal);
+                    let normal_vec3 = Vec3 {
+                        x: world_normal.x,
+                        y: world_normal.y,
+                        z: world_normal.z
+                    };
+                    vec3 outv = vec3(normal_vec3.x, normal_vec3.y, normal_vec3.z);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "struct Vec3_float {" in cuda_code
+        assert (
+            "Vec3_float{world_normal.x, world_normal.y, world_normal.z}"
+            in cuda_code
+        )
+        assert "Vec3{" not in cuda_code
+        assert "Vec3_T" not in cuda_code
+
     def test_simple_function_generation(self):
         source_code = """
         shader TestShader {
