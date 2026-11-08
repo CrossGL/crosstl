@@ -293,6 +293,7 @@ from .glsl_invariant_builtins import (
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_mesh_locations import mesh_fragment_input_layouts, mesh_output_layouts
+from .glsl_narrow_integer_literals import narrowed_integer_literal
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
 from .glsl_nested_stage_io import refuse_nested_stage_builtins
 from .glsl_ray_queries import (
@@ -33262,6 +33263,9 @@ class GLSLCodeGen(
 
     def generate_expression_with_expected(self, expr, expected_type):
         expected_type = self.type_name_string(expected_type)
+        narrowed = narrowed_integer_literal(self, expr, expected_type)
+        if narrowed is not None:
+            return narrowed
         interface_value = self.glsl_interface_block_value_expression(
             expr, expected_type
         )

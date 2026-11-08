@@ -91,6 +91,9 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXWorkgroupSizeError,
     HLSLCodeGen,
 )
+from crosstl.translator.codegen.directx_pointer_alias_errors import (
+    DirectXResourcePointerAliasError,
+)
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
 )
@@ -9802,7 +9805,9 @@ def test_hlsl_metal_const_auto_pointer_alias_preserves_readonly_access(tmp_path)
     shader_path = tmp_path / "const_auto_pointer_readonly.metal"
     shader_path.write_text(shader)
 
-    with pytest.raises(ValueError, match="does not provide writable storage"):
+    with pytest.raises(
+        DirectXResourcePointerAliasError, match="does not provide writable storage"
+    ):
         crosstl.translate(
             str(shader_path),
             backend="directx",
@@ -9827,7 +9832,7 @@ def test_hlsl_metal_explicit_pointer_alias_type_mismatch_still_rejects(tmp_path)
     shader_path.write_text(shader)
 
     with pytest.raises(
-        ValueError,
+        DirectXResourcePointerAliasError,
         match="changes element type from int64_t to float",
     ):
         crosstl.translate(
@@ -13875,7 +13880,9 @@ def test_hlsl_resource_pointer_alias_rejects_readonly_write():
     }
     """
 
-    with pytest.raises(ValueError, match="requires writable storage"):
+    with pytest.raises(
+        DirectXResourcePointerAliasError, match="requires writable storage"
+    ):
         generate_code(parse_code(tokenize_code(shader)))
 
 

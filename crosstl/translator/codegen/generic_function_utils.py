@@ -21,6 +21,10 @@ from ..ast import (
     ReturnNode,
     VariableNode,
 )
+from ..explicit_specializations import (
+    explicit_specialization_for,
+    explicit_specialization_index,
+)
 from .builtin_result_types import swizzle_access_type
 from .enum_utils import (
     generic_type_parts,
@@ -225,6 +229,9 @@ def prepare_generic_function_specializations(generator, functions, global_types=
         definitions[func_name].append(func)
     generator.generic_function_definitions = definitions
     generator.generic_function_definition_ordinals = definition_ordinals
+    generator.explicit_generic_specializations = explicit_specialization_index(
+        generator, functions
+    )
     generator.concrete_function_names = {
         func.name
         for func in functions or []
@@ -1037,6 +1044,12 @@ def _analyze_expression(generator, expr, substitutions):
 def _ensure_generic_function_specialization(generator, func, key, substitutions):
     specializations = generator.generic_function_specializations
     if key in specializations:
+        return
+    explicit = explicit_specialization_for(generator, key)
+    if explicit is not None:
+        # The specialization is a concrete function of the program; calls name it instead of a clone.
+        specializations[key] = explicit
+        generator.generic_function_specialized_names[key] = explicit.name
         return
     reject_late_generic_specialization(generator, func, key)
 
