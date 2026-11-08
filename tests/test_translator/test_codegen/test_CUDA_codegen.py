@@ -309,10 +309,7 @@ class TestCudaCodeGen:
         cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert "struct Vec3_float {" in cuda_code
-        assert (
-            "Vec3_float{world_normal.x, world_normal.y, world_normal.z}"
-            in cuda_code
-        )
+        assert "Vec3_float{world_normal.x, world_normal.y, world_normal.z}" in cuda_code
         assert "Vec3{" not in cuda_code
         assert "Vec3_T" not in cuda_code
 

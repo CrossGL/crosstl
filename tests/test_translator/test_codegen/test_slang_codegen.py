@@ -233,8 +233,7 @@ def test_generic_struct_constructor_is_specialized_for_slang_codegen():
     assert "float3 world_normal = " in generated
     assert (
         "Vec3_float normal_vec3 = "
-        "Vec3_float(world_normal.x, world_normal.y, world_normal.z);"
-        in generated
+        "Vec3_float(world_normal.x, world_normal.y, world_normal.z);" in generated
     )
     assert "Vec3(" not in generated
     assert "Vec3_T" not in generated
