@@ -24,7 +24,15 @@ from ..ast import (
     VectorType,
 )
 from ..explicit_specializations import explicit_specializations
-from .enum_utils import generic_type_parts, sanitize_type_name
+from .enum_utils import (
+    generic_type_parts,
+    sanitize_type_name,
+    substitute_generic_value_names,
+)
+from .generic_value_arguments import (
+    substitute_value_parameters,
+    value_argument_expression,
+)
 
 # CrossGL primitive spellings for the scalar types WGSL renders.
 _WGSL_SCALAR_SOURCE_NAMES = {
@@ -155,6 +163,16 @@ class WGSLGenericFunctionSpecializer:
         return emitted
 
     def _render(self, type_value):
+        if (
+            isinstance(type_value, str)
+            and "[" not in type_value
+            and not isinstance(
+                value_argument_expression(type_value), (IdentifierNode, type(None))
+            )
+        ):
+            # A literal or an expression binds a value parameter, as ``true`` in ``pick<float, true>``; it keeps
+            # its CrossGL spelling rather than reading as a type name.
+            return type_value.strip()
         if isinstance(type_value, str) and "[" in type_value:
             # An explicit array type argument keeps its CrossGL spelling, as in
             # ``pick<float[2]>(a)``; read it as a type so it renders ``array<f32, 2>``.
@@ -326,6 +344,8 @@ class WGSLGenericFunctionSpecializer:
         type_nodes = {
             param: _type_node(spelling) for param, spelling in bindings.items()
         }
+        # Values first: a local array's size (``T values[N]``) is part of the types substituted next.
+        substitute_value_parameters(getattr(clone, "body", None), bindings, func.name)
         substituter = _GenericSubstituter(bindings, type_nodes, self.generator)
         for attribute in ("return_type", "parameters", "body"):
             setattr(
@@ -469,7 +489,8 @@ def _substitute_spelling(spelling, bindings):
         return bindings[spelling]
     base, args = generic_type_parts(spelling)
     if not args:
-        return spelling
+        # A value argument that reads value parameters: ``N + 1`` in ``scale<T, N + 1>``.
+        return substitute_generic_value_names(spelling, bindings)
     return (
         f"{base}<"
         + ", ".join(_substitute_spelling(arg, bindings) for arg in args)
