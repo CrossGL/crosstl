@@ -32,6 +32,11 @@ from .enum_utils import (
     substitute_generic_type_name,
 )
 from .generic_body_types import substitute_body_types
+from .generic_call_collection_keys import (
+    collected_generic_call_key,
+    remember_collected_generic_call_key,
+    reset_collected_generic_call_keys,
+)
 from .generic_call_dependencies import (
     begin_generic_callee_recording,
     end_generic_callee_recording,
@@ -48,6 +53,7 @@ from .generic_emission_order import (
     reset_generic_function_emission,
 )
 from .generic_pointer_deduction import structured_buffer_element_type
+from .generic_result_types import reject_expression_result_type
 from .generic_specialization_names import (
     reserve_program_names,
     unique_specialization_name,
@@ -249,6 +255,7 @@ def prepare_generic_function_specializations(generator, functions, global_types=
     generator.generic_function_specializations = {}
     generator.generic_function_specialized_names = {}
     generator.generic_function_resolved_call_ids = set()
+    reset_collected_generic_call_keys(generator)
     reset_generic_callees(generator)
     reset_generic_function_emission(generator)
 
@@ -515,6 +522,10 @@ def generic_function_value_arguments(generator, func_name, args):
 def generic_function_call_key(generator, func_name, args):
     if is_reserved_generic_function_builtin_name(func_name):
         return None
+    if not getattr(generator, "collecting_generic_function_specializations", False):
+        collected = collected_generic_call_key(generator, func_name, args)
+        if collected is not None:
+            return collected
 
     definitions = getattr(generator, "generic_function_definitions", {}) or {}
     explicit_types = None
@@ -1035,6 +1046,7 @@ def _analyze_expression(generator, expr, substitutions):
         if key is not None:
             # Remember the call: later passes walk it without its function's local types.
             generator.generic_function_resolved_call_ids.add(id(expr))
+            remember_collected_generic_call_key(generator, func_name, args, key)
             record_generic_callee(generator, key)
         return
     if isinstance(expr, ConstructorNode):
@@ -1080,6 +1092,7 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
         getattr(func, "return_type", "void"),
         substitutions,
     )
+    reject_expression_result_type(func, key, clone.return_type)
     for param in getattr(clone, "parameters", getattr(clone, "params", [])) or []:
         concrete_type = substituted_generic_type(
             generator,

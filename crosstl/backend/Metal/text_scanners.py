@@ -18,6 +18,7 @@ ReadString = Callable[[str, int], Tuple[str, int]]
 _COMMA_STOPS = re.compile(r"[\"'/<>()\[\]{},]")
 _DEFAULT_VALUE_STOPS = re.compile(r"[\"'/<>()\[\]{}=]")
 _PARAMETER_STOPS = re.compile(r"[\"'/<>()\[\]]")
+_DECLTYPE_OPEN = re.compile(r"(?<![\w$])decltype\s*$")
 _COMMENT_OR_QUOTE = re.compile(r"[\"']|//|/\*")
 _COMPOUND_ASSIGNMENT_PREFIXES = "=<>!+-*/%&|^~"
 
@@ -198,7 +199,10 @@ def function_parameter_start(header: str, read_string: ReadString) -> Optional[i
                 i = end + 2
                 continue
         elif ch == "(":
-            if not (paren or bracket or angle):
+            # The operand of a ``decltype`` return type is no parameter list ([dcl.type.decltype]).
+            if not (paren or bracket or angle) and not _DECLTYPE_OPEN.search(
+                header, max(0, i - 64), i
+            ):
                 return i
             paren += 1
         elif ch == ")":
