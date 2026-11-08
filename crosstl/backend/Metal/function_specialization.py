@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Container, Iterable, Mapping, Sequence
 
+from .scalar_type_identity import canonical_scalar_type_spelling
+
 
 def _strip_metal_attribute_blocks(text: str) -> str:
     return re.sub(r"\[\[[^\]]*\]\]", " ", str(text or ""))
@@ -183,7 +185,9 @@ def _explicit_template_function_specialization_for_selected_overload(
             excluded_aliases=excluded_aliases,
         )
         if canonical is not None:
-            return _normalize_metal_type_text(canonical)
+            # ``uchar`` and ``uint8_t`` name one type (MSL table 2.1), so a
+            # deduced ``uchar`` selects the ``uint8_t`` specialization.
+            return canonical_scalar_type_spelling(_normalize_metal_type_text(canonical))
 
         suggested_action = (
             "declare every type alias before the specialization use, remove "
