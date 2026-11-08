@@ -8,6 +8,10 @@ import shutil
 import sys
 from pathlib import Path
 
+from crosstl.translator.codegen.host_workgroup_size_ids import (
+    HOST_WORKGROUP_SIZE_MACROS,
+)
+
 _HLSL_NATIVE_16_BIT_TYPE_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:float16_t|int16_t|uint16_t)(?:[1-4])?" r"(?![A-Za-z0-9_])"
 )
@@ -233,6 +237,28 @@ def dxc_profile_for_source(profile: str, source: str) -> str:
     if version >= minimum_profile:
         return profile
     return f"{match.group('stage')}_{minimum_profile[0]}_{minimum_profile[1]}"
+
+
+# The thread-group size a compile check gives an entry whose size the host chooses
+# (crosstl/translator/codegen/hlsl_host_workgroup_size.py): one invocation,
+# which every compute, mesh and amplification stage accepts.
+HOST_WORKGROUP_SIZE_CHECK_VALUE = 1
+
+
+def dxc_host_workgroup_size_check_arguments(source: str) -> tuple[str, ...]:
+    """``-D`` arguments that size a host-sized entry for a compile check only.
+
+    The host defines the size macros with the size it dispatches with; a check
+    that compiles the artifact without dispatching it defines them as one
+    invocation. Runtime compilation must not use these arguments.
+    """
+    text = str(source or "")
+    if not any(f"defined({macro})" in text for macro in HOST_WORKGROUP_SIZE_MACROS):
+        return ()
+    arguments: list[str] = []
+    for macro in HOST_WORKGROUP_SIZE_MACROS:
+        arguments += ["-D", f"{macro}={HOST_WORKGROUP_SIZE_CHECK_VALUE}"]
+    return tuple(arguments)
 
 
 def dxc_compiler_arguments_for_source(source: str) -> tuple[str, ...]:

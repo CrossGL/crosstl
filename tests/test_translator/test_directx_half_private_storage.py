@@ -275,30 +275,77 @@ def test_array_parameters_take_the_bits_representation(tmp_path):
 
 
 KEPT = {
-    "increment": ("", "++staged[0];", {"k_tile": "uint16_t", "staged": "float16_t"}),
-    "out-builtin": (
-        "",
-        "half whole; staged[0] = modf(staged[1], whole);",
-        {"k_tile": "uint16_t", "staged": "float16_t"},
-    ),
-    "out-builtin-element": (
-        "",
-        "half part = modf(staged[1], staged[0]);",
-        {"k_tile": "uint16_t", "staged": "float16_t"},
-    ),
-    "pointer-increment": (
-        "",
-        "threadgroup half* p = tile + 4; ++p[0];",
-        {"k_tile": "float16_t", "staged": "uint16_t"},
-    ),
+    "increment": ("", "++staged[0];"),
+    "out-builtin": ("", "half whole; staged[0] = modf(staged[1], whole);"),
+    "out-builtin-element": ("", "half part = modf(staged[1], staged[0]);"),
+    "pointer-increment": ("", "threadgroup half* p = tile + 4; ++p[0];"),
 }
 
 
 @pytest.mark.parametrize("case", KEPT)
-def test_uses_without_a_bit_rewrite_keep_their_whole_group_typed(tmp_path, case):
-    helpers, body, expected = KEPT[case]
-    generated = _hlsl(tmp_path, _kernel(helpers, body))
-    assert _arrays(generated) == expected
+def test_uses_without_a_bit_rewrite_keep_every_group_typed(tmp_path, case, monkeypatch):
+    # One group the pass cannot rewrite keeps the others typed too: values
+    # move between the groups, and DXC folds a reinterpreted value stored into
+    # typed memory into a store through a reinterpreted pointer.
+    source = _kernel(*KEPT[case])
+    generated = _hlsl(tmp_path, source)
+    assert _arrays(generated) == {"k_tile": "float16_t", "staged": "float16_t"}
+    monkeypatch.setattr(
+        directx_codegen, "lower_half_private_storage", lambda ast, map_type: ast
+    )
+    assert generated == _hlsl(tmp_path, source)
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+# A tile loader that keeps its workgroup destination in a struct member, as
+# MLX's steel BlockLoader does: the pass cannot follow the member pointer, so
+# the guarded private copies it could lower would be stored into typed
+# workgroup memory.
+MEMBER_POINTER_LOADER = """#include <metal_stdlib>
+using namespace metal;
+
+struct Loader {
+  const device half* src;
+  threadgroup half* dst;
+  void load_safe(uint lid, uint size) const {
+    half staged[4];
+    bool inside[4];
+    for (int j = 0; j < 4; ++j) {
+      inside[j] = lid * 4u + uint(j) < size;
+    }
+    for (int j = 0; j < 4; ++j) {
+      staged[j] = src[inside[j] ? lid * 4u + uint(j) : 0u];
+    }
+    for (int j = 0; j < 4; ++j) {
+      staged[j] = inside[j] ? staged[j] : half(0);
+    }
+    for (int j = 0; j < 4; ++j) {
+      dst[lid * 4u + uint(j)] = staged[j];
+    }
+  }
+};
+
+kernel void member_loader(const device half* values [[buffer(0)]],
+                          device half* results [[buffer(1)]],
+                          constant uint& size [[buffer(2)]],
+                          uint lid [[thread_index_in_threadgroup]]) {
+  threadgroup half tile[128];
+  Loader loader{values, tile};
+  loader.load_safe(lid, size);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  results[lid] = tile[127u - lid];
+}
+"""
+
+
+def test_private_copies_into_member_pointer_storage_stay_typed(tmp_path, monkeypatch):
+    generated = _hlsl(tmp_path, MEMBER_POINTER_LOADER)
+    assert "uint16_t staged[" not in generated
+    assert "float16_t staged[4];" in generated
+    monkeypatch.setattr(
+        directx_codegen, "lower_half_private_storage", lambda ast, map_type: ast
+    )
+    assert generated == _hlsl(tmp_path, MEMBER_POINTER_LOADER)
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
 

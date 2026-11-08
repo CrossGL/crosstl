@@ -10,9 +10,12 @@ import crosstl
 from crosstl.translator.host_workgroup_size import (
     HOST_WORKGROUP_SIZE_KEY,
     HostDefinedWorkgroupSizeError,
+    function_entry_execution_config,
+    require_static_workgroup_size,
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.spirv_friendly_names import translate_spirv
 
 SIZES = {
     "vulkan": r"OpExecutionMode %\S+ LocalSize (\d+) (\d+) (\d+)",
@@ -73,10 +76,18 @@ OPENCL_REQUIRED = (
 )
 
 
-def _translate(tmp_path, source, suffix, backend, **options):
+def _translate(tmp_path, source, suffix, backend, format_output=True, **options):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend, source_options=options or None)
+    if backend == "vulkan":
+        # Friendly ids whether or not SPIRV-Tools reformat the module.
+        return translate_spirv(path, source_options=options or None)
+    return crosstl.translate(
+        str(path),
+        backend=backend,
+        source_options=options or None,
+        format_output=format_output,
+    )
 
 
 def _size(code, backend):
@@ -85,7 +96,23 @@ def _size(code, backend):
     return tuple(int(value) for value in match.groups())
 
 
-@pytest.mark.parametrize("backend", sorted(SIZES) + ["wgsl"])
+# SPIR-V, GLSL and WGSL specialize a size the host chooses instead (test_spirv_entry_workgroup_sizes.py,
+# test_glsl_host_workgroup_size.py, test_wgsl_host_workgroup_size.py).
+HOST_NUMTHREADS = (
+    "[numthreads(CROSSGL_WORKGROUP_SIZE_X, CROSSGL_WORKGROUP_SIZE_Y, "
+    "CROSSGL_WORKGROUP_SIZE_Z)]"
+)
+
+
+def _require_static_sizes(crossgl):
+    """Refuse every entry of a CrossGL program as a target that fixes the size in the shader, such as Slang, does."""
+    shader = Parser(Lexer(crossgl).get_tokens()).parse()
+    for stage in (shader.stages or {}).values():
+        require_static_workgroup_size(stage.execution_config)
+    for function in shader.functions or []:
+        require_static_workgroup_size(function_entry_execution_config(function))
+
+
 @pytest.mark.parametrize(
     "source, suffix, reason",
     [
@@ -96,10 +123,13 @@ def _size(code, backend):
     ],
 )
 def test_size_dependent_kernel_is_refused_without_the_host_size(
-    tmp_path, backend, source, suffix, reason
+    tmp_path, source, suffix, reason
 ):
+    """A literal-only size is refused; HLSL reads the size from macros the host defines."""
     with pytest.raises(HostDefinedWorkgroupSizeError, match=reason):
-        _translate(tmp_path, source, suffix, backend)
+        _require_static_sizes(_translate(tmp_path, source, suffix, "cgl"))
+    code = _translate(tmp_path, source, suffix, "directx", format_output=False)
+    assert HOST_NUMTHREADS in code
 
 
 @pytest.mark.parametrize("backend", sorted(SIZES))
@@ -141,9 +171,23 @@ def test_required_opencl_size_is_kept(tmp_path, backend):
 def test_grid_index_and_grid_stride_need_no_block_size(tmp_path, backend, source):
     """blockIdx * blockDim + threadIdx and blockDim * gridDim do not depend on how the grid is split."""
     if source is CUDA_BLOCK_INDEX:
-        # blockIdx alone does depend on the split.
+        # blockIdx alone does depend on the split, so SPIR-V and GLSL let the pipeline set the size.
+        if backend == "vulkan":
+            code = _translate(tmp_path, source, ".cu", backend)
+            assert "OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize" in code
+            assert "SpecId 0" in code
+            return
+        if backend == "opengl":
+            code = _translate(tmp_path, source, ".cu", backend)
+            assert (
+                "local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2" in code
+            )
+            return
+        # HLSL reads the size from macros the host defines when it compiles the shader.
+        code = _translate(tmp_path, source, ".cu", backend, format_output=False)
+        assert HOST_NUMTHREADS in code
         with pytest.raises(HostDefinedWorkgroupSizeError, match="gl_WorkGroupID"):
-            _translate(tmp_path, source, ".cu", backend)
+            _require_static_sizes(_translate(tmp_path, source, ".cu", "cgl"))
         return
     assert _size(_translate(tmp_path, source, ".cu", backend), backend) == (1, 1, 1)
 

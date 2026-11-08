@@ -16,7 +16,10 @@ the mark names one; the host then dispatches whole workgroups of that size, as `
 any other kernel the mark records the first construct that depends on the size, and a code generator that needs
 the size raises :class:`HostDefinedWorkgroupSizeError` through :func:`require_static_workgroup_size`, unless an
 explicit ``@ workgroup_size`` or a project workgroup-size rule gives it. The Metal generator needs no size, so a
-Metal round trip keeps the host's choice.
+Metal round trip keeps the host's choice, the SPIR-V and GLSL generators make the size three specialization
+constants that the host sets when it creates the pipeline, the HLSL generator reads it from macros that the
+host defines when it compiles the shader, and the Slang generator reads those macros or, without them, three
+specialization constants.
 """
 
 from __future__ import annotations
@@ -29,13 +32,11 @@ __all__ = [
     "HOST_WORKGROUP_SIZE_ATTRIBUTE",
     "HOST_WORKGROUP_SIZE_KEY",
     "HostDefinedWorkgroupSizeError",
-    "STATIC_WORKGROUP_SIZE_TARGETS",
     "function_entry_execution_config",
     "has_explicit_workgroup_size",
     "host_workgroup_size_mark",
     "host_workgroup_size_attribute_text",
     "normalize_threadgroup_size_option",
-    "refuse_host_defined_workgroup_sizes",
     "require_static_workgroup_size",
     "resolve_host_workgroup_sizes",
     "workgroup_size_dependence",
@@ -483,40 +484,3 @@ def resolve_host_workgroup_sizes(shader: Any, render=str) -> Any:
         )
     _resolve_function_entries(shader, render)
     return shader
-
-
-# Targets that fix a workgroup's size in the shader: HLSL and Slang ``[numthreads]``, GLSL ``local_size``, SPIR-V
-# ``LocalSize`` and WGSL ``@workgroup_size``. Their generators call :func:`require_static_workgroup_size` for every
-# compute, mesh and task entry they emit.
-STATIC_WORKGROUP_SIZE_TARGETS = frozenset(
-    {"directx", "opengl", "vulkan", "wgsl", "slang"}
-)
-
-
-def refuse_host_defined_workgroup_sizes(shader: Any, target: str) -> None:
-    """Refuse, before the semantics passes and code generation, a library with an entry only the host can size.
-
-    The generators of :data:`STATIC_WORKGROUP_SIZE_TARGETS` raise the same :class:`HostDefinedWorkgroupSizeError`
-    when they reach such an entry's size. The CrossGL parser records that size on each entry, so checking every
-    entry of the parsed program refuses it without rewriting the program and generating the entries in front of
-    it, which takes minutes for a library of a few hundred kernels. Entries are checked in declaration order:
-    stage blocks, then top-level compute functions.
-
-    A program with a single entry is left to the generators: nothing stands in front of the entry, and they report
-    a construct the target cannot express in it, such as a cooperative matrix, ahead of its size.
-    """
-    if target not in STATIC_WORKGROUP_SIZE_TARGETS:
-        return
-    stages = list((getattr(shader, "stages", None) or {}).values())
-    functions = [
-        function
-        for function in getattr(shader, "functions", None) or []
-        if _function_stage(function) is not None
-    ]
-    if len(stages) + len(functions) < 2:
-        return
-    for stage in stages:
-        require_static_workgroup_size(getattr(stage, "execution_config", None))
-    for function in functions:
-        if _function_stage(function) == "compute":
-            require_static_workgroup_size(function_entry_execution_config(function))

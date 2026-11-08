@@ -3,6 +3,11 @@
 from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
+from .statement_import import (
+    EXPRESSION_STATEMENT_TYPES,
+    unsupported_expression,
+    unsupported_statement,
+)
 from .tessellation_control_import import tessellation_control_mode_attributes
 from .VulkanAst import (
     ArrayAccessNode,
@@ -153,37 +158,6 @@ class VulkanToCrossGLConverter:
             "sampler1DArray": "sampler1DArray",
             "sampler2DMS": "sampler2DMS",
             "sampler2DMSArray": "sampler2DMSArray",
-            "samplerBuffer": "Buffer",
-            "image1D": "RWTexture1D",
-            "image1DArray": "RWTexture1DArray",
-            "image2D": "RWTexture2D",
-            "image2DArray": "RWTexture2DArray",
-            "image2DMS": "RWTexture2DMS",
-            "image2DMSArray": "RWTexture2DMSArray",
-            "image3D": "RWTexture3D",
-            "imageBuffer": "RWBuffer",
-            "imageCube": "RWTextureCube",
-            "imageCubeArray": "RWTextureCubeArray",
-            "iimage1D": "RWTexture1D<int>",
-            "iimage1DArray": "RWTexture1DArray<int>",
-            "iimage2D": "RWTexture2D<int>",
-            "iimage2DArray": "RWTexture2DArray<int>",
-            "iimage2DMS": "RWTexture2DMS<int>",
-            "iimage2DMSArray": "RWTexture2DMSArray<int>",
-            "iimage3D": "RWTexture3D<int>",
-            "iimageBuffer": "RWBuffer<int>",
-            "iimageCube": "RWTextureCube<int>",
-            "iimageCubeArray": "RWTextureCubeArray<int>",
-            "uimage1D": "RWTexture1D<uint>",
-            "uimage1DArray": "RWTexture1DArray<uint>",
-            "uimage2D": "RWTexture2D<uint>",
-            "uimage2DArray": "RWTexture2DArray<uint>",
-            "uimage2DMS": "RWTexture2DMS<uint>",
-            "uimage2DMSArray": "RWTexture2DMSArray<uint>",
-            "uimage3D": "RWTexture3D<uint>",
-            "uimageBuffer": "RWBuffer<uint>",
-            "uimageCube": "RWTextureCube<uint>",
-            "uimageCubeArray": "RWTextureCubeArray<uint>",
             "atomic_uint": "RWStructuredBuffer<uint>",
         }
         self.semantic_map = {
@@ -1446,6 +1420,13 @@ class VulkanToCrossGLConverter:
         )
         if storage_mapped_name:
             return f"@{storage_mapped_name}"
+        if (
+            str(builtin_name) == "PrimitiveId"
+            and storage_class == "Input"
+            and "geometry" in self.spirv_module_shader_stages
+        ):
+            # A geometry stage's incoming primitive ID is gl_PrimitiveIDIn; gl_PrimitiveID is the one it writes.
+            return "@gl_PrimitiveIDIn"
         mapped_name = mapped_builtins.get(str(builtin_name))
         if mapped_name:
             return f"@{mapped_name}"
@@ -1639,8 +1620,10 @@ class VulkanToCrossGLConverter:
                 code += "discard;\n"
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
+            elif isinstance(stmt, EXPRESSION_STATEMENT_TYPES):
+                code += f"{self.generate_expression(stmt)};\n"
             else:
-                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                unsupported_statement(stmt)
         return code
 
     def generate_assignment(self, node):
@@ -1783,7 +1766,7 @@ class VulkanToCrossGLConverter:
             index = self.generate_expression(expr.index)
             return f"{array}[{index}]"
         else:
-            return str(expr)
+            unsupported_expression(expr)
 
     def generate_nested_expression(self, expr):
         rendered = self.generate_expression(expr)

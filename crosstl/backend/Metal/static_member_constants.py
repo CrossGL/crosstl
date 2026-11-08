@@ -17,6 +17,7 @@ from .constexpr_branches import (
     discarded_constexpr_branch_spans,
     substitute_static_member_constants,
 )
+from .signed_type_spellings import fold_integer_type_spellings
 
 IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -232,11 +233,13 @@ def static_member_constant_value(
     declared = next((item for item in struct.data_members if item.name == member), None)
     if declared is None or declared.array_suffix:
         return None
-    value_types = [
-        token
-        for token in IDENTIFIER_RE.findall(declared.type_text)
-        if token not in {"static", "constexpr", "constant", "const"}
-    ]
+    value_types = fold_integer_type_spellings(
+        [
+            token
+            for token in IDENTIFIER_RE.findall(declared.type_text)
+            if token not in {"static", "constexpr", "constant", "const"}
+        ]
+    )
     if len(value_types) != 1 or value_types[0] not in (
         preprocessor._METAL_INTEGRAL_SCALAR_TYPES
     ):

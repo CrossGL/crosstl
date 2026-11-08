@@ -91,6 +91,9 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXWorkgroupSizeError,
     HLSLCodeGen,
 )
+from crosstl.translator.codegen.directx_pointer_alias_errors import (
+    DirectXResourcePointerAliasError,
+)
 from crosstl.translator.codegen.pointer_reinterpret import (
     PointerReinterpretationError,
 )
@@ -1639,7 +1642,7 @@ def test_hlsl_invalid_compile_time_values_fail_before_global_emission(
     source = """
     shader RequiredDirectXSpecialization {
         float runtime_state;
-        constant bool has_w @function_constant(20);
+        constant vec2 offsets @function_constant(20) = vec2(1.0);
     }
     """
     ast = crosstl.translator.parse(source)
@@ -1667,14 +1670,13 @@ def test_hlsl_invalid_compile_time_values_fail_before_global_emission(
     assert diagnostic.missing_capabilities == (
         "directx.specialization-constant-variant",
     )
-    assert diagnostic.constant_name == "has_w"
+    assert diagnostic.constant_name == "offsets"
     assert diagnostic.constant_id == 20
-    assert diagnostic.constant_type == "bool"
-    assert diagnostic.reason == "missing-required-value"
+    assert diagnostic.constant_type == "float2"
+    assert diagnostic.reason == "incompatible-type"
     assert diagnostic.source_location == source_location
-    assert "has_w" in str(diagnostic)
+    assert "offsets" in str(diagnostic)
     assert "id 20" in str(diagnostic)
-    assert "no concrete/default value" in str(diagnostic)
 
     invalid_initializers = (
         (
@@ -9803,7 +9805,9 @@ def test_hlsl_metal_const_auto_pointer_alias_preserves_readonly_access(tmp_path)
     shader_path = tmp_path / "const_auto_pointer_readonly.metal"
     shader_path.write_text(shader)
 
-    with pytest.raises(ValueError, match="does not provide writable storage"):
+    with pytest.raises(
+        DirectXResourcePointerAliasError, match="does not provide writable storage"
+    ):
         crosstl.translate(
             str(shader_path),
             backend="directx",
@@ -9828,7 +9832,7 @@ def test_hlsl_metal_explicit_pointer_alias_type_mismatch_still_rejects(tmp_path)
     shader_path.write_text(shader)
 
     with pytest.raises(
-        ValueError,
+        DirectXResourcePointerAliasError,
         match="changes element type from int64_t to float",
     ):
         crosstl.translate(
@@ -13876,7 +13880,9 @@ def test_hlsl_resource_pointer_alias_rejects_readonly_write():
     }
     """
 
-    with pytest.raises(ValueError, match="requires writable storage"):
+    with pytest.raises(
+        DirectXResourcePointerAliasError, match="requires writable storage"
+    ):
         generate_code(parse_code(tokenize_code(shader)))
 
 

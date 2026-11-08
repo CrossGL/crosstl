@@ -1,0 +1,45 @@
+#version 450
+// GLSL 4.60 sections 5.9 and 6.3: a for-init-statement or loop expression that is a comma expression evaluates its
+// operands left to right; the loop expression runs after every iteration, also one left by continue, and a
+// do-while loop tests its condition after every iteration, also one left by continue.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Inp { int a[]; } inp;
+layout(std430, binding = 1) buffer Outp { int o[]; } outp;
+
+void main() {
+    uint t = gl_GlobalInvocationID.x;
+    int x = inp.a[t];
+    int acc = 0;
+    for (int i = 0, j = x & 15; i < j; i++, j--) {
+        if (i == 1) {
+            continue;
+        }
+        acc += i * 16 + j;
+    }
+    int k;
+    int m;
+    int sum = 0;
+    for (k = 0, m = (x >> 4) & 7; k < m; ++k, m -= 1) {
+        sum += k + 1;
+    }
+    int vals[4] = int[4](0, 0, 0, 0);
+    int q = 0;
+    for (int z = 0; z < (x & 3) + 1; vals[q++] = z * 3 + 1, z++) {
+    }
+    int c = (x >> 2) & 7;
+    int steps = 0;
+    do {
+        steps += c;
+        if (c == 2) {
+            continue;
+        }
+        steps += 100;
+    } while (--c > 0);
+    uint base = t * 6u;
+    outp.o[base] = acc;
+    outp.o[base + 1u] = sum * 100 + k * 10 + m;
+    outp.o[base + 2u] = vals[0] + vals[1] * 16 + vals[2] * 256 + vals[3] * 4096;
+    outp.o[base + 3u] = q;
+    outp.o[base + 4u] = steps;
+    outp.o[base + 5u] = c;
+}

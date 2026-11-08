@@ -1794,7 +1794,19 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         return None
 
     def format_global_variable_qualifiers(self, node, has_initializer=False):
-        allowed_qualifiers = {"groupshared", "extern", "static", "const", "constexpr"}
+        if any(
+            str(qualifier).lower() == "extern"
+            for qualifier in getattr(node, "qualifiers", []) or []
+        ):
+            # Slang link-time constants (``extern static const``) take their value from another module when the
+            # program is linked; CrossGL has no declaration whose value is supplied that way.
+            raise SlangImportRefused(
+                [
+                    f"extern global {node.name} is a link-time constant; CrossGL has "
+                    "no declaration whose value another module supplies"
+                ]
+            )
+        allowed_qualifiers = {"groupshared", "static", "const", "constexpr"}
         excluded_qualifiers = set()
         if not has_initializer and self.is_plain_uninitialized_const_global(node):
             # CrossGL requires plain top-level const declarations to carry an
@@ -1848,10 +1860,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         ]
         storage_order = {
             "groupshared": 0,
-            "extern": 1,
-            "static": 2,
-            "const": 3,
-            "constexpr": 4,
+            "static": 1,
+            "const": 2,
+            "constexpr": 3,
         }
         return " ".join(
             qualifier
@@ -2559,7 +2570,12 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         args = self.generic_type_arguments(slang_type)
         if len(args) != 1 or "*" not in args[0]:
             return None
-        return f"buffer<{self.map_type(args[0])}>"
+        raise SlangImportRefused(
+            [
+                f"{base_type}<{args[0].strip()}> holds pointers; CrossGL has no "
+                "storage buffer whose elements are pointers"
+            ]
+        )
 
     def map_packed_element_buffer_type(self, slang_type, base_type):
         # int8_t4_packed and uint8_t4_packed are uint aliases, so a structured

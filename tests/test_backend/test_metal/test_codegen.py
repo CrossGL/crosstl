@@ -42,6 +42,7 @@ from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
+    MetalTypeTraitError,
 )
 from crosstl.project import reflect_target_host_interface, translate_project
 from crosstl.translator.ast import ArrayAccessNode as CrossGLArrayAccessNode
@@ -1552,6 +1553,10 @@ def test_codegen_const_threadgroup_pointer_local_follows_parameter_pointee_polic
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
     assert f"{qualifier}threadgroup float* view = tile + 2;" in metal
+    _compile_metal_for_test(metal, tmp_path)
+
+
+def _compile_metal_for_test(metal, tmp_path):
     if shutil.which("xcrun") is None:
         return
     source = tmp_path / "partitions.metal"
@@ -1575,6 +1580,49 @@ def test_codegen_const_threadgroup_pointer_local_follows_parameter_pointee_polic
     if "unable to find utility" in result.stderr:
         return
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+CONST_THREADGROUP_CAST_SOURCE = """
+#include <metal_stdlib>
+using namespace metal;
+float first_and_fourth(const threadgroup float* view) { return view[0] + view[3]; }
+kernel void scalars(device float* output [[buffer(0)]],
+                    uint i [[thread_position_in_grid]]) {
+  threadgroup float2 tile[4];
+  tile[0] = float2(1.0f, 2.0f);
+  tile[1] = float2(3.0f, 4.0f);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const threadgroup float2* pairs = tile;
+  threadgroup const float* values = reinterpret_cast<threadgroup const float*>(pairs);
+  output[i] = first_and_fourth(values)
+      + first_and_fourth(reinterpret_cast<const threadgroup float*>(pairs));
+}
+"""
+
+
+@pytest.mark.parametrize("preserve", [False, True], ids=["dropped", "preserved"])
+def test_codegen_const_threadgroup_pointer_cast_follows_pointee_policy(
+    tmp_path, preserve
+):
+    # A cast to `const threadgroup T*` initializes a local and feeds a helper
+    # parameter; it must drop or keep pointee const exactly as they do, or the
+    # generated Metal assigns a const pointer to a non-const one.
+    ast = MetalParser(MetalLexer(CONST_THREADGROUP_CAST_SOURCE).tokenize()).parse()
+    crossgl = MetalToCrossGLConverter(preserve_pointer_pointee_const=preserve).generate(
+        ast
+    )
+
+    qualifier = "const " if preserve else ""
+    assert (
+        f"{qualifier}threadgroup float* values = ({qualifier}threadgroup float*)pairs;"
+        in crossgl
+    ), crossgl
+    assert f"first_and_fourth(({qualifier}threadgroup float*)pairs)" in crossgl
+    if not preserve:
+        assert "const threadgroup" not in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    _compile_metal_for_test(metal, tmp_path)
 
 
 REFERENCE_TO_ARRAY_SORT_SOURCE = """#include <metal_stdlib>
@@ -5258,7 +5306,7 @@ def test_codegen_rewrites_static_alias_call_inside_materialized_method():
     assert "HelperType::run" not in crossgl
 
 
-def test_codegen_scoped_variable_template_expression_from_mlx_gemv_masked():
+def test_codegen_refuses_gemv_masked_trait_outside_its_template():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
     # Commit: b155224b9963cd9476363b464a559232a0868000
@@ -5271,12 +5319,11 @@ def test_codegen_scoped_variable_template_expression_from_mlx_gemv_masked():
     constant constexpr const bool has_mul_operand_mask =
         has_operand_mask && !metal::is_same_v<op_mask_t, bool>;
     """
-    crossgl = convert(code)
-
-    assert "metal_u3a_u3ais_same_v_u3cop_mask_t_u2cnomask_t_u3e" in crossgl
-    assert "metal_u3a_u3ais_same_v_u3cop_mask_t_u2cbool_u3e" in crossgl
-    assert "is_same_v<" not in crossgl
-    assert parse_crossgl(crossgl) is not None
+    # Outside GEMVKernel's template header ``op_mask_t`` names no type, so the
+    # trait cannot be folded. It used to reach CrossGL as the mangled identifier
+    # metal_u3a_u3ais_same_v_u3cop_mask_t_u2cnomask_t_u3e, which nothing declares.
+    with pytest.raises(MetalTypeTraitError, match=r"is_same_v<op_mask_t, nomask_t>"):
+        convert(code)
 
 
 def test_codegen_normalizes_generic_atomic_types_from_apple_msl_spec():
@@ -5477,8 +5524,14 @@ def test_codegen_comma_assignment_statement_from_llama_cpp():
     """
     crossgl = convert(code)
 
-    assert "dl = values[0] , ml = values[1];" in crossgl
-    assert parse_crossgl(crossgl) is not None
+    # Both assignments stay one CrossGL comma expression; the bare ``a = x, b = y;`` spelling does not parse.
+    assert "(dl = values[0], ml = values[1]);" in crossgl
+    commas = [
+        node
+        for node in parse_crossgl(crossgl).walk()
+        if type(node).__name__ == "CommaExpressionNode"
+    ]
+    assert len(commas) == 1 and len(commas[0].expressions) == 2
 
 
 def test_codegen_braced_uchar_vector_constructor_from_llama_cpp():
@@ -6892,8 +6945,8 @@ def test_codegen_sizeof_and_cast():
 
 def test_codegen_rejects_sizeof_known_aggregate_without_layout_contract():
     code = """
-    struct alignas(16) Payload {
-        float value;
+    struct Payload {
+        alignas(16) float value;
     };
 
     int payload_size() {
@@ -14108,11 +14161,10 @@ if __name__ == "__main__":
 
 
 def test_codegen_resolves_local_conditional_t_alias_to_integer_pack_type():
-    # Reduced from mlx quantized `affine_quantize`: an uninstantiated generic
-    # kernel aliases its packed accumulator type through metal::conditional_t.
-    # The alias must resolve to an integer type so the bit-packing math stays
-    # integer-typed instead of the alias defaulting to float (which produces an
-    # invalid float bitwise operation in the SPIR-V backend).
+    # Reduced from mlx quantized `affine_quantize`: a kernel template aliases
+    # its packed accumulator type through metal::conditional_t on its `bits`
+    # parameter. Each instantiation resolves the alias for its own `bits`, so
+    # the bit-packing math stays integer-typed at the width it selects.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -14126,9 +14178,15 @@ def test_codegen_resolves_local_conditional_t_alias_to_integer_pack_type():
         output |= 7;
         out[gid] = output & 0xff;
     }
+
+    template [[host_name("pack_4")]] [[kernel]] void pack<float, 4>(device uint8_t*, uint);
+    template [[host_name("pack_5")]] [[kernel]] void pack<float, 5>(device uint8_t*, uint);
     """
     result = convert(code)
-    assert "uint output = 0" in result
+    pack_4 = result[result.index("void pack_4(") : result.index("void pack_5(")]
+    pack_5 = result[result.index("void pack_5(") :]
+    assert "uint output = 0" in pack_4
+    assert "uint64 output = 0" in pack_5
     assert "OutType" not in result
     assert parse_crossgl(result) is not None
 
@@ -14222,9 +14280,8 @@ def test_codegen_resolves_local_constexpr_conditional_t_exact_branch(
 
 def test_codegen_declares_bitwise_value_template_parameter_as_int():
     # Reduced from mlx quantized: the `bits` non-type template parameter drives
-    # the power-of-two idiom `bits & (bits - 1)`. In an uninstantiated generic
-    # kernel it has no declaration and would default to float, so it is declared
-    # as an integer placeholder to keep the bitwise math integer-typed.
+    # the power-of-two idiom `bits & (bits - 1)`. Each instantiation binds it to
+    # its integer argument, so the bitwise math stays integer-typed.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -14236,9 +14293,40 @@ def test_codegen_declares_bitwise_value_template_parameter_as_int():
         int power_of_2 = (bits & (bits - 1)) == 0;
         out[gid] = power_of_2;
     }
+
+    template [[host_name("quant_4")]] [[kernel]] void quant<float, 4>(device uint*, uint);
+    template [[host_name("quant_6")]] [[kernel]] void quant<float, 6>(device uint*, uint);
     """
     result = convert(code)
-    assert "int bits = 0;" in result
+    assert "int power_of_2 = (4 & 4 - 1) == 0;" in result
+    assert "int power_of_2 = (6 & 6 - 1) == 0;" in result
+    assert "bits" not in result
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_emits_no_entry_for_uninstantiated_kernel_template():
+    # A kernel template is an entry point only through an instantiation; the
+    # Metal library has no function for one the source never instantiates, so
+    # CrossGL gets no stage entry with unbound template parameters.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T, const int bits>
+    [[kernel]] void quant(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = T(bits);
+    }
+
+    kernel void fill(device float* out [[buffer(0)]], uint gid [[thread_position_in_grid]]) {
+        out[gid] = 1.0f;
+    }
+    """
+    result = convert(code)
+    assert "void fill(" in result
+    assert "quant" not in result
+    assert "bits" not in result
     assert parse_crossgl(result) is not None
 
 

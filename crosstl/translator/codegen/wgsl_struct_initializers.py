@@ -74,7 +74,10 @@ def _unconstructible_reason(codegen, vtype, seen=()):
         return None
     if codegen._struct_resource_paths.get(struct_name):
         return "it holds a resource"
-    for _name, member_type in _struct_members(codegen, struct_name):
+    for name, member_type in _struct_members(codegen, struct_name):
+        if (struct_name, name) in getattr(codegen, "_atomic_slots", {}):
+            # The atomic lowering (wgsl_buffer_atomics) gives atomic members their scalar type.
+            return "it holds an atomic"
         reason = _unconstructible_reason(
             codegen, member_type, tuple(seen) + (struct_name,)
         )

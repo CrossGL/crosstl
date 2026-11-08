@@ -4082,10 +4082,11 @@ def test_wave_intrinsics_validate_target_result_types():
         "Slang wave intrinsic: WaveActiveBallot returns uint4 but target expects float"
         in refused.reasons
     )
-    assert "bool boolFromLane = false;" in generated_code
-    assert (
-        "Slang wave intrinsic: WaveGetLaneIndex returns uint but target expects bool"
-        in refused.reasons
+    # A same-shaped value converts implicitly, as ``bool b = lane;`` does in
+    # CrossGL (GLSL output spells it ``lane != 0u``); the conversion is explicit.
+    assert "bool boolFromLane = bool(WaveGetLaneIndex());" in generated_code
+    assert not any(
+        "WaveGetLaneIndex returns uint" in reason for reason in refused.reasons
     )
     assert "uint2 widthMismatch = uint2(0u);" in generated_code
     assert (
@@ -11909,8 +11910,8 @@ def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
     assert "Particle particle = particlesIn.Load(tid.x);" in generated_code
     assert "float4 vectorValue = vectors.Load(0u);" in generated_code
     assert "particlesOut.GetDimensions(len);" in generated_code
-    assert "particlesOut.Store(tid.x, particle);" in generated_code
-    assert "values[1].Store(0u, particle.mass);" in generated_code
+    assert "particlesOut[tid.x] = particle;" in generated_code
+    assert "values[1][0u] = particle.mass;" in generated_code
     assert "buffer_load(" not in generated_code
     assert "buffer_store(" not in generated_code
     assert "buffer_dimensions(" not in generated_code
@@ -12150,8 +12151,8 @@ def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
         "Slang structured buffer: buffer_store requires writable structured buffer resource"
         in refused.reasons
     )
-    assert "readWriteValues.Store(0u, 2.0);" in generated_code
-    assert "attrWriteOnly.Store(0u, 4.0);" in generated_code
+    assert "readWriteValues[0u] = 2.0;" in generated_code
+    assert "attrWriteOnly[0u] = 4.0;" in generated_code
     assert "writeOnlyValues.Load" not in generated_code
     assert "attrWriteOnly.Load" not in generated_code
     assert "buffer_load(" not in generated_code
@@ -23665,7 +23666,7 @@ def test_structured_buffer_and_rw_structured_buffer_declarations():
         ": register(u1);" in generated_code
     )
     assert "Vertex v = vertexData.Load(tid.x);" in generated_code
-    assert "outputData.Store(tid.x, v);" in generated_code
+    assert "outputData[tid.x] = v;" in generated_code
     assert "buffer_load(" not in generated_code
     assert "buffer_store(" not in generated_code
 
@@ -23807,7 +23808,7 @@ def test_buffer_resource_multiple_types_with_auto_bindings():
     assert "register(u" in generated_code
     assert "Light l = lights.Load(tid.x);" in generated_code
     assert "float4 pos = positions.Load(0u);" in generated_code
-    assert "lightOutput.Store(tid.x, l.intensity);" in generated_code
+    assert "lightOutput[tid.x] = l.intensity;" in generated_code
 
 
 def test_struct_member_semantics_produce_slang_annotations():
@@ -24425,7 +24426,7 @@ def test_structured_buffer_declarations_emit_slang_resource_types():
         ": register(u3);" in generated_code
     )
     assert "Light light = lights.Load(tid.x);" in generated_code
-    assert "outputLights.Store(tid.x, light);" in generated_code
+    assert "outputLights[tid.x] = light;" in generated_code
     assert "buffer_load(" not in generated_code
     assert "buffer_store(" not in generated_code
 
@@ -24456,7 +24457,7 @@ def test_glsl_buffer_array_declarations_lower_to_slang_resources():
         ": register(u3);" in generated_code
     )
     assert "float value = values.Load(0u);" in generated_code
-    assert "outValues.Store(1u, value);" in generated_code
+    assert "outValues[1u] = value;" in generated_code
     assert "buffer_load(" not in generated_code
     assert "buffer_store(" not in generated_code
 
@@ -24852,7 +24853,7 @@ def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
     assert "register(u" in generated_code
     assert "RWTexture2D<uint> counterTex" in generated_code
     assert "weights.Load(tid.x)" in generated_code
-    assert "results.Store(tid.x, w * 2.0)" in generated_code
+    assert "results[tid.x] = w * 2.0" in generated_code
     assert "mat4" not in generated_code
     assert "sampler2d" not in generated_code
     assert "uimage2D" not in generated_code

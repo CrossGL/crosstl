@@ -32,9 +32,11 @@ from ..common_ast import (
 from ..import_refusals import DirectXImportRefused, ImportRefusalMixin
 from ..storage_image_texels import IMAGE_FORMAT_ATTRIBUTES
 from ..switch_clauses import ordered_switch_clauses
+from .byte_address_methods import byte_address_method_expression
 from .DirectxAst import *
 from .DirectxLexer import *
 from .DirectxParser import *
+from .discarded_values import VALUE_STATEMENT_TYPES, discarded_cast_operand
 from .hlsl_matrix_import import (
     HLSLMatrixImportMixin,
     crossgl_matrix_type_name,
@@ -434,6 +436,7 @@ class HLSLToCrossGLConverter(
             "InterlockedMax": "atomicMax",
             "InterlockedExchange": "atomicExchange",
             "InterlockedCompareExchange": "atomicCompareExchange",
+            "InterlockedCompareStore": "atomicCompareExchange",
         }
         self.texture_method_map = {
             "Sample": "texture",
@@ -1145,9 +1148,10 @@ class HLSLToCrossGLConverter(
                 descriptor["dropped_parameters"] = ["status output"]
             return descriptor
 
-        byte_address_interlocked_args = (
-            {4} if member == "InterlockedCompareExchange" else {2, 3}
-        )
+        byte_address_interlocked_args = {
+            "InterlockedCompareExchange": {4},
+            "InterlockedCompareStore": {3},
+        }.get(member, {2, 3})
         if (
             member in self.byte_address_interlocked_method_map
             and self.is_byte_address_buffer_type(resource_type)
@@ -1155,6 +1159,8 @@ class HLSLToCrossGLConverter(
         ):
             if member == "InterlockedCompareExchange":
                 byte_address_operation = "atomic_compare_exchange"
+            elif member == "InterlockedCompareStore":
+                byte_address_operation = "atomic_compare_store"
             elif member == "InterlockedAdd":
                 byte_address_operation = "atomic_add"
             else:
@@ -1267,6 +1273,11 @@ class HLSLToCrossGLConverter(
     ):
         if not descriptor.get("byte_address_atomic") or len(rendered_args) < 2:
             return None
+
+        if descriptor.get("operation") == "atomic_compare_store":
+            # InterlockedCompareStore is a compare-exchange whose previous value is not returned.
+            offset, compare, value = rendered_args[:3]
+            return f"{descriptor['function']}({obj}, {offset}, {compare}, {value})"
 
         if descriptor.get("operation") == "atomic_compare_exchange":
             if len(rendered_args) < 4:
@@ -4490,6 +4501,9 @@ class HLSLToCrossGLConverter(
             self.current_resource_array_dims = dict(previous_dims)
         code = ""
         for stmt in body:
+            stmt = discarded_cast_operand(stmt)
+            if stmt is None or isinstance(stmt, (bool, int, float)):
+                continue  # nothing to evaluate, as in ``(void)x;`` or ``1;``
             if isinstance(stmt, FunctionCallNode):
                 code += self.generate_function_call_statement(stmt, indent, is_main)
                 continue
@@ -4562,8 +4576,12 @@ class HLSLToCrossGLConverter(
                 code += f"{self.generate_type_alias_declaration(stmt)}\n"
             elif isinstance(stmt, StructNode):
                 code += self.generate_local_struct(stmt, indent, is_main)
+            elif isinstance(stmt, VALUE_STATEMENT_TYPES):
+                code += f"{self.generate_expression(stmt, is_main)};\n"
             else:
-                code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                code += self.refuse_import(
+                    f"statement {type(stmt).__name__} has no CrossGL form"
+                )
         self.current_variable_types = previous_types
         self.current_resource_array_dims = previous_dims
         return code
@@ -5304,6 +5322,11 @@ class HLSLToCrossGLConverter(
                 args = ", ".join(rendered_args)
                 resource_type = self.expression_raw_type(expr.name.object)
                 resource_base = self.raw_type_base(resource_type)
+                byte_address_access = byte_address_method_expression(
+                    self, member, obj, rendered_args, expr.args, resource_type
+                )
+                if byte_address_access is not None:
+                    return byte_address_access
                 if (
                     method_member == "GatherCmpRed"
                     and len(rendered_args) in {7, 8}

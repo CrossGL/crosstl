@@ -16,8 +16,6 @@ shader main {
     };
 
     vertex {
-    layout(std140, column_major) uniform;
-
     VertexOutput main(VertexInput input) {
         VertexOutput output;
         output.gl_Position = (MVP * input.Position);

@@ -22,7 +22,8 @@ the CUDA and HIP generators replaced them with a comment and ``0``, so the opera
 * any remaining three-argument ``atomicCompareExchange`` call into ``atomicCompSwap``.
 
 HLSL assigns ``original`` after the operation, as the rewritten assignment does. A call whose name a function of the
-program defines is left alone.
+program defines is left alone, and so is a call on a byte-address buffer: ``atomicOp(buffer, address, value)`` is the
+byte-address form, which already returns the previous value.
 
 HLSL output keeps the interlocked argument lists, which are its native form. For HLSL targets,
 :func:`hlsl_out_argument_atomics` does the opposite rewrite where the destination is not a buffer, because the
@@ -35,6 +36,7 @@ for ``atomicCompSwap(dest, compare, value)``.
 from __future__ import annotations
 
 from .. import ast as A
+from .byte_address_buffers import BYTE_ADDRESS_BUFFER_KINDS
 from .hub_types import call_name, iter_functions
 from .rewrite import call, child_slots, get_child, set_child
 from .scoped_walk import ScopedWalker
@@ -44,6 +46,7 @@ __all__ = [
     "TARGETS",
     "canonicalize_atomic_calls",
     "hlsl_out_argument_atomics",
+    "shared_variable_names",
 ]
 
 _RETURNING_OUT_ORIGINAL = frozenset(
@@ -93,6 +96,9 @@ class _AtomicWalker(ScopedWalker):
         if name in self.defined:
             return None
         arguments = list(expression.arguments or [])
+        if arguments and self.is_byte_address_buffer(arguments[0]):
+            # ``atomicOp(buffer, address, value)`` is the byte-address form, which returns the previous value.
+            return None
         if name in _RETURNING_OUT_ORIGINAL and len(arguments) == 3:
             return A.AssignmentNode(arguments[2], call(name, arguments[:2]))
         if name in (_COMPARE_SWAP, _COMPARE_EXCHANGE) and len(arguments) == 4:
@@ -100,6 +106,14 @@ class _AtomicWalker(ScopedWalker):
         if name == _COMPARE_STORE and len(arguments) == 3:
             return call(_COMPARE_SWAP, arguments)
         return None
+
+    def is_byte_address_buffer(self, expression):
+        declared = self.scope.node_type(expression)
+        return (
+            isinstance(declared, A.NamedType)
+            and not declared.generic_args
+            and declared.name in BYTE_ADDRESS_BUFFER_KINDS
+        )
 
 
 def _rename(node, name):
@@ -135,8 +149,11 @@ def _root_name(expression):
     return expression.name if isinstance(expression, A.IdentifierNode) else None
 
 
-def _shared_names(program):
-    """Names declared ``shared`` or ``groupshared`` at program or stage scope, or in a function body."""
+_SHARED_QUALIFIERS = frozenset({"shared", "groupshared"})
+
+
+def shared_variable_names(program, qualifiers=_SHARED_QUALIFIERS):
+    """Names declared with one of ``qualifiers`` at program or stage scope, or in a function body."""
     declarations = list(getattr(program, "global_variables", None) or [])
     stages = getattr(program, "stages", None) or {}
     for stage in stages.values() if isinstance(stages, dict) else stages:
@@ -150,8 +167,8 @@ def _shared_names(program):
     return {
         declaration.name
         for declaration in declarations
-        if {"shared", "groupshared"}
-        & set(getattr(declaration, "qualifiers", None) or [])
+        if qualifiers
+        & {str(value) for value in getattr(declaration, "qualifiers", None) or []}
     }
 
 
@@ -161,6 +178,12 @@ def _walk(node):
     pending = [node]
     while pending:
         item = pending.pop()
+        if isinstance(item, (list, tuple)):
+            # Function bodies may be a bare statement list instead of a block node.
+            pending.extend(item)
+            continue
+        if not isinstance(item, A.ASTNode):
+            continue
         yield item
         pending.extend(get_child(item, field, key) for field, key in child_slots(item))
 
@@ -268,6 +291,6 @@ def hlsl_out_argument_atomics(program, target) -> int:
         for function in iter_functions(program)
         if isinstance(getattr(function, "name", None), str)
     }
-    walker = _OutArgumentWalker(program, defined, _shared_names(program))
+    walker = _OutArgumentWalker(program, defined, shared_variable_names(program))
     walker.run_program()
     return walker.rewritten
