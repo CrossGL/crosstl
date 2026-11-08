@@ -79,6 +79,7 @@ from .fragment_rate_barycentrics import (
     refuse_mixed_metal_barycentrics,
 )
 from .function_name_collisions import rename_colliding_functions
+from .generic_struct_defaults import fill_generic_struct_defaults
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
 from .half import HalfFloatUnsupportedError, legalize_half_floats
@@ -425,6 +426,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     hoist_local_structs(program, report.target)
+    fill_generic_struct_defaults(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)

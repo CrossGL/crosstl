@@ -154,3 +154,41 @@ def test_wgsl_deduces_type_parameters_from_generic_instances(tmp_path):
     assert "fn Box_twice_f32(self_: Box_f32) -> f32" in output
     assert "fn Box_twice_i32(self_: Box_i32) -> i32" in output
     assert "fn make_f32(v: f32) -> Box_f32" in output
+
+
+CONSTRUCTORS = textwrap.dedent("""
+    shader main {
+        generic<T, U> struct Pair {
+            T first;
+            U second;
+        }
+        compute {
+            RWStructuredBuffer<float> f @buffer(0);
+            @numthreads(1, 1, 1)
+            void main(uvec3 id @ gl_GlobalInvocationID) {
+                Pair<vec2, float> p = Pair<vec2, float>(vec2(f[1]), 2.0);
+                Pair<int, float> q = Pair<int, float>(3, f[2]);
+                f[0] = p.first.x + p.second + float(q.first) + q.second;
+            }
+        }
+    }
+""").strip()
+
+
+@pytest.mark.parametrize("backend", ["opengl", "metal", "directx", "vulkan", "wgsl"])
+def test_constructors_name_the_instance_their_type_declares(tmp_path, backend):
+    path = tmp_path / "constructors.cgl"
+    path.write_text(CONSTRUCTORS)
+
+    output = crosstl.translate(str(path), backend=backend)
+
+    if backend == "metal":
+        # The constructor ``Pair<vec2, float>(...)`` and the type ``Pair<vec2, float>`` are one structure; the
+        # constructor used to name an undeclared ``Pair_vec2_float``.
+        assert output.count("struct Pair_float2_float {") == 1
+        assert "Pair_float2_float p = Pair_float2_float{" in output
+        assert "Pair_vec2_float" not in output
+    if backend == "vulkan":
+        # SPIR-V refused the constructor as a call through a callee expression.
+        assert "OpCompositeConstruct" in output
+    _validate(tmp_path, backend, output)

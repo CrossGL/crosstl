@@ -34,6 +34,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    NamedType,
     PointerReinterpretNode,
     RangeNode,
     RayQueryOpNode,
@@ -17711,6 +17712,24 @@ class VulkanSPIRVCodeGen(
 
         return self.composite_construct(enum_type, components)
 
+    def process_generic_struct_constructor_call(
+        self, callee_name, expr
+    ) -> Optional[SpirvId]:
+        """Lower ``Pair<vec2, float>(a, b)``, a constructor of a generic structure's instance, else ``None``."""
+        if not isinstance(callee_name, str) or "<" not in callee_name:
+            return None
+        struct_name = materialize_generic_struct_instance(
+            self, callee_name, self.program_generic_parameter_names
+        )
+        if struct_name is None or self.ensure_declared_struct_type(struct_name) is None:
+            return None
+        return self.process_struct_constructor_node(
+            ConstructorNode(
+                NamedType(struct_name),
+                list(getattr(expr, "arguments", getattr(expr, "args", [])) or []),
+            )
+        )
+
     def process_struct_constructor_node(
         self, expr: ConstructorNode
     ) -> Optional[SpirvId]:
@@ -30355,6 +30374,12 @@ class VulkanSPIRVCodeGen(
 
             if self.is_canonical_atomic_thread_fence_call(callee_name):
                 return self.reject_atomic_thread_fence(expr)
+
+            instance_constructor = self.process_generic_struct_constructor_call(
+                callee_name, expr
+            )
+            if instance_constructor is not None:
+                return instance_constructor
 
             if (
                 isinstance(callee_name, str)
