@@ -26,6 +26,7 @@ the pass refuses it instead.
 """
 
 import re
+from functools import lru_cache
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 __all__ = ["library_fallback_obstacle", "library_using_declaration_present"]
@@ -51,16 +52,27 @@ def _enclosing_namespaces(namespace: str) -> Sequence[str]:
     return ["::".join(components[:length]) for length in range(len(components), -1, -1)]
 
 
+_LIBRARY_USING_DECLARATION = re.compile(
+    r"(?<![\w:])using\s+(?:::\s*)?" + _LIBRARY_NAMESPACE + r"\s*::\s*(\w+)\s*;"
+)
+
+
+@lru_cache(maxsize=8)
+def _library_using_declarations(masked_code: str) -> frozenset:
+    """The names of every ``using metal::<name>;`` in ``masked_code``, found in one scan.
+
+    The constrained call pass asks once per call; scanning the whole unit for each name took minutes on large units.
+    """
+    if "using" not in masked_code:
+        return frozenset()
+    return frozenset(
+        match.group(1) for match in _LIBRARY_USING_DECLARATION.finditer(masked_code)
+    )
+
+
 def library_using_declaration_present(masked_code: str, name: str) -> bool:
     """Whether ``masked_code`` declares ``using metal::<name>;`` (comments and literals masked)."""
-    pattern = re.compile(
-        r"(?<![\w:])using\s+(?:::\s*)?"
-        + _LIBRARY_NAMESPACE
-        + r"\s*::\s*"
-        + re.escape(name)
-        + r"\s*;"
-    )
-    return pattern.search(masked_code) is not None
+    return name in _library_using_declarations(masked_code)
 
 
 def _active_directives(directives: Iterable[Any], position: int) -> list:
