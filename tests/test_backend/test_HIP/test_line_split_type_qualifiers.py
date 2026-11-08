@@ -26,14 +26,19 @@ def generate_crossgl(source):
             "@group(0) @binding(0) var<storage, read> in_: array<f32>",
         ),
         (
-            "__restrict__ const",
+            "const volatile",
             "float* in",
             "@group(0) @binding(0) var<storage, read> in_: array<f32>",
         ),
         (
             "const",
-            "__restrict__ float* in",
+            "float* __restrict__ in",
             "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "volatile",
+            "float* in",
+            "@group(0) @binding(0) var<storage, read_write> in_: array<f32>",
         ),
     ],
 )
