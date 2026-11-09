@@ -1,6 +1,13 @@
-"""Helpers for lowering CrossGL generic structs to C-style shader languages."""
+"""Helpers for lowering CrossGL generic structs to C-style shader languages.
+
+A specialization declares the definition's data members with the generic parameters substituted, and nothing else.
+A struct-level attribute such as ``@metal_alignas(4 * metal_sizeof(T))`` changes the specialization's layout, so a
+definition that carries one is refused with :class:`GenericStructAttributeError` when it is specialized rather than
+declared without it.
+"""
 
 from ..ast import ArrayNode, EnumNode, FunctionNode, StructNode
+from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .enum_utils import (
     collect_generic_parameter_names,
@@ -12,6 +19,12 @@ from .enum_utils import (
     substitute_generic_type_name,
     type_node_contains_generic_parameter,
 )
+
+
+class GenericStructAttributeError(TranslationDiagnostic):
+    """A generic struct with struct-level attributes, which a specialization would not carry."""
+
+    code = f"{CODE_PREFIX}generic-struct-attribute"
 
 
 def collect_generic_struct_definitions(nodes, excluded_names=None):
@@ -37,6 +50,12 @@ def collect_generic_struct_definitions(nodes, excluded_names=None):
             "name": node.name,
             "generic_params": generic_params,
             "members": members,
+            "attributes": sorted(
+                {
+                    str(getattr(attribute, "name", attribute))
+                    for attribute in getattr(node, "attributes", None) or []
+                }
+            ),
         }
     return definitions
 
@@ -174,6 +193,12 @@ def type_text_contains_generic_parameter(type_text, generic_names):
 
 
 def build_generic_struct_specialization(type_text, definition):
+    if definition.get("attributes"):
+        names = ", ".join(f"@{name}" for name in definition["attributes"])
+        raise GenericStructAttributeError(
+            f"generic struct {definition['name']} cannot be specialized as {type_text}: its attributes {names} are "
+            "not carried to specializations"
+        )
     base_name, generic_args = generic_type_parts(type_text)
     substitutions = dict(zip(definition["generic_params"], generic_args))
     return {

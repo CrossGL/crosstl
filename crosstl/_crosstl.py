@@ -22,14 +22,15 @@ from .translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from .translator.codegen.ast_text_leaks import refuse_ast_text
 from .translator.codegen.entry_selection import prepare_entry_scoped_target
 from .translator.codegen.pointer_reinterpret import (
     validate_pointer_reinterpretation_target,
 )
 from .translator.default_arguments import lower_default_arguments
-from .translator.host_workgroup_size import refuse_host_defined_workgroup_sizes
 from .translator.plugin_loader import discover_backend_plugins
 from .translator.semantics import apply_rule_carrying
+from .translator.semantics.rule_pragmas import rule_pragma
 from .translator.source_licenses import source_license_comments
 from .translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
@@ -333,10 +334,6 @@ def _translate_with_codegen(
             generated_code = shader_code
         else:
             codegen = get_codegen(requested_backend)
-            if entry_point is None:
-                # A library whose entries are all emitted is refused for a
-                # host-sized entry before the whole program is rewritten.
-                refuse_host_defined_workgroup_sizes(ast, normalized_backend)
             apply_rule_carrying(ast, source_spec.name, normalized_backend)
             lower_default_arguments(ast)
             selected_ast, remaining_entry_point = prepare_entry_scoped_target(
@@ -362,6 +359,10 @@ def _translate_with_codegen(
                 codegen.normalize_target_safe_cgl = True
             lower_default_arguments(ast)
             generated_code = codegen.generate(ast)
+            pragma = rule_pragma(source_spec.name)
+            if pragma is not None:
+                # The CrossGL program keeps the rule families of the language it came from (rule_pragmas.py).
+                generated_code = f"{pragma}\n{generated_code}"
             if source_spec.name == "opencl":
                 cgl_spec = SOURCE_REGISTRY.get("cgl")
                 if not cgl_spec:
@@ -402,10 +403,6 @@ def _translate_with_codegen(
             if source_spec.name == "hip" and normalized_backend == "directx":
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
-            if entry_point is None:
-                # A library whose entries are all emitted is refused for a
-                # host-sized entry before the whole program is rewritten.
-                refuse_host_defined_workgroup_sizes(cgl_ast, normalized_backend)
             apply_rule_carrying(cgl_ast, source_spec.name, normalized_backend)
             lower_default_arguments(cgl_ast)
             selected_ast, remaining_entry_point = prepare_entry_scoped_target(
@@ -452,6 +449,7 @@ def _generate_target_code(codegen, ast, entry_point, backend=None):
                 entry_point=entry_point,
             )
         code = generate_entry(ast, entry_point)
+    refuse_ast_text(code, backend)
     notices = source_license_comments(ast, backend)
     return code if not notices or notices in code else notices + code
 

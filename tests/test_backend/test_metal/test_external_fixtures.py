@@ -539,7 +539,7 @@ EXTERNAL_FIXTURES = [
         ),
         "roundtrip": True,
         "contains": [
-            "alignas(8) struct AtomicVisibilityBuffer",
+            "@metal_alignas(8)\n    struct AtomicVisibilityBuffer",
             "atomicAdd(dst.count, src.count);",
         ],
         "source": (
@@ -1882,15 +1882,18 @@ EXTERNAL_FIXTURES = [
         "source_path": (
             "ggml/src/ggml-metal/ggml-metal.metal, " "kernel_mul_mv_ext_q4_f32_impl"
         ),
-        "roundtrip": False,
-        "contains": ["[0 ... r1ptg-1] = 0.0f"],
+        # The GNU range designator resolves to one element per index once the extent is a constant; the
+        # importer refuses it in a template whose extent is a parameter (test_array_designators.py).
+        "roundtrip": True,
+        "contains": ["float[r1ptg] sumf = {0.0f, 0.0f, 0.0f, 0.0f};"],
+        "not_contains": ["..."],
         "source": (
             """
             #include <metal_stdlib>
             using namespace metal;
 
-            template<short r1ptg>
             void init_sums() {
+                constexpr short r1ptg = 4;
                 float sumf[r1ptg] = { [ 0 ... r1ptg - 1 ] = 0.0f };
             }
         """

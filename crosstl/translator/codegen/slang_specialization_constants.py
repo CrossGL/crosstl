@@ -31,6 +31,7 @@ from ..ast import (
     TypeNode,
     UnaryOpNode,
 )
+from .global_specialization_constants import specialization_constant_declarations
 from .specialization_constants import (
     SpecializationConstantError,
     array_sizes_reading,
@@ -173,7 +174,7 @@ def plan_slang_specialization_constants(
 
     ``type_name_of`` renders a CrossGL type as its Slang spelling.
     """
-    constants = list(getattr(ast, "constants", None) or [])
+    constants = specialization_constant_declarations(ast)
     ids = specialization_constant_ids(constants, _TARGET, _MAX_SLANG_ID)
     if not ids:
         return SlangSpecializationPlan({}, set(), set())

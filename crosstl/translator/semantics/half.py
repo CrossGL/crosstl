@@ -541,8 +541,9 @@ class HalfLegalizer(MatrixRules):
             return node
         if isinstance(node, A.ForNode):
             self.scope.push()
-            if node.init is not None:
-                set_child(node, "init", None, self.statement(node.init))
+            # ``for (int a = 0, b = 4; ...)`` holds its declarations as a list.
+            for slot in field_slots(node, "init"):
+                set_child(node, *slot, self.statement(get_child(node, *slot)))
             for field in ("condition", "body"):
                 child = getattr(node, field)
                 if child is not None:

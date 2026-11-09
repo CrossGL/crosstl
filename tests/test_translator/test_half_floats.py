@@ -973,3 +973,20 @@ def test_matrix_helpers_follow_their_column_helpers():
     ]
     with pytest.raises(ValueError):
         H.helper_source("cgl_half_div", (2, 2))
+
+
+def test_for_header_with_several_declarations(tmp_path):
+    """``for (int a = 0, b = 4; ...)`` holds a list of declarations, which the legalizer walks one by one."""
+    source = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void k(device half *o [[buffer(0)]], uint i [[thread_position_in_grid]]) {\n"
+        "    half acc = 0.0h;\n"
+        "    for (half a = 0.5h, b = 4.0h; a < b; a += 1.0h) {\n"
+        "        acc += o[int(a)] * a;\n"
+        "    }\n"
+        "    o[i] = acc;\n"
+        "}\n"
+    )
+    spirv = translate(tmp_path, source, "vulkan", ".metal")
+    assert "OpLoopMerge" in spirv

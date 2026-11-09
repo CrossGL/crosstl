@@ -18,6 +18,7 @@ from ...translator.cooperative_matrix import (
     has_cooperative_matrix_fragment_mapping,
 )
 from ...translator.division_math import binary32_division_support
+from ...translator.float_limit_constants import float_limit_constant
 from ...translator.fused_math import FMA_HELPER_KEYS, binary32_fma_support
 from ...translator.host_workgroup_size import (
     host_workgroup_size_attribute_text,
@@ -48,10 +49,18 @@ from .aggregate_scalar_conversions import (
     render_aggregate_scalar_conversion,
     render_explicit_aggregate_scalar_conversion,
 )
+from .aliased_member_owners import resolve_member_alias_type
+from .alignment_specifiers import MetalAlignmentSpecifiers
+from .array_designators import has_array_designators, positional_array_initializer
+from .atomic_result_conversions import convert_atomic_result, is_atomic_result_call
 from .barrier_import import metal_barrier_statements
 from .bit_scan_import import lower_scan as lower_bit_scan
 from .bit_scan_import import scan_function as bit_scan_function
 from .buffer_layout_import import MetalBufferLayoutImport
+from .call_template_deduction import (
+    TemplateDeductionConflict,
+    deduce_omitted_template_arguments,
+)
 from .color_attachments import (
     color_attachment_semantic,
     enumerator_index_values,
@@ -59,14 +68,28 @@ from .color_attachments import (
 )
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
+from .const_cast_buffer_writes import mark_const_cast_written_buffers
 from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
     dependent_access,
     dependent_builtin_result_type,
+    dependent_subscript_selection,
     unbound_template_type_names,
 )
+from .explicit_specialization_annotations import explicit_specialization_annotation
 from .external_functions import refuse_external_function_calls
+from .generic_call_return_types import (
+    deduced_call_return_type,
+    expression_call_return_type,
+)
+from .implicit_constructor_conversions import (
+    convert_user_call_arguments,
+    converted_assignment_value,
+    converting_constructor_argument,
+    converting_constructor_value,
+)
+from .instance_static_members import render_instance_static_struct_member
 from .library_structs import declare_referenced_library_structs
 from .local_aggregate_declarators import (
     union_layout,
@@ -78,7 +101,21 @@ from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
+from .namespace_scope_variables import resolve_namespace_scope_variables
+from .namespaced_functions import (
+    METAL_LIBRARY_MATH_FUNCTIONS,
+    declared_in_several_namespaces,
+    nominated_namespaces_in_scope,
+)
+from .narrow_float_constants import (
+    narrow_float_constant,
+    render_narrow_float_constant,
+)
 from .opaque_matrix_contracts import complete_opaque_matrix_contracts
+from .partial_struct_specializations import (
+    UndecidedPartialSpecialization,
+    partial_specialization_for_owner,
+)
 from .preprocessor import (
     DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
     MetalPreprocessor,
@@ -106,6 +143,7 @@ from .texture_types import (
 )
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
+from .using_declared_library_names import using_declared_library_names
 
 _PLAIN_TYPE_NAME = re.compile(r"[A-Za-z_]\w*")
 
@@ -1040,7 +1078,10 @@ class MetalConstexprBranchLoweringError(ValueError):
 
 
 class MetalToCrossGLConverter(
-    ImportRefusalMixin, MetalBufferLayoutImport, MetalMeshImport
+    ImportRefusalMixin,
+    MetalAlignmentSpecifiers,
+    MetalBufferLayoutImport,
+    MetalMeshImport,
 ):
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -1958,6 +1999,7 @@ class MetalToCrossGLConverter(
         self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
         self.callable_type_aliases = {}
+        self.metal_later_declarations_visible = False
         self.callable_alias_declarations = {}
         self.global_variable_types = {}
         self.current_variable_types = {}
@@ -2267,6 +2309,11 @@ class MetalToCrossGLConverter(
         ):
             # E::A of a declared enum is CrossGL's own spelling.
             return f"{scoped[0]}::{self.sanitize_identifier(scoped[1])}"
+        narrow_constant = narrow_float_constant(name)
+        if narrow_constant is not None and not self.unscoped_enumerator_is_shadowed(
+            name
+        ):
+            return render_narrow_float_constant(self, narrow_constant)
         return self.sanitize_identifier(name)
 
     def unscoped_enumerator_is_shadowed(self, name):
@@ -2348,7 +2395,10 @@ class MetalToCrossGLConverter(
         alias_target = self.local_struct_type_aliases.get(struct_name)
         resolved_struct = self.resolve_local_type_aliases(alias_target or struct_name)
         if resolved_struct not in self.struct_name_map:
-            match = self.struct_templates_for_dependent_owner(resolved_struct)
+            try:
+                match = self.struct_templates_for_dependent_owner(resolved_struct)
+            except UndecidedPartialSpecialization:
+                match = None
             if match is not None and match[2]:
                 candidates = match[0]
                 if len(candidates) != 1:
@@ -2567,8 +2617,11 @@ class MetalToCrossGLConverter(
         struct_node = self.struct_declarations.get(struct_name)
         if struct_node is None:
             return None
-        if (
+        alignas_alignment = self.metal_alignment_specifier_value(
             getattr(struct_node, "alignas", None)
+        )
+        if (
+            alignas_alignment is None
             or getattr(struct_node, "attributes", None)
             or getattr(struct_node, "template_parameters", None)
             or getattr(struct_node, "generics", None)
@@ -2617,6 +2670,7 @@ class MetalToCrossGLConverter(
                 offset += member_size
             aggregate_alignment = max(aggregate_alignment, member_alignment)
 
+        aggregate_alignment = max(aggregate_alignment, alignas_alignment)
         aggregate_size = self.align_metal_layout_offset(offset, aggregate_alignment)
         if aggregate_size == 0:
             aggregate_size = 1
@@ -3444,10 +3498,14 @@ class MetalToCrossGLConverter(
         """Render ``ast`` as a CrossGL program.
 
         Raises :class:`MetalImportRefused` listing every Metal construct CrossGL cannot represent faithfully, and
-        :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares.
+        :class:`.external_functions.MetalExternalFunctionError` for a call to a function the unit only declares, and
+        :class:`.namespace_scope_variables.MetalNamespaceLookupError` for an unqualified use of a variable name that
+        several namespaces declare and lookup cannot bind to one of them.
         """
+        resolve_namespace_scope_variables(ast)
         refuse_external_function_calls(ast)
         declare_referenced_library_structs(ast, parse_metal_structs)
+        mark_const_cast_written_buffers(ast)
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
@@ -3708,26 +3766,10 @@ class MetalToCrossGLConverter(
                     code += f"    cbuffer {self.map_struct_name(struct_node.name)} {{\n"
                 else:
                     code += "    // Structs\n"
-                    struct_alignas = ""
-                    if hasattr(struct_node, "alignas") and struct_node.alignas:
-                        parts = []
-                        for item in struct_node.alignas:
-                            if isinstance(item, tuple) and item[0] == "type":
-                                parts.append(self.map_type(item[1]))
-                            else:
-                                parts.append(self.generate_expression(item, False))
-                        if (
-                            getattr(struct_node, "nested_owner_name", None)
-                            and len(parts) == 1
-                        ):
-                            code += f"    @metal_alignas({parts[0]})\n"
-                        else:
-                            struct_alignas = (
-                                " ".join(f"alignas({part})" for part in parts) + " "
-                            )
+                    code += self.metal_struct_alignment_attributes(struct_node)
                     code += (
                         f"    {self.format_generic_prefix(struct_node)}"
-                        f"{struct_alignas}struct "
+                        "struct "
                         f"{self.map_struct_name(struct_node.name)} {{\n"
                     )
                 static_member_types = {
@@ -3848,11 +3890,16 @@ class MetalToCrossGLConverter(
                                 previous_type_resolution_context
                             )
                             continue
-                        self.global_variable_types[glob.left.name] = (
-                            self.metal_declaration_expression_type(glob.left)
+                        # ``constant constexpr auto n = 32;`` takes its type from the
+                        # initializer, as a block-scope ``auto`` does ([dcl.type.auto.deduct]).
+                        inferred_type = self.inferred_metal_declaration_type(
+                            glob.left, glob.right
                         )
+                        self.global_variable_types[glob.left.name] = inferred_type
                         self.global_variable_type_qualifiers[glob.left.name] = (
-                            self.metal_declaration_type_qualifiers(glob.left)
+                            self.inferred_metal_declaration_type_qualifiers(
+                                glob.left, glob.right, inferred_type
+                            )
                         )
                     left = (
                         self.format_decl(glob.left, include_semantic=True)
@@ -3860,7 +3907,9 @@ class MetalToCrossGLConverter(
                         else self.generate_expression(glob.left, False)
                     )
                     right = self.generate_initializer_value(
-                        glob.right,
+                        self.array_initializer_without_designators(
+                            glob.left, glob.right
+                        ),
                         False,
                         (
                             getattr(glob.left, "vtype", None)
@@ -6388,6 +6437,8 @@ class MetalToCrossGLConverter(
         return tiers
 
     def declaration_visible_at_current_offset(self, declaration):
+        if self.metal_later_declarations_visible:
+            return True
         use_offset = self.alias_resolution_offset()
         declaration_offset = self.alias_source_offset(declaration)
         return (
@@ -6883,6 +6934,18 @@ class MetalToCrossGLConverter(
             matches = exact or primary
             if not matches:
                 continue
+            if not exact:
+                # [temp.spec.partial.match]: the primary applies only when no partial specialization does.
+                specialization = partial_specialization_for_owner(
+                    self, owner, tier, arguments, primary
+                )
+                if specialization is not None:
+                    node, bound_arguments = specialization
+                    return (
+                        [node],
+                        bound_arguments,
+                        not getattr(node, "template_parameters", None),
+                    )
             return matches, arguments, bool(exact)
         return None
 
@@ -7105,7 +7168,19 @@ class MetalToCrossGLConverter(
 
     def resolve_dependent_alias_contract(self, owner, member, required):
         resolved_owner = self.materialize_alias_template_type(owner, required=required)
-        match = self.struct_templates_for_dependent_owner(resolved_owner)
+        try:
+            match = self.struct_templates_for_dependent_owner(resolved_owner)
+        except UndecidedPartialSpecialization as undecided:
+            if not required:
+                return None
+            raise MetalStructAliasResolutionError(
+                resolved_owner,
+                member,
+                undecided.reason,
+                source_location=getattr(
+                    self.current_type_resolution_context, "source_location", None
+                ),
+            ) from undecided
         if match is None:
             return None
         struct_nodes, arguments, exact_specialization = match
@@ -7259,7 +7334,7 @@ class MetalToCrossGLConverter(
         dependent = self.dependent_alias_type_parts(candidate)
         if dependent is not None:
             owner, member = dependent
-            resolved = self.resolve_dependent_alias_type(owner, member, required)
+            resolved = resolve_member_alias_type(self, owner, member, required)
             if resolved is not None:
                 return f"{resolved}{suffix}"
             if required and self.alias_template_resolution_stack:
@@ -8493,6 +8568,7 @@ class MetalToCrossGLConverter(
         explicit_arguments,
         *,
         selected_call,
+        deduced_arguments=None,
     ):
         parameters = [
             entry
@@ -8500,6 +8576,7 @@ class MetalToCrossGLConverter(
             if isinstance(entry, (tuple, list)) and len(entry) >= 2 and entry[1]
         ]
         defaults = getattr(function, "template_parameter_defaults", {}) or {}
+        deduced_arguments = dict(deduced_arguments or {})
         explicit_arguments = list(explicit_arguments or [])
         if len(explicit_arguments) > len(parameters):
             raise MetalTemplateArgumentResolutionError(
@@ -8518,7 +8595,13 @@ class MetalToCrossGLConverter(
         type_bindings = {}
         for index, (kind, name) in enumerate(parameters):
             explicit = index < len(explicit_arguments)
-            expression = explicit_arguments[index] if explicit else defaults.get(name)
+            deduced = not explicit and name in deduced_arguments
+            if explicit:
+                expression = explicit_arguments[index]
+            elif deduced:
+                expression = deduced_arguments[name]
+            else:
+                expression = defaults.get(name)
             if expression is None:
                 raise MetalTemplateArgumentResolutionError(
                     function.name,
@@ -8537,7 +8620,7 @@ class MetalToCrossGLConverter(
                     function,
                     name,
                     selected_call,
-                    is_default=not explicit,
+                    is_default=not (explicit or deduced),
                 )
                 value_bindings[name] = resolved
             else:
@@ -8547,11 +8630,51 @@ class MetalToCrossGLConverter(
                     function,
                     name,
                     selected_call,
-                    is_default=not explicit,
+                    is_default=not (explicit or deduced),
                 )
                 type_bindings[name] = resolved
             all_bindings[name] = resolved
         return value_bindings, type_bindings
+
+    def deduce_omitted_call_template_arguments(
+        self,
+        function,
+        explicit_arguments,
+        call_arguments,
+        *,
+        selected_call,
+    ):
+        """Deduce the template arguments an explicit call list leaves out."""
+        template_parameters = [
+            (entry[0], entry[1])
+            for entry in getattr(function, "template_parameters", None) or []
+            if isinstance(entry, (tuple, list)) and len(entry) >= 2 and entry[1]
+        ]
+        explicit_count = len(explicit_arguments or [])
+        if explicit_count >= len(template_parameters):
+            return {}
+        parameters = getattr(function, "params", None) or []
+        argument_types = [
+            self.expression_metal_type(argument) for argument in call_arguments
+        ]
+        try:
+            return deduce_omitted_template_arguments(
+                template_parameters,
+                explicit_count,
+                [getattr(parameter, "vtype", None) for parameter in parameters],
+                argument_types,
+            )
+        except TemplateDeductionConflict as conflict:
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                conflict.parameter_name,
+                ", ".join(conflict.values),
+                selected_call,
+                str(conflict),
+                "deduced",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+            ) from conflict
 
     def resolve_concrete_template_type_argument(
         self,
@@ -8713,6 +8836,12 @@ class MetalToCrossGLConverter(
                     function,
                     arguments,
                     selected_call=str(name),
+                    deduced_arguments=self.deduce_omitted_call_template_arguments(
+                        function,
+                        arguments,
+                        call_arguments,
+                        selected_call=str(name),
+                    ),
                 )
             )
         except MetalTemplateArgumentResolutionError as error:
@@ -9185,6 +9314,33 @@ class MetalToCrossGLConverter(
             self.metal_array_type_parts(self.effective_metal_variable_type(var))
         )
 
+    def array_initializer_without_designators(self, declaration, initializer):
+        """``initializer`` of ``declaration`` with its C array designators resolved to positions.
+
+        See :mod:`array_designators`; any other initializer is returned unchanged.
+        """
+        if not isinstance(declaration, VariableNode) or not has_array_designators(
+            initializer
+        ):
+            return initializer
+        element_type = getattr(declaration, "vtype", None)
+        extents = list(getattr(declaration, "array_sizes", None) or [])
+        if not extents:
+            parts = self.metal_array_type_parts(self.resolve_type_alias(element_type))
+            while parts is not None:
+                element_type, extent = parts
+                extents.append(extent)
+                parts = self.metal_array_type_parts(
+                    self.resolve_type_alias(element_type)
+                )
+        if not extents:
+            return self.refuse_import(
+                f"Metal designated array initializer of '{getattr(declaration, 'name', '')}', "
+                "which is not an array",
+                InitializerListNode([]),
+            )
+        return positional_array_initializer(self, element_type, extents, initializer)
+
     def map_variable_type(self, var):
         mapped_type = self.map_variable_type_by_declaration(var)
         if mapped_type == "sampler" and id(var) in self.comparison_sampler_ids:
@@ -9287,6 +9443,18 @@ class MetalToCrossGLConverter(
 
         return list(dict.fromkeys(qualifiers))
 
+    def metal_auto_pointer_object(self, var):
+        """Whether ``var`` is a plain ``auto`` local whose initializer deduced a pointer type."""
+        if self.metal_auto_pointer_depth(getattr(var, "vtype", None)):
+            return False
+        if not self.is_metal_auto_declaration_type(getattr(var, "vtype", None)):
+            return False
+        name = getattr(var, "name", None)
+        inferred_type = self.current_variable_types.get(
+            name, self.global_variable_types.get(name)
+        )
+        return self.metal_pointer_pointee_type_once(inferred_type) is not None
+
     def effective_declaration_qualifiers(self, var):
         qualifiers = self.resolved_declaration_qualifiers(var)
         if self.is_metal_auto_declaration_type(getattr(var, "vtype", None)):
@@ -9294,6 +9462,13 @@ class MetalToCrossGLConverter(
             inferred = self.current_variable_type_qualifiers.get(
                 name, self.global_variable_type_qualifiers.get(name, ())
             )
+            if self.metal_auto_pointer_object(var):
+                # ``const auto p = ptr`` is ``T* const``: the const is the pointer object's own, not the pointee's.
+                qualifiers = [
+                    qualifier
+                    for qualifier in qualifiers
+                    if str(qualifier).lower() not in {"const", "volatile"}
+                ]
             qualifiers.extend(inferred)
         return list(dict.fromkeys(qualifiers))
 
@@ -9481,6 +9656,9 @@ class MetalToCrossGLConverter(
             self.effective_metal_variable_type(var)
         )
         pointee_qualifiers = getattr(var, "pointee_qualifiers", None)
+        if self.metal_auto_pointer_object(var):
+            # The initializer's pointer type alone qualifies the pointee of ``const auto p = ptr``.
+            pointee_qualifiers = None
         pointee_qualifier_names = {
             str(qualifier).lower()
             for qualifier in (
@@ -9530,6 +9708,7 @@ class MetalToCrossGLConverter(
                 (
                     getattr(var, "is_const", False)
                     and not threadgroup_pointee_const_local
+                    and not self.metal_auto_pointer_object(var)
                 )
                 or (
                     "const" in qualifiers
@@ -9877,6 +10056,9 @@ class MetalToCrossGLConverter(
             for qualifier in ("static", "inline"):
                 if qualifier in qualifiers:
                     linkage_annotations.append(f"@metal_{qualifier}")
+            specialization = explicit_specialization_annotation(self, func)
+            if specialization is not None:
+                linkage_annotations.append(specialization)
         code += "    " * indent
         implicit_buffer_bindings = (
             self.apply_implicit_stage_entry_buffer_bindings(func) if stage_entry else []
@@ -10060,6 +10242,16 @@ class MetalToCrossGLConverter(
                     bound_value_names=active_value_bindings,
                 )
             )
+            if function_body is None and getattr(func, "is_template_prototype", False):
+                # A declaration-only primary that explicit specializations
+                # complete; generators select them per deduced argument tuple.
+                params = ", ".join(
+                    declaration for declaration in parameter_declarations if declaration
+                )
+                return (
+                    code
+                    + f"{generic_prefix}{return_type} {function_name}({params});\n\n"
+                )
             body = (
                 value_param_decls
                 + self.metal_mesh_body_prologue(func, indent + 1)
@@ -10698,7 +10890,8 @@ class MetalToCrossGLConverter(
                                 self.materialized_constexpr_expression_contexts.pop()
                         code += f"return {value};\n"
             elif isinstance(stmt, BinaryOpNode):
-                code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
+                # One renderer for every binary operator, so ``a = x, b = y;`` keeps the CrossGL comma spelling.
+                code += f"{self.generate_expression(stmt, is_main)};\n"
             elif (
                 isinstance(stmt, CastNode) and self.map_type(stmt.target_type) == "void"
             ):
@@ -10774,7 +10967,9 @@ class MetalToCrossGLConverter(
                 if expr:
                     code += f"{expr};\n"
                 else:
-                    code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+                    code += self.refuse_import(
+                        f"Metal statement of kind {type(stmt).__name__} has no CrossGL statement form"
+                    )
         return code
 
     def generate_scoped_function_body(self, body, indent=0, is_main=False):
@@ -11995,6 +12190,12 @@ class MetalToCrossGLConverter(
             initializer_type = self.expression_metal_type(node.left)
         if self.binary16_widening_profile is not None and not initializer_type:
             initializer_type = self.expression_metal_type(node.left)
+        if (
+            not initializer_type
+            and node.operator == "="
+            and is_atomic_result_call(self, node.right)
+        ):
+            initializer_type = self.expression_metal_type(node.left)
         converted_rhs = None
         if component_info is None and lhs_info is None:
             converted_rhs = render_aggregate_scalar_conversion(
@@ -12009,6 +12210,8 @@ class MetalToCrossGLConverter(
                 node.operator,
                 is_main,
             )
+        if converted_rhs is None and component_info is None and lhs_info is None:
+            converted_rhs = converted_assignment_value(self, node, is_main)
         try:
             # `device T& r = buffer[i]` binds the element; buffer_load would
             # bind a copy and drop every write through `r`.
@@ -12020,7 +12223,7 @@ class MetalToCrossGLConverter(
                 )
             else:
                 rhs = self.generate_initializer_value(
-                    node.right,
+                    self.array_initializer_without_designators(node.left, node.right),
                     is_main,
                     initializer_type,
                     (
@@ -12259,6 +12462,8 @@ class MetalToCrossGLConverter(
                 expr, is_main, expected_type, expected_array
             )
         value = self.generate_expression(expr, is_main)
+        if not expected_array:
+            value = convert_atomic_result(self, expr, value, expected_type)
         if self.binary16_widening_profile is not None and not expected_array:
             value = self.render_metal_half_widening(
                 value,
@@ -12357,24 +12562,17 @@ class MetalToCrossGLConverter(
             )
             return f"{emitted_name}: {value}"
 
-        designators = []
-        for designator in node.designators:
-            kind = designator[0]
-            if kind == "range":
-                start = self.generate_expression(designator[1], is_main)
-                end = self.generate_expression(designator[2], is_main)
-                designators.append(f"[{start} ... {end}]")
-                continue
-            target = designator[1]
-            if kind == "index":
-                designators.append(f"[{self.generate_expression(target, is_main)}]")
-            else:
-                emitted_name = member_names.get(
-                    target, self.sanitize_identifier(target)
-                )
-                designators.append(f".{emitted_name}")
-        value = self.generate_initializer_value(node.value, is_main)
-        return f"{''.join(designators)} = {value}"
+        # CrossGL has field designators only; array designators are resolved to positions before generation
+        # (array_designators), so one left here sits where its array cannot be known.
+        return self.refuse_import(
+            "Metal designated initializer "
+            + "".join(
+                f".{designator[1]}" if designator[0] == "field" else "[...]"
+                for designator in node.designators
+            )
+            + " = ... outside an array declaration CrossGL can resolve to positions",
+            "0",
+        )
 
     def normalize_literal_string(self, value):
         if "'" in value and re.match(r"^(?:0[xX][0-9a-fA-F]|0[bB][01]|\d|\.\d)", value):
@@ -12763,6 +12961,9 @@ class MetalToCrossGLConverter(
                                     expr.args[index], parameter, is_main
                                 )
                             )
+            convert_user_call_arguments(
+                self, materialized_name, expr, wrapper_arguments, is_main
+            )
             materialized_name = self.transported_metal_source_overload_name(
                 materialized_name,
                 expr.args,
@@ -12936,6 +13137,9 @@ class MetalToCrossGLConverter(
                 if constant is not None:
                     return constant
             static_member = self.render_decltype_static_struct_member(expr)
+            if static_member is None:
+                # `t.value` for a static member names its constant (instance_static_members.py).
+                static_member = render_instance_static_struct_member(self, expr)
             if static_member is not None:
                 return static_member
             if matrix_columns_object(self, expr) is not None:
@@ -13100,6 +13304,9 @@ class MetalToCrossGLConverter(
                 )
             return f"{condition} ? {true_expr} : {false_expr}"
         elif isinstance(expr, CastNode):
+            compound_literal = self.generate_metal_compound_literal(expr, is_main)
+            if compound_literal is not None:
+                return compound_literal
             profiled_constructor = self.generate_metal_half_widening_constructor(
                 expr.target_type, [expr.expression], is_main
             )
@@ -13274,7 +13481,10 @@ class MetalToCrossGLConverter(
         elif isinstance(expr, float) or isinstance(expr, int) or isinstance(expr, bool):
             return str(expr)
         else:
-            return f"/* Unhandled expression: {type(expr).__name__} */"
+            return self.refuse_import(
+                f"Metal expression of kind {type(expr).__name__} has no CrossGL expression form",
+                "0",
+            )
 
     def generate_lambda_expression(self, expr, is_main=False):
         del is_main
@@ -14923,6 +15133,21 @@ class MetalToCrossGLConverter(
         visit(root)
         return calls
 
+    def metal_library_function_names(self):
+        """Unqualified names of the Metal library functions the importer lowers.
+
+        User overloads of these names extend the library overload set (``metal::simd_shuffle_down(bfloat, ushort)``
+        next to the library template), so a call that no user overload matches still binds to the library function.
+        Splitting them per namespace would hide the library candidates, so they keep the library-collision path.
+        """
+        return (
+            set(self.metal_math_intrinsics)
+            | set(self.metal_bit_intrinsics)
+            | set(self.metal_wave_intrinsics)
+            | set(self.metal_atomic_intrinsics)
+            | METAL_LIBRARY_MATH_FUNCTIONS
+        )
+
     def prepare_metal_source_overload_transport(self, ast):
         """Assign internal names where portable target ABIs erase source identity."""
         self.metal_source_overload_groups = {}
@@ -14932,6 +15157,10 @@ class MetalToCrossGLConverter(
         # These portable names are emitted by as_type and arithmetic helpers,
         # even without a qualified builtin call in the source AST.
         builtin_names = qualified_math_calls | {"asfloat", "asint", "asuint"}
+        self.metal_using_declared_library_names = using_declared_library_names(
+            ast, self.metal_library_function_names()
+        )
+        builtin_names |= self.metal_using_declared_library_names
         used_names = set(self.wide_vector_reserved_names)
         used_names.update(
             self.sanitize_identifier(name)
@@ -14939,9 +15168,14 @@ class MetalToCrossGLConverter(
         )
 
         for function_name, overloads in self.user_function_overloads_by_name.items():
-            builtin_collision = function_name in builtin_names and any(
-                not self.is_materialized_metal_stdlib_wrapper(function)
-                for function in overloads
+            builtin_collision = (
+                function_name in builtin_names
+                and any(
+                    not self.is_materialized_metal_stdlib_wrapper(function)
+                    for function in overloads
+                )
+                or function_name not in self.metal_library_function_names()
+                and declared_in_several_namespaces(overloads)
             )
             if builtin_collision:
                 self.metal_builtin_name_collision_groups.add(function_name)
@@ -15496,7 +15730,9 @@ class MetalToCrossGLConverter(
                 if not explicitly_global:
                     visible_names.update(
                         f"{target}::{function_name}"
-                        for target in self.visible_using_namespace_targets(scope)
+                        for target in nominated_namespaces_in_scope(
+                            namespace, scope, self.visible_using_namespace_targets
+                        )
                     )
                 scoped = {
                     signature: declarations
@@ -15529,7 +15765,12 @@ class MetalToCrossGLConverter(
     def resolve_transported_metal_source_overload(
         self, function_name, arguments, source_location=None
     ):
-        if self.qualified_metal_math_operation(function_name) in getattr(
+        library_operation = self.qualified_metal_math_operation(function_name)
+        if library_operation is None and str(function_name) in getattr(
+            self, "metal_using_declared_library_names", set()
+        ):
+            library_operation = str(function_name)
+        if library_operation in getattr(
             self, "metal_builtin_name_collision_groups", set()
         ):
             binding, function = self.resolve_metal_user_function_overload(
@@ -15679,8 +15920,12 @@ class MetalToCrossGLConverter(
                 if not explicitly_global:
                     visible.update(
                         f"{target}::{function_name}"
-                        for target in self.visible_using_namespace_targets(
-                            scope, use_offset=source_offset
+                        for target in nominated_namespaces_in_scope(
+                            namespace,
+                            scope,
+                            lambda directive_scope: self.visible_using_namespace_targets(
+                                directive_scope, use_offset=source_offset
+                            ),
                         )
                     )
                 matching = [
@@ -17416,6 +17661,9 @@ float {scalar}(float base, float exponent) {{
         return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def generate_metal_value_argument(self, argument, parameter, is_main):
+        converted = converting_constructor_argument(self, argument, parameter, is_main)
+        if converted is not None:
+            return converted
         if self.binary16_widening_profile is not None and isinstance(
             argument, InitializerListNode
         ):
@@ -18898,6 +19146,27 @@ float {scalar}(float value) {{
             self.postfix_precedence,
             is_main,
         )
+
+    def generate_metal_compound_literal(self, expr, is_main):
+        """Render ``(T){...}`` as the braced initialization of a ``T`` temporary.
+
+        The Metal compiler accepts the C compound literal ``(float4x4){c0, c1, c2, c3}``
+        as a temporary initialized from the braced list, exactly as the declaration
+        ``float4x4 m = {c0, c1, c2, c3};`` would initialize it.
+        """
+        if not isinstance(expr.expression, InitializerListNode):
+            return None
+        target_type = expr.target_type
+        if (
+            not target_type
+            or "[" in str(target_type)
+            or self.metal_pointer_pointee_type_once(
+                self.resolve_type_alias(target_type)
+            )
+            is not None
+        ):
+            return None
+        return self.generate_initializer_value(expr.expression, is_main, target_type)
 
     def generate_cast_operand(self, operand, rendered_operand):
         if isinstance(operand, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
@@ -21507,6 +21776,10 @@ float {scalar}(float value) {{
             and initializer is not None
             and self.metal_pointer_pointee_type_once(inferred_type) is not None
         ):
+            if not self.metal_auto_pointer_depth(declaration.vtype):
+                # ``const auto p = ptr`` deduces ``T* const`` ([dcl.type.auto.deduct]): the const qualifies the
+                # local pointer object, which CrossGL locals need not spell, not the storage it points to.
+                qualifiers.difference_update({"const", "volatile"})
             qualifiers.update(self.expression_metal_type_qualifiers(initializer))
             if self.metal_auto_pointer_depth(declaration.vtype):
                 return self.normalized_metal_address_qualifiers(
@@ -21685,6 +21958,10 @@ float {scalar}(float value) {{
             if selected_callable is not None
             else self.expression_metal_type(initializer)
         )
+        if selected_callable is not None:
+            return_type = deduced_call_return_type(
+                self, declaration, initializer, selected_callable, return_type
+            )
         inferred_type = self.metal_source_overload_value_type(return_type)
         if self.metal_auto_pointer_depth(declared_type):
             array_element = self.split_outer_metal_declarator_array_type(inferred_type)
@@ -22057,6 +22334,22 @@ float {scalar}(float value) {{
         base_type = self.expression_metal_type(expr.array)
         source_location = getattr(expr, "source_location", None)
         index_expression = self.metal_index_expression_text(expr.index)
+        dependent = dependent_subscript_selection(
+            expr.array,
+            (
+                None
+                if base_type is None
+                else self.metal_source_overload_value_type(base_type)
+            ),
+            self.expression_metal_type,
+            unbound_template_type_names(
+                self.current_function,
+                set(self.type_aliases).union(*self.template_type_bindings),
+            ),
+            self.struct_declarations.values(),
+        )
+        if dependent is not None:
+            return dependent
         if base_type is None:
             raise MetalIndexedComponentTypeResolutionError(
                 None,
@@ -22255,9 +22548,15 @@ float {scalar}(float value) {{
 
     def metal_standard_math_constant_type(self, name):
         constant = standard_math_constant(name)
-        if constant is None or "metal" not in constant.source_environments:
-            return None
-        return constant.scalar_type
+        if constant is not None and "metal" in constant.source_environments:
+            return constant.scalar_type
+        # INFINITY, NAN, FLT_MAX and the other binary32 limits are float constants (MSL section 6.6.1).
+        if float_limit_constant(name) is not None:
+            return "float"
+        narrow_constant = narrow_float_constant(name)
+        if narrow_constant is not None:
+            return narrow_constant.metal_type
+        return None
 
     def metal_literal_string_type(self, value):
         text = str(value).replace("'", "")
@@ -23210,7 +23509,12 @@ float {scalar}(float value) {{
                 return constructor_type
             selected_callable = self.selected_metal_callable(expr)
             if selected_callable is not None:
-                return self.selected_metal_callable_return_type(selected_callable)
+                return expression_call_return_type(
+                    self,
+                    selected_callable,
+                    expr.args,
+                    self.selected_metal_callable_return_type(selected_callable),
+                )
             builtin_result_type = self.metal_math_builtin_result_type(expr)
             if builtin_result_type is not None:
                 return builtin_result_type
@@ -23235,6 +23539,16 @@ float {scalar}(float value) {{
                 )
                 if atomic_result is not None:
                     return atomic_result
+            unscoped_name = str(expr.name).rsplit("::", 1)[-1]
+            if (
+                unscoped_name in self.metal_wave_intrinsics
+                and expr.args
+                and self.map_metal_wave_function_name(expr.name, expr.args) is not None
+            ):
+                # The call lowers to the builtin, which no user overload of
+                # its name matches: it has the builtin's type, not the type of
+                # a user overload of the same arity.
+                return self.expression_metal_type(expr.args[0])
             arity_candidates = [
                 candidate
                 for candidate in self.user_function_overloads_by_name.get(
@@ -23243,8 +23557,12 @@ float {scalar}(float value) {{
                 if len(getattr(candidate, "params", []) or []) == len(expr.args)
             ]
             if len(arity_candidates) == 1:
-                return getattr(arity_candidates[0], "return_type", None)
-            unscoped_name = str(expr.name).rsplit("::", 1)[-1]
+                return expression_call_return_type(
+                    self,
+                    arity_candidates[0],
+                    expr.args,
+                    getattr(arity_candidates[0], "return_type", None),
+                )
             if (
                 unscoped_name in self.metal_wave_intrinsics
                 or unscoped_name == "simd_shuffle_and_fill_up"
@@ -23533,11 +23851,12 @@ float {scalar}(float value) {{
         if not element_type:
             return None
         qualifiers = set(self.effective_declaration_qualifiers(var))
-        buffer_type = (
-            "StructuredBuffer"
-            if qualifiers.intersection({"constant", "const"})
-            else "RWStructuredBuffer"
+        # A ``device const`` buffer that the function stores through after a
+        # const cast is still bound writable: keep the store.
+        read_only = qualifiers.intersection({"constant", "const"}) and not getattr(
+            var, "metal_storage_written", False
         )
+        buffer_type = "StructuredBuffer" if read_only else "RWStructuredBuffer"
         mapped_element_type = self.map_resource_pointer_element_type(var, element_type)
         return f"{buffer_type}<{mapped_element_type}>"
 
@@ -23604,7 +23923,24 @@ float {scalar}(float value) {{
             access.array, is_main
         )
         index = self.generate_expression(access.index, is_main)
+        converted = (
+            converting_constructor_value(
+                self,
+                self.expression_metal_type(access),
+                value,
+                is_main,
+                assignment=True,
+            )
+            if operator == "="
+            else None
+        )
+        if converted is not None:
+            return f"buffer_store({buffer}, {index}, {converted})"
         rendered_value = self.generate_expression(value, is_main)
+        if operator == "=" and is_atomic_result_call(self, value):
+            rendered_value = convert_atomic_result(
+                self, value, rendered_value, self.expression_metal_type(access)
+            )
         if self.binary16_widening_profile is not None:
             rendered_value = self.render_metal_half_widening(
                 rendered_value,

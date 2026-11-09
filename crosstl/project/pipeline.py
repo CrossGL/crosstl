@@ -30,9 +30,14 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.backend.Metal.alias_template_types import fold_expression_decltypes
 from crosstl.backend.Metal.auto_placeholders import (
     deduced_auto_type,
     is_auto_placeholder,
+)
+from crosstl.backend.Metal.deduction_operand_types import (
+    is_unary_sign_position,
+    operand_expression_type,
 )
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
@@ -41,11 +46,19 @@ from crosstl.backend.Metal.function_specialization import (
     _normalize_metal_type_text,
     _strip_metal_attribute_blocks,
     _template_parameter_values_from_arguments,
+    unique_specialization_identifier,
+)
+from crosstl.backend.Metal.integral_constant_tags import (
+    concretize_integral_constant_tags,
 )
 from crosstl.backend.Metal.member_lowering_layers import (
     lower_members_with_late_specializations,
 )
+from crosstl.backend.Metal.orphaned_explicit_specializations import (
+    prune_orphaned_explicit_specializations,
+)
 from crosstl.backend.Metal.pointer_conversions import pointer_conversion_type
+from crosstl.backend.Metal.return_type_enablers import fold_concrete_enablers
 from crosstl.backend.Metal.template_overloads import (
     declared_type_names,
     select_instantiated_overload,
@@ -59,10 +72,12 @@ from crosstl.backend.Metal.variable_templates import (
     materialize_value_variable_templates,
 )
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.project.arithmetic_result_types import arithmetic_result_type
 from crosstl.project.directx_toolchain import (
     directx_target_profiles_for_source,
     dxc_compiler_arguments_for_source,
     dxc_file_path,
+    dxc_host_workgroup_size_check_arguments,
     dxc_library_command_tool,
     dxc_long_path_command,
     dxc_profile_for_source,
@@ -14642,6 +14657,20 @@ def _materialize_inherited_source_template_helpers(
         template.name
         for template in preprocessor._find_template_functions(materialized)
     )
+    # An explicit specialization replaces the primary's body for its arguments
+    # ([temp.expl.spec]/1), including for helpers reached through inherited
+    # template parameters.
+    explicit_specializations = (
+        preprocessor._find_explicit_template_function_specializations(materialized)
+    )
+    materialized_type_aliases = (
+        preprocessor._collect_local_type_alias_bindings(
+            materialized,
+            [(0, len(materialized))],
+        )
+        if explicit_specializations
+        else {}
+    )
     generated: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     generated_order: list[tuple[str, tuple[str, ...]]] = []
     specialization_records: list[dict[str, Any]] = []
@@ -14713,13 +14742,31 @@ def _materialize_inherited_source_template_helpers(
             return materialized_name
 
         active.add(key)
-        child_replacements: dict[str, str] = {}
-        for child_name in sorted(
-            _plain_template_function_call_names(
-                preprocessor,
-                template,
-                template_names,
+        explicit_specialization = (
+            _explicit_template_function_specialization_for_selected_overload(
+                preprocessor=preprocessor,
+                explicit_specializations=explicit_specializations,
+                template=template,
+                function_name=name,
+                arguments=list(key[1]),
+                parameter_declarations=parameter_declarations,
+                declaration_source=materialized,
+                declaration_type_aliases=materialized_type_aliases,
             )
+            if explicit_specializations
+            else None
+        )
+        child_replacements: dict[str, str] = {}
+        for child_name in (
+            sorted(
+                _plain_template_function_call_names(
+                    preprocessor,
+                    template,
+                    template_names,
+                )
+            )
+            if explicit_specialization is None
+            else ()
         ):
             child_materialized_name = ensure_helper(
                 child_name,
@@ -14729,12 +14776,20 @@ def _materialize_inherited_source_template_helpers(
             if child_materialized_name is not None:
                 child_replacements[child_name] = child_materialized_name
 
-        source = preprocessor._materialize_template_function_with_name(
-            template,
-            list(key[1]),
-            materialized_name,
-            host_name=None,
-        )
+        if explicit_specialization is not None:
+            source = (
+                preprocessor._materialize_explicit_template_function_specialization(
+                    explicit_specialization,
+                    materialized_name,
+                )
+            )
+        else:
+            source = preprocessor._materialize_template_function_with_name(
+                template,
+                list(key[1]),
+                materialized_name,
+                host_name=None,
+            )
         if child_replacements:
             replacements = _plain_template_call_replacements(
                 preprocessor,
@@ -15377,6 +15432,8 @@ def _materialize_implicit_template_function_calls(
     ] = {}
     specializations: list[dict[str, Any]] = []
     seen_implicit_specializations: set[tuple[str, tuple[str, ...]]] = set()
+    implicit_names: dict[tuple[str, tuple[str, ...]], str] = {}
+    source_identifiers: set[str] | None = None
     for function_name, arguments, span in implicit_calls:
         template = templates_by_name.get(function_name)
         if template is None or not preprocessor._template_arguments_satisfy_parameters(
@@ -15408,11 +15465,26 @@ def _materialize_implicit_template_function_calls(
                 )
                 if inherited_key == key:
                     continue
-        materialized_name = preprocessor._template_specialization_identifier(
-            function_name,
-            list(key[1]),
-        )
-        materialized_name = known_materializations.get(key, materialized_name)
+        materialized_name = known_materializations.get(key) or implicit_names.get(key)
+        if materialized_name is None:
+            # A source function may already own the readable name, such as a
+            # concrete pick_float beside template pick; never define it twice.
+            if source_identifiers is None:
+                source_identifiers = set(
+                    re.findall(
+                        r"[A-Za-z_][A-Za-z0-9_]*",
+                        mask_comments_and_literals(materialized),
+                    )
+                )
+            materialized_name = unique_specialization_identifier(
+                preprocessor._template_specialization_identifier(
+                    function_name,
+                    list(key[1]),
+                ),
+                source_identifiers,
+                [*known_materializations.values(), *implicit_names.values()],
+            )
+            implicit_names[key] = materialized_name
         implicit_replacements.append((span[0], span[1], materialized_name))
         if key in seen_implicit_specializations:
             continue
@@ -16542,17 +16614,27 @@ def _metal_concrete_function_definition_fingerprints(
     return fingerprints
 
 
+def _metal_at_line_start(source: str, position: int) -> bool:
+    line_start = source.rfind("\n", 0, position) + 1
+    return not source[line_start:position].strip()
+
+
 def _metal_statement_start(source: str, start: int, end: int) -> int:
     """Return where the statement in ``source[start:end]`` begins.
 
     A statement span runs from the previous ``;``, so it can begin with the
     trailing comment of the line before (``int n = 8; // size``).  Comments are
-    not part of the statement ([lex.comment]), so skip them and whitespace.
+    not part of the statement ([lex.comment]), so skip them and whitespace, and
+    so is a preserved directive line such as ``#pragma clang loop``, which ends
+    without a semicolon.
     """
     position = start
     while position < end:
         if source[position].isspace():
             position += 1
+        elif source[position] == "#" and _metal_at_line_start(source, position):
+            line_end = source.find("\n", position, end)
+            position = end if line_end == -1 else line_end + 1
         elif source.startswith("//", position):
             line_end = source.find("\n", position, end)
             position = end if line_end == -1 else line_end + 1
@@ -16665,9 +16747,11 @@ def _metal_scoped_statement_spans(
         elif ch == "]":
             bracket_depth = max(0, bracket_depth - 1)
         elif ch == "{" and paren_depth == bracket_depth == 0:
-            # A comment before a nested block is not a statement prefix.
+            # A comment before a nested block is not a statement prefix, and
+            # neither is a preserved directive line that precedes it.
             prefix = strip_comments_outside_strings(
-                source[statement_start:i], _read_metal_string_for_project
+                source[_metal_statement_start(source, statement_start, i) : i],
+                _read_metal_string_for_project,
             ).strip()
             # Direct-list initializers share brace syntax with statement blocks.
             # Only statement blocks reset the declaration scan boundary.
@@ -17857,6 +17941,26 @@ def _metal_expression_type(
     type_environment: Mapping[str, str],
     return_types: Mapping[str, str],
 ) -> str | None:
+    """The concrete type of ``expression``, or None.
+
+    A local whose ``auto`` was not deduced keeps the placeholder in the type
+    environment; it is not a type, so it never types an expression (it would
+    otherwise become a template argument such as ``min<uint, auto>``).
+    """
+    inferred = _metal_expression_type_or_placeholder(
+        preprocessor, expression, type_environment, return_types
+    )
+    if inferred is None or is_auto_placeholder(inferred) or "decltype" in inferred:
+        return None
+    return inferred
+
+
+def _metal_expression_type_or_placeholder(
+    preprocessor: Any,
+    expression: str,
+    type_environment: Mapping[str, str],
+    return_types: Mapping[str, str],
+) -> str | None:
     text = _metal_strip_outer_parentheses(expression).rstrip(";").strip()
     if not text:
         return None
@@ -17959,8 +18063,23 @@ def _metal_expression_type(
                 indexed_type = element_type
             return indexed_type
 
+    # `x++`, `x--`, `++x` and `--x` have the type of `x` ([expr.post.incr],
+    # [expr.pre.incr]).
+    update_match = re.fullmatch(
+        r"(?:\+\+|--)\s*(?P<prefix>[A-Za-z_][A-Za-z0-9_]*)"
+        r"|(?P<postfix>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\+\+|--)",
+        text,
+    )
+    if update_match is not None:
+        return type_environment.get(
+            update_match.group("prefix") or update_match.group("postfix")
+        )
+    # `p + n` and `p - n` keep a pointer's type. Any other `a + b` is arithmetic
+    # and is typed by the operator rule below (`uint + long` is `long`).
     pointer_match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*[+\-]", text)
-    if pointer_match is not None and pointer_match.group("name") in type_environment:
+    if pointer_match is not None and "*" in type_environment.get(
+        pointer_match.group("name"), ""
+    ):
         return type_environment[pointer_match.group("name")]
 
     address_match = re.match(r"&\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b", text)
@@ -17969,8 +18088,16 @@ def _metal_expression_type(
         if base_type:
             return f"{base_type}*"
 
+    def infer_operand(operand: str) -> str | None:
+        return _metal_expression_type(
+            preprocessor, operand, type_environment, return_types
+        )
+
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
-        return type_environment.get(text)
+        declared = type_environment.get(text)
+        if declared is not None:
+            return declared
+        return operand_expression_type(preprocessor, text, infer_operand)
 
     brace_start = text.find("{")
     if brace_start > 0:
@@ -18009,19 +18136,8 @@ def _metal_expression_type(
                 )
                 for part in parts
             ]
-            for preferred in (
-                "double",
-                "float",
-                "half",
-                "ulong",
-                "uint",
-                "long",
-                "int",
-            ):
-                if preferred in inferred:
-                    return preferred
-            return next((item for item in inferred if item), None)
-    return None
+            return arithmetic_result_type(preprocessor, inferred, operator_text)
+    return operand_expression_type(preprocessor, text, infer_operand)
 
 
 def _split_metal_expression_operator(expression: str, operator_text: str) -> list[str]:
@@ -18058,6 +18174,9 @@ def _split_metal_expression_operator(expression: str, operator_text: str) -> lis
             and bracket_depth == 0
             and angle_depth == 0
             and brace_depth == 0
+            and not (
+                operator_text in {"+", "-"} and is_unary_sign_position(expression, i)
+            )
         ):
             parts.append("".join(current).strip())
             current = []
@@ -18717,22 +18836,36 @@ def _metal_reachable_function_return_types(
     template_spans: Sequence[tuple[int, int]],
     reachable_function_spans: Sequence[tuple[int, int]],
 ) -> dict[str, str]:
+    # A call's type is its selected overload's return type. Without overload
+    # resolution here, a name is typed only when every definition of it states
+    # the same return type and no function template shares the name; otherwise
+    # the last definition would type calls that select another overload.
     reachable = set(reachable_function_spans)
-    return_types: dict[str, str] = {}
+    declared: dict[str, set[str | None]] = {}
+    reached: set[str] = set()
     for function in preprocessor._find_non_template_function_definitions(
         source,
         list(template_spans),
     ):
-        if function.span not in reachable:
-            continue
         return_type = _metal_function_return_type(
             preprocessor,
             _metal_function_header(source, function),
             function.name,
         )
-        if return_type:
-            return_types[function.name] = return_type
-    return return_types
+        declared.setdefault(function.name, set()).add(return_type or None)
+        if function.span in reachable:
+            reached.add(function.name)
+    template_names = {
+        template.name for template in preprocessor._find_template_functions(source)
+    }
+    return {
+        name: next(iter(return_types))
+        for name, return_types in sorted(declared.items())
+        if name in reached
+        and name not in template_names
+        and len(return_types) == 1
+        and None not in return_types
+    }
 
 
 def _materialize_plain_template_helper_calls(
@@ -23502,6 +23635,9 @@ def _project_template_materialization_for_artifact(
         materialized = preprocessor._prune_unreferenced_template_struct_declarations(
             materialized
         )
+    # Every tag argument is bound now; a concrete metal::bool_constant<true> becomes a declared tag struct
+    # (integral_constant_tags.py).
+    materialized = concretize_integral_constant_tags(preprocessor, materialized)
     unsupported_target_artifact = (
         target_artifact if post_materialization_unsupported else None
     )
@@ -23566,6 +23702,13 @@ def _project_template_materialization_for_artifact(
         and not stripped_diagnostic_helpers
     ):
         return None
+    # The source is parsed without preprocessing, so the materialized return-type enablers are folded to the
+    # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py). Canonicalized
+    # alias templates can leave `decltype(float(0) + int(0))`, which names one built-in type (alias_template_types.py).
+    materialized = fold_expression_decltypes(
+        preprocessor, fold_concrete_enablers(preprocessor, materialized)
+    )
+    materialized = prune_orphaned_explicit_specializations(preprocessor, materialized)
 
     if unsupported:
         message = _template_materialization_unsupported_message(
@@ -58540,7 +58683,10 @@ def _directx_dxc_smoke_commands(
         source = artifact_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         source = ""
-    compiler_arguments = dxc_compiler_arguments_for_source(source)
+    compiler_arguments = (
+        *dxc_compiler_arguments_for_source(source),
+        *dxc_host_workgroup_size_check_arguments(source),
+    )
     entry_profiles = _directx_dxc_entry_profiles(artifact_path, artifact=artifact)
     if entry_profiles is None:
         return [

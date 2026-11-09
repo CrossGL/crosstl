@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 28,
-        "endOffset": 475,
+        "endLine": 27,
+        "endOffset": 456,
         "file": "crosstl-out/cgl/flat-color.vert.cgl",
-        "length": 475,
+        "length": 456,
         "line": 1,
         "offset": 0
       },

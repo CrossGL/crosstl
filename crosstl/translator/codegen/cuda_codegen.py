@@ -82,6 +82,7 @@ from .gpu_device_globals import (
     at_file_scope,
     constant_in_device_memory,
     file_scope_placement,
+    is_constant_value_declaration,
 )
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
@@ -1801,8 +1802,16 @@ class CudaCodeGen(
             if hasattr(node, "qualifiers"):
                 for qualifier in node.qualifiers:
                     qualifier = str(qualifier).lower()
-                    if qualifier == "const":
-                        qualifiers.append("const")
+                    if qualifier == "const" or (
+                        qualifier == "constant"
+                        and is_constant_value_declaration(node)
+                        and self.cuda_pointer_or_reference_type_info(
+                            self.type_name_string(var_type)
+                        )
+                        is None
+                    ):
+                        if "const" not in qualifiers:
+                            qualifiers.append("const")
                     elif qualifier == "static":
                         qualifiers.append("static")
                     elif "workgroup" in qualifier or "shared" in qualifier:
@@ -1818,6 +1827,9 @@ class CudaCodeGen(
             declaration = (
                 f"{qualifier_str}"
                 f"{self.format_typed_declarator(declaration_type, node.name)}"
+            )
+            declaration = self.apply_restrict_qualifier_to_declaration(
+                declaration, node.name, node
             )
             if initial_value is not None:
                 declaration += f" = {self.visit(initial_value)}"
@@ -11011,6 +11023,20 @@ class CudaCodeGen(
             if attr_name:
                 names.add(attr_name)
         return names
+
+    def apply_restrict_qualifier_to_declaration(self, declaration, name, node):
+        """Write a CrossGL ``restrict`` pointer declaration with ``__restrict__``, as HIP output does."""
+        if (
+            "*" not in declaration
+            or not name
+            or "__restrict__" in declaration
+            or "restrict" not in self.declaration_qualifier_names(node)
+        ):
+            return declaration
+        position = declaration.rfind(f" {name}")
+        if position < 0:
+            return declaration
+        return f"{declaration[:position]} __restrict__{declaration[position:]}"
 
     def apply_readonly_qualifier_to_type(self, type_name, node):
         """Apply readonly declaration qualifiers to pointer/reference types."""

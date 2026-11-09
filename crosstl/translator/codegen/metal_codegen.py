@@ -415,10 +415,15 @@ from .metal_keyword_identifiers import (
 from .metal_library_functions import rename_msl_library_functions
 from .metal_library_structs import is_metal_library_struct
 from .metal_matrix_builtins import MetalMatrixBuiltins
+from .metal_member_attributes import attach_member_attributes
 from .metal_namespace_names import rename_metal_namespace_names
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_nested_stage_io import collect_metal_nested_stage_io_member_lowerings
 from .metal_ray_flags import metal_trace_ray_flag_statements
+from .metal_reference_argument_conditions import generate_header_writeback_statement
+from .metal_reference_argument_order import generate_ordered_writeback_statement
+from .metal_reference_argument_returns import generate_return_writeback_statement
+from .metal_reference_call_results import generate_call_result_statement
 from .metal_refusals import metal_refusals
 from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
@@ -442,6 +447,7 @@ from .metal_texel_buffers import (
     MetalTexelBuffers,
     texel_buffer_component_type,
 )
+from .metal_threadgroup_forwarding import collect_metal_forwarded_threadgroup_storage
 from .metal_threadgroup_parameters import metal_threadgroup_parameter_attribute
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
@@ -640,6 +646,18 @@ class MetalCodeGen(
     }
     # Numeric grouping determines floating rounding and integer promotion.
     ASSOCIATIVE_BINARY_OPS = {"&&", "||"}
+    # Higher-precedence children that clang's -Wlogical-op-parentheses,
+    # -Wbitwise-op-parentheses, -Wparentheses (bitwise over comparison) and
+    # -Wshift-op-parentheses reject under -Werror when left unparenthesized.
+    _COMPARISON_OPS = frozenset({"==", "!=", "<", ">", "<=", ">="})
+    CLANG_PARENTHESIZED_BINARY_CHILDREN = {
+        "||": frozenset({"&&"}),
+        "|": frozenset({"&", "^"}) | _COMPARISON_OPS,
+        "^": frozenset({"&"}) | _COMPARISON_OPS,
+        "&": _COMPARISON_OPS,
+        "<<": frozenset({"+", "-"}),
+        ">>": frozenset({"+", "-"}),
+    }
     METAL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
         {
             "mem_none",
@@ -2441,6 +2459,21 @@ class MetalCodeGen(
         self.metal_lowered_program_scope_groupshared_global_ids.update(
             thread_private_ids
         )
+        threadgroup_storage, threadgroup_ids = (
+            collect_metal_forwarded_threadgroup_storage(
+                self,
+                ast,
+                target_stage,
+                global_vars,
+                all_functions,
+                METAL_GROUPSHARED_ENTRY_STAGES,
+            )
+        )
+        for function_id, nodes in threadgroup_storage.items():
+            self.metal_lowered_program_scope_groupshared_globals_by_function.setdefault(
+                function_id, []
+            ).extend(nodes)
+        self.metal_lowered_program_scope_groupshared_global_ids.update(threadgroup_ids)
         self.metal_runtime_initialized_constants = (
             self.collect_metal_runtime_initialized_constants(global_vars)
         )
@@ -4875,9 +4908,11 @@ class MetalCodeGen(
                     member, semantic, struct_name, default_member_semantics
                 )
                 interpolation_attr = self.metal_interpolation_attribute_suffix(member)
+                declaration = attach_member_attributes(
+                    resource_array_declaration, member.name, abi_attr
+                )
                 return (
-                    f"    {resource_array_declaration}{abi_attr}{semantic_attr}"
-                    f"{interpolation_attr};\n",
+                    f"    {declaration}{semantic_attr}{interpolation_attr};\n",
                     set(),
                 )
 
@@ -4926,9 +4961,11 @@ class MetalCodeGen(
                     member
                 )
                 if resource_array_declaration is not None:
+                    declaration = attach_member_attributes(
+                        resource_array_declaration, member.name, abi_attr
+                    )
                     return (
-                        f"    {resource_array_declaration}{abi_attr}{semantic_attr}"
-                        f"{interpolation_attr};\n",
+                        f"    {declaration}{semantic_attr}{interpolation_attr};\n",
                         set(),
                     )
             address_space_declaration = self.format_address_space_parameter_declaration(
@@ -4943,9 +4980,11 @@ class MetalCodeGen(
                         self.convert_type_node_to_string(member.member_type)
                     )
                 )
+                declaration = attach_member_attributes(
+                    address_space_declaration, member.name, abi_attr
+                )
                 return (
-                    f"    {address_space_declaration}{abi_attr}{semantic_attr}"
-                    f"{interpolation_attr};\n",
+                    f"    {declaration}{semantic_attr}{interpolation_attr};\n",
                     dependencies,
                 )
             if str(type(member.member_type)).find("ArrayType") != -1:
@@ -8458,11 +8497,22 @@ class MetalCodeGen(
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as Metal source."""
         if id(stmt) not in self.metal_writeback_statement_ids:
+            return_code = generate_return_writeback_statement(self, stmt, indent)
+            if return_code is not None:
+                return return_code
             writebacks = self.metal_reference_argument_writebacks(stmt)
             if writebacks:
-                return self.generate_statement_with_argument_writebacks(
-                    stmt, indent, writebacks
+                call_code = generate_call_result_statement(
+                    self, stmt, indent, writebacks
                 )
+                if call_code is not None:
+                    return call_code
+                return generate_ordered_writeback_statement(
+                    self, stmt, indent, writebacks
+                )
+            header_code = generate_header_writeback_statement(self, stmt, indent)
+            if header_code is not None:
+                return header_code
         indent_str = "    " * indent
         if isinstance(stmt, (VariableNode, BackendVariableNode)):
             var_type = self.local_variable_declared_type(stmt)
@@ -10139,6 +10189,26 @@ class MetalCodeGen(
         # Keep arithmetic carriers widened, but preserve the source conversion.
         return f"{carrier}({native}({rendered}))"
 
+    def metal_direct_narrow_float_conversion(self, constructor, arguments, rendered):
+        """``uchar(f)`` of a floating ``f``: converted directly, which keeps its result (MSL 4.1 section 8.6).
+
+        Converting through the 32-bit carrier first, ``uchar(uint(f))``, would wrap a value the direct conversion
+        saturates on Apple GPUs.
+        """
+        native = self.metal_native_narrow_bitcast_storage_type(constructor)
+        if (
+            native is None
+            or len(arguments) != 1
+            or not re.fullmatch(r"u?(?:char|short)[234]?", native)
+        ):
+            return None
+        operand = self.map_type(
+            self.type_name_string(self.expression_result_type(arguments[0])) or ""
+        )
+        if not re.fullmatch(r"(?:float|half|bfloat)[234]?", str(operand or "")):
+            return None
+        return f"{self.map_type(constructor)}({native}({rendered}))"
+
     def metal_narrow_update_repeatable_lvalue(self, target):
         """Return whether ``target`` can be read and written by repeating it.
 
@@ -10935,6 +11005,11 @@ class MetalCodeGen(
                 and func_name not in self.user_function_names
             ):
                 return self.expression_result_type(args[0])
+            componentwise_type = self.metal_componentwise_builtin_result_type(
+                func_name, args
+            )
+            if componentwise_type is not None:
+                return componentwise_type
             if (
                 func_name in {"inverseSqrt", "inversesqrt", "roundEven"}
                 and args
@@ -13247,6 +13322,11 @@ class MetalCodeGen(
                         metal_type, expr.args
                     )
                 )
+                direct = self.metal_direct_narrow_float_conversion(
+                    func_name, expr.args, args
+                )
+                if direct is not None:
+                    return direct
                 rendered = f"{metal_type}({args})"
                 return (
                     self.metal_narrow_integer_conversion_expression(rendered, func_name)
@@ -13374,7 +13454,12 @@ class MetalCodeGen(
                 self.generate_expression(expr.true_expr),
                 self.generate_expression(expr.false_expr),
             )
-            return f"{self.generate_expression(expr.condition)} ? {true_code} : {false_code}"
+            condition = self.generate_expression(expr.condition)
+            # `?:` is right-associative: an unparenthesized conditional
+            # condition would regroup as part of the false arm.
+            if isinstance(expr.condition, TernaryOpNode):
+                condition = f"({condition})"
+            return f"{condition} ? {true_code} : {false_code}"
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             if hasattr(expr, "value"):
                 value = expr.value
@@ -13798,10 +13883,12 @@ class MetalCodeGen(
         if child_precedence < parent_precedence:
             return True
         if child_precedence > parent_precedence:
-            # Clang intentionally warns on an unparenthesized additive child of a
-            # shift even though C++ precedence is unambiguous.  Retain explicit
-            # source grouping so warning-fatal native Metal builds stay portable.
-            return parent_operator in {"<<", ">>"} and child_operator in {"+", "-"}
+            # Clang's -Wparentheses (part of -Wall) warns on these children even
+            # though C++ precedence is unambiguous.  Retain explicit grouping so
+            # warning-fatal native Metal builds stay portable.
+            return child_operator in self.CLANG_PARENTHESIZED_BINARY_CHILDREN.get(
+                parent_operator, ()
+            )
         return is_right_child and (
             parent_operator not in self.ASSOCIATIVE_BINARY_OPS
             or child_operator != parent_operator
@@ -18492,6 +18579,10 @@ class MetalCodeGen(
             return self.argument_address_space(arg.operand)
         if isinstance(arg, ArrayAccessNode):
             return self.argument_address_space(arg.array)
+        if isinstance(arg, PointerReinterpretNode):
+            # A nested view names its address space; lowering that view proves
+            # it against the view's own source before this result is used.
+            return getattr(getattr(arg, "target_type", None), "address_space", None)
         if isinstance(arg, TernaryOpNode):
             if self.argument_address_space_conflict(arg) is not None:
                 return None
@@ -19220,7 +19311,10 @@ class MetalCodeGen(
 
     def collect_unsized_resource_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             if name and self.is_unsized_resource_array_type(vtype):
@@ -19229,7 +19323,10 @@ class MetalCodeGen(
 
     def collect_fixed_resource_global_sizes(self, ast):
         global_arrays = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             size = self.fixed_resource_array_size(vtype)
@@ -28171,6 +28268,18 @@ class MetalCodeGen(
             if getattr(expr, "is_postfix", False):
                 return f"{operand}{operator}"
             return f"{operator}{operand}"
+        elif isinstance(expr, TernaryOpNode):
+            # A conditional extent such as `[size == 0 ? 1 : size]` binds below
+            # every binary operator, so it is parenthesized inside one.
+            condition = self.safe_expression_to_string_with_precedence(
+                expr.condition, 1
+            )
+            true_value = self.safe_expression_to_string_with_precedence(expr.true_expr)
+            false_value = self.safe_expression_to_string_with_precedence(
+                expr.false_expr
+            )
+            expression = f"{condition} ? {true_value} : {false_value}"
+            return f"({expression})" if parent_precedence > 0 else expression
         else:
             # Fallback - avoid calling generate_expression to prevent infinite recursion
             return str(expr)
@@ -28644,6 +28753,17 @@ class MetalCodeGen(
     def metal_storage_pointer_reinterpret_source_is_readonly(
         self, expression, source_type
     ):
+        pointer_operand = self.pointer_arithmetic_operand(expression)
+        if pointer_operand is not None:
+            # Offsets add no storage; only the pointer operand can be const.
+            return self.metal_storage_pointer_reinterpret_source_is_readonly(
+                pointer_operand, self.expression_result_type(pointer_operand)
+            )
+        if isinstance(expression, PointerReinterpretNode):
+            # A nested view is lowered with its own constness proof.
+            return not getattr(
+                getattr(expression, "target_type", None), "is_mutable", True
+            )
         member = self.metal_storage_pointer_reinterpret_member_node(expression)
         if member is not None:
             raw_member_type = getattr(
@@ -28786,14 +28906,11 @@ class MetalCodeGen(
         ) or self.map_type(contract["targetType"])
         effective_is_mutable = contract["isMutable"]
         if source_is_readonly and contract["isMutable"]:
-            if (
-                contract.get("aggregateByteView")
-                or contract.get("aggregateHomogeneousScalarArrayRead")
-            ) and contract.get("usage") == "immediate-value-read":
-                # The source spelling may remove pointee constness before an
-                # immediate struct value load. Reconstruct the same native
-                # pointer identity as a const view because the validated AST
-                # cannot write through or escape this temporary pointer.
+            if contract.get("readOnlyUse"):
+                # The source spelling may remove pointee constness before a
+                # value load. Reconstruct the same native pointer identity as
+                # a const view because the validated AST cannot write through
+                # or escape this pointer.
                 effective_is_mutable = False
             else:
                 source_storage_type = self.metal_native_narrow_bitcast_storage_type(

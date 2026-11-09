@@ -4,7 +4,9 @@ A placeholder takes its type from the initializer ([dcl.type.auto.deduct]):
 
 * ``auto x = e`` has the type of ``e``;
 * ``auto* p = e`` requires ``e`` to be a pointer and has its type;
-* ``const auto* p = e`` has the pointer type of ``e`` with a const pointee.
+* ``const auto* p = e`` has the pointer type of ``e`` with a const pointee;
+* ``const auto x = e`` and ``constexpr auto x = e`` have the type of ``e``,
+  const-qualified (a pointer or reference initializer is left un-typed).
 
 Any other placeholder spelling (references, address-space qualified
 placeholders) or an initializer whose type is unknown gives the bare
@@ -26,8 +28,21 @@ def is_auto_placeholder(type_text):
 def deduced_auto_type(type_text, initializer_type):
     """Type of a local declared ``type_text`` with an initializer typed as given."""
     spelling = " ".join(type_text.split())
+    # `static` is a storage class, and `constexpr` makes the object const without changing the deduced type.
+    const_object = re.search(r"\bconstexpr\b", spelling) is not None
+    spelling = " ".join(re.sub(r"\b(?:constexpr|static)\b", " ", spelling).split())
+    if spelling in {"const auto", "auto const"}:
+        const_object = True
+        spelling = "auto"
     if spelling == "auto":
-        return initializer_type or "auto"
+        if not initializer_type:
+            return "auto"
+        if const_object:
+            value_type = re.sub(r"^\s*const\s+", "", " ".join(initializer_type.split()))
+            if re.search(r"[*&]", value_type):
+                return "auto"
+            return f"const {value_type}"
+        return initializer_type
     pointer = _POINTER_PLACEHOLDER_RE.fullmatch(spelling)
     if pointer is None or not initializer_type:
         return "auto"

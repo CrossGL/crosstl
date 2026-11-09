@@ -25,8 +25,12 @@ clamp either: SPIR-V's ``MinLod`` operand is valid only with implicit and gradie
 has no clamp overload, and an explicit level of ``max(0, clamp)`` would apply the sampler's LOD bias after the clamp
 instead of before it.
 
-Compute, mesh and task stages are left unchanged: their implicit-LOD semantics depend on derivative groups, which
-the emitters decide on their own.
+Mesh and task stages are left unchanged: their implicit-LOD semantics depend on derivative groups, which the
+emitters decide on their own. The compute stage is too, except for DirectX: SPIR-V's emitter already samples the
+base level there, while DXC accepts an implicit-LOD ``Sample`` in a compute shader only under Shader Model 6.6 with a
+derivative-capable thread-group shape, and then takes quad derivatives instead of the base level. For DirectX the
+implicit-LOD samples a compute stage reaches are therefore rewritten to level 0 as well; nothing is refused there,
+because derivative functions in compute shaders remain the emitter's decision.
 """
 
 from __future__ import annotations
@@ -66,6 +70,10 @@ BASE_LEVEL_STAGES = frozenset(
 EXPLICIT_LOD_TARGETS = frozenset(
     {"directx", "hlsl", "vulkan", "spirv", "wgsl", "slang"}
 )
+
+# Targets whose compute-stage samples are rewritten to the base level, without the base-level stages' refusals.
+_COMPUTE_BASE_LEVEL_TARGETS = frozenset({"directx", "hlsl"})
+_COMPUTE_STAGES = frozenset({"compute"})
 
 # Targets that print CrossGL itself and keep the program unchanged.
 _CROSSGL_TARGETS = frozenset({"", "cgl", "crossgl"})
@@ -307,9 +315,11 @@ class _BaseLevelRewriter:
         self.rewrite = rewrite
         self.clone_names = clone_names
         self.stage = None
+        self.refuse = True
 
-    def run(self, function, stage_node, stage):
+    def run(self, function, stage_node, stage, refuse=True):
         self.stage = stage
+        self.refuse = refuse
         scope = self.scope
         scope.push()
         if stage_node is not None:
@@ -344,6 +354,8 @@ class _BaseLevelRewriter:
             self.scope.pop()
 
     def _refuse(self, node, operation, reason):
+        if not self.refuse:
+            return
         raise ImplicitLodStageUnsupportedError(
             self.target,
             operation,
@@ -373,12 +385,20 @@ class _BaseLevelRewriter:
         if form is None:
             return
         arguments = node.arguments or []
+        if (
+            arguments
+            and isinstance(arguments[0], A.IdentifierNode)
+            and not self.scope.is_declared(arguments[0].name)
+        ):
+            # An undeclared resource is the generator's to diagnose, under the operation the source spelled.
+            return
         coordinate = (
             2 if len(arguments) > 2 and self._is_separate_sampler(arguments[1]) else 1
         )
         extra = len(arguments) - coordinate - 1
         if form.accepts_bias and extra == form.before + form.after + 1:
             self._refuse(node, operation, _BIAS_REASON)
+            return
         if extra != form.before + form.after or not self.rewrite:
             return
         node.arguments.insert(
@@ -429,21 +449,20 @@ def legalize_implicit_lod(program, target) -> None:
         return
     reach = _StageReach(program, graph)
     rewrite = target in EXPLICIT_LOD_TARGETS
+    rewritten_stages = BASE_LEVEL_STAGES
+    if target in _COMPUTE_BASE_LEVEL_TARGETS:
+        rewritten_stages = BASE_LEVEL_STAGES | _COMPUTE_STAGES
 
     clone_groups = set()
     if rewrite:
         for index, stages in enumerate(reach.stages):
-            if (
-                needs[index]
-                and stages & BASE_LEVEL_STAGES
-                and stages - BASE_LEVEL_STAGES
-            ):
+            if needs[index] and stages & rewritten_stages and stages - rewritten_stages:
                 clone_groups.add(graph.functions[index].name)
     # A base-level call to a cloned name calls the clone, so every overload base-level stages reach is cloned.
     base_level = [
         index
         for index, stages in enumerate(reach.stages)
-        if stages & BASE_LEVEL_STAGES
+        if stages & rewritten_stages
         and (needs[index] or graph.functions[index].name in clone_groups)
     ]
 
@@ -455,12 +474,15 @@ def legalize_implicit_lod(program, target) -> None:
     for index in base_level:
         function = graph.functions[index]
         stage_node = graph.stage_of(index)
-        stage = sorted(reach.stages[index] & BASE_LEVEL_STAGES)[0]
+        # Base-level stages refuse derivative-dependent operations; a compute stage only has its samples rewritten.
+        refusing = reach.stages[index] & BASE_LEVEL_STAGES
+        stage = sorted(refusing or reach.stages[index] & rewritten_stages)[0]
+        refuse = bool(refusing)
         if function.name in clone_names:
-            if not reach.stages[index] - BASE_LEVEL_STAGES:
+            if not reach.stages[index] - rewritten_stages:
                 # Only base-level stages run this overload: it moves to the clone name instead of being copied.
                 function.name = clone_names[function.name]
-                rewriter.run(function, stage_node, stage)
+                rewriter.run(function, stage_node, stage, refuse)
                 continue
             duplicate = clone(function)
             duplicate.name = clone_names[function.name]
@@ -472,4 +494,4 @@ def legalize_implicit_lod(program, target) -> None:
             if container is None or not _insert_after(container, function, duplicate):
                 program.functions.append(duplicate)
             function = duplicate
-        rewriter.run(function, stage_node, stage)
+        rewriter.run(function, stage_node, stage, refuse)

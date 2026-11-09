@@ -102,6 +102,7 @@ from ..metadata_preconditions import (
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
+from ..semantics.helpers import float_to_integer_helper_names
 from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
@@ -275,6 +276,11 @@ from .glsl_hlsl_precise import GLSLHlslPreciseMixin
 from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
+from .glsl_host_workgroup_size import (
+    glsl_host_workgroup_layout,
+    glsl_program_host_workgroup_size_ids,
+    glsl_workgroup_proof_local_size,
+)
 from .glsl_instance_index import INSTANCE_INDEX
 from .glsl_interface_block_io import (
     block_declared_stage_io,
@@ -288,6 +294,7 @@ from .glsl_invariant_builtins import (
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_mesh_locations import mesh_fragment_input_layouts, mesh_output_layouts
+from .glsl_narrow_integer_literals import narrowed_integer_literal
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
 from .glsl_nested_stage_io import refuse_nested_stage_builtins
 from .glsl_ray_queries import (
@@ -360,6 +367,7 @@ from .glsl_wave_extended import (
     GLSL_EXTENDED_WAVE_EXTENSIONS,
 )
 from .glsl_zero_values import zero_array_value
+from .host_workgroup_size_ids import is_host_sized_workgroup
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -583,7 +591,10 @@ from .scalar_return_bounds import (
 )
 from .sizeof_calls import sizeof_call_bytes
 from .software_quad_reductions import SOFTWARE_QUAD_REDUCTIONS, glsl_quad_sum_helper
-from .specialized_workgroup_size import workgroup_size_specialization_ids
+from .specialized_workgroup_size import (
+    has_specialized_workgroup_size,
+    workgroup_size_specialization_ids,
+)
 from .stage_distance_layout import distance_semantic
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -644,6 +655,9 @@ from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 # Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
 GLSL_SPIRV_GUARD = "#if defined(GL_SPIRV) || defined(VULKAN)\n"
+
+
+GLSL_FLOAT_TO_INTEGER_RULE_HELPERS = float_to_integer_helper_names()
 
 
 class OpenGLTemplateTypeError(ValueError):
@@ -6190,6 +6204,13 @@ class GLSLCodeGen(
             )
         )
 
+        if has_specialized_workgroup_size(execution_config):
+            raise self.glsl_software_subgroup_error(
+                "OpenGL software subgroup lowering requires a workgroup size fixed "
+                "in the shader, not one the pipeline specializes",
+                reason="workgroup-size-specialized",
+                source_location=getattr(entry_function, "source_location", None),
+            )
         raw_workgroup_size = tuple(compute_local_size(execution_config))
         concrete_workgroup_size = []
         for value in raw_workgroup_size:
@@ -13011,8 +13032,10 @@ class GLSLCodeGen(
         for stage_name, stage in getattr(ast, "stages", {}).items():
             entry_point = getattr(stage, "entry_point", None)
             if entry_point is not None:
-                entry_point._glsl_workgroup_proof_local_size = compute_local_size(
-                    getattr(stage, "execution_config", None)
+                entry_point._glsl_workgroup_proof_local_size = (
+                    glsl_workgroup_proof_local_size(
+                        getattr(stage, "execution_config", None)
+                    )
                 )
                 entry_point._glsl_workgroup_proof_subgroup_width = (
                     self.software_subgroup_width
@@ -19442,6 +19465,10 @@ class GLSLCodeGen(
         return code
 
     def generate_compute_layout(self, execution_config=None):
+        if is_host_sized_workgroup(execution_config):
+            return glsl_host_workgroup_layout(
+                glsl_program_host_workgroup_size_ids(self), GLSL_SPIRV_GUARD
+            )
         x, y, z = self.validate_glsl_compute_workgroup_size(
             compute_local_size(execution_config)
         )
@@ -32904,6 +32931,14 @@ class GLSLCodeGen(
                 stage_name, mapped_type
             ):
                 prefix = self.with_flat_stage_io_declaration_prefix(prefix)
+            elif (
+                direction == "out"
+                and normalize_stage_name(stage_name) == "vertex"
+                and self.requires_flat_stage_io(mapped_type)
+            ):
+                # An integer cannot be interpolated; GLSL ES 3.00 section 4.3.6 requires a vertex output that is or
+                # contains one to be flat, as the fragment input it feeds is, and stage output structs emit so.
+                prefix = self.with_flat_stage_io_declaration_prefix(prefix)
             layout = self.glsl_variable_layout_prefix(node)
             self.reserve_global_stage_io_layout(node, f"{prefix} ", layout, mapped_type)
             return f"{prefix} {declaration};\n"
@@ -33221,6 +33256,9 @@ class GLSLCodeGen(
 
     def generate_expression_with_expected(self, expr, expected_type):
         expected_type = self.type_name_string(expected_type)
+        narrowed = narrowed_integer_literal(self, expr, expected_type)
+        if narrowed is not None:
+            return narrowed
         interface_value = self.glsl_interface_block_value_expression(
             expr, expected_type
         )
@@ -41744,11 +41782,17 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         arguments = list(getattr(expression, "arguments", []) or [])
         name = self.function_call_name(expression)
-        if len(arguments) != 1 or name in self.function_return_types:
+        if len(arguments) != 1:
             return None
-        if self.glsl_constructor_type(name) is None:
+        if name in GLSL_FLOAT_TO_INTEGER_RULE_HELPERS:
+            # The ftoi_nan and convert_sat helpers replace int(x) and uint(x) of a float x.
+            target = self.glsl_value_type_info(self.function_return_types.get(name))
+        elif name in self.function_return_types:
             return None
-        target = self.glsl_value_type_info(name)
+        elif self.glsl_constructor_type(name) is None:
+            return None
+        else:
+            target = self.glsl_value_type_info(name)
         if target is None or target["family"] not in {"int", "uint"}:
             return None
         source = self.glsl_value_type_info(
@@ -50736,7 +50780,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_preserved_nonuniform_sampler_resources(self, ast, functions):
         global_samplers = set()
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = self.resource_node_name(node)
             if name and self.is_sampler_type(self.resource_node_type(node)):
                 global_samplers.add(name)
@@ -56195,7 +56242,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_unsized_sampled_texture_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             if name and self.is_unsized_sampled_texture_array_type(vtype):
@@ -56380,7 +56430,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_unsized_structured_buffer_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             base_type, declared_size = self.structured_buffer_array_base_type(vtype)
@@ -56395,7 +56448,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_fixed_resource_global_sizes(self, ast):
         global_arrays = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             size = self.fixed_resource_array_size(vtype)
