@@ -33,6 +33,7 @@ from ..common_ast import (
 __all__ = [
     "qualify_namespace_declarations",
     "resolve_namespaces",
+    "source_name",
     "using_directive_path",
 ]
 
@@ -361,6 +362,11 @@ class _Namespaces:
         self.resolve(getattr(function, "body", None), context, scopes)
 
 
+def source_name(declaration):
+    """The name ``declaration`` is spelled with in the HLSL source: ``ns::inner::twice`` once flattened."""
+    return getattr(declaration, "hlsl_source_name", None) or declaration.name
+
+
 def _names(scopes):
     names = set()
     for scope in scopes:
@@ -405,6 +411,7 @@ def resolve_namespaces(ast, refuse):
     for _collection, declaration, path, name in namespaced:
         flat = resolver.table.get(path + (name,))
         if flat is not None and flat != name:
+            declaration.hlsl_source_name = "::".join(path + (name,))
             declaration.name = flat
             renamed += 1
         if isinstance(declaration, StructNode):
