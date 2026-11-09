@@ -6176,9 +6176,11 @@ class VulkanParser:
             return None
 
         variable_name = self.spirv_assembly_value_name(variable_id, names, decorations)
+        # A storage block is declared as a struct type plus a variable of it, so an unnamed block type takes a name
+        # of its own: the variable's name would make each use of the variable also read as a use of the type.
         block_name = (
             names.get(struct_type_id)
-            or variable_name
+            or (None if layout_type == "BUFFER" else variable_name)
             or self.spirv_fallback_identifier(struct_type_id, "block")
         )
         qualifiers = []

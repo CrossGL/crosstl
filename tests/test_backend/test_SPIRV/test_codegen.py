@@ -6211,7 +6211,7 @@ def test_spirv_cross_decoration_group_resource_layout_codegen_reparse():
 
     assert ("BufferBlock", []) in ast.spirv_decorations["%Values"]
     assert ("0", "Offset", ["0"]) in ast.spirv_member_decorations["%Values"]
-    assert "RWStructuredBuffer<values> values @set(0) @binding(2);" in generated_code
+    assert "RWStructuredBuffer<Values> values @set(0) @binding(2);" in generated_code
     assert "float member0[];" in generated_code
     parse_crossgl(generated_code)
 
@@ -7006,8 +7006,8 @@ def test_spirv_tools_reserved_fallback_resource_names_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "cbuffer var_ @set(0) @binding(0) @buffer_layout(std140) {" in generated_code
-    assert "RWStructuredBuffer<in_> in_ @set(0) @binding(1);" in generated_code
-    assert "RWStructuredBuffer<out_> out_ @set(0) @binding(2);" in generated_code
+    assert "RWStructuredBuffer<struct_> in_ @set(0) @binding(1);" in generated_code
+    assert "RWStructuredBuffer<struct_> out_ @set(0) @binding(2);" in generated_code
     assert "cbuffer var @set" not in generated_code
     assert "RWStructuredBuffer<in> in @set" not in generated_code
     assert "RWStructuredBuffer<out> out @set" not in generated_code
@@ -8720,7 +8720,7 @@ def test_naga_empty_global_name_fallback_identifier_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "RWStructuredBuffer<global_> global_ @set(0) @binding(0);" in generated_code
+    assert "RWStructuredBuffer<block> global_ @set(0) @binding(0);" in generated_code
     assert "global_[0].member0 = (global_[0].member0 + 1);" in generated_code
     assert "struct global {" not in generated_code
 
