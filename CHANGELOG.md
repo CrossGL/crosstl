@@ -4,9 +4,14 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Metal and Slang output refuse a constant-buffer member placed by `@offset` or `@align` where their declaration would put it elsewhere, with `MemberPlacementError` (`project.translate.member-placement-unsupported`); they used to drop the placement (Metal) or write it as a semantic (Slang). HLSL and GLSL output refuse such placements in the struct of a uniform `ConstantBuffer<T>` that declares no layout, and GLSL output refuses a push-constant offset its `layout(offset)` cannot write. HLSL input refuses a `[[vk::push_constant]]` struct whose layout under DXC's default rule CrossGL cannot record (a nested struct DXC lays out differently from std430, a struct that needs offsets and is laid out elsewhere too, or 16-bit members) with `HLSLPushConstantLayoutError`.
+
 ### Fixed
 
 - GLSL input keeps the `coherent`, `volatile`, `restrict` and `writeonly` qualifiers, and the Vulkan memory-model qualifiers such as `workgroupcoherent`, of a named storage block whose only member is a runtime array, such as `layout(std430, binding = 1) coherent buffer B1 { float d[]; } b1;`. It imports as `RWStructuredBuffer<float> b1 @binding(1) @coherent;`, where it used to drop every qualifier but `readonly`, so GLSL, SPIR-V and Metal output lost the memory semantics and HLSL output did not refuse a `volatile` block.
+- HLSL input places the members of a `[[vk::push_constant]]` struct where DXC's default relaxed layout puts them, so `struct C { float s; float3 v; };` keeps `v` at byte 4 in SPIR-V and HLSL output instead of moving it to byte 16, and keeps every member's `[[vk::offset(N)]]` as `@offset(N)`. SPIR-V and HLSL output accept a vector at such a relaxed offset (Vulkan 1.3 section 15.6.4), and DirectX, Metal and Slang output no longer write `@offset` or `@align` as a semantic.
 - HIP and OpenCL input read a parameter, cast or local declaration whose type a line break splits after its base type, a `*` or `&`, a postfix qualifier such as `restrict` or `const`, or `pipe`, as they read it on one line: `__global float`, a line break and `* in` imports as `@group(0) @binding(0) var<storage, read_write> in_: array<f32>`, and `float widen(unsigned`, a line break and `v)` as `f32 widen(u32 v)`. They used to raise `SyntaxError` (`Expected RPAREN, got STAR` for a parameter, `Unexpected token in expression` for a function or a cast) (#3753).
 
 ---
