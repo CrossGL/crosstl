@@ -33725,17 +33725,18 @@ def test_metal_generic_image_memory_attributes_do_not_become_semantics():
     ast = crosstl.translator.parse(shader)
     generated_code = MetalCodeGen().generate(ast)
 
+    device = "memory_coherence::memory_coherence_device"
     assert (
-        "texture2d<float, access::read_write> coherentImage [[texture(0)]]"
+        f"texture2d<float, access::read_write, {device}> coherentImage [[texture(0)]]"
         in generated_code
     )
     assert (
-        "texture2d<uint, access::read_write> globalImage [[texture(1)]]"
+        f"texture2d<uint, access::read_write, {device}> globalImage [[texture(1)]]"
         in generated_code
     )
     assert (
-        "float readPixel(texture2d<float, access::read_write> image, int2 pixel)"
-        in generated_code
+        f"float readPixel(texture2d<float, access::read_write, {device}> image, "
+        "int2 pixel)" in generated_code
     )
     assert "[[coherent]]" not in generated_code
     assert "[[globallycoherent]]" not in generated_code

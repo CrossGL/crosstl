@@ -447,6 +447,11 @@ from .metal_texel_buffers import (
     MetalTexelBuffers,
     texel_buffer_component_type,
 )
+from .metal_texture_coherence import (
+    collect_device_coherent_textures,
+    is_storage_texture_type_name,
+    with_device_texture_coherence,
+)
 from .metal_threadgroup_forwarding import collect_metal_forwarded_threadgroup_storage
 from .metal_threadgroup_parameters import metal_threadgroup_parameter_attribute
 from .metal_varyings import is_metal_varying_builtin, metal_varying_attribute
@@ -1049,6 +1054,7 @@ class MetalCodeGen(
         self.gl_position = False
         self.char_mapper = CharTypeMapper()
         self.texture_variables = []
+        self.metal_device_coherent_textures = frozenset()
         self.acceleration_structure_variables = []
         self.visible_function_table_variables = []
         self.intersection_function_table_variables = []
@@ -2126,6 +2132,7 @@ class MetalCodeGen(
         )
 
         self.texture_variables = []
+        self.metal_device_coherent_textures = frozenset()
         self.acceleration_structure_variables = []
         self.visible_function_table_variables = []
         self.intersection_function_table_variables = []
@@ -3303,6 +3310,17 @@ class MetalCodeGen(
         )
         self.function_stage_output_dependencies = (
             self.collect_function_stage_output_dependencies(ast, target_stage)
+        )
+        self.metal_device_coherent_textures = collect_device_coherent_textures(
+            [entry[0] for entry in self.texture_variables],
+            all_functions,
+            is_storage_texture=self.is_metal_storage_texture_node,
+            contracts_of=lambda node: self.resource_memory_qualifier_contracts(
+                node, getattr(node, "param_type", getattr(node, "var_type", None))
+            ),
+            call_name=self.function_call_name,
+            iter_nodes=self.iter_ast_nodes,
+            refuse=self.refuse_lowering,
         )
 
         cbuffers = self.cbuffer_variables
@@ -8048,7 +8066,9 @@ class MetalCodeGen(
                 ):
                     continue
                 declaration = self.format_resource_parameter(
-                    texture_type, texture_name, array_size
+                    self.metal_coherent_texture_type(texture_type, None, texture_name),
+                    texture_name,
+                    array_size,
                 )
                 resource_params.append(f"{declaration} [[texture({i})]]")
         if self.acceleration_structure_variables:
@@ -8332,7 +8352,11 @@ class MetalCodeGen(
             if texture_name:
                 resource_params.append(
                     self.format_resource_parameter(
-                        texture_type, texture_name, array_size
+                        self.metal_coherent_texture_type(
+                            texture_type, None, texture_name
+                        ),
+                        texture_name,
+                        array_size,
                     )
                 )
         for (
@@ -17970,10 +17994,27 @@ class MetalCodeGen(
         if address_space_declaration is not None:
             return address_space_declaration
         array_type = self.resource_array_parameter(raw_param_type, node)
+        function_name = self.current_function_name
         if array_type is not None:
             resource_type, array_size = array_type
-            return self.format_resource_parameter(resource_type, name, array_size)
-        return format_c_style_array_declaration(mapped_type, name)
+            return self.format_resource_parameter(
+                self.metal_coherent_texture_type(resource_type, function_name, name),
+                name,
+                array_size,
+            )
+        return format_c_style_array_declaration(
+            self.metal_coherent_texture_type(mapped_type, function_name, name), name
+        )
+
+    def is_metal_storage_texture_node(self, node):
+        raw_type = getattr(node, "param_type", getattr(node, "var_type", None))
+        return is_storage_texture_type_name(self.resource_base_type(raw_type))
+
+    def metal_coherent_texture_type(self, texture_type, function_name, name):
+        """Add MSL 3.2 device coherence to a texture type that needs it (see metal_texture_coherence)."""
+        if (function_name, name) not in self.metal_device_coherent_textures:
+            return texture_type
+        return with_device_texture_coherence(str(texture_type))
 
     def validate_metal_ray_resource_parameter_value_type(self, raw_param_type, name):
         resource_kind = self.metal_ray_resource_pointer_or_reference_kind(
