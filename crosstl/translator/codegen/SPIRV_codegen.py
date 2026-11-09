@@ -34,6 +34,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    NamedType,
     PointerReinterpretNode,
     RangeNode,
     RayQueryOpNode,
@@ -80,6 +81,7 @@ from .comma_expressions import is_comma_expression, spirv_comma_expression
 from .enum_utils import (
     collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
+    collect_generic_parameter_names,
     enum_struct_fields,
     enum_variant_payload_fields,
     generic_enum_specialized_fields,
@@ -169,6 +171,10 @@ from .spirv_extension_builtins import (
     unmapped_builtin_reason,
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
+from .spirv_generic_structs import (
+    generic_struct_instance_spelling,
+    materialize_generic_struct_instance,
+)
 from .spirv_geometry_streams import (
     STREAM_FUNCTIONS,
     geometry_output_streams,
@@ -15935,6 +15941,10 @@ class VulkanSPIRVCodeGen(
 
         generic_base_name, generic_args = generic_type_parts(type_str)
         if generic_args:
+            # ``Box<float>`` of ``generic<T> struct Box`` is declared as the concrete ``Box_float`` on first use.
+            materialize_generic_struct_instance(
+                self, type_str, self.program_generic_parameter_names
+            )
             specialized_struct_type = self.ensure_declared_struct_type(
                 generic_struct_specialization_name(type_str)
             )
@@ -17714,6 +17724,24 @@ class VulkanSPIRVCodeGen(
             )
 
         return self.composite_construct(enum_type, components)
+
+    def process_generic_struct_constructor_call(
+        self, callee_name, expr
+    ) -> Optional[SpirvId]:
+        """Lower ``Pair<vec2, float>(a, b)``, a constructor of a generic structure's instance, else ``None``."""
+        if not isinstance(callee_name, str) or "<" not in callee_name:
+            return None
+        struct_name = materialize_generic_struct_instance(
+            self, callee_name, self.program_generic_parameter_names
+        )
+        if struct_name is None or self.ensure_declared_struct_type(struct_name) is None:
+            return None
+        return self.process_struct_constructor_node(
+            ConstructorNode(
+                NamedType(struct_name),
+                list(getattr(expr, "arguments", getattr(expr, "args", [])) or []),
+            )
+        )
 
     def process_struct_constructor_node(
         self, expr: ConstructorNode
@@ -22830,7 +22858,9 @@ class VulkanSPIRVCodeGen(
         inferred_type = self.infer_expression_result_type(arg)
         if inferred_type is None:
             return None
-        return inferred_type.type.base_type
+        base_type = inferred_type.type.base_type
+        # A generic instance keeps its CrossGL spelling, so ``Box<T>`` binds ``T`` from ``Box_float``.
+        return generic_struct_instance_spelling(self, base_type) or base_type
 
     def call_argument_type_names(self, args):
         return [self.call_argument_type_name(arg) or "unknown" for arg in args]
@@ -30374,6 +30404,12 @@ class VulkanSPIRVCodeGen(
             if self.is_canonical_atomic_thread_fence_call(callee_name):
                 return self.reject_atomic_thread_fence(expr)
 
+            instance_constructor = self.process_generic_struct_constructor_call(
+                callee_name, expr
+            )
+            if instance_constructor is not None:
+                return instance_constructor
+
             if (
                 isinstance(callee_name, str)
                 and callee_name.rsplit("::", 1)[-1] == "Some"
@@ -32678,6 +32714,11 @@ class VulkanSPIRVCodeGen(
                     self.enum_declarations.setdefault(node.name, node)
 
         collect_type_declarations(struct_declarations)
+        # Generic parameters are unbound where a generic body is read; instances naming them stay generic.
+        self.program_generic_parameter_names = frozenset(
+            collect_generic_parameter_names(ast)
+        ) - set(self.struct_declarations)
+        self.generic_struct_instance_spellings = {}
         self.glsl_buffer_block_type_names = self.collect_glsl_buffer_block_type_names(
             ast
         )

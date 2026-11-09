@@ -62,6 +62,7 @@ from .generic_specialization_names import (
     reserve_program_names,
     unique_specialization_name,
 )
+from .generic_value_arguments import substitute_value_parameters
 from .generic_vector_deduction import (
     bind_generic_vector_parameter,
     generic_vector_signature_name,
@@ -1110,6 +1111,8 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
             param.param_type = concrete_type
         if hasattr(param, "vtype"):
             param.vtype = concrete_type
+    # Values first: a local array's size (``T values[N]``) is part of the type substituted next.
+    substitute_value_parameters(getattr(clone, "body", None), substitutions, key[0])
     substitute_body_types(generator, getattr(clone, "body", None), substitutions)
     clone._generic_source_name = key[0]
     clone._generic_source_function_id = id(func)
