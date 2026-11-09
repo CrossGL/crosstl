@@ -252,6 +252,10 @@ from .spirv_single_evaluation import (
     recording_subscript_indices,
     subscript_index_scope,
 )
+from .spirv_specialization_conversions import (
+    specialization_constituent,
+    specialization_conversion_expression,
+)
 from .spirv_specialized_workgroup_size import (
     declare_specialized_workgroup_size,
     module_compute_stage_config,
@@ -1537,7 +1541,7 @@ class VulkanSPIRVCodeGen(
                 return None
             operator = getattr(expr, "operator", getattr(expr, "op", None))
             return self.emit_specialization_constant_unary_operation(operator, operand)
-        return None
+        return specialization_conversion_expression(self, expr)
 
     def register_vector_constant(
         self, vector_type: SpirvId, components: List[SpirvId]
@@ -2955,7 +2959,7 @@ class VulkanSPIRVCodeGen(
         if folded.id != component.id:
             return folded
         if constant:
-            return component
+            return specialization_constituent(self, component, member_type)
         return self.convert_value_to_type(component, member_type)
 
     def vector_member_info(self, vector_type: str, member_name: str):
@@ -27600,7 +27604,9 @@ class VulkanSPIRVCodeGen(
                         value = self.process_constant_expression(arg, component_type)
                         if value is None:
                             return None
-                        components.append(value)
+                        components.append(
+                            specialization_constituent(self, value, component_type)
+                        )
 
                     if len(components) == 1 and component_count > 1:
                         components *= component_count
