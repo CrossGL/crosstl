@@ -316,6 +316,11 @@ from .glsl_shadow_lod import (
     require_shadow_lod_extension,
     zero_lod_compare_gradient_call,
 )
+from .glsl_specialization_dependents import (
+    constant_source_name,
+    partition_constants_by_specialization_dependency,
+    runtime_specialization_dependents,
+)
 from .glsl_specialization_macros import glsl_specialization_macro_name
 from .glsl_stage_builtin_members import (
     fragment_member_builtin_alias,
@@ -2997,6 +3002,8 @@ class GLSLCodeGen(
         self.glsl_constant_types = {}
         self.glsl_specialization_constant_names = set()
         self.glsl_global_specialization_constants = []
+        self.glsl_specialization_constant_declarations = []
+        self.glsl_runtime_specialization_dependent_ids = set()
         self.literal_int_vector_constants = {}
         self.literal_int_vector_array_constants = {}
         self.current_compile_time_int_constants = {}
@@ -9123,6 +9130,8 @@ class GLSLCodeGen(
         self.current_glsl_private_pointer_base_names = {}
         self.current_glsl_private_pointer_function_name = None
         self.glsl_global_specialization_constants = []
+        self.glsl_specialization_constant_declarations = []
+        self.glsl_runtime_specialization_dependent_ids = set()
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -9542,6 +9551,7 @@ class GLSLCodeGen(
         for line in self.glsl_stage_extension_lines(ast, target_stage):
             if line not in extra_lines:
                 code += f"{line}\n"
+        code += self.prepare_glsl_runtime_specialization_dependents(ast, version_line)
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
         if exact_subgroup_width is not None:
@@ -9568,8 +9578,19 @@ class GLSLCodeGen(
                 getattr(ast, "constants", []) or [], structs
             )
         )
+        leading_constants, specialization_dependent_constants = (
+            partition_constants_by_specialization_dependency(
+                leading_constants,
+                {
+                    name
+                    for node in self.glsl_specialization_constant_declarations
+                    if (name := constant_source_name(node)) is not None
+                },
+            )
+        )
         code += self.generate_constants(ast, leading_constants)
         code += self.generate_glsl_global_specialization_constants()
+        code += self.generate_constants(ast, specialization_dependent_constants)
         code += self.generate_glsl_wave_helpers(ast, target_stage)
 
         all_global_vars = [
@@ -18641,6 +18662,11 @@ class GLSLCodeGen(
             return builtin_declaration
         if constant_id is None:
             value_code = self.generate_constant_expression(value, const_type)
+            if id(node) in self.glsl_runtime_specialization_dependent_ids:
+                return (
+                    f"{GLSL_SPIRV_GUARD}{declaration} = {value_code};\n"
+                    f"#else\nconst {declaration} = {value_code};\n#endif\n"
+                )
             return f"const {declaration} = {value_code};\n"
 
         self.validate_glsl_specialization_constant_type(node, const_type)
@@ -18927,6 +18953,35 @@ class GLSLCodeGen(
         self.glsl_global_specialization_constants = [
             node for node in declarations if id(node) in global_ids
         ]
+        self.glsl_specialization_constant_declarations = declarations
+
+    def prepare_glsl_runtime_specialization_dependents(self, ast, version_line):
+        declarations = self.glsl_specialization_constant_declarations
+        declaration_ids = {id(node) for node in declarations}
+        self.glsl_runtime_specialization_dependent_ids = (
+            runtime_specialization_dependents(
+                [
+                    node
+                    for node in getattr(ast, "constants", []) or []
+                    if id(node) not in declaration_ids
+                ],
+                declarations,
+                lambda node: self.map_type(
+                    self.glsl_specialization_constant_type(node)
+                ),
+                self.map_type,
+            )
+        )
+        if not self.glsl_runtime_specialization_dependent_ids or not re.search(
+            r"\bes\b", version_line
+        ):
+            return ""
+        # GLSL ES 3.20 section 4.3 requires constant global initializers; the extension lifts that.
+        return (
+            f"{GLSL_SPIRV_GUARD}"
+            "#extension GL_EXT_shader_non_constant_global_initializers : enable\n"
+            "#endif\n"
+        )
 
     def generate_constant_expression(self, expr, expected_type=None):
         previous = self.glsl_generating_global_initializer

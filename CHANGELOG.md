@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- GLSL output declares a global constant that reads a specialization constant, such as `const int doubled = count * 2;` or `const int sizes[2] = int[2](count, 4);`, after the specialization constant, where it used to come first and `glslang` refused the undeclared name. When the shader is compiled to SPIR-V (`GL_SPIRV` or `VULKAN` defined), a constant that SPIR-V cannot build as a specialization-constant operation, such as an array, structure, matrix or floating-point value, is declared as a global variable with the same initializer, because `glslang` refuses it as a constant ("global const initializers must be constant"); GLSL ES output then enables `GL_EXT_shader_non_constant_global_initializers` in that branch, before its precision statements. Integer and Boolean scalar and vector constants stay constants.
 - HIP and OpenCL input read a parameter, cast or local declaration whose type a line break splits after its base type, a `*` or `&`, a postfix qualifier such as `restrict` or `const`, or `pipe`, as they read it on one line: `__global float`, a line break and `* in` imports as `@group(0) @binding(0) var<storage, read_write> in_: array<f32>`, and `float widen(unsigned`, a line break and `v)` as `f32 widen(u32 v)`. They used to raise `SyntaxError` (`Expected RPAREN, got STAR` for a parameter, `Unexpected token in expression` for a function or a cast) (#3753).
 
 ---
