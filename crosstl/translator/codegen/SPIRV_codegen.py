@@ -310,6 +310,7 @@ from .texture_residency import (
     TEXTURE_RESIDENCY_OPERATION,
     TEXTURE_RESIDENT_OPERATION,
 )
+from .workgroup_size_extents import fold_workgroup_size_extents
 
 
 class SpirvType:
@@ -32671,6 +32672,7 @@ class VulkanSPIRVCodeGen(
                 self, "workgroup_access_assertions", ()
             ),
         )
+        ast = fold_workgroup_size_extents(ast, "SPIR-V", self.refuse_lowering)
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
             (getattr(ast, "stages", None) or {}).items()

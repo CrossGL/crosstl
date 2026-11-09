@@ -676,6 +676,7 @@ from .union_lanes import (
 )
 from .union_layout import UnionLayoutCollector, is_lane_kind
 from .workgroup_access_contracts import parse_workgroup_access_assertions
+from .workgroup_size_extents import fold_workgroup_size_extents
 
 # Specialization contract for a workgroup pointer parameter bound to ``nullptr``.
 # ``nullptr`` cannot name a groupshared array and real backings always have a
@@ -3667,6 +3668,7 @@ class HLSLCodeGen(
         )
 
     def render_program(self, ast, target_stage=None):
+        ast = fold_workgroup_size_extents(ast, "HLSL", self.refuse_lowering)
         region = codegen_dispatch_region(
             ast, self.hlsl_software_subgroup_stage_entries(ast, target_stage)
         )
