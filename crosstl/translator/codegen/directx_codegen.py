@@ -154,6 +154,7 @@ from .boolean_mix import boolean_mix_selector, hlsl_boolean_mix
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
 from .buffer_member_layout import (
+    MEMBER_LAYOUT_QUALIFIERS,
     member_explicit_offset,
     member_is_packed,
     member_is_row_major,
@@ -16026,6 +16027,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "column_major",
             # MSL's packed vector storage is a buffer layout, which the layout planners read.
             "packed",
+            # A member's own offset and alignment, which the layout planners read as well.
+            *MEMBER_LAYOUT_QUALIFIERS,
             # Ray payload access qualifiers follow the semantic (hlsl_payload_access_qualifiers).
             *PAYLOAD_ACCESS_ATTRIBUTES,
             # MSL's half texture element type; the image format attribute gives HLSL its element type.

@@ -117,7 +117,7 @@ from .buffer_block_diagnostics import (
     record_unsupported_layout_failures,
 )
 from .buffer_length import COUNTED_BUFFERS, BufferLengthUnsupportedError
-from .buffer_member_layout import member_is_packed
+from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS, member_is_packed
 from .builtin_result_types import (
     C_FAMILY,
     component_access_type,
@@ -23154,6 +23154,7 @@ class MetalCodeGen(
                 or is_interface_qualifier_attribute(attr)
                 or str(getattr(attr, "name", "")).lower()
                 in (BUFFER_LAYOUT_ATTRIBUTE, "packed")
+                or str(getattr(attr, "name", "")).lower() in MEMBER_LAYOUT_QUALIFIERS
                 # DXR payload access qualifiers; a Metal payload is a ray_data reference every stage may access.
                 or str(getattr(attr, "name", "")).lower() in PAYLOAD_ACCESS_ATTRIBUTES
             ):
