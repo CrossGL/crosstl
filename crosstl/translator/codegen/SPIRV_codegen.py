@@ -96,6 +96,7 @@ from .extended_arithmetic_builtins import (
 )
 from .fixed_sampler_contracts import fixed_sampler_records, with_spirv_fixed_samplers
 from .generic_call_dependencies import generic_callee_names
+from .generic_concrete_call_results import concrete_call_overload
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generic_function_call_name,
@@ -20219,6 +20220,9 @@ class VulkanSPIRVCodeGen(
                         return self.map_crossgl_type(
                             getattr(specialized_func, "return_type", "void")
                         )
+            declared_result_type = self.declared_concrete_call_result_type(expr)
+            if declared_result_type is not None:
+                return declared_result_type
             signature = self.resolve_function_signature(callee_name)
             if signature is not None:
                 return signature[0]
@@ -22861,6 +22865,25 @@ class VulkanSPIRVCodeGen(
         base_type = inferred_type.type.base_type
         # A generic instance keeps its CrossGL spelling, so ``Box<T>`` binds ``T`` from ``Box_float``.
         return generic_struct_instance_spelling(self, base_type) or base_type
+
+    def declared_concrete_call_result_type(self, call) -> Optional[SpirvId]:
+        """The declared result type of the concrete overload ``call`` selects.
+
+        Signatures are registered only as functions are emitted, and by name, so generic
+        specialization could not type a helper call and a name lookup typed an overloaded
+        helper by whichever overload was emitted last.
+        """
+        function_node = concrete_call_overload(
+            self,
+            call,
+            lambda generator, arg: generator.call_argument_type_name(arg),
+            lambda generator, type_name: generator.normalize_signature_type_name(
+                type_name
+            ),
+        )
+        if function_node is None:
+            return None
+        return self.map_crossgl_type(function_node.return_type)
 
     def call_argument_type_names(self, args):
         return [self.call_argument_type_name(arg) or "unknown" for arg in args]
