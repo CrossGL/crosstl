@@ -166,6 +166,11 @@ from .slang_projected_compare import (
     is_slang_projected_compare,
 )
 from .slang_refusals import SlangLoweringRefused
+from .slang_resource_memory import (
+    helper_resource_argument_names,
+    slang_resource_memory_prefix,
+    slang_resource_parameter_memory_prefix,
+)
 from .slang_specialization_constants import plan_slang_specialization_constants
 from .slang_wave_shuffles import (
     SLANG_WAVE_SHUFFLE_ARITIES,
@@ -475,6 +480,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             self.user_function_parameter_types = (
                 self.collect_user_function_parameter_types(ast)
+            )
+            self.slang_helper_resource_arguments = helper_resource_argument_names(
+                ast, self.user_function_names
             )
             self.generic_function_definitions = {}
             self.generic_function_definition_ordinals = {}
@@ -4054,35 +4062,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         return slang_image_format_prefix(self.explicit_image_format(node))
 
     def slang_resource_memory_qualifier_prefix(self, mapped_type, node):
-        if node is None:
-            return ""
-
-        base_type = self.resource_base_type(mapped_type)
-        if not isinstance(base_type, str):
-            return ""
-        if not base_type.startswith(
-            (
-                "RWTexture",
-                "RWBuffer",
-                "RWStructuredBuffer",
-                "AppendStructuredBuffer",
-                "ConsumeStructuredBuffer",
-                "RWByteAddressBuffer",
-            )
-        ):
-            return ""
-
-        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
-        attributes = {
-            str(getattr(attr, "name", "")).lower()
-            for attr in getattr(node, "attributes", []) or []
-        }
-        if qualifiers & {"coherent", "globallycoherent"} or attributes & {
-            "coherent",
-            "globallycoherent",
-        }:
-            return "globallycoherent "
-        return ""
+        return slang_resource_memory_prefix(self, mapped_type, node)
 
     def stage_semantic_map(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
@@ -5947,9 +5927,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.register_variable_type(node.name, direct_buffer_type, node)
             if self.skip_duplicate_slang_global_variable(node, direct_buffer_type):
                 return ""
-            declaration = format_c_style_array_declaration(
-                direct_buffer_type, node.name
-            )
+            declaration = self.slang_resource_memory_qualifier_prefix(
+                direct_buffer_type, node
+            ) + format_c_style_array_declaration(direct_buffer_type, node.name)
             declaration = self.apply_slang_resource_binding_decorations(
                 declaration, node, direct_buffer_type, auto_assign=True
             )
@@ -5962,9 +5942,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.local_variable_types[node.name] = original_type
             if self.skip_duplicate_slang_global_variable(node, lowered_block_type):
                 return ""
-            declaration = format_c_style_array_declaration(
-                lowered_block_type, node.name
-            )
+            declaration = self.slang_resource_memory_qualifier_prefix(
+                lowered_block_type, node
+            ) + format_c_style_array_declaration(lowered_block_type, node.name)
             declaration = self.apply_slang_resource_binding_decorations(
                 declaration, node, lowered_block_type, auto_assign=True
             )
@@ -6295,7 +6275,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                         param_type, param.name
                     )
                     declaration = (
-                        self.slang_resource_memory_qualifier_prefix(param_type, param)
+                        slang_resource_parameter_memory_prefix(self, param_type, param)
                         + declaration
                     )
                     ray_declaration = self.slang_ray_stage_parameter_declaration(
