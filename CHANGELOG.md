@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- CUDA output declares a GLSL `readonly buffer` block, a sized array and a scalar as HIP output does, such as `__device__ B0 b0;` for `readonly buffer B0 { float fin[]; };`, and keeps `const` only on the element type of a runtime-sized array, such as `__device__ const float* values;`. It used to declare them as uninitialized `__device__ const` objects, which CUDA compilers reject; assignments and atomics on a readonly block are still refused (#4192).
 - HIP and OpenCL input read a parameter, cast or local declaration whose type a line break splits after its base type, a `*` or `&`, a postfix qualifier such as `restrict` or `const`, or `pipe`, as they read it on one line: `__global float`, a line break and `* in` imports as `@group(0) @binding(0) var<storage, read_write> in_: array<f32>`, and `float widen(unsigned`, a line break and `v)` as `f32 widen(u32 v)`. They used to raise `SyntaxError` (`Expected RPAREN, got STAR` for a parameter, `Unexpected token in expression` for a function or a cast) (#3753).
 
 ---
