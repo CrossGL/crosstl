@@ -341,6 +341,11 @@ from .glsl_target_builtins import (
     OPENGL_UNAVAILABLE_BUILTINS,
     unavailable_builtin_reasons,
 )
+from .glsl_tessellation_modes import (
+    merge_control_stage_modes,
+    program_control_sources,
+    remember_scoped_control_sources,
+)
 from .glsl_union_storage import UnionStorage
 from .glsl_version_requirements import (
     VARIABLE_GATHER_OFFSET,
@@ -3705,6 +3710,7 @@ class GLSLCodeGen(
                 if getattr(function, "name", None) in reachable_names
             ]
         self.prune_entry_scoped_declarations(scoped_ast, selected_copy_function)
+        remember_scoped_control_sources(self, ast, scoped_ast)
         return scoped_ast
 
     def prune_entry_scoped_declarations(self, ast, entry_function):
@@ -8823,6 +8829,7 @@ class GLSLCodeGen(
 
         Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
         """
+        self.glsl_tessellation_control_sources = program_control_sources(self, ast)
         with self.opengl_descriptor_set_plan_for(ast):
             return self.refusals.run(
                 self.render_program_with_profile_builtins, ast, target_stage
@@ -19814,8 +19821,6 @@ class GLSLCodeGen(
             stage_layout_qualifiers=stage_layout_qualifiers,
             direction="in",
         )
-        if mapped_domain:
-            layout_parts.append(mapped_domain)
 
         partitioning = self.glsl_stage_consistent_layout_value(
             "tessellation",
@@ -19831,8 +19836,6 @@ class GLSLCodeGen(
             stage_layout_qualifiers=stage_layout_qualifiers,
             direction="in",
         )
-        if partitioning:
-            layout_parts.append(partitioning)
 
         winding = self.glsl_stage_consistent_layout_value(
             "tessellation",
@@ -19857,13 +19860,20 @@ class GLSLCodeGen(
                     f"{output_topology} with winding {winding}"
                 )
             winding = topology_winding
-        if winding:
-            layout_parts.append(winding)
 
-        point_mode = self.glsl_stage_bare_attribute(
-            func, {"point_mode"}, stage_layout_qualifiers, "in"
+        point_mode = bool(
+            self.glsl_stage_bare_attribute(
+                func, {"point_mode"}, stage_layout_qualifiers, "in"
+            )
+            or topology_point_mode
         )
-        if point_mode or topology_point_mode:
+        mapped_domain, partitioning, winding, point_mode = merge_control_stage_modes(
+            self, func, mapped_domain, partitioning, winding, point_mode
+        )
+        layout_parts.extend(
+            part for part in (mapped_domain, partitioning, winding) if part
+        )
+        if point_mode:
             layout_parts.append("point_mode")
 
         if not layout_parts:
