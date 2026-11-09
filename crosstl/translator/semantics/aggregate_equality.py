@@ -26,6 +26,7 @@ import re
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, SourceSpan, TranslationDiagnostic
+from .enum_values import scalar_enum_names
 from .hub_types import call_name, type_from_node
 from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 from .scoped_walk import ScopedWalker, parameter_type
@@ -81,6 +82,8 @@ class _AggregateEquality(ScopedWalker):
         self.target = target
         self.rewritten = 0
         self.pointer_parameter_types = []
+        # A payload-free enum is an integer: ``k == Kind::Y`` compares scalars, not members.
+        self.scalar_enums = scalar_enum_names(program)
         self.constants = {
             constant.name: constant.value
             for constant in getattr(program, "constants", None) or []
@@ -196,6 +199,8 @@ class _AggregateEquality(ScopedWalker):
     def _struct_members(self, type_node):
         if isinstance(type_node, (A.NamedType, A.PrimitiveType)):
             if getattr(type_node, "generic_args", None):
+                return None
+            if type_node.name in self.scalar_enums:
                 return None
             return self.scope.structs.get(type_node.name)
         return None

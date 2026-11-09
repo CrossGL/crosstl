@@ -221,6 +221,7 @@ from .for_in_utils import (
 )
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
+from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -340,6 +341,15 @@ from .glsl_string_literals import string_literal_reasons
 from .glsl_target_builtins import (
     OPENGL_UNAVAILABLE_BUILTINS,
     unavailable_builtin_reasons,
+)
+from .glsl_tessellation_input_arrays import (
+    implicit_tessellation_input_type,
+    tessellation_input_length,
+)
+from .glsl_tessellation_modes import (
+    merge_control_stage_modes,
+    program_control_sources,
+    remember_scoped_control_sources,
 )
 from .glsl_union_storage import UnionStorage
 from .glsl_version_requirements import (
@@ -3705,6 +3715,7 @@ class GLSLCodeGen(
                 if getattr(function, "name", None) in reachable_names
             ]
         self.prune_entry_scoped_declarations(scoped_ast, selected_copy_function)
+        remember_scoped_control_sources(self, ast, scoped_ast)
         return scoped_ast
 
     def prune_entry_scoped_declarations(self, ast, entry_function):
@@ -8823,6 +8834,7 @@ class GLSLCodeGen(
 
         Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
         """
+        self.glsl_tessellation_control_sources = program_control_sources(self, ast)
         with self.opengl_descriptor_set_plan_for(ast):
             return self.refusals.run(
                 self.render_program_with_profile_builtins, ast, target_stage
@@ -9189,6 +9201,7 @@ class GLSLCodeGen(
         self.glsl_hoisted_shared_alias_names = set()
         self.glsl_shared_dimension_constants = {}
         self.current_target_stage = target_stage
+        self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
         self.glsl_shadow_lod_extension_used = False
         self.glsl_stage_builtin_extensions = []
@@ -19814,8 +19827,6 @@ class GLSLCodeGen(
             stage_layout_qualifiers=stage_layout_qualifiers,
             direction="in",
         )
-        if mapped_domain:
-            layout_parts.append(mapped_domain)
 
         partitioning = self.glsl_stage_consistent_layout_value(
             "tessellation",
@@ -19831,8 +19842,6 @@ class GLSLCodeGen(
             stage_layout_qualifiers=stage_layout_qualifiers,
             direction="in",
         )
-        if partitioning:
-            layout_parts.append(partitioning)
 
         winding = self.glsl_stage_consistent_layout_value(
             "tessellation",
@@ -19857,13 +19866,20 @@ class GLSLCodeGen(
                     f"{output_topology} with winding {winding}"
                 )
             winding = topology_winding
-        if winding:
-            layout_parts.append(winding)
 
-        point_mode = self.glsl_stage_bare_attribute(
-            func, {"point_mode"}, stage_layout_qualifiers, "in"
+        point_mode = bool(
+            self.glsl_stage_bare_attribute(
+                func, {"point_mode"}, stage_layout_qualifiers, "in"
+            )
+            or topology_point_mode
         )
-        if point_mode or topology_point_mode:
+        mapped_domain, partitioning, winding, point_mode = merge_control_stage_modes(
+            self, func, mapped_domain, partitioning, winding, point_mode
+        )
+        layout_parts.extend(
+            part for part in (mapped_domain, partitioning, winding) if part
+        )
+        if point_mode:
             layout_parts.append("point_mode")
 
         if not layout_parts:
@@ -32857,6 +32873,12 @@ class GLSLCodeGen(
             qualifier
         ) == "input" and self.requires_flat_stage_input(stage_name, mapped_type):
             qualifier = f"{self.with_flat_stage_input_qualifier(qualifier.strip())} "
+        implicit_type = implicit_tessellation_input_type(
+            self, node, qualifier, mapped_type, stage_name
+        )
+        if implicit_type != mapped_type:
+            mapped_type = implicit_type
+            declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         self.reserve_global_stage_io_layout(
             node,
             qualifier,
@@ -32922,11 +32944,15 @@ class GLSLCodeGen(
         if linked_name is not None and linked_name != emitted_name:
             emitted_name = linked_name
             self.current_identifier_aliases[source_name] = linked_name
-        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         if direction is not None:
             prefix = self.stage_io_declaration_prefix(
                 node, direction, stage_name=stage_name
             )
+            mapped_type = implicit_tessellation_input_type(
+                self, node, prefix, mapped_type, stage_name
+            )
+        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
+        if direction is not None:
             if direction == "in" and self.requires_flat_stage_input(
                 stage_name, mapped_type
             ):
@@ -38040,6 +38066,16 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.type_name_string(
                     getattr(resolved_overload, "return_type", None)
                 )
+            if getattr(
+                self, "collecting_generic_function_specializations", False
+            ) and concrete_overload_results_differ(
+                self,
+                func_name,
+                lambda generator, type_name: generator.map_type(type_name),
+            ):
+                # Generic deduction must not bind a type parameter to a guessed overload;
+                # it resolves the overload from the argument types it tracks.
+                return None
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
             componentwise_type = self.glsl_componentwise_unary_result_type(
@@ -40988,6 +41024,9 @@ complex64_t crossgl_complex64_mod_assign(
                 and func_expr.member == "length"
                 and not expr.args
             ):
+                written_length = tessellation_input_length(self, func_expr)
+                if written_length is not None:
+                    return written_length
                 instance_member = self.glsl_structured_buffer_array_element_member(
                     func_expr.object
                 )
