@@ -116,6 +116,7 @@ class GLSLToCrossGLConverter:
         "perviewnv": "perview",
     }
     VULKAN_MEMORY_MODEL_QUALIFIER_ATTRIBUTES = {
+        "devicecoherent": "devicecoherent",
         "workgroupcoherent": "workgroupcoherent",
         "subgroupcoherent": "subgroupcoherent",
         "queuefamilycoherent": "queuefamilycoherent",
@@ -1497,8 +1498,11 @@ class GLSLToCrossGLConverter:
         instance_name = self.anonymous_ssbo_block_instances[struct.name]
         code = f"{layout} {qualifier_prefix}buffer {block_name} {{\n"
         self.increase_indent()
+        block_qualifiers = {qualifier.lower() for qualifier in qualifiers}
         for member in getattr(struct, "members", []) or getattr(struct, "fields", []):
-            code += self.indent() + self.anonymous_ssbo_member_declaration(member)
+            code += self.indent() + self.anonymous_ssbo_member_declaration(
+                member, block_qualifiers
+            )
         self.decrease_indent()
         code += self.indent_str + f"}} {instance_name};"
         return code
@@ -1525,11 +1529,16 @@ class GLSLToCrossGLConverter:
 
         return f"layout({', '.join(parts)})"
 
-    def anonymous_ssbo_member_declaration(self, member):
+    def anonymous_ssbo_member_declaration(self, member, block_qualifiers=frozenset()):
         var_type = self.convert_type(getattr(member, "vtype", ""))
         var_name = getattr(member, "name", "")
         attributes = self.interface_member_layout_attribute_suffix(member)
-        attributes += self.vulkan_memory_model_qualifier_attribute_suffix(member)
+        # The parser copies the block's qualifiers onto each member; the block header already carries them.
+        attributes += "".join(
+            f" {attribute}"
+            for attribute in self.vulkan_memory_model_qualifier_attributes(member)
+            if attribute[1:] not in block_qualifiers
+        )
         return f"{var_type} {var_name}{self.array_suffix(member)}{attributes};\n"
 
     def structured_buffer_declaration(self, var):

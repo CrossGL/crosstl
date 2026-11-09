@@ -96,6 +96,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..vulkan_memory_scope import metal_coherence_scope
 from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
 from .array_utils import (
     collect_literal_int_constants,
@@ -18265,6 +18266,9 @@ class MetalCodeGen(
             contract = (kind, str(scope).lower() if scope is not None else None)
             if contract not in contracts:
                 contracts.append(contract)
+        scope = metal_coherence_scope(node)
+        if scope is not None and not any(kind == "coherent" for kind, _ in contracts):
+            contracts.append(("coherent", scope))
         return contracts
 
     def resource_memory_qualifier_prefix(self, node=None, raw_type=None):

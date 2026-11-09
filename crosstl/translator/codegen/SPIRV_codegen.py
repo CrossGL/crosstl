@@ -68,6 +68,7 @@ from ..semantics.shader_records import (
     shader_record_memory_layout,
 )
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from ..vulkan_memory_scope import needs_device_coherence
 from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
@@ -18666,7 +18667,9 @@ class VulkanSPIRVCodeGen(
             if access_name in supported:
                 qualifiers.add(aliases.get(access_name, access_name))
 
-        if "globallycoherent" in qualifiers:
+        if "globallycoherent" in qualifiers or needs_device_coherence(node):
+            # Coherent under the GLSL450 memory model is device-wide, which holds every scope
+            # GL_KHR_memory_scope_semantics names.
             qualifiers.add("coherent")
 
         return qualifiers
