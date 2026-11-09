@@ -16,12 +16,27 @@ from ..ast import IdentifierNode, VariableNode
 __all__ = ["vector_value_subscript"]
 
 
+def _stored_value(generator, name):
+    """The local, global or constant built-in ``name`` refers to, found without emitting instructions.
+
+    ``variable_pointer_from_expression`` also resolves bare uniform-block members, and it does so by emitting an
+    ``OpAccessChain``. Those members always have storage, so the caller would emit the access chain a second time.
+    """
+    found = generator.local_variables.get(name) or generator.resolve_global_variable(name)
+    if found is not None:
+        return found
+    info = generator.compute_builtin_info(name)
+    if info is not None and info[2] == "Constant":
+        return generator.ensure_compute_builtin(name)
+    return None
+
+
 def vector_value_subscript(generator, array_expr, index, index_expr) -> object | None:
     """The component ``array_expr[index]`` when ``array_expr`` names a vector value without storage, else ``None``."""
     if not isinstance(array_expr, (IdentifierNode, VariableNode)):
         # Resolving a compound base emits its access chains and index code, which the caller then emits again.
         return None
-    base = generator.variable_pointer_from_expression(array_expr)
+    base = _stored_value(generator, array_expr.name)
     if base is None or base.type.storage_class:
         return None
     vector_type = generator.registered_value_type(base)

@@ -83,3 +83,33 @@ def test_subscript_matches_the_swizzle(tmp_path):
 def test_out_of_range_subscript_is_refused(tmp_path):
     with pytest.raises(SpirvLoweringRefused, match="Component 3 .* is out of range"):
         _vulkan(tmp_path, "local_size_x = 64", "gl_WorkGroupSize[3]")
+
+
+BLOCK_MEMBER_SHADER = """shader Probe {
+    struct VertexOutput {
+        vec4 gl_Position @ gl_Position;
+    };
+    cbuffer buf @binding(0) {
+        mat4 MVP;
+        vec4 position[4];
+    };
+    vertex {
+        VertexOutput main() {
+            VertexOutput output;
+            output.gl_Position = MVP * position[gl_VertexIndex];
+            return output;
+        }
+    }
+}
+"""
+
+
+def test_block_member_subscript_emits_one_access_chain(tmp_path):
+    """A bare uniform-block member keeps its access chain, and the lookup for a vector value adds none."""
+    path = tmp_path / "shader.cgl"
+    path.write_text(BLOCK_MEMBER_SHADER)
+    code = crosstl.translate(str(path), backend="vulkan", format_output=False)
+
+    chains = re.findall(r"= (OpAccessChain %\w+ %\w+ %\w+)$", code, re.MULTILINE)
+    assert len(chains) == len(set(chains)), chains
+    _validate(tmp_path, code)
