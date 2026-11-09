@@ -29,6 +29,7 @@ from crosstl.backend.SPIRV.VulkanAst import (
     WhileNode,
 )
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
+from crosstl.backend.SPIRV.workgroup_size_import import WorkgroupDimension
 
 
 def parse_code(tokens: List):
@@ -2332,7 +2333,6 @@ def test_spirv_assembly_specialization_constant_composite_and_op_parse():
         if isinstance(layout, LayoutNode)
     }
     total = layouts["WORKGROUP_TOTAL"]
-    workgroup_size = layouts["gl_WorkGroupSize"]
 
     assert ast.spirv_assembly is True
     assert ast.spirv_spec_constant_ids == [
@@ -2356,17 +2356,14 @@ def test_spirv_assembly_specialization_constant_composite_and_op_parse():
     assert total.declaration.right.op == "+"
     assert total.declaration.right.right == "WORKGROUP_HEIGHT"
 
-    assert workgroup_size.layout_type == "CONST"
-    assert workgroup_size.qualifiers == [("builtin", "WorkgroupSize")]
-    assert workgroup_size.spirv_decorations == [("BuiltIn", ["WorkgroupSize"])]
-    assert workgroup_size.declaration.left.vtype == "const uvec3"
-    assert isinstance(workgroup_size.declaration.right, FunctionCallNode)
-    assert workgroup_size.declaration.right.name == "uvec3"
-    assert workgroup_size.declaration.right.args == [
-        "WORKGROUP_WIDTH",
-        "WORKGROUP_HEIGHT",
-        "1",
-    ]
+    # The specialized WorkgroupSize composite is the gl_WorkGroupSize built-in, not a declared constant, and it
+    # sizes the entry point in place of LocalSize 1 1 1.
+    assert "gl_WorkGroupSize" not in layouts
+    assert ast.functions[0].spirv_workgroup_size == (
+        WorkgroupDimension("8", "0"),
+        WorkgroupDimension("4", "1"),
+        WorkgroupDimension("1"),
+    )
 
 
 def test_glslang_web_comp_barrier_instructions_parse():

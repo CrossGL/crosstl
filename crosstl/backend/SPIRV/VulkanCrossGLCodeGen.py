@@ -35,6 +35,7 @@ from .VulkanAst import (
     VariableNode,
     WhileNode,
 )
+from .workgroup_size_import import workgroup_size_layout_qualifiers
 
 
 class VulkanToCrossGLConverter:
@@ -652,6 +653,13 @@ class VulkanToCrossGLConverter:
         return "fragment"
 
     def spirv_compute_execution_layouts(self, node):
+        dimensions = getattr(node, "spirv_workgroup_size", None)
+        if dimensions is not None:
+            return [
+                LayoutNode(
+                    workgroup_size_layout_qualifiers(dimensions), layout_type="in"
+                )
+            ]
         layouts = []
         for mode in getattr(node, "spirv_execution_modes", []) or []:
             if mode.get("mode") not in {"LocalSize", "LocalSizeId"}:

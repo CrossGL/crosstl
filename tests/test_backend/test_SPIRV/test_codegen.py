@@ -7066,9 +7066,11 @@ def test_spirv_assembly_specialization_constant_composite_and_op_codegen():
         "const uint WORKGROUP_TOTAL = (WORKGROUP_WIDTH + WORKGROUP_HEIGHT);"
         in generated_code
     )
+    # The WorkgroupSize composite overrides LocalSize 1 1 1 and is the gl_WorkGroupSize built-in.
+    assert "gl_WorkGroupSize @gl_WorkGroupSize" not in generated_code
     assert (
-        "const uint3 gl_WorkGroupSize @gl_WorkGroupSize = "
-        "uint3(WORKGROUP_WIDTH, WORKGROUP_HEIGHT, 1);" in generated_code
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1, "
+        "local_size_x_id = 0, local_size_y_id = 1) in;" in generated_code
     )
     assert "OpSpecConstant" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7080,7 +7082,15 @@ def test_glslang_workgroup_size_array_lengths_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "groupshared uint keys[7][(2 * 5)];" in generated_code
+    # The arrays follow the specialized workgroup size, as GLSL's shared uint keys[gl_WorkGroupSize.z] does.
+    assert (
+        "groupshared uint keys[gl_WorkGroupSize.z]"
+        "[(gl_WorkGroupSize.x * gl_WorkGroupSize.y)];" in generated_code
+    )
+    assert (
+        "layout(local_size_x = 2, local_size_y = 5, local_size_z = 7, local_size_x_id = 18, "
+        "local_size_y_id = 10, local_size_z_id = 19) in;" in generated_code
+    )
     assert "uint3(2, 5, 7)[0]" not in generated_code
     assert "uint3(2, 5, 7)[1]" not in generated_code
     assert "uint3(2, 5, 7)[2]" not in generated_code
@@ -8269,8 +8279,8 @@ def test_spirv_assembly_local_size_id_codegen():
 
     assert "compute {" in generated_code
     assert (
-        "layout(local_size_x = WORKGROUP_WIDTH, local_size_y = WORKGROUP_HEIGHT, "
-        "local_size_z = 1) in;" in generated_code
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1, "
+        "local_size_x_id = 0, local_size_y_id = 1) in;" in generated_code
     )
     assert "const uint WORKGROUP_WIDTH @constant_id(0) = 8;" in generated_code
     assert "const uint WORKGROUP_HEIGHT @constant_id(1) = 4;" in generated_code

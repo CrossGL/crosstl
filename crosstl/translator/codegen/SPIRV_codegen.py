@@ -287,6 +287,7 @@ from .spirv_uniform_block_arrays import (
     lowered_constant_buffer_nodes,
     require_non_uniform_block_array_indexing,
 )
+from .spirv_value_subscripts import vector_value_subscript
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
 from .stage_utils import (
@@ -30138,6 +30139,9 @@ class VulkanSPIRVCodeGen(
             )
             if reinterpret_load is not None:
                 return reinterpret_load
+            component = vector_value_subscript(self, expr.array, index, expr.index)
+            if component is not None:
+                return component
 
             access, element_type = self.create_array_element_access(
                 expr.array, index, expr.index

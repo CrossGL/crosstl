@@ -38,6 +38,7 @@ from .struct_result_import import (
 from .subpass_import import is_subpass_image, subpass_load_expression
 from .VulkanAst import *
 from .VulkanLexer import *
+from .workgroup_size_import import SpirvWorkgroupSizes, workgroup_size_component
 
 
 class VulkanParser:
@@ -968,8 +969,12 @@ class VulkanParser:
         execution_modes = {}
         group_decorates = []
         group_member_decorates = []
+        workgroup_sizes = SpirvWorkgroupSizes(instructions)
+        self.spirv_workgroup_sizes = workgroup_sizes
 
         for result_id, opcode, operands, _line_number in instructions:
+            if result_id in workgroup_sizes.names:
+                names[result_id] = workgroup_sizes.names[result_id]
             if opcode == "OpCapability" and operands:
                 capabilities.append(operands[0])
             elif opcode == "OpName" and len(operands) >= 2:
@@ -1274,7 +1279,12 @@ class VulkanParser:
         )
         global_variables = (
             self.spirv_assembly_specialization_constants(
-                spec_constant_ids, names, decorations, types, constants, constant_types
+                workgroup_sizes.declared_spec_constants(spec_constant_ids),
+                names,
+                decorations,
+                types,
+                constants,
+                constant_types,
             )
             + global_variables
         )
@@ -1498,6 +1508,9 @@ class VulkanParser:
                 else None
             )
             node.spirv_execution_modes = execution_modes.get(function_id, [])
+            node.spirv_workgroup_size = self.spirv_entry_workgroup_size(
+                function_id, function_entry_points
+            )
             node.spirv_names = names
             names = module_names
             node.spirv_constants = constants
@@ -1519,6 +1532,25 @@ class VulkanParser:
             entry_instruction = None
             raw_instructions = []
         return functions
+
+    SPIRV_WORKGROUP_EXECUTION_MODELS = {
+        "GLCompute",
+        "MeshNV",
+        "MeshEXT",
+        "TaskNV",
+        "TaskEXT",
+    }
+
+    def spirv_entry_workgroup_size(self, function_id, function_entry_points):
+        workgroup_sizes = getattr(self, "spirv_workgroup_sizes", None)
+        for entry_point in function_entry_points:
+            if workgroup_sizes is None:
+                break
+            if entry_point["execution_model"] in self.SPIRV_WORKGROUP_EXECUTION_MODELS:
+                return workgroup_sizes.entry_dimensions(
+                    function_id, entry_point["name"]
+                )
+        return None
 
     def spirv_assembly_function_body(
         self,
@@ -5928,7 +5960,9 @@ class VulkanParser:
         if operation == "CompositeExtract" and len(args) >= 2:
             expression = args[0]
             for index in args[1:]:
-                extracted = self.spirv_static_composite_element(expression, index)
+                extracted = workgroup_size_component(
+                    expression, index
+                ) or self.spirv_static_composite_element(expression, index)
                 expression = (
                     extracted
                     if extracted is not None
@@ -6025,6 +6059,8 @@ class VulkanParser:
             array = self.spirv_constant_expression_text(value.array)
             index = self.spirv_constant_expression_text(value.index)
             return f"{array}[{index}]"
+        if isinstance(value, MemberAccessNode):
+            return f"{self.spirv_constant_expression_text(value.object)}.{value.member}"
         return str(value)
 
     def spirv_string_literal(self, value):
