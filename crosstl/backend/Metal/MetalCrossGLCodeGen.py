@@ -82,6 +82,7 @@ from .external_functions import refuse_external_function_calls
 from .generic_call_return_types import (
     deduced_call_return_type,
     expression_call_return_type,
+    same_arity_overloads,
 )
 from .generic_local_aliases import (
     bind_generic_local_alias,
@@ -8243,6 +8244,8 @@ class MetalToCrossGLConverter(
         if integer is not None:
             return integer.group(1)
         value = self.evaluate_value_template_constant_expression(normalized)
+        if value is None:
+            value = self.fold_constexpr_helper_calls_in_constant_text(normalized)
         if value is not None:
             return str(value)
 
@@ -8536,6 +8539,8 @@ class MetalToCrossGLConverter(
             return integer.group(1)
 
         value = self.evaluate_value_template_constant_expression(normalized)
+        if value is None:
+            value = self.fold_constexpr_helper_calls_in_constant_text(normalized)
         if value is not None:
             return str(value)
 
@@ -8555,6 +8560,44 @@ class MetalToCrossGLConverter(
             getattr(function, "template_source_location", None)
             or getattr(function, "source_location", None),
         )
+
+    def fold_constexpr_helper_calls_in_constant_text(self, text):
+        """Evaluate a template argument that calls concrete constexpr helpers.
+
+        A non-type template argument is a constant expression ([temp.arg.nontype]),
+        so a call such as ``work_per_thread_float()`` (a constexpr helper the
+        preprocessor materialized from a default argument) names one integral
+        value. The helper body is evaluated with the constexpr helper evaluator;
+        ``None`` keeps the caller's fail-closed diagnostic when any helper is
+        unknown, unsupported or not provably constant.
+        """
+
+        helpers = self.constexpr_value_template_functions
+        identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", text))
+        if not identifiers.intersection(helpers) and not identifiers.intersection(
+            {"sizeof", "alignof"}
+        ):
+            return None
+        try:
+            lexer = MetalLexer(text, preprocess=False)
+            parser = MetalParser(lexer.tokenize())
+            node = parser.parse_expression()
+            if parser.current_token[0] != "EOF":
+                return None
+        except (SyntaxError, ValueError, TypeError):
+            return None
+        self.push_materialized_constexpr_expression_context(
+            node,
+            required=False,
+            allow_concrete_without_bindings=True,
+        )
+        try:
+            rendered = self.generate_expression(node, False)
+        except MetalTemplateArgumentResolutionError:
+            return None
+        finally:
+            self.materialized_constexpr_expression_contexts.pop()
+        return self.evaluate_value_template_constant_expression(str(rendered))
 
     def evaluate_value_template_constant_expression(
         self, expression, *, constants=None
@@ -23544,6 +23587,7 @@ float {scalar}(float value) {{
                     selected_callable,
                     expr.args,
                     self.selected_metal_callable_return_type(selected_callable),
+                    expr,
                 )
             builtin_result_type = self.metal_math_builtin_result_type(expr)
             if builtin_result_type is not None:
@@ -23579,19 +23623,14 @@ float {scalar}(float value) {{
                 # its name matches: it has the builtin's type, not the type of
                 # a user overload of the same arity.
                 return self.expression_metal_type(expr.args[0])
-            arity_candidates = [
-                candidate
-                for candidate in self.user_function_overloads_by_name.get(
-                    str(expr.name), []
-                )
-                if len(getattr(candidate, "params", []) or []) == len(expr.args)
-            ]
+            arity_candidates = same_arity_overloads(self, expr)
             if len(arity_candidates) == 1:
                 return expression_call_return_type(
                     self,
                     arity_candidates[0],
                     expr.args,
                     getattr(arity_candidates[0], "return_type", None),
+                    expr,
                 )
             if (
                 unscoped_name in self.metal_wave_intrinsics
