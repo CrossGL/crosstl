@@ -9,6 +9,10 @@ from .statement_import import (
     unsupported_statement,
 )
 from .tessellation_control_import import tessellation_control_mode_attributes
+from .tessellation_evaluation_import import (
+    evaluation_leaves_modes_to_control_stage,
+    tessellation_evaluation_mode_attributes,
+)
 from .VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -775,8 +779,12 @@ class VulkanToCrossGLConverter:
             "VertexOrderCcw": "ccw",
             "PointMode": "point_mode",
         }
+        execution_modes = getattr(node, "spirv_execution_modes", []) or []
+        if evaluation_leaves_modes_to_control_stage(execution_modes):
+            # The entry point carries them as attributes; see tessellation_evaluation_import.
+            return []
         qualifiers = []
-        for mode in getattr(node, "spirv_execution_modes", []) or []:
+        for mode in execution_modes:
             mapped_name = modes.get(mode.get("mode"))
             if mapped_name is not None:
                 qualifiers.append((mapped_name, None))
@@ -1550,6 +1558,12 @@ class VulkanToCrossGLConverter:
         if stage == "tessellation_control":
             attributes.extend(
                 tessellation_control_mode_attributes(
+                    getattr(node, "spirv_execution_modes", None)
+                )
+            )
+        elif stage == "tessellation_evaluation":
+            attributes.extend(
+                tessellation_evaluation_mode_attributes(
                     getattr(node, "spirv_execution_modes", None)
                 )
             )

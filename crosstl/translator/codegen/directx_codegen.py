@@ -315,6 +315,9 @@ from .hlsl_extension_builtins import (
     refuse_unmapped_hlsl_builtin,
 )
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
+from .hlsl_glsl_tessellation_interface import (
+    refuse_glsl_style_tessellation_interface,
+)
 from .hlsl_groupshared_atomics import (
     hlsl_groupshared_variable_names,
     is_hlsl_groupshared_atomic_target,
@@ -40499,6 +40502,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         missing_attributes = sorted(required_attributes - present_attributes)
         if missing_attributes:
             raise DirectXStageAttributesMissingError(shader_type, missing_attributes)
+        refuse_glsl_style_tessellation_interface(self, func, shader_type, stage_node)
         self.validate_hlsl_tessellation_domain(func, shader_type)
         self.validate_hlsl_tessellation_output_topology(func, shader_type)
         self.validate_hlsl_tessellation_domain_topology(func, shader_type)
