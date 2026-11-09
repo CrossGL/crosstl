@@ -662,6 +662,7 @@ from .texture_residency import (
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .workgroup_access_contracts import parse_workgroup_access_assertions
+from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
 
 # Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
 GLSL_SPIRV_GUARD = "#if defined(GL_SPIRV) || defined(VULKAN)\n"
@@ -3095,6 +3096,8 @@ class GLSLCodeGen(
         self.struct_member_types = {}
         self.union_storage = UnionStorage(self)
         self.struct_member_name_maps = {}
+        # Read by type-name scans that run before the program's enums are collected.
+        self.struct_payload_enums = []
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
         self.generic_function_definitions = {}
@@ -9911,6 +9914,7 @@ class GLSLCodeGen(
                 else:
                     data_struct_nodes.append(node)
 
+        code += glsl_workgroup_size_declaration_layout(self, ast, target_stage)
         code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)

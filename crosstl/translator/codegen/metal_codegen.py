@@ -507,6 +507,7 @@ from .texture_residency import (
     metal_texture_residency_call,
     metal_texture_resident_call,
 )
+from .workgroup_size_extents import fold_workgroup_size_extents
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.extension.GL_EXT_fragment_invocation_density",
@@ -2095,6 +2096,7 @@ class MetalCodeGen(
 
     def render_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
+        ast = fold_workgroup_size_extents(ast, "Metal", self.refuse_lowering)
         ast = lower_constant_buffer_resources(
             ast,
             lambda name: self.refuse_lowering(
