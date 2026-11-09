@@ -22,7 +22,9 @@ def _stored_value(generator, name):
     ``variable_pointer_from_expression`` also resolves bare uniform-block members, and it does so by emitting an
     ``OpAccessChain``. Those members always have storage, so the caller would emit the access chain a second time.
     """
-    found = generator.local_variables.get(name) or generator.resolve_global_variable(name)
+    found = generator.local_variables.get(name) or generator.resolve_global_variable(
+        name
+    )
     if found is not None:
         return found
     info = generator.compute_builtin_info(name)
