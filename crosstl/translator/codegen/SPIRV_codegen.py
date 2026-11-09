@@ -15545,6 +15545,8 @@ class VulkanSPIRVCodeGen(
                 array_type = self.split_outer_array_type(base_type)
                 if array_type is not None:
                     return array_type[0]
+            if getattr(self, "collecting_generic_function_specializations", False):
+                return None
 
         source_type_name = self.source_storage_buffer_expression_type_name(expr)
         if source_type_name is not None:
@@ -20203,6 +20205,13 @@ class VulkanSPIRVCodeGen(
                 return self.infer_expression_result_type(expr.args[0])
             return spirv_pack_result_type(self, callee_name)
         if isinstance(expr, ArrayAccessNode):
+            array_type_name = self.storage_buffer_expression_type_name(expr.array)
+            if array_type_name is not None:
+                type_info = self.storage_buffer_resource_type_info(array_type_name)
+                if type_info is not None:
+                    element_type_name = type_info.get("element_type_name")
+                    if element_type_name is not None:
+                        return self.map_crossgl_type(element_type_name)
             array_type = self.infer_expression_result_type(expr.array)
             if array_type is None:
                 return None
@@ -27928,6 +27937,9 @@ class VulkanSPIRVCodeGen(
             self.propagate_readonly_builtin_pointer_name(array_variable, access)
             self.propagate_readonly_pointer_name(array_variable, access)
             return access, element_type
+
+        if getattr(self, "collecting_generic_function_specializations", False):
+            return None, None
 
         array = self.process_expression(array_expr)
         if array is None:

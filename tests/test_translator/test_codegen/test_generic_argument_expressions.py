@@ -240,3 +240,116 @@ def test_open_parameters_of_every_read_definition_are_discarded():
 
     assert generic_call_argument_type_name(generator, ["pair"], "B", "A") is None
     assert generic_call_argument_type_name(generator, ["pair"], None, "T") == "T"
+
+
+from crosstl._crosstl import _translate_with_codegen
+from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+
+
+@pytest.mark.parametrize(
+    "setup, expr, expected_func",
+    [
+        ("float a[2]; a[0] = 1.0; a[1] = 2.0;", "pick(a[0])", "pick_float"),
+        ("vec4 v = vec4(1.0, 2.0, 3.0, 4.0);", "pick(v[2])", "pick_float"),
+        ("mat4 m = mat4(1.0);", "pick(m[1]).x", "pick_v4float"),
+        ("float a[2][3]; a[1][2] = 3.0;", "pick(a[1][2])", "pick_float"),
+        (
+            "vec2 arr[2]; arr[0] = vec2(1.0); arr[1] = vec2(2.0);",
+            "sel2(arr[0], arr[1]).x",
+            "sel2_v2float",
+        ),
+        ("", "pick(outp[0])", "pick_float"),
+    ],
+)
+def test_spirv_indexed_generic_call_arguments(tmp_path, setup, expr, expected_func):
+    shader = f"""
+    shader main {{
+        generic<T> T pick(T x) {{ return x; }}
+        generic<T> T sel2(T a, T b) {{ return a + b; }}
+        compute {{
+            RWStructuredBuffer<float> outp @buffer(0);
+            @numthreads(1, 1, 1)
+            void main(uint3 gid @gl_GlobalInvocationID) {{
+                {setup}
+                int i = int(gid.x);
+                outp[i] = {expr};
+            }}
+        }}
+    }}
+    """
+    path = tmp_path / "shader.cgl"
+    path.write_text(shader, encoding="utf-8")
+    try:
+        code, codegen = _translate_with_codegen(str(path), backend="vulkan")
+    except SpirvLoweringRefused as e:
+        pytest.fail(f"SpirvLoweringRefused raised unexpectedly: {e}")
+
+    assert "OpFunctionCall" in code
+    specialized_names = set(codegen.generic_function_specialized_names.values())
+    assert expected_func in specialized_names
+    assert not codegen.refusals.reasons
+    _compile(tmp_path, "vulkan", code)
+
+
+def test_issue_3823_repro_shader(tmp_path):
+    shader = """
+    shader main {
+        generic<T> T pick(T x) { return x; }
+        generic<T> T sel2(T a, T b) { return a + b; }
+        compute {
+            RWStructuredBuffer<float> outp @buffer(0);
+            @numthreads(1, 1, 1)
+            void main(uint3 gid @gl_GlobalInvocationID) {
+                float a[2];
+                a[0] = 1.0;
+                a[1] = 2.0;
+                int i = int(gid.x);
+                outp[i] = pick(a[0]) + sel2(a[0], a[1]);
+            }
+        }
+    }
+    """
+    path = tmp_path / "shader.cgl"
+    path.write_text(shader, encoding="utf-8")
+    try:
+        code, codegen = _translate_with_codegen(str(path), backend="vulkan")
+    except SpirvLoweringRefused as e:
+        pytest.fail(f"SpirvLoweringRefused raised unexpectedly: {e}")
+
+    assert "OpFunctionCall" in code
+    specialized_names = set(codegen.generic_function_specialized_names.values())
+    assert "pick_float" in specialized_names
+    assert "sel2_float" in specialized_names
+    assert not codegen.refusals.reasons
+    _compile(tmp_path, "vulkan", code)
+
+
+def test_spirv_generic_calls_on_buffer_pointer(tmp_path):
+    shader = """
+    shader main {
+        generic<T> T pick(T x) { return x; }
+        generic<T> T sel2(T a, T b) { return a + b; }
+        compute {
+            buffer float* outp;
+            @numthreads(1, 1, 1)
+            void main(uint3 gid @gl_GlobalInvocationID) {
+                float x = 1.0;
+                int i = int(gid.x);
+                outp[i] = pick(outp[0]) + sel2(outp[0], x);
+            }
+        }
+    }
+    """
+    path = tmp_path / "shader.cgl"
+    path.write_text(shader, encoding="utf-8")
+    try:
+        code, codegen = _translate_with_codegen(str(path), backend="vulkan")
+    except SpirvLoweringRefused as e:
+        pytest.fail(f"SpirvLoweringRefused raised unexpectedly: {e}")
+
+    assert "OpFunctionCall" in code
+    specialized_names = set(codegen.generic_function_specialized_names.values())
+    assert "pick_float" in specialized_names
+    assert "sel2_float" in specialized_names
+    assert not codegen.refusals.reasons
+    _compile(tmp_path, "vulkan", code)
