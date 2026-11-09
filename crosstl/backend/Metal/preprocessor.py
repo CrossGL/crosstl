@@ -16,6 +16,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    FrozenSet,
     Iterable,
     Iterator,
     List,
@@ -32,6 +33,10 @@ from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MA
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 from crosstl.translator.codegen.metal_library_functions import MSL_LIBRARY_FUNCTIONS
 
+from .alias_template_types import (
+    expand_concrete_alias_template_references,
+    fold_expression_decltypes,
+)
 from .arithmetic_conversions import builtin_arithmetic_conversion
 from .array_element_receivers import (
     array_element_receiver_end,
@@ -43,6 +48,7 @@ from .auto_integral_constants import deduced_integral_auto_type
 from .auto_placeholders import deduced_auto_type
 from .call_result_types import CallResultScope, infer_call_result_type
 from .category_traits import CATEGORY_TRAITS, evaluate_category_trait
+from .class_argument_precedence import class_identity_template_outranks
 from .concrete_free_operators import materialize_concrete_free_operators
 from .concrete_qualified_aliases import resolve_concrete_qualified_type_aliases
 from .conditional_types import select_conditional_type, select_nested_conditional_types
@@ -57,6 +63,8 @@ from .constrained_template_retention import (
 )
 from .declarator_lists import split_struct_declarator_lists
 from .deduction_arguments import deduction_argument_type
+from .defaulted_template_arguments import canonical_struct_template_arguments
+from .dependent_result_templates import dependent_result_template_names
 from .directives import MetalDirectiveMixin
 from .floating_point import reject_contraction_tokens
 from .forwarding_reference_accessors import forwarded_storage_expression
@@ -128,6 +136,12 @@ from .return_type_enablers import (
 )
 from .scope_qualifier_keywords import NON_SCOPE_KEYWORDS
 from .signed_type_spellings import fold_integer_type_spellings
+from .simd_group_template_overloads import (
+    canonicalize_struct_template_ids,
+    only_simd_group_overloads,
+    overloads_simd_group_function,
+    simd_group_library_overload_selected,
+)
 from .source_analysis_cache import SourceAnalysisCache, memoized
 from .static_assertion_sources import concrete_static_assertion_conditions
 from .static_member_constants import (
@@ -150,6 +164,7 @@ from .template_reference_accessors import inline_template_reference_accessor
 from .text_scanners import (
     find_named_type_declarations,
     function_parameter_start,
+    mask_comments_and_literals,
     split_top_level_assignment,
     split_top_level_commas,
     strip_comments_outside_strings,
@@ -168,6 +183,9 @@ from .type_layout import metal_type_layout, metal_type_size
 from .unreachable_constrained_callers import (
     materialize_with_unreachable_callers,
     unreachable_caller_scope,
+)
+from .unreferenced_constrained_templates import (
+    prune_unreferenced_constrained_templates,
 )
 from .unused_specialization_members import prune_unreferenced_specialization_members
 from .value_traits import (
@@ -764,6 +782,8 @@ class _MetalConstexprFunction:
     template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
     template_parameter_types: Dict[str, str] = field(default_factory=dict)
     namespace_visibility: Optional[_MetalNamespaceVisibility] = None
+    # Plain `typename T` / `class T` parameters, bound to concrete types.
+    type_template_parameters: FrozenSet[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -1330,10 +1350,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             MetalStructMethodError,
         )
         processed = self._materialize_explicit_template_function_calls(processed)
+        # This source reaches the CrossGL generic path, which cannot defer a SIMD-group
+        # overload to each instantiation; the project materializer binds its own.
+        constrained_source = processed
         processed = self._materialize_inferred_constrained_template_function_calls(
-            processed
+            processed, simd_group_overloads=True
         )
+        if processed != constrained_source:
+            # A materialized constrained helper spells the struct templates of its signature with the bound
+            # arguments (`device mlx_atomic<float>*`), which the struct pass above has not seen.
+            processed = self._materialize_explicit_template_struct_instantiations(
+                processed
+            )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
+        # A constrained overload nothing calls would reach CrossGL without its constraint.
+        processed = prune_unreferenced_constrained_templates(self, processed)
         processed = prune_unreferenced_specialization_members(self, processed)
         processed = materialize_value_variable_templates(self, processed)
         processed = self._substitute_local_integral_constant_array_extents(processed)
@@ -1346,9 +1377,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = self._fold_concrete_type_trait_values(
             processed, require_resolution=True
         )
-        # With the traits folded, a materialized return-type enabler names its type, and a concrete library tag
-        # (metal::bool_constant<true>) a declared tag struct (integral_constant_tags.py).
-        processed = fold_concrete_enablers(self, processed)
+        # With the traits folded, a materialized return-type enabler names its type, and so does a decltype of
+        # built-in operands that a dependent result type leaves (dependent_result_templates.py). A concrete library
+        # tag (metal::bool_constant<true>) names a declared tag struct (integral_constant_tags.py).
+        # An alias template whose arguments are built-in types names one type too (alias_template_types.py).
+        processed = fold_expression_decltypes(
+            self,
+            expand_concrete_alias_template_references(
+                self, fold_concrete_enablers(self, processed)
+            ),
+        )
         processed = concretize_integral_constant_tags(self, processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
@@ -1715,19 +1753,29 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     working += "\n"
 
     def _materialize_inferred_constrained_template_function_calls(
-        self, code: str
+        self, code: str, *, simd_group_overloads: bool = False
     ) -> str:
         return materialize_with_unreachable_callers(
-            self, code, self._materialize_constrained_template_calls_in_source
+            self,
+            code,
+            lambda source: self._materialize_constrained_template_calls_in_source(
+                source, simd_group_overloads=simd_group_overloads
+            ),
         )
 
-    def _materialize_constrained_template_calls_in_source(self, code: str) -> str:
+    def _materialize_constrained_template_calls_in_source(
+        self, code: str, *, simd_group_overloads: bool = False
+    ) -> str:
         # Arguments that call source functions are typed from this source, which includes the
         # instantiations an earlier round appended.
         with self._call_result_scope.active(code):
-            return self._materialize_constrained_template_calls_in_scope(code)
+            return self._materialize_constrained_template_calls_in_scope(
+                code, simd_group_overloads=simd_group_overloads
+            )
 
-    def _materialize_constrained_template_calls_in_scope(self, code: str) -> str:
+    def _materialize_constrained_template_calls_in_scope(
+        self, code: str, *, simd_group_overloads: bool = False
+    ) -> str:
         """Resolve ordinary calls to constrained free function templates.
 
         Metal overload sets commonly provide an SFINAE fallback next to a native
@@ -1748,10 +1796,17 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         """
 
         templates = self._find_template_functions(code)
+        # A template named like a SIMD-group function competes with the library per
+        # instantiation too; deduction is its only constraint.
         constrained = [
-            template for template in templates if template.template_constraints
+            template
+            for template in templates
+            if template.template_constraints
+            or (simd_group_overloads and overloads_simd_group_function(template))
         ]
-        if not constrained:
+        # Templates whose result is a decltype of their parameters are carriers (dependent_result_templates.py).
+        dependent_results = dependent_result_template_names(self, code, templates)
+        if not constrained and not dependent_results:
             return code
 
         # A template method retained inside a residual aggregate declaration is
@@ -1765,7 +1820,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             for template in constrained
             if self._containing_span(template.span[0], aggregate_spans) is None
         ]
-        if not constrained:
+        if not constrained and not dependent_results:
             return code
 
         by_name: Dict[str, List[_MetalTemplateFunction]] = {}
@@ -1795,6 +1850,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     code, reference.span[0], set()
                 )
             ],
+            dependent_results,
         )
         carrier_names = {template.name for template in carriers}
         for template in carriers:
@@ -1883,7 +1939,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         unconstrained_template_names = {
             template.name
             for template in templates
-            if not template.template_constraints and template.span not in carrier_spans
+            if not template.template_constraints
+            and template.span not in carrier_spans
+            and not (simd_group_overloads and overloads_simd_group_function(template))
         }
         reserved_identifiers = set(IDENTIFIER_RE.findall(masked_code))
 
@@ -1962,6 +2020,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if any(argument_type is None for argument_type in argument_types):
                 if call.name in carrier_names:
                     # The generic path instantiates it; templates it needs stay.
+                    continue
+                if owner_key is None and only_simd_group_overloads(visible_candidates):
+                    # Unconstrained templates keep this call for a later binder,
+                    # such as the project materializer, which types it.
+                    deferred_call_ids.add(id(call))
                     continue
                 if (
                     owner_key is None
@@ -2148,12 +2211,24 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         and namespace in associated_namespaces
                     )
                     for namespace in namespaces
-                ) and not exact_template_outranks(
-                    self,
-                    self._template_function_parameter_text(enabled[0][0]),
-                    enabled[0][1],
-                    argument_types,
-                    declaration.arguments,
+                ) and not (
+                    exact_template_outranks(
+                        self,
+                        self._template_function_parameter_text(enabled[0][0]),
+                        enabled[0][1],
+                        argument_types,
+                        declaration.arguments,
+                    )
+                    or class_identity_template_outranks(
+                        self,
+                        code,
+                        context,
+                        enabled[0][0],
+                        enabled[0][1],
+                        argument_types,
+                        declaration,
+                        call.argument_open,
+                    )
                 ):
                     self._raise_constrained_free_function_error(
                         code,
@@ -2285,6 +2360,12 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         call,
                         "the uniquely enabled overload could not be materialized",
                     )
+                # Type the body's arguments from the structs the source declares.
+                materialized = canonicalize_struct_template_ids(
+                    self,
+                    materialized,
+                    {struct.name for struct in structs},
+                )
                 reserved_identifiers.add(specialized_name)
                 generated_name_owners[preferred_name] = key
                 materialized_names[key] = specialized_name
@@ -2536,25 +2617,32 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         A concrete body can still expose calls needed by a later pass. Pruning
         happens after materialization, and references in other template bodies,
         function-pointer expressions and declarations conservatively retain it.
+
+        Pruning repeats until nothing changes: a primary named only by another
+        pruned primary (a helper called from a default template argument such as
+        ``uint W = work_per_thread<T>()``) loses its last reference with it.
         """
         if not self._materialized_function_templates:
             return code
-        masked = self._mask_comments_and_literals(code)
-        replacements = []
-        for template in self._find_template_functions(code):
-            if (
-                template.namespace,
-                template.source,
-            ) not in self._materialized_function_templates:
-                continue
-            start, end = template.span
-            if any(
-                not start <= match.start() < end
-                for match in re.finditer(rf"\b{re.escape(template.name)}\b", masked)
-            ):
-                continue
-            replacements.append((start, end, ""))
-        return self._apply_text_replacements(code, replacements)
+        while True:
+            masked = self._mask_comments_and_literals(code)
+            replacements = []
+            for template in self._find_template_functions(code):
+                if (
+                    template.namespace,
+                    template.source,
+                ) not in self._materialized_function_templates:
+                    continue
+                start, end = template.span
+                if any(
+                    not start <= match.start() < end
+                    for match in re.finditer(rf"\b{re.escape(template.name)}\b", masked)
+                ):
+                    continue
+                replacements.append((start, end, ""))
+            if not replacements:
+                return code
+            code = self._apply_text_replacements(code, replacements)
 
     def _find_free_function_overload_declarations(
         self,
@@ -2772,6 +2860,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         bindings: Mapping[str, str],
     ) -> bool:
         """Whether a Metal library overload, not the enabled ``template``, is the best function for ``call``."""
+        simd_group_selected = simd_group_library_overload_selected(
+            self, code, call, argument_types, template, bindings
+        )
+        if simd_group_selected is not None:
+            return simd_group_selected
         if (
             call.name not in LIBRARY_OVERLOAD_NAMES
             and call.name not in MSL_LIBRARY_FUNCTIONS
@@ -3264,6 +3357,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if qualifiers & {"extern", "typedef", "thread_local", "volatile"}:
                 continue
             namespace = self._namespace_at(namespace_spans, match.start())
+            if self._defines_function_after(code, match.end("name")):
+                # `constexpr T name() { ... }` is a function, whatever the scope of `T`.
+                continue
             source_type = re.sub(r"\s*::\s*", "::", match.group("type"))
             if source_type.startswith("::"):
                 source_type = source_type[2:]
@@ -3379,6 +3475,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if "::" not in struct.qualified_name:
             return ""
         return struct.qualified_name.rsplit("::", 1)[0]
+
+    def _defines_function_after(self, code: str, name_end: int) -> bool:
+        """Whether the declarator ending at ``name_end`` has a parameter list followed by a function body."""
+        cursor = self._skip_cpp_trivia(code, name_end)
+        if cursor >= len(code) or code[cursor] != "(":
+            return False
+        end = self._find_matching_delimiter(code, cursor, "(", ")")
+        if end is None:
+            return False
+        after = self._skip_cpp_trivia(code, end + 1)
+        return bool(
+            re.match(
+                r"(?:(?:const|noexcept|thread|device)\b\s*)*(?:\{|->)", code[after:]
+            )
+        )
 
     def _parse_compile_time_global_initializer(
         self, code: str, name_end: int, expected_type_names: Set[str]
@@ -11968,6 +12079,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     ),
                     template_parameter_types=dict(function.template_parameter_types),
                     namespace_visibility=namespace_visibility,
+                    type_template_parameters=self._declared_type_template_parameters(
+                        code,
+                        function.span[0],
+                    ),
                 )
             )
 
@@ -12226,10 +12341,26 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         )
         if template_bindings is None:
             return None
+        type_parameters = self._static_constexpr_type_template_parameters(function)
+        if type_parameters:
+            # Body, return and parameter types name the type parameters; spell
+            # the bound concrete types so the integral evaluator sees them.
+            function = replace(
+                function,
+                source=self._replace_identifiers(
+                    function.source,
+                    {name: template_bindings[name] for name in type_parameters},
+                ),
+            )
+        value_bindings = {
+            name: value
+            for name, value in template_bindings.items()
+            if name not in type_parameters
+        }
         runtime_bindings = self._bind_static_constexpr_call_arguments(
             function,
             call.arguments,
-            template_bindings,
+            value_bindings,
             functions,
             position,
         )
@@ -12248,7 +12379,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
 
         self._static_constexpr_helper_resolution_stack.append(cache_key)
         try:
-            bindings = dict(template_bindings)
+            bindings = dict(value_bindings)
             bindings.update(runtime_bindings)
             value = self._evaluate_static_constexpr_function_body(
                 function,
@@ -12283,15 +12414,29 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         template_arguments = list(call.template_arguments or [])
         if len(template_arguments) > len(function.template_parameters):
             return False
+        type_parameters = self._static_constexpr_type_template_parameters(function)
         if any(
-            name not in function.template_parameter_types
-            or self._static_constexpr_integral_type(
-                function.template_parameter_types[name]
+            name not in type_parameters
+            and (
+                name not in function.template_parameter_types
+                or self._static_constexpr_integral_type(
+                    function.template_parameter_types[name]
+                )
+                is None
             )
-            is None
             for name in function.template_parameters
         ):
             return False
+        # A type parameter is viable only for a concrete builtin type argument
+        # and an integral parameter never for a type, so a helper overloaded on
+        # `template <typename T>` and `template <int N>` keeps one candidate.
+        for name, argument in zip(function.template_parameters, template_arguments):
+            is_type = (
+                metal_type_size(self._normalize_template_argument_text(argument))
+                is not None
+            )
+            if is_type != (name in type_parameters):
+                return False
         if not self._template_arguments_satisfy_parameters(
             function,
             template_arguments,
@@ -12314,15 +12459,26 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
     ) -> Optional[Dict[str, str]]:
         bindings: Dict[str, str] = {}
         defaults = function.template_parameter_defaults
+        type_parameters = self._static_constexpr_type_template_parameters(function)
+        type_bindings: Dict[str, str] = {}
+        value_bindings: Dict[str, str] = {}
         for index, name in enumerate(function.template_parameters):
             expression = (
                 arguments[index] if index < len(arguments) else defaults.get(name)
             )
             if expression is None:
                 return None
+            if type_bindings:
+                expression = self._replace_identifiers(expression, type_bindings)
+            if name in type_parameters:
+                type_text = self._normalize_template_argument_text(expression)
+                if metal_type_size(type_text) is None:
+                    return None
+                bindings[name] = type_bindings[name] = type_text
+                continue
             expression = self._substitute_template_argument_static_constants(
                 expression,
-                bindings,
+                value_bindings,
             )
             value_type = self._static_constexpr_integral_type(
                 function.template_parameter_types.get(name, "")
@@ -12335,8 +12491,43 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             )
             if value is None:
                 return None
-            bindings[name] = value
+            bindings[name] = value_bindings[name] = value
         return bindings
+
+    def _static_constexpr_type_template_parameters(
+        self,
+        function: _MetalConstexprFunction,
+    ) -> FrozenSet[str]:
+        return (
+            function.type_template_parameters if function.is_template else frozenset()
+        )
+
+    def _declared_type_template_parameters(
+        self,
+        code: str,
+        template_start: int,
+    ) -> FrozenSet[str]:
+        """Names declared ``typename T`` or ``class T`` by the template header.
+
+        Packs, template template parameters and non-type parameters are
+        excluded, so only a plain type parameter binds one concrete type.
+        """
+
+        header = re.compile(r"template\s*<").match(code, template_start)
+        if header is None:
+            return frozenset()
+        close = self._find_matching_angle(code, header.end() - 1)
+        if close is None:
+            return frozenset()
+        return frozenset(
+            parameter.name
+            for parameter in self._parse_template_parameter_list(
+                code[header.end() : close]
+            )
+            if parameter.is_type_parameter
+            and not parameter.is_variadic
+            and parameter.name is not None
+        )
 
     def _bind_static_constexpr_call_arguments(
         self,
@@ -26269,6 +26460,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     selected_partial_specializations[selection_key] = matching_partials[
                         0
                     ]
+                written_arguments = template_arguments
+                if not (matching_partials or has_unmaterializable_partial):
+                    template_arguments = canonical_struct_template_arguments(
+                        self, primary_template, template_arguments
+                    )
                 span_start = self._scoped_identifier_start(code, i)
                 instantiations.append(
                     (ident, template_arguments, (span_start, angle_end + 1))
@@ -26279,11 +26475,14 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                     specialization_key = self._template_specialization_key(
                         ident, template_arguments
                     )
-                    discovered_materialized_structs.setdefault(ident, {})[
-                        specialization_key[1]
-                    ] = self._template_specialization_identifier(
+                    specialized_identifier = self._template_specialization_identifier(
                         ident, list(specialization_key[1])
                     )
+                    discovered = discovered_materialized_structs.setdefault(ident, {})
+                    discovered[specialization_key[1]] = specialized_identifier
+                    discovered[
+                        self._template_specialization_key(ident, written_arguments)[1]
+                    ] = specialized_identifier
                 i = angle_end + 1
                 continue
             i = self._next_scan_stop(code, i + 1, excluded_spans)
@@ -28225,7 +28424,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         name=function_name,
                         span=(declaration_start, body_end),
                         body_span=(body_start + 1, body_end - 1),
-                        is_entry=METAL_ENTRY_FUNCTION_RE.search(header) is not None,
+                        is_entry=self._header_declares_entry(header),
                     )
                 )
                 pos = body_end
@@ -30293,6 +30492,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if paren_end is None:
             return None
         return paren_start, paren_end
+
+    def _header_declares_entry(self, header: str) -> bool:
+        """Whether a function definition's header declares a stage entry point.
+
+        A stage qualifier (``kernel``, ``vertex``, ...) or ``[[kernel]]`` precedes the parameter list. A parameter
+        named like a qualifier (``device mlx_atomic<T>* object``), a comment before the header and a string
+        literal (``[[host_name("vertex_copy")]]``) are not qualifiers, so only the masked declaration text before
+        the parameter list is searched.
+        """
+        masked = mask_comments_and_literals(header)
+        parameter_start = self._function_parameter_start(masked)
+        declaration = masked if parameter_start is None else masked[:parameter_start]
+        return METAL_ENTRY_FUNCTION_RE.search(declaration) is not None
 
     def _function_name_from_header(self, header: str) -> Optional[str]:
         paren_index = self._function_parameter_start(header)

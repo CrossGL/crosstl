@@ -93,6 +93,7 @@ from .extended_arithmetic_builtins import (
     spirv_extended_arithmetic_call,
 )
 from .fixed_sampler_contracts import fixed_sampler_records, with_spirv_fixed_samplers
+from .generic_call_dependencies import generic_callee_names
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generic_function_call_name,
@@ -1536,14 +1537,18 @@ class VulkanSPIRVCodeGen(
             return self.vector_constants[key]
 
         id_value = self.get_id()
+        is_specialized = any(
+            self.is_specialization_constant_value(component) for component in components
+        )
+        opcode = "OpSpecConstantComposite" if is_specialized else "OpConstantComposite"
 
         component_list = " ".join([f"%{component.id}" for component in components])
-        self.emit(
-            f"%{id_value} = OpConstantComposite %{vector_type.id} {component_list}"
-        )
+        self.emit(f"%{id_value} = {opcode} %{vector_type.id} {component_list}")
 
         spirv_id = SpirvId(id_value, vector_type.type)
         self.value_types[id_value] = vector_type
+        if is_specialized:
+            self.specialization_constant_result_ids.add(id_value)
         self.vector_constants[key] = spirv_id
         return spirv_id
 
@@ -1560,13 +1565,17 @@ class VulkanSPIRVCodeGen(
             return self.composite_constants[key]
 
         id_value = self.get_id()
-        component_list = " ".join(f"%{component.id}" for component in components)
-        self.emit(
-            f"%{id_value} = OpConstantComposite %{composite_type.id} {component_list}"
+        is_specialized = any(
+            self.is_specialization_constant_value(component) for component in components
         )
+        opcode = "OpSpecConstantComposite" if is_specialized else "OpConstantComposite"
+        component_list = " ".join(f"%{component.id}" for component in components)
+        self.emit(f"%{id_value} = {opcode} %{composite_type.id} {component_list}")
 
         spirv_id = SpirvId(id_value, composite_type.type)
         self.value_types[id_value] = composite_type
+        if is_specialized:
+            self.specialization_constant_result_ids.add(id_value)
         self.composite_constants[key] = spirv_id
         return spirv_id
 
@@ -22789,6 +22798,14 @@ class VulkanSPIRVCodeGen(
         if type_name is None:
             return None
         type_name = self.normalize_reference_type_name(type_name)
+        # Registered vector types are named ``v4float``; spell them as CrossGL
+        # does so call keys and declared signatures compare equal.
+        registered_vector = re.fullmatch(
+            r"v([234])(float|double|int|uint|bool)", str(type_name).strip()
+        )
+        if registered_vector is not None:
+            size, element = registered_vector.groups()
+            type_name = f"vec{size}<{element}>"
         type_name = self.normalize_generic_vector_type(type_name)
         type_name = self.normalize_hlsl_matrix_type(type_name)
         primitive_name = self.normalize_primitive_name(type_name)
@@ -23008,6 +23025,8 @@ class VulkanSPIRVCodeGen(
             FunctionCallNode,
             include_overloads=True,
             keep_overload_family_order=True,
+            # A specialization's calls still spell the generic name (``twice``), not ``twice_float``.
+            extra_callee_names=lambda func: generic_callee_names(self, func),
         )
 
     def walk_ast_nodes(self, root):

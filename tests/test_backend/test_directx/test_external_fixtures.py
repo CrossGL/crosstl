@@ -645,9 +645,10 @@ EXTERNAL_FIXTURES = [
         """).strip(),
         contains=(
             "enum Number {",
-            "static Number a = Second;",
+            # An unscoped enumerator is read through its enumeration, which CrossGL declares it in.
+            "static Number a = Number::Second;",
             "@ numthreads(1, 1, 1)",
-            "static Number e = Fourth;",
+            "static Number e = Number::Fourth;",
             "d = Number::Third;",
         ),
     ),

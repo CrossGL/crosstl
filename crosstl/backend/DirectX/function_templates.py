@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .namespaces import source_name
+
 __all__ = [
     "TemplateParameter",
     "begin_template_declaration",
@@ -244,7 +246,7 @@ def template_function_generic_prefix(codegen, func):
     for parameter in parameters:
         if not parameter.is_type:
             return codegen.refuse_import(
-                f"HLSL function template '{func.name}' declares the value parameter "
+                f"HLSL function template '{source_name(func)}' declares the value parameter "
                 f"'{parameter.kind} {parameter.name}', which CrossGL generic functions cannot express"
             )
         if not parameter.name:

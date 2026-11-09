@@ -49,6 +49,7 @@ from .function_templates import (
     take_template_parameters,
 )
 from .matrix_pack_pragma import apply_matrix_orientation, pack_matrix_orientation
+from .namespaces import qualify_namespace_declarations, using_directive_path
 
 TYPE_TOKENS = {
     "FLOAT",
@@ -390,6 +391,8 @@ class HLSLParser:
         self.effect_stage_entries = {}
         # The orientation the last ``#pragma pack_matrix`` set, if any.
         self.matrix_pack_orientation = None
+        # ``(scope, kind, target)`` for each file- or namespace-scope ``using`` directive (see .namespaces).
+        self.hlsl_using_directives = []
 
     def parse(self):
         structs = []
@@ -402,7 +405,7 @@ class HLSLParser:
         while self.current_token[0] != "EOF":
             expire_template_declaration(self)
             if self.current_token_is_keyword("USING", "using"):
-                alias = self.parse_using_directive()
+                alias = self.parse_using_directive(record=True)
                 if alias is not None:
                     typedefs.append(alias)
                 continue
@@ -537,7 +540,7 @@ class HLSLParser:
         self.apply_struct_parameter_stage_qualifiers(functions, structs)
         self.apply_effect_stage_entries(functions)
 
-        return ShaderNode(
+        shader = ShaderNode(
             includes=[],
             functions=functions,
             structs=structs,
@@ -546,6 +549,8 @@ class HLSLParser:
             enums=enums,
             typedefs=typedefs,
         )
+        shader.hlsl_using_directives = list(self.hlsl_using_directives)
+        return shader
 
     def is_effect_metadata_block(self):
         if self.current_token[0] != "IDENTIFIER":
@@ -822,17 +827,14 @@ class HLSLParser:
         self.eat("COLON")
         self.eat("COLON")
 
-    def parse_using_directive(self):
+    def parse_using_directive(self, record=False):
+        """Parse a ``using`` alias, directive or declaration; ``record`` keeps a file-scope directive."""
         self.eat_keyword("USING", "using")
         if self.current_token_is_keyword("NAMESPACE", "namespace"):
             self.eat_keyword("NAMESPACE", "namespace")
-            while self.current_token[0] not in {"SEMICOLON", "EOF"}:
-                if self.current_token_is_double_colon():
-                    self.eat_double_colon()
-                else:
-                    self.eat(self.current_token[0])
-            if self.current_token[0] == "SEMICOLON":
-                self.eat("SEMICOLON")
+            path = self.skip_using_target()
+            if record:
+                self.hlsl_using_directives.append(((), "namespace", path))
             return None
 
         if (
@@ -856,14 +858,23 @@ class HLSLParser:
             alias.array_sizes = array_sizes
             return alias
 
+        path = self.skip_using_target()
+        if record and len(path) > 1:
+            self.hlsl_using_directives.append(((), "declaration", path))
+        return None
+
+    def skip_using_target(self):
+        """Consume the rest of a ``using`` directive; returns the identifiers of the path it names."""
+        names = []
         while self.current_token[0] not in {"SEMICOLON", "EOF"}:
             if self.current_token_is_double_colon():
                 self.eat_double_colon()
             else:
+                names.append(self.current_token[1])
                 self.eat(self.current_token[0])
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        return None
+        return using_directive_path(names)
 
     def is_class_declaration_prefix(self):
         return self.current_token_is_keyword(
@@ -933,10 +944,13 @@ class HLSLParser:
 
     def parse_namespace_block(self):
         self.eat_keyword("NAMESPACE", "namespace")
+        path = []
         if self.current_token[0] == "IDENTIFIER":
+            path.append(self.current_token[1])
             self.eat("IDENTIFIER")
             while self.current_token_is_double_colon():
                 self.eat_double_colon()
+                path.append(self.current_token[1])
                 self.eat("IDENTIFIER")
 
         self.eat("LBRACE")
@@ -966,6 +980,11 @@ class HLSLParser:
         parser.synthetic_enum_count = self.synthetic_enum_count
         namespace_ast = parser.parse()
         self.synthetic_enum_count = parser.synthetic_enum_count
+        self.hlsl_using_directives.extend(
+            qualify_namespace_declarations(
+                namespace_ast, path, parser.hlsl_using_directives
+            )
+        )
         return namespace_ast
 
     def parse_preprocessor_directive(self):
@@ -4071,7 +4090,8 @@ class HLSLParser:
             scoped_name = self.parse_identifier()
             if self.current_token_is_double_colon():
                 scoped_name = self.parse_scoped_name(scoped_name)
-            return scoped_name
+            # ``::f`` names the global ``f`` even inside a namespace that declares one (see .namespaces).
+            return f"::{scoped_name}"
         if self.is_template_type_constructor_start():
             type_name = self.parse_type()
             args = self.parse_call_arguments()

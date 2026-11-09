@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from .function_templates import TemplateParameter
+from .namespaces import source_name
 
 __all__ = [
     "explicit_struct_specialization_arguments",
@@ -79,7 +80,7 @@ def _unsupported_reason(struct):
     for parameter in parameters or []:
         if not parameter.is_type:
             return (
-                f"HLSL struct template '{struct.name}' declares the value parameter "
+                f"HLSL struct template '{source_name(struct)}' declares the value parameter "
                 f"'{parameter.kind} {parameter.name}', which the importer does not translate yet"
             )
         if not parameter.name:

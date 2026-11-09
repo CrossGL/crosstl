@@ -25,6 +25,14 @@ from ..ast import (
 )
 from ..explicit_specializations import explicit_specializations
 from .enum_utils import generic_type_parts, sanitize_type_name
+from .generic_prototypes import (
+    declaration_only_generic_primaries,
+    reject_undefined_generic_instantiation,
+)
+from .wgsl_narrow_storage import (
+    narrow_storage_element,
+    refuse_narrow_generic_instantiation,
+)
 
 # CrossGL primitive spellings for the scalar types WGSL renders.
 _WGSL_SCALAR_SOURCE_NAMES = {
@@ -66,13 +74,27 @@ def generic_parameter_names(func):
     ]
 
 
+def _declared_primaries(ast):
+    if ast is None:
+        return []
+    functions = list(getattr(ast, "functions", None) or [])
+    for stage in (getattr(ast, "stages", None) or {}).values():
+        functions.extend(getattr(stage, "local_functions", None) or [])
+    return declaration_only_generic_primaries(
+        functions, lambda func: bool(generic_parameter_names(func))
+    )
+
+
 class WGSLGenericFunctionSpecializer:
     """Create the concrete WGSL functions a module's generic call sites need."""
 
-    def __init__(self, generator, functions):
+    def __init__(self, generator, functions, ast=None):
         self.generator = generator
         self.definitions = {}
-        for func in functions or []:
+        # Helpers arrive without prototypes, which WGSL cannot declare; a generic
+        # declared only by a prototype still names the primary its explicit
+        # specializations complete.
+        for func in list(functions or []) + _declared_primaries(ast):
             if generic_parameter_names(func) and getattr(func, "name", None):
                 self.definitions.setdefault(func.name, []).append(func)
         self.specializations = {}
@@ -168,6 +190,10 @@ class WGSLGenericFunctionSpecializer:
         return str(rendered).strip() if rendered else None
 
     def _argument_type(self, argument):
+        # A narrow storage load is a 32-bit word in WGSL but binds its CrossGL element type.
+        narrow = narrow_storage_element(self.generator, argument)
+        if narrow is not None:
+            return self._render(narrow)
         return self._render(self.generator.expression_type(argument))
 
     def _concrete_overloads(self, name, arguments):
@@ -273,6 +299,7 @@ class WGSLGenericFunctionSpecializer:
         explicit = self._explicit_specialization_name(func, concrete)
         if explicit is not None:
             return explicit
+        reject_undefined_generic_instantiation(func, (func.name, concrete))
         key = (id(func), concrete)
         existing = self.specializations.get(key)
         if existing is not None:
@@ -283,6 +310,7 @@ class WGSLGenericFunctionSpecializer:
                 f"'{func.name}' after {_MAX_SPECIALIZATIONS} instantiations; "
                 "the generic instantiates itself without bound"
             )
+        refuse_narrow_generic_instantiation(func, concrete)
         generator = self.generator
         candidate = "_".join(
             [sanitize_type_name(func.name)]

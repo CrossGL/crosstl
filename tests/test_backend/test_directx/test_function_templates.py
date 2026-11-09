@@ -240,6 +240,10 @@ def test_struct_template_prefix_does_not_reach_member_functions():
             "declares the value parameter 'int N'",
         ),
         (
+            "namespace util { template <typename T, int N> T scale(T x) { return x * (T)N; } }",
+            "function template 'util::scale' declares the value parameter 'int N'",
+        ),
+        (
             "template <typename T> T twice(T x);\n"
             "template <> float twice<float>(float x) { return x * 3.0; }",
             "specializes a function template with no definition",

@@ -30,6 +30,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.backend.Metal.alias_template_types import fold_expression_decltypes
 from crosstl.backend.Metal.auto_placeholders import (
     deduced_auto_type,
     is_auto_placeholder,
@@ -14656,6 +14657,20 @@ def _materialize_inherited_source_template_helpers(
         template.name
         for template in preprocessor._find_template_functions(materialized)
     )
+    # An explicit specialization replaces the primary's body for its arguments
+    # ([temp.expl.spec]/1), including for helpers reached through inherited
+    # template parameters.
+    explicit_specializations = (
+        preprocessor._find_explicit_template_function_specializations(materialized)
+    )
+    materialized_type_aliases = (
+        preprocessor._collect_local_type_alias_bindings(
+            materialized,
+            [(0, len(materialized))],
+        )
+        if explicit_specializations
+        else {}
+    )
     generated: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     generated_order: list[tuple[str, tuple[str, ...]]] = []
     specialization_records: list[dict[str, Any]] = []
@@ -14727,13 +14742,31 @@ def _materialize_inherited_source_template_helpers(
             return materialized_name
 
         active.add(key)
-        child_replacements: dict[str, str] = {}
-        for child_name in sorted(
-            _plain_template_function_call_names(
-                preprocessor,
-                template,
-                template_names,
+        explicit_specialization = (
+            _explicit_template_function_specialization_for_selected_overload(
+                preprocessor=preprocessor,
+                explicit_specializations=explicit_specializations,
+                template=template,
+                function_name=name,
+                arguments=list(key[1]),
+                parameter_declarations=parameter_declarations,
+                declaration_source=materialized,
+                declaration_type_aliases=materialized_type_aliases,
             )
+            if explicit_specializations
+            else None
+        )
+        child_replacements: dict[str, str] = {}
+        for child_name in (
+            sorted(
+                _plain_template_function_call_names(
+                    preprocessor,
+                    template,
+                    template_names,
+                )
+            )
+            if explicit_specialization is None
+            else ()
         ):
             child_materialized_name = ensure_helper(
                 child_name,
@@ -14743,12 +14776,20 @@ def _materialize_inherited_source_template_helpers(
             if child_materialized_name is not None:
                 child_replacements[child_name] = child_materialized_name
 
-        source = preprocessor._materialize_template_function_with_name(
-            template,
-            list(key[1]),
-            materialized_name,
-            host_name=None,
-        )
+        if explicit_specialization is not None:
+            source = (
+                preprocessor._materialize_explicit_template_function_specialization(
+                    explicit_specialization,
+                    materialized_name,
+                )
+            )
+        else:
+            source = preprocessor._materialize_template_function_with_name(
+                template,
+                list(key[1]),
+                materialized_name,
+                host_name=None,
+            )
         if child_replacements:
             replacements = _plain_template_call_replacements(
                 preprocessor,
@@ -23662,8 +23703,11 @@ def _project_template_materialization_for_artifact(
     ):
         return None
     # The source is parsed without preprocessing, so the materialized return-type enablers are folded to the
-    # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py).
-    materialized = fold_concrete_enablers(preprocessor, materialized)
+    # types they name here, as MetalPreprocessor.preprocess folds them (return_type_enablers.py). Canonicalized
+    # alias templates can leave `decltype(float(0) + int(0))`, which names one built-in type (alias_template_types.py).
+    materialized = fold_expression_decltypes(
+        preprocessor, fold_concrete_enablers(preprocessor, materialized)
+    )
     materialized = prune_orphaned_explicit_specializations(preprocessor, materialized)
 
     if unsupported:

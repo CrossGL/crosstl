@@ -135,9 +135,13 @@ from .relative_vertex_ids import (
 )
 from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
+from .rule_pragmas import take_declared_families
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
-from .scalar_brace_values import zero_empty_scalar_initializers
+from .scalar_brace_values import (
+    ScalarBraceInitializerError,
+    zero_empty_scalar_initializers,
+)
 from .scalar_swizzles import expand_scalar_swizzles
 from .shader_execution_reordering import (
     ShaderExecutionReorderingUnsupportedError,
@@ -250,6 +254,7 @@ __all__ = [
     "RowMajorMemberError",
     "RuleReport",
     "SOURCE_RULES",
+    "ScalarBraceInitializerError",
     "ShaderExecutionReorderingUnsupportedError",
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
@@ -328,8 +333,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
     (:mod:`.type_aliases`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
     refused with :class:`StaticAssertionFailedError` or :class:`StaticAssertionUnresolvedError`
-    (:mod:`.static_assertions`). An empty brace initializer of a scalar, ``float one = {};``, its zero
-    (:mod:`.scalar_brace_values`). GLSL's
+    (:mod:`.static_assertions`). Scalar brace initializers become zero or their single converted value,
+    and excess scalar values are refused (:mod:`.scalar_brace_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
     structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
@@ -424,6 +429,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    declared_families = take_declared_families(program, report.target)
     hoist_local_structs(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
@@ -530,7 +536,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_narrow_integers(program, report.source, report.target)
     wrap_narrow_arithmetic(program, report.source, report.target)
     refuse_spirv_instructions(program, report.target)
-    Annotator(program, report.source, report).run()
+    Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)
     if isinstance(annotations, dict):

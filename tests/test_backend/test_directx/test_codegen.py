@@ -2015,8 +2015,10 @@ def test_codegen_namespace_block_scoped_call_imports_to_parseable_crossgl():
         }
     """)
 
-    assert "float Weight(float value)" in crossgl
-    assert "CrossBilateral::Weight(value)" in crossgl
+    # The namespaced declaration and its qualified call share one flat CrossGL name.
+    assert "float CrossBilateral_Weight(float value)" in crossgl
+    assert "return CrossBilateral_Weight(value);" in crossgl
+    assert "::" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -7670,7 +7672,7 @@ def test_codegen_dependent_typename_scoped_template_traits_are_refused():
     # which CrossGL cannot express; the importer used to emit ``Wrapper wf;`` with an undeclared ``T`` member.
     with pytest.raises(
         DirectXImportRefused,
-        match=r"HLSL struct template 'enable_if' declares the value parameter 'bool B'",
+        match=r"HLSL struct template 'hlsl::enable_if' declares the value parameter 'bool B'",
     ):
         generate_crossgl(code)
 

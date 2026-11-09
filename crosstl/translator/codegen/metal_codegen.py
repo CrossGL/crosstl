@@ -4314,6 +4314,21 @@ class MetalCodeGen(
             if definition is not None:
                 definitions.append(definition)
 
+        # A generic struct specialized here and a concrete struct the importer
+        # already materialized for the same template-id share a name. Emit an
+        # identical definition once; a differing one still reaches the compiler.
+        emitted_code = {}
+        unique_definitions = []
+        for definition in definitions:
+            name = definition.get("name")
+            code = " ".join(definition["code"].split())
+            if name and emitted_code.get(name) == code:
+                continue
+            if name:
+                emitted_code.setdefault(name, code)
+            unique_definitions.append(definition)
+        definitions = unique_definitions
+
         self.metal_generated_struct_names = {
             definition["name"] for definition in definitions if definition.get("name")
         }
@@ -10189,6 +10204,26 @@ class MetalCodeGen(
         # Keep arithmetic carriers widened, but preserve the source conversion.
         return f"{carrier}({native}({rendered}))"
 
+    def metal_direct_narrow_float_conversion(self, constructor, arguments, rendered):
+        """``uchar(f)`` of a floating ``f``: converted directly, which keeps its result (MSL 4.1 section 8.6).
+
+        Converting through the 32-bit carrier first, ``uchar(uint(f))``, would wrap a value the direct conversion
+        saturates on Apple GPUs.
+        """
+        native = self.metal_native_narrow_bitcast_storage_type(constructor)
+        if (
+            native is None
+            or len(arguments) != 1
+            or not re.fullmatch(r"u?(?:char|short)[234]?", native)
+        ):
+            return None
+        operand = self.map_type(
+            self.type_name_string(self.expression_result_type(arguments[0])) or ""
+        )
+        if not re.fullmatch(r"(?:float|half|bfloat)[234]?", str(operand or "")):
+            return None
+        return f"{self.map_type(constructor)}({native}({rendered}))"
+
     def metal_narrow_update_repeatable_lvalue(self, target):
         """Return whether ``target`` can be read and written by repeating it.
 
@@ -10985,6 +11020,11 @@ class MetalCodeGen(
                 and func_name not in self.user_function_names
             ):
                 return self.expression_result_type(args[0])
+            componentwise_type = self.metal_componentwise_builtin_result_type(
+                func_name, args
+            )
+            if componentwise_type is not None:
+                return componentwise_type
             if (
                 func_name in {"inverseSqrt", "inversesqrt", "roundEven"}
                 and args
@@ -13297,6 +13337,11 @@ class MetalCodeGen(
                         metal_type, expr.args
                     )
                 )
+                direct = self.metal_direct_narrow_float_conversion(
+                    func_name, expr.args, args
+                )
+                if direct is not None:
+                    return direct
                 rendered = f"{metal_type}({args})"
                 return (
                     self.metal_narrow_integer_conversion_expression(rendered, func_name)
@@ -18549,6 +18594,10 @@ class MetalCodeGen(
             return self.argument_address_space(arg.operand)
         if isinstance(arg, ArrayAccessNode):
             return self.argument_address_space(arg.array)
+        if isinstance(arg, PointerReinterpretNode):
+            # A nested view names its address space; lowering that view proves
+            # it against the view's own source before this result is used.
+            return getattr(getattr(arg, "target_type", None), "address_space", None)
         if isinstance(arg, TernaryOpNode):
             if self.argument_address_space_conflict(arg) is not None:
                 return None
@@ -19277,7 +19326,10 @@ class MetalCodeGen(
 
     def collect_unsized_resource_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             if name and self.is_unsized_resource_array_type(vtype):
@@ -19286,7 +19338,10 @@ class MetalCodeGen(
 
     def collect_fixed_resource_global_sizes(self, ast):
         global_arrays = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             size = self.fixed_resource_array_size(vtype)
@@ -28713,6 +28768,17 @@ class MetalCodeGen(
     def metal_storage_pointer_reinterpret_source_is_readonly(
         self, expression, source_type
     ):
+        pointer_operand = self.pointer_arithmetic_operand(expression)
+        if pointer_operand is not None:
+            # Offsets add no storage; only the pointer operand can be const.
+            return self.metal_storage_pointer_reinterpret_source_is_readonly(
+                pointer_operand, self.expression_result_type(pointer_operand)
+            )
+        if isinstance(expression, PointerReinterpretNode):
+            # A nested view is lowered with its own constness proof.
+            return not getattr(
+                getattr(expression, "target_type", None), "is_mutable", True
+            )
         member = self.metal_storage_pointer_reinterpret_member_node(expression)
         if member is not None:
             raw_member_type = getattr(
@@ -28855,14 +28921,11 @@ class MetalCodeGen(
         ) or self.map_type(contract["targetType"])
         effective_is_mutable = contract["isMutable"]
         if source_is_readonly and contract["isMutable"]:
-            if (
-                contract.get("aggregateByteView")
-                or contract.get("aggregateHomogeneousScalarArrayRead")
-            ) and contract.get("usage") == "immediate-value-read":
-                # The source spelling may remove pointee constness before an
-                # immediate struct value load. Reconstruct the same native
-                # pointer identity as a const view because the validated AST
-                # cannot write through or escape this temporary pointer.
+            if contract.get("readOnlyUse"):
+                # The source spelling may remove pointee constness before a
+                # value load. Reconstruct the same native pointer identity as
+                # a const view because the validated AST cannot write through
+                # or escape this pointer.
                 effective_is_mutable = False
             else:
                 source_storage_type = self.metal_native_narrow_bitcast_storage_type(
