@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- A one-value brace initializer of a plain enumeration, such as `Mode m = {Mode::B};` or `enum class Mode { A, B }; Mode m = {Mode::B};` in CUDA input, is its value on every target, as if `Mode m = Mode::B;` were written, and so is a nested list such as `{{Mode::B}}`. A list with more than one value, such as `Mode m = {Mode::A, Mode::B};`, is refused with `ScalarBraceInitializerError` (`project.translate.scalar-brace-initializer-invalid`). WGSL output used to write `var m: i32 = array(Mode_B);`, which naga rejects, SPIR-V output a composite of `int`, which spirv-val rejects, Rust output `let m: Mode = [Mode::B];`, which rustc rejects, and Mojo output `var m: Mode = InlineArray[Mode, 1](Mode_B)`; GLSL output refused the program with `OpenGLAggregateInitializerError` (#4190).
 - HIP and OpenCL input read a parameter, cast or local declaration whose type a line break splits after its base type, a `*` or `&`, a postfix qualifier such as `restrict` or `const`, or `pipe`, as they read it on one line: `__global float`, a line break and `* in` imports as `@group(0) @binding(0) var<storage, read_write> in_: array<f32>`, and `float widen(unsigned`, a line break and `v)` as `f32 widen(u32 v)`. They used to raise `SyntaxError` (`Expected RPAREN, got STAR` for a parameter, `Unexpected token in expression` for a function or a cast) (#3753).
 
 ---
