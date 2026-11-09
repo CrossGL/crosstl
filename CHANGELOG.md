@@ -4,6 +4,10 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Fixed
+
+- HIP input divides a surface call's x byte offset by the element size, folding `x * 16` on a `float4` surface to texel `x` and `x * 4 + 4` on a `float` surface to texel `x + 1`, and refuses offsets it cannot prove are multiples of the element size, with `HipSurfaceByteOffsetError` (`project.translate.hip-surface-byte-offset-unproven`). The element type comes from the template argument, from the destination of a pointer read, or from the write value, including member and array accesses, and `x * sizeof(T)` divides for a template parameter `T` whatever its size. It used to pass offsets other than `x * sizeof(T)` and `x * N` through unchanged, so `surf2Dread(&p.c, img, x * 16, y)` read texel `16x` and `surf2Dwrite(p.c, img, x * 16, y)` wrote texel `16x` (#4197).
+
 ---
 
 ## [3.6.0] - 2026-11-08
