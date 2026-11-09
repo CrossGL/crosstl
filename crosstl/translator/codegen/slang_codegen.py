@@ -113,7 +113,17 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
-from .generic_struct_utils import named_struct_constructor_arguments
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    generate_generic_struct_constructor_expression,
+    generate_generic_structs,
+    generic_struct_specialized_fields,
+    generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
+    named_struct_constructor_arguments,
+)
 from .global_specialization_constants import split_global_specialization_constants
 from .glsl_buffer_layout import (
     align_to,
@@ -309,6 +319,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.struct_payload_enums = []
         self.generic_enum_struct_definitions = {}
         self.generic_enum_specializations = {}
+        self.generic_struct_definitions = {}
+        self.generic_struct_specializations = {}
         self.enum_type_names = set()
         self.enum_struct_type_names = set()
         self.enum_struct_variant_fields = {}
@@ -509,6 +521,17 @@ class SlangCodeGen(LoweringRefusalMixin):
                 self.generic_enum_struct_definitions,
                 self.type_name_string,
             )
+            self.generic_struct_definitions = collect_generic_struct_definitions(
+                user_structs,
+                excluded_names=set(self.generic_enum_struct_definitions),
+            )
+            self.generic_struct_specializations = (
+                collect_generic_struct_specializations(
+                    ast,
+                    self.generic_struct_definitions,
+                    self.type_name_string,
+                )
+            )
             self.plain_enums = collect_plain_enums(self.user_enum_nodes)
             self.struct_payload_enums = collect_struct_payload_enums(
                 self.user_enum_nodes
@@ -551,6 +574,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.struct_member_types.update(
                 collect_generic_enum_specialization_member_types(
                     self, self.generic_enum_specializations
+                )
+            )
+            self.struct_member_types.update(
+                collect_generic_struct_specialization_member_types(
+                    self, self.generic_struct_specializations
                 )
             )
             generic_function_specializations = prepare_generic_function_specializations(
@@ -640,12 +668,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 partition_constants_by_struct_dependency(constants, structs)
             )
             result += self.generate_constants(ast, leading_constants)
-            for struct in structs:
-                if isinstance(struct, EnumNode):
-                    continue
-                struct_code = self.generate_struct(struct)
-                if struct_code:
-                    result += struct_code + "\n\n"
+            result += self.generate_ordered_struct_declarations(structs)
             result += self.generate_constants(ast, struct_dependent_constants)
             result += self.slang_struct_dependent_helper_marker()
 
@@ -1927,12 +1950,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             partition_constants_by_struct_dependency(constants, structs)
         )
         result += self.generate_constants(node, leading_constants)
-        for struct in structs:
-            if isinstance(struct, EnumNode):
-                continue
-            struct_code = self.generate_struct(struct)
-            if struct_code:
-                result += struct_code + "\n\n"
+        result += self.generate_ordered_struct_declarations(structs)
         result += self.generate_constants(node, struct_dependent_constants)
         result += self.slang_struct_dependent_helper_marker()
 
@@ -6039,6 +6057,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             return ""
         if getattr(node, "name", None) in self.generic_enum_struct_definitions:
             return ""
+        if getattr(node, "name", None) in self.generic_struct_definitions:
+            return ""
         if getattr(node, "name", None) in self.glsl_buffer_block_struct_names:
             return ""
         result = f"struct {node.name}\n{{\n"
@@ -6096,6 +6116,181 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         result += "};"
         return result
+
+    def ordered_generic_struct_specializations(self):
+        specializations = self.generic_struct_specializations or {}
+        if not specializations:
+            return {}
+
+        type_text_by_struct_name = {
+            specialization["struct_name"]: type_text
+            for type_text, specialization in specializations.items()
+        }
+        dependencies = {type_text: set() for type_text in specializations}
+        for type_text, specialization in specializations.items():
+            for _field_name, field_type in generic_struct_specialized_fields(
+                self.type_name_string,
+                specialization,
+            ):
+                dependency_name = generic_struct_specialized_type_name(
+                    self,
+                    field_type,
+                )
+                dependency_type = type_text_by_struct_name.get(dependency_name)
+                if dependency_type and dependency_type != type_text:
+                    dependencies[type_text].add(dependency_type)
+
+        ordered = {}
+        visiting = set()
+        visited = set()
+        type_order = {
+            type_text: index for index, type_text in enumerate(specializations)
+        }
+
+        def visit(type_text):
+            if type_text in visited or type_text in visiting:
+                return
+            visiting.add(type_text)
+            for dependency_type in sorted(
+                dependencies[type_text],
+                key=lambda item: type_order[item],
+            ):
+                visit(dependency_type)
+            visiting.remove(type_text)
+            visited.add(type_text)
+            ordered[type_text] = specializations[type_text]
+
+        for type_text in specializations:
+            visit(type_text)
+        return ordered
+
+    def slang_mapped_type_dependency_name(self, type_value):
+        mapped_type = self.convert_type(type_value)
+        if mapped_type is None:
+            return None
+        base_type, _array_suffix = split_array_type_suffix(str(mapped_type or ""))
+        base_type = base_type.strip().rstrip("*&").strip()
+        if base_type.startswith("const "):
+            base_type = base_type[len("const ") :].strip()
+        if base_type in {
+            "int",
+            "uint",
+            "int64_t",
+            "uint64_t",
+            "float",
+            "double",
+            "bool",
+            "void",
+            "half",
+        }:
+            return None
+        return base_type or None
+
+    def slang_struct_node_dependency_names(self, node):
+        dependencies = []
+        for member in getattr(node, "members", []) or []:
+            if isinstance(member, ArrayNode):
+                member_type = getattr(
+                    member,
+                    "element_type",
+                    getattr(member, "vtype", "float"),
+                )
+            elif hasattr(member, "member_type"):
+                member_type = self.convert_type_node_to_string(member.member_type)
+            else:
+                member_type = getattr(member, "vtype", "float")
+            dependency = self.slang_mapped_type_dependency_name(member_type)
+            if dependency is not None:
+                dependencies.append(dependency)
+        return dependencies
+
+    def order_struct_declaration_entries(self, entries):
+        by_name = {}
+        for entry in entries:
+            by_name.setdefault(entry["name"], entry)
+
+        order_index = {entry["name"]: index for index, entry in enumerate(entries)}
+        dependencies = {
+            entry["name"]: [
+                dependency
+                for dependency in entry["dependencies"]
+                if dependency in by_name and dependency != entry["name"]
+            ]
+            for entry in entries
+        }
+
+        ordered = []
+        visiting = set()
+        visited = set()
+
+        def visit(name):
+            if name in visited or name in visiting:
+                return
+            visiting.add(name)
+            for dependency in sorted(
+                dependencies.get(name, []),
+                key=lambda item: order_index[item],
+            ):
+                visit(dependency)
+            visiting.remove(name)
+            visited.add(name)
+            ordered.append(by_name[name])
+
+        for entry in entries:
+            visit(entry["name"])
+        return ordered
+
+    def generate_ordered_struct_declarations(self, structs):
+        """Render plain structs and generic struct specializations in dependency order.
+
+        A specialization is emitted in place of its generic definition, after the
+        declarations its fields depend on and before the declarations that use it.
+        """
+        entries = []
+        for struct in structs:
+            if isinstance(struct, EnumNode):
+                continue
+            if getattr(struct, "name", None) in self.generic_enum_struct_definitions:
+                continue
+            if getattr(struct, "name", None) in self.generic_struct_definitions:
+                continue
+            if getattr(struct, "name", None) in self.glsl_buffer_block_struct_names:
+                continue
+            struct_code = self.generate_struct(struct)
+            if not struct_code:
+                continue
+            entries.append(
+                {
+                    "name": struct.name,
+                    "dependencies": self.slang_struct_node_dependency_names(struct),
+                    "code": struct_code + "\n\n",
+                }
+            )
+
+        for specialization in self.ordered_generic_struct_specializations().values():
+            entries.append(
+                {
+                    "name": specialization["struct_name"],
+                    "dependencies": [
+                        self.slang_mapped_type_dependency_name(field_type)
+                        for _field_name, field_type in (
+                            generic_struct_specialized_fields(
+                                self.type_name_string,
+                                specialization,
+                            )
+                        )
+                    ],
+                    "code": generate_generic_structs(
+                        self,
+                        {specialization["type_name"]: specialization},
+                    ),
+                }
+            )
+
+        code = ""
+        for entry in self.order_struct_declaration_entries(entries):
+            code += entry["code"]
+        return code
 
     def generate_function(
         self,
@@ -9360,7 +9555,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
                 if generic_enum_specialized_type_name(self, expected_type) is not None:
                     return expected_type
-            return constructor_type
+            return infer_struct_constructor_type(self, expr) or constructor_type
         if isinstance(expr, MatchNode):
             try:
                 return infer_match_expression_result_type(self, expr)
@@ -9599,6 +9794,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             "fwidthFine",
             "inversesqrt",
             "inverseSqrt",
+            "normalize",
         }:
             return self.expression_result_type(args[0]) if args else None
 
@@ -10060,6 +10256,11 @@ class SlangCodeGen(LoweringRefusalMixin):
             enum_constructor = generate_enum_constructor_expression(self, node)
             if enum_constructor is not None:
                 return enum_constructor
+            generic_struct_constructor = generate_generic_struct_constructor_expression(
+                self, node
+            )
+            if generic_struct_constructor is not None:
+                return generic_struct_constructor
             constructor_type = self.type_name_string(node.constructor_type)
             if node.named_arguments:
                 fields = list(
@@ -11408,6 +11609,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         generic_enum_type = generic_enum_specialized_type_name(self, type_name)
         if generic_enum_type is not None:
             return generic_enum_type
+
+        generic_struct_type = generic_struct_specialized_type_name(self, type_name)
+        if generic_struct_type is not None:
+            return generic_struct_type
 
         if type_name in self.enum_type_names:
             return "int"

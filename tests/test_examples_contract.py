@@ -113,6 +113,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
 
 ADDITIONAL_FIXED_CASES = (
     ("advanced/GenericPatternMatching.cgl", "hip"),
+    ("advanced/GenericPatternMatching.cgl", "slang"),
     ("cross_platform/UniversalPBRShader.cgl", "slang"),
 )
 
@@ -121,12 +122,6 @@ GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
         "advanced/GenericPatternMatching.cgl",
         "mojo",
         "Mojo generic payload enum specializations must be concrete",
-    ),
-    (
-        "advanced/GenericPatternMatching.cgl",
-        "slang",
-        "Slang codegen cannot emit unresolved generic parameter 'T'; "
-        "specialize generic declarations before Slang generation",
     ),
 )
 
