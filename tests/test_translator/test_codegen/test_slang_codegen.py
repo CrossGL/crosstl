@@ -12122,7 +12122,7 @@ def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
         ": register(t4);" in generated_code
     )
     assert (
-        "[[vk::binding(5, 0)]] RWStructuredBuffer<float> writeOnlyValues "
+        "[[vk::binding(5, 0)]] writeonly RWStructuredBuffer<float> writeOnlyValues "
         ": register(u5);" in generated_code
     )
     assert (
@@ -12134,7 +12134,7 @@ def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
         ": register(t7);" in generated_code
     )
     assert (
-        "[[vk::binding(8, 0)]] RWStructuredBuffer<float> attrWriteOnly "
+        "[[vk::binding(8, 0)]] writeonly RWStructuredBuffer<float> attrWriteOnly "
         ": register(u8);" in generated_code
     )
     assert "float blockedLoad = 0;" in generated_code
@@ -12847,7 +12847,7 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
         ": register(t9);" in generated_code
     )
     assert (
-        "[[vk::binding(10, 0)]] RWByteAddressBuffer writeOnlyRaw "
+        "[[vk::binding(10, 0)]] writeonly RWByteAddressBuffer writeOnlyRaw "
         ": register(u10);" in generated_code
     )
     assert (
@@ -12859,7 +12859,7 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
         ": register(t12);" in generated_code
     )
     assert (
-        "[[vk::binding(13, 0)]] RWByteAddressBuffer attrWriteOnlyRaw "
+        "[[vk::binding(13, 0)]] writeonly RWByteAddressBuffer attrWriteOnlyRaw "
         ": register(u13);" in generated_code
     )
     assert "uint blockedLoad = 0u;" in generated_code
@@ -13145,7 +13145,7 @@ def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
         ": register(t22);" in generated_code
     )
     assert (
-        "[[vk::binding(23, 0)]] RWByteAddressBuffer attrWriteOnlyRaw "
+        "[[vk::binding(23, 0)]] writeonly RWByteAddressBuffer attrWriteOnlyRaw "
         ": register(u23);" in generated_code
     )
     assert "rawOutput.InterlockedAdd(offset, value, oldValue);" in generated_code
@@ -21288,7 +21288,7 @@ def test_image_load_store_invalid_slang_calls_emit_diagnostics():
     assert "msImage[pixel, boolSample]" not in generated_code
 
 
-def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
+def test_resource_memory_qualifiers_emit_slang_modifiers():
     code = """
     shader SlangResourceMemoryQualifiers {
         uimage2D coherentCounters @r32ui @coherent;
@@ -21315,12 +21315,12 @@ def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
         "globalCounters : register(u1);" in generated_code
     )
     assert (
-        '[[vk::binding(2, 0)]] [format("r32ui")] RWTexture2D<uint> volatileCounters '
-        ": register(u2);" in generated_code
+        '[[vk::binding(2, 0)]] [format("r32ui")] volatile RWTexture2D<uint> '
+        "volatileCounters : register(u2);" in generated_code
     )
     assert (
-        '[[vk::binding(3, 0)]] [format("r32ui")] RWTexture2D<uint> restrictCounters '
-        ": register(u3);" in generated_code
+        '[[vk::binding(3, 0)]] [format("r32ui")] restrict RWTexture2D<uint> '
+        "restrictCounters : register(u3);" in generated_code
     )
     assert (
         "[[vk::binding(4, 0)]] globallycoherent RWStructuredBuffer<uint> "
@@ -21330,8 +21330,6 @@ def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
         "[[vk::binding(5, 0)]] globallycoherent RWByteAddressBuffer "
         "globalRaw : register(u5);" in generated_code
     )
-    assert "volatile RWTexture2D" not in generated_code
-    assert "restrict RWTexture2D" not in generated_code
     assert ": coherent" not in generated_code
     assert ": globallycoherent" not in generated_code
     assert "@coherent" not in generated_code
@@ -21340,7 +21338,8 @@ def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
     assert "@restrict" not in generated_code
 
 
-def test_resource_memory_qualifiers_apply_to_slang_parameters():
+def test_resource_memory_qualifiers_on_slang_parameters_refuse_coherence_and_volatility():
+    # slangc allows no coherent or volatile parameter (E31201); restrict only promises how the resource is used.
     code = """
     shader SlangResourceMemoryQualifierParameters {
         void update(
@@ -21358,20 +21357,27 @@ def test_resource_memory_qualifiers_apply_to_slang_parameters():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
 
-    assert "globallycoherent RWStructuredBuffer<uint> values" in generated_code
-    assert "globallycoherent RWTexture2D<uint> counters" in generated_code
-    assert "RWByteAddressBuffer volatileRaw" in generated_code
-    assert "RWStructuredBuffer<uint> restrictValues" in generated_code
-    assert "buffer_load(values" not in generated_code
-    assert "values.Load(0u)" in generated_code
-    assert "volatile RWByteAddressBuffer" not in generated_code
-    assert "restrict RWStructuredBuffer" not in generated_code
-    assert "@coherent" not in generated_code
-    assert "@globallycoherent" not in generated_code
-    assert "@volatile" not in generated_code
-    assert "@restrict" not in generated_code
+    assert len(refused.reasons) == 3
+    for name, qualifier in (
+        ("values", "coherent"),
+        ("counters", "coherent"),
+        ("volatileRaw", "volatile"),
+    ):
+        assert any(
+            f"resource parameter '{name}' is {qualifier}: slangc allows no coherent or "
+            "volatile parameter (E31201)" in reason
+            for reason in refused.reasons
+        )
+    assert not any("restrictValues" in reason for reason in refused.reasons)
+    assert "RWStructuredBuffer<uint> restrictValues" in refused.code
+    assert "restrict RWStructuredBuffer" not in refused.code
+    assert "values.Load(0u)" in refused.code
+    assert "@coherent" not in refused.code
+    assert "@globallycoherent" not in refused.code
+    assert "@volatile" not in refused.code
+    assert "@restrict" not in refused.code
 
 
 def test_explicit_image_formats_emit_slang_storage_element_types():
@@ -24453,7 +24459,7 @@ def test_glsl_buffer_array_declarations_lower_to_slang_resources():
         ": register(t2);" in generated_code
     )
     assert (
-        "[[vk::binding(3, 0)]] RWStructuredBuffer<float> outValues "
+        "[[vk::binding(3, 0)]] writeonly RWStructuredBuffer<float> outValues "
         ": register(u3);" in generated_code
     )
     assert "float value = values.Load(0u);" in generated_code
@@ -24677,7 +24683,9 @@ def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang():
     generated_code = refused.code
 
     assert "ByteAddressBuffer readOnlyData : register(t0);" in generated_code
-    assert "RWByteAddressBuffer writeOnlyData : register(u0);" in generated_code
+    assert (
+        "writeonly RWByteAddressBuffer writeOnlyData : register(u0);" in generated_code
+    )
     assert "RWByteAddressBuffer readWriteData : register(u1);" in generated_code
     assert "uint blockedRead = 0u;" in generated_code
     assert (
