@@ -215,6 +215,7 @@ from .spirv_per_vertex_builtins import (
 )
 from .spirv_placed_blocks import (
     SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION,
+    declare_placed_struct_uniform,
     decorate_placed_uniform_block,
     matrix_from_column_array,
     placed_member_type,
@@ -21001,6 +21002,11 @@ class VulkanSPIRVCodeGen(
             push_constant = declare_push_constant_variable(self, node, var_type)
             if push_constant is not None:
                 return push_constant
+        if storage_class == "Uniform":
+            # A ConstantBuffer<T> whose T places members with @offset or @align keeps those bytes.
+            placed_variable = declare_placed_struct_uniform(self, node, var_type)
+            if placed_variable is not None:
+                return placed_variable
         if (
             storage_class == "Uniform"
             and self.current_struct_members.get(var_type.type.base_type) is not None
