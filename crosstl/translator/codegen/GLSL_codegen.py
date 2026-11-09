@@ -342,6 +342,10 @@ from .glsl_target_builtins import (
     OPENGL_UNAVAILABLE_BUILTINS,
     unavailable_builtin_reasons,
 )
+from .glsl_tessellation_input_arrays import (
+    implicit_tessellation_input_type,
+    tessellation_input_length,
+)
 from .glsl_tessellation_modes import (
     merge_control_stage_modes,
     program_control_sources,
@@ -9197,6 +9201,7 @@ class GLSLCodeGen(
         self.glsl_hoisted_shared_alias_names = set()
         self.glsl_shared_dimension_constants = {}
         self.current_target_stage = target_stage
+        self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
         self.glsl_shadow_lod_extension_used = False
         self.glsl_stage_builtin_extensions = []
@@ -32868,6 +32873,12 @@ class GLSLCodeGen(
             qualifier
         ) == "input" and self.requires_flat_stage_input(stage_name, mapped_type):
             qualifier = f"{self.with_flat_stage_input_qualifier(qualifier.strip())} "
+        implicit_type = implicit_tessellation_input_type(
+            self, node, qualifier, mapped_type, stage_name
+        )
+        if implicit_type != mapped_type:
+            mapped_type = implicit_type
+            declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         self.reserve_global_stage_io_layout(
             node,
             qualifier,
@@ -32933,11 +32944,15 @@ class GLSLCodeGen(
         if linked_name is not None and linked_name != emitted_name:
             emitted_name = linked_name
             self.current_identifier_aliases[source_name] = linked_name
-        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         if direction is not None:
             prefix = self.stage_io_declaration_prefix(
                 node, direction, stage_name=stage_name
             )
+            mapped_type = implicit_tessellation_input_type(
+                self, node, prefix, mapped_type, stage_name
+            )
+        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
+        if direction is not None:
             if direction == "in" and self.requires_flat_stage_input(
                 stage_name, mapped_type
             ):
@@ -41009,6 +41024,9 @@ complex64_t crossgl_complex64_mod_assign(
                 and func_expr.member == "length"
                 and not expr.args
             ):
+                written_length = tessellation_input_length(self, func_expr)
+                if written_length is not None:
+                    return written_length
                 instance_member = self.glsl_structured_buffer_array_element_member(
                     func_expr.object
                 )
