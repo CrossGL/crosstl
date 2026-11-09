@@ -43,6 +43,7 @@ from .hlsl_matrix_import import (
     hlsl_matrix_type_map,
 )
 from .implicit_vector_truncation import HLSLImplicitVectorTruncationMixin
+from .namespaces import resolve_namespaces
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
 from .shader_record_import import is_hlsl_shader_record, shader_record_layout
 from .struct_method_calls import HLSLStructMethodCallMixin
@@ -3608,6 +3609,7 @@ class HLSLToCrossGLConverter(
         return self.refusals.run(self.render_program, ast)
 
     def render_program(self, ast):
+        resolve_namespaces(ast, self.refuse_import)
         self.struct_methods = collect_struct_methods(
             getattr(ast, "structs", []) or [], ast.functions
         )
