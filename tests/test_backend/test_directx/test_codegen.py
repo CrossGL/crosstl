@@ -2015,8 +2015,10 @@ def test_codegen_namespace_block_scoped_call_imports_to_parseable_crossgl():
         }
     """)
 
-    assert "float Weight(float value)" in crossgl
-    assert "CrossBilateral::Weight(value)" in crossgl
+    # The namespaced declaration and its qualified call share one flat CrossGL name.
+    assert "float CrossBilateral_Weight(float value)" in crossgl
+    assert "return CrossBilateral_Weight(value);" in crossgl
+    assert "::" not in crossgl
     parse_crossgl(crossgl)
 
 
