@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- GLSL input keeps the `coherent`, `volatile`, `restrict` and `writeonly` qualifiers, and the Vulkan memory-model qualifiers such as `workgroupcoherent`, of a named storage block whose only member is a runtime array, such as `layout(std430, binding = 1) coherent buffer B1 { float d[]; } b1;`. It imports as `RWStructuredBuffer<float> b1 @binding(1) @coherent;`, where it used to drop every qualifier but `readonly`, so GLSL, SPIR-V and Metal output lost the memory semantics and HLSL output did not refuse a `volatile` block.
 - HIP and OpenCL input read a parameter, cast or local declaration whose type a line break splits after its base type, a `*` or `&`, a postfix qualifier such as `restrict` or `const`, or `pipe`, as they read it on one line: `__global float`, a line break and `* in` imports as `@group(0) @binding(0) var<storage, read_write> in_: array<f32>`, and `float widen(unsigned`, a line break and `v)` as `f32 widen(u32 v)`. They used to raise `SyntaxError` (`Expected RPAREN, got STAR` for a parameter, `Unexpected token in expression` for a function or a cast) (#3753).
 
 ---

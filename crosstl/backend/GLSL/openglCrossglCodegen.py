@@ -1539,7 +1539,23 @@ class GLSLToCrossGLConverter:
         return (
             f"{self.structured_buffer_type(var, member)} {var.name}{array_suffix}"
             f"{self.ssbo_binding_attribute_suffix(var)}"
+            f"{self.structured_buffer_memory_attribute_suffix(var)}"
         )
+
+    def structured_buffer_memory_attribute_suffix(self, var):
+        """Carry the block's memory qualifiers onto its element-buffer form.
+
+        ``StructuredBuffer`` already says ``readonly``; every other qualifier
+        becomes the attribute the block form writes, so it reaches the target.
+        """
+        qualifiers = self._qualifier_set(var)
+        attributes = [
+            f"@{qualifier}"
+            for qualifier in ("coherent", "volatile", "restrict", "writeonly")
+            if qualifier in qualifiers
+        ]
+        attributes.extend(self.vulkan_memory_model_qualifier_attributes(var))
+        return f" {' '.join(attributes)}" if attributes else ""
 
     def supported_image_formats(self):
         return {
