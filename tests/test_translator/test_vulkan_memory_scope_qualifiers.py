@@ -88,6 +88,17 @@ def translate(tmp_path, source, backend, suffix=".cgl"):
     return crosstl.translate(str(path), backend=backend)
 
 
+def spirv_ids(code):
+    """Map OpName strings to the ids that name them.
+
+    Output is disassembled with friendly names only when SPIRV-Tools are installed, so tests look ids up.
+    """
+    ids = {}
+    for ident, name in re.findall(r'OpName %(\w+) "(\w+)"', code):
+        ids.setdefault(name, ident)
+    return ids
+
+
 def run_tool(tmp_path, *command):
     if shutil.which(command[0]) is None:
         pytest.skip(f"{command[0]} is not installed")
@@ -214,9 +225,10 @@ def test_glsl_round_trip_keeps_scopes_under_the_vulkan_memory_model(tmp_path):
 
 def test_spirv_output_decorates_scoped_resources_coherent(tmp_path):
     code = translate(tmp_path, ATTRIBUTES, "vulkan")
+    ids = spirv_ids(code)
 
     for name in "bdns":
-        assert f"OpMemberDecorate %{name}Buffer 0 Coherent" in code, code
+        assert f"OpMemberDecorate %{ids[name + 'Buffer']} 0 Coherent" in code, code
     (tmp_path / "out.spvasm").write_text(code)
     run_tool(
         tmp_path, "spirv-as", "--target-env", "vulkan1.1", "out.spvasm", "-o", "out.spv"
@@ -227,11 +239,12 @@ def test_spirv_output_decorates_scoped_resources_coherent(tmp_path):
 def test_spirv_output_of_imported_glsl_blocks_is_coherent(tmp_path):
     crossgl = translate(tmp_path, GLSL_BLOCKS, "cgl", suffix=".comp")
     code = translate(tmp_path, crossgl, "vulkan")
+    ids = spirv_ids(code)
 
-    assert "OpDecorate %img Coherent" in code
+    assert f"OpDecorate %{ids['img']} Coherent" in code, code
     for block in "BDN":
-        assert f"OpMemberDecorate %{block} 0 Coherent" in code, code
-    assert "OpMemberDecorate %S 1 Coherent" in code
+        assert f"OpMemberDecorate %{ids[block]} 0 Coherent" in code, code
+    assert f"OpMemberDecorate %{ids['S']} 1 Coherent" in code, code
 
 
 def test_metal_output_scopes_buffer_coherence(tmp_path):
@@ -239,7 +252,8 @@ def test_metal_output_scopes_buffer_coherence(tmp_path):
 
     for name, scope in zip("bdns", ("threadgroup", "device", "device", "threadgroup")):
         assert re.search(
-            rf"coherent\({scope}\) device uint \*{name} \[\[buffer\(\d\)\]\]", code
+            rf"coherent\({scope}\) device uint\s*\*\s*{name} \[\[buffer\(\d\)\]\]",
+            code,
         ), code
     (tmp_path / "out.metal").write_text(code)
     run_tool(
@@ -259,5 +273,5 @@ def test_metal_output_scopes_buffer_coherence(tmp_path):
 def test_metal_output_writes_one_coherence_qualifier(tmp_path):
     code = translate(tmp_path, MIXED, "metal")
 
-    assert re.search(r"\bcoherent device uint \*b \[\[buffer\(0\)\]\]", code), code
+    assert re.search(r"\bcoherent device uint\s*\*\s*b \[\[buffer\(0\)\]\]", code), code
     assert "coherent(" not in code
