@@ -178,6 +178,7 @@ from .slang_workgroup_locals import slang_workgroup_local_prefix
 from .slang_workgroup_size import SlangWorkgroupSizeConstants
 from .stage_utils import (
     is_fragment_output_parameter,
+    is_parameter_direction,
     normalize_stage_name,
 )
 from .storage_parameter_texels import StorageParameterTexels
@@ -289,6 +290,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.user_symbol_names = set()
         self.current_function_return_type = None
         self.current_shader_type = None
+        self.struct_member_to_struct_name = {}
         self.current_expression_expected_type = None
         self.user_function_names = set()
         self.user_functions_by_name = {}
@@ -502,6 +504,16 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.fragment_entry_output_struct_names = (
                 self.collect_slang_fragment_entry_output_struct_names(ast)
             )
+            self.struct_member_to_struct_name = {}
+            for struct in getattr(ast, "structs", []) or []:
+                struct_name = getattr(struct, "name", None)
+                for member in getattr(struct, "members", []) or []:
+                    self.struct_member_to_struct_name[id(member)] = struct_name
+            for stage in getattr(ast, "stages", {}).values():
+                for struct in getattr(stage, "local_structs", []) or []:
+                    struct_name = getattr(struct, "name", None)
+                    for member in getattr(struct, "members", []) or []:
+                        self.struct_member_to_struct_name[id(member)] = struct_name
             self.user_enum_nodes = self.collect_user_enums(ast)
             self.generic_enum_struct_definitions = (
                 collect_generic_enum_struct_definitions(user_structs)
@@ -3119,8 +3131,50 @@ class SlangCodeGen(LoweringRefusalMixin):
                     index = frag_data_attachment_index(node)
                     if index is not None:
                         return f"gl_FragData[{index}]"
+                if str(attr.name).lower() == "location":
+                    index = self.slang_location_attribute_index(attr)
+                    if index is not None:
+                        if self.is_slang_fragment_output_target(node):
+                            return f"SV_Target{index}"
+                        return f"TEXCOORD{index}"
                 return attr.name
         return None
+
+    def slang_location_attribute_index(self, node):
+        if hasattr(node, "attributes"):
+            attributes = getattr(node, "attributes", [])
+        else:
+            attributes = [node]
+        for attr in attributes or []:
+            name = getattr(attr, "name", None)
+            if str(name).lower() != "location":
+                continue
+            arguments = getattr(attr, "arguments", None) or getattr(attr, "args", None)
+            if not arguments:
+                continue
+            index_arg = arguments[0]
+            index = getattr(index_arg, "value", None)
+            if index is None:
+                index = getattr(index_arg, "name", None)
+            if index is None:
+                index = self.attribute_value_to_string(index_arg)
+            if isinstance(index, int):
+                return index
+            if str(index).isdigit():
+                return int(index)
+        return None
+
+    def is_slang_fragment_output_target(self, node):
+        struct_name = self.struct_member_to_struct_name.get(id(node))
+        if struct_name:
+            return struct_name in getattr(
+                self, "fragment_entry_output_struct_names", set()
+            )
+
+        if normalize_stage_name(self.current_shader_type) == "fragment":
+            return hasattr(node, "return_type") or is_parameter_direction(node, "out")
+
+        return False
 
     def slang_mesh_output_parameter_role(self, attr):
         attr_name = getattr(attr, "name", None)
@@ -6127,6 +6181,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             getattr(node, "_generic_substitutions", {}) or {}
         )
         self.expression_temp_names = set()
+        self.current_shader_type = shader_type
         if hasattr(node, "return_type"):
             ret_type_name = self.convert_type_node_to_string(node.return_type)
             ret_type = self.convert_type(ret_type_name)
