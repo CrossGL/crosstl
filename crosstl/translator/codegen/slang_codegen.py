@@ -65,6 +65,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .comma_expressions import (
@@ -3079,6 +3080,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
             if str(getattr(attr, "name", "")).lower() == "precise":
                 # A modifier of the declaration, rendered before its type.
+                continue
+            if str(getattr(attr, "name", "")).lower() in MEMBER_LAYOUT_QUALIFIERS:
+                # A block member's placement, which the layout planners read; it never names a semantic.
                 continue
             if str(getattr(attr, "name", "")).lower() in (
                 "ray_payload_read",
