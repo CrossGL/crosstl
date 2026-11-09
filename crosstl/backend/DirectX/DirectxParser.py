@@ -41,6 +41,13 @@ from .DirectxAst import (
     WhileNode,
 )
 from .entry_stage_hints import demote_name_hinted_helpers, entry_name_stage_hint
+from .function_templates import (
+    begin_template_declaration,
+    expire_template_declaration,
+    parse_specialization_declarator_arguments,
+    skip_specialization_declarator_arguments_at,
+    take_template_parameters,
+)
 from .matrix_pack_pragma import apply_matrix_orientation, pack_matrix_orientation
 from .namespaces import qualify_namespace_declarations, using_directive_path
 
@@ -396,6 +403,7 @@ class HLSLParser:
         typedefs = []
 
         while self.current_token[0] != "EOF":
+            expire_template_declaration(self)
             if self.current_token_is_keyword("USING", "using"):
                 alias = self.parse_using_directive(record=True)
                 if alias is not None:
@@ -452,7 +460,7 @@ class HLSLParser:
                 continue
 
             if self.is_template_declaration_prefix():
-                self.parse_template_declaration_prefix()
+                begin_template_declaration(self)
                 continue
 
             if self.is_effect_metadata_block():
@@ -503,7 +511,9 @@ class HLSLParser:
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
-            name = self.parse_function_declarator_name()
+            name = parse_specialization_declarator_arguments(
+                self, self.parse_function_declarator_name()
+            )
 
             if self.current_token[0] == "LPAREN":
                 synthetic_start = len(self.synthetic_structs)
@@ -1514,13 +1524,20 @@ class HLSLParser:
     def parse_struct(self, declaration_qualifiers=None, declaration_attributes=None):
         declaration_qualifiers = list(declaration_qualifiers or [])
         declaration_attributes = list(declaration_attributes or [])
+        # A struct template's parameters belong to the struct, not to its members (see .struct_templates).
+        template_parameters = take_template_parameters(self)
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
         name = None
+        specialization_arguments = None
         if self.is_identifier_token(self.current_token[0]):
             name = self.parse_identifier()
-            if self.current_token[0] == "LESS_THAN":
+            if self.current_token[0] == "LESS_THAN" and template_parameters == []:
+                # ``template <> struct Box<float>``: an explicit specialization keeps its arguments.
+                specialization_arguments = self.parse_generic_arguments()
+            elif self.current_token[0] == "LESS_THAN":
                 self.skip_template_argument_list()
+                specialization_arguments = True
 
         semantic = None
         base_classes = []
@@ -1616,6 +1633,8 @@ class HLSLParser:
         struct_node.semantic = semantic
         struct_node.base_classes = base_classes
         struct_node.methods = methods
+        struct_node.template_parameters = template_parameters
+        struct_node.specialization_arguments = specialization_arguments
         return struct_node
 
     def parse_nested_struct_member(
@@ -2173,6 +2192,7 @@ class HLSLParser:
         return name
 
     def parse_function(self, return_type, name, qualifiers, attributes):
+        template_parameters = take_template_parameters(self)
         params = self.parse_parameters()
         qualifiers = qualifiers + self.parse_trailing_function_qualifiers()
         return_array_sizes = self.parse_array_suffixes()
@@ -2218,6 +2238,7 @@ class HLSLParser:
             array_sizes=return_array_sizes,
         )
         function.is_prototype = is_prototype
+        function.template_parameters = template_parameters
         return function
 
     def parse_trailing_function_qualifiers(self):
@@ -2970,7 +2991,7 @@ class HLSLParser:
         if not self.is_declarator_identifier_token_at(idx):
             return False
 
-        idx += 1
+        idx = skip_specialization_declarator_arguments_at(self, idx + 1)
         idx = self.skip_array_suffixes_at(idx)
         if idx is None or idx >= len(self.tokens):
             return False
