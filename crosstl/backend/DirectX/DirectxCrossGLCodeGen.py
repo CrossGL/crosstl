@@ -1861,6 +1861,23 @@ class HLSLToCrossGLConverter(
             return f"attr_{safe_name}"
         return safe_name
 
+    def format_member_offset(self, member):
+        """`` @offset(N)`` for a member placed with ``[[vk::offset(N)]]``, else an empty string.
+
+        CrossGL spells the placement ``@offset(N)`` on the member itself; leaving it as an attribute would
+        spell it ``@ vk_offset(N)``, which no layout rule reads, so the member would lose its byte offset
+        on the round trip.
+        """
+        for attribute in getattr(member, "attributes", None) or []:
+            name = str(getattr(attribute, "name", "")).lower()
+            arguments = (
+                getattr(attribute, "args", getattr(attribute, "arguments", None))
+                or []
+            )
+            if name == "vk::offset" and len(arguments) == 1:
+                return f" @offset({self.generate_expression(arguments[0])})"
+        return ""
+
     def format_subpass_input_attributes(self, attributes, indent):
         normalized_attributes = []
         for attr in attributes or []:
@@ -3754,7 +3771,7 @@ class HLSLToCrossGLConverter(
                     code += (
                         f"        {qualifier_prefix}{self.map_variable_type(member)} "
                         f"{self.render_identifier(member.name)}"
-                        f"{array_suffix}{attributes};\n"
+                        f"{array_suffix}{self.format_member_offset(member)}{attributes};\n"
                     )
                 code += "    }\n"
             elif isinstance(node, PragmaNode):
@@ -4291,7 +4308,15 @@ class HLSLToCrossGLConverter(
                     attributes = [AttributeNode("tbuffer")] + attributes
                 code += self.format_attributes(attributes, 1)
                 code += self.format_binding_attributes(node, 1)
-                code += f"    @ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_CBUFFER_LAYOUT})\n"
+                is_push_constant = any(
+                    str(getattr(attribute, "name", "")).lower()
+                    == "vk::push_constant"
+                    for attribute in attributes
+                )
+                if not is_push_constant:
+                    # A push-constant block is laid out by the std430 rules of the push-constant range, not
+                    # by HLSL packing; claiming hlsl_cbuffer for it makes every output backend refuse it.
+                    code += f"    @ {BUFFER_LAYOUT_ATTRIBUTE}({HLSL_CBUFFER_LAYOUT})\n"
                 code += f"    cbuffer {cbuffer_name} {{\n"
                 for member in node.members:
                     self.record_variable_type(
@@ -4300,7 +4325,9 @@ class HLSLToCrossGLConverter(
                         self.global_resource_array_dims,
                     )
                     code += self.format_matrix_layout_attributes(member, 2)
-                    code += self.format_attributes(getattr(member, "attributes", []), 2)
+                    code += self.format_attributes(
+                        getattr(member, "attributes", []), 2, {"vk::offset"}
+                    )
                     code += self.format_binding_attributes(member, 2)
                     array_suffix = self.format_array_suffixes(member)
                     qualifier_prefix = self.format_precise_qualifier_prefix(member)
@@ -4313,7 +4340,7 @@ class HLSLToCrossGLConverter(
                     code += (
                         f"        {qualifier_prefix}{self.map_variable_type(member)} "
                         f"{self.render_identifier(member.name)}{array_suffix}"
-                        f"{initializer};\n"
+                        f"{self.format_member_offset(member)}{initializer};\n"
                     )
                 code += "    }\n"
         return code
@@ -6244,7 +6271,7 @@ class HLSLToCrossGLConverter(
             code += (
                 self.get_indent() + f"{self.map_variable_type(member)} "
                 f"{self.render_identifier(member.name)}"
-                f"{array_suffix}{attributes};\n"
+                f"{array_suffix}{self.format_member_offset(member)}{attributes};\n"
             )
 
         self.indentation -= 1
