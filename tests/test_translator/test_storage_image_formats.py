@@ -128,11 +128,14 @@ def test_spirv_output_writes_three_components_to_r11f_g11f_b10f(tmp_path):
 
     image = re.search(r"%(\w+) = OpTypeImage %\w+ 2D 0 0 0 2 R11fG11fB10f", code)
     assert image is not None
-    loaded = re.search(rf"%(\w+) = OpLoad %{image.group(1)} %c\b", code)
-    assert loaded is not None
-    texel = re.search(rf"OpImageWrite %{loaded.group(1)} %\w+ %(\w+)", code)
-    assert texel is not None
-    texel_type = re.search(rf"%{texel.group(1)} = \w+ %(\w+)", code).group(1)
+    # Result ids are names when SPIRV-Tools formats the module and numbers when
+    # it is not installed, so follow the image type rather than the name ``c``.
+    loads = re.findall(rf"%(\w+) = OpLoad %{image.group(1)} %\w+", code)
+    assert loads
+    writes = re.findall(r"OpImageWrite %(\w+) %\w+ %(\w+)", code)
+    texels = [texel for target, texel in writes if target in loads]
+    assert len(texels) == 1
+    texel_type = re.search(rf"%{texels[0]} = \w+ %(\w+)", code).group(1)
     assert re.search(rf"%{texel_type} = OpTypeVector %\w+ 3", code)
 
 
@@ -241,7 +244,7 @@ def test_unknown_format_on_storage_image_parameter_is_refused(tmp_path):
             "opengl",
             "layout(rgba8, binding = 0) coherent restrict uniform highp image2D img;",
         ),
-        ("vulkan", "OpTypeImage %float 2D 0 0 0 2 Rgba8"),
+        ("vulkan", re.compile(r"OpTypeImage %\w+ 2D 0 0 0 2 Rgba8\b")),
         ("metal", "texture2d<float, access::read_write> img"),
     ],
 )
@@ -249,7 +252,10 @@ def test_storage_image_qualifiers_are_not_formats(tmp_path, backend, declaration
     source = single_image("uniform image2D img @rgba8 @coherent @restrict @highp;")
     code = translate(tmp_path, source, backend)
 
-    assert declaration in code
+    if isinstance(declaration, re.Pattern):
+        assert declaration.search(code)
+    else:
+        assert declaration in code
 
 
 def test_glsl_input_keeps_packed_formats(tmp_path):
