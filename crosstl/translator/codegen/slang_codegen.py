@@ -11720,6 +11720,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             "rgba32f",
             "rgba32i",
             "rgba32ui",
+            "rgb10_a2",
+            "rgb10_a2ui",
+            "r11f_g11f_b10f",
         }
 
     def scalar_image_format_components(self):
@@ -11764,6 +11767,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             "rgba8ui": "uint4",
             "rgba16ui": "uint4",
             "rgba32ui": "uint4",
+            "rgb10_a2": "float4",
+            "rgb10_a2ui": "uint4",
+            "r11f_g11f_b10f": "float3",
         }
 
     def attribute_value_to_string(self, value):

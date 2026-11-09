@@ -1,5 +1,6 @@
 """Reverse code generator that emits CrossGL from Vulkan SPIR-V AST nodes."""
 
+from ...translator.codegen.image_access_contracts import SUPPORTED_IMAGE_FORMATS
 from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
@@ -1279,44 +1280,7 @@ class VulkanToCrossGLConverter:
         return isinstance(type_name, str) and type_name.endswith("imageBuffer")
 
     def supported_image_formats(self):
-        return {
-            "r8",
-            "r8_snorm",
-            "r8i",
-            "r8ui",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r16i",
-            "r16ui",
-            "r32f",
-            "r32i",
-            "r32ui",
-            "rg8",
-            "rg8_snorm",
-            "rg8i",
-            "rg8ui",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg16i",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-            "rgba8",
-            "rgba8_snorm",
-            "rgba8i",
-            "rgba8ui",
-            "rgba16",
-            "rgba16_snorm",
-            "rgba16f",
-            "rgba16i",
-            "rgba16ui",
-            "rgba32f",
-            "rgba32i",
-            "rgba32ui",
-        }
+        return set(SUPPORTED_IMAGE_FORMATS)
 
     def interface_layout_attribute_suffix(
         self,
