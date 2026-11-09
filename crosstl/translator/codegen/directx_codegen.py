@@ -53662,7 +53662,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return {
             image_format: image_format_vector_type(image_format)
             for image_format in supported_image_formats()
-            if image_format_channel_count(image_format) in {2, 4}
+            if image_format_channel_count(image_format) in {2, 3, 4}
         }
 
     def attribute_value_to_string(self, value):

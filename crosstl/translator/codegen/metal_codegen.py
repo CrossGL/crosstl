@@ -23011,7 +23011,7 @@ class MetalCodeGen(
         return {
             image_format: image_format_component_type(image_format)
             for image_format in supported_image_formats()
-            if image_format_channel_count(image_format) in {2, 4}
+            if image_format_channel_count(image_format) in {2, 3, 4}
         }
 
     def attribute_value_to_string(self, value):
