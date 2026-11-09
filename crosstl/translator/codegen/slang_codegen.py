@@ -417,6 +417,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "uintBitsToFloat": "asfloat",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
             "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
+            # GLSL's non-uniform resource index is Slang's NonUniformResourceIndex.
+            "nonuniformEXT": "NonUniformResourceIndex",
         }
 
     def indent(self):

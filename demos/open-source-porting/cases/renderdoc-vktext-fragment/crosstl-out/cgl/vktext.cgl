@@ -1,3 +1,4 @@
+#pragma cgl_rules(wrap)
 shader main {
     struct FragmentInput {
     vec4 tex @location(0);

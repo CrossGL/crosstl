@@ -159,6 +159,7 @@ from .template_reference_accessors import inline_template_reference_accessor
 from .text_scanners import (
     find_named_type_declarations,
     function_parameter_start,
+    mask_comments_and_literals,
     split_top_level_assignment,
     split_top_level_commas,
     strip_comments_outside_strings,
@@ -1344,9 +1345,16 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         processed = self._materialize_explicit_template_function_calls(processed)
         # This source reaches the CrossGL generic path, which cannot defer a SIMD-group
         # overload to each instantiation; the project materializer binds its own.
+        constrained_source = processed
         processed = self._materialize_inferred_constrained_template_function_calls(
             processed, simd_group_overloads=True
         )
+        if processed != constrained_source:
+            # A materialized constrained helper spells the struct templates of its signature with the bound
+            # arguments (`device mlx_atomic<float>*`), which the struct pass above has not seen.
+            processed = self._materialize_explicit_template_struct_instantiations(
+                processed
+            )
         processed = self._prune_unreferenced_materialized_function_templates(processed)
         # A constrained overload nothing calls would reach CrossGL without its constraint.
         processed = prune_unreferenced_constrained_templates(self, processed)
@@ -3331,6 +3339,9 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if qualifiers & {"extern", "typedef", "thread_local", "volatile"}:
                 continue
             namespace = self._namespace_at(namespace_spans, match.start())
+            if self._defines_function_after(code, match.end("name")):
+                # `constexpr T name() { ... }` is a function, whatever the scope of `T`.
+                continue
             source_type = re.sub(r"\s*::\s*", "::", match.group("type"))
             if source_type.startswith("::"):
                 source_type = source_type[2:]
@@ -3446,6 +3457,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if "::" not in struct.qualified_name:
             return ""
         return struct.qualified_name.rsplit("::", 1)[0]
+
+    def _defines_function_after(self, code: str, name_end: int) -> bool:
+        """Whether the declarator ending at ``name_end`` has a parameter list followed by a function body."""
+        cursor = self._skip_cpp_trivia(code, name_end)
+        if cursor >= len(code) or code[cursor] != "(":
+            return False
+        end = self._find_matching_delimiter(code, cursor, "(", ")")
+        if end is None:
+            return False
+        after = self._skip_cpp_trivia(code, end + 1)
+        return bool(
+            re.match(
+                r"(?:(?:const|noexcept|thread|device)\b\s*)*(?:\{|->)", code[after:]
+            )
+        )
 
     def _parse_compile_time_global_initializer(
         self, code: str, name_end: int, expected_type_names: Set[str]
@@ -28292,7 +28318,7 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                         name=function_name,
                         span=(declaration_start, body_end),
                         body_span=(body_start + 1, body_end - 1),
-                        is_entry=METAL_ENTRY_FUNCTION_RE.search(header) is not None,
+                        is_entry=self._header_declares_entry(header),
                     )
                 )
                 pos = body_end
@@ -30360,6 +30386,19 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if paren_end is None:
             return None
         return paren_start, paren_end
+
+    def _header_declares_entry(self, header: str) -> bool:
+        """Whether a function definition's header declares a stage entry point.
+
+        A stage qualifier (``kernel``, ``vertex``, ...) or ``[[kernel]]`` precedes the parameter list. A parameter
+        named like a qualifier (``device mlx_atomic<T>* object``), a comment before the header and a string
+        literal (``[[host_name("vertex_copy")]]``) are not qualifiers, so only the masked declaration text before
+        the parameter list is searched.
+        """
+        masked = mask_comments_and_literals(header)
+        parameter_start = self._function_parameter_start(masked)
+        declaration = masked if parameter_start is None else masked[:parameter_start]
+        return METAL_ENTRY_FUNCTION_RE.search(declaration) is not None
 
     def _function_name_from_header(self, header: str) -> Optional[str]:
         paren_index = self._function_parameter_start(header)

@@ -8738,7 +8738,8 @@ def test_translate_api_accepts_linkage_pointer_type_only_spirv_assembly(tmp_path
         str(shader_path), backend="cgl", format_output=False
     )
 
-    assert generated_code == "shader main {\n}\n"
+    # SPIR-V defines wrapping integer arithmetic, which the CrossGL program declares (rule_pragmas.py).
+    assert generated_code == "#pragma cgl_rules(wrap)\nshader main {\n}\n"
 
 
 def test_vulkan_layout_blocks_emit_crossgl_resources():

@@ -30,6 +30,7 @@ from .translator.codegen.pointer_reinterpret import (
 from .translator.default_arguments import lower_default_arguments
 from .translator.plugin_loader import discover_backend_plugins
 from .translator.semantics import apply_rule_carrying
+from .translator.semantics.rule_pragmas import rule_pragma
 from .translator.source_licenses import source_license_comments
 from .translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
@@ -358,6 +359,10 @@ def _translate_with_codegen(
                 codegen.normalize_target_safe_cgl = True
             lower_default_arguments(ast)
             generated_code = codegen.generate(ast)
+            pragma = rule_pragma(source_spec.name)
+            if pragma is not None:
+                # The CrossGL program keeps the rule families of the language it came from (rule_pragmas.py).
+                generated_code = f"{pragma}\n{generated_code}"
             if source_spec.name == "opencl":
                 cgl_spec = SOURCE_REGISTRY.get("cgl")
                 if not cgl_spec:

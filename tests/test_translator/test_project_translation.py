@@ -17609,8 +17609,8 @@ def test_translate_project_resolves_scalar_alias_from_partial_specialization(
         target: (repo / artifact["path"]).read_text(encoding="utf-8")
         for target, artifact in artifacts.items()
     }
-    assert "uint value = uint(" in outputs["directx"]
-    assert "uint value = uint(" in outputs["opengl"]
+    assert "uint value = cgl_rule_sat_ftou(" in outputs["directx"]
+    assert "uint value = cgl_rule_sat_ftou(" in outputs["opengl"]
     assert "OpConvertFToU" in outputs["vulkan"]
     assert "OpConvertUToF" in outputs["vulkan"]
     assert "W_T" not in "\n".join(outputs.values())
@@ -35730,7 +35730,11 @@ def test_translate_project_resolves_mlx_metal_vulkan_storage_buffer_template_ove
 
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "elem_to_loc_broadcast" not in generated
-    assert "OpFunctionCall" not in generated
+    # The overloads are inlined; the only calls left are the two uint(float) conversions, which Metal defines for
+    # NaN (ftoi_nan) and which call the one rule helper beside the entry point.
+    assert generated.count(" OpFunction ") == 2
+    calls = re.findall(r"OpFunctionCall %\w+ %(\w+)", generated)
+    assert len(calls) == 2 and len(set(calls)) == 1
     assert "storage-buffer-function-overload" not in generated
     assert "WARNING" not in generated
     assert "DescriptorSet 0" in generated
