@@ -176,6 +176,7 @@ from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
     generic_function_call_name,
+    generic_function_definition_name,
     generic_function_emission_list,
     generic_function_parameters,
     numeric_trait_method_result_type,
@@ -3294,7 +3295,10 @@ class MetalCodeGen(
                     code += f"{declaration};\n"
 
         self.function_global_resource_dependencies = (
-            self.collect_function_global_resource_dependencies(all_functions)
+            self.collect_function_global_resource_dependencies(
+                [f for f in all_functions if not generic_function_parameters(f)]
+                + list(generic_function_specializations.values())
+            )
         )
         self.function_stage_parameter_dependencies = (
             self.collect_function_stage_parameter_dependencies(ast, target_stage)
@@ -21916,10 +21920,25 @@ class MetalCodeGen(
             if not isinstance(node, FunctionCallNode):
                 continue
             func_name = self.function_call_name(node)
-            if func_name in self.user_function_names and func_name != getattr(
-                func, "name", None
-            ):
-                called_names.add(func_name)
+            if not func_name:
+                continue
+            specialized_name = generic_function_call_name(
+                self,
+                func_name,
+                getattr(node, "arguments", getattr(node, "args", [])),
+            )
+            if specialized_name:
+                candidates = (specialized_name,)
+            else:
+                base_name = generic_function_definition_name(self, func_name)
+                candidates = (func_name, base_name)
+            for candidate in candidates:
+                if (
+                    candidate
+                    and candidate in self.user_function_names
+                    and candidate != getattr(func, "name", None)
+                ):
+                    called_names.add(candidate)
         return called_names
 
     def collect_function_stage_parameter_dependencies(self, ast, target_stage):
