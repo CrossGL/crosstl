@@ -281,6 +281,10 @@ from .spirv_swizzle_reference_arguments import (
     prepare_swizzle_reference_binding,
     write_back_swizzle_reference_bindings,
 )
+from .spirv_tessellation_domain import (
+    evaluation_takes_glsl_defaults,
+    refuse_program_without_domain,
+)
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_texture_residency import (
     spirv_texture_residency_call,
@@ -32111,7 +32115,7 @@ class VulkanSPIRVCodeGen(
             sources.append(self.tessellation_control_stage)
         return sources
 
-    def tessellation_domain_mode(self, stage) -> str:
+    def tessellation_domain_mode(self, stage) -> Optional[str]:
         """Return the tessellation-evaluation domain execution mode."""
         mode_map = {
             "tri": "Triangles",
@@ -32138,9 +32142,10 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return "Triangles"
+        # Left to a control stage outside the program; see spirv_tessellation_domain.
+        return None
 
-    def tessellation_spacing_mode(self, stage) -> str:
+    def tessellation_spacing_mode(self, stage) -> Optional[str]:
         """Return the tessellation-evaluation spacing execution mode."""
         mode_map = {
             "integer": "SpacingEqual",
@@ -32165,9 +32170,9 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return None if self.tessellation_modes_follow_hlsl(stage) else "SpacingEqual"
+        return "SpacingEqual" if evaluation_takes_glsl_defaults(self, stage) else None
 
-    def tessellation_vertex_order_mode(self, stage) -> str:
+    def tessellation_vertex_order_mode(self, stage) -> Optional[str]:
         """Return the tessellation-evaluation vertex-order execution mode."""
         mode_map = {
             "cw": "VertexOrderCw",
@@ -32186,7 +32191,7 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return None if self.tessellation_modes_follow_hlsl(stage) else "VertexOrderCcw"
+        return "VertexOrderCcw" if evaluation_takes_glsl_defaults(self, stage) else None
 
     def tessellation_modes_follow_hlsl(self, stage) -> bool:
         """Whether ``stage`` declares its domain as an HLSL-style ``@domain`` attribute.
@@ -32250,6 +32255,7 @@ class VulkanSPIRVCodeGen(
             self.tessellation_spacing_mode(stage),
             self.tessellation_vertex_order_mode(stage),
         ]
+        refuse_program_without_domain(self, stage, modes[0])
         if self.tessellation_point_mode(stage):
             modes.append("PointMode")
         for mode in modes:

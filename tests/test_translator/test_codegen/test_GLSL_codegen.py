@@ -22793,6 +22793,7 @@ def test_glsl_combined_advanced_stage_entries_use_distinct_names():
         }
 
         tessellation_evaluation {
+            layout(triangles) in;
             void main() { }
         }
     }
