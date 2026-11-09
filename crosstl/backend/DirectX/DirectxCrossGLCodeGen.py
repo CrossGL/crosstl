@@ -53,6 +53,7 @@ from .hlsl_matrix_import import (
 from .implicit_vector_truncation import HLSLImplicitVectorTruncationMixin
 from .namespaces import resolve_namespaces
 from .precise_arithmetic import HLSLPreciseArithmeticMixin
+from .push_constant_offsets import member_offsets as push_constant_member_offsets
 from .shader_record_import import is_hlsl_shader_record, shader_record_layout
 from .struct_method_calls import HLSLStructMethodCallMixin
 from .struct_methods import (
@@ -3765,6 +3766,9 @@ class HLSLToCrossGLConverter(
         self.flattened_stage_struct_names = self.collect_flattened_stage_struct_names(
             ast
         )
+        self.hlsl_member_offsets = push_constant_member_offsets(
+            self, ast, self.structs_by_name
+        )
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []
@@ -3801,6 +3805,11 @@ class HLSLToCrossGLConverter(
                     attributes = self.format_semantic_and_interpolation_attributes(
                         member, member.semantic
                     )
+                    member_offset = self.hlsl_member_offsets.get(
+                        (node.name, str(member.name))
+                    )
+                    if member_offset is not None:
+                        attributes += f" @offset({member_offset})"
                     qualifier_prefix = self.format_precise_qualifier_prefix(member)
                     code += self.format_matrix_layout_attributes(member, 2)
                     code += (

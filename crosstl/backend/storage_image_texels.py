@@ -27,6 +27,13 @@ __all__ = [
 # ``vk::image_format``, and Slang also reads ``format``.
 IMAGE_FORMAT_ATTRIBUTES = frozenset({"vk::image_format", "format"})
 
+# DXC's ``vk::image_format`` spellings of the packed formats.
+_DXC_PACKED_FORMATS = {
+    "rgb10a2": "rgb10_a2",
+    "rgb10a2ui": "rgb10_a2ui",
+    "r11g11b10f": "r11f_g11f_b10f",
+}
+
 _TEXEL_SCALARS = {
     "float": ("float", "vec"),
     "int": ("int", "ivec"),
@@ -53,6 +60,8 @@ def crossgl_image_format(name):
     text = str(name).strip().strip('"').strip().lower()
     if text == "unknown" or text in SUPPORTED_IMAGE_FORMATS:
         return text
+    if text in _DXC_PACKED_FORMATS:
+        return _DXC_PACKED_FORMATS[text]
     if text.endswith("snorm") and not text.endswith("_snorm"):
         candidate = f"{text[: -len('snorm')]}_snorm"
         if candidate in SUPPORTED_IMAGE_FORMATS:

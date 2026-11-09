@@ -65,6 +65,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .comma_expressions import (
@@ -3079,6 +3080,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 continue
             if str(getattr(attr, "name", "")).lower() == "precise":
                 # A modifier of the declaration, rendered before its type.
+                continue
+            if str(getattr(attr, "name", "")).lower() in MEMBER_LAYOUT_QUALIFIERS:
+                # A block member's placement, which the layout planners read; it never names a semantic.
                 continue
             if str(getattr(attr, "name", "")).lower() in (
                 "ray_payload_read",
@@ -11720,6 +11724,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             "rgba32f",
             "rgba32i",
             "rgba32ui",
+            "rgb10_a2",
+            "rgb10_a2ui",
+            "r11f_g11f_b10f",
         }
 
     def scalar_image_format_components(self):
@@ -11764,6 +11771,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             "rgba8ui": "uint4",
             "rgba16ui": "uint4",
             "rgba32ui": "uint4",
+            "rgb10_a2": "float4",
+            "rgb10_a2ui": "uint4",
+            "r11f_g11f_b10f": "float3",
         }
 
     def attribute_value_to_string(self, value):

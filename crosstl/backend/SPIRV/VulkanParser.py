@@ -11,6 +11,7 @@ from .block_arrays import SpirvBlockArrayUnsupportedError, block_array_element
 from .block_layout_import import spirv_block_layout
 from .buffer_memory_qualifiers import storage_block_memory_qualifiers
 from .function_structure import SpirvFunctionStructure
+from .image_formats import crossgl_image_format
 from .image_texel_atomics import fold_image_texel_atomic
 from .integer_signedness_import import (
     spirv_integer_binary_expression,
@@ -6513,9 +6514,7 @@ class VulkanParser:
         return qualifiers
 
     def spirv_image_format_qualifier(self, image_format):
-        if not image_format or image_format == "Unknown":
-            return None
-        return str(image_format).replace("Snorm", "_snorm").lower()
+        return crossgl_image_format(image_format)
 
     def spirv_image_access_qualifier(self, access_qualifier):
         return {"ReadOnly": "readonly", "WriteOnly": "writeonly"}.get(access_qualifier)
