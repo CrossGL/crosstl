@@ -37,6 +37,12 @@ from .generic_call_collection_keys import (
     remember_collected_generic_call_key,
     reset_collected_generic_call_keys,
 )
+from .generic_call_dependencies import (
+    begin_generic_callee_recording,
+    end_generic_callee_recording,
+    record_generic_callee,
+    reset_generic_callees,
+)
 from .generic_call_results import (
     generic_call_argument_type_name,
     generic_call_result_type_name,
@@ -47,6 +53,10 @@ from .generic_emission_order import (
     reset_generic_function_emission,
 )
 from .generic_pointer_deduction import structured_buffer_element_type
+from .generic_prototypes import (
+    reject_undefined_generic_instantiation,
+    without_forward_generic_prototypes,
+)
 from .generic_result_types import reject_expression_result_type
 from .generic_specialization_names import (
     reserve_program_names,
@@ -223,7 +233,9 @@ def prepare_generic_function_specializations(generator, functions, global_types=
     generator.generic_collection_global_types = dict(global_types or {})
     definitions = {}
     definition_ordinals = {}
-    for func in functions or []:
+    for func in without_forward_generic_prototypes(
+        functions, generic_function_parameters
+    ):
         func_name = getattr(func, "name", None)
         if (
             not func_name
@@ -250,6 +262,7 @@ def prepare_generic_function_specializations(generator, functions, global_types=
     generator.generic_function_specialized_names = {}
     generator.generic_function_resolved_call_ids = set()
     reset_collected_generic_call_keys(generator)
+    reset_generic_callees(generator)
     reset_generic_function_emission(generator)
 
     if not definitions:
@@ -948,9 +961,14 @@ def _collect_from_function(generator, func, substitutions):
                 substitutions,
             )
         before = set(getattr(generator, "generic_function_specializations", {}) or {})
-        _analyze_statement(generator, getattr(func, "body", None), substitutions)
-        after = set(getattr(generator, "generic_function_specializations", {}) or {})
-        return [*after - before]
+        recording = begin_generic_callee_recording(generator)
+        try:
+            _analyze_statement(generator, getattr(func, "body", None), substitutions)
+        finally:
+            end_generic_callee_recording(generator, func, recording)
+        # The new keys in creation order: a set difference would order them by hash seed.
+        after = getattr(generator, "generic_function_specializations", {}) or {}
+        return [key for key in after if key not in before]
     finally:
         generator.local_variable_types = previous_local_variable_types
         generator.current_expression_expected_type = previous_expected_type
@@ -1035,6 +1053,7 @@ def _analyze_expression(generator, expr, substitutions):
             # Remember the call: later passes walk it without its function's local types.
             generator.generic_function_resolved_call_ids.add(id(expr))
             remember_collected_generic_call_key(generator, func_name, args, key)
+            record_generic_callee(generator, key)
         return
     if isinstance(expr, ConstructorNode):
         for arg in getattr(expr, "arguments", []) or []:
@@ -1066,6 +1085,7 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
         generator.generic_function_specialized_names[key] = explicit.name
         return
     reject_late_generic_specialization(generator, func, key)
+    reject_undefined_generic_instantiation(func, key)
 
     clone = deepcopy(func)
     overload_ordinal = key[2] if len(key) > 2 else None

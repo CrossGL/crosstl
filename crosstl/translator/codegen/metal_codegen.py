@@ -10189,6 +10189,26 @@ class MetalCodeGen(
         # Keep arithmetic carriers widened, but preserve the source conversion.
         return f"{carrier}({native}({rendered}))"
 
+    def metal_direct_narrow_float_conversion(self, constructor, arguments, rendered):
+        """``uchar(f)`` of a floating ``f``: converted directly, which keeps its result (MSL 4.1 section 8.6).
+
+        Converting through the 32-bit carrier first, ``uchar(uint(f))``, would wrap a value the direct conversion
+        saturates on Apple GPUs.
+        """
+        native = self.metal_native_narrow_bitcast_storage_type(constructor)
+        if (
+            native is None
+            or len(arguments) != 1
+            or not re.fullmatch(r"u?(?:char|short)[234]?", native)
+        ):
+            return None
+        operand = self.map_type(
+            self.type_name_string(self.expression_result_type(arguments[0])) or ""
+        )
+        if not re.fullmatch(r"(?:float|half|bfloat)[234]?", str(operand or "")):
+            return None
+        return f"{self.map_type(constructor)}({native}({rendered}))"
+
     def metal_narrow_update_repeatable_lvalue(self, target):
         """Return whether ``target`` can be read and written by repeating it.
 
@@ -10985,6 +11005,11 @@ class MetalCodeGen(
                 and func_name not in self.user_function_names
             ):
                 return self.expression_result_type(args[0])
+            componentwise_type = self.metal_componentwise_builtin_result_type(
+                func_name, args
+            )
+            if componentwise_type is not None:
+                return componentwise_type
             if (
                 func_name in {"inverseSqrt", "inversesqrt", "roundEven"}
                 and args
@@ -13297,6 +13322,11 @@ class MetalCodeGen(
                         metal_type, expr.args
                     )
                 )
+                direct = self.metal_direct_narrow_float_conversion(
+                    func_name, expr.args, args
+                )
+                if direct is not None:
+                    return direct
                 rendered = f"{metal_type}({args})"
                 return (
                     self.metal_narrow_integer_conversion_expression(rendered, func_name)
@@ -19281,7 +19311,10 @@ class MetalCodeGen(
 
     def collect_unsized_resource_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             if name and self.is_unsized_resource_array_type(vtype):
@@ -19290,7 +19323,10 @@ class MetalCodeGen(
 
     def collect_fixed_resource_global_sizes(self, ast):
         global_arrays = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             size = self.fixed_resource_array_size(vtype)

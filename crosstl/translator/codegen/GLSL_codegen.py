@@ -102,6 +102,7 @@ from ..metadata_preconditions import (
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
+from ..semantics.helpers import float_to_integer_helper_names
 from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
@@ -654,6 +655,9 @@ from .workgroup_access_contracts import parse_workgroup_access_assertions
 
 # Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
 GLSL_SPIRV_GUARD = "#if defined(GL_SPIRV) || defined(VULKAN)\n"
+
+
+GLSL_FLOAT_TO_INTEGER_RULE_HELPERS = float_to_integer_helper_names()
 
 
 class OpenGLTemplateTypeError(ValueError):
@@ -41778,11 +41782,17 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         arguments = list(getattr(expression, "arguments", []) or [])
         name = self.function_call_name(expression)
-        if len(arguments) != 1 or name in self.function_return_types:
+        if len(arguments) != 1:
             return None
-        if self.glsl_constructor_type(name) is None:
+        if name in GLSL_FLOAT_TO_INTEGER_RULE_HELPERS:
+            # The ftoi_nan and convert_sat helpers replace int(x) and uint(x) of a float x.
+            target = self.glsl_value_type_info(self.function_return_types.get(name))
+        elif name in self.function_return_types:
             return None
-        target = self.glsl_value_type_info(name)
+        elif self.glsl_constructor_type(name) is None:
+            return None
+        else:
+            target = self.glsl_value_type_info(name)
         if target is None or target["family"] not in {"int", "uint"}:
             return None
         source = self.glsl_value_type_info(
@@ -50770,7 +50780,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_preserved_nonuniform_sampler_resources(self, ast, functions):
         global_samplers = set()
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = self.resource_node_name(node)
             if name and self.is_sampler_type(self.resource_node_type(node)):
                 global_samplers.add(name)
@@ -56229,7 +56242,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_unsized_sampled_texture_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             if name and self.is_unsized_sampled_texture_array_type(vtype):
@@ -56414,7 +56430,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_unsized_structured_buffer_globals(self, ast):
         globals_by_name = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             base_type, declared_size = self.structured_buffer_array_base_type(vtype)
@@ -56429,7 +56448,10 @@ complex64_t crossgl_complex64_mod_assign(
 
     def collect_fixed_resource_global_sizes(self, ast):
         global_arrays = {}
-        for node in getattr(ast, "global_variables", []) or []:
+        for node in [
+            *(getattr(ast, "global_variables", []) or []),
+            *collect_stage_local_variables(ast),
+        ]:
             name = getattr(node, "name", getattr(node, "variable_name", None))
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             size = self.fixed_resource_array_size(vtype)

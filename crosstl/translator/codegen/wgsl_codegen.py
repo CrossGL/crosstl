@@ -1050,7 +1050,9 @@ class WGSLCodeGen(
         self._builtin_option_specializations = (
             self.collect_builtin_option_specializations(ast)
         )
-        generic_functions = WGSLGenericFunctionSpecializer(self, helper_function_nodes)
+        generic_functions = WGSLGenericFunctionSpecializer(
+            self, helper_function_nodes, ast
+        )
         concrete_helper_function_nodes = [
             func
             for func in helper_function_nodes

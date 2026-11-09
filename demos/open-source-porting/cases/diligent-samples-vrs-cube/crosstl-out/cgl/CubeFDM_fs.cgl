@@ -1,3 +1,4 @@
+#pragma cgl_rules(wrap)
 #version 450 core
 #extension GL_EXT_fragment_invocation_density : require
 

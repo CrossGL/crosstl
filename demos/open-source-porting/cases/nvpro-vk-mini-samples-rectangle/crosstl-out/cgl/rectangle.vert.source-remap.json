@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 23,
-        "endOffset": 462,
+        "endLine": 24,
+        "endOffset": 486,
         "file": "crosstl-out/cgl/rectangle.vert.cgl",
-        "length": 462,
+        "length": 486,
         "line": 1,
         "offset": 0
       },

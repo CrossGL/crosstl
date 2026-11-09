@@ -15,7 +15,9 @@ The result now follows the Metal compiler (checked with ``xcrun metal -std=metal
   vector with a ``bfloat`` scalar and a ``bfloat`` vector with a ``half`` or ``float`` scalar (ill-formed);
 * vectors of different types, ``bool`` vectors, and ``%``, ``|``, ``&``, ``^`` on floating operands are untyped.
 
-Other operand types (structs, matrices, pointers) are typed only when all operands have the same type.
+A pointer plus or minus an integral offset has the pointer's type, wherever the pointer comes from (a member
+``self.dst``, a subscript, a call). Other operand types (structs, matrices) are typed only when all operands have
+the same type.
 """
 
 from __future__ import annotations
@@ -113,10 +115,51 @@ def _combine(preprocessor, left: str, right: str, operator: str) -> str | None:
     return left if _FLOATING_RANK[left_kind] > _FLOATING_RANK[right_kind] else right
 
 
+def _pointer_type(type_text: str) -> str | None:
+    """``type_text`` as a pointer value (``device T* const&`` is ``device T*``), or None for a non-pointer."""
+    text = re.sub(r"\s*&+\s*$", "", type_text)
+    text = re.sub(r"\*(?:\s*\b(?:const|volatile)\b)+\s*$", "*", text).strip()
+    return text if text.endswith("*") else None
+
+
+def _pointer_arithmetic_type(
+    preprocessor, operand_types: Sequence[str | None], operator: str
+) -> str | None:
+    """The type of ``p + n``, ``n + p`` or ``p - n``: the type of the pointer ``p`` ([expr.add]/4).
+
+    An offset added to a pointer has integral or unscoped enumeration type, because a pointer plus a pointer is
+    ill-formed, so an untyped ``n`` of ``+`` is still an offset (``self.dst + i * factor()``). ``p - q`` of two
+    pointers is a ``ptrdiff_t``, so every operand subtracted from a pointer must be typed as an integral scalar.
+    A typed non-integral offset, a second pointer and every other operator are untyped.
+    """
+    pointers = [
+        index
+        for index, operand in enumerate(operand_types)
+        if operand and _pointer_type(operand) is not None
+    ]
+    if operator not in {"+", "-"} or len(pointers) != 1:
+        return None
+    position = pointers[0]
+    if operator == "-" and position != 0:
+        return None
+    for index, operand in enumerate(operand_types):
+        if index == position:
+            continue
+        if not operand:
+            if operator == "-":
+                return None
+            continue
+        if _operand(preprocessor, operand) != ("integral", 1):
+            return None
+    return _pointer_type(operand_types[position])
+
+
 def arithmetic_result_type(
     preprocessor, operand_types: Sequence[str | None], operator: str
 ) -> str | None:
     """The type of ``a op b op c ...`` (left to right) for operands of the given types."""
+    if any(operand and _pointer_type(operand) for operand in operand_types):
+        return _pointer_arithmetic_type(preprocessor, operand_types, operator)
     if not operand_types or any(not operand for operand in operand_types):
         return None
     result = operand_types[0]
