@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- Rust output value-initializes the elements of an array of a plain enumeration that a brace list leaves out, as in `M arr[2] = {};` or `M arr[2] = { {} };`, to the variant whose discriminant is 0, as `M m = {};` is: `let arr: [M; 2] = [M::B, M::B];` for `enum M { A = 2, B = 0 }`, and `[M::B; 3]` for a left-out row of `M grid[2][3]`. An enumeration with no zero-valued variant, or whose variants carry data, is refused with `RustEnumEmptyBraceError` (`project.translate.rust-enum-empty-brace-unsupported`). It used to fill them with `Default::default()`, the first variant (`M::A`, whose value is 2), and a shader-scope array such as `M table[2] = {};` became a `static` that rustc rejects (E0015) (#4189).
 - HIP and OpenCL input read a parameter, cast or local declaration whose type a line break splits after its base type, a `*` or `&`, a postfix qualifier such as `restrict` or `const`, or `pipe`, as they read it on one line: `__global float`, a line break and `* in` imports as `@group(0) @binding(0) var<storage, read_write> in_: array<f32>`, and `float widen(unsigned`, a line break and `v)` as `f32 widen(u32 v)`. They used to raise `SyntaxError` (`Expected RPAREN, got STAR` for a parameter, `Unexpected token in expression` for a function or a cast) (#3753).
 
 ---
