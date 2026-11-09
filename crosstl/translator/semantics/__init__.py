@@ -113,6 +113,7 @@ from .matrix_spellings import (
     AmbiguousMatrixSpellingError,
     refuse_ambiguous_matrix_spellings,
 )
+from .member_placements import refuse_unplaced_member_offsets
 from .metal_math_spellings import lower_metal_math_spellings
 from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
@@ -508,6 +509,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
+    refuse_unplaced_member_offsets(program, report.target)
     mark_push_constant_layouts(program, report.target)
     hoist_constant_buffer_layouts(program, report.target)
     hoist_constant_reference_layouts(program, report.target)

@@ -110,6 +110,7 @@ from .generic_function_utils import (
 )
 from .generic_struct_utils import generic_struct_specialization_name
 from .image_access_contracts import (
+    PACKED_IMAGE_FORMAT_CHANNEL_COUNTS,
     collect_function_image_access_requirements,
     collect_function_parameter_names,
     image_access_diagnostic_name,
@@ -14232,6 +14233,9 @@ class VulkanSPIRVCodeGen(
             "rgba32f": "Rgba32f",
             "rgba32i": "Rgba32i",
             "rgba32ui": "Rgba32ui",
+            "rgb10_a2": "Rgb10A2",
+            "rgb10_a2ui": "Rgb10a2ui",
+            "r11f_g11f_b10f": "R11fG11fB10f",
         }
 
     def spirv_image_format_name(self, image_format: Optional[str]) -> Optional[str]:
@@ -14252,6 +14256,9 @@ class VulkanSPIRVCodeGen(
             return 4
 
         image_format = str(image_format).lower()
+        packed = PACKED_IMAGE_FORMAT_CHANNEL_COUNTS.get(image_format)
+        if packed is not None:
+            return packed
         if image_format.startswith("rgba"):
             return 4
         if image_format.startswith("rg"):

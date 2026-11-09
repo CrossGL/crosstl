@@ -134,9 +134,14 @@ def test_placed_push_constant_struct_with_nested_matrix_and_array_members(tmp_pa
     "members, body, message",
     [
         (
-            "float scale; vec3 v @offset(4);",
-            "outp[i] = pc.scale + pc.v.y;",
-            "not a multiple of its std430 alignment 16",
+            "float a; float b; vec3 v @offset(8);",
+            "outp[i] = pc.a + pc.b + pc.v.y;",
+            "improperly straddles a 16-byte boundary",
+        ),
+        (
+            "float a; vec2 v @offset(6);",
+            "outp[i] = pc.a + pc.v.y;",
+            "not a multiple of its scalar size 4",
         ),
         (
             "vec4 s @offset(16); float b @offset(20);",
@@ -203,12 +208,37 @@ def test_placed_uniform_struct_leaves_struct_used_elsewhere_undecorated(tmp_path
 
 def test_uniform_struct_refuses_offset_std140_cannot_place():
     with pytest.raises(
-        UnsupportedSPIRVFeatureError, match="not a multiple of its std140 alignment 16"
+        UnsupportedSPIRVFeatureError,
+        match="not a multiple of its std140 alignment 16.*improperly straddles",
     ):
         generate(
             program(
-                "struct Constants { float scale; vec3 v @offset(4); };",
+                "struct Constants { vec2 a; vec3 v @offset(8); };",
                 "ConstantBuffer<Constants> cb @binding(0);",
-                "outp[i] = cb.scale + cb.v.y;",
+                "outp[i] = cb.a.x + cb.v.y;",
             )
         )
+
+
+@pytest.mark.parametrize(
+    "declaration, variable, storage_class",
+    [
+        ("ConstantBuffer<Constants> pc @push_constant;", "pc", "PushConstant"),
+        ("ConstantBuffer<Constants> pc @binding(0);", "pc", "Uniform"),
+    ],
+)
+def test_struct_member_keeps_relaxed_vector_offset(
+    tmp_path, declaration, variable, storage_class
+):
+    # A vector at a multiple of its scalar that does not straddle a 16-byte boundary is a valid placement under
+    # Vulkan's relaxed block layout (Vulkan 1.3 section 15.6.4), as DXC lays out float s; float3 v;.
+    code = generate(
+        program(
+            "struct Constants { float scale; vec3 v @offset(4); vec2 w @offset(16); };",
+            declaration,
+            "outp[i] = pc.scale + pc.v.y + pc.w.x;",
+        )
+    )
+
+    assert block_offsets(code, variable, storage_class) == {0: 0, 1: 4, 2: 16}
+    spirv_val(tmp_path, code)

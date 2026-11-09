@@ -58301,6 +58301,9 @@ complex64_t crossgl_complex64_mod_assign(
             "rgba8ui",
             "rgba16ui",
             "rgba32ui",
+            "rgb10_a2",
+            "rgb10_a2ui",
+            "r11f_g11f_b10f",
         }:
             if explicit_format in {
                 "r8",
@@ -58320,6 +58323,8 @@ complex64_t crossgl_complex64_mod_assign(
                 "rgba16_snorm",
                 "rgba16f",
                 "rgba32f",
+                "rgb10_a2",
+                "r11f_g11f_b10f",
             }:
                 format_class = "r32f"
             elif explicit_format.endswith("ui"):
