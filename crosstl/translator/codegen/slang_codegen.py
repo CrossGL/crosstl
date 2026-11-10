@@ -116,10 +116,14 @@ from .generic_function_utils import (
 )
 from .generic_struct_utils import named_struct_constructor_arguments
 from .global_specialization_constants import split_global_specialization_constants
+from .glsl_buffer_block_arrays import (
+    glsl_buffer_array_elements,
+    glsl_buffer_block_indexed_access,
+    glsl_buffer_whole_array_reason,
+)
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
-    byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_block_node_type,
     glsl_buffer_compound_binary_operator,
@@ -12719,7 +12723,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         parent = self.glsl_buffer_block_array_access(
             object_expr
         ) or self.glsl_buffer_block_member_access(object_expr)
-        if parent is None or not parent.get("members"):
+        if parent is None or not parent.get("members") or parent.get("subarray"):
             return None
         member = parent["members"].get(member_name)
         if member is None:
@@ -12734,16 +12738,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         }
 
     def glsl_buffer_block_array_access(self, expr):
-        if not isinstance(expr, ArrayAccessNode):
-            return None
-        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
-        member = self.glsl_buffer_block_member_access(array_expr)
-        if member is None or not member.get("is_array"):
-            return None
-        index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
-        index = self.generate_expression(index_expr)
-        offset = byte_offset_expression(member["offset"], index, member["stride"])
-        return {**member, "offset": offset, "offset_expr": offset}
+        return glsl_buffer_block_indexed_access(self, expr)
 
     def slang_byteaddress_load_method(self, components):
         return "Load" if components == 1 else f"Load{components}"
@@ -12884,6 +12879,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 str(member.get("stride")),
                 str(member.get("runtime_array")),
             ]
+            if member.get("inner_arrays"):
+                fields.append(str(member["inner_arrays"]))
             parts.append(":".join(fields))
             for child_name, child in (member.get("members") or {}).items():
                 visit(f"{member_name}.{child_name}", child)
@@ -12926,11 +12923,10 @@ class SlangCodeGen(LoweringRefusalMixin):
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_target = f"{member_target}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_target = f"{member_target}{subscripts}"
                     if member.get("members"):
                         nested_lines = (
                             self.slang_byteaddress_aggregate_load_assignments(
@@ -13025,11 +13021,10 @@ class SlangCodeGen(LoweringRefusalMixin):
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_value = f"{member_value}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_value = f"{member_value}{subscripts}"
                     if member.get("members"):
                         nested_stores = self.slang_byteaddress_aggregate_store_members(
                             buffer_name, element_offset, element_value, field_access
@@ -13125,10 +13120,22 @@ class SlangCodeGen(LoweringRefusalMixin):
             f"Slang GLSL buffer block: {operation} {reason}", placeholder
         )
 
+    def slang_glsl_buffer_whole_array_refusal(self, access, *, indexed):
+        """Refuse reading or writing ``access`` as a whole array; the placeholder, or ``None``."""
+        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
+        if reason is None:
+            return None
+        return self.unsupported_glsl_buffer_block_call(
+            "array value", reason, access["type"]
+        )
+
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
         if access is None or access.get("runtime_array"):
             return None
+        refusal = self.slang_glsl_buffer_whole_array_refusal(access, indexed=False)
+        if refusal is not None:
+            return refusal
         if access.get("writeonly"):
             return self.unsupported_glsl_buffer_block_call(
                 "load", "requires readable buffer block resource", access["type"]
@@ -13143,6 +13150,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         access = self.glsl_buffer_block_array_access(expr)
         if access is None:
             return None
+        refusal = self.slang_glsl_buffer_whole_array_refusal(access, indexed=True)
+        if refusal is not None:
+            return refusal
         if access.get("writeonly"):
             return self.unsupported_glsl_buffer_block_call(
                 "load", "requires readable buffer block resource", access["type"]
@@ -13157,6 +13167,7 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def generate_glsl_buffer_block_store(self, target, value, op):
         access = self.glsl_buffer_block_array_access(target)
+        indexed = access is not None
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
@@ -13165,6 +13176,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         else:
             offset = access["offset_expr"]
 
+        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
+        if reason is not None:
+            return self.refuse_lowering(
+                f"Slang GLSL buffer block store: array value {reason}", ";"
+            )
         if access.get("readonly"):
             return self.refuse_lowering(
                 "Slang GLSL buffer block store: "
