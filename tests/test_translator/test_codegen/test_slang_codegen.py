@@ -12788,11 +12788,14 @@ def test_byte_address_vector_methods_and_readonly_stores_emit_slang():
     assert "ByteAddressBuffer rawBytes : register(t0);" in generated_code
     assert "RWByteAddressBuffer rawVectors : register(u0);" in generated_code
     assert "return asfloat(rawVectors.Load2(offset));" in generated_code
-    assert "return asfloat(rawVectors.Load3(offset));" in generated_code
+    assert "return asfloat(__crossgl_load3_uint(rawVectors, offset));" in generated_code
     assert "return asfloat(rawVectors.Load4(offset));" in generated_code
     assert "return asint(rawVectors.Load(offset));" in generated_code
     assert "rawVectors.Store2(offset, asuint(pair));" in generated_code
-    assert "rawVectors.Store3(offset + uint(16), asuint(normal));" in generated_code
+    assert (
+        "__crossgl_store3_uint(rawVectors, offset + uint(16), asuint(normal));"
+        in generated_code
+    )
     assert "rawVectors.Store4(offset + uint(32), asuint(color));" in generated_code
     assert (
         "Slang byte-address buffer: Store requires RWByteAddressBuffer receiver"
@@ -12945,11 +12948,14 @@ def test_byte_address_load_calls_validate_target_result_types():
     assert "uint scalar = rawInput.Load(offset);" in generated_code
     assert "uint helperScalar = rawInput.Load(offset + 4u);" in generated_code
     assert "uint2 pair = rawInput.Load2(offset + 8u);" in generated_code
-    assert "uint3 triple = rawRW.Load3(offset + 16u);" in generated_code
+    assert "uint3 triple = __crossgl_load3_uint(rawRW, offset + 16u);" in generated_code
     assert "uint4 quad = rawInput.Load4(offset + 32u);" in generated_code
     assert "float castScalar = asfloat(rawInput.Load(offset + 48u));" in generated_code
     assert "float2 castPair = asfloat(rawInput.Load2(offset + 52u));" in generated_code
-    assert "int3 signedTriple = asint(rawRW.Load3(offset + 60u));" in generated_code
+    assert (
+        "int3 signedTriple = asint(__crossgl_load3_uint(rawRW, offset + 60u));"
+        in generated_code
+    )
     assert "float invalidFloat = 0;" in generated_code
     assert (
         "Slang byte-address buffer: Load returns uint but target expects float"
@@ -24536,13 +24542,23 @@ def test_glsl_buffer_block_std140_matrices_and_fixed_arrays_lower_to_slang_offse
     assert "RWByteAddressBuffer data : register(u0);" in generated_code
     # The block holds columns; a Slang matrix constructor fills rows and m[i] is a row.
     assert (
-        "float3x3 transform = transpose(float3x3(asfloat(data.Load3(0)), "
-        "asfloat(data.Load3(16)), asfloat(data.Load3(32))));" in generated_code
+        "float3x3 transform = transpose(float3x3(asfloat(__crossgl_load3_uint(data, 0)), "
+        "asfloat(__crossgl_load3_uint(data, 16)), asfloat(__crossgl_load3_uint(data, 32))));"
+        in generated_code
     )
-    assert "data.Store3(0, asuint(transform._m00_m10_m20));" in generated_code
-    assert "data.Store3(16, asuint(transform._m01_m11_m21));" in generated_code
-    assert "data.Store3(32, asuint(transform._m02_m12_m22));" in generated_code
-    assert "float3 offset = asfloat(data.Load3(48));" in generated_code
+    assert (
+        "__crossgl_store3_uint(data, 0, asuint(transform._m00_m10_m20));"
+        in generated_code
+    )
+    assert (
+        "__crossgl_store3_uint(data, 16, asuint(transform._m01_m11_m21));"
+        in generated_code
+    )
+    assert (
+        "__crossgl_store3_uint(data, 32, asuint(transform._m02_m12_m22));"
+        in generated_code
+    )
+    assert "float3 offset = asfloat(__crossgl_load3_uint(data, 48));" in generated_code
     assert "data.Store(80, asuint(offset.x));" in generated_code
     assert "unsupported Slang GLSL buffer block" not in generated_code
 
@@ -24581,12 +24597,16 @@ def test_glsl_buffer_block_aggregates_and_block_arrays_emit_slang_offsets():
         ": register(u5, space2);" in generated_code
     )
     assert "Leaf __crossgl_load_rw_glsl_buffer_Leaf_" in generated_code
-    assert "result.normal = asfloat(buffer.Load3(offset));" in generated_code
+    assert (
+        "result.normal = asfloat(__crossgl_load3_uint(buffer, offset));"
+        in generated_code
+    )
     assert "result.weight = asfloat(buffer.Load((offset + 12)));" in generated_code
     assert "Leaf leaf = __crossgl_load_rw_glsl_buffer_Leaf_" in generated_code
     assert "(data[1], 0);" in generated_code
-    assert "data[0].Store3(32, asuint(__crossgl_aggregate_store_0.normal));" in (
-        generated_code
+    assert (
+        "__crossgl_store3_uint(data[0], 32, asuint(__crossgl_aggregate_store_0.normal));"
+        in (generated_code)
     )
     assert "data[0].Store(44, asuint(__crossgl_aggregate_store_0.weight));" in (
         generated_code
@@ -24624,8 +24644,8 @@ def test_glsl_buffer_block_scalar_layout_lowers_to_slang_byteaddress_offsets():
     ) in generated_code
     assert "float weight = asfloat(data.Load(12));" in generated_code
     assert "data.Store(12, asuint(weight));" in generated_code
-    assert "float3 normal = asfloat(data.Load3(28));" in generated_code
-    assert "data.Store3(16, asuint(normal));" in generated_code
+    assert "float3 normal = asfloat(__crossgl_load3_uint(data, 28));" in generated_code
+    assert "__crossgl_store3_uint(data, 16, asuint(normal));" in generated_code
     assert "unsupported Slang GLSL buffer block" not in generated_code
 
 
