@@ -65,6 +65,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .buffer_length import HlslBufferLength
 from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
@@ -158,6 +159,7 @@ from .push_constant_blocks import (
 )
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .slang_buffer_lengths import slang_glsl_buffer_block_length
 from .slang_byte_address_words import (
     SlangThreeComponentAccess,
     slang_byte_address_vector_call,
@@ -353,6 +355,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.slang_three_component_access = SlangThreeComponentAccess()
         self.slang_byteaddress_temp_variable_index = 0
         self.slang_mesh_payload_parameter_types = set()
+        self.slang_buffer_length = HlslBufferLength()
         self.slang_ray_payload_parameter_types = set()
         self.slang_callable_data_parameter_types = set()
         self.slang_hit_attribute_parameter_types = set()
@@ -630,6 +633,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.slang_three_component_access = SlangThreeComponentAccess()
             self.slang_byteaddress_temp_variable_index = 0
             self.slang_mesh_payload_parameter_types = set()
+            self.slang_buffer_length = HlslBufferLength()
             self.slang_ray_payload_parameter_types = set()
             self.slang_callable_data_parameter_types = set()
             self.slang_hit_attribute_parameter_types = set()
@@ -784,6 +788,7 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def emit_helper_functions(self):
         helpers = self.hlsl_matrix_orientation.helper_code()
+        helpers += self.slang_buffer_length.code()
         if self.helper_functions:
             helpers += "\n\n".join(self.helper_functions.values()) + "\n\n"
         return helpers
@@ -10051,6 +10056,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
                 if geometry_stream_call is not None:
                     return geometry_stream_call
+                block_length = slang_glsl_buffer_block_length(
+                    self, func_expr, node.args
+                )
+                if block_length is not None:
+                    return block_length
                 resource_member_call = self.generate_resource_member_call(
                     func_expr,
                     node.args,
