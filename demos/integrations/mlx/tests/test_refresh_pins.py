@@ -287,6 +287,48 @@ def test_ambiguous_sizes_are_reported_and_left_alone(tmp_path):
     assert sorted(report.unmatched) == sorted({OLD_A, OLD_B, OLD_C})
 
 
+def test_artifact_size_bytes_pairs_with_the_artifact_hash(tmp_path):
+    # Gap evidence pins a corrected artifact as artifact_sha256 with
+    # artifact_size_bytes, in JSON and in the Python mirror of the same record.
+    gaps = tmp_path / SCOPE / "expected-gaps.json"
+    harness = tmp_path / SCOPE / "tests" / "test_harness.py"
+    harness.parent.mkdir(parents=True)
+    gaps.write_text(
+        json.dumps(
+            {
+                "corrected": {
+                    "artifact_sha256": OLD_A,
+                    "artifact_size_bytes": 100,
+                    "output_element_count": 100,
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    harness.write_text(
+        "CORRECTED = {\n"
+        f'    "artifact_sha256": (\n        "{OLD_A}"\n    ),\n'
+        '    "artifact_size_bytes": 100,\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    pins, _ = refresh_pins.build_pins(_drift("out/k.hlsl", OLD_A, NEW_A, 100, 104))
+
+    report = refresh_pins.refresh(pins, tmp_path, (SCOPE,), write=True)
+
+    assert report.unresolved == []
+    corrected = json.loads(gaps.read_text())["corrected"]
+    assert corrected == {
+        "artifact_sha256": NEW_A,
+        "artifact_size_bytes": 104,
+        "output_element_count": 100,
+    }
+    assert f'"{NEW_A}"' in harness.read_text()
+    assert '"artifact_size_bytes": 104,' in harness.read_text()
+
+
 def test_command_line_reads_drift_and_writes_a_summary(tmp_path, capsys):
     paths = _tree(tmp_path)
     drift = tmp_path / "drift"

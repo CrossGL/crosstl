@@ -9,9 +9,10 @@ pins under ``demos/integrations/mlx``:
 
 * every drifted SHA-256, wherever it is recorded: contracts, tests, harness tables,
   ``expected-gaps.json`` and the README;
-* the size recorded with it: a ``sizeBytes``, ``size_bytes`` or
-  ``generatedSizeBytes`` field of the same object, a compact ``"<sha>:<size>"``
-  value, or an ``N-byte``/``N bytes`` phrase in the same Markdown paragraph;
+* the size recorded with it: a ``sizeBytes``, ``size_bytes``,
+  ``artifact_size_bytes`` or ``generatedSizeBytes`` field of the same object,
+  a compact ``"<sha>:<size>"`` value, or an ``N-byte``/``N bytes`` phrase in
+  the same Markdown paragraph;
 * contract summaries derived from the contract's ``entries``
   (``generatedSizeBytesTotal`` and ``generatedSizeRange``), together with their
   mirrors in the tests and the README that name the contract;
@@ -69,7 +70,7 @@ SELF_FILES = frozenset(
 DRIFT_PREFIX = "MLX-PIN-DRIFT "
 HASH_FIELD = "generatedHash"
 SIZE_FIELD = "generatedSizeBytes"
-SIZE_KEYS = ("sizeBytes", "size_bytes", "generatedSizeBytes")
+SIZE_KEYS = ("sizeBytes", "size_bytes", "artifact_size_bytes", "generatedSizeBytes")
 MATERIALIZATION_FIELD = "materializationSha256"
 COUNT_FIELD = "specializationCount"
 COUNT_KEYS = (COUNT_FIELD,)
