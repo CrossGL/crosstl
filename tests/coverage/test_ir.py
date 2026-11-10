@@ -1,5 +1,7 @@
-from tools.coverage import causes, ir, report
-from tools.coverage.model import Feature, Result, Signature, Type
+import pytest
+
+from tools.coverage import causes, ir, report, runner, validators
+from tools.coverage.model import Feature, Param, Result, Signature, Type
 
 FLOAT = Type("float")
 
@@ -152,3 +154,91 @@ def test_a_gap_names_its_member_as_the_feature_of_its_cause():
             ["cuda/atomicAdd_block", "cuda/atomicOr_block"],
         )
     ]
+
+
+def test_a_member_its_generator_fails_counts_when_spirv_expresses_it():
+    expm1 = "GLSL.std.450:Exp+OpFSub"
+    entry = ir.build(
+        [
+            row(
+                "rust",
+                (
+                    "Float::exp_m1",
+                    "wrong",
+                    {"semantic": expm1, "detail": "no std", "expressed": "spirv"},
+                ),
+                ("Float::ln_1p", "wrong", {"semantic": "OpY", "detail": "no std"}),
+            ),
+        ]
+    )
+    features = by_name(entry)
+    assert features[expm1]["outcome"] == "supported"
+    assert features[expm1]["via"] == ["spirv"]
+    assert "detail" not in features[expm1]
+    # Without the route the generator's failure is still the IR gap.
+    assert features["OpY"]["outcome"] == "wrong"
+    assert features["OpY"]["detail"] == "rust: no std"
+
+
+def test_the_report_keeps_the_route_of_a_result_that_is_not_supported():
+    feature = Feature(
+        "rust", "function", "Float::exp_m1", Signature(FLOAT, ()), crossgl="expm1"
+    )
+    result = Result(
+        feature,
+        "output",
+        "wrong",
+        "no std",
+        semantic="GLSL.std.450:Exp+OpFSub",
+        expressed="spirv",
+    )
+    data = report.loads(report.dumps(report.build([result], ["rust"], ["output"])))
+    rust, crossgl = data["backends"]
+    assert rust["features"][0]["expressed"] == "spirv"
+    assert rust["score"] == 0.0
+    assert crossgl["score"] == 100.0
+
+
+RUST_ABS = Feature(
+    "rust",
+    "function",
+    "Float::abs",
+    Signature(FLOAT, (Param(FLOAT),)),
+    group="float",
+    crossgl="abs",
+)
+
+
+@pytest.mark.skipif(
+    not validators.available("spirv"), reason="spirv-val is not installed"
+)
+def test_a_crossgl_probe_whose_spirv_has_the_native_id_is_expressed():
+    assert runner.expressed(RUST_ABS, "rust", "GLSL.std.450:FAbs") == "spirv"
+    # The translation's call must lower to the native probe's id, not merely validate.
+    assert runner.expressed(RUST_ABS, "rust", "GLSL.std.450:FSign") == ""
+
+
+def test_no_route_for_spirv_itself_constructs_or_features_without_an_id():
+    assert runner.expressed(RUST_ABS, "spirv", "GLSL.std.450:FAbs") == ""
+    assert runner.expressed(RUST_ABS, "rust", "") == ""
+    assert runner.expressed(RUST_ABS, "rust", "construct:control-flow/loop") == ""
+
+
+def test_only_output_results_that_are_not_supported_look_for_the_route(monkeypatch):
+    asked = []
+    monkeypatch.setattr(
+        runner,
+        "expressed",
+        lambda feature, language, semantic: asked.append(language) or "spirv",
+    )
+    for outcome in ("supported", "wrong", "refused", "untested"):
+        monkeypatch.setattr(
+            runner,
+            "run_output",
+            lambda feature, language, outcome=outcome: Result(
+                feature, "output", outcome, semantic="GLSL.std.450:FAbs"
+            ),
+        )
+        result = runner._job((RUST_ABS, "output", "rust"))
+        assert result.expressed == ("spirv" if outcome in ("wrong", "refused") else "")
+    assert asked == ["rust", "rust"]

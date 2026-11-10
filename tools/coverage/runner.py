@@ -15,7 +15,7 @@ from pathlib import Path
 from . import decorations, execution, probes, rustgpu, spirv_input, validators
 from .features.spirv import is_core
 from .model import ROUND_TRIPS, Feature, Result, kept_folder
-from .semantic import lower
+from .semantic import identify, instructions, lower
 
 OUTPUT_BACKENDS = {
     "cuda": "cuda",
@@ -302,6 +302,37 @@ def run_output(feature: Feature, language: str) -> Result:
     return result("supported")
 
 
+def expressed(feature: Feature, language: str, semantic: str) -> str:
+    """``"spirv"`` when CrossTL translates ``feature``'s CrossGL probe to SPIR-V that spirv-val accepts, that keeps the
+    feature's anchors (:mod:`.decorations`), and whose call lowers to ``semantic``, the id of the native probe: the
+    translation's instructions beyond those of the CrossGL baseline probe's translation (:func:`.semantic.identify`).
+    Empty otherwise, and for SPIR-V itself, constructs and features without an id.
+
+    It shows that CrossGL expresses a feature whose own language's generator fails, so the CrossGL IR row (:mod:`.ir`)
+    does not count that generator's bugs as IR gaps; the language's own row still does.
+    """
+    if (
+        language == "spirv"
+        or not semantic
+        or semantic.startswith("construct:")
+        or not validators.available("spirv")
+    ):
+        return ""
+    try:
+        probe = probes.build(feature, "crossgl")
+        baseline = probes.build(feature, "crossgl", baseline=True)
+        translated = translate(probe.source, probe.suffix, "vulkan", "cgl")
+        reference = translate(baseline.source, baseline.suffix, "vulkan", "cgl")
+    except (probes.ProbeError, Refused, Broken):
+        return ""
+    _keep(feature, "output", language, "translated-spirv.spvasm", translated)
+    if identify(instructions(translated), instructions(reference)) != semantic:
+        return ""
+    if not _validated("spirv", translated, feature.stage).accepted:
+        return ""
+    return "" if decorations.lost(feature, "spirv", translated) else "spirv"
+
+
 def _encodes_otherwise(feature: Feature) -> bool:
     """Whether CrossTL's SPIR-V generator writes a core instruction's operation without the instruction, as it
     writes ``isnan`` as a test of the exponent bits: its translation of the feature's own CrossGL probe lacks the
@@ -384,11 +415,13 @@ def _job(job: tuple[Feature, str, str]) -> Result:
             Path(_kept, kept_folder(language, direction, feature.name)),
             ignore_errors=True,
         )
-    return (
-        run_output(feature, language)
-        if direction == "output"
-        else run_input(feature, language)
-    )
+    if direction == "input":
+        return run_input(feature, language)
+    result = run_output(feature, language)
+    if result.outcome not in ("wrong", "refused"):
+        return result
+    route = expressed(feature, language, result.semantic)
+    return replace(result, expressed=route) if route else result
 
 
 def run(

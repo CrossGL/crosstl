@@ -220,7 +220,8 @@ def _summary(row: dict, repository: str) -> str:
         return (
             f"CrossGL can express {chart.percent(row)} of the semantic features measured across the "
             f"backends: {tally}. A semantic feature is expressible when the CrossGL probe of at least one backend "
-            "feature that lowers to it translates correctly to that backend. A gap here asks for an IR feature "
+            "feature that lowers to it translates correctly to that backend, or to valid SPIR-V that lowers to it. "
+            "A gap here asks for an IR feature "
             f"in `crosstl/translator`. {link} lists every feature."
         )
     tool = TOOLS.get(row["language"], row["language"])
