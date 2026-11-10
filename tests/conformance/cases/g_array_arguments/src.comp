@@ -1,0 +1,41 @@
+#version 450
+// Arrays passed by value to helper functions (GLSL 4.60 section 6.1.1) from a std140 uniform block and from
+// shared memory. std140 gives every array element and matrix column or row its own 16-byte slot: v at 0, w at 32,
+// the column-major mat2x3 m at 80 (32 bytes per matrix) and the row-major mat2 r at 144 (one row per slot).
+// bump writes its copy, which neither the uniform block nor the shared array may see.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Inp { float x[]; };
+layout(std430, binding = 1) writeonly buffer Outp { float o[]; };
+layout(std140, binding = 2) uniform Params {
+    vec4 v[2];
+    float w[3];
+    mat2x3 m[2];
+    layout(row_major) mat2 r[2];
+} params;
+shared float s[64];
+float pickv(vec4 a[2], uint i) { return a[i % 2u][i % 4u]; }
+float pickw(float a[3], uint i) { return a[i % 3u]; }
+float pickm(mat2x3 a[2], uint i) { return a[i % 2u][(i / 2u) % 2u][i % 3u]; }
+float pickr(mat2 a[2], uint i) { return a[i % 2u][(i / 2u) % 2u][(i / 4u) % 2u]; }
+float forward(vec4 a[2], uint i) { return pickv(a, i + 1u); }
+float bump(float a[3], uint i) {
+    a[i % 3u] += 100.0;
+    return a[i % 3u];
+}
+float bumps(float a[64], uint i) {
+    a[(i + 1u) % 64u] += 100.0;
+    return a[(i + 1u) % 64u];
+}
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    s[i] = 2.0 * x[i];
+    barrier();
+    o[8u * i + 0u] = pickv(params.v, i);
+    o[8u * i + 1u] = pickw(params.w, i);
+    o[8u * i + 2u] = pickm(params.m, i);
+    o[8u * i + 3u] = pickr(params.r, i);
+    o[8u * i + 4u] = forward(params.v, i);
+    o[8u * i + 5u] = bump(params.w, i) + params.w[i % 3u];
+    o[8u * i + 6u] = bumps(s, i) + s[(i + 1u) % 64u];
+    o[8u * i + 7u] = pickw(params.w, i + 1u) * x[i];
+}
