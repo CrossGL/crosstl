@@ -6623,8 +6623,7 @@ class WGSLCodeGen(
             if access:
                 modes[variable.name] = access
             elif "uniform" in {
-                str(q).lower()
-                for q in getattr(variable, "qualifiers", []) or []
+                str(q).lower() for q in getattr(variable, "qualifiers", []) or []
             } and self.is_unsupported_uniform_array_stride(
                 getattr(variable, "var_type", None),
                 variable_name=getattr(variable, "name", None),
