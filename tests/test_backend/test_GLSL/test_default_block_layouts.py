@@ -213,3 +213,27 @@ def test_storage_block_matrix_order_reaches_every_target(
         void main() { dst.o[0] = vec4(src.m[0], src.m[1][2]); dst.o[1] = vec4(src.m[2], 0.0); }
         """)
     assert re.search(stored_row_major, translate(str(source), backend=backend))
+
+
+@pytest.mark.parametrize("block", ["uniform", "buffer"])
+def test_block_matrix_order_skips_structs_without_matrices(block):
+    crossgl = generate_crossgl(
+        f"""
+        #version 450
+        layout(local_size_x = 1) in;
+        struct Plain {{ vec4 c; }};
+        struct Inner {{ mat2 n; }};
+        struct Outer {{ Inner inner; float f; }};
+        layout(row_major, binding = 0) {block} Src {{
+            Plain plain;
+            Outer outer;
+        }} src;
+        layout(std430, binding = 1) buffer Dst {{ vec4 o; }} dst;
+        void main() {{ dst.o = src.plain.c + vec4(src.outer.inner.n[0], src.outer.f, 0.0); }}
+        """,
+        "compute",
+    )
+    # A matrix order changes no scalar or vector, so a struct of them keeps none.
+    assert member_line(crossgl, "plain") == "Plain plain;"
+    # A struct reaches the matrices of the structs it nests.
+    assert member_line(crossgl, "outer") == "Outer outer @row_major;"

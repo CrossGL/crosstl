@@ -95,14 +95,26 @@ def _matrix_order(layout):
     return None
 
 
+def _holds_matrix(type_name, struct_member_types, seen=()):
+    if _MATRIX_TYPE.match(type_name):
+        return True
+    if type_name in seen:
+        return False
+    return any(
+        _holds_matrix(member_type, struct_member_types, seen + (type_name,))
+        for member_type in struct_member_types.get(type_name, ())
+    )
+
+
 def member_layouts_with_block_matrix_order(
-    block_layout, members, member_layouts, struct_type_names
+    block_layout, members, member_layouts, struct_member_types
 ):
     """The layouts of ``members`` with the block's ``row_major`` order on matrices that do not name an order.
 
     ``column_major`` is the order a member without one already has, so only ``row_major`` is placed. Members of a
-    struct type receive it too, since it reaches the matrices the struct holds; scalar, vector and opaque members are
-    left unchanged because a matrix order does not affect them.
+    struct type that holds a matrix, directly or through a nested struct, receive it too, since it reaches those
+    matrices; ``struct_member_types`` maps each struct name to its member type names. Scalar, vector and opaque
+    members, and structs of them, are left unchanged because a matrix order does not affect them.
     """
     order = _matrix_order(block_layout)
     if order is None or str(order).lower() != "row_major":
@@ -110,9 +122,7 @@ def member_layouts_with_block_matrix_order(
     result = []
     for member, member_layout in zip(members, member_layouts):
         member_type = str(getattr(member, "vtype", "") or "")
-        affected = bool(_MATRIX_TYPE.match(member_type)) or (
-            member_type in struct_type_names
-        )
+        affected = _holds_matrix(member_type, struct_member_types)
         if affected and _matrix_order(member_layout) is None:
             member_layout = dict(member_layout or {})
             member_layout[order] = None
