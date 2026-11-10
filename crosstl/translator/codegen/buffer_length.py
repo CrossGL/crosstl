@@ -36,6 +36,9 @@ COUNTED_BUFFERS = {
     "StructuredBuffer": 2,
     "RWStructuredBuffer": 2,
     "RasterizerOrderedStructuredBuffer": 2,
+    # Append and consume buffers report their structure count and stride as well.
+    "AppendStructuredBuffer": 2,
+    "ConsumeStructuredBuffer": 2,
     "Buffer": 1,
     "RWBuffer": 1,
     "RasterizerOrderedBuffer": 1,

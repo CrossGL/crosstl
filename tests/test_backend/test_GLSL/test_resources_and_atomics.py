@@ -637,8 +637,9 @@ def test_codegen_ssbo_length_uses_buffer_dimensions_contract():
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "valuesBlock.GetDimensions(len);" in hlsl
-    assert "layers[1].GetDimensions(layerLen);" in hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload.
+    assert "len = cgl_buffer_count(valuesBlock);" in hlsl
+    assert "layerLen = cgl_buffer_count(layers[1]);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "constant uint* valuesBlockLength [[buffer(3)]]" in metal
@@ -692,7 +693,7 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     assert "int value = buffers[dynamicIndex].Load(2);" in hlsl
     assert "buffers[dynamicIndex][3] = (value + 1);" in hlsl
     assert "buffers[dynamicIndex].Store(" not in hlsl
-    assert "buffers[dynamicIndex].GetDimensions(len);" in hlsl
+    assert "len = cgl_buffer_count(buffers[dynamicIndex]);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "int value = buffers[dynamicIndex][2];" in metal

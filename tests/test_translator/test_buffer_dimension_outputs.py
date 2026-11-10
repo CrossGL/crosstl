@@ -156,3 +156,38 @@ def test_slang_output_compiles_with_slangc(tmp_path):
             str(tmp_path / "shader.spv"),
         ]
     )
+
+
+APPEND_SHADER = """
+shader AppendBufferDimensions {
+    AppendStructuredBuffer<float> queue @binding(0);
+    RWStructuredBuffer<uint> counts @binding(1);
+
+    compute {
+        layout(local_size_x = 1) in;
+        void main(uint3 tid @ gl_GlobalInvocationID) {
+            uint queueCount;
+            uint queueStride;
+            buffer_dimensions(queue, queueCount);
+            buffer_dimensions(queue, queueCount, queueStride);
+            buffer_store(counts, 0u, queueCount + queueStride);
+        }
+    }
+}
+"""
+
+
+def test_hlsl_append_buffer_reports_count_and_stride(tmp_path):
+    code = _flat(_translate(tmp_path, APPEND_SHADER, "directx"))
+
+    # AppendStructuredBuffer::GetDimensions takes (out uint numStructs, out uint stride).
+    assert "queueCount = cgl_buffer_count(queue);" in code
+    assert "queue.GetDimensions(queueCount, queueStride);" in code
+    assert "queue.GetDimensions(queueCount);" not in code
+
+
+def test_hlsl_append_buffer_dimensions_compile_with_dxc(tmp_path):
+    dxc = _tool("dxc")
+    source = tmp_path / "append.hlsl"
+    source.write_text(_translate(tmp_path, APPEND_SHADER, "directx"), encoding="utf-8")
+    _run([dxc, "-T", "cs_6_0", "-E", "CSMain", str(source)])
