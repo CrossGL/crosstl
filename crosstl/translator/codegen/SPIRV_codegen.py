@@ -24092,7 +24092,10 @@ class VulkanSPIRVCodeGen(
                     requirements.get(function_name, {})
                 )
                 self.stage_local_inline_storage_buffer_functions.setdefault(key, [])
-                if self.function_requires_pointer_preserving_inlining(function_node):
+                if (
+                    self.function_requires_pointer_preserving_inlining(function_node)
+                    and getattr(function_node, "body", None) is not None
+                ):
                     self.stage_local_inline_storage_buffer_functions[key].append(
                         function_node
                     )
@@ -24233,6 +24236,9 @@ class VulkanSPIRVCodeGen(
             if not function_name:
                 continue
             if not self.function_requires_pointer_preserving_inlining(func):
+                continue
+            if getattr(func, "body", None) is None:
+                # A prototype has nothing to inline; its definition is the candidate.
                 continue
             functions.setdefault(function_name, []).append(func)
         return functions

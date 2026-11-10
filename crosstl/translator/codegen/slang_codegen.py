@@ -6405,10 +6405,48 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += f'[shader("{shader_stage}")]\n'
         function_name = entry_name or node.name
         precise_prefix = "precise " if self.slang_function_is_precise(node) else ""
-        result += (
+        signature = (
             f"{precise_prefix}{ret_type} {function_name}({params_str}){semantic_str}"
-            "\n{\n"
         )
+        if getattr(node, "body", None) is None and not shader_type:
+            # A prototype stays a forward declaration: an empty body would define the function a second time,
+            # which slangc rejects once the definition follows.
+            result += f"{signature};"
+        else:
+            result += self.emit_slang_function_body(
+                signature,
+                body_statements,
+                builtin_return_rewrite,
+                hull_output_rewrite,
+                fragment_output_rewrite,
+                local_alias_declarations,
+            )
+        self.variable_types = saved_variable_types
+        self.image_resource_types = saved_image_resource_types
+        self.image_resource_accesses = saved_image_resource_accesses
+        self.buffer_resource_types = saved_buffer_resource_types
+        self.buffer_resource_accesses = saved_buffer_resource_accesses
+        self.current_function_return_type = saved_function_return_type
+        self.current_shader_type = saved_shader_type
+        self.identifier_aliases = saved_identifier_aliases
+        self.current_hull_output_rewrite = saved_hull_output_rewrite
+        self.expression_temp_names = saved_expression_temp_names
+        self.current_generic_function_substitutions = (
+            saved_generic_function_substitutions
+        )
+        return result
+
+    def emit_slang_function_body(
+        self,
+        signature,
+        body_statements,
+        builtin_return_rewrite,
+        hull_output_rewrite,
+        fragment_output_rewrite,
+        local_alias_declarations,
+    ):
+        """The braced body of a function whose ``signature`` :meth:`generate_function` has built."""
+        result = f"{signature}\n{{\n"
         self.indent_level += 1
 
         if builtin_return_rewrite is not None and builtin_return_rewrite["mode"] in {
@@ -6457,21 +6495,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
 
         self.indent_level -= 1
-        result += "}"
-        self.variable_types = saved_variable_types
-        self.image_resource_types = saved_image_resource_types
-        self.image_resource_accesses = saved_image_resource_accesses
-        self.buffer_resource_types = saved_buffer_resource_types
-        self.buffer_resource_accesses = saved_buffer_resource_accesses
-        self.current_function_return_type = saved_function_return_type
-        self.current_shader_type = saved_shader_type
-        self.identifier_aliases = saved_identifier_aliases
-        self.current_hull_output_rewrite = saved_hull_output_rewrite
-        self.expression_temp_names = saved_expression_temp_names
-        self.current_generic_function_substitutions = (
-            saved_generic_function_substitutions
-        )
-        return result
+        return result + "}"
 
     def slang_workgroup_size_constants(self):
         constants = getattr(self, "workgroup_size_constants", None)
@@ -13526,11 +13550,20 @@ class SlangCodeGen(LoweringRefusalMixin):
         return helper_name
 
     def build_buffer_dimensions_helper(self, helper_name, buffer_type):
+        # A byte-address buffer reports its size in one argument; a structured buffer reports its element count
+        # and stride, and Slang has no overload that omits the stride.
+        if self.is_byte_address_buffer_resource_type(buffer_type):
+            query = "    uint count;\n    buffer.GetDimensions(count);\n"
+        else:
+            query = (
+                "    uint count;\n"
+                "    uint stride;\n"
+                "    buffer.GetDimensions(count, stride);\n"
+            )
         return (
             f"uint {helper_name}({buffer_type} buffer)\n"
             "{\n"
-            "    uint count;\n"
-            "    buffer.GetDimensions(count);\n"
+            f"{query}"
             "    return count;\n"
             "}"
         )
