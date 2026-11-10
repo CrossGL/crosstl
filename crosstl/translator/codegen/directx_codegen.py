@@ -118,6 +118,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..vulkan_memory_scope import VULKAN_MEMORY_SCOPE_QUALIFIERS, needs_device_coherence
 from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
 from . import (
     hlsl_byte_records,
@@ -53707,6 +53708,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "restrict",
             "volatile",
             "writeonly",
+            *VULKAN_MEMORY_SCOPE_QUALIFIERS,
         }
 
     def is_rasterizer_ordered_attribute(self, attr):
@@ -53935,6 +53937,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "coherent",
             "globallycoherent",
         }:
+            return "globallycoherent "
+        if needs_device_coherence(node):
+            # globallycoherent reaches the device, which holds every scope GL_KHR_memory_scope_semantics names.
             return "globallycoherent "
         return ""
 
