@@ -7,7 +7,8 @@ plans. Two generators wrote other declarations silently:
 
 * Metal declares a constant block, or the ``T`` of a ``ConstantBuffer<T>``, as a plain MSL struct in its natural
   layout (MSL 3.2 section 2.2) unless the block declares a layout it plans (``hlsl_cbuffer``, ``std140``, ``std430``
-  or ``scalar``). ``float scale; vec3 v @offset(32);`` then read ``v`` at byte 16.
+  or ``scalar``) or is a push-constant block, which it plans with the push-constant layout.
+  ``float scale; vec3 v @offset(32);`` then read ``v`` at byte 16.
 * Slang declares the ``T`` of a push-constant ``ConstantBuffer<T>`` with no offsets, so slangc lays it out by std430;
   and it writes the ``[[vk::offset(N)]]`` of a push-constant ``cbuffer`` member, which slangc moves to the member's
   std430 alignment when ``N`` is not a multiple of it.
@@ -325,9 +326,16 @@ def refuse_unplaced_member_offsets(program, target) -> None:
     structs = _Structs(program)
     if target in METAL_TARGETS:
         native = (METAL_LAYOUT,)
-        _check_blocks(structs, program, target, native, METAL_PLANNED_LAYOUTS, True)
+        # Metal output plans push-constant blocks and buffers with their push-constant layout, and the structs a
+        # planned block holds with their members' placements (metal_hlsl_resources).
+        _check_blocks(structs, program, target, native, METAL_PLANNED_LAYOUTS, False)
         _check_elements(
-            structs, program, target, native, lambda _variable, _declared: False
+            structs,
+            program,
+            target,
+            native,
+            lambda variable, declared: is_push_constant(variable)
+            or declared in METAL_PLANNED_LAYOUTS,
         )
     elif target in SLANG_TARGETS:
         _check_slang(structs, program, target)
