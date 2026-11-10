@@ -1937,7 +1937,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "0f7b86380245c72005f0f6ab19b1a27db33fe08b482b3af3ca6e60bba0ee9fd6",
+      "sha256": "af26a8bf618796ff7a9a726b680a1458c7bbd141f3a2efca1d9cea8d59220bd6",
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -2048,7 +2048,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 6122996,
+      "generated_size_bytes_total": 6123144,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "ss_Addfloat16",
@@ -2500,7 +2500,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.metal-roundtrip.json",
       "schema_version": 2,
-      "sha256": "ad5d535afbabc683cec812033f22bc5369ffec1fba60dd0631f6cced8ecfa72f",
+      "sha256": "b9b96c9188511e070d613257b298c6b0bf5216b2094d21bc8c96abd7ce7d0a6a",
       "size_bytes": 2600527,
       "entry_identity_fields": [
         "entryPoint",
@@ -2684,7 +2684,7 @@
       ]
     },
     "artifacts": {
-      "generated_size_bytes_total": 2209066,
+      "generated_size_bytes_total": 2209000,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "g1_copybool_bool_",
@@ -3624,7 +3624,7 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/copy.directx-translation.json",
       "schema_version": 2,
-      "sha256": "5cca4b13412af0802c8ebace0ff003d6babff105fb07e0131eff88b6ec5e7c8a",
+      "sha256": "5debddcbc4e122335379a6e2aa69d6f34b09e419ad603df5e0904c697fca9dc9",
       "size_bytes": 876806,
       "entry_identity_fields": [
         "entryPoint",
@@ -3778,7 +3778,7 @@
       "dispatch_metadata_shape_count": 8
     },
     "artifacts": {
-      "generated_size_bytes_total": 5852576,
+      "generated_size_bytes_total": 5888738,
       "generated_size_range": {
         "minimum": {
           "entryPoint": "s_copybool_bool_",

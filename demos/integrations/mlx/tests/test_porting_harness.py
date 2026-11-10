@@ -13027,7 +13027,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "0f7b86380245c72005f0f6ab19b1a27db33fe08b482b3af3ca6e60bba0ee9fd6",
+        "sha256": "af26a8bf618796ff7a9a726b680a1458c7bbd141f3a2efca1d9cea8d59220bd6",
         "entry_identity_fields": [
             "entryPoint",
             "shape",

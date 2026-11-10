@@ -3183,7 +3183,7 @@ The current harness verifies:
   uint64 to float16, float32 and complex64 entries now convert through exact
   64-bit helpers that keep 32 leading bits plus a sticky bit and round once,
   because WARP's native `float(uint64_t)` rounds twice and turned
-  2^63 + 2^39 + 1 into 2^63 (5,852,576 source bytes in total; all 80 compile
+  2^63 + 2^39 + 1 into 2^63 (5,888,738 source bytes in total; all 80 compile
   with warnings fatal). Compiler
   equivalence does not establish current-pin numerical execution or full
   upstream-suite parity;
