@@ -328,10 +328,10 @@ def test_opengl_rejects_hlsl_cbuffers_without_a_layout(tmp_path):
         translate(
             tmp_path,
             """
-            cbuffer Params : register(b0) { float grid[2][2]; float after; }
+            cbuffer Params : register(b0) { SamplerState grid; float after; }
             RWStructuredBuffer<float> o : register(u0);
             [numthreads(1, 1, 1)]
-            void main(uint3 id : SV_DispatchThreadID) { o[id.x] = grid[1][0] + after; }
+            void main(uint3 id : SV_DispatchThreadID) { o[id.x] = after; }
             """,
             "opengl",
         )

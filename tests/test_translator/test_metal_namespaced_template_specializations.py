@@ -164,8 +164,10 @@ def test_constrained_specializations_are_declared_in_the_reopened_namespace():
     tail = processed[processed.index("kernel void run") :]
     assert "::lib::quotient_float_float(in[gid], in[gid + 1])" in tail
     assert "::lib::quotient_float2_float2(pairs[gid], pairs[gid + 1])" in tail
-    assert re.search(r"namespace lib \{\s*inline common_t<float, float> ", tail)
-    assert re.search(r"namespace lib \{\s*inline common_t<float2, float2> ", tail)
+    # A concrete alias-template reference names its type ([temp.alias]/2):
+    # common_t<float, float> is decltype(float(0) + float(0)), float.
+    assert re.search(r"namespace lib \{\s*inline float quotient_float_float\(", tail)
+    assert re.search(r"namespace lib \{\s*inline float2 quotient_float2_float2\(", tail)
 
 
 @pytest.mark.parametrize("backend", TARGETS)

@@ -118,6 +118,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..vulkan_memory_scope import VULKAN_MEMORY_SCOPE_QUALIFIERS, needs_device_coherence
 from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
 from . import (
     hlsl_byte_records,
@@ -154,6 +155,7 @@ from .boolean_mix import boolean_mix_selector, hlsl_boolean_mix
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
 from .buffer_member_layout import (
+    MEMBER_LAYOUT_QUALIFIERS,
     member_explicit_offset,
     member_is_packed,
     member_is_row_major,
@@ -231,6 +233,7 @@ from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
 )
+from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -261,9 +264,15 @@ from .glsl_block_layout import (
     hlsl_packoffsets_for_block,
     member_explicit_alignment,
 )
+from .glsl_buffer_block_arrays import (
+    glsl_buffer_array_elements,
+    glsl_buffer_block_indexed_access,
+    glsl_buffer_indexed_value_type,
+    glsl_buffer_matrix_column_access,
+    glsl_buffer_whole_array_reason,
+)
 from .glsl_buffer_layout import (
     byte_offset_add,
-    byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_block_node_type,
     glsl_buffer_compound_binary_operator,
@@ -276,6 +285,7 @@ from .hlsl_alias_offsets import (
     hlsl_source_identifier_name,
 )
 from .hlsl_array_list_assignment import generate_hlsl_array_list_assignment
+from .hlsl_array_value_arguments import HlslArrayValueArguments
 from .hlsl_atomic_conditions import (
     condition_has_hlsl_atomic,
     generate_hlsl_atomic_condition_do_while,
@@ -315,6 +325,9 @@ from .hlsl_extension_builtins import (
     refuse_unmapped_hlsl_builtin,
 )
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
+from .hlsl_glsl_tessellation_interface import (
+    refuse_glsl_style_tessellation_interface,
+)
 from .hlsl_groupshared_atomics import (
     hlsl_groupshared_variable_names,
     is_hlsl_groupshared_atomic_target,
@@ -361,6 +374,7 @@ from .hlsl_storage_array_views import (
 )
 from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_struct_varyings import assign_struct_varying_semantic
+from .hlsl_tall_matrix_rows import HlslTallMatrixRows
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
     STORAGE_TEXEL_BUFFER_TYPES,
@@ -672,6 +686,7 @@ from .union_lanes import (
 )
 from .union_layout import UnionLayoutCollector, is_lane_kind
 from .workgroup_access_contracts import parse_workgroup_access_assertions
+from .workgroup_size_extents import fold_workgroup_size_extents
 
 # Specialization contract for a workgroup pointer parameter bound to ``nullptr``.
 # ``nullptr`` cannot name a groupshared array and real backings always have a
@@ -2579,7 +2594,9 @@ class HLSLCodeGen(
         self.implicit_member_texture_samplers = {}
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
+        self.hlsl_array_value_arguments = HlslArrayValueArguments(self)
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
+        self.hlsl_tall_matrix_rows = HlslTallMatrixRows(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
         self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
         self.hlsl_image_load_swizzle_extent = None
@@ -3663,6 +3680,7 @@ class HLSLCodeGen(
         )
 
     def render_program(self, ast, target_stage=None):
+        ast = fold_workgroup_size_extents(ast, "HLSL", self.refuse_lowering)
         region = codegen_dispatch_region(
             ast, self.hlsl_software_subgroup_stage_entries(ast, target_stage)
         )
@@ -4002,7 +4020,9 @@ class HLSLCodeGen(
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
+        self.hlsl_array_value_arguments = HlslArrayValueArguments(self)
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
+        self.hlsl_tall_matrix_rows = HlslTallMatrixRows(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
         self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
         self.hlsl_image_load_swizzle_extent = None
@@ -5540,7 +5560,9 @@ class HLSLCodeGen(
         code = (
             code[:storage_helper_offset]
             + self.hlsl_half_storage.declarations()
+            + self.hlsl_array_value_arguments.declarations()
             + self.generate_hlsl_struct_constructor_helpers()
+            + self.hlsl_tall_matrix_rows.declarations()
             + hlsl_ray_query_helpers(self)
             + code[storage_helper_offset:]
         )
@@ -14897,6 +14919,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"{'    ' * (indent + 1)}{variable} = "
                     f"uint({software_subgroup_entry_index});\n"
                 )
+            self.hlsl_tall_matrix_rows.mark_writes(body)
             if self.current_hlsl_tail_recursive_call_ids:
                 code += f"{'    ' * (indent + 1)}while (true) {{\n"
                 code += self.generate_statement_body(body, indent + 2)
@@ -16020,6 +16043,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "column_major",
             # MSL's packed vector storage is a buffer layout, which the layout planners read.
             "packed",
+            # A member's own offset and alignment, which the layout planners read as well.
+            *MEMBER_LAYOUT_QUALIFIERS,
             # Ray payload access qualifiers follow the semantic (hlsl_payload_access_qualifiers).
             *PAYLOAD_ACCESS_ATTRIBUTES,
             # MSL's half texture element type; the image format attribute gives HLSL its element type.
@@ -19061,7 +19086,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(expr, ArrayAccessNode):
             block_access = self.glsl_buffer_block_array_access(expr)
             if block_access is not None:
-                return block_access["type"]
+                return glsl_buffer_indexed_value_type(block_access)
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if not array_type:
                 array_type = self.unsupported_glsl_buffer_block_expression_type(
@@ -19412,6 +19437,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if overloaded_return_type is not None:
                 return overloaded_return_type
+            if getattr(
+                self, "collecting_generic_function_specializations", False
+            ) and concrete_overload_results_differ(
+                self,
+                func_name,
+                lambda generator, type_name: generator.map_type(type_name),
+            ):
+                # Generic deduction must not bind a type parameter to a guessed overload;
+                # it resolves the overload from the argument types it tracks.
+                return None
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
             if func_name in {"isnan", "isinf", "isfinite"} and len(args) == 1:
@@ -25669,6 +25704,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             target = node.left
             value = node.right
             op = getattr(node, "operator", "=")
+        self.hlsl_tall_matrix_rows.mark_chain(target)
 
         # HLSL *= on matrices is component-wise; CrossGL's is the product.
         matrix_product = matrix_product_assignment(
@@ -28211,6 +28247,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
             if mapped_op in {"++", "--"}:
+                self.hlsl_tall_matrix_rows.mark_chain(getattr(expr, "operand", None))
                 self.hlsl_private_pointer_word_view_write_error(
                     getattr(expr, "operand", None)
                 )
@@ -28374,6 +28411,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 index_expr,
                 index,
                 rendered_resource=array,
+            )
+            array = (
+                self.hlsl_tall_matrix_rows.row_read(array_expr, index_expr, array)
+                or array
             )
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
@@ -32201,12 +32242,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             return f"{buffer}.DecrementCounter()"
         if func_name == "buffer_dimensions" and len(args) >= 2:
-            buffer = self.generate_expression(args[0])
-            dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
-            return f"{buffer}.GetDimensions({dimensions})"
+            return self.hlsl_buffer_dimension_outputs(args[0], args[1:])
         if func_name == "buffer_dimensions" and len(args) == 1:
             return self.hlsl_buffer_element_count(args[0])
         return None
+
+    def hlsl_buffer_dimension_outputs(self, buffer_expr, output_exprs):
+        """``buffer_dimensions(b, out...)``: the outputs written through the GetDimensions ``b``'s resource declares."""
+        buffer = self.generate_expression(buffer_expr)
+        outputs = [self.generate_expression(arg) for arg in output_exprs]
+        resource_type = self.hlsl_buffer_helper_resource_type(buffer_expr)
+        resource_name = self.hlsl_resource_type_name(resource_type)
+        rendered = self.hlsl_buffer_length.dimension_outputs(
+            buffer,
+            resource_name,
+            self.map_type(resource_type) if resource_type else None,
+            outputs,
+        )
+        if rendered is None:
+            raise BufferLengthUnsupportedError(
+                "directx",
+                f"buffer_dimensions({buffer}, {', '.join(outputs)}) passes {len(outputs)} "
+                "output(s), and the GetDimensions of "
+                f"{resource_type or 'a non-buffer argument'} takes no such list",
+            )
+        return rendered
 
     def hlsl_buffer_element_count(self, buffer_expr):
         """``buffer_dimensions(b)``: the element count of a structured or typed buffer."""
@@ -40499,6 +40559,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         missing_attributes = sorted(required_attributes - present_attributes)
         if missing_attributes:
             raise DirectXStageAttributesMissingError(shader_type, missing_attributes)
+        refuse_glsl_style_tessellation_interface(self, func, shader_type, stage_node)
         self.validate_hlsl_tessellation_domain(func, shader_type)
         self.validate_hlsl_tessellation_output_topology(func, shader_type)
         self.validate_hlsl_tessellation_domain_topology(func, shader_type)
@@ -47697,9 +47758,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             validate_range_reference_argument(
                 self, arg, expected_type, reference_qualifiers
             )
+            writable_parameter = index < len(parameters) and bool(
+                set(self.hlsl_parameter_qualifiers(parameters[index])).intersection(
+                    {"out", "inout"}
+                )
+            )
             if isinstance(arg, ArrayLiteralNode) and self.hlsl_outer_array_type(
                 expected_type
             ):
+                array_value = (
+                    None
+                    if writable_parameter
+                    else self.hlsl_array_value_arguments.argument(arg, expected_type)
+                )
+                if array_value is not None:
+                    rendered_args.append(array_value)
+                    continue
                 self.hlsl_fixed_array_aggregate_initializer(arg, expected_type)
                 self.hlsl_aggregate_error(
                     arg,
@@ -47723,6 +47797,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 # Value conversion would turn a writable argument into a temporary.
                 # Capture the location for both copy-in and copy-out, including
                 # aggregate receivers and indices changed inside the callee.
+                if self.hlsl_array_value_arguments.writable_lowered_value(
+                    arg, expected_type
+                ):
+                    rendered_args.append("")
+                    continue
                 byte = self.hlsl_byte_integer_shape(expected_type) is not None
                 assignments, arg = self.hlsl_stabilize_inout_lvalue(
                     call_node or arg,
@@ -47738,10 +47817,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     ),
                 )
                 argument_assignments.extend(assignments)
+                self.hlsl_tall_matrix_rows.mark_chain(arg)
                 rendered_args.append(self.generate_expression_with_expected(arg, None))
             else:
+                array_value = self.hlsl_array_value_arguments.argument(
+                    arg, expected_type
+                )
                 rendered_args.append(
-                    self.generate_expression_with_expected(arg, expected_type)
+                    array_value
+                    if array_value is not None
+                    else self.generate_expression_with_expected(arg, expected_type)
                 )
         return (
             self.generate_call_arguments_from_rendered(
@@ -52124,6 +52209,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for index, (field_name, field_type) in enumerate(fields):
             if index < len(positional_args):
                 argument = positional_args[index]
+                array_value = self.hlsl_array_value_arguments.argument(
+                    argument, field_type
+                )
+                if array_value is not None:
+                    rendered_args.append(array_value)
+                    continue
                 if isinstance(
                     argument, ArrayLiteralNode
                 ) and self.hlsl_outer_array_type(field_type):
@@ -53645,7 +53736,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return {
             image_format: image_format_vector_type(image_format)
             for image_format in supported_image_formats()
-            if image_format_channel_count(image_format) in {2, 4}
+            if image_format_channel_count(image_format) in {2, 3, 4}
         }
 
     def attribute_value_to_string(self, value):
@@ -53687,6 +53778,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "restrict",
             "volatile",
             "writeonly",
+            *VULKAN_MEMORY_SCOPE_QUALIFIERS,
         }
 
     def is_rasterizer_ordered_attribute(self, attr):
@@ -53915,6 +54007,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "coherent",
             "globallycoherent",
         }:
+            return "globallycoherent "
+        if needs_device_coherence(node):
+            # globallycoherent reaches the device, which holds every scope GL_KHR_memory_scope_semantics names.
             return "globallycoherent "
         return ""
 
@@ -54750,7 +54845,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parent = self.glsl_buffer_block_array_access(
             object_expr
         ) or self.glsl_buffer_block_member_access(object_expr)
-        if parent is None or not parent.get("members"):
+        if parent is None or not parent.get("members") or parent.get("subarray"):
             return None
         member_name = getattr(expr, "member", None)
         member = parent["members"].get(member_name)
@@ -54765,16 +54860,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
 
     def glsl_buffer_block_array_access(self, expr):
-        if not isinstance(expr, ArrayAccessNode):
-            return None
-        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
-        member = self.glsl_buffer_block_member_access(array_expr)
-        if member is None or not member.get("is_array"):
-            return None
-        index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
-        index = self.generate_expression(index_expr)
-        offset = byte_offset_expression(member["offset"], index, member["stride"])
-        return {**member, "offset": offset, "offset_expr": offset}
+        return glsl_buffer_block_indexed_access(self, expr)
 
     def hlsl_byteaddress_load_method(self, components):
         return "Load" if components == 1 else f"Load{components}"
@@ -54911,6 +54997,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 str(member.get("stride")),
                 str(member.get("runtime_array")),
             ]
+            if member.get("inner_arrays"):
+                fields.append(str(member["inner_arrays"]))
             parts.append(":".join(fields))
             for child_name, child in (member.get("members") or {}).items():
                 visit(f"{member_name}.{child_name}", child)
@@ -54952,11 +55040,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_target = f"{member_target}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_target = f"{member_target}{subscripts}"
                     if member.get("members"):
                         nested_lines = self.hlsl_byteaddress_aggregate_load_assignments(
                             element_target,
@@ -55049,11 +55136,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_value = f"{member_value}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_value = f"{member_value}{subscripts}"
                     if member.get("members"):
                         nested_stores = self.hlsl_byteaddress_aggregate_store_members(
                             buffer_name, element_offset, element_value, field_access
@@ -55138,10 +55224,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             f"{access['component_type']} buffer members",
         )
 
+    def hlsl_glsl_buffer_whole_array_check(self, access, *, indexed):
+        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
+        if reason is not None:
+            raise BufferBlockUnsupportedError("directx", "array value", reason)
+
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
         if access is None or access.get("runtime_array"):
             return None
+        self.hlsl_glsl_buffer_whole_array_check(access, indexed=False)
         if access.get("members"):
             return self.hlsl_byteaddress_aggregate_load(
                 access["buffer"], access["offset"], access
@@ -55152,6 +55244,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         access = self.glsl_buffer_block_array_access(expr)
         if access is None:
             return None
+        self.hlsl_glsl_buffer_whole_array_check(access, indexed=True)
         if access.get("members"):
             return self.hlsl_byteaddress_aggregate_load(
                 access["buffer"], access["offset_expr"], access
@@ -55161,13 +55254,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def generate_glsl_buffer_block_store(self, target, value, op):
-        access = self.glsl_buffer_block_array_access(target)
+        access = self.glsl_buffer_block_array_access(
+            target
+        ) or glsl_buffer_matrix_column_access(self, target)
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
                 return buffer_component_store(self, target, value, op)
+            self.hlsl_glsl_buffer_whole_array_check(access, indexed=False)
             offset = access["offset"]
         else:
+            self.hlsl_glsl_buffer_whole_array_check(access, indexed=True)
             offset = access["offset_expr"]
 
         if access.get("readonly"):

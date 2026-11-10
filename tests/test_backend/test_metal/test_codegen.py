@@ -7508,7 +7508,9 @@ def test_codegen_rejects_unresolved_function_local_struct_dependency():
     diagnostic = exc_info.value
     assert diagnostic.function_name == "prepare"
     assert diagnostic.type_name == "LocalValue"
-    assert diagnostic.unresolved_dependencies == ("Element",)
+    # ``Element`` is a plain synonym of the template parameter, so the
+    # dependency is reported as the parameter the struct actually needs.
+    assert diagnostic.unresolved_dependencies == ("T",)
     assert diagnostic.source_location is not None
 
 

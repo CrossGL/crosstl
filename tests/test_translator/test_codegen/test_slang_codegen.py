@@ -11909,7 +11909,10 @@ def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
     )
     assert "Particle particle = particlesIn.Load(tid.x);" in generated_code
     assert "float4 vectorValue = vectors.Load(0u);" in generated_code
-    assert "particlesOut.GetDimensions(len);" in generated_code
+    assert (
+        "len = cgl_bufferDimensions_RWStructuredBuffer_Particle(particlesOut);"
+        in generated_code
+    )
     assert "particlesOut[tid.x] = particle;" in generated_code
     assert "values[1][0u] = particle.mass;" in generated_code
     assert "buffer_load(" not in generated_code
@@ -12122,7 +12125,7 @@ def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
         ": register(t4);" in generated_code
     )
     assert (
-        "[[vk::binding(5, 0)]] RWStructuredBuffer<float> writeOnlyValues "
+        "[[vk::binding(5, 0)]] writeonly RWStructuredBuffer<float> writeOnlyValues "
         ": register(u5);" in generated_code
     )
     assert (
@@ -12134,7 +12137,7 @@ def test_structured_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics():
         ": register(t7);" in generated_code
     )
     assert (
-        "[[vk::binding(8, 0)]] RWStructuredBuffer<float> attrWriteOnly "
+        "[[vk::binding(8, 0)]] writeonly RWStructuredBuffer<float> attrWriteOnly "
         ": register(u8);" in generated_code
     )
     assert "float blockedLoad = 0;" in generated_code
@@ -12785,11 +12788,14 @@ def test_byte_address_vector_methods_and_readonly_stores_emit_slang():
     assert "ByteAddressBuffer rawBytes : register(t0);" in generated_code
     assert "RWByteAddressBuffer rawVectors : register(u0);" in generated_code
     assert "return asfloat(rawVectors.Load2(offset));" in generated_code
-    assert "return asfloat(rawVectors.Load3(offset));" in generated_code
+    assert "return asfloat(__crossgl_load3_uint(rawVectors, offset));" in generated_code
     assert "return asfloat(rawVectors.Load4(offset));" in generated_code
     assert "return asint(rawVectors.Load(offset));" in generated_code
     assert "rawVectors.Store2(offset, asuint(pair));" in generated_code
-    assert "rawVectors.Store3(offset + uint(16), asuint(normal));" in generated_code
+    assert (
+        "__crossgl_store3_uint(rawVectors, offset + uint(16), asuint(normal));"
+        in generated_code
+    )
     assert "rawVectors.Store4(offset + uint(32), asuint(color));" in generated_code
     assert (
         "Slang byte-address buffer: Store requires RWByteAddressBuffer receiver"
@@ -12847,7 +12853,7 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
         ": register(t9);" in generated_code
     )
     assert (
-        "[[vk::binding(10, 0)]] RWByteAddressBuffer writeOnlyRaw "
+        "[[vk::binding(10, 0)]] writeonly RWByteAddressBuffer writeOnlyRaw "
         ": register(u10);" in generated_code
     )
     assert (
@@ -12859,7 +12865,7 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
         ": register(t12);" in generated_code
     )
     assert (
-        "[[vk::binding(13, 0)]] RWByteAddressBuffer attrWriteOnlyRaw "
+        "[[vk::binding(13, 0)]] writeonly RWByteAddressBuffer attrWriteOnlyRaw "
         ": register(u13);" in generated_code
     )
     assert "uint blockedLoad = 0u;" in generated_code
@@ -12942,11 +12948,14 @@ def test_byte_address_load_calls_validate_target_result_types():
     assert "uint scalar = rawInput.Load(offset);" in generated_code
     assert "uint helperScalar = rawInput.Load(offset + 4u);" in generated_code
     assert "uint2 pair = rawInput.Load2(offset + 8u);" in generated_code
-    assert "uint3 triple = rawRW.Load3(offset + 16u);" in generated_code
+    assert "uint3 triple = __crossgl_load3_uint(rawRW, offset + 16u);" in generated_code
     assert "uint4 quad = rawInput.Load4(offset + 32u);" in generated_code
     assert "float castScalar = asfloat(rawInput.Load(offset + 48u));" in generated_code
     assert "float2 castPair = asfloat(rawInput.Load2(offset + 52u));" in generated_code
-    assert "int3 signedTriple = asint(rawRW.Load3(offset + 60u));" in generated_code
+    assert (
+        "int3 signedTriple = asint(__crossgl_load3_uint(rawRW, offset + 60u));"
+        in generated_code
+    )
     assert "float invalidFloat = 0;" in generated_code
     assert (
         "Slang byte-address buffer: Load returns uint but target expects float"
@@ -13145,7 +13154,7 @@ def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
         ": register(t22);" in generated_code
     )
     assert (
-        "[[vk::binding(23, 0)]] RWByteAddressBuffer attrWriteOnlyRaw "
+        "[[vk::binding(23, 0)]] writeonly RWByteAddressBuffer attrWriteOnlyRaw "
         ": register(u23);" in generated_code
     )
     assert "rawOutput.InterlockedAdd(offset, value, oldValue);" in generated_code
@@ -21288,7 +21297,7 @@ def test_image_load_store_invalid_slang_calls_emit_diagnostics():
     assert "msImage[pixel, boolSample]" not in generated_code
 
 
-def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
+def test_resource_memory_qualifiers_emit_slang_modifiers():
     code = """
     shader SlangResourceMemoryQualifiers {
         uimage2D coherentCounters @r32ui @coherent;
@@ -21315,12 +21324,12 @@ def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
         "globalCounters : register(u1);" in generated_code
     )
     assert (
-        '[[vk::binding(2, 0)]] [format("r32ui")] RWTexture2D<uint> volatileCounters '
-        ": register(u2);" in generated_code
+        '[[vk::binding(2, 0)]] [format("r32ui")] volatile RWTexture2D<uint> '
+        "volatileCounters : register(u2);" in generated_code
     )
     assert (
-        '[[vk::binding(3, 0)]] [format("r32ui")] RWTexture2D<uint> restrictCounters '
-        ": register(u3);" in generated_code
+        '[[vk::binding(3, 0)]] [format("r32ui")] restrict RWTexture2D<uint> '
+        "restrictCounters : register(u3);" in generated_code
     )
     assert (
         "[[vk::binding(4, 0)]] globallycoherent RWStructuredBuffer<uint> "
@@ -21330,8 +21339,6 @@ def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
         "[[vk::binding(5, 0)]] globallycoherent RWByteAddressBuffer "
         "globalRaw : register(u5);" in generated_code
     )
-    assert "volatile RWTexture2D" not in generated_code
-    assert "restrict RWTexture2D" not in generated_code
     assert ": coherent" not in generated_code
     assert ": globallycoherent" not in generated_code
     assert "@coherent" not in generated_code
@@ -21340,7 +21347,8 @@ def test_resource_memory_qualifiers_emit_slang_globalcoherent_only():
     assert "@restrict" not in generated_code
 
 
-def test_resource_memory_qualifiers_apply_to_slang_parameters():
+def test_resource_memory_qualifiers_on_slang_parameters_refuse_coherence_and_volatility():
+    # slangc allows no coherent or volatile parameter (E31201); restrict only promises how the resource is used.
     code = """
     shader SlangResourceMemoryQualifierParameters {
         void update(
@@ -21358,20 +21366,27 @@ def test_resource_memory_qualifiers_apply_to_slang_parameters():
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
+    refused = generate_refused_code(parse_code(tokenize_code(code)))
 
-    assert "globallycoherent RWStructuredBuffer<uint> values" in generated_code
-    assert "globallycoherent RWTexture2D<uint> counters" in generated_code
-    assert "RWByteAddressBuffer volatileRaw" in generated_code
-    assert "RWStructuredBuffer<uint> restrictValues" in generated_code
-    assert "buffer_load(values" not in generated_code
-    assert "values.Load(0u)" in generated_code
-    assert "volatile RWByteAddressBuffer" not in generated_code
-    assert "restrict RWStructuredBuffer" not in generated_code
-    assert "@coherent" not in generated_code
-    assert "@globallycoherent" not in generated_code
-    assert "@volatile" not in generated_code
-    assert "@restrict" not in generated_code
+    assert len(refused.reasons) == 3
+    for name, qualifier in (
+        ("values", "coherent"),
+        ("counters", "coherent"),
+        ("volatileRaw", "volatile"),
+    ):
+        assert any(
+            f"resource parameter '{name}' is {qualifier}: slangc allows no coherent or "
+            "volatile parameter (E31201)" in reason
+            for reason in refused.reasons
+        )
+    assert not any("restrictValues" in reason for reason in refused.reasons)
+    assert "RWStructuredBuffer<uint> restrictValues" in refused.code
+    assert "restrict RWStructuredBuffer" not in refused.code
+    assert "values.Load(0u)" in refused.code
+    assert "@coherent" not in refused.code
+    assert "@globallycoherent" not in refused.code
+    assert "@volatile" not in refused.code
+    assert "@restrict" not in refused.code
 
 
 def test_explicit_image_formats_emit_slang_storage_element_types():
@@ -24453,7 +24468,7 @@ def test_glsl_buffer_array_declarations_lower_to_slang_resources():
         ": register(t2);" in generated_code
     )
     assert (
-        "[[vk::binding(3, 0)]] RWStructuredBuffer<float> outValues "
+        "[[vk::binding(3, 0)]] writeonly RWStructuredBuffer<float> outValues "
         ": register(u3);" in generated_code
     )
     assert "float value = values.Load(0u);" in generated_code
@@ -24525,14 +24540,25 @@ def test_glsl_buffer_block_std140_matrices_and_fixed_arrays_lower_to_slang_offse
 
     assert "struct TransformBlock" not in generated_code
     assert "RWByteAddressBuffer data : register(u0);" in generated_code
+    # The block holds columns; a Slang matrix constructor fills rows and m[i] is a row.
     assert (
-        "float3x3 transform = float3x3(asfloat(data.Load3(0)), "
-        "asfloat(data.Load3(16)), asfloat(data.Load3(32)));" in generated_code
+        "float3x3 transform = transpose(float3x3(asfloat(__crossgl_load3_uint(data, 0)), "
+        "asfloat(__crossgl_load3_uint(data, 16)), asfloat(__crossgl_load3_uint(data, 32))));"
+        in generated_code
     )
-    assert "data.Store3(0, asuint(transform[0]));" in generated_code
-    assert "data.Store3(16, asuint(transform[1]));" in generated_code
-    assert "data.Store3(32, asuint(transform[2]));" in generated_code
-    assert "float3 offset = asfloat(data.Load3(48));" in generated_code
+    assert (
+        "__crossgl_store3_uint(data, 0, asuint(transform._m00_m10_m20));"
+        in generated_code
+    )
+    assert (
+        "__crossgl_store3_uint(data, 16, asuint(transform._m01_m11_m21));"
+        in generated_code
+    )
+    assert (
+        "__crossgl_store3_uint(data, 32, asuint(transform._m02_m12_m22));"
+        in generated_code
+    )
+    assert "float3 offset = asfloat(__crossgl_load3_uint(data, 48));" in generated_code
     assert "data.Store(80, asuint(offset.x));" in generated_code
     assert "unsupported Slang GLSL buffer block" not in generated_code
 
@@ -24571,12 +24597,16 @@ def test_glsl_buffer_block_aggregates_and_block_arrays_emit_slang_offsets():
         ": register(u5, space2);" in generated_code
     )
     assert "Leaf __crossgl_load_rw_glsl_buffer_Leaf_" in generated_code
-    assert "result.normal = asfloat(buffer.Load3(offset));" in generated_code
+    assert (
+        "result.normal = asfloat(__crossgl_load3_uint(buffer, offset));"
+        in generated_code
+    )
     assert "result.weight = asfloat(buffer.Load((offset + 12)));" in generated_code
     assert "Leaf leaf = __crossgl_load_rw_glsl_buffer_Leaf_" in generated_code
     assert "(data[1], 0);" in generated_code
-    assert "data[0].Store3(32, asuint(__crossgl_aggregate_store_0.normal));" in (
-        generated_code
+    assert (
+        "__crossgl_store3_uint(data[0], 32, asuint(__crossgl_aggregate_store_0.normal));"
+        in (generated_code)
     )
     assert "data[0].Store(44, asuint(__crossgl_aggregate_store_0.weight));" in (
         generated_code
@@ -24614,8 +24644,8 @@ def test_glsl_buffer_block_scalar_layout_lowers_to_slang_byteaddress_offsets():
     ) in generated_code
     assert "float weight = asfloat(data.Load(12));" in generated_code
     assert "data.Store(12, asuint(weight));" in generated_code
-    assert "float3 normal = asfloat(data.Load3(28));" in generated_code
-    assert "data.Store3(16, asuint(normal));" in generated_code
+    assert "float3 normal = asfloat(__crossgl_load3_uint(data, 28));" in generated_code
+    assert "__crossgl_store3_uint(data, 16, asuint(normal));" in generated_code
     assert "unsupported Slang GLSL buffer block" not in generated_code
 
 
@@ -24677,7 +24707,9 @@ def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang():
     generated_code = refused.code
 
     assert "ByteAddressBuffer readOnlyData : register(t0);" in generated_code
-    assert "RWByteAddressBuffer writeOnlyData : register(u0);" in generated_code
+    assert (
+        "writeonly RWByteAddressBuffer writeOnlyData : register(u0);" in generated_code
+    )
     assert "RWByteAddressBuffer readWriteData : register(u1);" in generated_code
     assert "uint blockedRead = 0u;" in generated_code
     assert (
@@ -25158,6 +25190,61 @@ def test_bare_block_is_emitted_with_its_own_scope():
     ) in body
     assert "        {\n            r += x;\n        }\n" in body
     assert "    outp[i] = r * 100.0 + x;" in body
+
+
+def test_slang_nonuniform_index_uses_non_uniform_resource_index():
+    """Slang spells the qualifier NonUniformResourceIndex, as HLSL does (#3923)."""
+    code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[2];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[i]) & 1;
+                outp[i] = textureLod(tex[nonuniformEXT(k)], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "tex[NonUniformResourceIndex(k)]" in generated_code
+    assert ".SampleLevel(float2(fin[i], 0.5), 0.0).x;" in generated_code
+    assert "nonuniformEXT" not in generated_code
+
+    hlsl_spelling = code.replace("nonuniformEXT(k)", "NonUniformResourceIndex(k)")
+    generated_code = generate_code(parse_code(tokenize_code(hlsl_spelling)))
+
+    assert "tex[NonUniformResourceIndex(k)]" in generated_code
+    assert "nonuniformEXT" not in generated_code
+
+
+def test_slang_keeps_user_nonuniform_ext_function():
+    code = """
+    shader UserNonuniform {
+        int nonuniformEXT(int x) {
+            return x + 1;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[2];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[i]) & 1;
+                outp[i] = textureLod(tex[nonuniformEXT(k)], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "tex[nonuniformEXT(k)]" in generated_code
+    assert "NonUniformResourceIndex" not in generated_code
 
 
 if __name__ == "__main__":

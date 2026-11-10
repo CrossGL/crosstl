@@ -1,3 +1,4 @@
+#pragma cgl_rules(ftoi_nan)
 shader main {
 
     // Structs

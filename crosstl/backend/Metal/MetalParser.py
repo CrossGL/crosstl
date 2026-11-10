@@ -4,11 +4,17 @@ import re
 import sys
 
 from ..switch_clauses import record_default_position
+from .declared_template_primaries import retain_declared_template_primaries
+from .explicit_entry_instantiations import (
+    instantiated_entry_name,
+    refuse_unmaterialized_entry_instantiations,
+)
 from .floating_point import reject_contraction_tokens
 from .local_aggregate_declarators import (
     split_block_aggregate_declaration,
     unnamed_aggregate_name,
 )
+from .member_enums import is_anonymous_member_enum_start, parse_anonymous_member_enum
 from .MetalAst import *
 from .MetalLexer import *
 from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
@@ -159,7 +165,15 @@ RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
-KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL", "RESTRICT"}
+KEYWORD_IDENTIFIER_TOKENS = {
+    "BUFFER",
+    "SAMPLER",
+    "METAL",
+    "RESTRICT",
+    "READ",
+    "WRITE",
+    "READ_WRITE",
+}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 GNU_EXTENSION_PREFIXES = {"__extension__"}
 STRUCT_METHOD_PREFIXES = {"virtual"}
@@ -334,6 +348,7 @@ class MetalParser:
         self.tokens = tokens
         self.pos = 0
         self.file_path = file_path
+        self.explicit_entry_instantiations = []
         self.max_template_specializations = (
             DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
             if max_template_specializations is None
@@ -444,6 +459,7 @@ class MetalParser:
         self.last_struct_type_aliases = []
         self.last_struct_constructors = []
         self.last_struct_declares_assignment_operator = False
+        self.last_struct_declares_subscript_operator = False
         self.last_struct_call_operator_declarations = []
         self.last_struct_nested_aggregates = []
         self.last_type_specifier_qualifier_contract = {
@@ -585,6 +601,11 @@ class MetalParser:
         try:
             shader = self.parse_shader()
             self.eat("EOF")
+            refuse_unmaterialized_entry_instantiations(
+                self.explicit_entry_instantiations,
+                getattr(shader, "functions", None),
+                self.max_template_specializations,
+            )
             return shader
         except (MetalParserError, MetalCallOperatorAssociationError):
             raise
@@ -737,7 +758,7 @@ class MetalParser:
 
         shader = ShaderNode(
             includes=preprocessors,
-            functions=functions,
+            functions=retain_declared_template_primaries(functions),
             structs=structs,
             global_variables=global_variables,
             constant=constants,
@@ -1087,6 +1108,10 @@ class MetalParser:
 
     def parse_template_declaration(self):
         start_token = self.current_token
+        if self.peek(1)[0] != "LESS_THAN":
+            instantiation = instantiated_entry_name(self.tokens, self.pos + 1)
+            if instantiation is not None:
+                self.explicit_entry_instantiations.append(instantiation)
         template_parameters = self.parse_template_prefix()
         template_parameter_defaults = dict(
             getattr(self, "last_template_parameter_defaults", {}) or {}
@@ -1156,7 +1181,7 @@ class MetalParser:
                 self.skip_template_declaration()
                 return None
 
-            function = self.parse_function()
+            function = self.parse_function_template_definition_or_prototype()
             if function is not None:
                 self.known_function_templates.add(function.name)
                 function.generics = [
@@ -1355,6 +1380,24 @@ class MetalParser:
             if end < len(self.tokens) and self.tokens[end][0] == "SEMICOLON"
             else None
         )
+
+    def parse_function_template_definition_or_prototype(self):
+        """Parse a function template, keeping ``R f(params);`` as a body-less node.
+
+        The prototype is recorded like any other dropped prototype, so calls of
+        a template nothing defines stay refused, and
+        :mod:`.declared_template_primaries` keeps the node only when explicit
+        specializations complete it.
+        """
+        function = self.parse_function(preserve_declaration=True)
+        if function is None or function.body is not None:
+            return function
+        self.function_prototypes.setdefault(
+            function.name, len(self.function_prototypes)
+        )
+        function.is_template_prototype = True
+        function.declaration_kind = "declaration"
+        return function
 
     def skip_template_declaration(self):
         paren_depth = 0
@@ -1591,6 +1634,10 @@ class MetalParser:
         if tok_type == "IDENTIFIER" and self.tokens[idx][1] in SIGNED_TYPE_PREFIXES:
             idx = self.skip_signed_type_prefix_at(idx)
             type_name = "int"
+        elif self.is_decltype_start_at(idx):
+            # ``decltype(e) f(...)``: parse_type_specifier reads the decltype return type.
+            type_name = "decltype"
+            idx = self.skip_decltype_type_at(idx)
         elif (
             tok_type in {"STRUCT", "ENUM"}
             and idx + 1 < len(self.tokens)
@@ -1743,8 +1790,31 @@ class MetalParser:
             idx += 1
         return False
 
+    def is_contextual_access_identifier_at(self, idx):
+        if idx >= len(self.tokens) or self.tokens[idx][0] not in {
+            "READ",
+            "WRITE",
+            "READ_WRITE",
+        }:
+            return False
+        next_type = self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
+        return next_type in {
+            "SEMICOLON",
+            "COMMA",
+            "EQUALS",
+            "LPAREN",
+            "LBRACE",
+            "LBRACKET",
+            "LESS_THAN",
+            "SCOPE",
+            "RPAREN",
+            "GREATER_THAN",
+        }
+
     def is_qualifier_token_at(self, idx):
         if idx >= len(self.tokens):
+            return False
+        if self.is_contextual_access_identifier_at(idx):
             return False
         tok_type, value = self.tokens[idx]
         if tok_type in QUALIFIER_TOKENS or (
@@ -2541,6 +2611,8 @@ class MetalParser:
         return idx
 
     def is_type_qualifier_start(self):
+        if self.is_contextual_access_identifier_at(self.pos):
+            return False
         if self.current_token[0] in QUALIFIER_TOKENS:
             return True
         if (
@@ -2889,6 +2961,9 @@ class MetalParser:
         struct_node.declares_assignment_operator = (
             self.last_struct_declares_assignment_operator
         )
+        struct_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
+        )
         struct_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -2952,6 +3027,9 @@ class MetalParser:
         class_node.constructors = list(self.last_struct_constructors)
         class_node.declares_assignment_operator = (
             self.last_struct_declares_assignment_operator
+        )
+        class_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
         )
         class_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
@@ -3038,6 +3116,9 @@ class MetalParser:
         union_node.declares_assignment_operator = (
             self.last_struct_declares_assignment_operator
         )
+        union_node.declares_subscript_operator = (
+            self.last_struct_declares_subscript_operator
+        )
         union_node.call_operator_declarations = list(
             self.last_struct_call_operator_declarations
         )
@@ -3119,6 +3200,7 @@ class MetalParser:
         call_operator_declarations = []
         nested_aggregates = []
         declares_assignment_operator = False
+        declares_subscript_operator = False
 
         def capture_nested_aggregate(nested):
             if nested is None:
@@ -3150,6 +3232,9 @@ class MetalParser:
             if self.current_token[0] == "STATIC_ASSERT":
                 members.append(self.parse_static_assert())
                 continue
+            if is_anonymous_member_enum_start(self.tokens, self.pos):
+                members.extend(parse_anonymous_member_enum(self))
+                continue
             if self.current_token[0] == "USING":
                 alias = self.parse_using_statement()
                 if isinstance(alias, TypeAliasNode):
@@ -3176,6 +3261,9 @@ class MetalParser:
                     continue
                 declares_assignment_operator |= (
                     self.skipped_member_declares_assignment_operator()
+                )
+                declares_subscript_operator |= (
+                    self.skipped_member_declares_subscript_operator()
                 )
                 self.skip_template_declaration()
                 continue
@@ -3216,6 +3304,9 @@ class MetalParser:
                 declares_assignment_operator |= (
                     self.skipped_member_declares_assignment_operator()
                 )
+                declares_subscript_operator |= (
+                    self.skipped_member_declares_subscript_operator()
+                )
                 self.skip_struct_method()
                 continue
             qualifier_contract = dict(self.last_type_specifier_qualifier_contract)
@@ -3223,6 +3314,10 @@ class MetalParser:
             member_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             if var_name == "operator":
                 declares_assignment_operator |= self.current_token[0] == "EQUALS"
+                # The declarator parser reads ``operator[]`` as an array of unknown bound.
+                declares_subscript_operator |= bool(array_sizes) or (
+                    self.current_token[0] == "LBRACKET"
+                )
                 self.skip_struct_method()
                 continue
             if self.current_token[0] == "LPAREN":
@@ -3261,6 +3356,7 @@ class MetalParser:
         self.last_struct_call_operator_declarations = call_operator_declarations
         self.last_struct_nested_aggregates = nested_aggregates
         self.last_struct_declares_assignment_operator = declares_assignment_operator
+        self.last_struct_declares_subscript_operator = declares_subscript_operator
         return members
 
     def skipped_member_declares_assignment_operator(self):
@@ -3279,6 +3375,26 @@ class MetalParser:
                 "operator",
             )
             if names_operator and self.tokens[index + 1][0] == "EQUALS":
+                return True
+            index += 1
+        return False
+
+    def skipped_member_declares_subscript_operator(self):
+        """Whether the member declaration at the cursor declares ``operator[]``.
+
+        The struct parser skips member operators, but a subscript of a dependent value may select a user-declared
+        subscript operator when its template is instantiated ([over.sub]), which the importer has to know.
+        """
+        index = self.pos
+        while index + 2 < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type in {"LBRACE", "SEMICOLON", "EOF"}:
+                return False
+            if (
+                self.tokens[index] == ("IDENTIFIER", "operator")
+                and self.tokens[index + 1][0] == "LBRACKET"
+                and self.tokens[index + 2][0] == "RBRACKET"
+            ):
                 return True
             index += 1
         return False

@@ -73,3 +73,54 @@ def forwarded_storage_expression(
     except MetalStructMethodError:
         return None
     return storage
+
+
+_IF_CONSTEXPR_HEAD_RE = re.compile(r"if\s+constexpr\s*\(")
+_MAX_BRANCH_FOLDS = 16
+
+
+def selected_constexpr_body(preprocessor: Any, body: str) -> str:
+    """``body`` reduced through enclosing braces and ``if constexpr`` statements whose condition is a constant.
+
+    Only a body that consists of exactly one such statement is reduced, so the
+    result is the single statement the instantiation executes. Anything else is
+    returned unchanged.
+    """
+
+    for _ in range(_MAX_BRANCH_FOLDS):
+        text = body.strip()
+        if (
+            text.startswith("{")
+            and preprocessor._find_matching_delimiter(text, 0, "{", "}")
+            == len(text) - 1
+        ):
+            body = text[1:-1]
+            continue
+        head = _IF_CONSTEXPR_HEAD_RE.match(text)
+        if head is None:
+            return body
+        open_paren = head.end() - 1
+        close = preprocessor._find_matching_delimiter(text, open_paren, "(", ")")
+        if close is None:
+            return body
+        ok, value = preprocessor._evaluate_static_integral_expression(
+            text[open_paren + 1 : close]
+        )
+        if not ok or value is None:
+            return body
+        then_start = close + 1
+        while then_start < len(text) and text[then_start].isspace():
+            then_start += 1
+        if then_start >= len(text) or text[then_start] != "{":
+            return body
+        then_end = preprocessor._find_matching_delimiter(text, then_start, "{", "}")
+        if then_end is None:
+            return body
+        rest = text[then_end + 1 :].strip()
+        if rest and not re.match(r"else\b", rest):
+            return body
+        if value:
+            body = text[then_start : then_end + 1]
+        else:
+            body = rest[4:] if rest else ""
+    return body

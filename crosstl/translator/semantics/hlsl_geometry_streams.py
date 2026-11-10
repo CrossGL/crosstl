@@ -76,7 +76,9 @@ __all__ = [
 # need a semantic, since the structure is part of the entry's signature, and an empty one declares none.
 EMPTY_STREAM_VERTEX_ATTRIBUTE = "crossgl_empty_stream_vertex"
 
-_HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
+_HLSL_TARGETS = frozenset(
+    {"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "slang"}
+)
 _INPUT_TOPOLOGIES = {
     "points": ("point", 1),
     "lines": ("line", 2),
@@ -713,13 +715,18 @@ class _GeometryRaising:
                     self.refuse(
                         f"compound assignment to {node.target.name}", "builtin-update"
                     )
-                node.target = _output_member(streams[found[0]].output, found[1])
+                # ``left`` and ``right`` alias ``target`` and ``value``; generators read either.
+                node.target = node.left = _output_member(
+                    streams[found[0]].output, found[1]
+                )
                 value = self.replacement(
                     function, node, node.value, output_members, streams, builtins
                 )
                 # The value's own slot is stale once wrapped, so its root is rewritten here; the nodes below
                 # it keep their parents and are rewritten by the caller's walk.
-                node.value = _convert("uint", node.value if value is None else value)
+                node.value = node.right = _convert(
+                    "uint", node.value if value is None else value
+                )
                 return None
         if not isinstance(node, A.IdentifierNode):
             return None

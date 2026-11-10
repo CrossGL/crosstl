@@ -5,6 +5,7 @@ and type detection across different code generators.
 """
 
 import ast
+import re
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -46,6 +47,25 @@ def parse_array_type(type_name: str) -> Tuple[str, Optional[int]]:
             return base_type, None
 
     return type_name, None
+
+
+_OUTER_ARRAY_DIMENSION = re.compile(
+    r"\s*(?P<base>[^\[\]]+?)\s*\[\s*(?P<count>[^\[\]]*?)\s*\](?P<rest>(?:\s*\[[^\[\]]*\])*)\s*"
+)
+
+
+def split_outer_array_dimension(type_name: str) -> Optional[Tuple[str, str]]:
+    """``("float[3]", "2")`` for ``float[2][3]``: the element type and the extent text of the outermost dimension.
+
+    A C-style array spelling lists its dimensions outermost first (``float a[2][3]`` holds two ``float[3]``, as in
+    GLSL 4.60 section 4.1.9), so the element type keeps every bracket after the first. ``None`` when ``type_name``
+    is not an array spelling.
+    """
+    match = _OUTER_ARRAY_DIMENSION.fullmatch(str(type_name or ""))
+    if match is None:
+        return None
+    rest = re.sub(r"\s+", "", match.group("rest"))
+    return match.group("base") + rest, match.group("count")
 
 
 def format_array_type(

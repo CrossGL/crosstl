@@ -30,6 +30,13 @@ PACKOFFSET_COMPONENTS = {"x": 0, "y": 1, "z": 2, "w": 3, "r": 0, "g": 1, "b": 2,
 PACKOFFSET_PATTERN = re.compile(
     r"\s*c(?P<register>\d+)\s*(?:\.\s*(?P<component>[xyzwrgba]))?\s*"
 )
+# The qualifiers that place a member at a byte offset or alignment of its own. They are layout, never a semantic.
+MEMBER_LAYOUT_QUALIFIERS = frozenset({"offset", "align"})
+
+
+def member_has_explicit_placement(member):
+    """Whether a member carries an ``@ offset`` or ``@ align`` qualifier."""
+    return bool(member_attribute_names(member) & MEMBER_LAYOUT_QUALIFIERS)
 
 
 def member_attribute_names(member):

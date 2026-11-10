@@ -49,15 +49,24 @@ def _class_target_type(codegen, target_type):
     return target_type
 
 
-def _selected_value_type(codegen, value_type):
-    """``value_type`` with a ``conditional_t<C, A, B>`` spelling replaced by the branch ``C`` selects.
+_CONDITIONAL_TYPE = re.compile(
+    r"^(?:typename\s+)?(?:::\s*)?(?:metal\s*::\s*)?conditional(?:_t)?\s*<"
+)
 
-    A value typed through such an alias has type ``A`` or ``B``, either of which may be the class itself. When
-    ``C`` does not fold to a constant, no conversion is proven to apply, so this returns ``None``.
+
+def _selected_value_type(codegen, value_type):
+    """``value_type`` with a ``conditional_t`` selection replaced by the branch it names.
+
+    A local declared through ``using loader_t = conditional_t<C, A, B>`` has the type of the selected branch, and
+    the class target of a conversion is resolved the same way (``metal_constructor_contract``). A selection whose
+    condition is not known yet names no known type, so no conversion is decided from it (``None``).
     """
-    if value_type is None or codegen.resolve_conditional_type(value_type) is None:
+    if value_type is None or not _CONDITIONAL_TYPE.match(value_type):
         return value_type
-    return codegen.resolve_conditional_type(value_type, require_concrete=True)
+    selected = codegen.resolve_conditional_type(value_type, require_concrete=True)
+    if selected is None:
+        return None
+    return codegen.metal_source_overload_value_type(selected)
 
 
 def converting_constructor_value(
@@ -149,6 +158,10 @@ def convert_user_call_arguments(codegen, function_name, expression, rendered, is
         return
     for index, parameter in enumerate(getattr(selected, "params", None) or []):
         if index in rendered or index >= len(expression.args):
+            continue
+        if index == 0 and getattr(parameter, "name", None) == "self":
+            # The receiver of a lowered method is its implicit object parameter, which no user-defined
+            # conversion initializes ([over.match.funcs]/5).
             continue
         converted = converting_constructor_argument(
             codegen, expression.args[index], parameter, is_main
