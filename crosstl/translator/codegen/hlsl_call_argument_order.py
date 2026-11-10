@@ -135,6 +135,38 @@ def _builtin_result_type(name):
     return None
 
 
+# Built-ins whose result has the type their arguments share (HLSL intrinsic functions reference, GLSL 4.60 section
+# 8.3): fmod(float2, float2) is a float2.
+_SAME_TYPE_BUILTINS = frozenset(
+    {
+        "atan2",
+        "clamp",
+        "fma",
+        "fmod",
+        "lerp",
+        "mad",
+        "max",
+        "min",
+        "mix",
+        "mod",
+        "pow",
+        "smoothstep",
+        "step",
+    }
+)
+
+
+def _shared_argument_type(sequencer, name, arguments):
+    """The type every argument of a same-type built-in has, or None."""
+    if (name or "").lower() not in _SAME_TYPE_BUILTINS:
+        return None
+    types = [sequencer.source_type(argument) for argument in arguments]
+    if any(source_type is None for source_type in types):
+        return None
+    mapped = {str(sequencer.codegen.map_type(source_type)) for source_type in types}
+    return types[0] if len(mapped) == 1 else None
+
+
 class _Effects:
     """Side effects of expressions and of the program's functions, for one HLSL generator."""
 
@@ -681,7 +713,9 @@ def hlsl_ordered_call_expression(codegen, expr):
     steps = list(sequencer.steps)
     result_type = sequencer.source_type(expr)
     if result_type is None and parameters is None:
-        result_type = _builtin_result_type(name)
+        result_type = _builtin_result_type(name) or _shared_argument_type(
+            sequencer, name, arguments
+        )
     mapped = str(codegen.map_type(result_type)) if result_type is not None else "void"
     if sequencer.copy_backs:
         if mapped == "void":

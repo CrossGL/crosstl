@@ -214,3 +214,57 @@ def test_dxil_computes_the_source_order_values(tmp_path, x):
     stored = _stored_constants(dxc, tmp_path, folded)
     expected = [int(np.int32(value(x))) for _, value in FOLDED]
     assert stored == expected
+
+
+REMAINDER = """shader Probe {
+    float bump(inout float t) { t = t * 3.0 + 1.0; return t - 2.0; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* v;
+        void main() {
+            float y = v[0];
+            float r = bump(y) % y;
+            float z = v[0];
+            v[1] = r + fmod(bump(z), z);
+        }
+    }
+}
+"""
+
+
+def test_floating_remainder_operands_are_ordered(tmp_path):
+    """A floating ``%`` becomes a call of the exact ``fmod`` helper, whose arguments DXC evaluates right to left; its
+    operands are ordered as an ``fmod`` call's are, and the initializer's comma expression is cast to its type.
+    """
+    path = tmp_path / "remainder.cgl"
+    path.write_text(REMAINDER)
+    code = crosstl.translate(str(path), backend="directx", format_output=False)
+    assert (
+        "float r = float((__crossgl_argument0 = bump(y), "
+        "crosstl_fmod_float(__crossgl_argument0, y)));"
+    ) in code
+    assert (
+        "(__crossgl_argument1 = bump(z), crosstl_fmod_float(__crossgl_argument1, z))"
+        in code
+    )
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        return
+    source = tmp_path / "remainder.hlsl"
+    source.write_text(code)
+    result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            "-WX",
+            str(source),
+            "-Fo",
+            str(tmp_path / "r.dxil"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
