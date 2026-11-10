@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from tools.coverage import __main__ as cli
-from tools.coverage import causes, issues
+from tools.coverage import causes, github, issues
 
 
 def _feature(name, outcome, category="function", detail=""):
@@ -132,7 +132,7 @@ def test_first_run_files_tracking_and_bug_issues():
     assert "`probes/hlsl-output/b/` then holds the probe" in bug.body
 
 
-class _Repository(issues.GitHub):
+class _Repository(github.GitHub):
     """An in-memory repository of managed issues."""
 
     def __init__(self, existing=()):
@@ -671,7 +671,7 @@ def test_long_gap_lists_are_cut_to_the_body_limit(monkeypatch):
     assert body.rstrip().endswith("more gaps are listed in COVERAGE.md.")
 
 
-class _FakeGitHub(issues.GitHub):
+class _FakeGitHub(github.GitHub):
     def __init__(self, pages):
         super().__init__("o/r")
         self.pages = pages
@@ -698,22 +698,22 @@ def test_github_lists_only_marked_issues_across_pages():
     marked = issues.MARKER.format("tracking/hlsl/output")
     first = [_item(n, "no marker") for n in range(1, 100)] + [_item(100, marked)]
     second = [_item(101, marked, pull_request={}), _item(102, None)]
-    github = _FakeGitHub([first, second])
-    found = github.managed()
+    client = _FakeGitHub([first, second])
+    found = client.managed()
     assert [(i.number, i.key, i.labels) for i in found] == [
         (100, "tracking/hlsl/output", ("coverage",))
     ]
-    assert [call[1] for call in github.calls] == [
+    assert [call[1] for call in client.calls] == [
         "issues?state=all&labels=coverage&per_page=100&page=1",
         "issues?state=all&labels=coverage&per_page=100&page=2",
     ]
 
 
 def test_github_comments_before_closing_and_adds_labels_last():
-    github = _FakeGitHub([])
+    client = _FakeGitHub([])
     action = issues.Action("close", "k", "t", "b", ("bug",), 5, "why", "completed")
-    assert github.apply(action) == 5
-    assert github.calls == [
+    assert client.apply(action) == 5
+    assert client.calls == [
         ("POST", "issues/5/comments", {"body": "why"}),
         (
             "PATCH",
@@ -722,8 +722,8 @@ def test_github_comments_before_closing_and_adds_labels_last():
         ),
         ("POST", "issues/5/labels", {"labels": ["bug"]}),
     ]
-    assert github.apply(issues.Action("create", "k", "t", "b", ("bug",))) == 7
-    assert github.calls[-1] == (
+    assert client.apply(issues.Action("create", "k", "t", "b", ("bug",))) == 7
+    assert client.calls[-1] == (
         "POST",
         "issues",
         {"title": "t", "body": "b", "labels": ["bug"]},
@@ -733,19 +733,19 @@ def test_github_comments_before_closing_and_adds_labels_last():
 def test_github_waits_a_second_between_changes(monkeypatch):
     clock = iter([100.0, 100.0, 100.25, 100.25, 107.0, 107.0])
     slept = []
-    monkeypatch.setattr(issues.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(issues.time, "sleep", slept.append)
+    monkeypatch.setattr(github.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(github.time, "sleep", slept.append)
     monkeypatch.setattr(
-        issues.subprocess,
+        github.subprocess,
         "run",
-        lambda *args, **kwargs: issues.subprocess.CompletedProcess(args, 0, "[]", ""),
+        lambda *args, **kwargs: github.subprocess.CompletedProcess(args, 0, "[]", ""),
     )
-    github = issues.GitHub("o/r")
-    github._api("GET", "issues")
-    github._api("PATCH", "issues/1", {})
-    github._api("GET", "issues")
-    github._api("POST", "issues/1/comments", {})
-    github._api("PATCH", "issues/1", {})
+    client = github.GitHub("o/r")
+    client._api("GET", "issues")
+    client._api("PATCH", "issues/1", {})
+    client._api("GET", "issues")
+    client._api("POST", "issues/1/comments", {})
+    client._api("PATCH", "issues/1", {})
     assert slept == [0.0, 0.75, 0.0]
 
 
@@ -756,9 +756,9 @@ def test_cli_prints_the_plan_and_applies_it_unless_dry_run(
     path = tmp_path / "coverage.json"
     path.write_text(json.dumps(_report(_hlsl())))
     applied = []
-    monkeypatch.setattr(issues.GitHub, "managed", lambda self: [])
+    monkeypatch.setattr(github.GitHub, "managed", lambda self: [])
     monkeypatch.setattr(
-        issues.GitHub, "apply", lambda self, action: applied.append(action.key)
+        github.GitHub, "apply", lambda self, action: applied.append(action.key)
     )
     argv = ["issues", str(path), "--repository", "o/r"] + (
         ["--dry-run"] if dry_run else []
@@ -781,8 +781,8 @@ def test_cli_reports_github_errors(tmp_path, monkeypatch, capsys):
     path.write_text(json.dumps(_report()))
 
     def fail(self):
-        raise issues.GitHubError("gh api GET issues: HTTP 401")
+        raise github.GitHubError("gh api GET issues: HTTP 401")
 
-    monkeypatch.setattr(issues.GitHub, "managed", fail)
+    monkeypatch.setattr(github.GitHub, "managed", fail)
     assert cli.main(["issues", str(path)]) == 2
     assert "HTTP 401" in capsys.readouterr().err
