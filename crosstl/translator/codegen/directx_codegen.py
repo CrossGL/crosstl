@@ -8997,7 +8997,7 @@ class HLSLCodeGen(
         used_names.update(self.hlsl_inverse_hyperbolic_helper_names.values())
         names = {}
         for key, base_name in (
-            ("counter", "__crossgl_physical_subgroup_counter"),
+            ("leaders", "__crossgl_physical_subgroup_leaders"),
             ("helper", "__crossgl_physical_subgroup_id"),
         ):
             name = base_name
@@ -9017,20 +9017,30 @@ class HLSLCodeGen(
     def generate_hlsl_physical_subgroup_id_helper(self):
         if not self.required_hlsl_physical_subgroup_id_helper:
             return ""
-        counter_name = self.hlsl_physical_subgroup_id_helper_names["counter"]
+        leaders = self.hlsl_physical_subgroup_id_helper_names["leaders"]
         helper_name = self.hlsl_physical_subgroup_id_helper_name()
-        return f"""groupshared uint {counter_name};
+        # Source languages number subgroups by thread position: subgroup 0
+        # holds invocation 0. Direct3D numbers no waves, so each wave sets
+        # the bit of the smallest SV_GroupIndex it holds, and its ID is the
+        # number of waves whose smallest index is smaller. One bit per
+        # invocation covers D3D12's 1024-invocation limit in 32 words.
+        return f"""groupshared uint {leaders}[32];
 uint {helper_name}(uint groupIndex) {{
-    if (groupIndex == 0u) {{
-        {counter_name} = 0u;
+    if (groupIndex < 32u) {{
+        {leaders}[groupIndex] = 0u;
     }}
     GroupMemoryBarrierWithGroupSync();
-    uint subgroupIndex = 0u;
+    uint leader = WaveActiveMin(groupIndex);
+    uint leaderWord = leader >> 5u;
+    uint leaderBit = 1u << (leader & 31u);
     if (WaveIsFirstLane()) {{
-        InterlockedAdd({counter_name}, 1u, subgroupIndex);
+        InterlockedOr({leaders}[leaderWord], leaderBit);
     }}
-    subgroupIndex = WaveReadLaneFirst(subgroupIndex);
     GroupMemoryBarrierWithGroupSync();
+    uint subgroupIndex = countbits({leaders}[leaderWord] & (leaderBit - 1u));
+    for (uint word = 0u; word < leaderWord; ++word) {{
+        subgroupIndex += countbits({leaders}[word]);
+    }}
     return subgroupIndex;
 }}
 """
