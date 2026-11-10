@@ -156,6 +156,10 @@ def test_ordered_call_stays_where_the_source_evaluates_it(tmp_path):
         "int y = x; int z = x + 1; o[0] = two(z, bump(y));",
         "int y = x; int z = x + 1; o[0] = max(bump(y), z);",
         "int y = x; int z = x + 1; scale(z, bump(y)); o[0] = z;",
+        # constants built by operators and constructors read nothing a side effect can write
+        "o[0] = int(dot(vec2(1.0, -2.0), vec2(float(next()), 1.0)));",
+        "o[0] = two(int(2.5 * 2.0), next());",
+        "o[0] = clamp(ivec2(next(), 1), ivec2(0), ivec2(1 + 2, 4)).x;",
     ],
 )
 def test_calls_whose_order_cannot_matter_are_unchanged(tmp_path, statement):

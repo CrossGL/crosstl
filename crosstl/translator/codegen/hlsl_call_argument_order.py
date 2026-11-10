@@ -46,6 +46,7 @@ import re
 from ..ast import (
     ArrayAccessNode,
     AssignmentNode,
+    BinaryOpNode,
     BlockNode,
     FunctionCallNode,
     IdentifierNode,
@@ -83,6 +84,11 @@ _CONSTRUCTOR = re.compile(
 # A type a function-style cast can name: no array extents, pointers or references.
 _CAST_TYPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\s*<[A-Za-z0-9_,\s<>]*>)?")
 _FIXED_EXTENTS = re.compile(r"(?:\[\s*[0-9]+\s*\])+")
+_CONSTANT_UNARY = frozenset({"-", "+", "!", "~"})
+_CONSTANT_BINARY = frozenset(
+    {"+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"}
+    | {"&&", "||", "==", "!=", "<", ">", "<=", ">="}
+)
 _OPAQUE_PREFIXES = (
     "Texture",
     "RWTexture",
@@ -413,9 +419,37 @@ def _opaque(codegen, expr):
     return mapped.startswith(_OPAQUE_PREFIXES)
 
 
+def _constant(expr):
+    """Whether ``expr`` is built from literals by operators and constructors only, so it reads no storage."""
+    if isinstance(expr, LiteralNode):
+        return True
+    if isinstance(expr, UnaryOpNode):
+        return (
+            not expr.is_postfix
+            and expr.operator in _CONSTANT_UNARY
+            and _constant(expr.operand)
+        )
+    if isinstance(expr, BinaryOpNode):
+        return (
+            expr.operator in _CONSTANT_BINARY
+            and _constant(expr.left)
+            and _constant(expr.right)
+        )
+    if isinstance(expr, FunctionCallNode):
+        name = _callee_name(expr)
+        return (
+            name is not None
+            and not isinstance(expr.function, MemberAccessNode)
+            and _CONSTRUCTOR.match(name) is not None
+            and not getattr(expr, "generic_args", None)
+            and all(_constant(argument) for argument in expr.arguments)
+        )
+    return False
+
+
 def _stable(codegen, expr):
     """Whether no side effect can change the value ``expr`` evaluates to."""
-    if isinstance(expr, LiteralNode):
+    if _constant(expr):
         return True
     if codegen.literal_int_value(expr, {}) is not None:
         return True
