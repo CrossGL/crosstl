@@ -101,13 +101,6 @@ from .enum_utils import (
 )
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
-from .slang_varying_locations import (
-    entry_parameter_location_prefix,
-    fragment_output_location_node_ids,
-    location_attribute_index,
-    struct_member_location_prefix,
-    varying_location_semantic,
-)
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -185,6 +178,13 @@ from .slang_resource_memory import (
     slang_resource_parameter_memory_prefix,
 )
 from .slang_specialization_constants import plan_slang_specialization_constants
+from .slang_varying_locations import (
+    entry_parameter_location_prefix,
+    fragment_output_location_node_ids,
+    location_attribute_index,
+    struct_member_location_prefix,
+    varying_location_semantic,
+)
 from .slang_wave_shuffles import (
     SLANG_WAVE_SHUFFLE_ARITIES,
     as_type_target,
