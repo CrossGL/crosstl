@@ -1186,6 +1186,7 @@ class MetalCodeGen(
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
+        self.metal_sequenced_call_ids = set()
         self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
@@ -2295,6 +2296,7 @@ class MetalCodeGen(
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
+        self.metal_sequenced_call_ids = set()
         self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
@@ -2543,6 +2545,7 @@ class MetalCodeGen(
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
+        self.metal_sequenced_call_ids = set()
         self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
