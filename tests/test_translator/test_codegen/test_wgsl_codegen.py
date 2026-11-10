@@ -2288,6 +2288,57 @@ def test_wgsl_codegen_escapes_reserved_resources_functions_and_locals():
     assert "textureSample(type," not in generated
 
 
+ACCESS_MODE_FUNCTION_SHADER = """
+shader main {{
+    float {name}(float v) {{ return v + 1.0; }}
+    compute {{
+        StructuredBuffer<float> values @buffer(0);
+        RWStructuredBuffer<float> results @buffer(1);
+        @numthreads(1, 1, 1)
+        void main(uint3 gid @gl_GlobalInvocationID) {{
+            results[gid.x] = {name}(values[gid.x]);
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize("name", ["read", "read_write"])
+def test_wgsl_renames_function_that_hides_a_used_storage_access_mode(name, tmp_path):
+    generated = WGSLCodeGen().generate(
+        parse_shader(ACCESS_MODE_FUNCTION_SHADER.format(name=name))
+    )
+    renamed = f"{name}_"
+
+    assert "var<storage, read> values: array<f32>;" in generated
+    assert "var<storage, read_write> results: array<f32>;" in generated
+    assert f"fn {renamed}(v: f32) -> f32" in generated
+    assert f"results[gid.x] = {renamed}(values[gid.x]);" in generated
+    assert f"fn {name}(" not in generated
+    assert f" = {name}(" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_keeps_read_function_when_access_mode_is_unused(tmp_path):
+    shader = """
+    shader main {
+        float read(float v) { return v + 1.0; }
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(read(1.0));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn read(v: f32) -> f32" in generated
+    assert "return vec4<f32>(read(1.0));" in generated
+    assert "fn read_(" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_aliases_format_as_noop_wgsl():
     source = "@vertex fn main() {}"
 
