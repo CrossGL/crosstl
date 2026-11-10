@@ -279,6 +279,7 @@ from .hlsl_alias_offsets import (
     hlsl_source_identifier_name,
 )
 from .hlsl_array_list_assignment import generate_hlsl_array_list_assignment
+from .hlsl_array_value_arguments import HlslArrayValueArguments
 from .hlsl_atomic_conditions import (
     condition_has_hlsl_atomic,
     generate_hlsl_atomic_condition_do_while,
@@ -2586,6 +2587,7 @@ class HLSLCodeGen(
         self.implicit_member_texture_samplers = {}
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
+        self.hlsl_array_value_arguments = HlslArrayValueArguments(self)
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
         self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
@@ -4010,6 +4012,7 @@ class HLSLCodeGen(
         self.global_implicit_texture_query_lod_samplers = {}
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
+        self.hlsl_array_value_arguments = HlslArrayValueArguments(self)
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
         self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
@@ -5548,6 +5551,7 @@ class HLSLCodeGen(
         code = (
             code[:storage_helper_offset]
             + self.hlsl_half_storage.declarations()
+            + self.hlsl_array_value_arguments.declarations()
             + self.generate_hlsl_struct_constructor_helpers()
             + hlsl_ray_query_helpers(self)
             + code[storage_helper_offset:]
@@ -47737,9 +47741,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             validate_range_reference_argument(
                 self, arg, expected_type, reference_qualifiers
             )
+            writable_parameter = index < len(parameters) and bool(
+                set(self.hlsl_parameter_qualifiers(parameters[index])).intersection(
+                    {"out", "inout"}
+                )
+            )
             if isinstance(arg, ArrayLiteralNode) and self.hlsl_outer_array_type(
                 expected_type
             ):
+                array_value = (
+                    None
+                    if writable_parameter
+                    else self.hlsl_array_value_arguments.argument(arg, expected_type)
+                )
+                if array_value is not None:
+                    rendered_args.append(array_value)
+                    continue
                 self.hlsl_fixed_array_aggregate_initializer(arg, expected_type)
                 self.hlsl_aggregate_error(
                     arg,
@@ -47763,6 +47780,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 # Value conversion would turn a writable argument into a temporary.
                 # Capture the location for both copy-in and copy-out, including
                 # aggregate receivers and indices changed inside the callee.
+                if self.hlsl_array_value_arguments.writable_lowered_value(
+                    arg, expected_type
+                ):
+                    rendered_args.append("")
+                    continue
                 byte = self.hlsl_byte_integer_shape(expected_type) is not None
                 assignments, arg = self.hlsl_stabilize_inout_lvalue(
                     call_node or arg,
@@ -47780,8 +47802,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 argument_assignments.extend(assignments)
                 rendered_args.append(self.generate_expression_with_expected(arg, None))
             else:
+                array_value = self.hlsl_array_value_arguments.argument(
+                    arg, expected_type
+                )
                 rendered_args.append(
-                    self.generate_expression_with_expected(arg, expected_type)
+                    array_value
+                    if array_value is not None
+                    else self.generate_expression_with_expected(arg, expected_type)
                 )
         return (
             self.generate_call_arguments_from_rendered(
@@ -52164,6 +52191,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for index, (field_name, field_type) in enumerate(fields):
             if index < len(positional_args):
                 argument = positional_args[index]
+                array_value = self.hlsl_array_value_arguments.argument(
+                    argument, field_type
+                )
+                if array_value is not None:
+                    rendered_args.append(array_value)
+                    continue
                 if isinstance(
                     argument, ArrayLiteralNode
                 ) and self.hlsl_outer_array_type(field_type):
