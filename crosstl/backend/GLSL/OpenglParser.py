@@ -181,6 +181,7 @@ MESH_STORAGE_QUALIFIERS_LOWER = {
 }
 
 VULKAN_MEMORY_MODEL_QUALIFIERS = {
+    "devicecoherent",
     "workgroupcoherent",
     "subgroupcoherent",
     "queuefamilycoherent",

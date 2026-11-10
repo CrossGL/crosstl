@@ -2651,19 +2651,20 @@ def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     }
     """
     expected_metal = """
+    #pragma METAL internals : enable
     #include <metal_stdlib>
     using namespace metal;
 
     // Compute Shader
-    kernel void kernel_main(device uchar* mixedBlocks_0 [[buffer(72)]], device uchar* mixedBlocks_1 [[buffer(73)]]) {
-        array<device uchar*, 2> mixedBlocks = {mixedBlocks_0, mixedBlocks_1};
-        uint i = (*reinterpret_cast<const device uint*>(mixedBlocks[1] + 0));
-        float4 value = float4((*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 4))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 8))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 12))));
+    kernel void kernel_main(coherent device uchar* mixedBlocks_0 [[buffer(72)]], coherent device uchar* mixedBlocks_1 [[buffer(73)]]) {
+        array<coherent device uchar*, 2> mixedBlocks = {mixedBlocks_0, mixedBlocks_1};
+        uint i = (*reinterpret_cast<coherent const device uint*>(mixedBlocks[1] + 0));
+        float4 value = float4((*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 4))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 8))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 12))));
         float4 __crossgl_buffer_store_0 = value;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16))) = __crossgl_buffer_store_0.x;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 4))) = __crossgl_buffer_store_0.y;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 8))) = __crossgl_buffer_store_0.z;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 12))) = __crossgl_buffer_store_0.w;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16))) = __crossgl_buffer_store_0.x;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 4))) = __crossgl_buffer_store_0.y;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 8))) = __crossgl_buffer_store_0.z;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 12))) = __crossgl_buffer_store_0.w;
     }
     """
     expected_glsl = """
