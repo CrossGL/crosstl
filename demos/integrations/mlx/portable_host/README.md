@@ -503,6 +503,34 @@ reaches `affine_qmv`, one nvfp4 row `nvfp4_qmv` and two or four rows
 `nvfp4_qmv_wide`. The references take `gemv` for one row and
 `steel_gemm_fused` otherwise.
 
+`verify_upstream_qmv_wide.py` runs `test_qmv_wide`: 1,188 products of two to
+nine rows against 256 or 67 output rows, unbatched and as three stacked slabs,
+over every affine group size and width and the three block-scaled modes with
+`K` of 128 and 512, then tiny products of 32 or 64 values. The host reports no
+Apple GPU generation, so `use_qmv_wide` keeps the affine products on
+`affine_qmv_quad`, `affine_qmv_fast` and `affine_qmv` as on MLX's devices
+before generation 15; the block-scaled ones reach `qmv_quad` for `K` of 64 or
+128 and otherwise `qmv_wide`, in batched and unbatched variants with tiles of
+two to five vectors. The references take `steel_gemm_fused` or, for 441 single
+matrices, `steel_gemm_splitk` and its accumulation. The trace must hold all
+5,193 of these launches.
+
+`verify_upstream_qmm_non_transposed.py` runs `test_qmm_non_transposed`: 340
+products with untransposed `K`-by-`N` weights, the product a quantized linear
+layer's backward pass runs, in float16 and bfloat16 as the GPU device does. It
+sweeps `M` over values that leave partial 32-row tiles, then transformer-sized
+`K` and `N` up to 11008 by 2048, batched activations (folded into rows against
+the 2-D weights), 33,000 rows, and group-32 2-, 4- and 8-bit weights over one
+to four reduction tiles, for affine weights and for mxfp4, nvfp4 and mxfp8.
+One and two rows reach `affine_qvm` and the block-scaled `qvm` kernels, four or
+more `affine_qmm_n` and the block-scaled `qmm_n` kernels. Affine weights
+dequantize to the test's type; block-scaled ones to bfloat16, so the float16
+block-scaled references convert both operands to float32. The references take
+`gemv`, `steel_gemm_fused` and, for 80 short deep products,
+`steel_gemm_splitk`. The trace must hold all 1,488 quantize, dequantize,
+product and reference launches, and the float16, bfloat16 and float32 maxima
+of the error bounds must each run natively.
+
 `verify_upstream_qmm_vjp.py` runs `test_qmm_vjp` and `test_qmm_jvp`. Each
 differentiates an 8-bit, group-64 product of a `(2, 64, K)` input with respect
 to that input, for transposed and untransposed weights, and compares the

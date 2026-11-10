@@ -182,6 +182,7 @@ def test_package_verification_entries_include_the_split_products():
         verify_upstream_fp_qmv,
         verify_upstream_fp_qmv_large_output,
         verify_upstream_qmv_small_non_multiples,
+        verify_upstream_qmv_wide,
     )
 
     assert set(fp_matmul_packages.verification_entries()) == {
@@ -189,6 +190,7 @@ def test_package_verification_entries_include_the_split_products():
         *verify_upstream_fp_qmv.package_entries()["quantized"],
         *verify_upstream_fp_qmv_large_output.package_entries()["quantized"],
         *verify_upstream_qmv_small_non_multiples.package_entries()["fp"],
+        *verify_upstream_qmv_wide.package_entries()["fp"],
     }
     assert any(
         "_qvm_split_k_" in name for name in fp_matmul_packages.verification_entries()

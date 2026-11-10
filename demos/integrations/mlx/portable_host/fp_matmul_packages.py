@@ -127,14 +127,15 @@ def verification_entries():
     """The block-scaled entries the upstream runners route, sorted, once each.
 
     test_fp_qmv, test_fp_qmv_large_output and test_fp_qvm route only
-    block-scaled products; test_qmv_small_non_multiples routes its nvfp4 ones
-    beside affine products.
+    block-scaled products; test_qmv_small_non_multiples and test_qmv_wide
+    route theirs beside affine products.
     """
     from demos.integrations.mlx.portable_host import (
         verify_upstream_fp_qmv,
         verify_upstream_fp_qmv_large_output,
         verify_upstream_fp_qvm,
         verify_upstream_qmv_small_non_multiples,
+        verify_upstream_qmv_wide,
     )
 
     return sorted(
@@ -143,6 +144,7 @@ def verification_entries():
             *verify_upstream_fp_qmv_large_output.package_entries()["quantized"],
             *verify_upstream_fp_qvm.package_entries()["quantized"],
             *verify_upstream_qmv_small_non_multiples.package_entries()["fp"],
+            *verify_upstream_qmv_wide.package_entries()["fp"],
         }
     )
 

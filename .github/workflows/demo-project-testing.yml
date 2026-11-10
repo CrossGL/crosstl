@@ -3325,16 +3325,21 @@ jobs:
     timeout-minutes: 270
     strategy:
       fail-fast: false
+      # Two waves of the 36 legs, at most six of them on macOS at a time.
+      max-parallel: 18
       matrix:
         # Each unchanged upstream test runs on its own leg of every platform.
-        test: [qvm, qmv, qvm_splitk, qmm_shapes, qmm, fp_qmv, fp_qmv_large_output, fp_qvm, qmv_small_non_multiples, qmm_vjp]
+        # The target is an axis: include entries that set it without one would
+        # overwrite each other's added values, leaving only the last platform.
+        test: [qvm, qmv, qvm_splitk, qmm_shapes, qmm, fp_qmv, fp_qmv_large_output, fp_qvm, qmv_small_non_multiples, qmm_vjp, qmv_wide, qmm_non_transposed]
+        target: [opengl, directx, metal]
         include:
-          - os: ubuntu-24.04
-            target: opengl
-          - os: windows-2025
-            target: directx
-          - os: macos-26
-            target: metal
+          - target: opengl
+            os: ubuntu-24.04
+          - target: directx
+            os: windows-2025
+          - target: metal
+            os: macos-26
     defaults:
       run:
         shell: bash
@@ -3370,7 +3375,9 @@ jobs:
             demos/integrations/mlx/tests/host/test_portable_upstream_fp_qmv_large_output.py \
             demos/integrations/mlx/tests/host/test_portable_upstream_fp_qvm.py \
             demos/integrations/mlx/tests/host/test_portable_upstream_qmv_small_non_multiples.py \
-            demos/integrations/mlx/tests/host/test_portable_upstream_qmm_vjp.py
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmm_vjp.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmv_wide.py \
+            demos/integrations/mlx/tests/host/test_portable_upstream_qmm_non_transposed.py
       - name: Install OpenGL runtime dependencies
         if: runner.os == 'Linux'
         run: python -m pip install moderngl PyOpenGL
@@ -3452,7 +3459,7 @@ jobs:
           CROSTL_DIRECTX_FORCE_WARP: "1"
         run: |
           set -euo pipefail
-          python tools/run_bounded_command.py --timeout-seconds 12300 --label "MLX upstream test_${{ matrix.test }}" -- \
+          python tools/run_bounded_command.py --timeout-seconds 13500 --label "MLX upstream test_${{ matrix.test }}" -- \
             python -m demos.integrations.mlx.portable_host.verify_upstream_${{ matrix.test }} --mlx-root mlx-upstream \
               --packages .mlx-portable-quantized/base/packages --output-dir .mlx-portable-quantized/upstream-${{ matrix.test }} \
               2>&1 | tee .mlx-portable-quantized/upstream-${{ matrix.test }}.log

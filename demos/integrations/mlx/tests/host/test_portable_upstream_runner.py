@@ -13,10 +13,12 @@ from demos.integrations.mlx.portable_host import (
     verify_upstream_fp_qmv_large_output,
     verify_upstream_fp_qvm,
     verify_upstream_qmm,
+    verify_upstream_qmm_non_transposed,
     verify_upstream_qmm_shapes,
     verify_upstream_qmm_vjp,
     verify_upstream_qmv,
     verify_upstream_qmv_small_non_multiples,
+    verify_upstream_qmv_wide,
 )
 from demos.integrations.mlx.portable_host import (
     verify_upstream_quantization as quantization,
@@ -25,6 +27,7 @@ from demos.integrations.mlx.portable_host import (
     verify_upstream_qvm,
     verify_upstream_qvm_splitk,
 )
+from demos.integrations.mlx.tests.workflow_matrix import expand_matrix
 
 WORKFLOW = (
     Path(__file__).resolve().parents[5] / ".github/workflows/demo-project-testing.yml"
@@ -40,6 +43,8 @@ RUNNERS = {
     "fp_qvm": verify_upstream_fp_qvm,
     "qmv_small_non_multiples": verify_upstream_qmv_small_non_multiples,
     "qmm_vjp": verify_upstream_qmm_vjp,
+    "qmv_wide": verify_upstream_qmv_wide,
+    "qmm_non_transposed": verify_upstream_qmm_non_transposed,
 }
 RUN_STEP = "Run the unchanged upstream test through translated kernels"
 
@@ -64,7 +69,10 @@ def trace(spec, target):
         for _ in range(count)
     ]
     return items + [
-        {"entry": spec.REDUCTIONS[0], "target": target, "threads": 64},
+        *(
+            {"entry": reduction, "target": target, "threads": 64}
+            for reduction in spec.REDUCTIONS
+        ),
         {"entry": "rbitsc", "target": target},
     ]
 
@@ -317,9 +325,25 @@ def test_runner_prepares_packages_before_both_workers(
                 for index, item in enumerate(command)
                 if item == "--reductions"
             ]
+            # Each 16-bit maximum sits in its own family's directory, loaded
+            # in the worker's family order.
+            families = {
+                (
+                    "half"
+                    if reduction.endswith("float16") and "bfloat" not in reduction
+                    else "bfloat" if reduction.endswith("bfloat16") else "all"
+                )
+                for reduction in spec.REDUCTIONS
+            }
             expected_reductions = [
-                str(output / ("reductions-half" if name == "qmm" else "reductions"))
+                str(
+                    output
+                    / ("reductions" if family == "all" else f"reductions-{family}")
+                )
+                for family in upstream_runner.MAXIMA_FAMILIES
+                if family in families
             ]
+            assert ("half" in families) == (name in ("qmm", "qmm_non_transposed"))
             if getattr(spec, "COLUMN_SUMS", ()):
                 expected_reductions.append(str(output / "reductions-column"))
             assert loaded == expected_reductions
@@ -399,6 +423,14 @@ def test_ci_runs_every_upstream_test_on_every_quantized_host_platform():
         "opengl": "ubuntu-24.04",
     }
     assert matrix.get("exclude") is None
+    # GitHub's expansion runs every test once on each platform's runner.
+    legs = expand_matrix(matrix)
+    assert sorted((leg["test"], leg["target"], leg["os"]) for leg in legs) == sorted(
+        (test, item["target"], item["os"])
+        for test in RUNNERS
+        for item in matrix["include"]
+    )
+    assert job["strategy"]["max-parallel"] < len(legs)
     assert "${{ matrix.test }}" in job["name"] and "${{ matrix.target }}" in job["name"]
     names = [item.get("name") for item in job["steps"]]
     steps = dict(zip(names, job["steps"]))
