@@ -125,6 +125,7 @@ from .glsl_buffer_array_values import (
 from .glsl_buffer_block_arrays import (
     glsl_buffer_array_elements,
     glsl_buffer_block_indexed_access,
+    glsl_buffer_matrix_column_access,
     glsl_buffer_whole_array_reason,
 )
 from .glsl_buffer_layout import (
@@ -13243,7 +13244,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
 
     def generate_glsl_buffer_block_store(self, target, value, op):
-        access = self.glsl_buffer_block_array_access(target)
+        access = self.glsl_buffer_block_array_access(
+            target
+        ) or glsl_buffer_matrix_column_access(self, target)
         indexed = access is not None
         if access is None:
             access = self.glsl_buffer_block_member_access(target)

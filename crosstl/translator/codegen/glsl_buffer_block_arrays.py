@@ -9,6 +9,10 @@ inner stride`` bytes past ``a``.
 Indexing an outer dimension yields a sub-array access, marked ``subarray``. Byte-offset loads and stores move one
 scalar, vector, matrix or struct at a time, so an expression that still denotes an array, such as ``block.a`` or
 ``block.a[i]`` above, is refused where it would be read or written as a value.
+
+A subscript of a matrix selects a column (GLSL 4.60 section 5.6), which a std140 or std430 matrix stores as one
+vector every ``column_stride`` bytes. ``glsl_buffer_matrix_column_access`` describes ``block.m[c]`` as that vector,
+so a write to the column, one of its components or one of its elements stores just those bytes.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ __all__ = [
     "glsl_buffer_array_extents",
     "glsl_buffer_block_indexed_access",
     "glsl_buffer_indexed_value_type",
+    "glsl_buffer_matrix_column_access",
     "glsl_buffer_whole_array_reason",
 ]
 
@@ -67,6 +72,62 @@ def glsl_buffer_block_indexed_access(codegen, expr):
         else:
             access.pop(key, None)
     return access
+
+
+_TARGET_TYPE_KEYS = ("hlsl_type", "metal_type", "slang_type")
+
+
+def glsl_buffer_matrix_column_access(codegen, expr):
+    """The vector access ``expr``, a subscript of a buffer block matrix, makes, or ``None``.
+
+    ``codegen`` provides ``glsl_buffer_block_array_access``, ``glsl_buffer_block_member_access``,
+    ``generate_expression`` and ``map_type``. The matrix is a member, a struct field or a fully subscripted array
+    element; the column keeps its buffer, block flags and component type.
+    """
+    if not isinstance(expr, ArrayAccessNode):
+        return None
+    matrix_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+    matrix = codegen.glsl_buffer_block_array_access(matrix_expr)
+    if matrix is None:
+        matrix = codegen.glsl_buffer_block_member_access(matrix_expr)
+        if matrix is not None and matrix.get("is_array"):
+            return None
+    if matrix is None or matrix.get("subarray") or not matrix.get("matrix_columns"):
+        return None
+    rows = matrix["matrix_rows"]
+    index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
+    index = codegen.generate_expression(index_expr)
+    offset = byte_offset_expression(matrix["offset"], index, matrix["column_stride"])
+    column_type = f"vec{rows}"
+    column = {
+        key: value
+        for key, value in matrix.items()
+        if key not in {
+            "matrix_columns",
+            "matrix_rows",
+            "column_stride",
+            "inner_arrays",
+            "inner_array_sizes",
+            "array_count",
+            "array_size",
+            "stride",
+            "members",
+        }
+    }
+    column.update(
+        type=column_type,
+        layout_type=column_type,
+        size=rows * matrix.get("component_size", 4),
+        components=rows,
+        is_array=False,
+        runtime_array=False,
+        offset=offset,
+        offset_expr=offset,
+    )
+    for key in _TARGET_TYPE_KEYS:
+        if key in matrix:
+            column[key] = codegen.map_type(column_type)
+    return column
 
 
 def glsl_buffer_array_extents(access):

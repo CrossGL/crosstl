@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from ..ast import ArrayAccessNode, MemberAccessNode
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
+from .glsl_buffer_block_arrays import glsl_buffer_matrix_column_access
 from .glsl_buffer_layout import (
     byte_offset_add,
     byte_offset_expression,
@@ -48,6 +49,9 @@ def _swizzle(member):
 
 
 def _vector_access(codegen, base):
+    column = glsl_buffer_matrix_column_access(codegen, base)
+    if column is not None:
+        return column, column["offset_expr"]
     access = codegen.glsl_buffer_block_array_access(base)
     if access is not None:
         if access.get("subarray"):
