@@ -806,6 +806,28 @@ def o_row_major_members(inp):
     return np.array(out_w + out_o, dtype=np.float32)
 
 
+def row_major_struct_inputs():
+    """64 std430 row-major ``L`` structures of 20 distinct small integers each, padding words included."""
+    return ((np.arange(64 * 20, dtype=np.int64) * 37 % 1283) - 641).astype(np.float32)
+
+
+def o_row_major_struct_members(inp):
+    """Reads of the row-major matrices of ``L`` and its nested ``Inner``, three vec4 results per invocation.
+
+    In each 20-word ``L``: ``inner.n`` (mat2x3) row r, column c is word 2r + c; ``c`` is words 8-11; ``k``
+    (mat3x2) row r, column c is word 12 + 4r + c.
+    """
+    ls = inp.reshape(64, 20).astype(np.float64)
+    out = []
+    for i in range(64):
+        a, b = ls[i], ls[63 - i]
+        kv = [sum(a[12 + 4 * r + c] * (c + 1.0) for c in range(3)) for r in range(2)]
+        out.extend([a[0], a[2], a[4], a[18]])
+        out.extend([b[1], b[3], b[5], a[11]])
+        out.extend([kv[0], kv[1], b[12], b[16]])
+    return np.array(out, dtype=np.float32)
+
+
 def o_mirror(inp):
     """Each 64-element group reversed: workgroup memory is shared by the group."""
     return inp.reshape(-1, 64)[:, ::-1].reshape(-1).astype(np.int32)
@@ -2139,6 +2161,16 @@ CASES = [
         row_major_inputs(),
         np.float32,
         o_row_major_members,
+    ),
+    Case(
+        "g_row_major_struct_members",
+        "S20",
+        "layout(row_major) on a buffer block reaches the mat2x3 of a nested structure and the mat3x2 of an "
+        "arrayed structure: matrix, column and element reads and a matrix times a vector",
+        "GLSL 4.60 section 4.4.5: row_major applies to the matrices of structures nested in the block, at any depth",
+        row_major_struct_inputs(),
+        np.float32,
+        o_row_major_struct_members,
     ),
     Case(
         "u_array_values",
