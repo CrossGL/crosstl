@@ -338,7 +338,7 @@ def refuse_unplaced_member_offsets(program, target) -> None:
             structs, program, target, (), lambda _variable, declared: declared is None
         )
     elif target in TARGET_LAYOUTS:
-        # GLSL output refuses the members of a push-constant T itself. HLSL output places them (hlsl_push_constants)
+        # GLSL output places or refuses the members of a push-constant T itself (push_constant_blocks). HLSL output places them (hlsl_push_constants)
         # and reads a buffer that declares a layout from registers at the planned offsets
         # (hlsl_glsl_block_registers).
         hlsl = TARGET_LAYOUTS[target] == HLSL_CBUFFER_LAYOUT
