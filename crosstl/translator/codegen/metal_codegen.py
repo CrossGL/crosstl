@@ -2257,9 +2257,6 @@ class MetalCodeGen(
                 self.expression_name,
             )
         )
-        self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
-            all_functions
-        )
         self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
             self.cbuffer_variables
         )
@@ -3333,6 +3330,10 @@ class MetalCodeGen(
                 [f for f in all_functions if not generic_function_parameters(f)]
                 + list(generic_function_specializations.values())
             )
+        )
+        self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
+            [f for f in all_functions if not generic_function_parameters(f)]
+            + list(generic_function_specializations.values())
         )
         self.function_stage_parameter_dependencies = (
             self.collect_function_stage_parameter_dependencies(ast, target_stage)
