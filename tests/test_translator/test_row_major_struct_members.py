@@ -147,3 +147,110 @@ def test_hlsl_output_compiles_with_dxc(tmp_path):
         timeout=180,
     )
     assert completed.returncode == 0, completed.stderr[-2000:]
+
+
+BUFFER = """
+shader main {
+    struct Inner {
+        mat2x3 n;
+    };
+    struct L {
+        Inner inner;
+        vec4 c;
+        mat3x2 k;
+    };
+    struct I {
+        L ls[2] @row_major;
+        float f;
+    };
+    struct O {
+        vec4 o[2];
+    };
+    I src @glsl_buffer_block(std430) @binding(0);
+    O dst @glsl_buffer_block(std430) @binding(1);
+    compute {
+        layout(local_size_x = 1) in;
+        void main() {
+            dst.o[0] = vec4(src.ls[1].inner.n[0], src.ls[0].inner.n[1].z);
+            dst.o[1] = vec4(src.ls[1].k[2], src.ls[0].k[1].y, src.f);
+        }
+    }
+}
+"""
+
+BUFFER_WHOLE = """
+shader main {
+    struct L {
+        mat2 n;
+        vec4 c;
+    };
+    struct Src {
+        L l @row_major;
+    };
+    struct O {
+        vec4 o[2];
+    };
+    Src src @glsl_buffer_block(std430) @binding(0);
+    O dst @glsl_buffer_block(std430) @binding(1);
+    compute {
+        layout(local_size_x = 1) in;
+        void main() {
+            L copy = src.l;
+            dst.o[0] = vec4(copy.n[0], copy.n[1]);
+        }
+    }
+}
+"""
+
+
+def _translate_cgl(tmp_path, source, backend):
+    path = tmp_path / "shader.cgl"
+    path.write_text(source, encoding="utf-8")
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+def test_buffer_block_copies_reach_the_byte_address_loads(tmp_path):
+    # The copy stores its matrices transposed (row_major_members.py): CrossGL mat2x3 is HLSL float3x2, and its
+    # row-major copy is declared float2x3 and read back through transpose.
+    code = _flat(_translate_cgl(tmp_path, BUFFER, "directx"))
+    assert "struct Inner_row_major { float2x3 n; };" in code, code
+    assert "transpose(transpose(" in code, code
+
+
+@pytest.mark.parametrize("backend", ["vulkan", "metal", "slang"])
+def test_buffer_block_copies_translate(tmp_path, backend):
+    code = _translate_cgl(tmp_path, BUFFER, backend)
+    assert "L_row_major" in code
+
+
+@pytest.mark.parametrize("backend", ["directx", "metal", "vulkan", "slang"])
+def test_whole_buffer_member_reads_are_refused(tmp_path, backend):
+    with pytest.raises(
+        RowMajorStructMemberUnsupportedError,
+        match="reads the whole row-major member 'l' of 'Src'",
+    ):
+        _translate_cgl(tmp_path, BUFFER_WHOLE, backend)
+
+
+def test_buffer_block_hlsl_compiles_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+    source = tmp_path / "buffer.hlsl"
+    source.write_text(_translate_cgl(tmp_path, BUFFER, "directx"), encoding="utf-8")
+    completed = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(source),
+            "-Fo",
+            str(tmp_path / "b.dxo"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]

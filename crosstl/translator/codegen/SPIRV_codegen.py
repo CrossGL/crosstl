@@ -7896,7 +7896,17 @@ class VulkanSPIRVCodeGen(
         Logical addressing accepts only memory object declarations as pointer operands of ``OpFunctionCall`` (SPIR-V
         1.6, section 2.16.1, "Universal Validation Rules"), so an ``OpAccessChain`` result cannot be the argument.
         The callee copies a by-value array parameter on entry, so a copy taken here keeps the same meaning.
+        An array that is a value rather than a pointer (an ``OpConstantComposite`` such as a program-scope
+        ``const`` array, a composite construct or a call result) is stored into a Function variable in the
+        same way.
         """
+        if (
+            value is not None
+            and expected_type is not None
+            and value.type.storage_class is None
+            and expected_type.type.storage_class == "Function"
+        ):
+            return self.spill_array_value_argument(value, expected_type)
         if (
             value is None
             or expected_type is None
@@ -7913,6 +7923,25 @@ class VulkanSPIRVCodeGen(
             return value
         copied = self.copy_array_pointer_to_function_storage(value, expected_pointee)
         return value if copied is None else copied
+
+    def spill_array_value_argument(self, value, expected_type):
+        """Store an array value into a Function variable so it can be a by-value array argument."""
+        expected_pointee = self.pointer_type_pointee_type(expected_type)
+        if (
+            expected_pointee is None
+            or self.array_type_info_from_type(expected_pointee) is None
+        ):
+            return value
+        converted = self.convert_value_to_type(value, expected_pointee)
+        if not self.value_has_type(converted, expected_pointee):
+            self.refuse_lowering(
+                "SPIR-V cannot pass an array value of a different type "
+                "to a by-value array parameter"
+            )
+            return value
+        scratch_array = self.create_variable(expected_pointee, "Function")
+        self.store_to_variable(scratch_array, converted)
+        return scratch_array
 
     def contains_lambda_expression(self, expr) -> bool:
         if isinstance(expr, FunctionCallNode):
