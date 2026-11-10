@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.coverage import probes, rustgpu, semantic, validators
+from tools.coverage import lowering, probes, rustgpu, semantic, validators
 from tools.coverage.features import rust
 from tools.coverage.model import VOID, Feature, Param, Signature, Type
 
@@ -276,7 +276,7 @@ def test_rust_mesh_and_task_probes_compile_for_vulkan_1_2(monkeypatch):
         return validators.Verdict(True)
 
     monkeypatch.setattr(rustgpu, "command", lambda target=rustgpu.TARGET: (target,))
-    monkeypatch.setattr(validators, "_run", run)
+    monkeypatch.setattr(validators, "run", run)
     for stage in ("compute", "closest-hit", "mesh", "task"):
         validators.validate("rust", "", stage)
     assert [arguments[0] for arguments in commands] == [
@@ -405,7 +405,7 @@ def test_rust_gpu_rejects_code_that_is_not_a_shader_crate():
 
 @needs_rust_gpu
 def test_rust_features_lower_to_spir_v_through_rust_gpu():
-    assert validators.can_lower("rust")
+    assert lowering.can_lower("rust")
     assert semantic.lower(SAMPLES[0]) == ("GLSL.std.450:Sin", "")
     # glam's methods are Rust arithmetic, so they borrow GLSL's ids through their CrossGL spelling instead.
     dot = Feature("rust", "function", "Vec3::dot", SAMPLES[1].signature, group="vec3")

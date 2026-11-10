@@ -376,11 +376,13 @@ def test_metal_rejects_hlsl_layouts_it_cannot_reproduce():
             void main(uint3 id : SV_DispatchThreadID) { o[id.x] = a[id.x][0].x + b; }
             """)
 
-    with pytest.raises(ValueError, match="matrices in HLSL structured buffers"):
+    with pytest.raises(
+        ValueError, match="matrix element of HLSL structured buffer 'm'"
+    ):
         generate_metal("""
             RWStructuredBuffer<float2x2> m : register(u0);
             [numthreads(1, 1, 1)]
-            void main(uint3 id : SV_DispatchThreadID) { m[id.x] = m[id.x] * 2.0; }
+            void main(uint3 id : SV_DispatchThreadID) { m[id.x][1].y = 2.0; }
             """)
 
     with pytest.raises(ValueError, match="different layouts"):

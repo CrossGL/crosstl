@@ -8,7 +8,8 @@ only when asked to, with ``copy()``.
 
 from __future__ import annotations
 
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY
 
 _ARRAY_PARAMETER = C_FAMILY["array-parameter"].body
 _STRUCT_RETURN = C_FAMILY["struct-return"].body

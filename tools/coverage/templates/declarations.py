@@ -9,7 +9,8 @@ asked to, accepts no ``0X`` prefix or bare ``.5``, and declares several variable
 
 from __future__ import annotations
 
-from .base import ABSENT, C_FAMILY, FIND, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY, FIND
 
 _C_FIND = FIND.replace("float(k)", "(float)k").replace("-1.0", "-1.0f")
 _C_BINS = "typedef struct {\n    float v[3];\n    int n;\n} Bins;"

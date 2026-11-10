@@ -9,6 +9,7 @@ from tests.conformance import runner as harness
 from tools.coverage import (
     execution,
     issues,
+    lowering,
     probes,
     publish,
     report,
@@ -68,7 +69,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 
 
 def test_a_buffer_passed_to_a_function_keeps_the_hlsl_interface(tmp_path):
-    if not validators.can_lower("hlsl"):
+    if not lowering.can_lower("hlsl"):
         pytest.skip(f"{validators.TOOLS['hlsl']} or spirv-dis is not installed")
     from tests.conformance import interface
 

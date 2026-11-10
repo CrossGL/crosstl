@@ -28,7 +28,7 @@ from __future__ import annotations
 import dataclasses
 import re
 
-from . import constructs, execution, probes, semantic, validators
+from . import constructs, execution, lowering, probes, semantic, validators
 from .dialect import ProbeError
 from .features.spirv import NAN_AWARE, is_core
 from .model import Feature, Param, Signature, Type
@@ -130,7 +130,7 @@ def _lowered(feature: Feature, language: str) -> tuple[str, probes.Probe]:
     when the reference compiler rejects it."""
     probe = probes.build(feature, language)
     # DXC drops the resources a shader never reads unless told to keep them, as the execution harness has it do.
-    assembly, log = validators.lower(
+    assembly, log = lowering.lower(
         language,
         probe.source,
         probe.entry,
@@ -152,13 +152,13 @@ def build(feature: Feature) -> probes.Probe:
     """The SPIR-V input probe of ``feature``; raises :class:`ProbeError` when there is none."""
     language = source_language(feature)
     if language == FALLBACK:
-        if not validators.can_lower(language):
+        if not lowering.can_lower(language):
             raise ProbeError("dxc or spirv-dis is not installed")
         assembly, probe = _lowered(
             dataclasses.replace(feature, language=language), language
         )
         return probes.Probe("spirv", assembly, probe.entry, ".spvasm")
-    if not validators.can_lower("glsl"):
+    if not lowering.can_lower("glsl"):
         raise ProbeError("glslangValidator or spirv-dis is not installed")
     instruction = "" if constructs.is_construct(feature) else feature.name
     glsl = dataclasses.replace(feature, language="glsl")

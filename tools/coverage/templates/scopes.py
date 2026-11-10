@@ -11,7 +11,8 @@ blocks, opens its inner scope with ``if True:``.
 
 from __future__ import annotations
 
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY
 
 _NO_PRIVATE_GLOBAL = {"global-variable": ABSENT}
 

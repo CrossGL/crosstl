@@ -11,7 +11,8 @@ matrices. OpenCL C has no bool vectors, so it converts the mask its comparison g
 
 from __future__ import annotations
 
-from .base import ABSENT, PAIR, Template
+from .base import ABSENT, Template
+from .family import PAIR
 from .statements import c_text
 
 # absorb changes a member of one argument and two elements of the other, after reading what the caller stored.

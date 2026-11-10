@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import re
 
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY
 
 _LITERAL = re.compile(r"\b(\d+\.\d+)\b")
 
