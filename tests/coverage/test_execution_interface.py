@@ -244,7 +244,7 @@ def test_generated_mixed_scalar_probe_is_executable(language):
 
 
 def _mixed_interface(language, input_count, constants):
-    """Discovery fixtures; SPIR-V needs only entry-point, binding and block declarations."""
+    """Discovery fixtures; SPIR-V needs only entry-point, binding, block and storage-buffer type declarations."""
     storage = [("float", "fin"), ("int", "iin"), ("uint", "uin")][:input_count]
     storage.append(("float", "outp"))
     if language == "metal":
@@ -270,6 +270,18 @@ def _mixed_interface(language, input_count, constants):
     source += "".join(
         f"OpDecorate %{name} DescriptorSet 0\nOpDecorate %{name} Binding {slot}\n"
         for slot, (_, name) in enumerate(storage)
+    )
+    scalars = {
+        "float": "OpTypeFloat 32",
+        "int": "OpTypeInt 32 1",
+        "uint": "OpTypeInt 32 0",
+    }
+    source += "".join(
+        f"%{name}_scalar = {scalars[kind]}\n%{name}_array = OpTypeRuntimeArray %{name}_scalar\n"
+        f"%{name}_block = OpTypeStruct %{name}_array\n"
+        f"%{name}_pointer = OpTypePointer StorageBuffer %{name}_block\n"
+        f"%{name} = OpVariable %{name}_pointer StorageBuffer\n"
+        for kind, name in storage
     )
     if constants:
         source += (

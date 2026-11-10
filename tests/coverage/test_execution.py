@@ -50,6 +50,68 @@ def test_only_supported_probes_with_matching_ordered_input_buffers_run():
     )
 
 
+def _module(inputs: tuple[str, ...], named: bool) -> str:
+    """A SPIR-V compute module binding one block of a runtime array per input, then the output and a uniform block."""
+    scalars = {
+        "fin": "OpTypeFloat 32",
+        "iin": "OpTypeInt 32 1",
+        "half": "OpTypeFloat 16",
+    }
+    lines = [
+        'OpEntryPoint GLCompute %main "main"',
+        "OpExecutionMode %main LocalSize 1 1 1",
+    ]
+    for slot, name in enumerate((*inputs, "fin")):
+        if named:
+            lines.append(
+                f'OpMemberName %block{slot} 0 "{name if slot < len(inputs) else "outp"}"'
+            )
+        lines += [
+            f"OpDecorate %var{slot} Binding {slot}",
+            f"OpDecorate %var{slot} DescriptorSet 0",
+        ]
+    lines.append(f"OpDecorate %params Binding {len(inputs) + 1}")
+    for slot, name in enumerate((*inputs, "fin")):
+        lines += [
+            f"%scalar{slot} = {scalars[name]}",
+            f"%array{slot} = OpTypeRuntimeArray %scalar{slot}",
+            f"%block{slot} = OpTypeStruct %array{slot}",
+            f"%pointer{slot} = OpTypePointer StorageBuffer %block{slot}",
+            f"%var{slot} = OpVariable %pointer{slot} StorageBuffer",
+        ]
+    lines += [
+        "%v4float = OpTypeVector %scalar0 4",
+        "%Params = OpTypeStruct %v4float",
+        "%params_pointer = OpTypePointer Uniform %Params",
+        "%params = OpVariable %params_pointer Uniform",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def test_spirv_inputs_are_the_storage_buffers_by_binding_and_scalar_type():
+    # A SPIR-V producer may drop debug names, so a round trip without them still runs in the native probe's place.
+    native = _module(("fin", "iin"), named=True)
+    assert execution.input_buffers(native) == ("fin", "iin")
+    assert execution.input_buffers(_module(("fin", "iin"), named=False)) == (
+        "fin",
+        "iin",
+    )
+    spirv = Feature("spirv", "function", "Ldexp", SIN.signature)
+
+    def runs(translated: str) -> bool:
+        return execution.executable(
+            Result(spirv, "input", "supported", sources=(native, translated))
+        )
+
+    assert runs(_module(("fin", "iin"), named=False))
+    # Swapped bindings, or a 16-bit float buffer the harness has no input for, keep the validation result.
+    assert not runs(_module(("iin", "fin"), named=True))
+    assert not runs(_module(("fin", "half"), named=True))
+    assert not execution.executable(
+        Result(spirv, "input", "supported", sources=(_module(("half",), True),) * 2)
+    )
+
+
 def test_every_run_gets_the_same_inputs_and_small_integers():
     assert np.array_equal(execution.inputs("fin"), execution.inputs("fin"))
     for buffer, dtype in (("iin", np.int32), ("uin", np.uint32)):

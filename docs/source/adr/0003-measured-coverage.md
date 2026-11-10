@@ -63,7 +63,9 @@ OpenCL C probe is emitted as HLSL, the target whose output row covers the most b
 Where Core's conformance harness has a runtime for the language, a supported compute probe whose native probe and
 translation declare the same input buffers in the same order also runs, with the inputs at slots 0 to n-1 and the output
 at slot n: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs through the
-harness's `run_suite`, and a translation that binds other resources or writes other results is `wrong`. The runtime
+harness's `run_suite`, and a translation that binds other resources or writes other results is `wrong`. SPIR-V names
+are debug information that a producer may drop, so a SPIR-V probe's inputs are its storage buffers in binding order,
+known by the scalar type of each runtime array. The runtime
 harness is not duplicated. HLSL, Slang and WGSL have no runtime on the Linux job, so both probes are compiled to SPIR-V
 by the language's reference compiler (DXC, slangc or naga) and run on lavapipe; a probe that compiler cannot lower, or
 whose SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps its validation result. llvmpipe's
