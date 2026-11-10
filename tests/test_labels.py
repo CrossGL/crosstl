@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from tools import labels
+from tools.coverage import ir, issues, runner
 from tools.labels import Change, GitHub, Label, load, plan
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,7 @@ TAXONOMY = {
             "metal",
             "spirv",
             "wgsl",
+            "webgl",
             "cuda",
             "hip",
             "slang",
@@ -73,6 +75,21 @@ def test_labels_that_workflows_and_dependabot_apply_are_defined():
         used |= set(update["labels"])
     assert {"ci:full", "stale", "dependencies"} <= used
     assert used <= names
+
+
+def test_labels_that_the_coverage_issues_apply_are_defined():
+    # GitHub creates a missing label when an issue is given it, and the next sync deletes it again.
+    rows = [
+        {"language": language, "direction": direction}
+        for direction, backends in (
+            ("output", runner.OUTPUT_BACKENDS),
+            ("input", runner.INPUT_BACKENDS),
+        )
+        for language in backends
+    ]
+    rows.append({"language": ir.LANGUAGE, "direction": "output"})
+    used = {label for row in rows for label in issues.bug_labels(row)}
+    assert used <= {label.name for label in load()}
 
 
 def test_every_dependency_manifest_has_a_dependabot_entry():
@@ -154,6 +171,10 @@ def test_every_path_pattern_matches_a_tracked_file():
         (
             ["crosstl/translator/codegen/directx_codegen.py"],
             ["backend:hlsl", "direction:output", "area:codegen"],
+        ),
+        (
+            ["crosstl/translator/codegen/webgl_codegen.py"],
+            ["backend:webgl", "direction:output", "area:codegen"],
         ),
         (["tests/test_translator/test_codegen/test_CUDA_codegen.py"], ["backend:cuda"]),
         (["crosstl/translator/parser.py"], ["backend:crossgl", "area:frontend"]),

@@ -39,7 +39,7 @@ silently reading other bytes.
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .array_utils import fold_array_type_counts, split_outer_array_dimension
 from .glsl_block_layout import (
@@ -56,6 +56,7 @@ from .hlsl_buffer_layout import (
     HLSL_CBUFFER_LAYOUT,
     HLSL_STRUCTURED_LAYOUT,
     HlslLayoutError,
+    HlslMemberPlacement,
     align_to,
     array_type,
     oriented_matrix_type,
@@ -112,6 +113,17 @@ class MetalLayoutMember:
     nested_struct: Optional[str] = None
     # Helper that reads element ``i`` of an array held as register words: ``helper(storage, i)``.
     element_load: Optional[str] = None
+    # Extents after the first of an array of arrays, outermost first. Storage, conversions and suffix describe
+    # the innermost element, which takes ``1 + len(inner_counts)`` subscripts; an ``element_load`` helper takes
+    # the row-major flattened index of those subscripts.
+    inner_counts: Tuple[int, ...] = ()
+
+    @property
+    def dimensions(self):
+        """Subscripts that select one element of an array member, ``0`` for other members."""
+        if self.array_count is None and not self.element_load:
+            return 0
+        return 1 + len(self.inner_counts)
 
     @property
     def converted(self):
@@ -151,6 +163,8 @@ class MetalLayoutPlan:
             if padding:
                 lines.append(f"char {padding_name(index)}[{padding}];")
             suffix = f"[{member.array_count}]" if member.array_count is not None else ""
+            if member.array_count is not None:
+                suffix += "".join(f"[{count}]" for count in member.inner_counts)
             lines.append(f"{member.storage_type} {member.name}{suffix};")
         if self.tail_padding:
             lines.append(
@@ -251,10 +265,24 @@ class MetalHlslBufferLayouts:
             existing_plan = self.struct_plans[name]
             candidate = self.plan_members(name, layout_type, layout)
             if [
-                (m.name, m.offset, m.storage_type, m.array_count, m.element_suffix)
+                (
+                    m.name,
+                    m.offset,
+                    m.storage_type,
+                    m.array_count,
+                    m.inner_counts,
+                    m.element_suffix,
+                )
                 for m in existing_plan.members
             ] != [
-                (m.name, m.offset, m.storage_type, m.array_count, m.element_suffix)
+                (
+                    m.name,
+                    m.offset,
+                    m.storage_type,
+                    m.array_count,
+                    m.inner_counts,
+                    m.element_suffix,
+                )
                 for m in candidate.members
             ]:
                 raise HlslLayoutError(
@@ -411,10 +439,7 @@ class MetalHlslBufferLayouts:
         count = layout_type.count
         label = LAYOUT_LABELS[layout]
         if element.kind == "array":
-            # Element storage, its read conversion and its suffix describe one array dimension.
-            raise HlslLayoutError(
-                f"multidimensional arrays in {label} buffers are not supported"
-            )
+            return self.nested_array_member_storage(placement, layout, following)
         if layout in REGISTER_LAYOUTS and element.kind in ("scalar", "vector"):
             storage, size = METAL_SCALAR_STORAGE[element.scalar]
             if size != 4:
@@ -469,6 +494,46 @@ class MetalHlslBufferLayouts:
             write_conversion=write,
             nested_struct=nested,
         )
+
+    def nested_array_member_storage(self, placement, layout, following):
+        """Storage of an array of arrays, planned as the one-dimensional array of its innermost elements.
+
+        Each of these layouts places an array of arrays as the arrays it contains, one after another: the stride of
+        a dimension is the size of its element rounded up to the array alignment (GLSL 4.60 section 7.6.2.2, rules
+        4 and 10, applied per dimension; HLSL starts each element of a constant-buffer array in a new register).
+        That makes every outer stride the inner extent times the inner stride, as Metal's nested C arrays have it,
+        which is checked here for each dimension of the layouts that define their own strides.
+        """
+        counts = []
+        level = placement.layout_type
+        while level.kind == "array":
+            counts.append(level.count)
+            level = level.element
+        total = 1
+        for count in counts:
+            total *= count
+        flat_type = array_type(level, total)
+        flat = HlslMemberPlacement(
+            placement.name, flat_type, placement.offset, placement.size
+        )
+        member = self.array_member_storage(flat, layout, following)
+        # HLSL structured buffers pack arrays as C does, which Metal's arrays reproduce.
+        checked = layout in REGISTER_LAYOUTS or layout in GLSL_BLOCK_LAYOUTS
+        element_stride = layout_array_stride(flat_type, layout) if checked else 0
+        level, inner = placement.layout_type, total
+        while checked and level.kind == "array":
+            inner //= level.count
+            stride = layout_array_stride(level, layout)
+            if stride != inner * element_stride:
+                raise HlslLayoutError(
+                    f"array '{placement.name}' has a {stride}-byte {LAYOUT_LABELS[layout]} stride in a dimension "
+                    f"whose Metal storage takes {inner * element_stride} bytes per element"
+                )
+            level = level.element
+        if not member.element_load:
+            member.array_count = counts[0]
+        member.inner_counts = tuple(counts[1:])
+        return member
 
     def trimmed_array_storage(self, placement, scalar, width):
         """Register words of a constant-buffer array whose last register the next member shares.

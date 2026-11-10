@@ -1113,3 +1113,172 @@ def test_glslang_lowers_push_constants_and_a_second_descriptor_set():
     )
     second = uniform.replace("std140, binding = 3", "std140, set = 1, binding = 3")
     assert decorations.lost(bound, "glsl", second) == ""
+
+
+_ORDERED = (
+    "ExecutionMode.PixelInterlockOrderedEXT Capability.FragmentShaderPixelInterlockEXT"
+    " OpBeginInvocationInterlockEXT"
+)
+
+
+def test_a_rasterizer_ordered_translation_keeps_its_interlocked_region(monkeypatch):
+    ordered = Feature(
+        "spirv", "graphics", "rasterizer-ordered-image", None, group=_ORDERED
+    )
+    interlocked = (
+        "OpCapability FragmentShaderPixelInterlockEXT\n"
+        "OpExecutionMode %main PixelInterlockOrderedEXT\n"
+        "OpBeginInvocationInterlockEXT\nOpEndInvocationInterlockEXT\n"
+    )
+    assert decorations.lost(ordered, "spirv", interlocked) == ""
+    unordered = interlocked.replace("OpBeginInvocationInterlockEXT\n", "")
+    assert decorations.lost(ordered, "spirv", unordered) == (
+        "the translation loses OpBeginInvocationInterlockEXT"
+    )
+    # Metal orders the accesses to an argument in a raster order group, and has no capability to check.
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    argument = '!15 = !{i32 2, !"air.texture", !"air.raster_order_group", i32 0}\n'
+    assert decorations.lost(ordered, "metal", argument) == ""
+    assert decorations.lost(
+        ordered, "metal", argument.replace("raster_order_group", "read_write")
+    ) == ("the translation loses ExecutionMode.PixelInterlockOrderedEXT")
+
+
+@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+def test_glslang_lowers_a_pixel_interlocked_region():
+    ordered = Feature(
+        "glsl",
+        "graphics",
+        "rasterizer-ordered-image",
+        None,
+        group=_ORDERED,
+        stage="fragment",
+    )
+    source = (
+        "#version 460\n#extension GL_ARB_fragment_shader_interlock : require\n"
+        "layout(pixel_interlock_ordered) in;\n"
+        "layout(rgba32f, binding = 0) uniform image2D accum;\n"
+        "layout(location = 0) out vec4 color;\n"
+        "void main() {\n    ivec2 p = ivec2(gl_FragCoord.xy);\n"
+        "    beginInvocationInterlockARB();\n"
+        "    imageStore(accum, p, imageLoad(accum, p) + vec4(1.0));\n"
+        "    endInvocationInterlockARB();\n    color = vec4(1.0);\n}\n"
+    )
+    assert decorations.lost(ordered, "glsl", source) == ""
+    unordered = (
+        source.replace("layout(pixel_interlock_ordered) in;\n", "")
+        .replace("    beginInvocationInterlockARB();\n", "")
+        .replace("    endInvocationInterlockARB();\n", "")
+    )
+    lost = decorations.lost(ordered, "glsl", unordered)
+    assert "OpBeginInvocationInterlockEXT" in lost
+    assert "ExecutionMode.PixelInterlockOrderedEXT" in lost
+
+
+_ARRAY = "OpTypeArray OpTypeImage Dim.2D"
+
+
+def test_an_array_of_textures_keeps_its_images_as_array_elements(monkeypatch):
+    textures = Feature("spirv", "resource", "array-of-textures", None, group=_ARRAY)
+    image = "%img = OpTypeImage %float 2D 2 0 0 1 Unknown\n"
+    # HLSL's Texture2D tex[2] is an array of images, GLSL's sampler2D tex[2] one of sampled images.
+    for elements in (
+        image + "%arr = OpTypeArray %img %uint_2\n",
+        image + "%si = OpTypeSampledImage %img\n%arr = OpTypeArray %si %uint_2\n",
+    ):
+        assert decorations.lost(textures, "spirv", elements) == ""
+    # Two separate textures keep the shape but not the array.
+    separate = (
+        image + "%si = OpTypeSampledImage %img\n%arr = OpTypeArray %float %uint_2\n"
+    )
+    assert (
+        decorations.lost(textures, "spirv", separate) == "the translation loses Dim.2D"
+    )
+    # Metal passes an array of textures as an array of texture pointers.
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    argument = "define void @probe([2 x %struct._texture_2d_t addrspace(1)*]* %3)\n"
+    assert decorations.lost(textures, "metal", argument) == ""
+    single = "define void @probe(%struct._texture_2d_t addrspace(1)* %3)\n"
+    assert decorations.lost(textures, "metal", single) == "the translation loses Dim.2D"
+    # A texture that is not an array keeps the plain shape.
+    helper = dataclasses.replace(textures, name="texture-in-helper")
+    assert decorations.lost(helper, "metal", single) == ""
+
+
+def test_an_unsized_array_of_textures_stays_unsized(monkeypatch):
+    unsized = Feature(
+        "spirv",
+        "resource",
+        "unsized-array-of-textures",
+        None,
+        group="Capability.RuntimeDescriptorArray OpTypeRuntimeArray Dim.2D",
+    )
+    image = "%img = OpTypeImage %float 2D 2 0 0 1 Unknown\n"
+    runtime = "OpCapability RuntimeDescriptorArray\n" + image
+    assert decorations.lost(unsized, "spirv", runtime) == ""
+    assert decorations.lost(unsized, "spirv", image) == (
+        "the translation loses Capability.RuntimeDescriptorArray"
+    )
+    # Metal reaches the array through an argument buffer, a structure that holds the texture; a sized array of
+    # textures wraps each texture too, but in no structure of its own.
+    monkeypatch.setattr(validators, "air", lambda source: source)
+    texture = (
+        '%"struct.metal::texture2d" = type { %struct._texture_2d_t addrspace(1)* }\n'
+    )
+    slot = '%struct.Slot = type { %"struct.metal::texture2d" }\n'
+    assert decorations.lost(unsized, "metal", slot + texture) == ""
+    assert decorations.lost(unsized, "metal", texture) == (
+        "the translation loses Capability.RuntimeDescriptorArray"
+    )
+
+
+def test_a_storage_image_translation_keeps_its_texel_format():
+    unorm = Feature(
+        "spirv",
+        "resource",
+        "unorm-storage-image",
+        None,
+        group="OpImageWrite ImageFormat.Rgba8 Dim.2D",
+    )
+    image = "%img = OpTypeImage %float 2D 0 0 0 2 {}\n"
+    assert decorations.lost(unorm, "spirv", image.format("Rgba8")) == ""
+    assert decorations.lost(unorm, "spirv", image.format("Rgba32f")) == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+    # A format that only begins with the wanted one is another format.
+    assert decorations.lost(unorm, "spirv", image.format("Rgba8Snorm")) == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+    # DXC writes Rgba32f for any float4 storage texture, so HLSL keeps the format in its declaration.
+    assert decorations.lost(unorm, "hlsl", "RWTexture2D<unorm float4> img;\n") == ""
+    assert (
+        decorations.lost(
+            unorm, "hlsl", '[[vk::image_format("rgba8")]] RWTexture2D<float4> img;\n'
+        )
+        == ""
+    )
+    assert decorations.lost(unorm, "hlsl", "RWTexture2D<float4> img;\n") == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+    # An OpenCL C kernel names no format, so the HLSL CrossTL writes from it is not checked for one.
+    plain = "RWTexture2D<float4> img;\n"
+    assert decorations.lost(unorm, "hlsl", plain, imported="opencl") == ""
+    assert decorations.lost(unorm, "hlsl", plain, imported="hlsl") == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+
+
+def test_a_shared_sampler_translation_declares_the_sampler_apart():
+    shared = Feature(
+        "spirv",
+        "resource",
+        "shared-sampler",
+        None,
+        group="OpTypeSampler OpSampledImage Dim.2D",
+    )
+    image = "%img = OpTypeImage %float 2D 0 0 0 1 Unknown\n"
+    assert decorations.lost(shared, "spirv", image + "%smp = OpTypeSampler\n") == ""
+    combined = image + "%si = OpTypeSampledImage %img\n"
+    assert decorations.lost(shared, "spirv", combined) == (
+        "the translation loses OpTypeSampler"
+    )

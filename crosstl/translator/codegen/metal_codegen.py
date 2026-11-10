@@ -2257,9 +2257,6 @@ class MetalCodeGen(
                 self.expression_name,
             )
         )
-        self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
-            all_functions
-        )
         self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
             self.cbuffer_variables
         )
@@ -2718,6 +2715,16 @@ class MetalCodeGen(
                     self.generic_struct_specializations,
                 )
             )
+        # Collect cbuffer dependencies after generic specializations exist, so a
+        # specialization that reads a cbuffer member (e.g. `scaled_float` reading
+        # `gain`) gets the cbuffer threaded as a parameter like any other helper.
+        # The unspecialized generic templates are excluded, mirroring the
+        # global-resource collection below: emission and call sites query the
+        # specialization name, not the template name.
+        self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
+            [f for f in all_functions if not generic_function_parameters(f)]
+            + list(generic_function_specializations.values())
+        )
         wave_dependency_functions = list(all_functions) + list(
             generic_function_specializations.values()
         )
