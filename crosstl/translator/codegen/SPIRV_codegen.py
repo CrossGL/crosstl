@@ -68,6 +68,7 @@ from ..semantics.shader_records import (
     shader_record_memory_layout,
 )
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from ..vulkan_memory_scope import needs_device_coherence
 from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
@@ -110,6 +111,7 @@ from .generic_function_utils import (
 )
 from .generic_struct_utils import generic_struct_specialization_name
 from .image_access_contracts import (
+    PACKED_IMAGE_FORMAT_CHANNEL_COUNTS,
     collect_function_image_access_requirements,
     collect_function_parameter_names,
     image_access_diagnostic_name,
@@ -215,6 +217,7 @@ from .spirv_per_vertex_builtins import (
 )
 from .spirv_placed_blocks import (
     SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION,
+    declare_placed_struct_uniform,
     decorate_placed_uniform_block,
     matrix_from_column_array,
     placed_member_type,
@@ -302,6 +305,7 @@ from .spirv_uniform_block_arrays import (
     lowered_constant_buffer_nodes,
     require_non_uniform_block_array_indexing,
 )
+from .spirv_value_subscripts import vector_value_subscript
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
 from .stage_utils import (
@@ -318,6 +322,7 @@ from .texture_residency import (
     TEXTURE_RESIDENCY_OPERATION,
     TEXTURE_RESIDENT_OPERATION,
 )
+from .workgroup_size_extents import fold_workgroup_size_extents
 
 
 class SpirvType:
@@ -14229,6 +14234,9 @@ class VulkanSPIRVCodeGen(
             "rgba32f": "Rgba32f",
             "rgba32i": "Rgba32i",
             "rgba32ui": "Rgba32ui",
+            "rgb10_a2": "Rgb10A2",
+            "rgb10_a2ui": "Rgb10a2ui",
+            "r11f_g11f_b10f": "R11fG11fB10f",
         }
 
     def spirv_image_format_name(self, image_format: Optional[str]) -> Optional[str]:
@@ -14249,6 +14257,9 @@ class VulkanSPIRVCodeGen(
             return 4
 
         image_format = str(image_format).lower()
+        packed = PACKED_IMAGE_FORMAT_CHANNEL_COUNTS.get(image_format)
+        if packed is not None:
+            return packed
         if image_format.startswith("rgba"):
             return 4
         if image_format.startswith("rg"):
@@ -18656,7 +18667,9 @@ class VulkanSPIRVCodeGen(
             if access_name in supported:
                 qualifiers.add(aliases.get(access_name, access_name))
 
-        if "globallycoherent" in qualifiers:
+        if "globallycoherent" in qualifiers or needs_device_coherence(node):
+            # Coherent under the GLSL450 memory model is device-wide, which holds every scope
+            # GL_KHR_memory_scope_semantics names.
             qualifiers.add("coherent")
 
         return qualifiers
@@ -21001,6 +21014,11 @@ class VulkanSPIRVCodeGen(
             push_constant = declare_push_constant_variable(self, node, var_type)
             if push_constant is not None:
                 return push_constant
+        if storage_class == "Uniform":
+            # A ConstantBuffer<T> whose T places members with @offset or @align keeps those bytes.
+            placed_variable = declare_placed_struct_uniform(self, node, var_type)
+            if placed_variable is not None:
+                return placed_variable
         if (
             storage_class == "Uniform"
             and self.current_struct_members.get(var_type.type.base_type) is not None
@@ -24074,7 +24092,10 @@ class VulkanSPIRVCodeGen(
                     requirements.get(function_name, {})
                 )
                 self.stage_local_inline_storage_buffer_functions.setdefault(key, [])
-                if self.function_requires_pointer_preserving_inlining(function_node):
+                if (
+                    self.function_requires_pointer_preserving_inlining(function_node)
+                    and getattr(function_node, "body", None) is not None
+                ):
                     self.stage_local_inline_storage_buffer_functions[key].append(
                         function_node
                     )
@@ -24215,6 +24236,9 @@ class VulkanSPIRVCodeGen(
             if not function_name:
                 continue
             if not self.function_requires_pointer_preserving_inlining(func):
+                continue
+            if getattr(func, "body", None) is None:
+                # A prototype has nothing to inline; its definition is the candidate.
                 continue
             functions.setdefault(function_name, []).append(func)
         return functions
@@ -30201,6 +30225,9 @@ class VulkanSPIRVCodeGen(
             )
             if reinterpret_load is not None:
                 return reinterpret_load
+            component = vector_value_subscript(self, expr.array, index, expr.index)
+            if component is not None:
+                return component
 
             access, element_type = self.create_array_element_access(
                 expr.array, index, expr.index
@@ -32683,6 +32710,7 @@ class VulkanSPIRVCodeGen(
                 self, "workgroup_access_assertions", ()
             ),
         )
+        ast = fold_workgroup_size_extents(ast, "SPIR-V", self.refuse_lowering)
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
             (getattr(ast, "stages", None) or {}).items()

@@ -38215,8 +38215,8 @@ def test_opengl_image_format_metadata_rejects_duplicate_metadata(shader, message
                 }
             }
             """,
-            "Invalid OpenGL image format metadata for 'colorOut': "
-            "format rgba64f is not a supported storage image format",
+            "Unsupported storage image format on global variable 'colorOut': "
+            "@format\\(rgba64f\\) is not a CrossGL storage image format",
         ),
         (
             """
@@ -38232,8 +38232,8 @@ def test_opengl_image_format_metadata_rejects_duplicate_metadata(shader, message
                 }
             }
             """,
-            "Invalid OpenGL image format metadata for 'image': "
-            "format slot is not a supported storage image format",
+            "Unsupported storage image format on parameter 'image' of function "
+            "'loadColor': @format\\(slot\\) is not a CrossGL storage image format",
         ),
         (
             """

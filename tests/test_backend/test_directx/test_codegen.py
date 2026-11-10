@@ -6876,7 +6876,9 @@ def test_codegen_get_dimensions_mapping():
     assert "buffer_dimensions" in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
-    assert "buf.GetDimensions(len);" in regenerated_hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload, so the lone count is assigned.
+    assert "len = cgl_buffer_count(buf);" in regenerated_hlsl
+    assert "buf.GetDimensions(len);" not in regenerated_hlsl
     assert "texture_dimensions" not in regenerated_hlsl
     assert "buffer_dimensions" not in regenerated_hlsl
 

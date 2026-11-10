@@ -138,6 +138,10 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..vulkan_memory_scope import (
+    declares_vulkan_memory_model,
+    glsl_memory_scope_qualifiers,
+)
 from ..wave_operations import WAVE_BALLOT_BIT_OPERATIONS, wave_extended_result_type
 from .apple_sdk_includes import is_apple_sdk_include
 from .array_utils import (
@@ -315,6 +319,11 @@ from .glsl_shadow_lod import (
     is_zero_lod_literal,
     require_shadow_lod_extension,
     zero_lod_compare_gradient_call,
+)
+from .glsl_specialization_dependents import (
+    constant_source_name,
+    partition_constants_by_specialization_dependency,
+    runtime_specialization_dependents,
 )
 from .glsl_specialization_macros import glsl_specialization_macro_name
 from .glsl_stage_builtin_members import (
@@ -662,6 +671,7 @@ from .texture_residency import (
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .workgroup_access_contracts import parse_workgroup_access_assertions
+from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
 
 # Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
 GLSL_SPIRV_GUARD = "#if defined(GL_SPIRV) || defined(VULKAN)\n"
@@ -2996,6 +3006,8 @@ class GLSLCodeGen(
         self.glsl_constant_types = {}
         self.glsl_specialization_constant_names = set()
         self.glsl_global_specialization_constants = []
+        self.glsl_specialization_constant_declarations = []
+        self.glsl_runtime_specialization_dependent_ids = set()
         self.literal_int_vector_constants = {}
         self.literal_int_vector_array_constants = {}
         self.current_compile_time_int_constants = {}
@@ -3024,6 +3036,7 @@ class GLSLCodeGen(
         self.current_mesh_output_parameters = {}
         self.current_mesh_output_topology = None
         self.current_glsl_extensions = set()
+        self.glsl_vulkan_memory_model = False
         self.current_glsl_version_line = None
         self.current_glsl_resource_binding_layouts_supported = True
         self.glsl_emission_requirements = []
@@ -3095,6 +3108,8 @@ class GLSLCodeGen(
         self.struct_member_types = {}
         self.union_storage = UnionStorage(self)
         self.struct_member_name_maps = {}
+        # Read by type-name scans that run before the program's enums are collected.
+        self.struct_payload_enums = []
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
         self.generic_function_definitions = {}
@@ -9120,6 +9135,8 @@ class GLSLCodeGen(
         self.current_glsl_private_pointer_base_names = {}
         self.current_glsl_private_pointer_function_name = None
         self.glsl_global_specialization_constants = []
+        self.glsl_specialization_constant_declarations = []
+        self.glsl_runtime_specialization_dependent_ids = set()
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -9203,6 +9220,9 @@ class GLSLCodeGen(
         self.current_target_stage = target_stage
         self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
+            getattr(ast, "preprocessors", None), self.current_glsl_extensions
+        )
         self.glsl_shadow_lod_extension_used = False
         self.glsl_stage_builtin_extensions = []
         stage_names = {
@@ -9539,6 +9559,7 @@ class GLSLCodeGen(
         for line in self.glsl_stage_extension_lines(ast, target_stage):
             if line not in extra_lines:
                 code += f"{line}\n"
+        code += self.prepare_glsl_runtime_specialization_dependents(ast, version_line)
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
         if exact_subgroup_width is not None:
@@ -9565,8 +9586,19 @@ class GLSLCodeGen(
                 getattr(ast, "constants", []) or [], structs
             )
         )
+        leading_constants, specialization_dependent_constants = (
+            partition_constants_by_specialization_dependency(
+                leading_constants,
+                {
+                    name
+                    for node in self.glsl_specialization_constant_declarations
+                    if (name := constant_source_name(node)) is not None
+                },
+            )
+        )
         code += self.generate_constants(ast, leading_constants)
         code += self.generate_glsl_global_specialization_constants()
+        code += self.generate_constants(ast, specialization_dependent_constants)
         code += self.generate_glsl_wave_helpers(ast, target_stage)
 
         all_global_vars = [
@@ -9911,6 +9943,7 @@ class GLSLCodeGen(
                 else:
                     data_struct_nodes.append(node)
 
+        code += glsl_workgroup_size_declaration_layout(self, ast, target_stage)
         code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
@@ -18637,6 +18670,11 @@ class GLSLCodeGen(
             return builtin_declaration
         if constant_id is None:
             value_code = self.generate_constant_expression(value, const_type)
+            if id(node) in self.glsl_runtime_specialization_dependent_ids:
+                return (
+                    f"{GLSL_SPIRV_GUARD}{declaration} = {value_code};\n"
+                    f"#else\nconst {declaration} = {value_code};\n#endif\n"
+                )
             return f"const {declaration} = {value_code};\n"
 
         self.validate_glsl_specialization_constant_type(node, const_type)
@@ -18923,6 +18961,35 @@ class GLSLCodeGen(
         self.glsl_global_specialization_constants = [
             node for node in declarations if id(node) in global_ids
         ]
+        self.glsl_specialization_constant_declarations = declarations
+
+    def prepare_glsl_runtime_specialization_dependents(self, ast, version_line):
+        declarations = self.glsl_specialization_constant_declarations
+        declaration_ids = {id(node) for node in declarations}
+        self.glsl_runtime_specialization_dependent_ids = (
+            runtime_specialization_dependents(
+                [
+                    node
+                    for node in getattr(ast, "constants", []) or []
+                    if id(node) not in declaration_ids
+                ],
+                declarations,
+                lambda node: self.map_type(
+                    self.glsl_specialization_constant_type(node)
+                ),
+                self.map_type,
+            )
+        )
+        if not self.glsl_runtime_specialization_dependent_ids or not re.search(
+            r"\bes\b", version_line
+        ):
+            return ""
+        # GLSL ES 3.20 section 4.3 requires constant global initializers; the extension lifts that.
+        return (
+            f"{GLSL_SPIRV_GUARD}"
+            "#extension GL_EXT_shader_non_constant_global_initializers : enable\n"
+            "#endif\n"
+        )
 
     def generate_constant_expression(self, expr, expected_type=None):
         previous = self.glsl_generating_global_initializer
@@ -58242,6 +58309,9 @@ complex64_t crossgl_complex64_mod_assign(
             "rgba8ui",
             "rgba16ui",
             "rgba32ui",
+            "rgb10_a2",
+            "rgb10_a2ui",
+            "r11f_g11f_b10f",
         }:
             if explicit_format in {
                 "r8",
@@ -58261,6 +58331,8 @@ complex64_t crossgl_complex64_mod_assign(
                 "rgba16_snorm",
                 "rgba16f",
                 "rgba32f",
+                "rgb10_a2",
+                "r11f_g11f_b10f",
             }:
                 format_class = "r32f"
             elif explicit_format.endswith("ui"):
@@ -59209,8 +59281,10 @@ complex64_t crossgl_complex64_mod_assign(
         if "globallycoherent" in qualifiers:
             qualifiers.add("coherent")
 
+        scoped = glsl_memory_scope_qualifiers(node, self.glsl_vulkan_memory_model)
         order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
-        return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
+        names = [*scoped, *(name for name in order if name in qualifiers)]
+        return " ".join(dict.fromkeys(names))
 
     def resource_access_metadata_choices(self, node):
         choices = []

@@ -113,6 +113,7 @@ from .matrix_spellings import (
     AmbiguousMatrixSpellingError,
     refuse_ambiguous_matrix_spellings,
 )
+from .member_placements import refuse_unplaced_member_offsets
 from .metal_math_spellings import lower_metal_math_spellings
 from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
@@ -199,7 +200,11 @@ from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
-from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
+from .unsized_arrays import (
+    StorageBufferParameterUnsupportedError,
+    UnsizedArrayUnsupportedError,
+    legalize_unsized_arrays,
+)
 from .vector_logic import lower_vector_logic
 from .vertex_input_positions import (
     VertexInputPositionUnsupportedError,
@@ -266,6 +271,7 @@ __all__ = [
     "SpirvOperationUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
+    "StorageBufferParameterUnsupportedError",
     "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
@@ -508,6 +514,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
+    refuse_unplaced_member_offsets(program, report.target)
     mark_push_constant_layouts(program, report.target)
     hoist_constant_buffer_layouts(program, report.target)
     hoist_constant_reference_layouts(program, report.target)

@@ -10,7 +10,11 @@ most 2048 bytes, so the DirectX emitter gave the runtime array 1024 elements and
 emitter knew ``spirvArrayLength``.
 
 For translations from SPIR-V this pass rewrites each such variable into the forms the GLSL importer produces for
-the same declarations (GLSL 4.60 section 4.3.9, interface blocks, and section 4.1.9, ``length()``):
+the same declarations (GLSL 4.60 section 4.3.9, interface blocks, and section 4.1.9, ``length()``). It rewrites a
+variable whose block ends in a runtime array for every source, including the ``.cgl`` file the importer writes:
+no struct with an unbounded element count can be an array element, so such a buffer only ever holds one block.
+A block without a runtime array is also a valid one-element structured buffer, and only translations from SPIR-V
+rewrite it. The forms are:
 
 * a block whose only member is a runtime array of a 32-bit scalar, or of a two- or four-component vector of one,
   becomes a structured buffer of that element; those element strides are the same under std430 and in HLSL
@@ -30,7 +34,8 @@ importer's forms for ``buffer B { ... } v[N]``).
 
 A variable used other than through ``v[0]`` (``v[k][0]`` for an array) or ``spirvArrayLength``, or whose name a local
 declaration shadows, is left as it is. A ``spirvArrayLength`` call that is not rewritten is refused with
-:class:`SpirvArrayLengthUnsupportedError`, since no target defines that name.
+:class:`SpirvArrayLengthUnsupportedError`, since no target defines that name, unless the program defines a function
+of that name itself.
 """
 
 from __future__ import annotations
@@ -166,9 +171,10 @@ class _Block:
 
 
 class StorageBlockNormalizer:
-    def __init__(self, program, target):
+    def __init__(self, program, target, runtime_blocks_only=False):
         self.program = program
         self.target = target
+        self.runtime_blocks_only = runtime_blocks_only
         self.parents = _parents(program)
         self.structs = {s.name: s for s in iter_structs(program)}
 
@@ -209,6 +215,8 @@ class StorageBlockNormalizer:
             ):
                 continue
             struct = self.structs.get(var_type.generic_args[0].name)
+            if self.runtime_blocks_only and not _ends_in_runtime_array(struct):
+                continue
             if isinstance(struct, A.StructNode) and struct.members:
                 blocks[variable.name] = _Block(
                     variable, struct, _STRUCTURED[var_type.name], array
@@ -386,7 +394,10 @@ class StorageBlockNormalizer:
         return False
 
     def refuse_remaining_lengths(self):
-        for function in iter_functions(self.program):
+        functions = list(iter_functions(self.program))
+        if any(function.name == ARRAY_LENGTH for function in functions):
+            return  # a CrossGL program's own function of that name
+        for function in functions:
             for node in _walk(function.body):
                 if (
                     isinstance(node, A.FunctionCallNode)
@@ -400,7 +411,35 @@ class StorageBlockNormalizer:
 
 
 def normalize_spirv_storage_blocks(program, source, target) -> bool:
-    """Rewrite ``program``'s SPIR-V storage block variables for ``target``; returns whether any changed."""
-    if str(source or "").lower() not in SPIRV_SOURCES:
+    """Rewrite ``program``'s SPIR-V storage block variables for ``target``; returns whether any changed.
+
+    A structured buffer whose element struct ends in a runtime array has one meaning whatever the source: the
+    element count of such a struct is unbounded, so the buffer can only hold the one block that ``v[0]`` names.
+    Those variables are rewritten for every source, which lets the CrossGL that the SPIR-V importer writes out
+    translate the same as the module itself. Blocks without a runtime array are also valid one-element structured
+    buffers, so only translations from SPIR-V rewrite them.
+    """
+    from_spirv = str(source or "").lower() in SPIRV_SOURCES
+    if not from_spirv and not _has_runtime_block_forms(program):
         return False
-    return StorageBlockNormalizer(program, str(target or "")).run()
+    return StorageBlockNormalizer(
+        program, str(target or ""), runtime_blocks_only=not from_spirv
+    ).run()
+
+
+def _ends_in_runtime_array(struct) -> bool:
+    members = getattr(struct, "members", None) or []
+    return bool(members) and _is_runtime_array(
+        getattr(members[-1], "member_type", None)
+    )
+
+
+def _has_runtime_block_forms(program) -> bool:
+    """Whether ``program`` has a struct ending in a runtime array or calls ``spirvArrayLength``."""
+    if any(_ends_in_runtime_array(s) for s in iter_structs(program)):
+        return True
+    return any(
+        isinstance(node, A.FunctionCallNode) and call_name(node) == ARRAY_LENGTH
+        for function in iter_functions(program)
+        for node in _walk(function.body)
+    )
