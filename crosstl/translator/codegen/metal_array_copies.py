@@ -83,6 +83,12 @@ def generate_metal_array_copy(codegen, target, value):
         return None
     if isinstance(value, ArrayLiteralNode):
         return _generate_metal_array_literal_copy(codegen, target, value, target_type)
+    prologue = []
+    if is_pure(target) and not is_pure(value):
+        source = _thread_array_source(codegen, value)
+        if source is not None:
+            prologue.append(source[0])
+            value = source[1]
     if not (is_pure(target) and is_pure(value)):
         return codegen.refuse_lowering(
             f"array assignment: '{target_type}' values are copied element by element in Metal, which evaluates "
@@ -96,8 +102,33 @@ def generate_metal_array_copy(codegen, target, value):
     )
     body = codegen.generate_assignment(element)
     return "\n".join(
-        [f"for (int {index} = 0; {index} < {extent}; ++{index}) {{", str(body), "}"]
+        [
+            *prologue,
+            f"for (int {index} = 0; {index} < {extent}; ++{index}) {{",
+            str(body),
+            "}",
+        ]
     )
+
+
+def _thread_array_source(codegen, value):
+    """``(declaration, name)`` binding the thread-storage array ``value`` to a reference, or ``None``.
+
+    The copy loop then reads the reference, so the effects of ``value``, such as the step in ``b[i++]``, happen
+    once. Only a row of a local variable's array is bound: it lives in the ``thread`` address space (MSL
+    specification section 4.4), and ``auto`` keeps its own type, whether a C array or ``array<T, N>``.
+    """
+    root = _root_name(value)
+    if (
+        not isinstance(value, ArrayAccessNode)
+        or root is None
+        or root not in (getattr(codegen, "local_variable_types", None) or {})
+        or codegen.argument_address_space(value) not in (None, "thread")
+    ):
+        return None
+    name = codegen.next_metal_temp_variable("array_source")
+    rendered = codegen.generate_expression(value)
+    return f"thread auto &{name} = {rendered}", IdentifierNode(name)
 
 
 def _generate_metal_array_literal_copy(codegen, target, value, target_type):
