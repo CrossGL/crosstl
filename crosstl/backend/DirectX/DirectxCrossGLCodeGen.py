@@ -2430,7 +2430,14 @@ class HLSLToCrossGLConverter(
         owner_base = self.raw_type_base(
             self.member_owner_type(self.expression_raw_type(expr.object))
         )
-        return self.struct_member_array_dims.get(owner_base, {}).get(expr.member)
+        dims = self.struct_member_array_dims.get(owner_base, {}).get(expr.member)
+        if dims is None and isinstance(expr.object, ArrayAccessNode):
+            # ``buffer[i].member``: the declared type is the buffer's, the struct is its element's.
+            owner_base = self.raw_type_base(
+                self.member_owner_type(self.expression_value_raw_type(expr.object))
+            )
+            dims = self.struct_member_array_dims.get(owner_base, {}).get(expr.member)
+        return dims
 
     def raw_type_base(self, type_name):
         if not type_name:
