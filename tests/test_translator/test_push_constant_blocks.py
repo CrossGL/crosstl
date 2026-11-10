@@ -72,6 +72,12 @@ TWO_BLOCKS = """shader Probe {
 """ + BODY % "scale + bias"
 
 STRUCT_OFFSET = CONSTANT_BUFFER.replace("float scale;", "float scale @offset(16);")
+# std430 places ``values`` at byte 8 with a stride of 4; std140 cannot (arrays have a stride of 16).
+STRIDED_STRUCT_OFFSET = (
+    CONSTANT_BUFFER.replace("float scale;", "float scale @offset(4);")
+    .replace("float bias;", "float values[2];")
+    .replace("pc.scale + pc.bias", "pc.scale + pc.values[1]")
+)
 ARRAY_OF_BLOCKS = CONSTANT_BUFFER.replace(
     "ConstantBuffer<Constants> pc @push_constant;",
     "ConstantBuffer<Constants> pc[2] @push_constant;",
@@ -84,12 +90,12 @@ def _translate(tmp_path, source, backend, name="shader.cgl"):
     return crosstl.translate(str(path), backend=backend)
 
 
-def _vulkan_spirv(tmp_path, glsl):
+def _vulkan_spirv(tmp_path, glsl, name="out.comp"):
     """The SPIR-V assembly glslang writes for ``glsl`` compiled for Vulkan, or ``None`` without the tools."""
     glslang, disassembler = shutil.which("glslangValidator"), shutil.which("spirv-dis")
     if glslang is None or disassembler is None:
         return None
-    source, binary = tmp_path / "out.comp", tmp_path / "out.spv"
+    source, binary = tmp_path / name, tmp_path / "out.spv"
     source.write_text(glsl)
     result = subprocess.run(
         [glslang, "-V", "--target-env", "vulkan1.1", str(source), "-o", str(binary)],
@@ -102,12 +108,28 @@ def _vulkan_spirv(tmp_path, glsl):
     ).stdout
 
 
-def _check_opengl(tmp_path, glsl):
+def _opengl_spirv(tmp_path, glsl, name="opengl.comp"):
+    """The SPIR-V assembly glslang writes for ``glsl`` compiled for OpenGL (``VULKAN`` undefined), or ``None``."""
+    glslang, disassembler = shutil.which("glslangValidator"), shutil.which("spirv-dis")
+    if glslang is None or disassembler is None:
+        return None
+    source, binary = tmp_path / name, tmp_path / "opengl.spv"
+    source.write_text(glsl)
+    result = subprocess.run(
+        [glslang, "-G", str(source), "-o", str(binary)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return subprocess.run(
+        [disassembler, str(binary)], capture_output=True, text=True, check=True
+    ).stdout
+
+
+def _check_opengl(tmp_path, glsl, name="opengl.comp"):
     """glslang accepts ``glsl`` as OpenGL GLSL, where ``VULKAN`` is not defined."""
     glslang = shutil.which("glslangValidator")
     if glslang is None:
         return
-    source = tmp_path / "opengl.comp"
+    source = tmp_path / name
     source.write_text(glsl)
     result = subprocess.run([glslang, str(source)], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -234,13 +256,68 @@ void main() { values[gl_GlobalInvocationID.x] *= pc.scale + pc.bias; }
         assert _member_offsets(spirv, "Constants") == [16, 20]
 
 
+def test_glsl_places_the_members_of_a_push_constant_struct(tmp_path):
+    """``@offset`` on a member of a push-constant ``T``: the Vulkan block writes every member's offset, and the
+    OpenGL uniform block that stands for it is padded so that std140 places the members at the same bytes.
+    """
+    glsl = _translate(tmp_path, STRUCT_OFFSET, "opengl")
+    assert "layout(offset = 16) float scale;" in glsl
+    assert "layout(offset = 20) float bias;" in glsl
+    assert "vec4 crosstl_push_constant_pad0[1];" in glsl
+    spirv = _vulkan_spirv(tmp_path, glsl)
+    _assert_push_constant(spirv)
+    if spirv is not None:
+        assert _member_offsets(spirv, "Constants") == [16, 20]
+    opengl = _opengl_spirv(tmp_path, glsl)
+    if opengl is not None:
+        assert _member_offsets(opengl, "Constants") == [0, 16, 20]
+
+
+HLSL_PLACED = """struct Constants {
+    [[vk::offset(12)]] float roughness;
+    [[vk::offset(272)]] float alpha;
+    float4 tint;
+};
+[[vk::push_constant]] Constants material;
+float4 main(float2 coord : TEXCOORD0) : SV_TARGET
+{
+    return material.tint * material.roughness + material.alpha;
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["opengl", "essl"])
+def test_glsl_pads_the_uniform_block_of_an_imported_push_constant_struct(
+    tmp_path, backend
+):
+    """DXC's ``[[vk::offset(N)]]`` on the members of a push-constant struct: a float run up to a 16-byte boundary
+    and an array of ``vec4`` fill the gaps of the std140 block, on desktop GLSL and GLSL ES alike.
+    """
+    glsl = _translate(tmp_path, HLSL_PLACED, backend, "shader.hlsl")
+    assert "layout(offset = 12) float roughness;" in glsl
+    assert "layout(offset = 272) float alpha;" in glsl
+    assert "layout(offset = 288) vec4 tint;" in glsl
+    assert "float crosstl_push_constant_pad2;" in glsl
+    assert "vec4 crosstl_push_constant_pad3[16];" in glsl
+    if backend == "essl":
+        _check_opengl(tmp_path, glsl, "opengl.frag")
+        return
+    spirv = _vulkan_spirv(tmp_path, glsl, "out.frag")
+    _assert_push_constant(spirv)
+    if spirv is not None:
+        assert _member_offsets(spirv, "Constants") == [12, 272, 288]
+    opengl = _opengl_spirv(tmp_path, glsl, "opengl.frag")
+    if opengl is not None:
+        assert _member_offsets(opengl, "Constants") == [0, 4, 8, 12, 16, 272, 288]
+
+
 @pytest.mark.parametrize(
     "source, message",
     [
         (TWO_BLOCKS, "already declares push-constant block 'First'"),
         (
-            STRUCT_OFFSET,
-            "member 'scale' of struct 'Constants' is at byte 16, where std430 places it at byte 0",
+            STRIDED_STRUCT_OFFSET,
+            "member 'values' is at byte 8 of the push-constant block, and std140",
         ),
         (ARRAY_OF_BLOCKS, "it is an array"),
         (
