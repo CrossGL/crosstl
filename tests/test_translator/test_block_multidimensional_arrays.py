@@ -18,6 +18,7 @@ import pytest
 import crosstl
 from crosstl.translator.codegen.array_utils import split_outer_array_dimension
 from crosstl.translator.codegen.glsl_block_layout import crossgl_layout_type
+from tests.spirv_friendly_names import friendly_spirv
 
 GLSL_SOURCE = """#version 450
 layout(local_size_x = 64) in;
@@ -111,7 +112,11 @@ def test_hlsl_cbuffer_reaches_glsl_as_registers(tmp_path):
 
 
 def test_hlsl_cbuffer_reaches_spirv_with_nested_strides(tmp_path):
-    code = _translate(tmp_path, HLSL_SOURCE, ".hlsl", "vulkan")
+    path = tmp_path / "blocks.hlsl"
+    path.write_text(HLSL_SOURCE, encoding="utf-8")
+    code = friendly_spirv(
+        crosstl.translate(str(path), backend="vulkan", format_output=False)
+    )
     strides = set(re.findall(r"OpDecorate %(\w+) ArrayStride (\d+)", code))
     assert {stride for _name, stride in strides} >= {"16", "32", "48"}
     offsets = re.findall(r"OpMemberDecorate %Params (\d) Offset (\d+)", code)
