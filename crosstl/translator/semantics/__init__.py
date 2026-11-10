@@ -140,6 +140,7 @@ from .row_major_constant_members import store_row_major_constant_members_transpo
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
 from .row_major_struct_members import (
     RowMajorStructMemberUnsupportedError,
+    orient_row_major_buffer_struct_members,
     orient_row_major_struct_members,
 )
 from .rule_pragmas import take_declared_families
@@ -473,6 +474,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
     lower_device_private_globals(program, report.target)
+    orient_row_major_buffer_struct_members(program, report.target)
     store_row_major_members_transposed(program, report.target)
     store_row_major_constant_members_transposed(program, report.target)
     legalize_texel_offsets(program, report.target)
