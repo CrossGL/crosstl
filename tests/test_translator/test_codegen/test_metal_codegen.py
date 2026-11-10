@@ -17902,14 +17902,12 @@ def test_metal_generic_specialization_threads_shader_scope_buffer():
     ast = parse_code(tokenize_code(code))
     generated_code = MetalCodeGen().generate_stage(ast, "compute")
 
-    assert (
-        "float twice_float(float x, device float* outp)" in generated_code
-        or "float twice_float(float x, device float *outp)" in generated_code
-        or re.search(r"twice_float\(float x,\s*device float\s*\*outp\)", generated_code)
-    )
-    assert "twice_float(v, outp)" in generated_code
-    assert "float pick_float(float x)" in generated_code
-    assert "outp" not in re.search(r"float pick_float\([^)]*\)", generated_code).group(0)
+    assert "float twice_float(float x, device float* outp)" in generated_code
+    assert "outp[0] = twice_float(v, outp);" in generated_code
+    # pick never reads the buffer, so its specialization takes no buffer parameter.
+    assert "float pick_float(float x) {" in generated_code
+    assert "return pick_float(x) + float(outp[0]);" in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_transitively_threads_buffer_to_helper_calling_generic():
@@ -17934,18 +17932,11 @@ def test_metal_transitively_threads_buffer_to_helper_calling_generic():
     ast = parse_code(tokenize_code(code))
     generated_code = MetalCodeGen().generate_stage(ast, "compute")
 
-    assert (
-        "float invokeTwice(float x, device float* outp)" in generated_code
-        or "float invokeTwice(float x, device float *outp)" in generated_code
-        or re.search(r"invokeTwice\(float x,\s*device float\s*\*outp\)", generated_code)
-    )
-    assert (
-        "float twice_float(float x, device float* outp)" in generated_code
-        or "float twice_float(float x, device float *outp)" in generated_code
-        or re.search(r"twice_float\(float x,\s*device float\s*\*outp\)", generated_code)
-    )
+    assert "float invokeTwice(float x, device float* outp)" in generated_code
+    assert "float twice_float(float x, device float* outp)" in generated_code
     assert "return twice_float(x, outp);" in generated_code
-    assert "invokeTwice(v, outp)" in generated_code
+    assert "outp[0] = invokeTwice(v, outp);" in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_generic_and_nongeneric_overload_buffer_threading():
@@ -17973,18 +17964,46 @@ def test_metal_generic_and_nongeneric_overload_buffer_threading():
     ast = parse_code(tokenize_code(code))
     generated_code = MetalCodeGen().generate_stage(ast, "compute")
 
-    assert "float helper(float x)" in generated_code
-    helper_decl = re.search(r"float helper\(float x[^)]*\)", generated_code)
-    assert helper_decl is not None and "outp" not in helper_decl.group(0)
-    assert "helper(a)" in generated_code
-    assert "helper(a, outp)" not in generated_code
+    # The non-generic overload never reads the buffer; only the specialization takes it.
+    assert "float helper(float x) {" in generated_code
+    assert "float r1 = helper(a);" in generated_code
+    assert "float helper_float(float x, float y, device float* outp)" in generated_code
+    assert "float r2 = helper_float(a, 2.0, outp);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_generic_specialization_threads_global_texture_parameter():
+    code = """
+    shader TextureHelperScope {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        T sampleAs<T>(vec2 uv) {
+            return T(texture(colorMap, uv));
+        }
+
+        fragment {
+            vec4 main(FSInput input) {
+                return sampleAs<vec4>(input.uv);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
 
     assert (
-        "float helper_float(float x, float y, device float* outp)" in generated_code
-        or "float helper_float(float x, float y, device float *outp)" in generated_code
-        or re.search(r"helper_float\(float x,\s*float y,\s*device float\s*\*outp\)", generated_code)
+        "float4 sampleAs_vec4(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
     )
-    assert "helper_float(a, 2.0, outp)" in generated_code
+    assert (
+        "return sampleAs_vec4(input.uv, colorMap, colorMapSampler);" in generated_code
+    )
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_helper_local_cbuffer_member_name_does_not_thread_parameter():
