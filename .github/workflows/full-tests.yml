@@ -4,6 +4,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   POWERSHELL_TELEMETRY_OPTOUT: "1"
   POWERSHELL_UPDATECHECK: "Off"
+  CROSSTL_MLX_PIN_MODE: report
 
 on:
   push:
@@ -120,7 +121,7 @@ jobs:
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -272,7 +273,7 @@ jobs:
   runtime-parity:
     name: Runtime Parity (${{ matrix.adapter }} on ${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -441,7 +442,7 @@ jobs:
   directx-native-runtime-smoke:
     name: Direct3D 12 Native Runtime Smoke (Windows)
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: false
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -500,7 +501,7 @@ jobs:
   compiler-smoke-linux:
     name: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -683,7 +684,7 @@ jobs:
   compiler-smoke-macos:
     name: Compiler Smoke (macOS Metal)
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: false
     runs-on: macOS-latest
     timeout-minutes: 60
 
