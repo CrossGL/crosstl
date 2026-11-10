@@ -159,6 +159,12 @@ from .push_constant_blocks import (
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
 from .slang_constant_references import slang_constant_reference_parameter
+from .slang_declaration_modifiers import (
+    is_slang_declaration_metadata_attribute,
+    slang_member_modifier_prefix,
+    slang_packoffset_suffix,
+    slang_precise_prefix,
+)
 from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
@@ -3086,8 +3092,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 or self.slang_shader_stage_marker_name(getattr(attr, "name", None))
             ):
                 continue
-            if str(getattr(attr, "name", "")).lower() == "precise":
-                # A modifier of the declaration, rendered before its type.
+            if is_slang_declaration_metadata_attribute(attr):
+                # A modifier or record of the declaration (slang_declaration_modifiers.py), never a semantic.
                 continue
             if str(getattr(attr, "name", "")).lower() in MEMBER_LAYOUT_QUALIFIERS:
                 # A block member's placement, which the layout planners read; it never names a semantic.
@@ -4947,6 +4953,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 seen.add(mapped)
                 qualifiers.append(mapped)
 
+        if slang_precise_prefix(node):
+            qualifiers.append("precise")
+
         if not qualifiers:
             return ""
         return " ".join(qualifiers) + " "
@@ -5870,7 +5879,14 @@ class SlangCodeGen(LoweringRefusalMixin):
                 member_type = self.convert_type(member_type_name)
             else:
                 member_type = self.convert_type(getattr(member, "vtype", "float"))
-            result += f"    {self.format_declaration(member_type, member.name)};\n"
+            modifiers = slang_member_modifier_prefix(
+                self,
+                member,
+                member_type,
+                f"constant buffer member '{name}.{member.name}'",
+            )
+            declaration = self.format_declaration(member_type, member.name)
+            result += f"    {modifiers}{declaration}{slang_packoffset_suffix(self, member)};\n"
         result += "};"
         return result
 
@@ -6060,9 +6076,16 @@ class SlangCodeGen(LoweringRefusalMixin):
                 f"struct member semantic '{node.name}.{member.name}'",
             )
             semantic_str = self.semantic_suffix(semantic)
-            declaration = self.slang_interpolation_attribute_prefix(
-                member
-            ) + self.format_declaration(member_type, member.name)
+            declaration = (
+                self.slang_interpolation_attribute_prefix(member)
+                + slang_member_modifier_prefix(
+                    self,
+                    member,
+                    member_type,
+                    f"struct member '{node.name}.{member.name}'",
+                )
+                + self.format_declaration(member_type, member.name)
+            )
             result += f"{self.indent()}{declaration}{semantic_str};\n"
 
         self.indent_level -= 1
