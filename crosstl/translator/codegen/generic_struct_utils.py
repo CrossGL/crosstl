@@ -6,7 +6,7 @@ definition that carries one is refused with :class:`GenericStructAttributeError`
 declared without it.
 """
 
-from ..ast import ArrayNode, EnumNode, FunctionNode, StructNode
+from ..ast import ArrayNode, ArrayType, EnumNode, FunctionNode, StructNode
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .enum_utils import (
@@ -20,6 +20,7 @@ from .enum_utils import (
     substitute_generic_value_names,
     type_node_contains_generic_parameter,
 )
+from .generic_vector_deduction import concrete_generic_vector_type
 
 
 class GenericStructAttributeError(TranslationDiagnostic):
@@ -635,17 +636,58 @@ def generic_struct_specialized_fields(type_name_string, specialization):
     fields = []
     for member in specialization["definition"]["members"]:
         field_name = member.name
-        field_type = generic_struct_member_type_name(member, type_name_string)
-        fields.append(
-            (
-                field_name,
-                substitute_generic_type_name_with_arrays(
-                    field_type,
-                    specialization["substitutions"],
-                ),
-            )
+        field_type = specialized_struct_member_type(
+            member,
+            type_name_string,
+            specialization["substitutions"],
         )
+        fields.append((field_name, field_type))
     return fields
+
+
+def specialized_struct_member_type(member, type_name_string, substitutions):
+    """The member type with the specialization's type parameters substituted.
+
+    A ``vecN<T>`` member is spelled ``T2`` by the generators, which no string substitution can repair, so its
+    element is substituted as a type node first (the array-parameter fix of ``generic_vector_deduction`` applied to
+    struct members). Anything else keeps the string substitution it already had.
+    """
+    concrete = concrete_vector_member_type(member, type_name_string, substitutions)
+    if concrete is not None:
+        return concrete
+    return substitute_generic_type_name_with_arrays(
+        generic_struct_member_type_name(member, type_name_string),
+        substitutions,
+    )
+
+
+def concrete_vector_member_type(member, type_name_string, substitutions):
+    """The concrete spelling of a ``vecN<T>`` struct member, else ``None``.
+
+    The member's type node is substituted (see :func:`concrete_generic_vector_type`) instead of its ``T2`` spelling,
+    which string substitution cannot repair. An array member substitutes its element and keeps the ``[N]`` suffix,
+    whether the parser kept it as a legacy ``ArrayNode`` or as an ``ArrayType`` member type.
+    """
+    member_type = getattr(member, "member_type", None)
+    if member_type is None:
+        member_type = getattr(member, "vtype", "float")
+    if isinstance(member, ArrayNode):
+        element_type = getattr(
+            member, "element_type", getattr(member, "vtype", "float")
+        )
+        size = getattr(member, "size", None)
+        array_suffix = f"[{size}]" if size else "[]"
+    elif isinstance(member_type, ArrayType):
+        element_type = member_type.element_type
+        _base, array_suffix = split_array_type_suffix(type_name_string(member_type))
+    else:
+        element_type = member_type
+        array_suffix = ""
+    concrete = concrete_generic_vector_type(element_type, substitutions)
+    if concrete is None:
+        return None
+    spelling = concrete if isinstance(concrete, str) else type_name_string(concrete)
+    return spelling + array_suffix
 
 
 def generic_struct_member_type_name(member, type_name_string):

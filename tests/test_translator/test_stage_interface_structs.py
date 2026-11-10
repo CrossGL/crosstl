@@ -107,6 +107,27 @@ def _validate_hlsl(tmp_path, code, profile, entry):
     _run([compiler, "-T", profile, "-E", entry, str(source)])
 
 
+def _validate_slang(tmp_path, code, profile="fragment", entry="main"):
+    compiler = shutil.which("slangc")
+    if compiler is None:
+        return
+    source = tmp_path / "out.slang"
+    source.write_text(code)
+    # Without -o, slangc writes the SPIR-V binary to stdout.
+    command = [compiler, str(source), "-target", "spirv", "-entry", entry]
+    command += ["-stage", profile, "-o", str(tmp_path / "out.spv")]
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+    assert "E39019" not in combined
+    assert "E30011" not in combined
+    assert result.returncode == 0, combined
+
+
 def _struct(program, name):
     return next(struct for struct in program.structs if struct.name == name)
 
@@ -219,22 +240,24 @@ def test_metal_hlsl_render_targets_are_colour_attachments(tmp_path):
     _validate_metal(tmp_path, code)
 
 
-def test_entry_points_with_their_own_interface_are_refused():
+@pytest.mark.parametrize("target", ["metal", "directx", "slang"])
+def test_entry_points_with_their_own_interface_are_refused(target):
     source = VERTEX_CGL.replace("void main() {", "void main(int extra @ TexCoord5) {")
 
     with pytest.raises(StageInterfaceUnsupportedError) as raised:
-        gather_stage_interface_variables(parse(source), "metal")
+        gather_stage_interface_variables(parse(source), target)
     assert raised.value.reason_code == "mixed-entry-interface"
 
 
-def test_helpers_declaring_an_interface_name_are_refused():
+@pytest.mark.parametrize("target", ["metal", "directx", "slang"])
+def test_helpers_declaring_an_interface_name_are_refused(target):
     source = VERTEX_CGL.replace(
         "return p * float(gl_VertexID);",
         "float inPos = 1.0;\n        return p * inPos;",
     )
 
     with pytest.raises(StageInterfaceUnsupportedError) as raised:
-        gather_stage_interface_variables(parse(source), "directx")
+        gather_stage_interface_variables(parse(source), target)
     assert raised.value.reason_code == "shadowed-interface-variable"
 
 
@@ -262,7 +285,7 @@ shader main {
 """
 
 
-@pytest.mark.parametrize("target", ["metal", "directx"])
+@pytest.mark.parametrize("target", ["metal", "directx", "slang"])
 def test_spirv_pervertex_block_is_dropped_and_member_names_are_plain(tmp_path, target):
     program = parse(SPIRV_PERVERTEX_CGL)
 
@@ -288,3 +311,213 @@ def test_hlsl_spirv_pervertex_block_emits_no_precision_semantic(tmp_path):
     assert "float4 position: SV_POSITION;" in code
     assert "output.position = (input.ua_position + input.ua_color);" in code
     _validate_hlsl(tmp_path, code, "vs_6_0", "VSMain")
+
+
+REPRO_FRAGMENT_OUT_VAR = """
+shader main {
+    fragment {
+        in vec2 uv @ TEXCOORD0;
+        out vec4 color @ gl_FragColor;
+        void main() {
+            color = vec4(uv, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+REPRO_FRAGMENT_MIXED = """
+shader main {
+    fragment {
+        in vec2 uv @ TEXCOORD0;
+        vec4 main() @ gl_FragColor {
+            return vec4(uv, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+HELPER_INVOCATION_FRAGMENT = """
+shader main {
+    fragment {
+        in bool helper @ gl_HelperInvocation;
+        out vec4 color @ gl_FragColor;
+        void main() {
+            color = helper ? vec4(1.0) : vec4(0.0);
+        }
+    }
+}
+"""
+
+
+def test_slang_fragment_repro_variant_with_out_variable(tmp_path):
+    code = _translate(tmp_path, REPRO_FRAGMENT_OUT_VAR, "slang")
+
+    assert "struct FragmentInput" in code
+    assert re.search(r"float2\s+uv\s*:\s*TEXCOORD0;", code)
+    assert "struct FragmentOutput" in code
+    assert re.search(r"float4\s+color\s*:\s*SV_Target;", code)
+    assert '[shader("fragment")]' in code
+    assert re.search(r"FragmentOutput\s+main\s*\(\s*FragmentInput\s+input\s*\)", code)
+    assert re.search(
+        r"output\.color\s*=\s*float4\s*\(\s*input\.uv,\s*0\.0,\s*1\.0\s*\);", code
+    )
+    assert "return output;" in code
+
+    # Assert no top-level uniform-style globals are emitted
+    assert not re.search(r"^\s*float2\s+uv\s*;", code, re.MULTILINE)
+    assert not re.search(r"^\s*float4\s+color\s*;", code, re.MULTILINE)
+    _validate_slang(tmp_path, code, profile="fragment", entry="main")
+
+
+def test_slang_fragment_repro_variant_mixed_interface_refused(tmp_path):
+    with pytest.raises(StageInterfaceUnsupportedError) as raised:
+        _translate(tmp_path, REPRO_FRAGMENT_MIXED, "slang")
+    assert raised.value.reason_code == "mixed-entry-interface"
+
+
+def test_slang_fragment_stage_helper_invocation_builtin(tmp_path):
+    code = _translate(tmp_path, HELPER_INVOCATION_FRAGMENT, "slang")
+
+    assert "struct FragmentOutput" in code
+    assert re.search(r"float4\s+color\s*:\s*SV_Target;", code)
+    assert '[shader("fragment")]' in code
+    assert "IsHelperLane()" in code
+    assert "FragmentInput" not in code
+    assert not re.search(r"^\s*bool\s+helper\s*;", code, re.MULTILINE)
+    assert "gl_HelperInvocation" not in code
+    _validate_slang(tmp_path, code, profile="fragment", entry="main")
+
+
+def test_slang_vertex_stage_reads_inputs_and_returns_outputs(tmp_path):
+    code = _translate(tmp_path, VERTEX_CGL, "slang")
+
+    assert "struct VertexInput" in code
+    assert re.search(r"float3\s+inPos\s*:\s*TEXCOORD0;", code)
+    assert "struct VertexOutput" in code
+    assert re.search(r"float3\s+outColor\s*:\s*TEXCOORD0;", code)
+    assert re.search(r"nointerpolation\s+int\s+outId\s*:\s*TEXCOORD1;", code)
+    assert re.search(r"float4\s+position\s*:\s*SV_Position;", code)
+    assert re.search(
+        r"float3\s+shade\s*\(\s*float3\s+p,\s*int\s+cgl_VertexID\s*\)", code
+    )
+    assert re.search(
+        r"void\s+place\s*\(\s*float3\s+p,\s*inout\s+VertexOutput\s+output\s*\)", code
+    )
+    assert '[shader("vertex")]' in code
+    assert re.search(
+        r"VertexOutput\s+main\s*\(\s*VertexInput\s+input,\s*"
+        r"uint\s+cgl_VertexID_bits\s*:\s*SV_VertexID,\s*"
+        r"uint\s+cgl_InstanceID_bits\s*:\s*SV_InstanceID\s*\)",
+        code,
+    )
+    assert "int cgl_VertexID = int(cgl_VertexID_bits);" in code
+    assert "int cgl_InstanceID = int(cgl_InstanceID_bits);" in code
+    assert re.search(
+        r"output\.outColor\s*=\s*shade\s*\(\s*input\.inPos,\s*cgl_VertexID\s*\);", code
+    )
+    assert re.search(r"place\s*\(\s*input\.inPos,\s*output\s*\);", code)
+    assert "return output;" in code
+
+    # No stage-scope globals
+    assert not re.search(r"^\s*float3\s+inPos\s*;", code, re.MULTILINE)
+    assert not re.search(r"^\s*float3\s+outColor\s*;", code, re.MULTILINE)
+    _validate_slang(tmp_path, code, profile="vertex", entry="main")
+
+
+def test_slang_fragment_output_location_attribute_mapped_to_sv_target(tmp_path):
+    source = """
+shader main {
+    fragment {
+        out vec4 color @location(1);
+        void main() {
+            color = vec4(1.0, 0.0, 0.0, 1.0);
+        }
+    }
+}
+"""
+    code = _translate(tmp_path, source, "slang")
+    assert "struct FragmentOutput" in code
+    assert re.search(r"float4\s+color\s*:\s*SV_Target1;", code)
+    _validate_slang(tmp_path, code, profile="fragment", entry="main")
+
+
+def test_slang_entry_parameter_location_attribute_mapped_to_texcoord(tmp_path):
+    source = """
+shader main {
+    vertex {
+        void main(vec2 uv @location(2)) {
+            gl_Position = vec4(uv, 0.0, 1.0);
+        }
+    }
+}
+"""
+    code = _translate(tmp_path, source, "slang")
+    assert re.search(r"float2\s+uv\s*:\s*TEXCOORD2", code)
+    _validate_slang(tmp_path, code, profile="vertex", entry="main")
+
+
+def test_slang_stage_interface_location_index_reuse_between_input_and_output(tmp_path):
+    source = """
+shader main {
+    vertex {
+        in vec3 pos @location(0);
+        out vec3 color @location(0);
+        void main() {
+            color = pos;
+            gl_Position = vec4(pos, 1.0);
+        }
+    }
+}
+"""
+    code = _translate(tmp_path, source, "slang")
+    assert "struct VertexInput" in code
+    assert re.search(r"float3\s+pos\s*:\s*TEXCOORD0;", code)
+    assert "struct VertexOutput" in code
+    assert re.search(r"float3\s+color\s*:\s*TEXCOORD0;", code)
+    _validate_slang(tmp_path, code, profile="vertex", entry="main")
+
+
+def test_slang_struct_with_fragment_output_name_prefix_non_output_uses_texcoord(
+    tmp_path,
+):
+    source = """
+struct FragmentOutputConfig {
+    @location(1) float factor;
+};
+
+shader main {
+    vertex {
+        void main(FragmentOutputConfig config) {
+            gl_Position = vec4(config.factor, 0.0, 0.0, 1.0);
+        }
+    }
+}
+"""
+    code = _translate(tmp_path, source, "slang")
+    assert "struct FragmentOutputConfig" in code
+    assert re.search(r"float\s+factor\s*:\s*TEXCOORD1;", code)
+    assert "SV_Target" not in code
+    _validate_slang(tmp_path, code, profile="vertex", entry="main")
+
+
+def test_slang_fragment_entry_param_struct_with_fragment_output_name_uses_texcoord(
+    tmp_path,
+):
+    source = """
+struct FragmentOutputConfig {
+    @location(1) float factor;
+};
+
+shader main {
+    fragment {
+        void main(FragmentOutputConfig config) {
+            float x = config.factor;
+        }
+    }
+}
+"""
+    code = _translate(tmp_path, source, "slang")
+    assert "struct FragmentOutputConfig" in code
+    assert re.search(r"float\s+factor\s*:\s*TEXCOORD1;", code)
+    assert "SV_Target" not in code
+    _validate_slang(tmp_path, code, profile="fragment", entry="main")

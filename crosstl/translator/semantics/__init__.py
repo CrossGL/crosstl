@@ -21,6 +21,7 @@ from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .binding_constants import BindingIndexUnresolvedError, fold_binding_constants
+from .block_matrix_orders import BlockMatrixOrderError, distribute_block_matrix_orders
 from .boolean_reductions import lower_boolean_reductions
 from .buffer_strides import materialize_buffer_strides
 from .builtin_input_reads import pass_builtin_inputs
@@ -137,6 +138,10 @@ from .relative_vertex_ids import (
 )
 from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
+from .row_major_struct_members import (
+    RowMajorStructMemberUnsupportedError,
+    orient_row_major_struct_members,
+)
 from .rule_pragmas import take_declared_families
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
@@ -221,6 +226,7 @@ __all__ = [
     "AmbiguousMatrixSpellingError",
     "ArrayConstructorUnsupportedError",
     "BindingIndexUnresolvedError",
+    "BlockMatrixOrderError",
     "BuiltinValueUnsupportedError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
@@ -243,6 +249,7 @@ __all__ = [
     "GlslMeshStageUnsupportedError",
     "HitObjectUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
+    "RowMajorStructMemberUnsupportedError",
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
@@ -398,6 +405,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Direct3D, which writes the call back unchanged (:mod:`.shader_execution_reordering`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
+    A block-level ``row_major`` on a constant buffer or block instance is placed on its matrix members
+    (:mod:`.block_matrix_orders`).
     Row-major struct members are stored as their column-major transpose, with every use rewritten, for targets
     whose structs cannot carry a matrix layout (:mod:`.row_major_members`), and so are the row-major members of
     Metal's unmarked constant blocks (:mod:`.row_major_constant_members`).
@@ -442,6 +451,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
+    distribute_block_matrix_orders(program, report.target)
     resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
     lower_void_casts(program, report.target)
@@ -468,6 +478,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    orient_row_major_struct_members(program, report.target)
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
     lower_metal_math_spellings(program, report.target)

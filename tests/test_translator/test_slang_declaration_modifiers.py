@@ -153,8 +153,35 @@ def test_orientation_on_vectors_is_dropped_and_matrices_keep_it(tmp_path):
     _slangc_spirv(tmp_path, "vectors", generated, "compute")
 
 
+CGL_STRUCT_ORIENTATION = """
+shader main {
+    struct L {
+        mat2 n;
+        vec4 c;
+    };
+    struct S {
+        L l @row_major;
+    };
+    compute {
+        layout(local_size_x = 1) in;
+        void main() {
+            S s;
+        }
+    }
+}
+"""
+
+
+def test_block_orientation_reaches_a_struct_holding_a_matrix(tmp_path):
+    # semantics/row_major_struct_members.py gives the block member a row-major copy of its struct.
+    code = _flat(_slang(tmp_path, GLSL_NESTED, ".comp"))
+    assert "struct L_row_major { row_major float2x2 n; float4 c; };" in code, code
+    assert "L_row_major l;" in code, code
+
+
 def test_orientation_on_a_struct_holding_a_matrix_is_refused(tmp_path):
+    # Outside a constant block, row_major on a struct-typed member has no Slang spelling.
     with pytest.raises(
         Exception, match=r"cannot apply row_major to the matrices inside struct 'L'"
     ):
-        _slang(tmp_path, GLSL_NESTED, ".comp")
+        _slang(tmp_path, CGL_STRUCT_ORIENTATION, ".cgl")
