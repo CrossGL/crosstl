@@ -12693,7 +12693,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                     f"({column_offset})"
                 )
                 columns.append(f"asfloat({load})")
-            return f"{access['slang_type']}({', '.join(columns)})"
+            # The buffer holds columns and a Slang matrix constructor fills rows, as in HLSL.
+            transposed_type = (
+                f"{access['component_type']}{access['matrix_columns']}"
+                f"x{access['matrix_rows']}"
+            )
+            return f"transpose({transposed_type}({', '.join(columns)}))"
 
         if hlsl_byteaddress_is_typed_access(access):
             return hlsl_byteaddress_typed_load(self, buffer_name, offset, access)
@@ -12757,9 +12762,13 @@ class SlangCodeGen(LoweringRefusalMixin):
         for column, column_offset in matrix_column_offsets(
             offset, access["matrix_columns"], access["column_stride"]
         ):
+            # A Slang m[i] is a row, as in HLSL; the swizzle selects column ``column``.
+            swizzle = "".join(
+                f"_m{row}{column}" for row in range(access["matrix_rows"])
+            )
             lines.append(
                 f"{buffer_name}.{store_method}"
-                f"({column_offset}, asuint({value_expr}[{column}]))"
+                f"({column_offset}, asuint({value_expr}.{swizzle}))"
             )
         return "\n".join(lines)
 
