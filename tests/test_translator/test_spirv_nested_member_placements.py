@@ -28,6 +28,7 @@ from crosstl.translator.semantics.member_placements import (
     ConstantBufferArrayLayoutError,
     MemberPlacementError,
 )
+from tests.spirv_friendly_names import friendly_spirv
 
 REQUIRE_ENV = "CROSSTL_REQUIRE_NESTED_MEMBER_PLACEMENT_EXECUTION"
 DECOY = 99.0
@@ -145,7 +146,12 @@ def _source(declarations, body):
 def _translate(tmp_path, source, backend):
     path = tmp_path / f"{backend}.cgl"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend)
+    if backend != "vulkan":
+        return crosstl.translate(str(path), backend=backend)
+    # The same friendly ids with or without SPIRV-Tools on PATH.
+    return friendly_spirv(
+        crosstl.translate(str(path), backend=backend, format_output=False)
+    )
 
 
 def _flat(code):
