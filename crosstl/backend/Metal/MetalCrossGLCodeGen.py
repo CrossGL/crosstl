@@ -154,7 +154,10 @@ from .texture_types import (
 )
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
-from .using_declared_library_names import using_declared_library_names
+from .using_declared_library_names import (
+    using_declared_alias_targets,
+    using_declared_library_names,
+)
 
 _PLAIN_TYPE_NAME = re.compile(r"[A-Za-z_]\w*")
 
@@ -2007,6 +2010,7 @@ class MetalToCrossGLConverter(
         self.alias_template_structs = []
         self.alias_template_structs_by_qualified_name = {}
         self.alias_template_using_namespaces = []
+        self.alias_template_using_declarations = []
         self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
         self.callable_type_aliases = {}
@@ -3583,6 +3587,7 @@ class MetalToCrossGLConverter(
         self.alias_template_structs = []
         self.alias_template_structs_by_qualified_name = {}
         self.alias_template_using_namespaces = []
+        self.alias_template_using_declarations = []
         self.current_type_resolution_context = None
         typedefs = getattr(ast, "typedefs", []) or []
         self.collect_callable_type_aliases(typedefs)
@@ -6236,6 +6241,9 @@ class MetalToCrossGLConverter(
         self.alias_template_using_namespaces = list(
             getattr(ast, "using_namespace_directives", []) or []
         )
+        self.alias_template_using_declarations = list(
+            getattr(ast, "using_declarations", []) or []
+        )
         self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
 
@@ -6483,6 +6491,16 @@ class MetalToCrossGLConverter(
         for scope in self.namespace_lookup_scopes(namespace):
             direct = f"{scope}::{raw_name}" if scope else raw_name
             tiers.append([direct])
+            # ``using c10::metal::opmath_t;`` makes the name a member of the scope it appears in
+            # ([namespace.udecl]/1), ahead of the namespaces a using-directive nominates.
+            declared = using_declared_alias_targets(
+                self.alias_template_using_declarations,
+                scope,
+                raw_name,
+                self.normalize_qualified_type_name,
+            )
+            if declared:
+                tiers.append(declared)
             imported = [
                 f"{target}::{raw_name}"
                 for target in self.visible_using_namespace_targets(scope)
