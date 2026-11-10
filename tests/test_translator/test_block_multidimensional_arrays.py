@@ -64,7 +64,7 @@ RWStructuredBuffer<float> o : register(u1);
 def _translate(tmp_path, source, suffix, backend):
     path = tmp_path / f"blocks{suffix}"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 @pytest.mark.parametrize(
@@ -185,9 +185,9 @@ def test_metal_reads_shared_hlsl_registers_by_flattened_index(tmp_path):
     assert "crosstl_hlsl_cbuffer_float_array6 a;" in code, code
     assert "crosstl_hlsl_cbuffer_float2_array6 v;" in code, code
     assert (
-        "crosstl_hlsl_cbuffer_float_array6_element(\n"
-        "                     params.a, (i % 2u) * 3 + (i % 3u))"
-    ) in code, code
+        "crosstl_hlsl_cbuffer_float_array6_element(params.a, (i % 2u) * 3 + (i % 3u))"
+        in code
+    ), code
     assert "params.v, (i % 3u) * 2 + (i / 3u % 2u))[i % 2u]" in code, code
 
 
