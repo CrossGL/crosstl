@@ -16432,8 +16432,10 @@ def test_structured_buffer_dimensions_lower_to_get_dimensions():
 
     generated = generate_code(ast)
 
-    assert "values.GetDimensions(len);" in generated
-    assert "buffers[index].GetDimensions(arrayLen);" in generated
+    # StructuredBuffer::GetDimensions always writes the stride too, so a lone output takes the element count.
+    assert "len = cgl_buffer_count(values);" in generated
+    assert "arrayLen = cgl_buffer_count(buffers[index]);" in generated
+    assert ".GetDimensions(len)" not in generated
     assert "buffer_dimensions" not in generated
 
 

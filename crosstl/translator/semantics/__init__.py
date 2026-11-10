@@ -79,6 +79,7 @@ from .fragment_rate_barycentrics import (
     refuse_mixed_metal_barycentrics,
 )
 from .function_name_collisions import rename_colliding_functions
+from .generic_struct_defaults import fill_generic_struct_defaults
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
 from .half import HalfFloatUnsupportedError, legalize_half_floats
@@ -112,6 +113,7 @@ from .matrix_spellings import (
     AmbiguousMatrixSpellingError,
     refuse_ambiguous_matrix_spellings,
 )
+from .member_placements import refuse_unplaced_member_offsets
 from .metal_math_spellings import lower_metal_math_spellings
 from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
@@ -198,7 +200,11 @@ from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
-from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
+from .unsized_arrays import (
+    StorageBufferParameterUnsupportedError,
+    UnsizedArrayUnsupportedError,
+    legalize_unsized_arrays,
+)
 from .vector_logic import lower_vector_logic
 from .vertex_input_positions import (
     VertexInputPositionUnsupportedError,
@@ -265,6 +271,7 @@ __all__ = [
     "SpirvOperationUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
+    "StorageBufferParameterUnsupportedError",
     "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
@@ -431,6 +438,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     declared_families = take_declared_families(program, report.target)
     hoist_local_structs(program, report.target)
+    fill_generic_struct_defaults(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
@@ -506,6 +514,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
+    refuse_unplaced_member_offsets(program, report.target)
     mark_push_constant_layouts(program, report.target)
     hoist_constant_buffer_layouts(program, report.target)
     hoist_constant_reference_layouts(program, report.target)

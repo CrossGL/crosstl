@@ -89,6 +89,36 @@ def test_calls_of_a_declared_primary_run_the_specializations(tmp_path, backend):
         _assert_metal_compiles(tmp_path, code)
 
 
+def _assert_spirv_validates(tmp_path, generated):
+    if shutil.which("spirv-as") is None or shutil.which("spirv-val") is None:
+        return
+    (tmp_path / "translated.spvasm").write_text(generated)
+    binary = str(tmp_path / "translated.spv")
+    for command in (
+        ["spirv-as", "--target-env", "vulkan1.0"]
+        + [str(tmp_path / "translated.spvasm"), "-o", binary],
+        ["spirv-val", "--target-env", "vulkan1.0", binary],
+    ):
+        result = subprocess.run(command, capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spirv_calls_of_a_declared_primary_run_the_specializations(tmp_path):
+    # The float4 specialization calls ``ramp`` on a vector element, which the
+    # importer reads through a concrete helper; its declared result binds T.
+    code = _translate(tmp_path, DECLARED_PRIMARY, "vulkan")
+    entries = re.findall(r'OpEntryPoint GLCompute %(\w+) "(\w+)"', code)
+    assert [name for _, name in entries] == ["k_f32", "k_f32_4"]
+    functions = re.findall(r"%(\w+) = OpFunction %(\w+) ", code)
+    calls = re.findall(r"= OpFunctionCall %(\w+) %(\w+)", code)
+    called = {callee for _, callee in calls}
+    called_types = sorted(result for name, result in functions if name in called)
+    # One float and one float4 specialization plus the vector-element helper.
+    assert len(called_types) == 3, (functions, calls)
+    assert len(set(called_types)) == 2, called_types
+    _assert_spirv_validates(tmp_path, code)
+
+
 def test_redeclared_defined_primary_keeps_one_generic(tmp_path):
     source = "template <typename T> T twice(T x);\n" + DEFINED_PRIMARY
     cgl = _translate(tmp_path, source, "cgl")
