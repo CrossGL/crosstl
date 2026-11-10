@@ -533,6 +533,7 @@ from .texture_residency import (
 from .workgroup_size_extents import fold_workgroup_size_extents
 from .written_type_names import (
     METAL_TYPE_NAMES,
+    refuse_written_foreign_types,
     sized_float_spelling,
     written_type_name,
 )
@@ -653,8 +654,10 @@ class MetalCodeGen(
 ):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
-    # The type names the program being rendered declares; see :func:`written_type_name`.
+    # The type names the program being rendered declares, and the foreign built-in type names its rendering has
+    # written so far (``None`` outside a rendering); see :func:`written_type_name`.
     program_type_names = frozenset()
+    written_foreign_type_names = None
 
     BINARY_PRECEDENCE = {
         "||": 1,
@@ -2117,7 +2120,14 @@ class MetalCodeGen(
     def render_checked_program(self, ast, target_stage=None):
         """Render the program and refuse the types the Metal language does not have."""
         self.program_type_names = declared_type_names(ast)
-        output = self.render_program(ast, target_stage)
+        self.written_foreign_type_names = set()
+        try:
+            output = self.render_program(ast, target_stage)
+            refuse_written_foreign_types(
+                output, self.written_foreign_type_names, "Metal"
+            )
+        finally:
+            self.written_foreign_type_names = None
         refuse_metal_double_values(output, self.refuse_lowering)
         return output
 
@@ -28745,7 +28755,10 @@ class MetalCodeGen(
                 # Refused with the specification's reason by ``refuse_metal_double_values``.
                 return vtype_str
             return written_type_name(
-                vtype_str, METAL_TYPE_NAMES, self.program_type_names, "Metal"
+                vtype_str,
+                METAL_TYPE_NAMES,
+                self.program_type_names,
+                self.written_foreign_type_names,
             )
         return self.type_mapping[vtype_str]
 

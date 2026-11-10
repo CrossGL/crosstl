@@ -15,6 +15,8 @@ from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.written_type_names import (
     sized_float_spelling,
     sized_vector_parts,
+    written_foreign_type_names,
+    written_type_name,
 )
 from crosstl.translator.semantics.builtin_type_names import BUILTIN_TYPE_NAMES
 
@@ -123,6 +125,59 @@ def test_metal_refuses_a_sized_double_with_the_double_reason(tmp_path):
     reasons = raised.value.reasons
     assert any("double-precision value" in reason for reason in reasons)
     assert not any("built-in type" in reason for reason in reasons)
+
+
+def test_only_recorded_foreign_names_are_recorded():
+    recorded = set()
+    assert written_type_name("Float16", {"half"}, set(), recorded) == "Float16"
+    assert written_type_name("half", {"half"}, set(), recorded) == "half"
+    assert written_type_name("dim3", set(), {"dim3"}, recorded) == "dim3"
+    assert written_type_name("MyType", set(), set(), recorded) == "MyType"
+    assert recorded == {"Float16"}
+    # Outside a rendering nothing is recorded.
+    assert written_type_name("Float16", set(), set(), None) == "Float16"
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        ("Float16 v;", ["Float16"]),
+        ("struct S { Float16 v; };", ["Float16"]),
+        ("// Float16 v;\n/* __half w; */\nfloat x;", []),
+        ('printf("Float16");', []),
+        ("x.Float16 = dx::HitObject(); p->__half = 0;", []),
+        ("#if defined(Float16)\n#endif\nfloat v;", []),
+        ("#define Float16 half\nFloat16 v;", []),
+        ("typedef half Float16;\nFloat16 v;", []),
+        ("using Float16 = half;\nFloat16 v;", []),
+        ("struct Float16 { half x; };\nFloat16 v;", []),
+        ("template <typename dim3> dim3 f(dim3 v);", []),
+        ("Float16Helper v; crossgl_Float16 w;", []),
+        ("__half a; Float16 b; HitObject c;", ["Float16", "HitObject", "__half"]),
+    ],
+)
+def test_the_output_scan_finds_unqualified_undeclared_uses(code, expected):
+    assert (
+        written_foreign_type_names(code, {"Float16", "__half", "HitObject", "dim3"})
+        == expected
+    )
+
+
+def test_a_foreign_name_the_output_does_not_keep_is_not_refused(tmp_path):
+    # GLSL pairs a texture used only with comparison samples with a shadow sampler; the
+    # intermediate ``texture2DShadow`` spelling never reaches the output.
+    source = """
+Texture2D<float> shadowMap : register(t0);
+SamplerComparisonState shadowSampler : register(s0);
+float4 main(float4 position : SV_Position) : SV_Target {
+    return shadowMap.SampleCmpLevelZero(shadowSampler, position.xy, 0.5).xxxx;
+}
+"""
+    path = tmp_path / "shader.hlsl"
+    path.write_text(source)
+    output = crosstl.translate(str(path), backend="opengl", format_output=False)
+    assert "texture2DShadow" not in output
+    assert "sampler2DShadow" in output
 
 
 def test_sized_spelling_helpers():

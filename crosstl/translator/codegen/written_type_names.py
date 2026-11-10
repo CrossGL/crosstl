@@ -3,9 +3,15 @@
 The importers carry the built-in types of the languages they read into the IR as plain names
 (:data:`~crosstl.translator.semantics.builtin_type_names.BUILTIN_TYPE_NAMES`), and each generator maps the ones it
 knows to its own spelling. A built-in name a generator had no mapping for used to be written unchanged: GLSL, HLSL
-and Metal output declared ``Float16 v;``, ``__half v;`` or ``RWTextureCube<float4> t;``, which no compiler for the
-target accepts. :func:`written_type_name` writes a name unchanged only when the program declares a type of that name
-or the target defines it, and refuses any other built-in name with the target's typed refusal.
+and Metal output declared ``Float16 v;``, ``__half v;`` or ``atomic_uint counter;``, which no compiler for the
+target accepts.
+
+A generator also maps type names it never writes: it asks for the spelling of a declaration that a later lowering
+replaces (a ``texture2DShadow`` paired with a comparison sampler, a byte-address buffer bound as words) or of an
+intermediate it discards. So the refusal is decided on the output. :func:`written_type_name` returns the name
+unchanged and records it when it is a built-in type that neither the program nor the target declares, and
+:func:`refuse_written_foreign_types` refuses each recorded name that the rendered program still uses as a type
+identifier and does not declare itself.
 
 Each set lists the plain type names one target defines, built from families as
 :mod:`~crosstl.translator.semantics.builtin_type_names` is, and restricted to the spellings its compiler accepts:
@@ -36,6 +42,8 @@ __all__ = [
     "METAL_TYPE_NAMES",
     "sized_float_spelling",
     "sized_vector_parts",
+    "refuse_written_foreign_types",
+    "written_foreign_type_names",
     "written_type_name",
 ]
 
@@ -288,23 +296,70 @@ def sized_vector_parts(name):
     return match.group("component"), int(match.group("lanes"))
 
 
-def written_type_name(name, target_type_names, declared_type_names, target_label):
-    """``name`` as the target writes a type it has no mapping for, or a refusal when that would be a foreign type.
+def written_type_name(name, target_type_names, declared_type_names, foreign_names=None):
+    """``name`` as the target writes a type it has no mapping for, recorded in ``foreign_names`` when it is foreign.
 
-    A name the program declares (a structure, enumeration, alias, constant block or generic parameter) and a name
-    the target defines are written unchanged, and so is a name that is no built-in type of any language, which the
-    importers and lowerings declare themselves. Any other built-in type is refused, because the target compiler
-    would reject the copied name or read it as a different type.
+    A name the program declares (a structure, enumeration, alias, constant block or generic parameter), a name the
+    target defines and a name that is no built-in type of any language, which the importers and lowerings declare
+    themselves, are not recorded. ``foreign_names`` is the set of the rendering in progress, or ``None`` outside one.
     """
     if (
-        name not in BUILTIN_TYPE_NAMES
-        or name in target_type_names
-        or name in declared_type_names
+        foreign_names is not None
+        and name in BUILTIN_TYPE_NAMES
+        and name not in target_type_names
+        and name not in declared_type_names
     ):
-        return name
-    return refuse_unsupported(
-        target_label,
-        "type",
-        f"the built-in type '{name}' has no {target_label} spelling",
-        name,
-    )
+        foreign_names.add(name)
+    return name
+
+
+# Comments and string literals, blanked before the output is searched.
+_NON_CODE = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"', re.S)
+_PREPROCESSOR_LINE = re.compile(r"^[ \t]*#[^\n]*", re.M)
+_DEFINE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)", re.M)
+_DECLARATIONS = (
+    re.compile(
+        r"\b(?:struct|class|union|enum|typename)\s+(?:class\s+|struct\s+)?([A-Za-z_]\w*)"
+    ),
+    re.compile(r"\busing\s+([A-Za-z_]\w*)\s*="),
+    re.compile(r"\btypedef\b[^;{}]*?\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)*;"),
+)
+_IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+_QUALIFIER_BEFORE = re.compile(r"(?:\.|->|::)\s*$")
+
+
+def written_foreign_type_names(code, foreign_names):
+    """The names of ``foreign_names`` that ``code`` uses as unqualified identifiers and does not declare, sorted.
+
+    A name in a comment, a string literal or a preprocessor line, a member or qualified name (``x.half``,
+    ``dx::HitObject``) and a name the output declares as a structure, class, union, enumeration, template
+    parameter, ``using`` or ``typedef`` alias or macro is not a use of the foreign built-in type.
+    """
+    if not foreign_names or not isinstance(code, str):
+        return []
+    text = _NON_CODE.sub(lambda match: re.sub(r"[^\n]", " ", match.group(0)), code)
+    declared = set(_DEFINE.findall(text))
+    text = _PREPROCESSOR_LINE.sub("", text)
+    for pattern in _DECLARATIONS:
+        declared.update(pattern.findall(text))
+    candidates = set(foreign_names) - declared
+    used = set()
+    for match in _IDENTIFIER.finditer(text):
+        name = match.group(0)
+        if name in candidates and name not in used:
+            if not _QUALIFIER_BEFORE.search(
+                text[max(0, match.start() - 8) : match.start()]
+            ):
+                used.add(name)
+    return sorted(used)
+
+
+def refuse_written_foreign_types(code, foreign_names, target_label):
+    """Refuse, in the rendering in progress, each foreign built-in type the rendered ``code`` still names."""
+    for name in written_foreign_type_names(code, foreign_names):
+        refuse_unsupported(
+            target_label,
+            "type",
+            f"the built-in type '{name}' has no {target_label} spelling",
+            name,
+        )

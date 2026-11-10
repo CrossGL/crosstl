@@ -681,6 +681,7 @@ from .workgroup_access_contracts import parse_workgroup_access_assertions
 from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
 from .written_type_names import (
     GLSL_TYPE_NAMES,
+    refuse_written_foreign_types,
     sized_float_spelling,
     sized_vector_parts,
     written_type_name,
@@ -1719,8 +1720,10 @@ class GLSLCodeGen(
     GLSL_UNAVAILABLE_BUILTINS = OPENGL_UNAVAILABLE_BUILTINS
     GLSL_UNAVAILABLE_FUNCTION_PATTERNS = ()
     LOWERING_REFUSAL_TYPE = OpenGLLoweringRefused
-    # The type names the program being rendered declares; see :func:`written_type_name`.
+    # The type names the program being rendered declares, and the foreign built-in type names its rendering has
+    # written so far (``None`` outside a rendering); see :func:`written_type_name`.
     program_type_names = frozenset()
+    written_foreign_type_names = None
     GLSL_ARITHMETIC_CONVERSION_ERROR = OpenGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = OpenGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = OpenGLBooleanOrderedIntrinsicError
@@ -8875,7 +8878,16 @@ class GLSLCodeGen(
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         self.program_type_names = declared_type_names(ast)
-        code = self.render_program_at_required_version(ast, target_stage)
+        self.written_foreign_type_names = set()
+        try:
+            code = self.render_program_at_required_version(ast, target_stage)
+            refuse_written_foreign_types(
+                code,
+                self.written_foreign_type_names,
+                self.LOWERING_REFUSAL_TYPE.label,
+            )
+        finally:
+            self.written_foreign_type_names = None
         for reason in unavailable_builtin_reasons(
             code,
             self.GLSL_UNAVAILABLE_BUILTINS,
@@ -57997,7 +58009,7 @@ complex64_t crossgl_complex64_mod_assign(
                 vtype_str,
                 GLSL_TYPE_NAMES,
                 self.program_type_names,
-                self.LOWERING_REFUSAL_TYPE.label,
+                self.written_foreign_type_names,
             )
         return mapped_type
 

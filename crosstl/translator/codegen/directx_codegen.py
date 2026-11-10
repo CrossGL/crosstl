@@ -704,7 +704,11 @@ from .union_lanes import (
 from .union_layout import UnionLayoutCollector, is_lane_kind
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 from .workgroup_size_extents import fold_workgroup_size_extents
-from .written_type_names import HLSL_TYPE_NAMES, written_type_name
+from .written_type_names import (
+    HLSL_TYPE_NAMES,
+    refuse_written_foreign_types,
+    written_type_name,
+)
 
 # Specialization contract for a workgroup pointer parameter bound to ``nullptr``.
 # ``nullptr`` cannot name a groupshared array and real backings always have a
@@ -1868,8 +1872,10 @@ class HLSLCodeGen(
     """Emit HLSL source from the shared CrossGL translator AST."""
 
     LOWERING_REFUSAL_TYPE = DirectXLoweringRefused
-    # The type names the program being rendered declares; see :func:`written_type_name`.
+    # The type names the program being rendered declares, and the foreign built-in type names its rendering has
+    # written so far (``None`` outside a rendering); see :func:`written_type_name`.
     program_type_names = frozenset()
+    written_foreign_type_names = None
 
     DIRECTX_COOPERATIVE_MATRIX_COMPONENT_TYPES = {
         "float": "float",
@@ -3703,6 +3709,19 @@ class HLSLCodeGen(
     def render_program(self, ast, target_stage=None):
         ast = fold_workgroup_size_extents(ast, "HLSL", self.refuse_lowering)
         self.program_type_names = declared_type_names(ast)
+        self.written_foreign_type_names = set()
+        try:
+            code = self.render_hlsl_program(ast, target_stage)
+            refuse_written_foreign_types(
+                code,
+                self.written_foreign_type_names,
+                self.LOWERING_REFUSAL_TYPE.label,
+            )
+        finally:
+            self.written_foreign_type_names = None
+        return code
+
+    def render_hlsl_program(self, ast, target_stage=None):
         region = codegen_dispatch_region(
             ast, self.hlsl_software_subgroup_stage_entries(ast, target_stage)
         )
@@ -57071,7 +57090,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 vtype_str,
                 HLSL_TYPE_NAMES,
                 self.program_type_names,
-                self.LOWERING_REFUSAL_TYPE.label,
+                self.written_foreign_type_names,
             )
         return self.hlsl_native_16_bit_source_type(vtype_str, mapped_type)
 

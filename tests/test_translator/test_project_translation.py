@@ -56084,14 +56084,10 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
             comptime float_dtype = DType.float32
             comptime vector_size = 4
 
-            def vector_addition(
-                lhs_tensor: UnsafePointer[Float32],
-                rhs_tensor: UnsafePointer[Float32],
-                out_tensor: UnsafePointer[Float32],
-            ):
+            def vector_addition(scale: Float32):
                 var tid: Int = block_idx.x * block_dim.x + thread_idx.x
                 if tid < vector_size:
-                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+                    var value: Float32 = scale * 2.0
 
             def main() raises:
                 if not has_accelerator():
@@ -56166,6 +56162,42 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     assert vulkan["code"] == "project.translate.vulkan-builtin-unsupported"
     assert vulkan["location"]["file"] == "vector_addition.mojo"
     assert vulkan["missingCapabilities"] == ["spirv.builtin.has_accelerator"]
+
+
+def test_translate_project_mojo_pointer_parameters_are_refused_by_metal(tmp_path):
+    # The Mojo importer keeps `UnsafePointer[Float32]` as a plain type name, which
+    # the Metal emitter used to copy into the output as
+    # `UnsafePointer lhs_tensor[Float32]`. It is refused with the typed refusal.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.gpu import block_dim, block_idx, thread_idx
+
+            comptime vector_size = 4
+
+            def vector_addition(
+                lhs_tensor: UnsafePointer[Float32],
+                rhs_tensor: UnsafePointer[Float32],
+                out_tensor: UnsafePointer[Float32],
+            ):
+                var tid: Int = block_idx.x * block_dim.x + thread_idx.x
+                if tid < vector_size:
+                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(repo, targets=["metal"], output_dir="out").to_json()
+
+    (artifact,) = payload["artifacts"]
+    assert artifact["status"] == "failed"
+    assert (
+        "the built-in type 'UnsafePointer' has no Metal spelling" in artifact["error"]
+    )
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-lowering-unsupported": 1
+    }
 
 
 def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
