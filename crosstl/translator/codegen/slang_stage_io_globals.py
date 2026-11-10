@@ -131,8 +131,9 @@ def collect_stage_io_globals(codegen, ast):
 
     if not any(
         direction is not None
-        for _variable, direction in candidates
-        + [item for items in stage_candidates.values() for item in items]
+        for _variable, direction in candidates + [
+            item for items in stage_candidates.values() for item in items
+        ]
     ):
         return {}, set()
 
@@ -173,9 +174,11 @@ def collect_stage_io_globals(codegen, ast):
         names = reached_names(entry)
         parameter_names = {
             getattr(parameter, "name", None)
-            for parameter in getattr(entry, "parameters", None)
-            or getattr(entry, "params", None)
-            or []
+            for parameter in (
+                getattr(entry, "parameters", None)
+                or getattr(entry, "params", None)
+                or []
+            )
         }
         selected = [
             (variable, direction)
@@ -199,8 +202,9 @@ def collect_stage_io_globals(codegen, ast):
     # Unused stage variables become static too: as uniforms they would be shader parameters (slangc E39019).
     variable_ids = {
         id(variable)
-        for variable, direction in candidates
-        + [item for items in stage_candidates.values() for item in items]
+        for variable, direction in candidates + [
+            item for items in stage_candidates.values() for item in items
+        ]
         if direction is not None and id(variable) not in refused_ids
     }
     return used, variable_ids
@@ -274,8 +278,7 @@ def stage_io_parameters(codegen, entry, fragment_stage):
             attributes = [_location_attribute(location)]
         interpolation = [
             name
-            for name in _qualifiers(variable)
-            + [
+            for name in _qualifiers(variable) + [
                 str(getattr(attribute, "name", "")).lower()
                 for attribute in variable.attributes or []
             ]
