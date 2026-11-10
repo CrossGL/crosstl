@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import re
 
-from .base import ABSENT, C_FAMILY, QUAD, TWICE, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY, QUAD, TWICE
 
 _LITERAL = re.compile(r"\b(\d+\.\d+)\b")
 

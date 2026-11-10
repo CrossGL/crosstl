@@ -12,7 +12,8 @@ Mojo have no matrix types.
 
 from __future__ import annotations
 
-from .base import ABSENT, BLEND, C_FAMILY, PAIR, SPREAD, TWICE, Template
+from .base import ABSENT, Template
+from .family import BLEND, C_FAMILY, PAIR, SPREAD, TWICE
 
 
 def _f(source: str) -> str:

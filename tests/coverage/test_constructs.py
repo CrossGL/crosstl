@@ -17,7 +17,8 @@ from tools.coverage import (
 )
 from tools.coverage.model import Feature, Result
 from tools.coverage.templates import relations
-from tools.coverage.templates.base import ABSENT, OPERATORS
+from tools.coverage.templates.base import ABSENT
+from tools.coverage.templates.family import OPERATORS
 
 from .construct_grammar import GRAMMAR, construct_feature, grammar
 

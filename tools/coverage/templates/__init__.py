@@ -13,8 +13,9 @@ yet.
 
 from __future__ import annotations
 
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
 from .cuda import CUDA
+from .family import C_FAMILY
 from .glsl import GLSL
 from .hip import HIP
 from .hlsl import HLSL

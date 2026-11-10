@@ -14,7 +14,8 @@ structures only at module scope, and GLSL has no ``typedef``.
 
 from __future__ import annotations
 
-from .base import ABSENT, PAIR, Template
+from .base import ABSENT, Template
+from .family import PAIR
 from .statements import c_text
 
 _COMMA = (
