@@ -1,8 +1,12 @@
-"""64-bit integer literals that initialize 32-bit integers in GLSL.
+"""Integer literals spelled with the GLSL integer type they initialize.
 
 ``2654435761`` does not fit ``int``, so C and Metal sources give it a 64-bit type and CrossGL spells it
 ``2654435761l``. Initializing a ``uint`` converts the value, which fits. GLSL has no implicit ``int64_t`` to
 ``uint`` conversion, so the literal is spelled with the 32-bit type it initializes.
+
+In the other direction, Mesa refuses ``int64_t[1](0)``, ``f(3)`` for an ``int64_t`` parameter and struct
+constructor arguments although ``GL_ARB_gpu_shader_int64`` lists the implicit conversion, so a literal that
+initializes a 64-bit integer carries that type's suffix.
 """
 
 import crosstl
@@ -39,4 +43,51 @@ def test_wide_literals_initializing_32_bit_integers_use_the_32_bit_type(tmp_path
 def test_64_bit_objects_keep_64_bit_literals(tmp_path):
     glsl = _glsl(tmp_path)
     assert "int64_t big = 5000000000l;" in glsl
-    assert "uint64_t ubig = 5000000000l;" in glsl
+    assert "uint64_t ubig = 5000000000ul;" in glsl
+
+
+WIDE_SOURCE = """
+shader S {
+    struct Pair {
+        int64 a;
+        uint64 b;
+    }
+
+    int64 bump(int64 x) {
+        return x + 1;
+    }
+
+    compute {
+        void main(RWStructuredBuffer<int64> out_ @buffer(0), uint i @gl_GlobalInvocationID) {
+            int64 totals[2] = {0, -7};
+            uint64 masks[1] = {2};
+            uint64 wide[1] = {5000000000l};
+            Pair pair = Pair(3, 4u);
+            int64 sum = 0;
+            sum += bump(3) + totals[i % 2] + pair.a + int64(pair.b + masks[0] + wide[0]);
+            buffer_store(out_, i, sum);
+        }
+    }
+}
+"""
+
+
+def _wide_glsl(tmp_path):
+    path = tmp_path / "wide.cgl"
+    path.write_text(WIDE_SOURCE)
+    return crosstl.translate(str(path), backend="opengl", format_output=False)
+
+
+def test_literals_in_64_bit_array_constructors_carry_the_element_type(tmp_path):
+    glsl = _wide_glsl(tmp_path)
+    # A negated literal is an expression; it keeps its explicit conversion.
+    assert "int64_t[2](0l, int64_t((-7)))" in glsl
+    assert "uint64_t[1](2ul)" in glsl
+    assert "uint64_t[1](5000000000ul)" in glsl
+
+
+def test_literals_initializing_64_bit_scalars_carry_the_type(tmp_path):
+    glsl = _wide_glsl(tmp_path)
+    assert "int64_t sum = 0l;" in glsl
+    assert "bump(3)" not in glsl
+    assert "Pair(3, 4u)" not in glsl

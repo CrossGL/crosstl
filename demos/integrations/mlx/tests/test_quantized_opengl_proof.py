@@ -70,6 +70,9 @@ float crossgl_metal_round_float(float value) {
     uint rounded = ((magnitude + (unit >> 1u)) & (~(unit - 1u)));
     return uintBitsToFloat((sign | rounded));
 }
+int cgl_rule_sat_ftoi(float x0) {
+    return (((floatBitsToUint(x0) & 2147483647u) < 1325400064u) ? int(uintBitsToFloat((((floatBitsToUint(x0) & 2147483647u) < 1325400064u) ? floatBitsToUint(x0) : 0u))) : (((floatBitsToUint(x0) & 2147483647u) > 2139095040u) ? 0 : ((floatBitsToUint(x0) >= 2147483648u) ? int(2147483648u) : 2147483647)));
+}
 void main() {
     float val_0 = w[uint((in_index + uint64_t(i)))];
     w_min = subgroupMin(w_min);
@@ -78,7 +81,7 @@ void main() {
     float q0 = crossgl_metal_round_float(float((edge / scale)));
     scales[uint(gindex)] = float(scale);
     biases[uint(gindex)] = float(bias);
-    uint val = bitfieldExtract(uint(min(crossgl_metal_round_float(float(((w_thread[i] - bias) / scale))), n_bins)), 0, 8);
+    uint val = bitfieldExtract(uint(clamp(cgl_rule_sat_ftoi(min(crossgl_metal_round_float(float(((w_thread[i] - bias) / scale))), n_bins)), 0, 255)), 0, 8);
     uint sval = subgroupShuffleDown(val, (uint(j) & 65535u));
     out_[uint((out_index / uint64_t(writes_per_reduce)))] = output_;
 }
