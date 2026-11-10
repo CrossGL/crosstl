@@ -161,7 +161,7 @@ def test_depth_reads_select_the_depth_in_hlsl(tmp_path):
     hlsl = _translate(tmp_path, DEPTH_READS, "directx")
 
     assert "float sampled = depth.Sample(s, p.xy).x;" in hlsl
-    assert "float loaded = depth.Load(int3(uint2(p.xy), 0)).x;" in hlsl
+    assert "float loaded = depth.Load(int3(cgl_rule_sat_ftou2(p.xy), 0)).x;" in hlsl
 
 
 def test_depth_reads_validate_as_spirv(tmp_path):

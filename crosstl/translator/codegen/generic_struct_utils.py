@@ -17,6 +17,7 @@ from .enum_utils import (
     generic_type_parts,
     sanitize_type_name,
     substitute_generic_type_name,
+    substitute_generic_value_names,
     type_node_contains_generic_parameter,
 )
 from .generic_vector_deduction import concrete_generic_vector_type
@@ -116,6 +117,9 @@ def collect_generic_struct_specializations(nodes, definitions, type_name_string)
         if value is None:
             return
         if isinstance(value, str):
+            # A spelling in the program is CrossGL's; the specialization keys are the target's.
+            if "<" in value and generic_type_parts(value)[0] in definitions:
+                value = target_generic_struct_text(value, type_name_string)
             add_type_text(value)
             return
         if isinstance(value, (int, float, bool)):
@@ -171,6 +175,26 @@ def collect_generic_struct_specializations(nodes, definitions, type_name_string)
             ),
         )
     )
+
+
+def target_generic_struct_text(type_text, type_name_string):
+    """The target's spelling of the CrossGL instance ``type_text``: ``Pair<float2, float>`` for ``Pair<vec2,
+    float>`` on Metal. Text that is no CrossGL type is returned unchanged."""
+    from ..lexer import Lexer
+    from ..parser import Parser
+
+    text = str(type_text or "").strip()
+    if "<" not in text:
+        return text
+    try:
+        parser = Parser(Lexer(text).get_tokens())
+        node = parser.parse_type()
+        if parser.current_token[0] != "EOF":
+            return text
+        rendered = type_name_string(node)
+    except Exception:  # noqa: BLE001 - any text the parser rejects keeps its spelling
+        return text
+    return normalize_specialization_type_text(rendered) or text
 
 
 def normalize_specialization_type_text(type_text):
@@ -237,10 +261,15 @@ def resolve_generic_struct_specialization(generator, type_value, expected_base=N
         return None
 
     specializations = getattr(generator, "generic_struct_specializations", {})
-    return specializations.get(type_text) or build_generic_struct_specialization(
-        type_text,
-        definition,
-    )
+    found = specializations.get(type_text)
+    if found is None and isinstance(type_value, str):
+        # A CrossGL spelling (``Pair<vec2, float>``) names the specialization the target spells its own way
+        # (``Pair<float2, float>`` on Metal).
+        target_text = target_generic_struct_text(type_text, generator.type_name_string)
+        found = specializations.get(target_text)
+        if found is None and target_text != type_text:
+            return build_generic_struct_specialization(target_text, definition)
+    return found or build_generic_struct_specialization(type_text, definition)
 
 
 def generate_generic_structs(generator, specializations):
@@ -678,7 +707,10 @@ def generic_struct_member_type_name(member, type_name_string):
 
 def substitute_generic_type_name_with_arrays(type_name, substitutions):
     base_type, array_suffix = split_array_type_suffix(str(type_name or ""))
-    return substitute_generic_type_name(base_type, substitutions) + array_suffix
+    # A dimension may be a value parameter: ``T items[N]`` in ``generic<T, N> struct Ring``.
+    return substitute_generic_type_name(
+        base_type, substitutions
+    ) + substitute_generic_value_names(array_suffix, substitutions)
 
 
 def generic_struct_specialization_name(type_name):

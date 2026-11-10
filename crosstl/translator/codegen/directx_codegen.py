@@ -118,6 +118,7 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from ..vulkan_memory_scope import VULKAN_MEMORY_SCOPE_QUALIFIERS, needs_device_coherence
 from ..wave_operations import WAVE_EXTENDED_OPERATIONS, wave_extended_result_type
 from . import (
     hlsl_byte_records,
@@ -154,6 +155,7 @@ from .boolean_mix import boolean_mix_selector, hlsl_boolean_mix
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
 from .buffer_length import BufferLengthUnsupportedError, HlslBufferLength
 from .buffer_member_layout import (
+    MEMBER_LAYOUT_QUALIFIERS,
     member_explicit_offset,
     member_is_packed,
     member_is_row_major,
@@ -231,6 +233,7 @@ from .for_in_utils import (
     generate_typed_array_for_in,
     validate_range_reference_argument,
 )
+from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -315,6 +318,9 @@ from .hlsl_extension_builtins import (
     refuse_unmapped_hlsl_builtin,
 )
 from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
+from .hlsl_glsl_tessellation_interface import (
+    refuse_glsl_style_tessellation_interface,
+)
 from .hlsl_groupshared_atomics import (
     hlsl_groupshared_variable_names,
     is_hlsl_groupshared_atomic_target,
@@ -672,6 +678,7 @@ from .union_lanes import (
 )
 from .union_layout import UnionLayoutCollector, is_lane_kind
 from .workgroup_access_contracts import parse_workgroup_access_assertions
+from .workgroup_size_extents import fold_workgroup_size_extents
 
 # Specialization contract for a workgroup pointer parameter bound to ``nullptr``.
 # ``nullptr`` cannot name a groupshared array and real backings always have a
@@ -3663,6 +3670,7 @@ class HLSLCodeGen(
         )
 
     def render_program(self, ast, target_stage=None):
+        ast = fold_workgroup_size_extents(ast, "HLSL", self.refuse_lowering)
         region = codegen_dispatch_region(
             ast, self.hlsl_software_subgroup_stage_entries(ast, target_stage)
         )
@@ -16020,6 +16028,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "column_major",
             # MSL's packed vector storage is a buffer layout, which the layout planners read.
             "packed",
+            # A member's own offset and alignment, which the layout planners read as well.
+            *MEMBER_LAYOUT_QUALIFIERS,
             # Ray payload access qualifiers follow the semantic (hlsl_payload_access_qualifiers).
             *PAYLOAD_ACCESS_ATTRIBUTES,
             # MSL's half texture element type; the image format attribute gives HLSL its element type.
@@ -19412,6 +19422,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if overloaded_return_type is not None:
                 return overloaded_return_type
+            if getattr(
+                self, "collecting_generic_function_specializations", False
+            ) and concrete_overload_results_differ(
+                self,
+                func_name,
+                lambda generator, type_name: generator.map_type(type_name),
+            ):
+                # Generic deduction must not bind a type parameter to a guessed overload;
+                # it resolves the overload from the argument types it tracks.
+                return None
             if func_name in getattr(self, "function_return_types", {}):
                 return self.function_return_types[func_name]
             if func_name in {"isnan", "isinf", "isfinite"} and len(args) == 1:
@@ -32201,12 +32221,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             return f"{buffer}.DecrementCounter()"
         if func_name == "buffer_dimensions" and len(args) >= 2:
-            buffer = self.generate_expression(args[0])
-            dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
-            return f"{buffer}.GetDimensions({dimensions})"
+            return self.hlsl_buffer_dimension_outputs(args[0], args[1:])
         if func_name == "buffer_dimensions" and len(args) == 1:
             return self.hlsl_buffer_element_count(args[0])
         return None
+
+    def hlsl_buffer_dimension_outputs(self, buffer_expr, output_exprs):
+        """``buffer_dimensions(b, out...)``: the outputs written through the GetDimensions ``b``'s resource declares."""
+        buffer = self.generate_expression(buffer_expr)
+        outputs = [self.generate_expression(arg) for arg in output_exprs]
+        resource_type = self.hlsl_buffer_helper_resource_type(buffer_expr)
+        resource_name = self.hlsl_resource_type_name(resource_type)
+        rendered = self.hlsl_buffer_length.dimension_outputs(
+            buffer,
+            resource_name,
+            self.map_type(resource_type) if resource_type else None,
+            outputs,
+        )
+        if rendered is None:
+            raise BufferLengthUnsupportedError(
+                "directx",
+                f"buffer_dimensions({buffer}, {', '.join(outputs)}) passes {len(outputs)} "
+                "output(s), and the GetDimensions of "
+                f"{resource_type or 'a non-buffer argument'} takes no such list",
+            )
+        return rendered
 
     def hlsl_buffer_element_count(self, buffer_expr):
         """``buffer_dimensions(b)``: the element count of a structured or typed buffer."""
@@ -40499,6 +40538,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         missing_attributes = sorted(required_attributes - present_attributes)
         if missing_attributes:
             raise DirectXStageAttributesMissingError(shader_type, missing_attributes)
+        refuse_glsl_style_tessellation_interface(self, func, shader_type, stage_node)
         self.validate_hlsl_tessellation_domain(func, shader_type)
         self.validate_hlsl_tessellation_output_topology(func, shader_type)
         self.validate_hlsl_tessellation_domain_topology(func, shader_type)
@@ -53645,7 +53685,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return {
             image_format: image_format_vector_type(image_format)
             for image_format in supported_image_formats()
-            if image_format_channel_count(image_format) in {2, 4}
+            if image_format_channel_count(image_format) in {2, 3, 4}
         }
 
     def attribute_value_to_string(self, value):
@@ -53687,6 +53727,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "restrict",
             "volatile",
             "writeonly",
+            *VULKAN_MEMORY_SCOPE_QUALIFIERS,
         }
 
     def is_rasterizer_ordered_attribute(self, attr):
@@ -53915,6 +53956,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "coherent",
             "globallycoherent",
         }:
+            return "globallycoherent "
+        if needs_device_coherence(node):
+            # globallycoherent reaches the device, which holds every scope GL_KHR_memory_scope_semantics names.
             return "globallycoherent "
         return ""
 

@@ -1651,3 +1651,97 @@ def test_opencl_function_parameter_qualifier_split_across_lines():
 
     assert "f32 twice(f32 v)" in crossgl
     assert crossgl == generate_crossgl(one_line_source)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "second_line", "expected"),
+    [
+        (
+            "__global float",
+            "* in",
+            "@group(0) @binding(0) var<storage, read_write> in_: array<f32>",
+        ),
+        (
+            "__global float",
+            "const* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global float const",
+            "* in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global const float*",
+            "restrict in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+        (
+            "__global float* restrict",
+            "const in",
+            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+        ),
+    ],
+)
+def test_opencl_kernel_parameter_type_split_after_base_type(
+    first_line, second_line, expected
+):
+    # A line break after the base type, a ``*`` or a postfix qualifier is ignored (#3753).
+    split_source = f"""
+        __kernel void first({first_line}
+            {second_line}, __global float* out) {{
+            size_t i = get_global_id(0);
+            out[i] = in[i];
+        }}
+        """
+    one_line_source = split_source.replace(f"{first_line}\n", f"{first_line} ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert expected in crossgl
+    assert "@group(0) @binding(1) var<storage, read_write> out: array<f32>" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_pipe_parameter_split_after_pipe_keyword():
+    split_source = """
+        __kernel void first(__read_only pipe
+            int p, __global float* out) {
+            out[get_global_id(0)] = 0.0f;
+        }
+        """
+    one_line_source = split_source.replace("pipe\n", "pipe ")
+
+    assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+def test_opencl_function_parameter_unsigned_split_across_lines():
+    split_source = """
+        float widen(unsigned
+            v) {
+            return (float)v;
+        }
+
+        __kernel void first(__global float* out) {
+            out[0] = widen(1u);
+        }
+        """
+    one_line_source = split_source.replace("unsigned\n", "unsigned ")
+
+    crossgl = generate_crossgl(split_source)
+
+    assert "f32 widen(u32 v)" in crossgl
+    assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_opencl_cast_type_qualifier_split_across_lines():
+    split_source = """
+        __kernel void first(__global float* in, __global float* out) {
+            size_t i = get_global_id(0);
+            out[i] = (const
+                float)in[i];
+        }
+        """
+    one_line_source = split_source.replace("const\n", "const ")
+
+    assert generate_crossgl(split_source) == generate_crossgl(one_line_source)

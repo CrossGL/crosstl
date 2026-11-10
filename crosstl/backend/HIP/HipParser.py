@@ -3030,6 +3030,7 @@ class HipParser:
             type_parts.append(self.current_token.value)
             self.advance()
 
+        self.skip_newlines()
         self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
@@ -3089,6 +3090,7 @@ class HipParser:
             type_parts.append(self.current_token.value)
             self.advance()
 
+        self.skip_newlines()
         self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
@@ -3184,9 +3186,11 @@ class HipParser:
         return f"decltype({self.format_template_parts(parts)})"
 
     def parse_postfix_type_qualifiers(self, type_parts):
+        self.skip_newlines()
         while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
             type_parts.append(self.current_token.value)
             self.advance()
+            self.skip_newlines()
 
     def parse_type_name(self):
         if self.match(*self.ELABORATED_TYPE_TOKENS):
@@ -5126,9 +5130,17 @@ class HipParser:
     def is_cast_type_sequence(self, start, end):
         index = start
         saw_integral_sign = False
-        while index < end and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS:
+        while index < end:
+            if self.tokens[index].type == "NEWLINE":
+                index += 1
+                continue
+            if self.tokens[index].type not in self.TYPE_QUALIFIER_TOKENS:
+                break
             if self.tokens[index].type in {"SIGNED", "UNSIGNED"}:
                 saw_integral_sign = True
+            index += 1
+
+        while index < end and self.tokens[index].type == "NEWLINE":
             index += 1
 
         if index >= end:
@@ -5520,6 +5532,7 @@ class HipParser:
                 saw_integral_sign = True
             index += 1
 
+        index = self.skip_newlines_at_pos(index)
         index = self.skip_cpp_attributes_at_pos(index)
         if index >= len(self.tokens):
             return None
@@ -5758,11 +5771,13 @@ class HipParser:
         return isinstance(type_name, str) and type_name[:1].isupper()
 
     def skip_postfix_type_qualifiers_at_pos(self, index):
+        index = self.skip_newlines_at_pos(index)
         while (
             index < len(self.tokens)
             and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
         ):
             index += 1
+            index = self.skip_newlines_at_pos(index)
         return index
 
     def skip_linkage_specifier_at_pos(self, index):
