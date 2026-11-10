@@ -149,6 +149,7 @@ from .simd_group_template_overloads import (
     simd_group_library_overload_selected,
 )
 from .source_analysis_cache import SourceAnalysisCache, memoized
+from .specialized_member_types import specialized_member_type_template_names
 from .static_assertion_sources import concrete_static_assertion_conditions
 from .static_member_constants import (
     canonicalize_materialized_template_id_owners,
@@ -1813,8 +1814,11 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
             if template.template_constraints
             or (simd_group_overloads and overloads_simd_group_function(template))
         ]
-        # Templates whose result is a decltype of their parameters are carriers (dependent_result_templates.py).
-        dependent_results = dependent_result_template_names(self, code, templates)
+        # Templates whose result is a decltype of their parameters are carriers (dependent_result_templates.py),
+        # and so are templates that name a member type a specialization may redefine (specialized_member_types.py).
+        dependent_results = dependent_result_template_names(
+            self, code, templates
+        ) | specialized_member_type_template_names(self, code, templates)
         if not constrained and not dependent_results:
             return code
 
