@@ -508,4 +508,3 @@ def test_issue_3762_nested_generic_calls(tmp_path, case_name, backend):
             expected_func in code
         ), f"Expected {expected_func} in {backend} output:\n{code}"
         _compile(tmp_path, backend, code)
-
