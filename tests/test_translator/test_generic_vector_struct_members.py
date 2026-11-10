@@ -30,6 +30,7 @@ PROGRAM = textwrap.dedent("""
             IVec<int> u;
             u.p = vec3(1, 2, 3);
             u.q[0] = vec2(4, 5);
+        u.q[1] = vec2(6, 7);
             u.s = 6;
             iresults[0] = u.p.x + u.p.y + u.p.z + u.q[0].x + u.q[1].y + u.s;
         }
