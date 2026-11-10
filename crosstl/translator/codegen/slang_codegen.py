@@ -101,6 +101,13 @@ from .enum_utils import (
 )
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
+from .slang_varying_locations import (
+    entry_parameter_location_prefix,
+    fragment_output_location_node_ids,
+    location_attribute_index,
+    struct_member_location_prefix,
+    varying_location_semantic,
+)
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generate_numeric_trait_method_call,
@@ -331,6 +338,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.vertex_entry_output_struct_names = set()
         self.fragment_entry_input_struct_names = set()
         self.fragment_entry_output_struct_names = set()
+        self.slang_fragment_output_location_ids = set()
         self.literal_int_constants = {}
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -516,6 +524,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             self.fragment_entry_output_struct_names = (
                 self.collect_slang_fragment_entry_output_struct_names(ast)
+            )
+            self.slang_fragment_output_location_ids = fragment_output_location_node_ids(
+                self, ast
             )
             self.user_enum_nodes = self.collect_user_enums(ast)
             self.generic_enum_struct_definitions = (
@@ -3137,6 +3148,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                     index = frag_data_attachment_index(node)
                     if index is not None:
                         return f"gl_FragData[{index}]"
+                location = location_attribute_index(attr)
+                if location is not None:
+                    # slang_varying_locations.py: SV_Target<N> for a fragment colour output, else TEXCOORD<N>.
+                    return varying_location_semantic(
+                        location, id(node) in self.slang_fragment_output_location_ids
+                    )
                 return attr.name
         return None
 
@@ -4341,7 +4358,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
         if (
             expected_type == "uint3"
-            and mapped_semantic in {
+            and mapped_semantic
+            in {
                 "SV_DispatchThreadID",
                 "SV_GroupThreadID",
                 "SV_GroupID",
@@ -6077,7 +6095,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             semantic_str = self.semantic_suffix(semantic)
             declaration = (
-                self.slang_interpolation_attribute_prefix(member)
+                struct_member_location_prefix(self, node, member, semantic)
+                + self.slang_interpolation_attribute_prefix(member)
                 + slang_member_modifier_prefix(
                     self,
                     member,
@@ -6343,7 +6362,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                             f"{param_type}, which a Slang entry point cannot take"
                         )
                     declaration = (
-                        self.slang_stage_parameter_qualifier_prefix(param, shader_type)
+                        entry_parameter_location_prefix(
+                            self, param, semantic, shader_type
+                        )
+                        + self.slang_stage_parameter_qualifier_prefix(
+                            param, shader_type
+                        )
                         + declaration
                     )
                     declaration = self.apply_slang_resource_binding_decorations(
