@@ -21,6 +21,7 @@ import textwrap
 import pytest
 
 import crosstl
+from crosstl._crosstl import _translate_with_codegen
 from crosstl.translator.codegen.builtin_result_types import swizzle_access_type
 from crosstl.translator.codegen.generic_call_results import (
     generic_call_argument_type_name,
@@ -242,10 +243,6 @@ def test_open_parameters_of_every_read_definition_are_discarded():
     assert generic_call_argument_type_name(generator, ["pair"], None, "T") == "T"
 
 
-from crosstl._crosstl import _translate_with_codegen
-from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
-
-
 @pytest.mark.parametrize(
     "setup, expr, expected_func",
     [
@@ -279,10 +276,7 @@ def test_spirv_indexed_generic_call_arguments(tmp_path, setup, expr, expected_fu
     """
     path = tmp_path / "shader.cgl"
     path.write_text(shader, encoding="utf-8")
-    try:
-        code, codegen = _translate_with_codegen(str(path), backend="vulkan")
-    except SpirvLoweringRefused as e:
-        pytest.fail(f"SpirvLoweringRefused raised unexpectedly: {e}")
+    code, codegen = _translate_with_codegen(str(path), backend="vulkan")
 
     assert "OpFunctionCall" in code
     specialized_names = set(codegen.generic_function_specialized_names.values())
@@ -311,10 +305,7 @@ def test_issue_3823_repro_shader(tmp_path):
     """
     path = tmp_path / "shader.cgl"
     path.write_text(shader, encoding="utf-8")
-    try:
-        code, codegen = _translate_with_codegen(str(path), backend="vulkan")
-    except SpirvLoweringRefused as e:
-        pytest.fail(f"SpirvLoweringRefused raised unexpectedly: {e}")
+    code, codegen = _translate_with_codegen(str(path), backend="vulkan")
 
     assert "OpFunctionCall" in code
     specialized_names = set(codegen.generic_function_specialized_names.values())
@@ -342,10 +333,7 @@ def test_spirv_generic_calls_on_buffer_pointer(tmp_path):
     """
     path = tmp_path / "shader.cgl"
     path.write_text(shader, encoding="utf-8")
-    try:
-        code, codegen = _translate_with_codegen(str(path), backend="vulkan")
-    except SpirvLoweringRefused as e:
-        pytest.fail(f"SpirvLoweringRefused raised unexpectedly: {e}")
+    code, codegen = _translate_with_codegen(str(path), backend="vulkan")
 
     assert "OpFunctionCall" in code
     specialized_names = set(codegen.generic_function_specialized_names.values())
