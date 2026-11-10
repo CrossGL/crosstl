@@ -18585,6 +18585,9 @@ class MetalCodeGen(
                 continue
             if self.mutable_metal_pointer_member_argument(arg):
                 continue
+            if self.metal_array_arguments.copies(func_name, index, arg, call_args):
+                # A by-value array parameter receives a thread copy of the read-only array.
+                continue
             reason = self.current_readonly_metal_parameter_reasons.get(
                 arg_name, "readonly"
             )

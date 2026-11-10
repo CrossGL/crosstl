@@ -11122,7 +11122,9 @@ def test_generated_metal_const_local_array_alias_compiles_with_metal(tmp_path):
 
     assert "const float values[2] = {1.0, 2.0};" in code
     assert "parameter store" in refusal
-    assert "parameter call" in refusal
+    # The by-value ``mutate`` parameter receives a thread copy of the read-only array.
+    assert "parameter call" not in refusal
+    assert "mutate(crosstl_array_value<" in code
     assert "values[0] = value;" not in code
     assert "mutate(values);" not in code
 
@@ -11175,7 +11177,9 @@ def test_generated_metal_nested_constant_local_array_compiles_with_metal(tmp_pat
 
     assert "const float values[2][2] = {{1.0, 2.0}, {3.0, 4.0}};" in code
     assert "parameter store" in refusal
-    assert "parameter call" in refusal
+    # The by-value ``mutate`` parameter receives a thread copy of the read-only array.
+    assert "parameter call" not in refusal
+    assert "mutate(crosstl_array_value<" in code
     assert "values[0][1] = value;" not in code
     assert "mutate(values);" not in code
 
