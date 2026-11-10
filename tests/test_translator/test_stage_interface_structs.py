@@ -113,8 +113,11 @@ def _validate_slang(tmp_path, code, profile="fragment", entry="main"):
         return
     source = tmp_path / "out.slang"
     source.write_text(code)
+    # Without -o, slangc writes the SPIR-V binary to stdout.
+    command = [compiler, str(source), "-target", "spirv", "-entry", entry]
+    command += ["-stage", profile, "-o", str(tmp_path / "out.spv")]
     result = subprocess.run(
-        [compiler, str(source), "-target", "spirv", "-entry", entry, "-stage", profile],
+        command,
         capture_output=True,
         text=True,
         check=False,
