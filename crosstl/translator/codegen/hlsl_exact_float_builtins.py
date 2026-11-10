@@ -434,6 +434,11 @@ def _remainder(codegen, expr):
     value = _value_shape(shapes)
     if value is None:
         return None
+    if not _user_function(codegen, "fmod"):
+        # The helper is a call, whose arguments DXC evaluates right to left; as an ``fmod`` call the operands go
+        # through the call-argument ordering (:mod:`.hlsl_call_argument_order`) like any other call's.
+        call = FunctionCallNode(IdentifierNode("fmod"), list(operands))
+        return codegen.generate_expression(call)
     rendered = [codegen.generate_expression(operand) for operand in operands]
     return _fmod(codegen, value, rendered)
 

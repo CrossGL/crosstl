@@ -322,6 +322,7 @@ from .hlsl_byteaddress_typed_access import (
     hlsl_byteaddress_typed_load,
     hlsl_byteaddress_typed_store,
 )
+from .hlsl_call_argument_order import hlsl_ordered_call_expression
 from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
 from .hlsl_exact_float_builtins import (
     emit_hlsl_exact_float_helpers,
@@ -15301,6 +15302,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL AST statement as HLSL source."""
         indent_str = "    " * indent
+        # The expression whose value a statement discards (see hlsl_call_argument_order).
+        self.hlsl_statement_expression = getattr(stmt, "expression", stmt)
 
         if isinstance(stmt, VariableNode):
             comma_initializer = split_comma_initializer(stmt)
@@ -27996,6 +27999,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         builtin_read = hlsl_stage_builtin_read(self, expr)
         if builtin_read is not None:
             return builtin_read
+        # Arguments first: the ordered call renders the call itself through this method again.
+        ordered_call = hlsl_ordered_call_expression(self, expr)
+        if ordered_call is not None:
+            return ordered_call
         exact_float = hlsl_exact_float_expression(self, expr)
         if exact_float is not None:
             return exact_float
