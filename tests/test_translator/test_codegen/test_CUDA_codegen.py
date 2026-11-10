@@ -10973,6 +10973,34 @@ class TestCudaCodeGen:
         assert "__device__ float* __restrict__ outp;" in cuda_code
         assert "__restrict__ const" not in cuda_code
 
+    def test_restrict_buffer_parameters_keep_restrict_in_cuda(self):
+        # #4191: a helper's restrict pointer parameter lost the qualifier.
+        source_code = """
+        shader Probe {
+            restrict buffer float* fin;
+            restrict buffer float* outp;
+            float twice(restrict buffer float* p, uint i) {
+                return p[i] * 2.0;
+            }
+            float plain(buffer float* q, uint i) {
+                return q[i];
+            }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    outp[i] = twice(fin, i) + plain(fin, i);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float twice(float* __restrict__ p, uint i)" in cuda_code
+        assert "float plain(float* q, uint i)" in cuda_code
+
     def test_image_access_aliases_inherit_cuda_diagnostics(self):
         source_code = """
         shader ImageAccessAliases {
