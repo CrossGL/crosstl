@@ -10716,11 +10716,17 @@ class CudaCodeGen(
             return type_name
         if type_name.startswith("const "):
             return type_name
+        # Only a runtime-sized array becomes a pointer whose pointee can be
+        # const. A block object, sized array or scalar would be an
+        # uninitialized `__device__ const` object, which CUDA rejects, so it
+        # stays writable and the readonly diagnostics guard its writes.
         if "[" not in type_name or "]" not in type_name:
-            return f"const {type_name}"
+            return type_name
         open_bracket = type_name.find("[")
         base_type = type_name[:open_bracket].strip()
         array_suffix = type_name[open_bracket:]
+        if array_suffix != "[]":
+            return type_name
         return f"const {base_type}{array_suffix}"
 
     def glsl_buffer_block_metadata_comment(self, node, type_name):
