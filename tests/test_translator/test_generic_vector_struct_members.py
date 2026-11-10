@@ -41,7 +41,7 @@ PROGRAM = textwrap.dedent("""
 def translate(tmp_path, backend):
     path = tmp_path / "vectors.cgl"
     path.write_text(PROGRAM)
-    return crosstl.translate(str(path), backend=backend)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _validate(tmp_path, backend, output):
