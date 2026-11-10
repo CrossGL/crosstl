@@ -1655,7 +1655,7 @@ def test_metal_copies_buffer_elements_through_reference_parameters():
     assert "Counter_Scaled(_.constants)" in metal
 
 
-def test_metal_reference_argument_copy_back_requires_unconditional_evaluation():
+def test_metal_reference_argument_copy_in_a_short_circuit_operand_is_made_in_place():
     hlsl = textwrap.dedent("""
         RWStructuredBuffer<float> values : register(u0);
 
@@ -1673,8 +1673,12 @@ def test_metal_reference_argument_copy_back_requires_unconditional_evaluation():
         }
     """).strip()
 
-    with pytest.raises(ValueError, match="conditionally evaluated expression"):
-        MetalCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+    metal = MetalCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+    assert (
+        "bool done = ThreadIds.x > 3 && (__crossgl_ref1 = values[ThreadIds.x], "
+        "__crossgl_call2 = Bump(__crossgl_ref1), values[ThreadIds.x] = __crossgl_ref1, "
+        "__crossgl_call2);"
+    ) in metal
 
 
 def test_metal_unifies_mixed_numeric_builtin_arguments():
