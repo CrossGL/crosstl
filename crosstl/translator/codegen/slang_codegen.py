@@ -13538,11 +13538,14 @@ class SlangCodeGen(LoweringRefusalMixin):
         buffer_type = self.structured_buffer_resource_type(args[0])
         if self.is_byte_address_buffer_resource_type(buffer_type):
             buffer = self.generate_expression(args[0])
-            if len(args) >= 2:
-                dimensions = ", ".join(
-                    self.generate_expression(arg) for arg in args[1:]
+            if len(args) > 2:
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_dimensions",
+                    "writes only the byte size",
+                    "uint",
                 )
-                return f"{buffer}.GetDimensions({dimensions})"
+            if len(args) == 2:
+                return f"{buffer}.GetDimensions({self.generate_expression(args[1])})"
 
             helper_name = self.buffer_dimensions_helper_name(buffer_type)
             return f"{helper_name}({buffer})"
@@ -13555,11 +13558,20 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
 
         buffer = self.generate_expression(args[0])
-        if len(args) >= 2:
+        if len(args) > 3:
+            return self.unsupported_structured_buffer_call(
+                "buffer_dimensions",
+                "writes only the element count and stride of a structured buffer",
+                "uint",
+            )
+        if len(args) == 3:
             dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
             return f"{buffer}.GetDimensions({dimensions})"
 
+        # A structured buffer's GetDimensions always writes the stride as well, so a lone output takes the count.
         helper_name = self.buffer_dimensions_helper_name(buffer_type)
+        if len(args) == 2:
+            return f"{self.generate_expression(args[1])} = {helper_name}({buffer})"
         return f"{helper_name}({buffer})"
 
     def buffer_dimensions_helper_name(self, buffer_type):

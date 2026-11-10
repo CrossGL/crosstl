@@ -11909,7 +11909,10 @@ def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
     )
     assert "Particle particle = particlesIn.Load(tid.x);" in generated_code
     assert "float4 vectorValue = vectors.Load(0u);" in generated_code
-    assert "particlesOut.GetDimensions(len);" in generated_code
+    assert (
+        "len = cgl_bufferDimensions_RWStructuredBuffer_Particle(particlesOut);"
+        in generated_code
+    )
     assert "particlesOut[tid.x] = particle;" in generated_code
     assert "values[1][0u] = particle.mass;" in generated_code
     assert "buffer_load(" not in generated_code
