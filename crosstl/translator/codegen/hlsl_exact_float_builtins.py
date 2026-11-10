@@ -45,6 +45,7 @@ _NAMED = re.compile(
 )
 _GLSL_VECTOR = re.compile(r"(f16|f32|f64|d|i|u|b)?vec([234])")
 _ALIASES = {
+    **{name: name for name in ("half", "float", "double", "int", "uint", "bool")},
     "min16float": "half",
     "min10float": "half",
     "float16_t": "half",
@@ -80,7 +81,7 @@ def _shape(type_name):
         return _GLSL_PREFIX[match.group(1)], int(match.group(2))
     match = _NAMED.fullmatch(text)
     if match:
-        component = _ALIASES.get(match.group(1), match.group(1))
+        component = _ALIASES[match.group(1)]
         return component, int(match.group(2) or 1)
     return None
 
