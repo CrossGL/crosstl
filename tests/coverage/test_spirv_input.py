@@ -2,7 +2,7 @@ import dataclasses
 
 import pytest
 
-from tools.coverage import runner, spirv_input, validators
+from tools.coverage import lowering, runner, spirv_input, validators
 from tools.coverage.dialect import ProbeError
 from tools.coverage.model import VOID, Feature, Param, Signature, Type
 
@@ -45,7 +45,7 @@ STREAM = Feature(
     spelling="EmitStreamVertex",
 )
 needs_glslang = pytest.mark.skipif(
-    not (validators.can_lower("glsl") and validators.available("spirv")),
+    not (lowering.can_lower("glsl") and validators.available("spirv")),
     reason="glslangValidator or SPIRV-Tools is missing",
 )
 
@@ -219,7 +219,7 @@ def test_a_bit_test_against_the_exponent_mask_handles_nan():
 
 
 def test_without_glslang_the_input_probes_are_untested(monkeypatch):
-    monkeypatch.setattr(validators, "can_lower", lambda language: False)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: False)
     result = runner.run_input(FABS, "spirv")
     assert (result.outcome, result.detail) == (
         "untested",
@@ -231,7 +231,7 @@ def test_strict_run_names_glslang_for_spirv_input(monkeypatch, capsys):
     from tools.coverage import __main__ as cli
 
     monkeypatch.setattr(validators, "available", lambda language: True)
-    monkeypatch.setattr(validators, "can_lower", lambda language: False)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: False)
     monkeypatch.setattr(
         validators,
         "command",
@@ -250,7 +250,7 @@ def test_strict_run_names_dxc_for_the_spirv_input_constructs_glsl_cannot_spell(
     from tools.coverage import __main__ as cli
 
     monkeypatch.setattr(validators, "available", lambda language: True)
-    monkeypatch.setattr(validators, "can_lower", lambda language: language != "hlsl")
+    monkeypatch.setattr(lowering, "can_lower", lambda language: language != "hlsl")
     monkeypatch.setattr(
         validators, "command", lambda tool: () if tool == "dxc" else (tool,)
     )
@@ -324,7 +324,7 @@ POINT_MODE = Feature(
     stage="tessellation-control",
 )
 needs_dxc = pytest.mark.skipif(
-    not (validators.can_lower("hlsl") and validators.available("spirv")),
+    not (lowering.can_lower("hlsl") and validators.available("spirv")),
     reason="dxc or SPIRV-Tools is missing",
 )
 
@@ -343,7 +343,7 @@ def test_a_construct_glsl_cannot_spell_is_probed_in_hlsl():
 
 
 def test_the_hlsl_fallback_needs_dxc(monkeypatch):
-    monkeypatch.setattr(validators, "can_lower", lambda language: language != "hlsl")
+    monkeypatch.setattr(lowering, "can_lower", lambda language: language != "hlsl")
     with pytest.raises(ProbeError, match="dxc or spirv-dis is not installed"):
         spirv_input.build(POINT_MODE)
 

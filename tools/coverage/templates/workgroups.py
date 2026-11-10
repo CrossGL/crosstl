@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import re
 
-from .base import ABSENT, PAIR, Template
+from .base import ABSENT, Template
+from .family import PAIR
 from .statements import c_text
 
 NAMES = ("shared-vector-array", "shared-struct-array", "shared-2d-array")

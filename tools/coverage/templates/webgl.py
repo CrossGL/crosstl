@@ -11,7 +11,7 @@ from __future__ import annotations
 from .abstractions import FAMILY as _ABSTRACTIONS
 from .abstractions import GLSL as _ABSTRACTIONS_GLSL
 from .aggregates import FAMILY as _AGGREGATES
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
 from .bindings import WEBGL as _BINDINGS
 from .blocks import WEBGL as _BLOCKS
 from .booleans import WEBGL as _BOOLEANS
@@ -24,6 +24,7 @@ from .edges import FAMILY as _EDGES
 from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
 from .extensions import WEBGL as _EXTENSIONS
+from .family import C_FAMILY
 from .formats import WEBGL as _FORMATS
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL

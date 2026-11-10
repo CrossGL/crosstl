@@ -213,7 +213,7 @@ def available(language: str, target: str = "") -> bool:
     return not missing(language, target)
 
 
-def _run(
+def run(
     arguments: list[str],
     cwd: str,
     environment: dict[str, str] | None = None,
@@ -264,7 +264,7 @@ def _essl(name: str, source: str, scratch: str) -> Verdict:
     """Check a WebGL shader with glslang as GLSL ES 3.00, the shading language of WebGL 2."""
     if not _ESSL_VERSION.match(source):
         return Verdict(False, "error: the shader does not begin with #version 300 es")
-    return _run([*command("glslangValidator"), name], scratch)
+    return run([*command("glslangValidator"), name], scratch)
 
 
 # Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.
@@ -311,7 +311,7 @@ METAL_ENTRIES = {
 
 def _air(name: str, scratch: str) -> Verdict:
     """Compile the Metal source ``name`` in ``scratch`` to textual AIR in ``probe.ll``."""
-    return _run(
+    return run(
         [
             *command("metal"),
             f"-std={METAL_STANDARD}",
@@ -362,7 +362,7 @@ def _dxc(name: str, source: str, stage: str, entry: str, scratch: str) -> Verdic
     attribute = rf'\[\s*shader\s*\(\s*"{kind}"\s*\)\s*\]'
     if library and not re.search(attribute, source, re.IGNORECASE):
         return Verdict(False, f"error: the library has no {stage} entry point")
-    return _run(
+    return run(
         [
             *command("dxc"),
             "-T",
@@ -424,7 +424,7 @@ def _glsl(name: str, stage: str, target: str, scratch: str) -> Verdict:
         environment = ["--target-env", SPIRV_ENVIRONMENT]
     else:
         environment = []
-    return _run([*command("glslangValidator"), *environment, name], scratch)
+    return run([*command("glslangValidator"), *environment, name], scratch)
 
 
 def _slang(
@@ -438,7 +438,7 @@ def _slang(
         *([] if attributed else ["-stage", SLANG_STAGES.get(stage, stage)]),
     ]
     output = "probe.hlsl" if target == "hlsl" else "probe.spv"
-    compiled = _run(
+    compiled = run(
         [
             *command("slangc"),
             name,
@@ -468,12 +468,12 @@ def _spirv(name: str, stage: str, scratch: str) -> Verdict:
         "--target-env",
         (SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT),
     ]
-    assembled = _run(
+    assembled = run(
         [*command("spirv-as"), *environment, name, "-o", "probe.spv"], scratch
     )
     if not assembled.accepted:
         return assembled
-    return _run([*command("spirv-val"), *environment, "probe.spv"], scratch)
+    return run([*command("spirv-val"), *environment, "probe.spv"], scratch)
 
 
 def validate(
@@ -490,7 +490,7 @@ def validate(
         Path(scratch, name).write_text(source)
         if language in COMPILE_ARGUMENTS:
             arguments = (a.format(source=name) for a in COMPILE_ARGUMENTS[language])
-            return _run([*command(TOOLS[language]), *arguments], scratch)
+            return run([*command(TOOLS[language]), *arguments], scratch)
         if language == "webgl":
             return _essl(name, source, scratch)
         if language == "glsl":
@@ -501,79 +501,10 @@ def validate(
             return _metal(name, stage, scratch)
         if language == "rust":
             compiler = rustgpu.command(rustgpu.target(stage))
-            return _run([*compiler, name, "--out-dir", "."], scratch)
+            return run([*compiler, name, "--out-dir", "."], scratch)
         if language == "slang":
             return _slang(name, source, stage, entry, target, scratch)
         return _spirv(name, stage, scratch)
-
-
-# How each language's reference compiler lowers a probe to SPIR-V; ``{source}``, ``{entry}``, ``{stage}``, the HLSL
-# ``{profile}`` and the Vulkan ``{environment}`` are filled in.
-SPIRV_COMPILERS = {
-    "glsl": (
-        "glslangValidator",
-        ("-V", "--target-env", "{environment}", "{source}", "-o", "probe.spv"),
-    ),
-    "hlsl": (
-        "dxc",
-        (
-            "-spirv",
-            "-T",
-            "{profile}",
-            "-E",
-            "{entry}",
-            "-HV",
-            "2021",
-            "-enable-16bit-types",
-            "-O0",
-            "-fspv-target-env={environment}",
-            "{source}",
-            "-Fo",
-            "probe.spv",
-        ),
-    ),
-    "slang": (
-        "slangc",
-        (
-            "{source}",
-            "-target",
-            SLANG_TARGET,
-            "-entry",
-            "{entry}",
-            "-stage",
-            "{stage}",
-            "-O0",
-            # slangc removes unused locals even at -O0; with debug information it keeps them, so the baseline
-            # probe keeps the argument reads the call's probe has. Debug instructions never join an id.
-            "-g2",
-            "-o",
-            "probe.spv",
-        ),
-    ),
-    "wgsl": ("naga", ("{source}", "probe.spv")),
-    # rust-gpu names the module after the crate, which is named after the file.
-    "rust": ("rust-gpu", ("{source}", "--out-dir", ".")),
-}
-# The flags that make a compiler keep the resources a shader declares but never reads, so its SPIR-V keeps the
-# bindings the source gives them. glslang and naga keep them without one.
-KEEP_BINDINGS = {"hlsl": ("-fspv-preserve-bindings",), "slang": ("-preserve-params",)}
-# The flags that let glslang lower OpenGL GLSL, whose stage inputs and outputs may have no location, for Vulkan.
-AUTO_LOCATIONS = {"glsl": ("--auto-map-locations",)}
-# GLSL for Vulkan has no gl_VertexID or gl_InstanceID: it names the vertex and instance index gl_VertexIndex and
-# gl_InstanceIndex (GL_KHR_vulkan_glsl), so OpenGL GLSL is lowered with those names. gl_InstanceIndex also counts the
-# draw's first instance, which a lowered probe, never drawn, does not observe.
-VULKAN_NAMES = {"gl_VertexID": "gl_VertexIndex", "gl_InstanceID": "gl_InstanceIndex"}
-_OPENGL_NAME = re.compile(rf"\b(?:{'|'.join(VULKAN_NAMES)})\b")
-
-
-def vulkan_glsl(source: str) -> str:
-    """OpenGL GLSL ``source`` with the vertex and instance index given their Vulkan names (:data:`VULKAN_NAMES`)."""
-    return _OPENGL_NAME.sub(lambda match: VULKAN_NAMES[match[0]], source)
-
-
-def can_lower(language: str) -> bool:
-    compiler = SPIRV_COMPILERS.get(language)
-    return bool(compiler and command(compiler[0]) and command("spirv-dis"))
 
 
 # slangc names only the kind of an error in its header (``error[E30015]: undefined identifier``) and puts the
@@ -612,69 +543,3 @@ def _labelled(header: re.Match[str], following: list[str]) -> str:
                 text = f"{message}: {text}"
             return f"error[{header['code']}]: {text}"
     return header.group(0)
-
-
-def lower(
-    language: str,
-    source: str,
-    entry: str = "main",
-    stage: str = "compute",
-    *,
-    raw_ids: bool = True,
-    keep_bindings: bool = False,
-    auto_locations: bool = False,
-) -> tuple[str, str]:
-    """Compile a probe to SPIR-V and disassemble it: ``(assembly, "")`` on success, ``("", log)`` if not.
-
-    ``raw_ids`` numbers every id instead of naming it after its debug name, so assemblies compare by instruction.
-    ``keep_bindings`` keeps the resources the probe never reads (:data:`KEEP_BINDINGS`), and ``auto_locations``
-    numbers the stage inputs and outputs that have no location (:data:`AUTO_LOCATIONS`). GLSL is lowered with the
-    Vulkan names of its vertex and instance index (:func:`vulkan_glsl`). Call only when :func:`can_lower` is true.
-    """
-    tool, arguments = SPIRV_COMPILERS[language]
-    name = "probe" + (
-        f".{GLSL_STAGES[stage]}" if language == "glsl" else SUFFIX[language]
-    )
-    fields = {
-        "source": name,
-        "entry": entry,
-        "stage": SLANG_STAGES.get(stage, stage),
-        "profile": HLSL_PROFILES.get(stage, ""),
-        "environment": (
-            SPIRV_1_4_ENVIRONMENT if stage in SPIRV_1_4_STAGES else SPIRV_ENVIRONMENT
-        ),
-    }
-    with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
-        Path(scratch, name).write_text(
-            vulkan_glsl(source) if language == "glsl" else source
-        )
-        filled = [a.format(**fields) for a in arguments]
-        if keep_bindings:
-            filled += KEEP_BINDINGS.get(language, ())
-        if auto_locations:
-            filled += AUTO_LOCATIONS.get(language, ())
-        compiler = (
-            rustgpu.command(rustgpu.target(stage))
-            if tool == "rust-gpu"
-            else command(tool)
-        )
-        compiled = _run([*compiler, *filled], scratch)
-        if not compiled.accepted:
-            return "", compiled.log
-        try:
-            result = subprocess.run(
-                [
-                    *command("spirv-dis"),
-                    *(["--raw-id"] if raw_ids else []),
-                    "probe.spv",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT,
-                cwd=scratch,
-            )
-        except subprocess.TimeoutExpired:
-            return "", f"spirv-dis timed out after {TIMEOUT} s"
-        if result.returncode != 0:
-            return "", result.stderr.strip()[-2000:]
-        return result.stdout, ""
