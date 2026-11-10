@@ -5653,9 +5653,6 @@ class VulkanParser:
         for result_id in spec_constant_ids:
             constant_decorations = decorations.get(result_id, [])
             constant_id = self.spirv_spec_constant_id(constant_decorations)
-            data_type = self.spirv_type_name(constant_types.get(result_id), types)
-            if data_type is None:
-                continue
 
             qualifiers = []
             if constant_id is not None:
@@ -5672,8 +5669,18 @@ class VulkanParser:
                     constant_id, "spec_constant"
                 )
 
+            # An OpSpecConstantComposite may build an array (SPIR-V 1.6 section 3.52.7); the importer reads a
+            # named one by name, so it is declared as a sized const array.
+            data_type, array_suffix = self.spirv_type_name_and_suffix(
+                constant_types.get(result_id), types, constants
+            )
+            if data_type is None:
+                raise SpirvInstructionUnsupportedError(
+                    "OpSpecConstantComposite",
+                    f"declares {variable_name} with a type CrossGL cannot name",
+                )
             declaration = AssignmentNode(
-                VariableNode(f"const {data_type}", variable_name),
+                VariableNode(f"const {data_type}", f"{variable_name}{array_suffix}"),
                 constants.get(result_id),
             )
             layouts.append(
