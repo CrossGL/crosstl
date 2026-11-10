@@ -39,7 +39,10 @@ from demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip i
     _canonical_json_sha256,
     _normalized_materialization,
 )
-from demos.integrations.mlx.tests.pins import check_generated_artifact
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    check_template_materialization,
+)
 
 REQUIRE_REDUCE_DIRECTX_ENV = "CROSTL_REQUIRE_MLX_REDUCE_DIRECTX_TRANSLATION"
 REDUCE_DIRECTX_SHARD_INDEX_ENV = "CROSTL_MLX_REDUCE_DIRECTX_SHARD_INDEX"
@@ -599,8 +602,13 @@ def _translate_and_validate(
     assert execution[0]["targetEntryPoint"] == "CSMain"
     assert execution[0]["workgroupSize"] == [1, 1, 1]
     materialization = _normalized_materialization(artifact["templateMaterialization"])
-    assert materialization["specializationCount"] == workload.specialization_count
-    assert _canonical_json_sha256(materialization) == workload.materialization_sha256
+    check_template_materialization(
+        artifact["path"],
+        materialization,
+        _canonical_json_sha256(materialization),
+        sha256=workload.materialization_sha256,
+        specialization_count=workload.specialization_count,
+    )
     assert payload["validation"].get("toolchainRuns", []) == []
 
     generated_path = mlx_root / artifact["path"]

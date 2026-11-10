@@ -1,7 +1,8 @@
 """Generated-artifact pins for the MLX corpus tests.
 
 A pin records the exact bytes one translator state produced for an MLX kernel when
-the artifact was reviewed. Other work keeps changing the translator on ``main``, so a
+the artifact was reviewed, or the digest and specialization count of the template
+materialization behind those bytes. Other work keeps changing the translator on ``main``, so a
 merge-queue group or a nightly run builds on a translator the pins were not reviewed
 against. Those runs set ``CROSSTL_MLX_PIN_MODE=report``: a changed pin is reported as
 drift instead of failing, while translation, diagnostics, native compilation and
@@ -118,6 +119,36 @@ def check_generated_artifact(
             and matches
         )
     return matches
+
+
+def check_template_materialization(
+    subject: str,
+    materialization: Mapping[str, Any],
+    digest: str,
+    *,
+    sha256: str,
+    specialization_count: int,
+) -> bool:
+    """Check a template-materialization record against its pinned digest and count.
+
+    ``digest`` is the caller's canonical SHA-256 of ``materialization``. The record
+    must always list exactly ``specializationCount`` specializations; only the
+    pinned digest and count may drift, because both follow the translator's
+    template instantiation rather than the kernel's behaviour.
+    """
+
+    count = materialization.get("specializationCount")
+    specializations = materialization.get("specializations")
+    assert isinstance(count, int) and count > 0, f"{subject}: {count!r}"
+    assert isinstance(specializations, list), f"{subject}: specializations missing"
+    assert count == len(specializations), (count, len(specializations))
+    assert isinstance(digest, str) and len(digest) == 64, digest
+    int(digest, 16)
+    matches = check_pin(subject, "materializationSha256", digest, sha256)
+    return (
+        check_pin(subject, "specializationCount", count, specialization_count)
+        and matches
+    )
 
 
 def drift_records(directory: Path) -> list[dict]:

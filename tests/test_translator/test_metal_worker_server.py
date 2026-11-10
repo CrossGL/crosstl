@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import sys
 import threading
 
@@ -124,6 +125,18 @@ def test_deadline_kills_the_worker(worker):
     assert details["command"] == [str(worker), "--serve"]
     assert server.process.returncode is not None
     assert not server.usable
+
+
+def test_refused_group_signal_kills_the_worker_itself(worker, monkeypatch):
+    # macOS answers EPERM for a group whose leader exited but is unreaped.
+    def refuse(pid, number):
+        raise PermissionError(1, "Operation not permitted")
+
+    server = MetalWorkerServer(worker)
+    monkeypatch.setattr(os, "killpg", refuse)
+    server._kill()
+    assert server.process.wait(timeout=30) == -9
+    server.terminate()
 
 
 def test_malformed_reply_is_rejected(worker):
@@ -253,3 +266,18 @@ def test_native_worker_serves_independent_requests(tmp_path, monkeypatch):
     (tmp_path / "serve.json").write_text(
         json.dumps({"pids": pids}, indent=2), encoding="utf-8"
     )
+
+
+def test_deadline_kills_the_worker_when_its_group_refuses_signals(worker, monkeypatch):
+    # Darwin refuses killpg with EPERM once the group leader starts exiting;
+    # the worker must still be stopped and reaped rather than leak the error.
+    def refuse(pid, signum):
+        raise PermissionError(1, "Operation not permitted")
+
+    server = MetalWorkerServer(worker)
+    monkeypatch.setattr(os, "killpg", refuse)
+    with pytest.raises(RuntimeAdapterSetupError) as caught:
+        server.exchange(_request("hang"), 0.5)
+    assert caught.value.details["reasonKind"] == "operation-timeout"
+    assert server.process.returncode == -signal.SIGKILL
+    assert not server.usable

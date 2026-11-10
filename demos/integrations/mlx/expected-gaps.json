@@ -3121,8 +3121,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "0ba7ce40aceb8adee664ae2e08028ee75b1486dfcc6ab111486d28d67dde6c8b",
-      "size_bytes": 1500898,
+      "sha256": "9457e54345ce48ca5f2b00e889e52b4af73088690b65930643b4a35ff3561bc7",
+      "size_bytes": 1500893,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -3165,7 +3165,7 @@
       "expressions": [
         "in_ + LoopedElemToLoc_1_int64_t_false__location(loop)",
         "in_ + LoopedElemToLoc_2_int64_t_false__location(loop)",
-        "in_ + LoopedElemToLoc_5_int64_t_true__location(loop)",
+        "in_ + LoopedElemToLoc_5_int64_t__location(loop)",
         "inputs[i - 1] + reduction_size",
         "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
         "out_idx",
@@ -8240,8 +8240,8 @@
         }
       },
       "generated_hlsl": {
-        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
-        "size_bytes": 5721
+        "sha256": "2d697ea546e481dbc20e5a4c13faaa4c8fab2946230be6f265edf6bbd2d79381",
+        "size_bytes": 5862
       },
       "materialization": {
         "reachable_specialization_count": 5,
@@ -8368,8 +8368,8 @@
         }
       },
       "generated_hlsl": {
-        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
-        "size_bytes": 17917
+        "sha256": "b0c3238977654b03d610fae1e543e8be400eeb6589ef1ca522bd651747010542",
+        "size_bytes": 18052
       },
       "compiler_validation": {
         "compiler": "dxc",

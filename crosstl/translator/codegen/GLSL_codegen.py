@@ -299,7 +299,10 @@ from .glsl_invariant_builtins import (
 )
 from .glsl_keywords import GLSL_TYPE_KEYWORDS
 from .glsl_mesh_locations import mesh_fragment_input_layouts, mesh_output_layouts
-from .glsl_narrow_integer_literals import narrowed_integer_literal
+from .glsl_narrow_integer_literals import (
+    narrowed_integer_literal,
+    widened_integer_literal,
+)
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
 from .glsl_nested_stage_io import refuse_nested_stage_builtins
 from .glsl_ray_queries import (
@@ -37566,7 +37569,8 @@ complex64_t crossgl_complex64_mod_assign(
                 expected_element_count=expected_count,
             )
         rendered = [
-            self.generate_expression_with_expected(element, element_types[index])
+            widened_integer_literal(self, element, element_types[index])
+            or self.generate_expression_with_expected(element, element_types[index])
             for index, element in enumerate(elements)
         ]
         rendered.extend(

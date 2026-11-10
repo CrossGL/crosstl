@@ -157,6 +157,45 @@ struct c { float x; bool operator==(c o) const { return true; } };
     assert flags == {"a": True, "b": True, "c": False}
 
 
+# Two scale formats, each constructible from float and converting back to it.
+SCALES = """
+struct e8 {
+  e8(float x) thread { bits = uint8_t(x); }
+  operator float() thread { return float(bits); }
+  uint8_t bits;
+};
+struct e4 {
+  e4(float x) thread { bits = uint8_t(x * 2.0f); }
+  operator float() thread { return float(bits) * 0.5f; }
+  uint8_t bits;
+};
+"""
+
+
+def test_conditional_alias_value_of_the_class_type_is_not_converted(tmp_path):
+    # ``S`` selects ``e8`` or ``e4`` through a local constexpr condition, so a loaded ``S``
+    # already has the type ``operator float`` takes as its object; no constructor applies.
+    source = SCALES + """
+template <int group_size>
+[[kernel]] void k(const device uint8_t* scales [[buffer(0)]],
+                  device float* out [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+  constexpr bool use_e8 = group_size == 32;
+  using S = metal::conditional_t<use_e8, e8, e4>;
+  auto q = ((device S*)(scales))[i];
+  out[i] = float(q);
+}
+template [[host_name("k32")]] [[kernel]] void k<32>(
+    const device uint8_t*, device float*, uint);
+template [[host_name("k16")]] [[kernel]] void k<16>(
+    const device uint8_t*, device float*, uint);
+"""
+    cgl = _translate(tmp_path, source)
+    assert "e8__operator_float(q)" in cgl
+    assert "e4__operator_float(q)" in cgl
+    assert "crosstl_ctor_e8_1(q)" not in cgl
+    assert "crosstl_ctor_e4_1(q)" not in cgl
+
+
 SELECTED_LOADERS = """
 template <typename T, int N>
 struct SmallLoader {

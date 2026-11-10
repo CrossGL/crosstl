@@ -40,7 +40,10 @@ from demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip i
     _canonical_json_sha256,
     _normalized_materialization,
 )
-from demos.integrations.mlx.tests.pins import check_generated_artifact
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    check_template_materialization,
+)
 
 REQUIRE_REDUCE_OPENGL_ENV = "CROSTL_REQUIRE_MLX_REDUCE_OPENGL_TRANSLATION"
 REDUCE_OPENGL_SHARD_INDEX_ENV = "CROSTL_MLX_REDUCE_OPENGL_SHARD_INDEX"
@@ -56,9 +59,9 @@ REDUCE_OPENGL_CONTRACT_PATH = (
     / "reduce.opengl-translation.json"
 )
 REDUCE_OPENGL_CONTRACT_SHA256 = (
-    "0ba7ce40aceb8adee664ae2e08028ee75b1486dfcc6ab111486d28d67dde6c8b"
+    "9457e54345ce48ca5f2b00e889e52b4af73088690b65930643b4a35ff3561bc7"
 )
-REDUCE_OPENGL_CONTRACT_SIZE_BYTES = 1500898
+REDUCE_OPENGL_CONTRACT_SIZE_BYTES = 1500893
 REDUCE_OPENGL_SPECIALIZATION_COUNT = 9216
 REDUCE_OPENGL_REFLECTED_RESOURCE_COUNT = 25088
 REDUCE_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 45277608
@@ -70,7 +73,7 @@ REDUCE_OPENGL_GENERATED_SIZE_MAXIMUM = (
 INDEX_RANGE_ASSERTIONS = (
     ("in_ + LoopedElemToLoc_1_int64_t_false__location(loop)", 0, 2**31 - 1),
     ("in_ + LoopedElemToLoc_2_int64_t_false__location(loop)", 0, 2**31 - 1),
-    ("in_ + LoopedElemToLoc_5_int64_t_true__location(loop)", 0, 2**31 - 1),
+    ("in_ + LoopedElemToLoc_5_int64_t__location(loop)", 0, 2**31 - 1),
     ("inputs[i - 1] + reduction_size", 0, 2**31 - 1),
     (
         "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
@@ -605,8 +608,13 @@ def _translate_and_validate(
     assert execution[0]["targetEntryPoint"] == "main"
     assert execution[0]["workgroupSize"] == [1, 1, 1]
     materialization = _normalized_materialization(artifact["templateMaterialization"])
-    assert materialization["specializationCount"] == workload.specialization_count
-    assert _canonical_json_sha256(materialization) == workload.materialization_sha256
+    check_template_materialization(
+        artifact["path"],
+        materialization,
+        _canonical_json_sha256(materialization),
+        sha256=workload.materialization_sha256,
+        specialization_count=workload.specialization_count,
+    )
     assert payload["validation"].get("toolchainRuns", []) == []
 
     generated_path = mlx_root / artifact["path"]

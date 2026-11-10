@@ -1201,8 +1201,8 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
-        "size_bytes": 5721,
+        "sha256": "2d697ea546e481dbc20e5a4c13faaa4c8fab2946230be6f265edf6bbd2d79381",
+        "size_bytes": 5862,
     },
     "materialization": {
         "reachable_specialization_count": 5,
@@ -1325,8 +1325,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
-        "size_bytes": 17917,
+        "sha256": "b0c3238977654b03d610fae1e543e8be400eeb6589ef1ca522bd651747010542",
+        "size_bytes": 18052,
     },
     "compiler_validation": {
         "compiler": "dxc",

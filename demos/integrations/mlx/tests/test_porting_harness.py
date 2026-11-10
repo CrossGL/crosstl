@@ -10196,7 +10196,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "17,917 bytes" in normalized_readme
+    assert "18,052 bytes" in normalized_readme
     assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
     assert "independent shape and stride resource offsets" in normalized_readme
     assert "passes its logical offset as `inout int64_t`" in normalized_readme
@@ -10230,8 +10230,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["compiler_target_profiles"] == ["directx-12"]
     assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
-        "size_bytes": 5721,
+        "sha256": "2d697ea546e481dbc20e5a4c13faaa4c8fab2946230be6f265edf6bbd2d79381",
+        "size_bytes": 5862,
     }
     assert directx["materialization"] == {
         "reachable_specialization_count": 5,
@@ -10434,8 +10434,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
-        "size_bytes": 17917,
+        "sha256": "b0c3238977654b03d610fae1e543e8be400eeb6589ef1ca522bd651747010542",
+        "size_bytes": 18052,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",
@@ -17510,7 +17510,7 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
         "expressions": [
             "in_ + LoopedElemToLoc_1_int64_t_false__location(loop)",
             "in_ + LoopedElemToLoc_2_int64_t_false__location(loop)",
-            "in_ + LoopedElemToLoc_5_int64_t_true__location(loop)",
+            "in_ + LoopedElemToLoc_5_int64_t__location(loop)",
             "inputs[i - 1] + reduction_size",
             "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
             "out_idx",

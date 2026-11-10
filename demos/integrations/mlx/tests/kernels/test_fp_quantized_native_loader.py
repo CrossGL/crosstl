@@ -445,7 +445,12 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
         if target == "directx"
         else "crossgl_metal_round_float"
     )
-    assert generated.count(f"int n = int({round_helper}(float(le)));") == 1
+    # Metal float-to-int conversion saturates, so the rounded exponent keeps it.
+    assert (
+        generated.count(f"int n = cgl_rule_sat_ftoi({round_helper}(float(le)));")
+        == 1
+    )
+    assert f"int n = int({round_helper}(float(le)));" not in generated
     assert "int n = int(round(le));" not in generated
     global_scale_lines = [
         line for line in generated.splitlines() if "global_scale" in line

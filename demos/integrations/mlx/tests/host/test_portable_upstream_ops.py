@@ -70,6 +70,48 @@ def test_upstream_op_results_cannot_skip_or_replace_tests(native, fault):
             ops.validate_upstream(record, native=native)
 
 
+def test_each_upstream_test_draws_numpy_operands_from_the_fixed_seed(monkeypatch):
+    import unittest
+
+    import numpy as np
+
+    draws = []
+
+    class Draw(unittest.TestCase):
+        def test_draw(self):
+            draws.append(np.random.uniform(1, 100, size=4).tolist())
+
+    monkeypatch.setattr(
+        unittest.defaultTestLoader,
+        "loadTestsFromName",
+        lambda name: unittest.TestSuite([Draw("test_draw")]),
+    )
+    for _ in range(2):
+        # A worker that ran other tests first has advanced the global generator.
+        np.random.uniform(size=7)
+        assert ops.run_upstream_test("test_ops.TestOps.test_divmod").wasSuccessful()
+    np.random.seed(ops.UPSTREAM_NUMPY_SEED)
+    assert draws == [np.random.uniform(1, 100, size=4).tolist()] * 2
+
+
+def test_failed_workers_print_their_stderr_tail(tmp_path, capsys):
+    (tmp_path / "cpu.stderr").write_text("cpu ok\n")
+    (tmp_path / "native.stderr").write_text(
+        "".join(f"line {i}\n" for i in range(40))
+        + "ValueError: Unchanged upstream test failed\n"
+    )
+    ops.report_failed_workers(
+        tmp_path, {"cpu": {"returncode": 0}, "native": {"returncode": 1}}, lines=3
+    )
+    err = capsys.readouterr().err.splitlines()
+    assert err == [
+        "MLX upstream ops native worker exited 1; last 3 stderr lines:",
+        "  line 38",
+        "  line 39",
+        "  ValueError: Unchanged upstream test failed",
+    ]
+
+
 def event(entry, size=1, target="metal"):
     return {"entry": entry, "workgroupSize": [size, 1, 1], "target": target}
 
