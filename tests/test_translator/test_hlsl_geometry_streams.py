@@ -16,7 +16,7 @@ import crosstl
 from crosstl.translator.diagnostics import CODE_PREFIX
 from crosstl.translator.semantics import HlslGeometryStreamUnsupportedError
 
-# The coverage probe for the geometry stage (tools/coverage/crossgl.py).
+# The coverage probe for the geometry stage (tools/coverage/crossgl/).
 PROBE_CGL = """
 shader Probe {
     in vec4 inPosition[1] @location(0);

@@ -18,6 +18,7 @@ from . import (
     compare,
     execution,
     features,
+    github,
     issues,
     publish,
     report,
@@ -220,11 +221,11 @@ def _issues(args: argparse.Namespace) -> int:
     try:
         actions = issues.reconcile(
             data,
-            issues.GitHub(args.repository),
+            github.GitHub(args.repository),
             new_bugs=args.new_bugs,
             dry_run=args.dry_run,
         )
-    except issues.GitHubError as error:
+    except github.GitHubError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     print(f"{len(actions)} issue changes" + (" planned" if args.dry_run else ""))

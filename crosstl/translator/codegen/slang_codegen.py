@@ -117,6 +117,12 @@ from .generic_function_utils import (
 )
 from .generic_struct_utils import named_struct_constructor_arguments
 from .global_specialization_constants import split_global_specialization_constants
+from .glsl_buffer_array_values import (
+    glsl_buffer_array_store_lines,
+    glsl_buffer_array_value,
+    glsl_buffer_array_value_type,
+    glsl_buffer_subscripts_are_repeatable,
+)
 from .glsl_buffer_block_arrays import (
     glsl_buffer_array_elements,
     glsl_buffer_block_indexed_access,
@@ -133,6 +139,7 @@ from .glsl_buffer_layout import (
     std430_layout_type_name,
     vector_component_offsets,
 )
+from .hlsl_array_value_arguments import HlslArrayValueArguments
 from .hlsl_buffer_component_stores import slang_buffer_component_store
 from .hlsl_byteaddress_typed_access import (
     hlsl_byteaddress_component_refusal,
@@ -358,6 +365,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.glsl_buffer_block_struct_lowering_failures = {}
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.required_byteaddress_atomic_helpers = set()
+        self.slang_array_values = HlslArrayValueArguments(self)
         self.slang_three_component_access = SlangThreeComponentAccess()
         self.slang_byteaddress_temp_variable_index = 0
         self.slang_mesh_payload_parameter_types = set()
@@ -636,6 +644,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.collect_slang_glsl_buffer_blocks(ast)
             self.required_glsl_buffer_aggregate_load_helpers = {}
             self.required_byteaddress_atomic_helpers = set()
+            self.slang_array_values = HlslArrayValueArguments(self)
             self.slang_three_component_access = SlangThreeComponentAccess()
             self.slang_byteaddress_temp_variable_index = 0
             self.slang_mesh_payload_parameter_types = set()
@@ -805,8 +814,9 @@ class SlangCodeGen(LoweringRefusalMixin):
     def emit_struct_dependent_helper_functions(self):
         helpers = self.generate_slang_glsl_buffer_aggregate_load_helpers()
         helpers += self.generate_slang_byteaddress_atomic_helpers()
+        array_values = self.slang_array_values.declarations()
         # Generated last: the helpers above call the three-component accessors too.
-        return self.slang_three_component_access.declarations() + helpers
+        return array_values + self.slang_three_component_access.declarations() + helpers
 
     def collect_user_function_names(self, node):
         names = set()
@@ -13154,20 +13164,86 @@ class SlangCodeGen(LoweringRefusalMixin):
             f"Slang GLSL buffer block: {operation} {reason}", placeholder
         )
 
-    def slang_glsl_buffer_whole_array_refusal(self, access, *, indexed):
-        """Refuse reading or writing ``access`` as a whole array; the placeholder, or ``None``."""
-        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
-        if reason is None:
+    def slang_glsl_buffer_whole_array_refusal(self, access, *, indexed, expr=None):
+        """The whole block array ``access`` read as one value, or ``None`` for one element.
+
+        See glsl_buffer_array_values; subscripts with side effects are refused.
+        """
+        if glsl_buffer_whole_array_reason(access, indexed=indexed) is None:
             return None
-        return self.unsupported_glsl_buffer_block_call(
-            "array value", reason, access["type"]
+        if not glsl_buffer_subscripts_are_repeatable(expr):
+            return self.unsupported_glsl_buffer_block_call(
+                "array value",
+                f"{access.get('member')} is read element by element, and its "
+                "subscripts have side effects",
+                glsl_buffer_array_value_type(access),
+            )
+
+        def load_element(element):
+            if element.get("members"):
+                return self.slang_byteaddress_aggregate_load(
+                    element["buffer"], element["offset"], element
+                )
+            return self.slang_byteaddress_load(
+                element["buffer"], element["offset"], element
+            )
+
+        return glsl_buffer_array_value(
+            access,
+            load_element=load_element,
+            value_struct=self.slang_array_values.value_struct,
+            map_type=self.map_type,
         )
+
+    def slang_glsl_buffer_array_store(self, target, access, offset, value, op):
+        """Statements storing array ``value`` into the whole block array ``access``."""
+        if op != "=" or not glsl_buffer_subscripts_are_repeatable(target):
+            return self.refuse_lowering(
+                f"Slang GLSL buffer block store: {access.get('member')} is an array, "
+                "written element by element, which needs '=' and subscripts without "
+                "side effects",
+                ";",
+            )
+        value_type = glsl_buffer_array_value_type(access)
+        rhs = self.generate_expression_with_expected(value, value_type)
+
+        def store_element(element, element_offset, element_value):
+            if element.get("members"):
+                lines = self.slang_byteaddress_aggregate_store_members(
+                    element["buffer"], element_offset, element_value, element
+                )
+                return (
+                    lines
+                    if lines is not None
+                    else [
+                        self.refuse_lowering(
+                            "Slang GLSL buffer block store: the array elements hold "
+                            "runtime arrays",
+                            ";",
+                        )
+                    ]
+                )
+            return self.slang_byteaddress_leaf_store(
+                element["buffer"], element_offset, element_value, element
+            ).splitlines()
+
+        lines = glsl_buffer_array_store_lines(
+            access,
+            offset,
+            rhs,
+            self.next_slang_byteaddress_temp_variable("array_store"),
+            store_element=store_element,
+            map_type=self.map_type,
+        )
+        return self.terminate_slang_statement_lines("\n".join(lines))
 
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
         if access is None or access.get("runtime_array"):
             return None
-        refusal = self.slang_glsl_buffer_whole_array_refusal(access, indexed=False)
+        refusal = self.slang_glsl_buffer_whole_array_refusal(
+            access, indexed=False, expr=expr
+        )
         if refusal is not None:
             return refusal
         if access.get("writeonly"):
@@ -13184,7 +13260,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         access = self.glsl_buffer_block_array_access(expr)
         if access is None:
             return None
-        refusal = self.slang_glsl_buffer_whole_array_refusal(access, indexed=True)
+        refusal = self.slang_glsl_buffer_whole_array_refusal(
+            access, indexed=True, expr=expr
+        )
         if refusal is not None:
             return refusal
         if access.get("writeonly"):
@@ -13212,17 +13290,15 @@ class SlangCodeGen(LoweringRefusalMixin):
         else:
             offset = access["offset_expr"]
 
-        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
-        if reason is not None:
-            return self.refuse_lowering(
-                f"Slang GLSL buffer block store: array value {reason}", ";"
-            )
+        whole_array = glsl_buffer_whole_array_reason(access, indexed=indexed)
         if access.get("readonly"):
             return self.refuse_lowering(
                 "Slang GLSL buffer block store: "
                 "readonly ByteAddressBuffer cannot be written",
                 ";",
             )
+        if whole_array is not None:
+            return self.slang_glsl_buffer_array_store(target, access, offset, value, op)
         if access.get("members"):
             if op != "=":
                 return self.refuse_lowering(
