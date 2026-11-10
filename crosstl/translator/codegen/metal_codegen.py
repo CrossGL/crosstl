@@ -63,6 +63,7 @@ from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.constant_buffers import lower_constant_buffer_resources
+from ..semantics.declared_types import declared_type_names
 from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
 from ..semantics.narrowing_constructors import select_narrowing_constructor_components
 from ..semantics.sampler_states import is_sampler_constructor
@@ -530,6 +531,11 @@ from .texture_residency import (
     metal_texture_resident_call,
 )
 from .workgroup_size_extents import fold_workgroup_size_extents
+from .written_type_names import (
+    METAL_TYPE_NAMES,
+    sized_float_spelling,
+    written_type_name,
+)
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.extension.GL_EXT_fragment_invocation_density",
@@ -646,6 +652,9 @@ class MetalCodeGen(
     MetalNarrowVectorMixin,
 ):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
+
+    # The type names the program being rendered declares; see :func:`written_type_name`.
+    program_type_names = frozenset()
 
     BINARY_PRECEDENCE = {
         "||": 1,
@@ -2107,6 +2116,7 @@ class MetalCodeGen(
 
     def render_checked_program(self, ast, target_stage=None):
         """Render the program and refuse the types the Metal language does not have."""
+        self.program_type_names = declared_type_names(ast)
         output = self.render_program(ast, target_stage)
         refuse_metal_double_values(output, self.refuse_lowering)
         return output
@@ -28728,7 +28738,16 @@ class MetalCodeGen(
                 component = "float"
             return f"{component}{fixed_float_vector.group('lanes')}"
 
-        return self.type_mapping.get(vtype_str, vtype_str)
+        if vtype_str not in self.type_mapping:
+            if sized_float_spelling(vtype_str) != vtype_str:
+                return self.map_type(sized_float_spelling(vtype_str))
+            if re.fullmatch(r"double(?:[234](?:x[234])?)?", vtype_str):
+                # Refused with the specification's reason by ``refuse_metal_double_values``.
+                return vtype_str
+            return written_type_name(
+                vtype_str, METAL_TYPE_NAMES, self.program_type_names, "Metal"
+            )
+        return self.type_mapping[vtype_str]
 
     def cooperative_matrix_contract(self, matrix_type):
         if isinstance(matrix_type, CooperativeMatrixType):
