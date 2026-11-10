@@ -6,7 +6,11 @@ import struct
 
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
-from .assembly_validation import check_defined_ids
+from .assembly_validation import (
+    check_defined_ids,
+    check_type_declaration_order,
+    check_unique_result_ids,
+)
 from .barrier_import import spirv_barrier_statements
 from .block_arrays import SpirvBlockArrayUnsupportedError, block_array_element
 from .block_layout_import import spirv_block_layout
@@ -5079,6 +5083,8 @@ class VulkanParser:
             instructions.append((result_id, opcode, operands, instruction_line_number))
             index = next_index
 
+        check_unique_result_ids(instructions)
+        check_type_declaration_order(instructions)
         check_defined_ids(
             id_operands, {result_id for result_id, *_ in instructions if result_id}
         )

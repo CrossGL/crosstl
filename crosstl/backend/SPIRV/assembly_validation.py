@@ -11,7 +11,13 @@ that ``spirv-as`` or ``spirv-val`` (SPIRV-Tools) enforces:
   OpBranch instruction, but found the next instruction instead");
 * each label operand of a branch or merge names a block of the same function (``spirv-val``: "'Target Label'
   operands for OpBranch must be the ID of an OpLabel instruction", "Block(s) ... are referenced but not defined
-  in function").
+  in function");
+* each result ``<id>`` is defined once (``spirv-val``: "Id ... is defined more than once"; SPIR-V 1.6 section 2.2.1,
+  the module is in static single-assignment form);
+* a type declaration names only types and constants declared before it, except a pointer type announced by
+  ``OpTypeForwardPointer`` (``spirv-val``: "Operand ... requires a previous definition"; SPIR-V 1.6 section 2.4,
+  logical layout item 9). A type that refers to itself or to a later type would otherwise make the reader recurse
+  without end.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ __all__ = [
     "SpirvInvalidModuleError",
     "check_control_flow_operands",
     "check_defined_ids",
+    "check_type_declaration_order",
+    "check_unique_result_ids",
 ]
 
 # Instructions that only attach metadata to an <id>: entry points, execution modes, debug names and annotations.
@@ -121,3 +129,47 @@ def check_control_flow_operands(block_label, opcode, operands, blocks):
             raise SpirvInvalidModuleError(
                 f"{opcode} in block {block_label} names {label}, which is not a block of the function"
             )
+
+
+def check_unique_result_ids(instructions):
+    """Refuse a result ``<id>`` that two instructions define.
+
+    ``instructions`` holds ``(result_id, opcode, operands, line)`` for each instruction in module order.
+    """
+    defined_on = {}
+    for result_id, opcode, _operands, line in instructions:
+        if not result_id:
+            continue
+        if result_id in defined_on:
+            raise SpirvInvalidModuleError(
+                f"{opcode} on line {line} defines {result_id}, which line {defined_on[result_id]} already defines"
+            )
+        defined_on[result_id] = line
+
+
+def check_type_declaration_order(instructions):
+    """Refuse a type declaration whose ``<id>`` operand is not declared before it.
+
+    The one exception is a pointer type that an ``OpTypeForwardPointer`` announced. ``instructions`` holds
+    ``(result_id, opcode, operands, line)`` for each instruction in module order.
+    """
+    forward_pointers = {
+        operands[0]
+        for _result_id, opcode, operands, _line in instructions
+        if opcode == "OpTypeForwardPointer" and operands
+    }
+    declared = set()
+    for result_id, opcode, operands, line in instructions:
+        if opcode.startswith("OpType") and opcode != "OpTypeForwardPointer":
+            for operand in operands:
+                if (
+                    isinstance(operand, str)
+                    and operand.startswith("%")
+                    and operand not in declared
+                    and operand not in forward_pointers
+                ):
+                    raise SpirvInvalidModuleError(
+                        f"{opcode} on line {line} uses {operand} before any instruction declares it"
+                    )
+        if result_id:
+            declared.add(result_id)

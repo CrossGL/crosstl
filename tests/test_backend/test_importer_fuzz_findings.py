@@ -243,6 +243,26 @@ INVALID_SPIRV = {
         "%v = OpVariable %ptr Function\nOpReturn",
         "%ptr = OpTypePointer Function %float",
     ),
+    # spirv-val: "Id ... is defined more than once". A type that redefines its own element
+    # type used to send the reader into unbounded recursion (fuzz finding vulkan-d897eee2eee6).
+    "type-redefined-as-array-of-itself": (
+        "OpReturn",
+        "%int = OpTypeInt 32 1\n%int = OpTypeRuntimeArray %int",
+    ),
+    "constant-defined-twice": (
+        "OpReturn",
+        "%int = OpTypeInt 32 1\n%c = OpConstant %int 1\n%c = OpConstant %int 2",
+    ),
+    # spirv-val: "Operand ... requires a previous definition"; only OpTypeForwardPointer
+    # announces a later type.
+    "types-that-name-each-other": (
+        "OpReturn",
+        "%a = OpTypeRuntimeArray %b\n%b = OpTypeRuntimeArray %a",
+    ),
+    "array-of-a-later-type": (
+        "OpReturn",
+        "%arr = OpTypeRuntimeArray %int\n%int = OpTypeInt 32 1",
+    ),
 }
 
 
@@ -253,6 +273,21 @@ def test_invalid_spirv_modules_are_refused(tmp_path, case):
     assert getattr(error, "project_diagnostic_code", None) == (
         "project.translate.spirv-invalid-module"
     ), repr(error)
+
+
+def test_spirv_forward_pointer_may_name_a_later_type():
+    from crosstl.backend.SPIRV.assembly_validation import (
+        check_type_declaration_order,
+    )
+
+    check_type_declaration_order(
+        [
+            (None, "OpTypeForwardPointer", ["%p", "PhysicalStorageBuffer"], 1),
+            ("%int", "OpTypeInt", ["32", "1"], 2),
+            ("%s", "OpTypeStruct", ["%int", "%p"], 3),
+            ("%p", "OpTypePointer", ["PhysicalStorageBuffer", "%s"], 4),
+        ]
+    )
 
 
 def test_spirv_result_id_without_opcode_is_rejected(tmp_path):
