@@ -59,9 +59,9 @@ REDUCE_OPENGL_CONTRACT_PATH = (
     / "reduce.opengl-translation.json"
 )
 REDUCE_OPENGL_CONTRACT_SHA256 = (
-    "0ba7ce40aceb8adee664ae2e08028ee75b1486dfcc6ab111486d28d67dde6c8b"
+    "9457e54345ce48ca5f2b00e889e52b4af73088690b65930643b4a35ff3561bc7"
 )
-REDUCE_OPENGL_CONTRACT_SIZE_BYTES = 1500898
+REDUCE_OPENGL_CONTRACT_SIZE_BYTES = 1500893
 REDUCE_OPENGL_SPECIALIZATION_COUNT = 9216
 REDUCE_OPENGL_REFLECTED_RESOURCE_COUNT = 25088
 REDUCE_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 45277608
@@ -73,7 +73,7 @@ REDUCE_OPENGL_GENERATED_SIZE_MAXIMUM = (
 INDEX_RANGE_ASSERTIONS = (
     ("in_ + LoopedElemToLoc_1_int64_t_false__location(loop)", 0, 2**31 - 1),
     ("in_ + LoopedElemToLoc_2_int64_t_false__location(loop)", 0, 2**31 - 1),
-    ("in_ + LoopedElemToLoc_5_int64_t_true__location(loop)", 0, 2**31 - 1),
+    ("in_ + LoopedElemToLoc_5_int64_t__location(loop)", 0, 2**31 - 1),
     ("inputs[i - 1] + reduction_size", 0, 2**31 - 1),
     (
         "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",

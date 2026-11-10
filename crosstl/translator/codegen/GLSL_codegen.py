@@ -33359,9 +33359,7 @@ class GLSLCodeGen(
 
     def generate_expression_with_expected(self, expr, expected_type):
         expected_type = self.type_name_string(expected_type)
-        narrowed = narrowed_integer_literal(
-            self, expr, expected_type
-        ) or widened_integer_literal(self, expr, expected_type)
+        narrowed = narrowed_integer_literal(self, expr, expected_type)
         if narrowed is not None:
             return narrowed
         interface_value = self.glsl_interface_block_value_expression(
@@ -37571,7 +37569,8 @@ complex64_t crossgl_complex64_mod_assign(
                 expected_element_count=expected_count,
             )
         rendered = [
-            self.generate_expression_with_expected(element, element_types[index])
+            widened_integer_literal(self, element, element_types[index])
+            or self.generate_expression_with_expected(element, element_types[index])
             for index, element in enumerate(elements)
         ]
         rendered.extend(

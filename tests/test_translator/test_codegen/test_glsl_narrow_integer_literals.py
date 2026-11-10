@@ -4,9 +4,9 @@
 ``2654435761l``. Initializing a ``uint`` converts the value, which fits. GLSL has no implicit ``int64_t`` to
 ``uint`` conversion, so the literal is spelled with the 32-bit type it initializes.
 
-In the other direction, Mesa refuses ``int64_t[1](0)``, ``f(3)`` for an ``int64_t`` parameter and struct
-constructor arguments although ``GL_ARB_gpu_shader_int64`` lists the implicit conversion, so a literal that
-initializes a 64-bit integer carries that type's suffix.
+In the other direction, Mesa refuses ``int64_t[1](0)`` although ``GL_ARB_gpu_shader_int64`` lists the implicit
+conversion, so a literal element of a 64-bit aggregate constructor carries that type's suffix. Calls and struct
+constructors convert their arguments explicitly instead.
 """
 
 import crosstl
@@ -43,7 +43,7 @@ def test_wide_literals_initializing_32_bit_integers_use_the_32_bit_type(tmp_path
 def test_64_bit_objects_keep_64_bit_literals(tmp_path):
     glsl = _glsl(tmp_path)
     assert "int64_t big = 5000000000l;" in glsl
-    assert "uint64_t ubig = 5000000000ul;" in glsl
+    assert "uint64_t ubig = 5000000000l;" in glsl
 
 
 WIDE_SOURCE = """
@@ -86,8 +86,9 @@ def test_literals_in_64_bit_array_constructors_carry_the_element_type(tmp_path):
     assert "uint64_t[1](5000000000ul)" in glsl
 
 
-def test_literals_initializing_64_bit_scalars_carry_the_type(tmp_path):
+def test_64_bit_scalars_calls_and_structs_keep_explicit_conversions(tmp_path):
     glsl = _wide_glsl(tmp_path)
-    assert "int64_t sum = 0l;" in glsl
-    assert "bump(3)" not in glsl
-    assert "Pair(3, 4u)" not in glsl
+    # Initializers accept the implicit conversion; calls and struct constructors convert explicitly.
+    assert "int64_t sum = 0;" in glsl
+    assert "bump(int64_t(3))" in glsl
+    assert "Pair(int64_t(3), uint64_t(4u))" in glsl

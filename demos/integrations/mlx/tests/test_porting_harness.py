@@ -17510,7 +17510,7 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
         "expressions": [
             "in_ + LoopedElemToLoc_1_int64_t_false__location(loop)",
             "in_ + LoopedElemToLoc_2_int64_t_false__location(loop)",
-            "in_ + LoopedElemToLoc_5_int64_t_true__location(loop)",
+            "in_ + LoopedElemToLoc_5_int64_t__location(loop)",
             "inputs[i - 1] + reduction_size",
             "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
             "out_idx",

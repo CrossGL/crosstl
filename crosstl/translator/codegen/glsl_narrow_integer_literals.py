@@ -5,11 +5,11 @@ that type (``2654435761l``). Initializing a ``uint`` from it converts the value,
 conversion from ``int64_t`` to ``uint``, so ``uint[3](1, 2654435761l, 5)`` does not compile. When the value fits
 the 32-bit type it initializes, the literal is spelled with that type.
 
-The other direction needs the same spelling. ``GL_ARB_gpu_shader_int64`` adds implicit conversions from ``int``
-and ``uint`` to the 64-bit integer types, but drivers do not apply them to every operand: Mesa accepts
-``int64_t t = 0;`` and refuses ``int64_t[1](0)`` ("type error in array constructor"), a call ``f(3)`` to an
-``int64_t`` parameter and a struct constructor argument. A literal that initializes a 64-bit integer is
-therefore spelled with that type's suffix (``0l``, ``2ul``), which every context accepts.
+The other direction needs the same spelling in aggregate constructors. ``GL_ARB_gpu_shader_int64`` adds implicit
+conversions from ``int`` and ``uint`` to the 64-bit integer types, but drivers do not apply them to every operand:
+Mesa accepts ``int64_t t = 0;`` and refuses ``int64_t[1](0)`` ("type error in array constructor"). Calls and
+struct constructors already convert such arguments explicitly (``f(int64_t(3))``), so only the elements of an
+aggregate initializer are spelled with the 64-bit type's suffix (``int64_t[1](0l)``, ``uint64_t[1](2ul)``).
 """
 
 from __future__ import annotations

@@ -3121,8 +3121,8 @@
     "contract": {
       "path": "demos/integrations/mlx/contracts/reduce.opengl-translation.json",
       "schema_version": 2,
-      "sha256": "0ba7ce40aceb8adee664ae2e08028ee75b1486dfcc6ab111486d28d67dde6c8b",
-      "size_bytes": 1500898,
+      "sha256": "9457e54345ce48ca5f2b00e889e52b4af73088690b65930643b4a35ff3561bc7",
+      "size_bytes": 1500893,
       "entry_identity_fields": [
         "entryPoint",
         "shape",
@@ -3165,7 +3165,7 @@
       "expressions": [
         "in_ + LoopedElemToLoc_1_int64_t_false__location(loop)",
         "in_ + LoopedElemToLoc_2_int64_t_false__location(loop)",
-        "in_ + LoopedElemToLoc_5_int64_t_true__location(loop)",
+        "in_ + LoopedElemToLoc_5_int64_t__location(loop)",
         "inputs[i - 1] + reduction_size",
         "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
         "out_idx",
