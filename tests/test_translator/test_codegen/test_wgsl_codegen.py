@@ -5335,6 +5335,3 @@ def test_wgsl_codegen_sampler2d_array_takes_unmodified_resource_path():
     assert "var tex_1: texture_2d<f32>;" in generated
     assert "var tex_1_sampler: sampler;" in generated
     assert "var<storage" not in generated
-
-
-
