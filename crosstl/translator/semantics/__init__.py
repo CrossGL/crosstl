@@ -200,7 +200,11 @@ from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
-from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
+from .unsized_arrays import (
+    StorageBufferParameterUnsupportedError,
+    UnsizedArrayUnsupportedError,
+    legalize_unsized_arrays,
+)
 from .vector_logic import lower_vector_logic
 from .vertex_input_positions import (
     VertexInputPositionUnsupportedError,
@@ -267,6 +271,7 @@ __all__ = [
     "SpirvOperationUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
+    "StorageBufferParameterUnsupportedError",
     "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
