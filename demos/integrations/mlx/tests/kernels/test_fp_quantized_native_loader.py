@@ -447,8 +447,7 @@ def _translate_artifact(mlx_root: Path, work_dir: Path, target: str) -> Path:
     )
     # Metal float-to-int conversion saturates, so the rounded exponent keeps it.
     assert (
-        generated.count(f"int n = cgl_rule_sat_ftoi({round_helper}(float(le)));")
-        == 1
+        generated.count(f"int n = cgl_rule_sat_ftoi({round_helper}(float(le)));") == 1
     )
     assert f"int n = int({round_helper}(float(le)));" not in generated
     assert "int n = int(round(le));" not in generated
