@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -952,17 +953,26 @@ def _translate_and_validate(
     if workload.shape.startswith("gn"):
         assert "StructuredBuffer<int> ndim : register(t4);" in generated
         assert "ndim[0]" in generated
-        if workload.shape == "gn1" and workload.output_type not in {
-            "half",
-            "float16_t",
-        }:
-            assert "out_[out_idx++]" in generated
-        else:
-            assert workload.shape == "gn4large" or workload.output_type in {
-                "half",
-                "float16_t",
-            }
+        if workload.output_type in {"half", "float16_t"}:
+            # A 16-bit float output is stored through its uint16 view by a plain assignment.
             assert "out_[uint(out_idx++)]" in generated
+        else:
+            # Every other output is a buffer store with a side effect among its arguments, so
+            # the HLSL generator evaluates them in order into temporaries, the post-incremented
+            # index first, and the element is still written at the index before the increment.
+            assert workload.shape in {"gn1", "gn4large"}
+            index = (
+                r"__crossgl_argument\1"
+                if workload.shape == "gn1"
+                else r"uint\(__crossgl_argument\1\)"
+            )
+            assert re.search(
+                r"\(__crossgl_argument(\d+) = out_idx\+\+, [^;]*?out_\["
+                + index
+                + r"\] = ",
+                generated,
+            )
+            assert "out_idx++]" not in generated
         assert "++out_idx" not in generated
 
     assert validate_project_report(report_path)["success"] is True
