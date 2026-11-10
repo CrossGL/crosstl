@@ -14,7 +14,15 @@ from dataclasses import dataclass
 from . import constructs, execution
 from .dialect import Buffer, Dialect, NoSpelling, ProbeError
 from .languages import DIALECTS
-from .model import RAYTRACING_STAGES, Feature, Param, Signature, Type, tuple_element
+from .model import (
+    RAYTRACING_STAGES,
+    VOID,
+    Feature,
+    Param,
+    Signature,
+    Type,
+    tuple_element,
+)
 from .objects import Receiver, Uniforms, local_object
 
 __all__ = ["DIALECTS", "NoSpelling", "Probe", "ProbeError", "build", "spell"]
@@ -310,7 +318,9 @@ class _Builder:
             output = Type("uint")
             stores = [f"{held} r = {call};", dialect.store(dialect.literal(output))]
         elif output is not None or result.opaque:
-            stores = [dialect.statement(call)]
+            # An atomic call updates the output buffer itself; the value it returns is dropped.
+            dropped = output is not None and result != VOID
+            stores = [dialect.discard(call) if dropped else dialect.statement(call)]
             if output is None:
                 output = Type("uint")
                 stores.append(dialect.store(dialect.literal(output)))

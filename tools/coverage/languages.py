@@ -225,6 +225,10 @@ class WGSL(Dialect):
         # An atomic buffer element can only be used through atomic built-in functions.
         return "" if atomic else self.store("outp[i]")
 
+    def discard(self, expression: str) -> str:
+        # naga lowers a call statement of atomicLoad to no instruction; a phony assignment keeps the load.
+        return f"_ = {expression};"
+
     def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
         lines = list(parts.get("prelude", ()))
         lines += [

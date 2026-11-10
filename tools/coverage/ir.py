@@ -1,7 +1,8 @@
 """The CrossGL IR row: which semantic features of any backend CrossGL can express.
 
 Its feature universe is the union of every backend's output features, grouped by semantic id (:mod:`.semantic`); a
-feature with no id is a semantic feature of its own. A semantic feature is expressible, and counts as ``supported``,
+function with no id takes the id of the functions that CrossGL spells the same way, and a feature that still has none
+is a semantic feature of its own. A semantic feature is expressible, and counts as ``supported``,
 when the CrossGL probe of at least one member parses, type-checks and translates correctly to that member's backend.
 Otherwise the row reports a ``wrong`` result before a ``refused`` one, and ``untested`` only when no member was
 measured. The row is computed from the report alone, so reports from several runners can be merged first.
@@ -17,6 +18,11 @@ DIRECTION = "ir"
 _PRECEDENCE = ("supported", "wrong", "refused", "untested")
 
 
+def _spelled(feature: dict) -> str:
+    # A call that spells its generic arguments, as Slang's ``bit_cast<int>``, is keyed by the function's name.
+    return (feature.get("crossgl") or feature["name"]).split("<", 1)[0]
+
+
 def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
     outputs = [b for b in backends if b["direction"] == "output" and b.get("offered")]
     ids = {
@@ -25,17 +31,28 @@ def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
         for f in b["features"]
         if f.get("semantic")
     }
+    # The ids of the functions of every language that CrossGL spells alike. A function without an id of its own or
+    # its lender's takes the id when there is only one: CUDA ``cospi``, which no compiler here lowers, and Slang
+    # ``cospi`` are one feature. A method's name says nothing without its object's type, so methods take none.
+    shared: dict[str, set[str]] = {}
+    for backend in outputs:
+        for feature in backend["features"]:
+            if feature.get("semantic") and feature["category"] == "function":
+                shared.setdefault(_spelled(feature), set()).add(feature["semantic"])
+    alike = {
+        spelled: found.pop() for spelled, found in shared.items() if len(found) == 1
+    }
     groups: dict[str, list[tuple[str, dict]]] = {}
     for backend in outputs:
         language = backend["language"]
         lender = BORROWED.get(language, "")
         for feature in backend["features"]:
-            # A call that spells its generic arguments, as Slang's ``bit_cast<int>``, is keyed by the function's name.
-            spelled = (feature.get("crossgl") or feature["name"]).split("<", 1)[0]
+            spelled = _spelled(feature)
             # Without an id, features one language spells alike in CrossGL are one: CUDA ``erff`` and ``erf``.
             key = (
                 feature.get("semantic")
                 or ids.get((lender, spelled))
+                or (alike.get(spelled, "") if feature["category"] == "function" else "")
                 or f"{language}/{spelled}"
             )
             groups.setdefault(key, []).append((language, feature))

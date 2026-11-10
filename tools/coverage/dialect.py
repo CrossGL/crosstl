@@ -273,6 +273,10 @@ class Dialect:
     def statement(self, expression: str) -> str:
         return f"{expression};"
 
+    def discard(self, expression: str) -> str:
+        """A statement that evaluates ``expression`` and drops the value it returns."""
+        return self.statement(expression)
+
     def flat(self, kind: str) -> str:
         """A shader input of type ``kind`` that is not interpolated."""
         return f"flat {kind}"
