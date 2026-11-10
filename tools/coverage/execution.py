@@ -22,7 +22,10 @@ probe, or a translation that it compiles at a lower version than the translation
 the SPIR-V glslang writes for them, on the Vulkan runtime, and that run decides the result.
 
 The harness binds input buffers in declaration order at slots 0 through n-1, followed by the output at slot n.
-A probe whose call takes no argument declares one input it never reads. When the native probe also declares one
+A SPIR-V module's names are debug information without semantic impact, which a producer may drop (SPIR-V 1.6,
+section 3.42.2, ``OpName``), and CrossTL's generator renames a buffer block's member. So the inputs of a SPIR-V
+probe are its storage buffers in binding order, each known by the scalar type of its runtime array, and the last
+binding is the output. A probe whose call takes no argument declares one input it never reads. When the native probe also declares one
 uniform or constant buffer, the harness fills it with :data:`CONSTANTS` for both probes, so the translation must
 declare that block too. Probes with different ordered inputs keep their validation result, and so does one that
 reads a clock or queries a ray query, because two runs of it need not agree.
@@ -52,6 +55,14 @@ WORDS = 16
 # Input elements one thread may read past its own: three 4x4 matrix arguments.
 SPAN = 48
 _INPUT = re.compile(r"\b(fin|iin|uin)\b")
+_SPIRV_ENTRY = re.compile(r"^\s*OpEntryPoint\b", re.M)
+_BINDING = re.compile(r"^\s*OpDecorate (%\S+) Binding (\d+)\s*$", re.M)
+# The input each scalar type of a SPIR-V storage buffer gets.
+_SCALAR_INPUTS = {
+    "OpTypeFloat 32": "fin",
+    "OpTypeInt 32 1": "iin",
+    "OpTypeInt 32 0": "uin",
+}
 # The bytes of the constants block a probe declares: sixteen 32-bit floats, four 16-byte std140 rows. A probe reads the
 # first row, the first word of each row, or all four rows as a 4x4 matrix. The words differ so that a translation
 # reading another offset computes something else.
@@ -118,16 +129,48 @@ def _quoted(record: dict) -> str:
 
 
 def input_buffers(source: str) -> tuple[str, ...]:
-    """Probe input names in declaration order, before their uses in the entry point."""
+    """Probe input names in declaration order, before their uses in the entry point, or in binding order for SPIR-V."""
+    if _SPIRV_ENTRY.search(source):
+        return _spirv_inputs(source)
     return tuple(dict.fromkeys(_INPUT.findall(source)))
 
 
+def _spirv_inputs(assembly: str) -> tuple[str, ...]:
+    """The inputs of a SPIR-V module: the variables it binds to a block of one runtime array, in binding order and
+    without the last one, the output. Each is named for the array's scalar type as :func:`inputs` fills it, or for
+    the instruction that declares any other element type."""
+    defined = {}
+    for line in assembly.splitlines():
+        found = _DEFINITION.match(line)
+        if found:
+            defined[found[1]] = (found[2], found[3].split())
+
+    def operand(ident: str, opcode: str, position: int) -> str:
+        op, words = defined.get(ident, ("", []))
+        return words[position] if op == opcode and words else ""
+
+    buffers = []
+    for variable, slot in _BINDING.findall(assembly):
+        block = operand(operand(variable, "OpVariable", 0), "OpTypePointer", -1)
+        op, members = defined.get(block, ("", []))
+        array = members[0] if op == "OpTypeStruct" and len(members) == 1 else ""
+        scalar = operand(array, "OpTypeRuntimeArray", 0)
+        if scalar in defined:
+            kind = " ".join((defined[scalar][0], *defined[scalar][1]))
+            buffers.append((int(slot), _SCALAR_INPUTS.get(kind, kind)))
+    return tuple(name for _, name in sorted(buffers)[:-1])
+
+
 def executable(result: Result) -> bool:
-    """Whether ``result`` is a supported compute probe whose native probe and translation declare the same ordered inputs."""
+    """Whether ``result`` is a supported compute probe whose native probe and translation declare the same ordered
+    inputs, each one :func:`inputs` fills."""
     if result.outcome != "supported" or len(result.sources) != 2:
         return False
     buffers = [input_buffers(source) for source in result.sources]
-    return bool(buffers[0]) and buffers[0] == buffers[1]
+    known = set(_SCALAR_INPUTS.values())
+    return (
+        bool(buffers[0]) and buffers[0] == buffers[1] and known.issuperset(buffers[0])
+    )
 
 
 def runnable(language: str, source: str) -> str:
