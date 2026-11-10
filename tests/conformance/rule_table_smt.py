@@ -36,6 +36,11 @@ Target model:
 For ``convert_sat`` the carried rule is OpenCL C 6.4.3.3, stated over IEEE binary32 values: NaN gives 0, and other
 values truncate toward zero and clamp to the result range.
 
+For ``ftoi_nan`` the carried rule is MSL 4.1 section 8.6: NaN gives 0, and a value whose truncation is representable
+truncates toward zero. It is partial: other values carry no obligation, so the query only asks about operands inside
+the rule's domain (``find x : domain_S(x) and not (...)``). Metal's own ``int(f)`` and ``uint(f)`` give 0 for NaN by
+the same section, so its native entry is modelled with that result.
+
 The check also fails when an entry is missing for a registered backend, when a template uses a parameter other than
 exactly once (helper functions may repeat parameters, since a call evaluates each operand once), when an intrinsic
 has neither a template nor a helper, or when a construct of a template has no model here. Run ``python -m tests.conformance.rule_table_smt``;
@@ -62,6 +67,8 @@ ALL_ONES = (1 << BITS) - 1
 SIGNED_WRAPS = frozenset({"opengl", "webgl", "wgsl"})
 # A configuration under which a target's signed arithmetic wraps; the entry must record it.
 SIGNED_WRAPS_UNDER = {"rust": "overflow-checks = false"}
+# Targets whose own float-to-integer conversion gives 0 for a NaN operand (MSL 4.1 section 8.6).
+NAN_CONVERTS_TO_ZERO = frozenset({"metal"})
 # What an unsigned division or remainder by zero gives; every target not listed leaves it undefined (or panics).
 UNSIGNED_DIVISION_BY_ZERO = {
     "opengl": "unspecified",
@@ -170,14 +177,22 @@ class Semantics:
         DXC's LLVM fptosi and fptoui, and unspecified on GLSL, SPIR-V and WGSL; the model treats them all as undefined.
         """
         value = z3.fpBVToFP(operand.term, z3.Float32())
+        nan_is_zero = self.target in NAN_CONVERTS_TO_ZERO
         if name == "int":
             low, high = _fp(-(2.0**31)), _fp(2.0**31)
-            self.defined.append(z3.And(z3.fpGEQ(value, low), z3.fpLT(value, high)))
-            return Value(z3.fpToSBV(z3.RTZ(), value, z3.BitVecSort(BITS)), "i")
-        self.defined.append(
-            z3.And(z3.fpGT(value, _fp(-1.0)), z3.fpLT(value, _fp(2.0**32)))
-        )
-        return Value(z3.fpToUBV(z3.RTZ(), value, z3.BitVecSort(BITS)), "u")
+            in_range = z3.And(z3.fpGEQ(value, low), z3.fpLT(value, high))
+            result = z3.fpToSBV(z3.RTZ(), value, z3.BitVecSort(BITS))
+            kind = "i"
+        else:
+            in_range = z3.And(z3.fpGT(value, _fp(-1.0)), z3.fpLT(value, _fp(2.0**32)))
+            result = z3.fpToUBV(z3.RTZ(), value, z3.BitVecSort(BITS))
+            kind = "u"
+        if not nan_is_zero:
+            self.defined.append(in_range)
+            return Value(result, kind)
+        is_nan = z3.fpIsNaN(value)
+        self.defined.append(z3.Or(is_nan, in_range))
+        return Value(z3.If(is_nan, z3.BitVecVal(0, BITS), result), kind)
 
     def arithmetic(self, op, left, right) -> Value:
         if not {left.kind, right.kind} <= {"i", "u"}:
@@ -268,6 +283,28 @@ def carried_convert_sat(op, operands):
     return z3.If(z3.fpIsNaN(value), zero, clamped)
 
 
+def carried_ftoi_nan(op, operands):
+    """MSL 4.1 section 8.6: NaN gives 0, and a representable truncation is exact (see :func:`ftoi_nan_domain`)."""
+    (x,) = operands
+    value = z3.fpBVToFP(x, z3.Float32())
+    convert = z3.fpToSBV if op == "ftoi" else z3.fpToUBV
+    truncated = convert(z3.RTZ(), value, z3.BitVecSort(BITS))
+    return z3.If(z3.fpIsNaN(value), z3.BitVecVal(0, BITS), truncated)
+
+
+def ftoi_nan_domain(op, operands):
+    """The operands the ``ftoi_nan`` rule defines: NaN, and values whose truncation the result type represents."""
+    (x,) = operands
+    value = z3.fpBVToFP(x, z3.Float32())
+    if op == "ftoi":
+        in_range = z3.And(
+            z3.fpGEQ(value, _fp(-(2.0**31))), z3.fpLT(value, _fp(2.0**31))
+        )
+    else:
+        in_range = z3.And(z3.fpGT(value, _fp(-1.0)), z3.fpLT(value, _fp(2.0**32)))
+    return z3.Or(z3.fpIsNaN(value), in_range)
+
+
 def _fp(value):
     return z3.FPVal(value, z3.Float32())
 
@@ -283,7 +320,10 @@ CARRIED = {
     rule_table.WRAP: carried_wrap,
     rule_table.UDIV_ZERO: carried_udiv_zero,
     rule_table.CONVERT_SAT: carried_convert_sat,
+    rule_table.FTOI_NAN: carried_ftoi_nan,
 }
+# The operands a partial rule defines; a family not listed defines every operand.
+DOMAIN = {rule_table.FTOI_NAN: ftoi_nan_domain}
 # The operand and result kind of each family's operations; conversions have their own signatures.
 FAMILY_KIND = {rule_table.WRAP: "i", rule_table.UDIV_ZERO: "u"}
 _SCALAR_KIND = {"float": "f", "int": "i", "uint": "u"}
@@ -374,6 +414,8 @@ def check_entry(intrinsic, target, entry):
         *semantics.defined, result.term == CARRIED[family](operator, operands)
     )
     solver.add(z3.Not(refines))
+    if family in DOMAIN:
+        solver.add(DOMAIN[family](operator, operands))
     verdict = solver.check()
     if verdict == z3.unsat:
         record["result"] = "sound"

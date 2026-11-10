@@ -27,6 +27,7 @@ glslang does for a GLSL block that needs it. A layout no planner reproduces rais
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from types import SimpleNamespace
 
 from ..ast import ArrayNode, ArrayType, FunctionNode
 from .array_utils import evaluate_literal_int_expression
@@ -58,9 +59,11 @@ from .hlsl_buffer_layout import (
 __all__ = [
     "SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION",
     "PlacedUniformBlock",
+    "declare_placed_struct_uniform",
     "decorate_placed_uniform_block",
     "matrix_from_column_array",
     "placed_member_type",
+    "placed_struct_block",
     "placed_uniform_block",
 ]
 
@@ -473,3 +476,56 @@ def decorate_placed_uniform_block(codegen, block_type, plan: PlacedUniformBlock)
             f"spirv.uniform_block.{plan.layout}_layout",
         ) from exc
     codegen.require_source_extension(SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION)
+
+
+def placed_struct_block(
+    codegen, node, logical_type, plain_layout=STD140_LAYOUT
+) -> PlacedUniformBlock | None:
+    """The placements of a ``ConstantBuffer<T> name`` block whose bytes differ from ``plain_layout``, or ``None``.
+
+    The members come from the declaration of ``T`` and the rule set from the variable ``node``, so a member
+    ``float a @offset(16);`` of ``T`` lands at byte 16 as it does in a ``cbuffer`` block, and a placement the
+    rule set refuses (misaligned or overlapping) raises :class:`UnsupportedSPIRVFeatureError`.
+    """
+    structs = getattr(codegen, "struct_declarations", None) or {}
+    struct = structs.get(logical_type.type.base_type)
+    if struct is None:
+        return None
+    view = SimpleNamespace(
+        name=struct.name,
+        members=getattr(struct, "members", None) or [],
+        attributes=getattr(node, "attributes", None),
+    )
+    return placed_uniform_block(codegen, view, plain_layout=plain_layout)
+
+
+def declare_placed_struct_uniform(codegen, node, logical_type):
+    """Declare ``ConstantBuffer<T> name`` as a ``Uniform`` block at the placements of :func:`placed_struct_block`.
+
+    Returns the variable, or ``None`` when ``T`` is not a struct or the block keeps the std140 path. The block
+    type is a layout clone of ``T`` of its own, so neither ``Block`` nor the planned offsets reach a ``T`` that
+    another block holds as a member.
+    """
+    members = codegen.current_struct_members.get(logical_type.type.base_type)
+    if members is None:
+        return None
+    plan = placed_struct_block(codegen, node, logical_type)
+    if plan is None:
+        return None
+    laid_out = [
+        (placed_member_type(codegen, member_type, member_name, plan), member_name)
+        for member_type, member_name in members
+    ]
+    block_type = codegen.register_layout_struct_type(
+        logical_type, f"{plan.clone_key}_block", laid_out
+    )
+    decorate_placed_uniform_block(codegen, block_type, plan)
+    variable = codegen.create_variable(block_type, "Uniform", node.name)
+    descriptor_set, binding = codegen.resource_descriptor_slot(node)
+    codegen.decorations.append(
+        f"OpDecorate %{variable.id} DescriptorSet {descriptor_set}"
+    )
+    codegen.decorations.append(f"OpDecorate %{variable.id} Binding {binding}")
+    codegen.uniform_buffers.append(variable)
+    codegen.register_global_variable_name(node.name, variable, "Uniform")
+    return variable

@@ -102,6 +102,7 @@ from ..metadata_preconditions import (
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
+from ..semantics.helpers import float_to_integer_helper_names
 from ..semantics.shader_records import (
     is_shader_record_buffer,
     shader_record_memory_layout,
@@ -136,6 +137,10 @@ from ..validation import (
     texture_offset_argument_indices,
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
+)
+from ..vulkan_memory_scope import (
+    declares_vulkan_memory_model,
+    glsl_memory_scope_qualifiers,
 )
 from ..wave_operations import WAVE_BALLOT_BIT_OPERATIONS, wave_extended_result_type
 from .apple_sdk_includes import is_apple_sdk_include
@@ -220,6 +225,7 @@ from .for_in_utils import (
 )
 from .for_initializers import join_for_initializer
 from .fragment_output_targets import frag_data_attachment_index
+from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -314,6 +320,11 @@ from .glsl_shadow_lod import (
     require_shadow_lod_extension,
     zero_lod_compare_gradient_call,
 )
+from .glsl_specialization_dependents import (
+    constant_source_name,
+    partition_constants_by_specialization_dependency,
+    runtime_specialization_dependents,
+)
 from .glsl_specialization_macros import glsl_specialization_macro_name
 from .glsl_stage_builtin_members import (
     fragment_member_builtin_alias,
@@ -339,6 +350,15 @@ from .glsl_string_literals import string_literal_reasons
 from .glsl_target_builtins import (
     OPENGL_UNAVAILABLE_BUILTINS,
     unavailable_builtin_reasons,
+)
+from .glsl_tessellation_input_arrays import (
+    implicit_tessellation_input_type,
+    tessellation_input_length,
+)
+from .glsl_tessellation_modes import (
+    merge_control_stage_modes,
+    program_control_sources,
+    remember_scoped_control_sources,
 )
 from .glsl_union_storage import UnionStorage
 from .glsl_version_requirements import (
@@ -651,9 +671,13 @@ from .texture_residency import (
 )
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .workgroup_access_contracts import parse_workgroup_access_assertions
+from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
 
 # Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
 GLSL_SPIRV_GUARD = "#if defined(GL_SPIRV) || defined(VULKAN)\n"
+
+
+GLSL_FLOAT_TO_INTEGER_RULE_HELPERS = float_to_integer_helper_names()
 
 
 class OpenGLTemplateTypeError(ValueError):
@@ -2982,6 +3006,8 @@ class GLSLCodeGen(
         self.glsl_constant_types = {}
         self.glsl_specialization_constant_names = set()
         self.glsl_global_specialization_constants = []
+        self.glsl_specialization_constant_declarations = []
+        self.glsl_runtime_specialization_dependent_ids = set()
         self.literal_int_vector_constants = {}
         self.literal_int_vector_array_constants = {}
         self.current_compile_time_int_constants = {}
@@ -3010,6 +3036,7 @@ class GLSLCodeGen(
         self.current_mesh_output_parameters = {}
         self.current_mesh_output_topology = None
         self.current_glsl_extensions = set()
+        self.glsl_vulkan_memory_model = False
         self.current_glsl_version_line = None
         self.current_glsl_resource_binding_layouts_supported = True
         self.glsl_emission_requirements = []
@@ -3081,6 +3108,8 @@ class GLSLCodeGen(
         self.struct_member_types = {}
         self.union_storage = UnionStorage(self)
         self.struct_member_name_maps = {}
+        # Read by type-name scans that run before the program's enums are collected.
+        self.struct_payload_enums = []
         self.generic_struct_definitions = {}
         self.generic_struct_specializations = {}
         self.generic_function_definitions = {}
@@ -3701,6 +3730,7 @@ class GLSLCodeGen(
                 if getattr(function, "name", None) in reachable_names
             ]
         self.prune_entry_scoped_declarations(scoped_ast, selected_copy_function)
+        remember_scoped_control_sources(self, ast, scoped_ast)
         return scoped_ast
 
     def prune_entry_scoped_declarations(self, ast, entry_function):
@@ -8819,6 +8849,7 @@ class GLSLCodeGen(
 
         Raises the emitter's ``LOWERING_REFUSAL_TYPE`` listing every construct that has no faithful lowering.
         """
+        self.glsl_tessellation_control_sources = program_control_sources(self, ast)
         with self.opengl_descriptor_set_plan_for(ast):
             return self.refusals.run(
                 self.render_program_with_profile_builtins, ast, target_stage
@@ -9104,6 +9135,8 @@ class GLSLCodeGen(
         self.current_glsl_private_pointer_base_names = {}
         self.current_glsl_private_pointer_function_name = None
         self.glsl_global_specialization_constants = []
+        self.glsl_specialization_constant_declarations = []
+        self.glsl_runtime_specialization_dependent_ids = set()
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -9185,7 +9218,11 @@ class GLSLCodeGen(
         self.glsl_hoisted_shared_alias_names = set()
         self.glsl_shared_dimension_constants = {}
         self.current_target_stage = target_stage
+        self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
+            getattr(ast, "preprocessors", None), self.current_glsl_extensions
+        )
         self.glsl_shadow_lod_extension_used = False
         self.glsl_stage_builtin_extensions = []
         stage_names = {
@@ -9522,6 +9559,7 @@ class GLSLCodeGen(
         for line in self.glsl_stage_extension_lines(ast, target_stage):
             if line not in extra_lines:
                 code += f"{line}\n"
+        code += self.prepare_glsl_runtime_specialization_dependents(ast, version_line)
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
         if exact_subgroup_width is not None:
@@ -9548,8 +9586,19 @@ class GLSLCodeGen(
                 getattr(ast, "constants", []) or [], structs
             )
         )
+        leading_constants, specialization_dependent_constants = (
+            partition_constants_by_specialization_dependency(
+                leading_constants,
+                {
+                    name
+                    for node in self.glsl_specialization_constant_declarations
+                    if (name := constant_source_name(node)) is not None
+                },
+            )
+        )
         code += self.generate_constants(ast, leading_constants)
         code += self.generate_glsl_global_specialization_constants()
+        code += self.generate_constants(ast, specialization_dependent_constants)
         code += self.generate_glsl_wave_helpers(ast, target_stage)
 
         all_global_vars = [
@@ -9894,6 +9943,7 @@ class GLSLCodeGen(
                 else:
                     data_struct_nodes.append(node)
 
+        code += glsl_workgroup_size_declaration_layout(self, ast, target_stage)
         code += glsl_ray_desc_declaration(self, ast, data_struct_nodes)
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
@@ -18620,6 +18670,11 @@ class GLSLCodeGen(
             return builtin_declaration
         if constant_id is None:
             value_code = self.generate_constant_expression(value, const_type)
+            if id(node) in self.glsl_runtime_specialization_dependent_ids:
+                return (
+                    f"{GLSL_SPIRV_GUARD}{declaration} = {value_code};\n"
+                    f"#else\nconst {declaration} = {value_code};\n#endif\n"
+                )
             return f"const {declaration} = {value_code};\n"
 
         self.validate_glsl_specialization_constant_type(node, const_type)
@@ -18906,6 +18961,35 @@ class GLSLCodeGen(
         self.glsl_global_specialization_constants = [
             node for node in declarations if id(node) in global_ids
         ]
+        self.glsl_specialization_constant_declarations = declarations
+
+    def prepare_glsl_runtime_specialization_dependents(self, ast, version_line):
+        declarations = self.glsl_specialization_constant_declarations
+        declaration_ids = {id(node) for node in declarations}
+        self.glsl_runtime_specialization_dependent_ids = (
+            runtime_specialization_dependents(
+                [
+                    node
+                    for node in getattr(ast, "constants", []) or []
+                    if id(node) not in declaration_ids
+                ],
+                declarations,
+                lambda node: self.map_type(
+                    self.glsl_specialization_constant_type(node)
+                ),
+                self.map_type,
+            )
+        )
+        if not self.glsl_runtime_specialization_dependent_ids or not re.search(
+            r"\bes\b", version_line
+        ):
+            return ""
+        # GLSL ES 3.20 section 4.3 requires constant global initializers; the extension lifts that.
+        return (
+            f"{GLSL_SPIRV_GUARD}"
+            "#extension GL_EXT_shader_non_constant_global_initializers : enable\n"
+            "#endif\n"
+        )
 
     def generate_constant_expression(self, expr, expected_type=None):
         previous = self.glsl_generating_global_initializer
@@ -19810,8 +19894,6 @@ class GLSLCodeGen(
             stage_layout_qualifiers=stage_layout_qualifiers,
             direction="in",
         )
-        if mapped_domain:
-            layout_parts.append(mapped_domain)
 
         partitioning = self.glsl_stage_consistent_layout_value(
             "tessellation",
@@ -19827,8 +19909,6 @@ class GLSLCodeGen(
             stage_layout_qualifiers=stage_layout_qualifiers,
             direction="in",
         )
-        if partitioning:
-            layout_parts.append(partitioning)
 
         winding = self.glsl_stage_consistent_layout_value(
             "tessellation",
@@ -19853,13 +19933,20 @@ class GLSLCodeGen(
                     f"{output_topology} with winding {winding}"
                 )
             winding = topology_winding
-        if winding:
-            layout_parts.append(winding)
 
-        point_mode = self.glsl_stage_bare_attribute(
-            func, {"point_mode"}, stage_layout_qualifiers, "in"
+        point_mode = bool(
+            self.glsl_stage_bare_attribute(
+                func, {"point_mode"}, stage_layout_qualifiers, "in"
+            )
+            or topology_point_mode
         )
-        if point_mode or topology_point_mode:
+        mapped_domain, partitioning, winding, point_mode = merge_control_stage_modes(
+            self, func, mapped_domain, partitioning, winding, point_mode
+        )
+        layout_parts.extend(
+            part for part in (mapped_domain, partitioning, winding) if part
+        )
+        if point_mode:
             layout_parts.append("point_mode")
 
         if not layout_parts:
@@ -32853,6 +32940,12 @@ class GLSLCodeGen(
             qualifier
         ) == "input" and self.requires_flat_stage_input(stage_name, mapped_type):
             qualifier = f"{self.with_flat_stage_input_qualifier(qualifier.strip())} "
+        implicit_type = implicit_tessellation_input_type(
+            self, node, qualifier, mapped_type, stage_name
+        )
+        if implicit_type != mapped_type:
+            mapped_type = implicit_type
+            declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         self.reserve_global_stage_io_layout(
             node,
             qualifier,
@@ -32918,11 +33011,15 @@ class GLSLCodeGen(
         if linked_name is not None and linked_name != emitted_name:
             emitted_name = linked_name
             self.current_identifier_aliases[source_name] = linked_name
-        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         if direction is not None:
             prefix = self.stage_io_declaration_prefix(
                 node, direction, stage_name=stage_name
             )
+            mapped_type = implicit_tessellation_input_type(
+                self, node, prefix, mapped_type, stage_name
+            )
+        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
+        if direction is not None:
             if direction == "in" and self.requires_flat_stage_input(
                 stage_name, mapped_type
             ):
@@ -38036,6 +38133,16 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.type_name_string(
                     getattr(resolved_overload, "return_type", None)
                 )
+            if getattr(
+                self, "collecting_generic_function_specializations", False
+            ) and concrete_overload_results_differ(
+                self,
+                func_name,
+                lambda generator, type_name: generator.map_type(type_name),
+            ):
+                # Generic deduction must not bind a type parameter to a guessed overload;
+                # it resolves the overload from the argument types it tracks.
+                return None
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
             componentwise_type = self.glsl_componentwise_unary_result_type(
@@ -40984,6 +41091,9 @@ complex64_t crossgl_complex64_mod_assign(
                 and func_expr.member == "length"
                 and not expr.args
             ):
+                written_length = tessellation_input_length(self, func_expr)
+                if written_length is not None:
+                    return written_length
                 instance_member = self.glsl_structured_buffer_array_element_member(
                     func_expr.object
                 )
@@ -41778,11 +41888,17 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         arguments = list(getattr(expression, "arguments", []) or [])
         name = self.function_call_name(expression)
-        if len(arguments) != 1 or name in self.function_return_types:
+        if len(arguments) != 1:
             return None
-        if self.glsl_constructor_type(name) is None:
+        if name in GLSL_FLOAT_TO_INTEGER_RULE_HELPERS:
+            # The ftoi_nan and convert_sat helpers replace int(x) and uint(x) of a float x.
+            target = self.glsl_value_type_info(self.function_return_types.get(name))
+        elif name in self.function_return_types:
             return None
-        target = self.glsl_value_type_info(name)
+        elif self.glsl_constructor_type(name) is None:
+            return None
+        else:
+            target = self.glsl_value_type_info(name)
         if target is None or target["family"] not in {"int", "uint"}:
             return None
         source = self.glsl_value_type_info(
@@ -58193,6 +58309,9 @@ complex64_t crossgl_complex64_mod_assign(
             "rgba8ui",
             "rgba16ui",
             "rgba32ui",
+            "rgb10_a2",
+            "rgb10_a2ui",
+            "r11f_g11f_b10f",
         }:
             if explicit_format in {
                 "r8",
@@ -58212,6 +58331,8 @@ complex64_t crossgl_complex64_mod_assign(
                 "rgba16_snorm",
                 "rgba16f",
                 "rgba32f",
+                "rgb10_a2",
+                "r11f_g11f_b10f",
             }:
                 format_class = "r32f"
             elif explicit_format.endswith("ui"):
@@ -59160,8 +59281,10 @@ complex64_t crossgl_complex64_mod_assign(
         if "globallycoherent" in qualifiers:
             qualifiers.add("coherent")
 
+        scoped = glsl_memory_scope_qualifiers(node, self.glsl_vulkan_memory_model)
         order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
-        return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
+        names = [*scoped, *(name for name in order if name in qualifiers)]
+        return " ".join(dict.fromkeys(names))
 
     def resource_access_metadata_choices(self, node):
         choices = []

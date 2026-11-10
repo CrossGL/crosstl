@@ -24,10 +24,18 @@ from ..ast import (
     VectorType,
 )
 from ..explicit_specializations import explicit_specializations
-from .enum_utils import generic_type_parts, sanitize_type_name
+from .enum_utils import (
+    generic_type_parts,
+    sanitize_type_name,
+    substitute_generic_value_names,
+)
 from .generic_prototypes import (
     declaration_only_generic_primaries,
     reject_undefined_generic_instantiation,
+)
+from .generic_value_arguments import (
+    substitute_value_parameters,
+    value_argument_expression,
 )
 from .wgsl_narrow_storage import (
     narrow_storage_element,
@@ -100,6 +108,8 @@ class WGSLGenericFunctionSpecializer:
         self.specializations = {}
         self.pending = []
         self.explicit = explicit_specializations(functions)
+        # The generic parameters of the definition being matched, spelled as themselves by ``_spelling``.
+        self._open_parameters = set()
 
     def is_generic(self, func):
         return bool(generic_parameter_names(func))
@@ -177,6 +187,16 @@ class WGSLGenericFunctionSpecializer:
         return emitted
 
     def _render(self, type_value):
+        if (
+            isinstance(type_value, str)
+            and "[" not in type_value
+            and not isinstance(
+                value_argument_expression(type_value), (IdentifierNode, type(None))
+            )
+        ):
+            # A literal or an expression binds a value parameter, as ``true`` in ``pick<float, true>``; it keeps
+            # its CrossGL spelling rather than reading as a type name.
+            return type_value.strip()
         if isinstance(type_value, str) and "[" in type_value:
             # An explicit array type argument keeps its CrossGL spelling, as in
             # ``pick<float[2]>(a)``; read it as a type so it renders ``array<f32, 2>``.
@@ -189,12 +209,34 @@ class WGSLGenericFunctionSpecializer:
             return None
         return str(rendered).strip() if rendered else None
 
+    def _spelling(self, type_value):
+        """``_render``, except that an instance of a generic structure keeps its arguments: ``Box<f32>``, ``Box<T>``.
+
+        The generator names a concrete instance by its specialization (``Box_f32``) and cannot name one with an
+        unbound parameter at all, so neither spelling would unify with a parameter of type ``Box<T>``.
+        """
+        definitions = getattr(self.generator, "_generic_struct_definitions", None) or {}
+        arguments = getattr(type_value, "generic_args", None)
+        if (
+            isinstance(type_value, NamedType)
+            and arguments
+            and type_value.name in definitions
+        ):
+            spelled = [self._spelling(argument) for argument in arguments]
+            if any(argument is None for argument in spelled):
+                return None
+            return f"{type_value.name}<{', '.join(spelled)}>"
+        if isinstance(type_value, (NamedType, PrimitiveType)) and not arguments:
+            if type_value.name in self._open_parameters:
+                return type_value.name
+        return self._render(type_value)
+
     def _argument_type(self, argument):
         # A narrow storage load is a 32-bit word in WGSL but binds its CrossGL element type.
         narrow = narrow_storage_element(self.generator, argument)
         if narrow is not None:
             return self._render(narrow)
-        return self._render(self.generator.expression_type(argument))
+        return self._spelling(self.generator.expression_type(argument))
 
     def _concrete_overloads(self, name, arguments):
         return [
@@ -245,8 +287,9 @@ class WGSLGenericFunctionSpecializer:
             zip(parameters, argument_types, literal_flags),
             key=lambda item: item[2],
         )
+        self._open_parameters = set(params)
         for parameter, actual, _literal in ordered:
-            expected = self._render(getattr(parameter, "param_type", None))
+            expected = self._spelling(getattr(parameter, "param_type", None))
             if expected is None:
                 return None
             # A parameter whose type is concrete, or fixed by explicit type
@@ -354,6 +397,8 @@ class WGSLGenericFunctionSpecializer:
         type_nodes = {
             param: _type_node(spelling) for param, spelling in bindings.items()
         }
+        # Values first: a local array's size (``T values[N]``) is part of the types substituted next.
+        substitute_value_parameters(getattr(clone, "body", None), bindings, func.name)
         substituter = _GenericSubstituter(bindings, type_nodes, self.generator)
         for attribute in ("return_type", "parameters", "body"):
             setattr(
@@ -497,7 +542,8 @@ def _substitute_spelling(spelling, bindings):
         return bindings[spelling]
     base, args = generic_type_parts(spelling)
     if not args:
-        return spelling
+        # A value argument that reads value parameters: ``N + 1`` in ``scale<T, N + 1>``.
+        return substitute_generic_value_names(spelling, bindings)
     return (
         f"{base}<"
         + ", ".join(_substitute_spelling(arg, bindings) for arg in args)

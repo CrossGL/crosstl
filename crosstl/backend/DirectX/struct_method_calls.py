@@ -9,6 +9,7 @@ lowered function, and report which call arguments a callee writes.
 
 from ..common_ast import FunctionNode, MemberAccessNode, VariableNode
 from .struct_methods import RECEIVER_PARAMETER
+from .struct_templates import struct_template_owner, struct_template_receiver_type
 
 
 class HLSLStructMethodCallMixin:
@@ -52,6 +53,10 @@ class HLSLStructMethodCallMixin:
                     getattr(definition, "array_sizes", []) or []
                 )
                 function.is_prototype = False
+                # A member function of a struct template is generic over the struct's parameters.
+                function.template_parameters = getattr(
+                    self, "struct_templates", {}
+                ).get(method.owner)
                 functions.append(function)
                 method.definition = function
         return functions
@@ -87,7 +92,11 @@ class HLSLStructMethodCallMixin:
 
     def struct_method_receiver_parameter(self, method):
         qualifier = "inout" if method.mutates_receiver else "in"
-        return VariableNode(method.owner, RECEIVER_PARAMETER, qualifiers=[qualifier])
+        return VariableNode(
+            struct_template_receiver_type(self, method.owner),
+            RECEIVER_PARAMETER,
+            qualifiers=[qualifier],
+        )
 
     def current_struct_method_fields(self):
         method = getattr(self, "current_struct_method", None)
@@ -147,7 +156,10 @@ class HLSLStructMethodCallMixin:
             member = name.member
             if not isinstance(member, str) or "<" in member:
                 return None
-            owner = self.raw_type_base(self.struct_method_receiver_type(name.object))
+            receiver_type = self.struct_method_receiver_type(name.object)
+            owner = struct_template_owner(self, receiver_type) or self.raw_type_base(
+                receiver_type
+            )
             method = table.get(owner, {}).get(member)
             if method is None:
                 return None

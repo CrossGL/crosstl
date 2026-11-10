@@ -155,6 +155,7 @@ def metal_buffer_component_store(codegen, target, rhs, op):
         if binary_op is None:
             return codegen.metal_buffer_compound_store_diagnostic(op, access)
     buffer_name = access["buffer"]
+    memory = access.get("memory", "")
     lines = []
     if len(offsets) == 1:
         sources = [f"({rhs})"]
@@ -167,9 +168,13 @@ def metal_buffer_component_store(codegen, target, rhs, op):
         sources = [f"{temp}.{'xyzw'[position]}" for position in range(len(offsets))]
     for offset, source in zip(offsets, sources):
         if binary_op is not None:
-            current = codegen.metal_scalar_load(component_type, buffer_name, offset)
+            current = codegen.metal_scalar_load(
+                component_type, buffer_name, offset, memory
+            )
             source = f"({current} {binary_op} {source})"
         lines.append(
-            codegen.metal_scalar_store(component_type, buffer_name, offset, source)
+            codegen.metal_scalar_store(
+                component_type, buffer_name, offset, source, memory
+            )
         )
     return "\n".join(lines)

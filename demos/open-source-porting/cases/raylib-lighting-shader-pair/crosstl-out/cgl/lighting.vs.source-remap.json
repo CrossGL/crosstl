@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 37,
-        "endOffset": 859,
+        "endLine": 38,
+        "endOffset": 883,
         "file": "crosstl-out/cgl/lighting.vs.cgl",
-        "length": 859,
+        "length": 883,
         "line": 1,
         "offset": 0
       },

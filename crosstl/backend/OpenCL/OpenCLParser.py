@@ -556,9 +556,11 @@ class OpenCLParser(HipParser):
         self.parse_type_attribute_prefixes()
         type_name = super().parse_type()
 
-        if "pipe" in str(type_name).split() and self.is_current_token_type_start():
-            element_type = super().parse_type()
-            type_name = f"{type_name} {element_type}".strip()
+        if "pipe" in str(type_name).split():
+            self.skip_newlines()
+            if self.is_current_token_type_start():
+                element_type = super().parse_type()
+                type_name = f"{type_name} {element_type}".strip()
 
         return type_name
 
@@ -576,6 +578,7 @@ class OpenCLParser(HipParser):
             for token in self.tokens[original_index:index]
             if token.type != "NEWLINE"
         }
+        index = self.skip_newlines_at_pos(index)
         if (
             "pipe" in consumed_values
             and index < len(self.tokens)

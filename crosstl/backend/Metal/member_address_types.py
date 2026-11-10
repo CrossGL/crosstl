@@ -18,6 +18,7 @@ _MEMBER_RE = re.compile(
     r"(?P<obj>[A-Za-z_][A-Za-z0-9_]*)\s*\.\s*(?P<member>[A-Za-z_][A-Za-z0-9_]*)"
 )
 _ADDRESS_SPACES = ("thread", "threadgroup")
+_WHITESPACE = re.compile(r"\s*")
 
 
 def addressed_member_pointer_type(
@@ -74,10 +75,13 @@ def _restates_declaration(code, existing, entry):
     position, declared = entry
     for other_position, other in existing:
         if (
-            getattr(other, "pointer_type", None)
+            other_position <= position
+            and getattr(other, "pointer_type", None)
             and str(other) == str(declared)
-            and other_position <= position
-            and not code[other_position:position].strip()
+            # Only whitespace between the two: matched forward, so the scan stops at the first other character
+            # instead of copying the source between declarations of one name in different functions.
+            and _WHITESPACE.match(code, other_position).end()
+            >= min(position, len(code))
         ):
             return True
     return False
