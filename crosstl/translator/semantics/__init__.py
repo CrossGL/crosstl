@@ -79,6 +79,7 @@ from .fragment_rate_barycentrics import (
     refuse_mixed_metal_barycentrics,
 )
 from .function_name_collisions import rename_colliding_functions
+from .generic_struct_defaults import fill_generic_struct_defaults
 from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_streams
 from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
 from .half import HalfFloatUnsupportedError, legalize_half_floats
@@ -112,6 +113,7 @@ from .matrix_spellings import (
     AmbiguousMatrixSpellingError,
     refuse_ambiguous_matrix_spellings,
 )
+from .member_placements import refuse_unplaced_member_offsets
 from .metal_math_spellings import lower_metal_math_spellings
 from .metal_ray_dispatch import (
     MetalRayDispatchUnsupportedError,
@@ -135,9 +137,13 @@ from .relative_vertex_ids import (
 )
 from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
+from .rule_pragmas import take_declared_families
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
-from .scalar_brace_values import zero_empty_scalar_initializers
+from .scalar_brace_values import (
+    ScalarBraceInitializerError,
+    zero_empty_scalar_initializers,
+)
 from .scalar_swizzles import expand_scalar_swizzles
 from .shader_execution_reordering import (
     ShaderExecutionReorderingUnsupportedError,
@@ -194,7 +200,11 @@ from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
-from .unsized_arrays import UnsizedArrayUnsupportedError, legalize_unsized_arrays
+from .unsized_arrays import (
+    StorageBufferParameterUnsupportedError,
+    UnsizedArrayUnsupportedError,
+    legalize_unsized_arrays,
+)
 from .vector_logic import lower_vector_logic
 from .vertex_input_positions import (
     VertexInputPositionUnsupportedError,
@@ -250,6 +260,7 @@ __all__ = [
     "RowMajorMemberError",
     "RuleReport",
     "SOURCE_RULES",
+    "ScalarBraceInitializerError",
     "ShaderExecutionReorderingUnsupportedError",
     "ShaderRecordBufferUnsupportedError",
     "ShadowSampleUnsupportedError",
@@ -260,6 +271,7 @@ __all__ = [
     "SpirvOperationUnsupportedError",
     "StageConstantBlockConflictError",
     "StaticLocalUnsupportedError",
+    "StorageBufferParameterUnsupportedError",
     "StructMethodUnsupportedError",
     "SubpassInputUnsupportedError",
     "VertexInputPositionUnsupportedError",
@@ -328,8 +340,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
     (:mod:`.type_aliases`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
     refused with :class:`StaticAssertionFailedError` or :class:`StaticAssertionUnresolvedError`
-    (:mod:`.static_assertions`). An empty brace initializer of a scalar, ``float one = {};``, its zero
-    (:mod:`.scalar_brace_values`). GLSL's
+    (:mod:`.static_assertions`). Scalar brace initializers become zero or their single converted value,
+    and excess scalar values are refused (:mod:`.scalar_brace_values`). GLSL's
     ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
     scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
     structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
@@ -424,7 +436,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
+    declared_families = take_declared_families(program, report.target)
     hoist_local_structs(program, report.target)
+    fill_generic_struct_defaults(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
@@ -500,6 +514,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     mark_default_buffer_layouts(program, report.target)
     legalize_structured_layouts(program, report.target)
     materialize_buffer_strides(program, report.target)
+    refuse_unplaced_member_offsets(program, report.target)
     mark_push_constant_layouts(program, report.target)
     hoist_constant_buffer_layouts(program, report.target)
     hoist_constant_reference_layouts(program, report.target)
@@ -530,7 +545,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_narrow_integers(program, report.source, report.target)
     wrap_narrow_arithmetic(program, report.source, report.target)
     refuse_spirv_instructions(program, report.target)
-    Annotator(program, report.source, report).run()
+    Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)
     if isinstance(annotations, dict):

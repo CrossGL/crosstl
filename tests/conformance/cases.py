@@ -881,6 +881,14 @@ def o_array_list_assignment(inp):
     return np.array(out, dtype=np.int32)
 
 
+def o_buffer_helper_parameters(inp):
+    """``load`` reads ``2 x + 5`` through a read-only buffer parameter; ``store`` and ``bump`` write ``x + 7``."""
+    out = []
+    for x in inp.astype(np.int64):
+        out.extend([x * 2 + 5, x + 7])
+    return np.array(out, dtype=np.int32)
+
+
 def _width_check(inp, out, group=64, divergent=False):
     """Parametric oracle for SIMD/wave reductions: the reported width w must be uniform and every lane's sum must
     equal the sum over its SIMD-group (consecutive chunks of w threads within each threadgroup); with
@@ -1881,6 +1889,17 @@ CASES = [
         threads=128,
         group=32,
         out_count=128 * warp_cases.RESULTS,
+    ),
+    Case(
+        "x_buffer_helper_parameters",
+        "composite",
+        "Helpers that take storage buffers as buffer T name[] parameters",
+        "A helper's storage-buffer parameter names the buffer its caller passes, so its loads and stores reach "
+        "that buffer",
+        SMALL,
+        np.int32,
+        o_buffer_helper_parameters,
+        threads=128,
     ),
     Case(
         "x_array_list_assignment",

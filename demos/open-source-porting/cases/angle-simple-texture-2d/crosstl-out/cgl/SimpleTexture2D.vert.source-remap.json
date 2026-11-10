@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 395,
+        "endLine": 22,
+        "endOffset": 419,
         "file": "crosstl-out/cgl/SimpleTexture2D.vert.cgl",
-        "length": 395,
+        "length": 419,
         "line": 1,
         "offset": 0
       },

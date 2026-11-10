@@ -101,6 +101,7 @@ from .static_assertion_syntax import (
     starts_static_assertion,
 )
 from .validation import validate_shader_cbuffers
+from .vulkan_memory_scope import VULKAN_MEMORY_SCOPE_QUALIFIERS
 from .wave_operations import GLSL_SUBGROUP_FUNCTIONS, WAVE_EXTENDED_OPERATIONS
 
 WAVE_INTRINSICS = {
@@ -1399,6 +1400,8 @@ class Parser:
         token_type, token_value = token
         if token_type == "BUFFER":
             return False
+        if token_type == "IDENTIFIER" and token_value in VULKAN_MEMORY_SCOPE_QUALIFIERS:
+            return True
         return self.token_is_variable_qualifier(token_type, token_value)
 
     def default_layout_buffer_instance_name(self, block_name):

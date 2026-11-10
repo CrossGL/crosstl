@@ -260,19 +260,30 @@ def test_std140_nested_struct_and_qualifiers_match_glslang(tmp_path):
             assert {name: reflected[name] for name in expected} == expected
 
 
-def test_std140_offset_qualifier_must_respect_alignment():
-    block = crossgl_layout_type(
+def _vec3_at(offset):
+    return crossgl_layout_type(
         "Bad",
         lambda name: (
-            [("v", "vec4", False, None, None), ("w", "vec3", False, 20, None)]
+            [("v", "vec4", False, None, None), ("w", "vec3", False, offset, None)]
             if name == "Bad"
             else None
         ),
     )
+
+
+@pytest.mark.parametrize("offset", [18, 24])
+def test_std140_offset_qualifier_must_respect_alignment(offset):
+    # 18 is not a multiple of the 4-byte scalar; a vec3 at 24 crosses the 16-byte boundary at 32.
     with pytest.raises(
         HlslLayoutError, match="not a multiple of its std140 alignment 16"
     ):
-        block_struct_placements(block, "std140", root=True)
+        block_struct_placements(_vec3_at(offset), "std140", root=True)
+
+
+def test_std140_offset_qualifier_may_place_a_vector_at_a_relaxed_offset():
+    # Vulkan 1.3 section 15.6.4: a vector may sit at a multiple of its scalar that stays within one 16-byte span.
+    placements, _size = block_struct_placements(_vec3_at(20), "std140", root=True)
+    assert {p.name: p.offset for p in placements} == {"v": 0, "w": 20}
 
 
 def test_hlsl_packoffsets_are_skipped_when_packing_agrees():
