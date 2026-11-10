@@ -1,21 +1,27 @@
-"""Row-major constant-block members of structure type, as row-major copies of the structure.
+"""Row-major block members of structure type, as row-major copies of the structure.
 
-GLSL lets a uniform block, or one of its members, declare ``row_major`` (GLSL 4.60 section 4.4.5); the order reaches
-every matrix the member holds, including the matrices of a structure member and of the structures it nests. The GLSL
-import keeps the block's order on such a member as ``Light light @row_major;``. The targets spell a matrix order on a
-matrix only:
+GLSL lets a uniform or buffer block, or one of its members, declare ``row_major`` (GLSL 4.60 section 4.4.5); the
+order reaches every matrix the member holds, including the matrices of a structure member and of the structures it
+nests. The GLSL import keeps the block's order on such a member as ``Light light @row_major;``. The targets spell a
+matrix order on a matrix only:
 
 * HLSL and Slang accept ``row_major`` on matrix declarations, and DXC rejects it elsewhere ("'row_major' can only be
-  used with a matrix type"), so the HLSL output did not compile;
+  used with a matrix type"), so the HLSL output of a uniform block did not compile;
 * MSL has no matrix order and reads a matrix as it is declared, so the Metal output read each nested matrix
   transposed;
-* SPIR-V decorates ``RowMajor`` per structure member, and the SPIR-V output refused the member as holding no matrix.
+* SPIR-V decorates ``RowMajor`` per structure member, and the SPIR-V output refused a uniform-block member as holding
+  no matrix.
 
-All of them already lay out a structure member declared ``@row_major`` (HLSL and Slang ``row_major``, MSL a transposed
-declaration read through ``transpose``, SPIR-V ``RowMajor``). For those targets :func:`orient_row_major_struct_members`
-therefore gives each such block member a copy of its structure, ``<Name>_row_major``, whose matrices without an
-order of their own are ``@row_major`` and whose nested structures holding matrices are copied the same way, and drops
-the member's own ``@row_major``. A member is read through its fields (``light.m``, ``lights[i].m``). A read of the
+Buffer blocks, which HLSL and Slang read through byte-address buffers, read every nested matrix column-major on all
+four targets.
+
+All of them already lay out a structure member declared ``@row_major``: HLSL and Slang ``row_major`` in constant
+blocks, a transposed declaration read through ``transpose`` in buffer blocks (:mod:`.row_major_members`), MSL a
+transposed declaration, SPIR-V ``RowMajor``. :func:`orient_row_major_struct_members` (constant blocks) and
+:func:`orient_row_major_buffer_struct_members` (buffer blocks, before :mod:`.row_major_members` runs) therefore give
+each such block member a copy of its structure, ``<Name>_row_major``, whose matrices without an order of their own
+are ``@row_major`` and whose nested structures holding matrices are copied the same way, and drop the member's own
+``@row_major``. A member is read through its fields (``light.m``, ``lights[i].m``, ``block.light.m``). A read of the
 whole member would give the copy where the program expects the original structure, and is refused with
 :class:`RowMajorStructMemberUnsupportedError`. GLSL output keeps ``layout(row_major)`` on the member, which GLSL
 defines.
@@ -28,7 +34,11 @@ from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .stage_varyings import slots
 from .stage_varyings import stages as _stages
 
-__all__ = ["RowMajorStructMemberUnsupportedError", "orient_row_major_struct_members"]
+__all__ = [
+    "RowMajorStructMemberUnsupportedError",
+    "orient_row_major_buffer_struct_members",
+    "orient_row_major_struct_members",
+]
 
 TARGETS = frozenset(
     {
@@ -108,6 +118,7 @@ class _Orientation:
             if isinstance(struct, A.StructNode) and getattr(struct, "name", None)
         }
         self.copies = {}
+        self.instances = {}
         self.taken = set(self.structs)
         self.holding = {}
 
@@ -172,7 +183,7 @@ class _Orientation:
         self.structs[copy_name] = copy
         return copy_name
 
-    def refuse_whole_reads(self, member_name, block_name):
+    def refuse_whole_reads(self, member_name, block_name, instances=()):
         functions = list(getattr(self.program, "functions", None) or [])
         for stage in _stages(self.program):
             functions.extend(getattr(stage, "local_functions", None) or [])
@@ -184,7 +195,15 @@ class _Orientation:
             for parent, _field, _key, node in slots(getattr(function, "body", None)):
                 parents.setdefault(id(node), parent)
             for parent, _field, _key, node in slots(getattr(function, "body", None)):
-                if not isinstance(node, A.IdentifierNode) or node.name != member_name:
+                # A constant block's member is named directly; a buffer block's through its instance.
+                direct = isinstance(node, A.IdentifierNode) and node.name == member_name
+                through_instance = (
+                    isinstance(node, A.MemberAccessNode)
+                    and node.member == member_name
+                    and isinstance(node.object, A.IdentifierNode)
+                    and node.object.name in instances
+                )
+                if not (direct or through_instance):
                     continue
                 if isinstance(parent, A.MemberAccessNode) and parent.object is node:
                     continue
@@ -201,10 +220,30 @@ class _Orientation:
                     f"'{block_name}'",
                 )
 
-    def run(self):
-        blocks = list(getattr(self.program, "cbuffers", None) or [])
+    def buffer_blocks(self):
+        """The structs that GLSL buffer blocks (``@ glsl_buffer_block``) are declared with, and their names."""
+        declarations = list(getattr(self.program, "global_variables", None) or [])
         for stage in _stages(self.program):
-            blocks.extend(getattr(stage, "local_cbuffers", None) or [])
+            declarations.extend(getattr(stage, "local_variables", None) or [])
+        blocks = []
+        for declaration in declarations:
+            if "glsl_buffer_block" not in _names(declaration):
+                continue
+            name = _struct_name(getattr(declaration, "var_type", None), self.structs)
+            if name is None:
+                continue
+            if self.structs[name] not in blocks:
+                blocks.append(self.structs[name])
+            self.instances.setdefault(name, set()).add(declaration.name)
+        return blocks
+
+    def run(self, buffers=False):
+        if buffers:
+            blocks = self.buffer_blocks()
+        else:
+            blocks = list(getattr(self.program, "cbuffers", None) or [])
+            for stage in _stages(self.program):
+                blocks.extend(getattr(stage, "local_cbuffers", None) or [])
         changed = 0
         for block in blocks:
             for member in getattr(block, "members", None) or []:
@@ -214,7 +253,11 @@ class _Orientation:
                 name = _struct_name(member_type, self.structs)
                 if name is None or not self.holds_matrix(member_type):
                     continue
-                self.refuse_whole_reads(member.name, getattr(block, "name", ""))
+                self.refuse_whole_reads(
+                    member.name,
+                    getattr(block, "name", ""),
+                    self.instances.get(getattr(block, "name", None), ()),
+                )
                 member.member_type = _retyped(member_type, self.row_major_copy(name))
                 member.attributes = [
                     attribute
@@ -230,8 +273,20 @@ class _Orientation:
 
 
 def orient_row_major_struct_members(program, target) -> int:
-    """Give row-major block members of structure type row-major structure copies; returns how many changed."""
+    """Give row-major constant-block members of structure type row-major structure copies; returns how many."""
     target = str(target or "").lower()
     if target not in TARGETS or not isinstance(program, A.ShaderNode):
         return 0
     return _Orientation(program, target).run()
+
+
+def orient_row_major_buffer_struct_members(program, target) -> int:
+    """The same for GLSL buffer blocks, before :mod:`.row_major_members` stores the copies' matrices transposed.
+
+    HLSL, Slang and Metal read a buffer block's bytes through their own lowerings and SPIR-V transposes a row-major
+    struct member, so a copy's ``@ row_major`` matrices reach each of them through that pass.
+    """
+    target = str(target or "").lower()
+    if target not in TARGETS or not isinstance(program, A.ShaderNode):
+        return 0
+    return _Orientation(program, target).run(buffers=True)
