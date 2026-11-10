@@ -84,10 +84,6 @@ from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_str
 from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hit_objects import HitObjectUnsupportedError, refuse_hit_objects
-from .row_major_struct_members import (
-    RowMajorStructMemberUnsupportedError,
-    orient_row_major_struct_members,
-)
 from .hlsl_geometry_streams import (
     HlslGeometryStreamUnsupportedError,
     raise_glsl_geometry_streams,
@@ -141,6 +137,10 @@ from .relative_vertex_ids import (
 )
 from .row_major_constant_members import store_row_major_constant_members_transposed
 from .row_major_members import RowMajorMemberError, store_row_major_members_transposed
+from .row_major_struct_members import (
+    RowMajorStructMemberUnsupportedError,
+    orient_row_major_struct_members,
+)
 from .rule_pragmas import take_declared_families
 from .rule_table import FAMILIES, SOURCE_RULES, TARGET_ENTRIES
 from .sampler_states import FixedSamplerStateUnsupportedError, legalize_sampler_states
