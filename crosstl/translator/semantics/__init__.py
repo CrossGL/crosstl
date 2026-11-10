@@ -84,6 +84,10 @@ from .geometry_streams import GeometryStreamUnsupportedError, lower_geometry_str
 from .glsl_mesh_stages import GlslMeshStageUnsupportedError, raise_glsl_mesh_stages
 from .half import HalfFloatUnsupportedError, legalize_half_floats
 from .hit_objects import HitObjectUnsupportedError, refuse_hit_objects
+from .row_major_struct_members import (
+    RowMajorStructMemberUnsupportedError,
+    orient_row_major_struct_members,
+)
 from .hlsl_geometry_streams import (
     HlslGeometryStreamUnsupportedError,
     raise_glsl_geometry_streams,
@@ -243,6 +247,7 @@ __all__ = [
     "GlslMeshStageUnsupportedError",
     "HitObjectUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
+    "RowMajorStructMemberUnsupportedError",
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
@@ -468,6 +473,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    orient_row_major_struct_members(program, report.target)
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
     lower_metal_math_spellings(program, report.target)

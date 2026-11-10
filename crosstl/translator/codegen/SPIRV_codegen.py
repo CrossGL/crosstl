@@ -12815,12 +12815,14 @@ class VulkanSPIRVCodeGen(
     ) -> Optional[SpirvId]:
         primitive_name = self.normalize_primitive_name(function_name)
         if (
-            primitive_name not in {
+            primitive_name
+            not in {
                 "bool",
                 "float",
                 "double",
                 self.BFLOAT16_TYPE_NAME,
-            } | self.INTEGER_TYPE_NAMES
+            }
+            | self.INTEGER_TYPE_NAMES
         ):
             return None
 
@@ -18903,18 +18905,26 @@ class VulkanSPIRVCodeGen(
         self.validate_specialization_sized_member_layout(
             type_id.type.base_type, members
         )
+        # A struct member declared row_major (the row-major copies of semantics/row_major_struct_members.py)
+        # is decorated RowMajor, as a block member is; the std140 copy names its source struct.
+        row_major_names = self.uniform_struct_row_major_member_names(type_id)
         offset = 0
         for member_index, (member_type, member_name) in enumerate(members):
-            offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
+            row_major = member_name in row_major_names
+            offset = self.align_to(
+                offset, self.uniform_layout_alignment(member_type, row_major)
+            )
             self.decorations.append(
                 f"OpMemberDecorate %{type_id.id} {member_index} Offset {offset}"
             )
             self.decorate_uniform_matrix_member(
-                type_id, member_index, member_type, False, member_name
+                type_id, member_index, member_type, row_major, member_name
             )
+            if row_major:
+                self.decorate_uniform_array_strides(member_type, row_major)
             self.decorate_uniform_nested_type(member_type, decorated_structs)
             if member_index + 1 < len(members):
-                offset += self.uniform_layout_size(member_type)
+                offset += self.uniform_layout_size(member_type, row_major)
 
     def align_to(self, value: int, alignment: int) -> int:
         if alignment <= 1:
@@ -18973,11 +18983,14 @@ class VulkanSPIRVCodeGen(
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
+            row_major_names = self.uniform_struct_row_major_member_names(type_id)
             return self.align_to(
                 max(
                     (
-                        self.uniform_layout_alignment(member_type)
-                        for member_type, _ in struct_members
+                        self.uniform_layout_alignment(
+                            member_type, member_name in row_major_names
+                        )
+                        for member_type, member_name in struct_members
                     ),
                     default=1,
                 ),
@@ -19025,11 +19038,13 @@ class VulkanSPIRVCodeGen(
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
+            row_major_names = self.uniform_struct_row_major_member_names(type_id)
             offset = 0
-            for member_type, _ in struct_members:
-                alignment = self.uniform_layout_alignment(member_type)
+            for member_type, member_name in struct_members:
+                member_row_major = member_name in row_major_names
+                alignment = self.uniform_layout_alignment(member_type, member_row_major)
                 offset = self.align_to(offset, alignment)
-                offset += self.uniform_layout_size(member_type)
+                offset += self.uniform_layout_size(member_type, member_row_major)
             return self.align_to(offset, self.uniform_layout_alignment(type_id))
 
         vector_info = self.vector_type_info_from_type(type_id)
@@ -19038,6 +19053,19 @@ class VulkanSPIRVCodeGen(
             return self.uniform_scalar_size(component_type) * component_count
 
         return self.uniform_scalar_size(type_id)
+
+    def uniform_struct_row_major_member_names(self, type_id: SpirvId) -> set:
+        """Names of the members of struct ``type_id`` (or of the struct a layout copy was made from) declared
+        row_major, such as the row-major copies of semantics/row_major_struct_members.py.
+        """
+        source_type = self.layout_struct_source_types.get(type_id.id, type_id)
+        metadata = self.struct_member_metadata.get(source_type.type.base_type, {})
+        return {
+            name
+            for name, entry in metadata.items()
+            if (entry or {}).get("node") is not None
+            and self.uniform_member_is_row_major(entry["node"])
+        }
 
     def uniform_scalar_size(self, type_id: SpirvId) -> int:
         primitive_name = self.normalize_primitive_name(type_id.type.base_type)
@@ -20590,7 +20618,8 @@ class VulkanSPIRVCodeGen(
             # task_payload_variables.py: a task entry's DispatchMesh payload is task-payload storage.
             payload = (
                 self.current_execution_model == "TaskEXT"
-                and node.name in dispatch_mesh_payload_names(
+                and node.name
+                in dispatch_mesh_payload_names(
                     getattr(self.current_function_node, "body", None)
                 )
             )
@@ -27113,9 +27142,8 @@ class VulkanSPIRVCodeGen(
         if isinstance(expression, ConstructorNode):
             return all(
                 self.side_effect_free_call_argument(argument)
-                for argument in list(expression.arguments) + list(
-                    expression.named_arguments.values()
-                )
+                for argument in list(expression.arguments)
+                + list(expression.named_arguments.values())
             )
         if isinstance(expression, FunctionCallNode):
             callee_name = self.function_call_name(expression)
@@ -31270,7 +31298,8 @@ class VulkanSPIRVCodeGen(
                 return
         if (
             self.include_resource_interface_variables
-            and variable.type.storage_class in {
+            and variable.type.storage_class
+            in {
                 "StorageBuffer",
                 "Uniform",
                 "UniformConstant",
