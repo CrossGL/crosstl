@@ -5,11 +5,7 @@ import pytest
 
 from tests.conformance import runner as harness
 from tests.conformance import runtimes
-from tools.coverage import (
-    execution,
-    probes,
-    validators,
-)
+from tools.coverage import execution, lowering, probes, validators
 from tools.coverage.model import Feature, Result, Signature, Type
 
 from .execution_cases import CALLS, NATIVE, SIN, fake_harness, hlsl_result
@@ -60,7 +56,7 @@ def _opengl_then_vulkan(monkeypatch, outcomes, written=0):
         "select_runtimes",
         lambda spec, targets: {t: [(on[t], Provided())] for t in targets},
     )
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
     monkeypatch.setattr(
         execution, "as_spirv", lambda language, source: f"; {language} as SPIR-V\n"
     )
@@ -157,7 +153,7 @@ def test_hlsl_slang_and_wgsl_probes_run_as_spirv_on_vulkan(
     monkeypatch, translated_outcome, written, expected, detail
 ):
     fake_harness(monkeypatch, translated_outcome, written, "vulkan-lavapipe")
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
     lowered = []
 
     def as_spirv(language, source):
@@ -193,7 +189,7 @@ def test_slang_probes_run_in_the_environment_of_the_spirv_slangc_writes(
     # slangc writes SPIR-V 1.5, which spirv-val rejects for Vulkan 1.1, so no Slang probe would ever run there.
     environments = []
     fake_harness(monkeypatch, "preserved", 0, "vulkan-lavapipe", environments)
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
     versions = {"slang": "1.5", "hlsl": "1.3"}
     monkeypatch.setattr(
         execution,
@@ -211,7 +207,7 @@ def test_slang_probes_run_in_the_environment_of_the_spirv_slangc_writes(
 @pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
 def test_the_native_probe_runs_as_the_spirv_its_compiler_writes(language):
     """A native compute probe, lowered by its reference compiler, runs on a Vulkan runtime and computes."""
-    if not validators.can_lower(language):
+    if not lowering.can_lower(language):
         pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
     feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
     native = probes.build(feature, language).source
@@ -224,7 +220,7 @@ def test_the_native_probe_runs_as_the_spirv_its_compiler_writes(language):
 
 def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypatch):
     fake_harness(monkeypatch, "preserved", 1, "vulkan-lavapipe")
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
     monkeypatch.setattr(
         execution,
         "as_spirv",
@@ -232,7 +228,7 @@ def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypat
     )
     probe = hlsl_result(hlsl_result().sources[0].replace("void main", "void CSMain"))
     assert execution.run([probe])[0] == [probe]
-    monkeypatch.setattr(validators, "can_lower", lambda language: False)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: False)
     assert execution.run([hlsl_result()]) == ([hlsl_result()], [])
     assert execution.idle([hlsl_result()]) == ["hlsl"]
 
@@ -243,7 +239,7 @@ def test_a_probe_that_rounds_through_16_bit_floats_keeps_its_validation_result(
 ):
     # lavapipe drops a float-to-half-to-float round trip, so such a native probe is no reference.
     fake_harness(monkeypatch, "preserved", 1, "vulkan-lavapipe")
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
     half = "%half = OpTypeFloat 16\n; reads fin\n"
     single = "%float = OpTypeFloat 32\n; reads fin\n"
     feature = Feature(language, "function", "asfloat16", SIN.signature)
@@ -259,7 +255,7 @@ def test_a_probe_that_reads_a_clock_or_a_ray_query_keeps_its_validation_result(
 ):
     # Neither a clock nor a ray query the harness never initializes gives two runs the same result.
     fake_harness(monkeypatch, "preserved", 1, "vulkan-lavapipe")
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
     feature = Feature("slang", "function", "clockARB", Signature(Type("uint"), ()))
     for source, outcome in ((f"%1 = {instruction}\n", "supported"), ("", "wrong")):
         source += "; declares fin\n"
@@ -270,7 +266,7 @@ def test_a_probe_that_reads_a_clock_or_a_ray_query_keeps_its_validation_result(
 
 @pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
 def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
-    if not validators.can_lower(language):
+    if not lowering.can_lower(language):
         pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
     from tests.conformance import interface
 

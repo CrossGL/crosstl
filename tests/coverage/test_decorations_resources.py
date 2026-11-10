@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from tools.coverage import decorations, validators
+from tools.coverage import decorations, lowering, validators
 from tools.coverage.model import Feature
 
 
@@ -59,7 +59,7 @@ def test_a_ray_tracing_translation_keeps_the_storage_and_calls_that_hand_data_ov
     )
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_the_data_ray_tracing_stages_hand_over():
     callable_data = Feature(
         "glsl",
@@ -128,7 +128,7 @@ def test_a_binding_translation_keeps_its_push_constants_and_descriptor_set():
     assert decorations.lost(bound, "spirv", second.replace("Set 1", "Set 10")) == ""
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_push_constants_and_a_second_descriptor_set():
     head = (
         "#version 460\nlayout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
@@ -188,7 +188,7 @@ def test_a_rasterizer_ordered_translation_keeps_its_interlocked_region(monkeypat
     ) == ("the translation loses ExecutionMode.PixelInterlockOrderedEXT")
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_a_pixel_interlocked_region():
     ordered = Feature(
         "glsl",

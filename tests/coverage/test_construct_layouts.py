@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.coverage import constructs, execution, probes, validators
+from tools.coverage import constructs, execution, lowering, probes
 from tools.coverage.model import Result
 
 from .construct_grammar import GRAMMAR, construct_feature
@@ -357,7 +357,7 @@ _HLSL_BY_COLUMNS = {
 @pytest.mark.parametrize("name", sorted(_HLSL_BY_COLUMNS))
 def test_the_hlsl_matrix_probes_compute_what_the_crossgl_probes_compute(name):
     # HLSL fills and indexes a matrix by rows and CrossGL by columns, so the probes must write them differently.
-    if not validators.can_lower("hlsl"):
+    if not lowering.can_lower("hlsl"):
         pytest.skip("dxc or spirv-dis is not installed")
     feature = construct_feature("hlsl", name)
     native = probes.build(feature, "hlsl").source

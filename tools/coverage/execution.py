@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from . import validators
+from . import lowering, validators
 from .model import Result
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
@@ -155,7 +155,7 @@ def as_spirv(language: str, source: str) -> str:
         if language in ("glsl", "wgsl")
         else validators.hlsl_entry(source, "compute")
     )
-    assembly, _ = validators.lower(language, source, entry, keep_bindings=True)
+    assembly, _ = lowering.lower(language, source, entry, keep_bindings=True)
     return without_unused_counters(assembly) if language == "hlsl" else assembly
 
 
@@ -458,7 +458,7 @@ def _pass(
     there is nothing to run or no runtime to run it on."""
     from tests.conformance import runner
 
-    if not items or (via_spirv and not validators.can_lower(language)):
+    if not items or (via_spirv and not lowering.can_lower(language)):
         return {}, ""
     runs_as = "spirv" if via_spirv else language
     selection = runner.select_runtimes(runtimes, [runs_as])
