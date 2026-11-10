@@ -245,7 +245,13 @@ def test_unknown_format_on_storage_image_parameter_is_refused(tmp_path):
             "layout(rgba8, binding = 0) coherent restrict uniform highp image2D img;",
         ),
         ("vulkan", re.compile(r"OpTypeImage %\w+ 2D 0 0 0 2 Rgba8\b")),
-        ("metal", "texture2d<float, access::read_write> img"),
+        (
+            "metal",
+            re.compile(
+                r"texture2d<float, access::read_write,\s*"
+                r"memory_coherence::memory_coherence_device>\s*img\b"
+            ),
+        ),
     ],
 )
 def test_storage_image_qualifiers_are_not_formats(tmp_path, backend, declaration):
