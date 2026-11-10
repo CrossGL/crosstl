@@ -1,9 +1,9 @@
 """Ray-tracing interface probes: the data a ray-tracing stage hands another stage, and the record it reads.
 
-Each probe is a stage program of :mod:`.graphics` with one interface added. A ray-generation stage traces a ray with
-a payload and reads back what the hit or miss stage wrote, or calls a callable shader with data and reads it back. An
-intersection stage reports a hit with an attribute structure of its own, and a closest-hit stage reads that structure
-in place of the triangle's barycentrics. A miss stage reads a value from its shader binding table record.
+Each probe is a stage program of the language's module with one interface added. A ray-generation stage traces a ray
+with a payload and reads back what the hit or miss stage wrote, or calls a callable shader with data and reads it
+back. An intersection stage reports a hit with an attribute structure of its own, and a closest-hit stage reads that
+structure in place of the triangle's barycentrics. A miss stage reads a value from its shader binding table record.
 
 GLSL declares the outgoing payload ``rayPayloadEXT``, the callable data ``callableDataEXT``, the attributes
 ``hitAttributeEXT`` and the record as a ``shaderRecordEXT`` buffer block (GL_EXT_ray_tracing). HLSL and Slang pass a
