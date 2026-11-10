@@ -413,6 +413,7 @@ jobs:
           CROSSTL_REQUIRE_FUNCTION_CONSTANT_EXECUTION: "1"
           CROSSTL_REQUIRE_THREADGROUP_BINDING_EXECUTION: "1"
           CROSSTL_REQUIRE_HLSL_STRUCTURED_MATRIX_EXECUTION: "1"
+          CROSSTL_REQUIRE_REFERENCE_ALIASING_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
           EGL_PLATFORM: surfaceless
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
@@ -427,7 +428,8 @@ jobs:
             tests/test_translator/test_append_consume_layouts.py \
             tests/test_translator/test_structured_buffer_array_layouts.py \
             tests/test_translator/test_metal_specialization_constants.py \
-            tests/test_translator/test_metal_threadgroup_parameter_indices.py
+            tests/test_translator/test_metal_threadgroup_parameter_indices.py \
+            tests/test_translator/test_metal_reference_aliasing.py
 
       # The conformance harness builds vkrun against libvulkan-dev and runs it on the host lavapipe ICD.
       - name: Check SPIR-V member placements on lavapipe

@@ -35,6 +35,8 @@ from ..ast import (
 )
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
+from .metal_reference_argument_aliasing import metal_reference_argument_aliases
+from .metal_refusals import MetalLoweringRefused
 from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
@@ -119,6 +121,9 @@ class MetalHlslFunctionMixin:
         )
 
     def metal_expression_is_side_effect_free(self, expr):
+        if id(expr) in self.metal_sequenced_call_ids:
+            # A call evaluated in place with its copies (metal_reference_sequenced_calls).
+            return False
         if id(expr) in self.metal_argument_substitutions:
             # Already evaluated into a local.
             return True
@@ -189,17 +194,30 @@ class MetalHlslFunctionMixin:
                         if qualifier is None
                         else self.metal_reference_argument_parameter(expr, index)
                     )
-                    if parameter is None or self.metal_argument_binds_thread_reference(
-                        argument
+                    binds = parameter is not None and (
+                        self.metal_argument_binds_thread_reference(argument)
+                    )
+                    if parameter is None or (
+                        binds
+                        and not metal_reference_argument_aliases(
+                            self, expr, index, parameter
+                        )
                     ):
                         visit(argument, conditional)
                         continue
                     if conditional:
-                        raise ValueError(
-                            "Metal cannot pass a non-thread lvalue to the "
-                            f"{qualifier} parameter of "
-                            f"'{self.function_call_name(expr)}' in a conditionally "
-                            "evaluated expression"
+                        what = (
+                            "an lvalue that other accesses during the call alias"
+                            if binds
+                            else "a non-thread lvalue"
+                        )
+                        raise MetalLoweringRefused(
+                            [
+                                f"{what} passed to the {qualifier} parameter of "
+                                f"'{self.function_call_name(expr)}' in a conditionally "
+                                "evaluated expression: Metal copies it through a thread "
+                                "temporary around the whole statement"
+                            ]
                         )
                     if not self.metal_expression_is_side_effect_free(argument):
                         raise ValueError(
