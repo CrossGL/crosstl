@@ -100,6 +100,38 @@ def test_a_feature_with_no_id_borrows_the_glsl_id_of_its_crossgl_spelling():
     assert features["GLSL.std.450:Frexp"]["members"] == ["glsl/frexp", "wgsl/frexp"]
 
 
+def test_a_function_with_no_id_takes_the_one_id_of_functions_spelled_alike():
+    cospi = "GLSL.std.450:Cos+OpVectorTimesScalar"
+    method = row("metal", ("texture2d.read", "supported", {"crossgl": "Load"}))
+    method["features"][0]["category"] = "method"
+    entry = ir.build(
+        [
+            row(
+                "slang",
+                ("cospi", "refused", {"semantic": cospi, "detail": "gap"}),
+                ("log10", "supported", {"semantic": "GLSL.std.450:Log+OpFMul"}),
+                ("Load", "supported", {"semantic": "OpImageFetch"}),
+            ),
+            row(
+                "hlsl",
+                ("log10", "supported", {"semantic": "GLSL.std.450:Log2+OpFMul"}),
+            ),
+            row(
+                "cuda",
+                ("cospif", "supported", {"crossgl": "cospi"}),
+                ("log10f", "supported", {"crossgl": "log10"}),
+            ),
+            method,
+        ]
+    )
+    features = by_name(entry)
+    assert features[cospi]["members"] == ["cuda/cospif", "slang/cospi"]
+    assert features[cospi]["outcome"] == "supported"
+    # Two ids share the spelling log10, so neither is taken; a method takes no function's id.
+    assert features["cuda/log10"]["members"] == ["cuda/log10f"]
+    assert features["metal/Load"]["members"] == ["metal/texture2d.read"]
+
+
 def test_a_gap_names_its_member_as_the_feature_of_its_cause():
     detail = 'probe.cu(9): error: no instance of overloaded function "{}" matches'
     entry = ir.build(

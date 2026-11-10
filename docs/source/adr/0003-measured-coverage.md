@@ -88,8 +88,10 @@ normalized to semantic features: a feature's id is the set of SPIR-V instruction
 reference compiler builds it (DXC `-spirv`, glslang, naga, slangc, rust-gpu), minus a baseline probe that reads the
 same arguments without the call. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
 Mojo have no SPIR-V compiler here, and glam writes its vector methods in plain Rust arithmetic, so those features take
-the id of the GLSL function CrossGL spells the same way. A feature SPIR-V cannot express is listed by hand in
-`tools/coverage/semantic.py` only when it is known to equal another; otherwise it stays a semantic feature of its own.
+the id of the GLSL function CrossGL spells the same way. A function that still has no id takes the id of the other
+functions CrossGL spells the same way when they share one: CUDA `cospi` and Slang `cospi` count once. A feature SPIR-V
+cannot express is listed by hand in `tools/coverage/semantic.py` only when it is known to equal another; otherwise it
+stays a semantic feature of its own.
 
 A semantic feature is expressible when a CrossGL probe for it parses, type-checks and translates correctly to at least
 one backend that has it. CrossGL probes come from a small template layer, `tools/coverage/crossgl/`, and the
