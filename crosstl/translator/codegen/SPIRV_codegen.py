@@ -34,6 +34,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    NamedType,
     PointerReinterpretNode,
     RangeNode,
     RayQueryOpNode,
@@ -67,6 +68,7 @@ from ..semantics.shader_records import (
     shader_record_memory_layout,
 )
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from ..vulkan_memory_scope import needs_device_coherence
 from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
@@ -80,6 +82,7 @@ from .comma_expressions import is_comma_expression, spirv_comma_expression
 from .enum_utils import (
     collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
+    collect_generic_parameter_names,
     enum_struct_fields,
     enum_variant_payload_fields,
     generic_enum_specialized_fields,
@@ -93,6 +96,8 @@ from .extended_arithmetic_builtins import (
     spirv_extended_arithmetic_call,
 )
 from .fixed_sampler_contracts import fixed_sampler_records, with_spirv_fixed_samplers
+from .generic_call_dependencies import generic_callee_names
+from .generic_concrete_call_results import concrete_call_overload
 from .generic_function_utils import (
     collect_unresolved_generic_function_call_names,
     generic_function_call_name,
@@ -106,6 +111,7 @@ from .generic_function_utils import (
 )
 from .generic_struct_utils import generic_struct_specialization_name
 from .image_access_contracts import (
+    PACKED_IMAGE_FORMAT_CHANNEL_COUNTS,
     collect_function_image_access_requirements,
     collect_function_parameter_names,
     image_access_diagnostic_name,
@@ -168,6 +174,10 @@ from .spirv_extension_builtins import (
     unmapped_builtin_reason,
 )
 from .spirv_float_semantics import SpirvFloatSemanticsMixin
+from .spirv_generic_structs import (
+    generic_struct_instance_spelling,
+    materialize_generic_struct_instance,
+)
 from .spirv_geometry_streams import (
     STREAM_FUNCTIONS,
     geometry_output_streams,
@@ -207,6 +217,7 @@ from .spirv_per_vertex_builtins import (
 )
 from .spirv_placed_blocks import (
     SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION,
+    declare_placed_struct_uniform,
     decorate_placed_uniform_block,
     matrix_from_column_array,
     placed_member_type,
@@ -244,6 +255,10 @@ from .spirv_single_evaluation import (
     recording_subscript_indices,
     subscript_index_scope,
 )
+from .spirv_specialization_conversions import (
+    specialization_constituent,
+    specialization_conversion_expression,
+)
 from .spirv_specialized_workgroup_size import (
     declare_specialized_workgroup_size,
     module_compute_stage_config,
@@ -259,6 +274,10 @@ from .spirv_standard_constants import (
     spirv_non_finite_float_literal,
     spirv_standard_float_constant,
 )
+from .spirv_storage_subscripts import (
+    reads_storage_buffer_element,
+    storage_buffer_subscript_element_type_name,
+)
 from .spirv_struct_varyings import (
     flatten_struct_varying,
     load_flattened_struct_varying,
@@ -268,6 +287,10 @@ from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_swizzle_reference_arguments import (
     prepare_swizzle_reference_binding,
     write_back_swizzle_reference_bindings,
+)
+from .spirv_tessellation_domain import (
+    evaluation_takes_glsl_defaults,
+    refuse_program_without_domain,
 )
 from .spirv_texel_buffers import emit_texel_buffer_fetch, texel_buffer_type_info
 from .spirv_texture_residency import (
@@ -282,6 +305,7 @@ from .spirv_uniform_block_arrays import (
     lowered_constant_buffer_nodes,
     require_non_uniform_block_array_indexing,
 )
+from .spirv_value_subscripts import vector_value_subscript
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
 from .stage_utils import (
@@ -298,6 +322,7 @@ from .texture_residency import (
     TEXTURE_RESIDENCY_OPERATION,
     TEXTURE_RESIDENT_OPERATION,
 )
+from .workgroup_size_extents import fold_workgroup_size_extents
 
 
 class SpirvType:
@@ -1525,7 +1550,7 @@ class VulkanSPIRVCodeGen(
                 return None
             operator = getattr(expr, "operator", getattr(expr, "op", None))
             return self.emit_specialization_constant_unary_operation(operator, operand)
-        return None
+        return specialization_conversion_expression(self, expr)
 
     def register_vector_constant(
         self, vector_type: SpirvId, components: List[SpirvId]
@@ -1536,14 +1561,18 @@ class VulkanSPIRVCodeGen(
             return self.vector_constants[key]
 
         id_value = self.get_id()
+        is_specialized = any(
+            self.is_specialization_constant_value(component) for component in components
+        )
+        opcode = "OpSpecConstantComposite" if is_specialized else "OpConstantComposite"
 
         component_list = " ".join([f"%{component.id}" for component in components])
-        self.emit(
-            f"%{id_value} = OpConstantComposite %{vector_type.id} {component_list}"
-        )
+        self.emit(f"%{id_value} = {opcode} %{vector_type.id} {component_list}")
 
         spirv_id = SpirvId(id_value, vector_type.type)
         self.value_types[id_value] = vector_type
+        if is_specialized:
+            self.specialization_constant_result_ids.add(id_value)
         self.vector_constants[key] = spirv_id
         return spirv_id
 
@@ -1560,13 +1589,17 @@ class VulkanSPIRVCodeGen(
             return self.composite_constants[key]
 
         id_value = self.get_id()
-        component_list = " ".join(f"%{component.id}" for component in components)
-        self.emit(
-            f"%{id_value} = OpConstantComposite %{composite_type.id} {component_list}"
+        is_specialized = any(
+            self.is_specialization_constant_value(component) for component in components
         )
+        opcode = "OpSpecConstantComposite" if is_specialized else "OpConstantComposite"
+        component_list = " ".join(f"%{component.id}" for component in components)
+        self.emit(f"%{id_value} = {opcode} %{composite_type.id} {component_list}")
 
         spirv_id = SpirvId(id_value, composite_type.type)
         self.value_types[id_value] = composite_type
+        if is_specialized:
+            self.specialization_constant_result_ids.add(id_value)
         self.composite_constants[key] = spirv_id
         return spirv_id
 
@@ -2935,7 +2968,7 @@ class VulkanSPIRVCodeGen(
         if folded.id != component.id:
             return folded
         if constant:
-            return component
+            return specialization_constituent(self, component, member_type)
         return self.convert_value_to_type(component, member_type)
 
     def vector_member_info(self, vector_type: str, member_name: str):
@@ -14201,6 +14234,9 @@ class VulkanSPIRVCodeGen(
             "rgba32f": "Rgba32f",
             "rgba32i": "Rgba32i",
             "rgba32ui": "Rgba32ui",
+            "rgb10_a2": "Rgb10A2",
+            "rgb10_a2ui": "Rgb10a2ui",
+            "r11f_g11f_b10f": "R11fG11fB10f",
         }
 
     def spirv_image_format_name(self, image_format: Optional[str]) -> Optional[str]:
@@ -14221,6 +14257,9 @@ class VulkanSPIRVCodeGen(
             return 4
 
         image_format = str(image_format).lower()
+        packed = PACKED_IMAGE_FORMAT_CHANNEL_COUNTS.get(image_format)
+        if packed is not None:
+            return packed
         if image_format.startswith("rgba"):
             return 4
         if image_format.startswith("rg"):
@@ -15922,6 +15961,10 @@ class VulkanSPIRVCodeGen(
 
         generic_base_name, generic_args = generic_type_parts(type_str)
         if generic_args:
+            # ``Box<float>`` of ``generic<T> struct Box`` is declared as the concrete ``Box_float`` on first use.
+            materialize_generic_struct_instance(
+                self, type_str, self.program_generic_parameter_names
+            )
             specialized_struct_type = self.ensure_declared_struct_type(
                 generic_struct_specialization_name(type_str)
             )
@@ -17702,6 +17745,24 @@ class VulkanSPIRVCodeGen(
 
         return self.composite_construct(enum_type, components)
 
+    def process_generic_struct_constructor_call(
+        self, callee_name, expr
+    ) -> Optional[SpirvId]:
+        """Lower ``Pair<vec2, float>(a, b)``, a constructor of a generic structure's instance, else ``None``."""
+        if not isinstance(callee_name, str) or "<" not in callee_name:
+            return None
+        struct_name = materialize_generic_struct_instance(
+            self, callee_name, self.program_generic_parameter_names
+        )
+        if struct_name is None or self.ensure_declared_struct_type(struct_name) is None:
+            return None
+        return self.process_struct_constructor_node(
+            ConstructorNode(
+                NamedType(struct_name),
+                list(getattr(expr, "arguments", getattr(expr, "args", [])) or []),
+            )
+        )
+
     def process_struct_constructor_node(
         self, expr: ConstructorNode
     ) -> Optional[SpirvId]:
@@ -18606,7 +18667,9 @@ class VulkanSPIRVCodeGen(
             if access_name in supported:
                 qualifiers.add(aliases.get(access_name, access_name))
 
-        if "globallycoherent" in qualifiers:
+        if "globallycoherent" in qualifiers or needs_device_coherence(node):
+            # Coherent under the GLSL450 memory model is device-wide, which holds every scope
+            # GL_KHR_memory_scope_semantics names.
             qualifiers.add("coherent")
 
         return qualifiers
@@ -20178,6 +20241,9 @@ class VulkanSPIRVCodeGen(
                         return self.map_crossgl_type(
                             getattr(specialized_func, "return_type", "void")
                         )
+            declared_result_type = self.declared_concrete_call_result_type(expr)
+            if declared_result_type is not None:
+                return declared_result_type
             signature = self.resolve_function_signature(callee_name)
             if signature is not None:
                 return signature[0]
@@ -20203,6 +20269,9 @@ class VulkanSPIRVCodeGen(
                 return self.infer_expression_result_type(expr.args[0])
             return spirv_pack_result_type(self, callee_name)
         if isinstance(expr, ArrayAccessNode):
+            buffer_element_type = storage_buffer_subscript_element_type_name(self, expr)
+            if buffer_element_type is not None:
+                return self.map_crossgl_type(buffer_element_type)
             array_type = self.infer_expression_result_type(expr.array)
             if array_type is None:
                 return None
@@ -20945,6 +21014,11 @@ class VulkanSPIRVCodeGen(
             push_constant = declare_push_constant_variable(self, node, var_type)
             if push_constant is not None:
                 return push_constant
+        if storage_class == "Uniform":
+            # A ConstantBuffer<T> whose T places members with @offset or @align keeps those bytes.
+            placed_variable = declare_placed_struct_uniform(self, node, var_type)
+            if placed_variable is not None:
+                return placed_variable
         if (
             storage_class == "Uniform"
             and self.current_struct_members.get(var_type.type.base_type) is not None
@@ -22789,6 +22863,14 @@ class VulkanSPIRVCodeGen(
         if type_name is None:
             return None
         type_name = self.normalize_reference_type_name(type_name)
+        # Registered vector types are named ``v4float``; spell them as CrossGL
+        # does so call keys and declared signatures compare equal.
+        registered_vector = re.fullmatch(
+            r"v([234])(float|double|int|uint|bool)", str(type_name).strip()
+        )
+        if registered_vector is not None:
+            size, element = registered_vector.groups()
+            type_name = f"vec{size}<{element}>"
         type_name = self.normalize_generic_vector_type(type_name)
         type_name = self.normalize_hlsl_matrix_type(type_name)
         primitive_name = self.normalize_primitive_name(type_name)
@@ -22797,13 +22879,37 @@ class VulkanSPIRVCodeGen(
         return re.sub(r"\s+", "", str(type_name))
 
     def call_argument_type_name(self, arg) -> Optional[str]:
+        if reads_storage_buffer_element(self, arg):
+            inferred_type = self.infer_expression_result_type(arg)
+            return None if inferred_type is None else inferred_type.type.base_type
         storage_buffer_type = self.storage_buffer_expression_type_name(arg)
         if storage_buffer_type is not None:
             return storage_buffer_type
         inferred_type = self.infer_expression_result_type(arg)
         if inferred_type is None:
             return None
-        return inferred_type.type.base_type
+        base_type = inferred_type.type.base_type
+        # A generic instance keeps its CrossGL spelling, so ``Box<T>`` binds ``T`` from ``Box_float``.
+        return generic_struct_instance_spelling(self, base_type) or base_type
+
+    def declared_concrete_call_result_type(self, call) -> Optional[SpirvId]:
+        """The declared result type of the concrete overload ``call`` selects.
+
+        Signatures are registered only as functions are emitted, and by name, so generic
+        specialization could not type a helper call and a name lookup typed an overloaded
+        helper by whichever overload was emitted last.
+        """
+        function_node = concrete_call_overload(
+            self,
+            call,
+            lambda generator, arg: generator.call_argument_type_name(arg),
+            lambda generator, type_name: generator.normalize_signature_type_name(
+                type_name
+            ),
+        )
+        if function_node is None:
+            return None
+        return self.map_crossgl_type(function_node.return_type)
 
     def call_argument_type_names(self, args):
         return [self.call_argument_type_name(arg) or "unknown" for arg in args]
@@ -23008,6 +23114,8 @@ class VulkanSPIRVCodeGen(
             FunctionCallNode,
             include_overloads=True,
             keep_overload_family_order=True,
+            # A specialization's calls still spell the generic name (``twice``), not ``twice_float``.
+            extra_callee_names=lambda func: generic_callee_names(self, func),
         )
 
     def walk_ast_nodes(self, root):
@@ -23984,7 +24092,10 @@ class VulkanSPIRVCodeGen(
                     requirements.get(function_name, {})
                 )
                 self.stage_local_inline_storage_buffer_functions.setdefault(key, [])
-                if self.function_requires_pointer_preserving_inlining(function_node):
+                if (
+                    self.function_requires_pointer_preserving_inlining(function_node)
+                    and getattr(function_node, "body", None) is not None
+                ):
                     self.stage_local_inline_storage_buffer_functions[key].append(
                         function_node
                     )
@@ -24125,6 +24236,9 @@ class VulkanSPIRVCodeGen(
             if not function_name:
                 continue
             if not self.function_requires_pointer_preserving_inlining(func):
+                continue
+            if getattr(func, "body", None) is None:
+                # A prototype has nothing to inline; its definition is the candidate.
                 continue
             functions.setdefault(function_name, []).append(func)
         return functions
@@ -27518,7 +27632,9 @@ class VulkanSPIRVCodeGen(
                         value = self.process_constant_expression(arg, component_type)
                         if value is None:
                             return None
-                        components.append(value)
+                        components.append(
+                            specialization_constituent(self, value, component_type)
+                        )
 
                     if len(components) == 1 and component_count > 1:
                         components *= component_count
@@ -30109,6 +30225,9 @@ class VulkanSPIRVCodeGen(
             )
             if reinterpret_load is not None:
                 return reinterpret_load
+            component = vector_value_subscript(self, expr.array, index, expr.index)
+            if component is not None:
+                return component
 
             access, element_type = self.create_array_element_access(
                 expr.array, index, expr.index
@@ -30344,6 +30463,12 @@ class VulkanSPIRVCodeGen(
 
             if self.is_canonical_atomic_thread_fence_call(callee_name):
                 return self.reject_atomic_thread_fence(expr)
+
+            instance_constructor = self.process_generic_struct_constructor_call(
+                callee_name, expr
+            )
+            if instance_constructor is not None:
+                return instance_constructor
 
             if (
                 isinstance(callee_name, str)
@@ -32023,7 +32148,7 @@ class VulkanSPIRVCodeGen(
             sources.append(self.tessellation_control_stage)
         return sources
 
-    def tessellation_domain_mode(self, stage) -> str:
+    def tessellation_domain_mode(self, stage) -> Optional[str]:
         """Return the tessellation-evaluation domain execution mode."""
         mode_map = {
             "tri": "Triangles",
@@ -32050,9 +32175,10 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return "Triangles"
+        # Left to a control stage outside the program; see spirv_tessellation_domain.
+        return None
 
-    def tessellation_spacing_mode(self, stage) -> str:
+    def tessellation_spacing_mode(self, stage) -> Optional[str]:
         """Return the tessellation-evaluation spacing execution mode."""
         mode_map = {
             "integer": "SpacingEqual",
@@ -32077,9 +32203,9 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return None if self.tessellation_modes_follow_hlsl(stage) else "SpacingEqual"
+        return "SpacingEqual" if evaluation_takes_glsl_defaults(self, stage) else None
 
-    def tessellation_vertex_order_mode(self, stage) -> str:
+    def tessellation_vertex_order_mode(self, stage) -> Optional[str]:
         """Return the tessellation-evaluation vertex-order execution mode."""
         mode_map = {
             "cw": "VertexOrderCw",
@@ -32098,7 +32224,7 @@ class VulkanSPIRVCodeGen(
             for flag in self.stage_layout_flag_names(source, "in"):
                 if flag in mode_map:
                     return mode_map[flag]
-        return None if self.tessellation_modes_follow_hlsl(stage) else "VertexOrderCcw"
+        return "VertexOrderCcw" if evaluation_takes_glsl_defaults(self, stage) else None
 
     def tessellation_modes_follow_hlsl(self, stage) -> bool:
         """Whether ``stage`` declares its domain as an HLSL-style ``@domain`` attribute.
@@ -32162,6 +32288,7 @@ class VulkanSPIRVCodeGen(
             self.tessellation_spacing_mode(stage),
             self.tessellation_vertex_order_mode(stage),
         ]
+        refuse_program_without_domain(self, stage, modes[0])
         if self.tessellation_point_mode(stage):
             modes.append("PointMode")
         for mode in modes:
@@ -32583,6 +32710,7 @@ class VulkanSPIRVCodeGen(
                 self, "workgroup_access_assertions", ()
             ),
         )
+        ast = fold_workgroup_size_extents(ast, "SPIR-V", self.refuse_lowering)
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
             (getattr(ast, "stages", None) or {}).items()
@@ -32649,6 +32777,11 @@ class VulkanSPIRVCodeGen(
                     self.enum_declarations.setdefault(node.name, node)
 
         collect_type_declarations(struct_declarations)
+        # Generic parameters are unbound where a generic body is read; instances naming them stay generic.
+        self.program_generic_parameter_names = frozenset(
+            collect_generic_parameter_names(ast)
+        ) - set(self.struct_declarations)
+        self.generic_struct_instance_spellings = {}
         self.glsl_buffer_block_type_names = self.collect_glsl_buffer_block_type_names(
             ast
         )

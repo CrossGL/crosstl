@@ -79,15 +79,32 @@ SUPPORTED_IMAGE_FORMATS = frozenset(
         "rgba32f",
         "rgba32i",
         "rgba32ui",
+        "rgb10_a2",
+        "rgb10_a2ui",
+        "r11f_g11f_b10f",
     }
 )
 
+# Packed formats whose names do not start with their channel set
+# (GLSL 4.60 section 4.4.7, SPIR-V Image Format Rgb10A2, Rgb10a2ui, R11fG11fB10f).
+PACKED_IMAGE_FORMAT_CHANNEL_COUNTS = {
+    "rgb10_a2": 4,
+    "rgb10_a2ui": 4,
+    "r11f_g11f_b10f": 3,
+}
+
+
+def _image_format_channel_count(image_format):
+    packed = PACKED_IMAGE_FORMAT_CHANNEL_COUNTS.get(image_format)
+    if packed is not None:
+        return packed
+    if image_format.startswith("rgba"):
+        return 4
+    return 2 if image_format.startswith("rg") else 1
+
+
 IMAGE_FORMAT_CHANNEL_COUNTS = {
-    image_format: (
-        4
-        if image_format.startswith("rgba")
-        else 2 if image_format.startswith("rg") else 1
-    )
+    image_format: _image_format_channel_count(image_format)
     for image_format in SUPPORTED_IMAGE_FORMATS
 }
 

@@ -1,3 +1,4 @@
+#pragma cgl_rules(wrap)
 #version 450
 
 shader main {

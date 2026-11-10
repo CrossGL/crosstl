@@ -70,6 +70,23 @@ def explicit_specializations(functions):
     return found
 
 
+def _canonical_vector_spelling(type_name):
+    """One spelling of a vector type for every generator.
+
+    Instantiation keys carry the types a generator renders for deduced arguments (``float4`` for ``vec4`` on Metal,
+    ``v4float`` on SPIR-V) but CrossGL spellings for explicit ones, and the attribute spells CrossGL types. Vectors
+    are compared as ``vecN<element>``. Scalars keep their own spelling: a generator's type mapping may widen them
+    (Metal maps ``uint8`` to ``uint``), which would merge distinct specializations.
+    """
+    from .codegen.generic_vector_deduction import vector_element_and_size
+
+    parts = vector_element_and_size(type_name)
+    if parts is None:
+        return type_name
+    element, size = parts
+    return f"vec{size}<{element}>"
+
+
 def _normalized(generator, type_name):
     normalize = getattr(generator, "normalize_signature_type_name", None)
     if normalize is not None:
@@ -78,7 +95,9 @@ def _normalized(generator, type_name):
         rendered = generator.type_name_string(type_name)
     except (TypeError, ValueError):
         return None
-    return str(rendered).replace(" ", "") if rendered is not None else None
+    if rendered is None:
+        return None
+    return _canonical_vector_spelling(str(rendered).replace(" ", ""))
 
 
 def explicit_specialization_index(generator, functions):

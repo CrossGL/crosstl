@@ -155,3 +155,92 @@ struct c { float x; bool operator==(c o) const { return true; } };
     ast = MetalParser(MetalLexer(source).tokenize()).parse()
     flags = {node.name: node.declares_assignment_operator for node in ast.structs}
     assert flags == {"a": True, "b": True, "c": False}
+
+
+SELECTED_LOADERS = """
+template <typename T, int N>
+struct SmallLoader {
+  const device T* src;
+  int n;
+  SmallLoader(const device T* src_, int n_) : src(src_), n(n_ * N) {}
+  T load() const thread { return src[n]; }
+};
+template <typename T, int N>
+struct LargeLoader {
+  const device T* src;
+  LargeLoader(const device T* src_, int n_) : src(src_ + n_) {}
+  T load() const thread { return src[0]; }
+};
+template <typename T, int N>
+T take(SmallLoader<T, N> loader) {
+  return loader.load();
+}
+template <typename T, int N>
+[[kernel]] void copy_k(const device T* in [[buffer(0)]], device T* out [[buffer(1)]],
+                       uint tid [[thread_position_in_grid]]) {
+  using loader_t = typename metal::conditional_t<(N <= 4), SmallLoader<T, N>, LargeLoader<T, N>>;
+  loader_t loader(in, int(tid));
+  out[tid] = {use};
+}
+template [[host_name("copy_float_2")]] [[kernel]] void copy_k<float, 2>(
+    const device float*, device float*, uint);
+"""
+
+
+@pytest.mark.parametrize("backend", ("cgl", "directx", "vulkan"))
+def test_a_conditional_alias_receiver_is_not_converted(tmp_path, backend):
+    # `loader` has the type `conditional_t` selects, SmallLoader<float, 2>; its
+    # method call passes it as the implicit object argument, which no
+    # converting constructor initializes ([over.match.funcs]/5).
+    output = _translate(
+        tmp_path, SELECTED_LOADERS.replace("{use}", "loader.load()"), backend
+    )
+    if backend == "cgl":
+        assert "SmallLoader_float_2__load(loader, in_)" in output
+        assert "crosstl_ctor_SmallLoader_float_2_1(loader" not in output
+
+
+@pytest.mark.parametrize("backend", ("directx", "vulkan"))
+def test_a_conditional_alias_argument_has_the_selected_type(tmp_path, backend):
+    # A value argument of the selected class type is copied, not converted.
+    output = _translate(
+        tmp_path, SELECTED_LOADERS.replace("{use}", "take(loader)"), backend
+    )
+    if backend == "directx":
+        assert "take_float_2(loader," in output
+
+
+SELECTED_SCALE_LOAD = """
+struct Wide {
+  uint8_t bits;
+  Wide(float v) thread { bits = uint8_t(v); }
+  operator float() thread { return float(bits); }
+};
+struct Narrow {
+  uint8_t bits;
+  Narrow(float v) thread { bits = uint8_t(v * 2.0f); }
+  operator float() thread { return float(bits) * 0.5f; }
+};
+template <typename T, int group_size>
+[[kernel]] void decode(const device uint8_t* scales [[buffer(0)]], device T* out [[buffer(1)]],
+                       uint tid [[thread_position_in_grid]]) {
+  constexpr bool wide = group_size == 32;
+  using Scale = metal::conditional_t<wide, Wide, Narrow>;
+  auto q = ((const device Scale*)(scales))[tid / group_size];
+  out[tid] = T(float(q));
+}
+template [[host_name("decode_float_32")]] [[kernel]] void decode<float, 32>(
+    const device uint8_t*, device float*, uint);
+"""
+
+
+@pytest.mark.parametrize("backend", ("cgl", "directx"))
+def test_a_conditional_alias_conversion_operator_receiver_is_not_converted(
+    tmp_path, backend
+):
+    # `float(q)` runs Wide::operator float on `q`, whose type is the selected
+    # Wide; the receiver is passed as it is.
+    output = _translate(tmp_path, SELECTED_SCALE_LOAD, backend)
+    if backend == "cgl":
+        assert "Wide__operator_float(q)" in output
+        assert "crosstl_ctor_Wide_1(q)" not in output

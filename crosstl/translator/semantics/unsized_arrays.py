@@ -57,7 +57,11 @@ from .rewrite import call, clone
 from .stage_io_arrays import size_stage_io_arrays
 from .storage_blocks import _flat_element, _parents, _replace, _walk
 
-__all__ = ["UnsizedArrayUnsupportedError", "legalize_unsized_arrays"]
+__all__ = [
+    "StorageBufferParameterUnsupportedError",
+    "UnsizedArrayUnsupportedError",
+    "legalize_unsized_arrays",
+]
 
 _LAYOUTS = ("std430", "std140", "scalar")
 _ACCESS = frozenset({"buffer", "readonly", "writeonly"})
@@ -83,6 +87,22 @@ class UnsizedArrayUnsupportedError(TranslationDiagnostic):
             "storage block); give the array a size or declare it as 'buffer T name[]'",
             target=target,
             code=f"{CODE_PREFIX}{target}-unsized-array-unsupported",
+        )
+
+
+class StorageBufferParameterUnsupportedError(TranslationDiagnostic):
+    """A ``buffer T name[]`` helper parameter whose elements have no single stride across the targets."""
+
+    def __init__(self, target, function, name, why, *, source_location=None):
+        self.source_location = source_location
+        self.missing_capabilities = (f"{target}.storage-buffer-parameter",)
+        super().__init__(
+            f"storage-buffer parameter '{name}' of '{function}' {why}: a helper can take a storage buffer only "
+            "as a structured buffer, whose elements are 32-bit scalars, two- or four-component vectors of one, "
+            "or structs of them without std430 padding, since only those have the same stride in std430, HLSL "
+            "structured buffers and MSL; pass the elements the helper needs instead",
+            target=target,
+            code=f"{CODE_PREFIX}{target}-storage-buffer-parameter-unsupported",
         )
 
 
@@ -261,6 +281,7 @@ class _Legalizer:
             self.taken = self.declared_names()
             for owner, field, variable in buffers:
                 self.legalize_buffer(owner, field, variable)
+        self.legalize_buffer_parameters()
         self.constant_array_initializers()
         self.refuse_unsized_values()
 
@@ -436,6 +457,88 @@ class _Legalizer:
             "buffer_store or buffer_dimensions",
             identifier,
         )
+
+    # Storage buffers passed to helpers as ``buffer T name[]`` parameters.
+
+    def legalize_buffer_parameters(self):
+        """A helper's ``buffer T name[]`` (or ``buffer T name[N]``) parameter takes the structured-buffer form of
+        the buffer its caller passes, ``RWStructuredBuffer<T> name`` or ``StructuredBuffer<T>`` when ``readonly``,
+        which is how the HLSL importer spells the same parameter and which every emitter carries: HLSL and Slang
+        pass the resource, MSL a device pointer, and GLSL and SPIR-V, which cannot pass a buffer, specialize the
+        helper for each buffer it receives. The emitters had printed the unsized array parameter unchanged, which
+        DXC, glslang, slangc and spirv-val reject. ``name.length()`` in the helper becomes
+        ``int(buffer_dimensions(name))``, or ``N``.
+
+        A buffer of other elements takes the buffer-block form, which no target can pass to a function, so such
+        a parameter is refused with :class:`StorageBufferParameterUnsupportedError`.
+        """
+        parameters = [
+            (function, parameter)
+            for function in iter_functions(self.program)
+            for parameter in function.parameters or []
+            if "buffer" in _qualifiers(parameter)
+            and "glsl_buffer_block" not in _attribute_names(parameter)
+            and isinstance(parameter.param_type, A.ArrayType)
+            and self.is_value(parameter.param_type.element_type)
+            and not _is_bound_parameter(function, parameter)
+        ]
+        if not parameters:
+            return
+        self.parents = _parents(self.program)
+        for function, parameter in parameters:
+            self.legalize_buffer_parameter(function, parameter)
+
+    def legalize_buffer_parameter(self, function, parameter):
+        name = parameter.name
+        layouts = [
+            a for a in parameter.attributes or [] if str(a.name).lower() in _LAYOUTS
+        ]
+        layout = str(layouts[0].name).lower() if layouts else "std430"
+        element = parameter.param_type.element_type
+        size = parameter.param_type.size
+        if layout == "std140" or not (
+            _flat_element(element)
+            or (self.is_struct(element) and _flat_struct(self.structs[element.name]))
+        ):
+            raise StorageBufferParameterUnsupportedError(
+                self.target,
+                function.name,
+                name,
+                (
+                    "has an std140 layout"
+                    if layout == "std140"
+                    else "holds elements of another type"
+                ),
+                source_location=getattr(parameter, "source_location", None),
+            )
+        identifiers, shadowed = [], False
+        for node in _walk(function.body):
+            if isinstance(node, A.VariableNode) and node.name == name:
+                shadowed = True
+            elif isinstance(node, A.IdentifierNode) and node.name == name:
+                identifiers.append(node)
+        if shadowed and any(self.length_call(i) is not None for i in identifiers):
+            raise StorageBufferParameterUnsupportedError(
+                self.target,
+                function.name,
+                name,
+                "is measured with length() where a local declaration shadows it",
+                source_location=getattr(parameter, "source_location", None),
+            )
+        wrapper = (
+            "StructuredBuffer"
+            if "readonly" in _qualifiers(parameter)
+            else "RWStructuredBuffer"
+        )
+        parameter.qualifiers = [
+            q for q in parameter.qualifiers if str(q).lower() not in _ACCESS
+        ]
+        parameter.attributes = [
+            a for a in parameter.attributes or [] if a not in layouts
+        ]
+        parameter.param_type = A.NamedType(wrapper, [element])
+        for identifier in identifiers:
+            self.rewrite_flat_count(identifier, name, size)
 
     # Every other unsized array of values.
 

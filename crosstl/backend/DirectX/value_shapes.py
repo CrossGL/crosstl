@@ -20,6 +20,7 @@ from ..common_ast import (
     VariableNode,
     VectorConstructorNode,
 )
+from .struct_templates import templated_struct_type
 from .subpass_inputs import subpass_input_crossgl_type
 
 
@@ -652,6 +653,12 @@ class HLSLValueShapeMixin:
                     for arg in self.split_generic_arguments(generic_type)
                 )
                 return f"{self.sanitize_type_name(base)}<{mapped_args}>"
+            templated = templated_struct_type(
+                self, base, self.split_generic_arguments(generic_type)
+            )
+            if templated is not None:
+                # ``Box<float2>`` of a struct template keeps its arguments: ``Box<vec2>``.
+                return templated
             type_name = base
         default_template_type = {
             "vector": "vec4",

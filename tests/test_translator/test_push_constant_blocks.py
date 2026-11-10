@@ -238,7 +238,10 @@ void main() { values[gl_GlobalInvocationID.x] *= pc.scale + pc.bias; }
     "source, message",
     [
         (TWO_BLOCKS, "already declares push-constant block 'First'"),
-        (STRUCT_OFFSET, "member 'scale' of struct 'Constants' has an explicit offset"),
+        (
+            STRUCT_OFFSET,
+            "member 'scale' of struct 'Constants' is at byte 16, where std430 places it at byte 0",
+        ),
         (ARRAY_OF_BLOCKS, "it is an array"),
         (
             LAYOUT_CBUFFER % "hlsl_cbuffer",

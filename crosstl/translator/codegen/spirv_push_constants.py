@@ -141,22 +141,41 @@ def declare_push_constant_variable(codegen, node, logical_type):
     """Declare ``uniform T name @push_constant`` (HLSL ``[[vk::push_constant]] ConstantBuffer<T>``).
 
     The block type is a clone of ``T`` of its own, so the ``Block`` decoration never lands on a ``T`` that a
-    storage buffer also holds as an array element. Returns the variable, or ``None`` when ``T`` is not a struct.
+    storage buffer also holds as an array element. Its members follow the layout the variable declares, else
+    ``std430``; a member of ``T`` with an explicit ``@ offset(N)`` or ``@ align(N)`` keeps that placement (see
+    :func:`spirv_placed_blocks.placed_struct_block`). Returns the variable, or ``None`` when ``T`` is not a struct.
     """
     members = codegen.current_struct_members.get(logical_type.type.base_type)
     if members is None:
         return None
+    layout = push_constant_layout(node)
     _claim_push_constant_slot(codegen, node.name)
-    laid_out = [
-        (codegen.storage_layout_type(member_type, "std430"), member_name)
-        for member_type, member_name in members
-    ]
+    from .spirv_placed_blocks import (
+        decorate_placed_uniform_block,
+        placed_member_type,
+        placed_struct_block,
+    )
+
+    placed = placed_struct_block(codegen, node, logical_type, plain_layout=layout)
+    if placed is not None:
+        laid_out = [
+            (placed_member_type(codegen, member_type, member_name, placed), member_name)
+            for member_type, member_name in members
+        ]
+    else:
+        laid_out = [
+            (codegen.storage_layout_type(member_type, layout), member_name)
+            for member_type, member_name in members
+        ]
     block_type = codegen.register_layout_struct_type(
         logical_type, "push_constant", laid_out
     )
-    codegen.decorate_storage_buffer_block_type(
-        block_type, "std430", block_decoration="Block"
-    )
+    if placed is not None:
+        decorate_placed_uniform_block(codegen, block_type, placed)
+    else:
+        codegen.decorate_storage_buffer_block_type(
+            block_type, layout, block_decoration="Block"
+        )
     variable = codegen.create_variable(
         block_type, PUSH_CONSTANT_STORAGE_CLASS, node.name
     )

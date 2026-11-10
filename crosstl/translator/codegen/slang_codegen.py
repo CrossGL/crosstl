@@ -65,6 +65,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
 from .comma_expressions import (
@@ -158,6 +159,12 @@ from .push_constant_blocks import (
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
 from .slang_constant_references import slang_constant_reference_parameter
+from .slang_declaration_modifiers import (
+    is_slang_declaration_metadata_attribute,
+    slang_member_modifier_prefix,
+    slang_packoffset_suffix,
+    slang_precise_prefix,
+)
 from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_projected_compare import (
     SLANG_PROJECTED_COMPARE_FORMS,
@@ -165,6 +172,11 @@ from .slang_projected_compare import (
     is_slang_projected_compare,
 )
 from .slang_refusals import SlangLoweringRefused
+from .slang_resource_memory import (
+    helper_resource_argument_names,
+    slang_resource_memory_prefix,
+    slang_resource_parameter_memory_prefix,
+)
 from .slang_specialization_constants import plan_slang_specialization_constants
 from .slang_wave_shuffles import (
     SLANG_WAVE_SHUFFLE_ARITIES,
@@ -417,6 +429,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             "uintBitsToFloat": "asfloat",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
             "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
+            # GLSL's non-uniform resource index is Slang's NonUniformResourceIndex.
+            "nonuniformEXT": "NonUniformResourceIndex",
         }
 
     def indent(self):
@@ -472,6 +486,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             self.user_function_parameter_types = (
                 self.collect_user_function_parameter_types(ast)
+            )
+            self.slang_helper_resource_arguments = helper_resource_argument_names(
+                ast, self.user_function_names
             )
             self.generic_function_definitions = {}
             self.generic_function_definition_ordinals = {}
@@ -3075,8 +3092,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                 or self.slang_shader_stage_marker_name(getattr(attr, "name", None))
             ):
                 continue
-            if str(getattr(attr, "name", "")).lower() == "precise":
-                # A modifier of the declaration, rendered before its type.
+            if is_slang_declaration_metadata_attribute(attr):
+                # A modifier or record of the declaration (slang_declaration_modifiers.py), never a semantic.
+                continue
+            if str(getattr(attr, "name", "")).lower() in MEMBER_LAYOUT_QUALIFIERS:
+                # A block member's placement, which the layout planners read; it never names a semantic.
                 continue
             if str(getattr(attr, "name", "")).lower() in (
                 "ray_payload_read",
@@ -4048,35 +4068,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         return slang_image_format_prefix(self.explicit_image_format(node))
 
     def slang_resource_memory_qualifier_prefix(self, mapped_type, node):
-        if node is None:
-            return ""
-
-        base_type = self.resource_base_type(mapped_type)
-        if not isinstance(base_type, str):
-            return ""
-        if not base_type.startswith(
-            (
-                "RWTexture",
-                "RWBuffer",
-                "RWStructuredBuffer",
-                "AppendStructuredBuffer",
-                "ConsumeStructuredBuffer",
-                "RWByteAddressBuffer",
-            )
-        ):
-            return ""
-
-        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
-        attributes = {
-            str(getattr(attr, "name", "")).lower()
-            for attr in getattr(node, "attributes", []) or []
-        }
-        if qualifiers & {"coherent", "globallycoherent"} or attributes & {
-            "coherent",
-            "globallycoherent",
-        }:
-            return "globallycoherent "
-        return ""
+        return slang_resource_memory_prefix(self, mapped_type, node)
 
     def stage_semantic_map(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
@@ -4960,6 +4952,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             if mapped not in seen:
                 seen.add(mapped)
                 qualifiers.append(mapped)
+
+        if slang_precise_prefix(node):
+            qualifiers.append("precise")
 
         if not qualifiers:
             return ""
@@ -5884,7 +5879,14 @@ class SlangCodeGen(LoweringRefusalMixin):
                 member_type = self.convert_type(member_type_name)
             else:
                 member_type = self.convert_type(getattr(member, "vtype", "float"))
-            result += f"    {self.format_declaration(member_type, member.name)};\n"
+            modifiers = slang_member_modifier_prefix(
+                self,
+                member,
+                member_type,
+                f"constant buffer member '{name}.{member.name}'",
+            )
+            declaration = self.format_declaration(member_type, member.name)
+            result += f"    {modifiers}{declaration}{slang_packoffset_suffix(self, member)};\n"
         result += "};"
         return result
 
@@ -5941,9 +5943,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.register_variable_type(node.name, direct_buffer_type, node)
             if self.skip_duplicate_slang_global_variable(node, direct_buffer_type):
                 return ""
-            declaration = format_c_style_array_declaration(
-                direct_buffer_type, node.name
-            )
+            declaration = self.slang_resource_memory_qualifier_prefix(
+                direct_buffer_type, node
+            ) + format_c_style_array_declaration(direct_buffer_type, node.name)
             declaration = self.apply_slang_resource_binding_decorations(
                 declaration, node, direct_buffer_type, auto_assign=True
             )
@@ -5956,9 +5958,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.local_variable_types[node.name] = original_type
             if self.skip_duplicate_slang_global_variable(node, lowered_block_type):
                 return ""
-            declaration = format_c_style_array_declaration(
-                lowered_block_type, node.name
-            )
+            declaration = self.slang_resource_memory_qualifier_prefix(
+                lowered_block_type, node
+            ) + format_c_style_array_declaration(lowered_block_type, node.name)
             declaration = self.apply_slang_resource_binding_decorations(
                 declaration, node, lowered_block_type, auto_assign=True
             )
@@ -6074,9 +6076,16 @@ class SlangCodeGen(LoweringRefusalMixin):
                 f"struct member semantic '{node.name}.{member.name}'",
             )
             semantic_str = self.semantic_suffix(semantic)
-            declaration = self.slang_interpolation_attribute_prefix(
-                member
-            ) + self.format_declaration(member_type, member.name)
+            declaration = (
+                self.slang_interpolation_attribute_prefix(member)
+                + slang_member_modifier_prefix(
+                    self,
+                    member,
+                    member_type,
+                    f"struct member '{node.name}.{member.name}'",
+                )
+                + self.format_declaration(member_type, member.name)
+            )
             result += f"{self.indent()}{declaration}{semantic_str};\n"
 
         self.indent_level -= 1
@@ -6289,7 +6298,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                         param_type, param.name
                     )
                     declaration = (
-                        self.slang_resource_memory_qualifier_prefix(param_type, param)
+                        slang_resource_parameter_memory_prefix(self, param_type, param)
                         + declaration
                     )
                     ray_declaration = self.slang_ray_stage_parameter_declaration(
@@ -6419,10 +6428,48 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += f'[shader("{shader_stage}")]\n'
         function_name = entry_name or node.name
         precise_prefix = "precise " if self.slang_function_is_precise(node) else ""
-        result += (
+        signature = (
             f"{precise_prefix}{ret_type} {function_name}({params_str}){semantic_str}"
-            "\n{\n"
         )
+        if getattr(node, "body", None) is None and not shader_type:
+            # A prototype stays a forward declaration: an empty body would define the function a second time,
+            # which slangc rejects once the definition follows.
+            result += f"{signature};"
+        else:
+            result += self.emit_slang_function_body(
+                signature,
+                body_statements,
+                builtin_return_rewrite,
+                hull_output_rewrite,
+                fragment_output_rewrite,
+                local_alias_declarations,
+            )
+        self.variable_types = saved_variable_types
+        self.image_resource_types = saved_image_resource_types
+        self.image_resource_accesses = saved_image_resource_accesses
+        self.buffer_resource_types = saved_buffer_resource_types
+        self.buffer_resource_accesses = saved_buffer_resource_accesses
+        self.current_function_return_type = saved_function_return_type
+        self.current_shader_type = saved_shader_type
+        self.identifier_aliases = saved_identifier_aliases
+        self.current_hull_output_rewrite = saved_hull_output_rewrite
+        self.expression_temp_names = saved_expression_temp_names
+        self.current_generic_function_substitutions = (
+            saved_generic_function_substitutions
+        )
+        return result
+
+    def emit_slang_function_body(
+        self,
+        signature,
+        body_statements,
+        builtin_return_rewrite,
+        hull_output_rewrite,
+        fragment_output_rewrite,
+        local_alias_declarations,
+    ):
+        """The braced body of a function whose ``signature`` :meth:`generate_function` has built."""
+        result = f"{signature}\n{{\n"
         self.indent_level += 1
 
         if builtin_return_rewrite is not None and builtin_return_rewrite["mode"] in {
@@ -6471,21 +6518,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
 
         self.indent_level -= 1
-        result += "}"
-        self.variable_types = saved_variable_types
-        self.image_resource_types = saved_image_resource_types
-        self.image_resource_accesses = saved_image_resource_accesses
-        self.buffer_resource_types = saved_buffer_resource_types
-        self.buffer_resource_accesses = saved_buffer_resource_accesses
-        self.current_function_return_type = saved_function_return_type
-        self.current_shader_type = saved_shader_type
-        self.identifier_aliases = saved_identifier_aliases
-        self.current_hull_output_rewrite = saved_hull_output_rewrite
-        self.expression_temp_names = saved_expression_temp_names
-        self.current_generic_function_substitutions = (
-            saved_generic_function_substitutions
-        )
-        return result
+        return result + "}"
 
     def slang_workgroup_size_constants(self):
         constants = getattr(self, "workgroup_size_constants", None)
@@ -11718,6 +11751,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             "rgba32f",
             "rgba32i",
             "rgba32ui",
+            "rgb10_a2",
+            "rgb10_a2ui",
+            "r11f_g11f_b10f",
         }
 
     def scalar_image_format_components(self):
@@ -11762,6 +11798,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             "rgba8ui": "uint4",
             "rgba16ui": "uint4",
             "rgba32ui": "uint4",
+            "rgb10_a2": "float4",
+            "rgb10_a2ui": "uint4",
+            "r11f_g11f_b10f": "float3",
         }
 
     def attribute_value_to_string(self, value):
@@ -12654,7 +12693,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                     f"({column_offset})"
                 )
                 columns.append(f"asfloat({load})")
-            return f"{access['slang_type']}({', '.join(columns)})"
+            # The buffer holds columns and a Slang matrix constructor fills rows, as in HLSL.
+            transposed_type = (
+                f"{access['component_type']}{access['matrix_columns']}"
+                f"x{access['matrix_rows']}"
+            )
+            return f"transpose({transposed_type}({', '.join(columns)}))"
 
         if hlsl_byteaddress_is_typed_access(access):
             return hlsl_byteaddress_typed_load(self, buffer_name, offset, access)
@@ -12718,9 +12762,13 @@ class SlangCodeGen(LoweringRefusalMixin):
         for column, column_offset in matrix_column_offsets(
             offset, access["matrix_columns"], access["column_stride"]
         ):
+            # A Slang m[i] is a row, as in HLSL; the swizzle selects column ``column``.
+            swizzle = "".join(
+                f"_m{row}{column}" for row in range(access["matrix_rows"])
+            )
             lines.append(
                 f"{buffer_name}.{store_method}"
-                f"({column_offset}, asuint({value_expr}[{column}]))"
+                f"({column_offset}, asuint({value_expr}.{swizzle}))"
             )
         return "\n".join(lines)
 
@@ -13490,11 +13538,14 @@ class SlangCodeGen(LoweringRefusalMixin):
         buffer_type = self.structured_buffer_resource_type(args[0])
         if self.is_byte_address_buffer_resource_type(buffer_type):
             buffer = self.generate_expression(args[0])
-            if len(args) >= 2:
-                dimensions = ", ".join(
-                    self.generate_expression(arg) for arg in args[1:]
+            if len(args) > 2:
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_dimensions",
+                    "writes only the byte size",
+                    "uint",
                 )
-                return f"{buffer}.GetDimensions({dimensions})"
+            if len(args) == 2:
+                return f"{buffer}.GetDimensions({self.generate_expression(args[1])})"
 
             helper_name = self.buffer_dimensions_helper_name(buffer_type)
             return f"{helper_name}({buffer})"
@@ -13507,11 +13558,20 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
 
         buffer = self.generate_expression(args[0])
-        if len(args) >= 2:
+        if len(args) > 3:
+            return self.unsupported_structured_buffer_call(
+                "buffer_dimensions",
+                "writes only the element count and stride of a structured buffer",
+                "uint",
+            )
+        if len(args) == 3:
             dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
             return f"{buffer}.GetDimensions({dimensions})"
 
+        # A structured buffer's GetDimensions always writes the stride as well, so a lone output takes the count.
         helper_name = self.buffer_dimensions_helper_name(buffer_type)
+        if len(args) == 2:
+            return f"{self.generate_expression(args[1])} = {helper_name}({buffer})"
         return f"{helper_name}({buffer})"
 
     def buffer_dimensions_helper_name(self, buffer_type):
@@ -13525,11 +13585,20 @@ class SlangCodeGen(LoweringRefusalMixin):
         return helper_name
 
     def build_buffer_dimensions_helper(self, helper_name, buffer_type):
+        # A byte-address buffer reports its size in one argument; a structured buffer reports its element count
+        # and stride, and Slang has no overload that omits the stride.
+        if self.is_byte_address_buffer_resource_type(buffer_type):
+            query = "    uint count;\n    buffer.GetDimensions(count);\n"
+        else:
+            query = (
+                "    uint count;\n"
+                "    uint stride;\n"
+                "    buffer.GetDimensions(count, stride);\n"
+            )
         return (
             f"uint {helper_name}({buffer_type} buffer)\n"
             "{\n"
-            "    uint count;\n"
-            "    buffer.GetDimensions(count);\n"
+            f"{query}"
             "    return count;\n"
             "}"
         )

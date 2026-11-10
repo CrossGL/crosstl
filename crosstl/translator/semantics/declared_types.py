@@ -38,6 +38,7 @@ __all__ = [
 ]
 
 _PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_BOOLEAN_LITERALS = frozenset({"true", "false"})
 # The sizes of an array type argument, ``[2]`` in ``pick<foo[2]>``.
 _ARRAY_SUFFIXES = re.compile(r"(?:\s*\[[^\[\]]*\])+\Z")
 # Built-in types whose template arguments are values rather than types.
@@ -288,7 +289,12 @@ def _call_type_argument_names(call, generic_functions):
     names.append(arguments[start:].strip())
     # An array type argument, such as ``foo[2]``, uses its element type.
     names = [_ARRAY_SUFFIXES.sub("", name) for name in names]
-    return [name for name in names if _PLAIN_NAME.fullmatch(name)]
+    # ``true`` and ``false`` are the values of a ``bool`` generic parameter, as in ``pick<float, true>(a, b)``.
+    return [
+        name
+        for name in names
+        if _PLAIN_NAME.fullmatch(name) and name not in _BOOLEAN_LITERALS
+    ]
 
 
 def undeclared_type_uses(program, target=None):
