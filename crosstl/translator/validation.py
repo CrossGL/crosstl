@@ -7,6 +7,11 @@ from .stage_utils import (
     STAGE_NAME_ALIASES,
     normalize_stage_name,
 )
+from .storage_image_qualifiers import (
+    STORAGE_IMAGE_QUALIFIER_NAMES,
+    UnsupportedImageFormatError,
+    unknown_storage_image_attribute,
+)
 
 TEXTURE_INTRINSIC_MIN_ARGUMENTS = {
     "texture": 2,
@@ -300,7 +305,16 @@ IMAGE_FORMAT_METADATA_NAMES = frozenset(
         "rgba32f",
         "rgba32i",
         "rgba32ui",
+        "rgb10_a2",
+        "rgb10_a2ui",
+        "r11f_g11f_b10f",
     }
+)
+
+STORAGE_IMAGE_BARE_ATTRIBUTE_NAMES = (
+    IMAGE_FORMAT_METADATA_NAMES
+    | frozenset(RESOURCE_ACCESS_METADATA_NAMES)
+    | STORAGE_IMAGE_QUALIFIER_NAMES
 )
 
 STORAGE_IMAGE_TYPE_NAMES = frozenset(
@@ -1923,6 +1937,7 @@ def validate_declaration_role_metadata(node, context, declaration_roles):
 
 def validate_image_format_metadata(node, context):
     """Validate storage-image format metadata appears on storage images only."""
+    _refuse_unknown_storage_image_formats(node, context)
     format_metadata = _node_image_format_metadata(node)
     if not format_metadata:
         return
@@ -1976,6 +1991,31 @@ def _raise_descriptor_role_error(role, required_role, node, context):
         f"{role} metadata on {context} requires {required_role}: "
         f"@{role} on {type_name}"
     )
+
+
+def _refuse_unknown_storage_image_formats(node, context):
+    """Refuse a bare attribute on a storage image that names no format or qualifier."""
+    node_type = _node_declared_type(node)
+    while getattr(node_type, "element_type", None) is not None and not (
+        _is_storage_image_type(node_type)
+    ):
+        node_type = node_type.element_type
+    if not _is_storage_image_type(node_type):
+        return
+    unknown = unknown_storage_image_attribute(
+        getattr(node, "attributes", None),
+        STORAGE_IMAGE_BARE_ATTRIBUTE_NAMES,
+        _normalized_metadata_name,
+    )
+    if unknown is not None:
+        raise UnsupportedImageFormatError(unknown, context)
+    for attr in getattr(node, "attributes", None) or []:
+        if _normalized_metadata_name(getattr(attr, "name", None)) != "format":
+            continue
+        value = _normalized_metadata_name(_first_attribute_metadata_value(attr))
+        if value is not None and value != "unknown":
+            if value not in IMAGE_FORMAT_METADATA_NAMES:
+                raise UnsupportedImageFormatError(f"format({value})", context)
 
 
 def _node_image_format_metadata(node):

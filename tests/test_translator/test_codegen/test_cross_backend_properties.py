@@ -14,6 +14,7 @@ from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 
 IDENTIFIER_SUFFIXES = st.from_regex(r"[a-z][a-z0-9_]{0,10}", fullmatch=True)
@@ -44,17 +45,28 @@ class ResourceMemoryQualifierCase:
     hlsl_prefix: str | None  # None: HLSL cannot declare it and refuses the resource.
     glsl_qualifier: str
     metal_access: str
+    # Extra MSL texture template argument; None: MSL cannot declare it and refuses.
+    metal_coherence: str | None = ""
 
 
 RESOURCE_MEMORY_QUALIFIER_CASES = (
     ResourceMemoryQualifierCase(
-        "coherent", "globallycoherent ", "coherent", "read_write"
+        "coherent",
+        "globallycoherent ",
+        "coherent",
+        "read_write",
+        ", memory_coherence::memory_coherence_device",
     ),
     ResourceMemoryQualifierCase(
-        "globallycoherent", "globallycoherent ", "coherent", "read_write"
+        "globallycoherent",
+        "globallycoherent ",
+        "coherent",
+        "read_write",
+        ", memory_coherence::memory_coherence_device",
     ),
-    # HLSL has no volatile resources: DXC rejects 'volatile' on a global.
-    ResourceMemoryQualifierCase("volatile", None, "volatile", "read_write"),
+    # HLSL has no volatile resources: DXC rejects 'volatile' on a global, and an
+    # MSL volatile texture has no read or write members.
+    ResourceMemoryQualifierCase("volatile", None, "volatile", "read_write", None),
     ResourceMemoryQualifierCase("restrict", "", "restrict", "read_write"),
     ResourceMemoryQualifierCase("readonly", "", "readonly", "read"),
     ResourceMemoryQualifierCase("writeonly", "", "writeonly", "write"),
@@ -594,6 +606,7 @@ def test_comparison_sampler_array_is_an_explicit_sampler_resource():
 
 @settings(max_examples=20, deadline=None)
 @example(suffix="a_", qualifier_case=RESOURCE_MEMORY_QUALIFIER_CASES[0])
+@example(suffix="a_", qualifier_case=RESOURCE_MEMORY_QUALIFIER_CASES[2])
 @given(
     suffix=IDENTIFIER_SUFFIXES,
     qualifier_case=st.sampled_from(RESOURCE_MEMORY_QUALIFIER_CASES),
@@ -617,8 +630,14 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
 
     glsl_codegen = GLSLCodeGen()
     glsl = glsl_codegen.generate(ast)
-    metal = MetalCodeGen().generate(ast)
-    outputs = [("opengl", glsl), ("metal", metal)]
+    outputs = [("opengl", glsl)]
+    metal = None
+    if qualifier_case.metal_coherence is None:
+        with pytest.raises(MetalLoweringRefused, match=qualifier_case.attribute):
+            MetalCodeGen().generate(ast)
+    else:
+        metal = MetalCodeGen().generate(ast)
+        outputs.append(("metal", metal))
     if qualifier_case.hlsl_prefix is None:
         with pytest.raises(DirectXLoweringRefused, match=qualifier_case.attribute):
             HLSLCodeGen().generate(ast)
@@ -641,8 +660,11 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
         f"{qualifier_case.glsl_qualifier} uniform uimage2D {glsl_image_name};" in glsl
     )
 
+    if metal is None:
+        return
     assert (
-        f"texture2d<uint, access::{qualifier_case.metal_access}> "
+        f"texture2d<uint, access::{qualifier_case.metal_access}"
+        f"{qualifier_case.metal_coherence}> "
         f"{image_name} [[texture(0)]]" in metal
     )
     assert f"[[{qualifier_case.attribute}]]" not in metal
@@ -698,7 +720,8 @@ def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
         in hlsl
     )
     assert f"{buffer_case.hlsl_type} value = {source_name}.Load(tid.x);" in hlsl
-    assert f"{target_name}.GetDimensions(len);" in hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload.
+    assert f"len = cgl_buffer_count({target_name});" in hlsl
     assert f"{target_name}[tid.x] = value;" in hlsl
     assert "buffer_load" not in hlsl
     assert "buffer_store" not in hlsl

@@ -24,6 +24,12 @@ packing or the natural layout of Metal:
 * ``layout(offset = N)`` places a member at byte ``N``, which must be a
   multiple of its alignment and must not reach back into the previous member;
   ``layout(align = N)`` raises a member's alignment to ``N`` (section 4.4.5).
+  Under std140 and std430 an explicit offset may also put a vector at a
+  multiple of its scalar where it does not improperly straddle a 16-byte
+  boundary (Vulkan 1.3 section 15.6.4, VK_KHR_relaxed_block_layout, core in
+  Vulkan 1.1). DXC's default push-constant and constant-buffer layouts place
+  ``float s; float3 v;`` that way, with ``v`` at byte 4; GLSL itself cannot
+  write such an offset, so a GLSL generator must refuse it.
 
 CrossGL keeps such a block as a ``cbuffer`` marked ``@ buffer_layout(std140)``
 (or ``std430``, ``scalar``); the shapes are the :class:`HlslLayoutType` values
@@ -272,6 +278,37 @@ def member_alignments(layout_type):
     return layout_type.alignments or (None,) * len(layout_type.members)
 
 
+RELAXED_VECTOR_LAYOUTS = (STD140_LAYOUT, STD430_LAYOUT)
+
+
+def improperly_straddles(offset, size):
+    """Whether a vector of ``size`` bytes at ``offset`` improperly straddles (Vulkan 1.3 section 15.6.4): it crosses
+    a 16-byte boundary, or, when larger than 16 bytes, does not start on one."""
+    if size <= VEC4_ALIGNMENT:
+        return offset // VEC4_ALIGNMENT != (offset + size - 1) // VEC4_ALIGNMENT
+    return offset % VEC4_ALIGNMENT != 0
+
+
+def relaxed_vector_offset(layout_type, offset, layout):
+    """Whether an explicit ``offset`` is a relaxed placement of a vector under ``layout``: a multiple of its scalar
+    that does not improperly straddle a 16-byte boundary (VK_KHR_relaxed_block_layout, core in Vulkan 1.1).
+    """
+    if layout not in RELAXED_VECTOR_LAYOUTS or layout_type.kind != "vector":
+        return False
+    if layout_type.packed or offset % layout_type.scalar_size:
+        return False
+    return not improperly_straddles(offset, block_size(layout_type, layout))
+
+
+def _relaxed_refusal(layout_type, layout):
+    if layout not in RELAXED_VECTOR_LAYOUTS or layout_type.kind != "vector":
+        return ""
+    return (
+        f", and a vector there is not a multiple of its scalar size "
+        f"{layout_type.scalar_size} or improperly straddles a 16-byte boundary"
+    )
+
+
 def block_struct_placements(layout_type, layout, root=False):
     """Member placements and size of a struct, or of a block when ``root``.
 
@@ -288,11 +325,16 @@ def block_struct_placements(layout_type, layout, root=False):
     ):
         alignment = block_alignment(member_type, layout)
         if offset is not None:
-            if offset % alignment:
+            if offset % alignment and not relaxed_vector_offset(
+                member_type, offset, layout
+            ):
                 raise HlslLayoutError(
                     f"offset {offset} of '{name}' is not a multiple of its {layout} "
-                    f"alignment {alignment}"
+                    f"alignment {alignment}{_relaxed_refusal(member_type, layout)}"
                 )
+            if offset % alignment:
+                # A relaxed vector keeps its scalar alignment (rule 3 of Vulkan 1.3 section 15.6.4).
+                alignment = member_type.scalar_size
             if offset < cursor:
                 raise HlslLayoutError(
                     f"offset {offset} of '{name}' lies within or before the previous "

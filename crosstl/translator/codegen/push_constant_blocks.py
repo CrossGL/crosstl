@@ -36,8 +36,12 @@ from ..ast import ArrayNode, FunctionNode
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .array_utils import format_c_style_array_declaration
 from .buffer_member_layout import member_explicit_offset
-from .glsl_block_layout import declared_buffer_layout
-from .hlsl_buffer_layout import HlslLayoutError
+from .glsl_block_layout import (
+    block_alignment,
+    block_struct_placements,
+    declared_buffer_layout,
+)
+from .hlsl_buffer_layout import HlslLayoutError, HlslLayoutType
 
 __all__ = [
     "PUSH_CONSTANT_GUARD",
@@ -185,6 +189,28 @@ def _glsl_guarded(vulkan, opengl, loaders):
     return f"{PUSH_CONSTANT_GUARD}{vulkan}{stubs}#else\n{opengl}#endif\n"
 
 
+def _glsl_writable_offsets(codegen, node, members, block_layout):
+    """Refuse a member offset that GLSL's ``layout(offset = N)`` cannot write: GLSL requires a multiple of the
+    member's alignment (GLSL 4.60 section 4.4.5), so a vector at a relaxed offset (:mod:`.glsl_block_layout`, as DXC
+    places ``float s; float3 v;``) has no GLSL spelling."""
+    for member in members:
+        offset = _member_offset(member, "opengl", node.name)
+        if offset is None:
+            continue
+        try:
+            layout_type = codegen.glsl_hlsl_cbuffer_member_layout_type(node, member)
+            alignment = block_alignment(layout_type, block_layout)
+        except HlslLayoutError as exc:
+            raise PushConstantBlockError("opengl", node.name, str(exc)) from exc
+        if offset % alignment:
+            raise PushConstantBlockError(
+                "opengl",
+                node.name,
+                f"member '{member.name}' is at byte {offset}, which is not a multiple of its {block_layout} "
+                f"alignment {alignment}; GLSL's layout(offset) cannot place it there (GLSL 4.60 section 4.4.5)",
+            )
+
+
 def glsl_push_constant_cbuffer(codegen, node, layout, block_name):
     """The declaration of a ``cbuffer`` marked ``@push_constant`` in GLSL output, or ``None`` for another cbuffer.
 
@@ -196,6 +222,7 @@ def glsl_push_constant_cbuffer(codegen, node, layout, block_name):
     block_layout = push_constant_block_layout(node, "opengl", node.name)
     _claim(codegen, "opengl", node.name)
     members = _members(node)
+    _glsl_writable_offsets(codegen, node, members, block_layout)
 
     def name_of(member):
         return codegen.glsl_global_identifier_name(member.name)
@@ -222,6 +249,48 @@ def glsl_push_constant_cbuffer(codegen, node, layout, block_name):
     return _glsl_guarded(vulkan, opengl, loaders)
 
 
+def _glsl_struct_offsets_agree(codegen, struct, block_layout, var_name):
+    """Refuse a member ``@ offset(N)`` of a push-constant ``T`` that moves the member from where ``block_layout``
+    places it. The uniform block of the OpenGL branch, like the other generators, does not place the members of a
+    struct, so GLSL writes no offsets for ``T``: one that agrees with the layout, such as an imported
+    ``[[vk::offset(N)]]``, needs none, and another one needs a cbuffer."""
+    members = _members(struct)
+    offsets = tuple(_member_offset(member, "opengl", var_name) for member in members)
+    if all(offset is None for offset in offsets):
+        return
+    struct_name = str(getattr(struct, "name", ""))
+    try:
+        member_types = tuple(
+            (
+                str(member.name),
+                codegen.glsl_hlsl_cbuffer_member_layout_type(struct, member),
+            )
+            for member in members
+        )
+        placed, _size = block_struct_placements(
+            HlslLayoutType(
+                "struct", struct_name=struct_name, members=member_types, offsets=offsets
+            ),
+            block_layout,
+            root=True,
+        )
+        plain, _size = block_struct_placements(
+            HlslLayoutType("struct", struct_name=struct_name, members=member_types),
+            block_layout,
+            root=True,
+        )
+    except HlslLayoutError as exc:
+        raise PushConstantBlockError("opengl", var_name, str(exc)) from exc
+    for member, explicit, natural in zip(members, placed, plain):
+        if explicit.offset != natural.offset:
+            raise PushConstantBlockError(
+                "opengl",
+                var_name,
+                f"member '{member.name}' of struct '{struct_name}' is at byte {explicit.offset}, where {block_layout} "
+                f"places it at byte {natural.offset}; declare the block as a cbuffer to place its members",
+            )
+
+
 def glsl_push_constant_struct_block(
     codegen, node, struct, block_name, var_name, array_suffix, opengl, marker=""
 ):
@@ -241,16 +310,7 @@ def glsl_push_constant_struct_block(
     block_layout = push_constant_block_layout(node, "opengl", var_name)
     _claim(codegen, "opengl", var_name)
     struct_name = getattr(struct, "name", None)
-    for member in _members(struct):
-        if _member_offset(member, "opengl", var_name) is not None:
-            # The uniform block of the OpenGL branch, like the other generators, does not place the members of a
-            # struct; a cbuffer carries member offsets.
-            raise PushConstantBlockError(
-                "opengl",
-                var_name,
-                f"member '{member.name}' of struct '{struct_name}' has an explicit offset; declare the block as "
-                "a cbuffer to place its members",
-            )
+    _glsl_struct_offsets_agree(codegen, struct, block_layout, var_name)
 
     def name_of(member):
         return codegen.glsl_struct_member_name(struct_name, member.name)

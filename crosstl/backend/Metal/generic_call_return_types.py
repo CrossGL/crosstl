@@ -26,6 +26,7 @@ __all__ = [
     "deduce_call_return_type",
     "deduced_call_return_type",
     "expression_call_return_type",
+    "same_arity_overloads",
 ]
 
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_]\w*\b")
@@ -85,6 +86,84 @@ def _deduced_bindings(
     return bindings, False
 
 
+def _explicit_template_arguments(converter: Any, function: Any, call: Any) -> list[str]:
+    """The explicit template-argument list of ``call`` when it names ``function`` ([temp.arg.explicit])."""
+
+    text = str(getattr(call, "name", "") or "").strip()
+    if "<" not in text or not text.endswith(">"):
+        return []
+    base = text[: text.find("<")].strip().rsplit("::", 1)[-1].strip()
+    if base != str(getattr(function, "name", "")).rsplit("::", 1)[-1].strip():
+        return []
+    return [
+        str(argument).strip()
+        for argument in converter.split_generic_arguments(text[text.find("<") + 1 : -1])
+    ]
+
+
+def _call_bindings(
+    converter: Any,
+    function: Any,
+    arguments: Sequence[Any],
+    names: Sequence[str],
+    call: Any,
+) -> tuple[dict[str, str], bool]:
+    """Template arguments of a call: explicit, then deduced, then declaration defaults ([temp.deduct]/2-5).
+
+    An explicitly specified parameter is not deduced, so its function parameters accept converted arguments. A default
+    may name earlier parameters ([temp.param]/14) and is substituted with the bindings made so far. An explicit list
+    longer than the parameter list, or one for a template with a pack, binds nothing explicitly.
+    """
+
+    kinds = [
+        str(kind)
+        for kind, name in getattr(function, "template_parameters", None) or ()
+        if name
+    ]
+    explicit = (
+        _explicit_template_arguments(converter, function, call)
+        if call is not None
+        else []
+    )
+    if len(explicit) > len(names) or any(kind.endswith("...") for kind in kinds):
+        explicit = []
+    bindings = dict(zip(names, explicit))
+    deduced, conflicting = _deduced_bindings(
+        converter, function, arguments, [name for name in names if name not in bindings]
+    )
+    bindings.update(deduced)
+    if conflicting:
+        return bindings, True
+    defaults = getattr(function, "template_parameter_defaults", None) or {}
+    for name in names:
+        if name not in bindings and defaults.get(name):
+            bindings[name] = converter_preprocessor(converter)._replace_identifiers(
+                str(defaults[name]), bindings
+            )
+    return bindings, False
+
+
+def same_arity_overloads(converter: Any, call: Any) -> list[Any]:
+    """The source functions ``call`` can name, qualified or with explicit template arguments, of its arity."""
+
+    name = str(getattr(call, "name", "") or "").strip()
+    candidates = converter.metal_user_function_overloads(name)
+    if not candidates and "<" in name and name.endswith(">"):
+        candidates = [
+            candidate
+            for candidate in converter.metal_user_function_overloads(
+                name[: name.find("<")].strip()
+            )
+            if _template_parameter_names(candidate)
+        ]
+    arity = len(getattr(call, "args", None) or ())
+    return [
+        candidate
+        for candidate in candidates
+        if len(getattr(candidate, "params", None) or ()) == arity
+    ]
+
+
 def _decltype_parameters(function: Any, return_type: str) -> tuple[Any, ...]:
     """The callee's function parameters a ``decltype`` in ``return_type`` names, as a trailing return type can."""
 
@@ -127,9 +206,16 @@ def _callee_scope_type(
 
 
 def deduce_call_return_type(
-    converter: Any, function: Any, arguments: Sequence[Any], return_type: str | None
+    converter: Any,
+    function: Any,
+    arguments: Sequence[Any],
+    return_type: str | None,
+    call: Any = None,
 ) -> tuple[str | None, tuple[str, ...], bool]:
-    """``return_type`` with the template arguments a call deduces, the parameters left unbound, and a conflict.
+    """``return_type`` with the template arguments of a call, the parameters left unbound, and a conflict.
+
+    The arguments are those ``call`` lists explicitly, then the ones deduced from ``arguments``, then the defaults
+    (``_call_bindings``).
 
     The type is None when a parameter the return type names stays unbound or two arguments disagree. A ``decltype``
     of the callee's own parameters is resolved with those parameters in scope; one that does not resolve leaves them
@@ -152,7 +238,7 @@ def deduce_call_return_type(
         )
     if not referenced and not scoped:
         return return_type, (), False
-    bindings, conflicting = _deduced_bindings(converter, function, arguments, names)
+    bindings, conflicting = _call_bindings(converter, function, arguments, names, call)
     unresolved = tuple(name for name in referenced if name not in bindings)
     if conflicting or unresolved:
         return None, unresolved, conflicting
@@ -172,11 +258,15 @@ def deduce_call_return_type(
 
 
 def expression_call_return_type(
-    converter: Any, function: Any, arguments: Sequence[Any], return_type: str | None
+    converter: Any,
+    function: Any,
+    arguments: Sequence[Any],
+    return_type: str | None,
+    call: Any = None,
 ) -> str | None:
     """The value type of a call expression, or None while it depends on the callee's parameters."""
 
-    return deduce_call_return_type(converter, function, arguments, return_type)[0]
+    return deduce_call_return_type(converter, function, arguments, return_type, call)[0]
 
 
 def deduced_call_return_type(
@@ -189,7 +279,11 @@ def deduced_call_return_type(
     """The type an ``auto`` local initialized by a call to ``function`` has; refused while it stays dependent."""
 
     deduced, unresolved, conflicting = deduce_call_return_type(
-        converter, function, getattr(initializer, "args", None) or (), return_type
+        converter,
+        function,
+        getattr(initializer, "args", None) or (),
+        return_type,
+        initializer,
     )
     if not conflicting and not unresolved:
         return deduced
