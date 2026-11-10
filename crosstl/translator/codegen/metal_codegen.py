@@ -202,6 +202,7 @@ from .glsl_buffer_block_arrays import (
     glsl_buffer_array_elements,
     glsl_buffer_block_indexed_access,
     glsl_buffer_indexed_value_type,
+    glsl_buffer_matrix_column_access,
     glsl_buffer_whole_array_reason,
 )
 from .glsl_buffer_layout import (
@@ -24246,7 +24247,9 @@ class MetalCodeGen(
         component_store = metal_buffer_component_store(self, target, rhs, op)
         if component_store is not None:
             return component_store
-        access = self.glsl_buffer_block_array_access(target)
+        access = self.glsl_buffer_block_array_access(
+            target
+        ) or glsl_buffer_matrix_column_access(self, target)
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
