@@ -192,3 +192,35 @@ def test_unplaced_output_takes_a_free_location_and_inputs_keep_interpolation(tmp
     )
     assert _spirv_locations(spirv) == {"n": 1, "uv": 0, "a": 1, "b": 0}
     assert re.search(r"OpDecorate %crossgl_in_n Flat", spirv), spirv
+
+
+CGL_STAGE_ATTRIBUTES = """
+shader main {
+    fragment {
+        float4 color @output @location(0);
+        float2 uv @input @location(0);
+        float4 extra @output @location(1);
+        float3 normal @input @location(1);
+        void main() {
+            color = float4(uv[0], uv[1], 0.0, 1.0);
+            extra = float4(normal[0], normal[1], normal[2], 1.0);
+            return;
+        }
+    }
+}
+"""
+
+
+def test_spirv_import_stage_variables_become_entry_parameters(tmp_path):
+    # The SPIR-V import declares a stage's interface variables in its stage block with @input and @output.
+    code = _flat(_slang(tmp_path, CGL_STAGE_ATTRIBUTES, ".cgl"))
+    assert "static float4 color;" in code and "static float2 uv;" in code, code
+    assert "[[vk::location(1)]] out float4 crossgl_out_extra : SV_Target1" in code, code
+    assert "[[vk::location(1)]] in float3 crossgl_in_normal : TEXCOORD1" in code, code
+    spirv = _slangc(
+        tmp_path,
+        _slang(tmp_path, CGL_STAGE_ATTRIBUTES, ".cgl"),
+        "fragment",
+        "spirv-asm",
+    )
+    assert _spirv_locations(spirv) == {"color": 0, "uv": 0, "extra": 1, "normal": 1}

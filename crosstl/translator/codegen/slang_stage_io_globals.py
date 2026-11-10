@@ -57,19 +57,34 @@ def _qualifiers(node):
     ]
 
 
+_DIRECTION_ATTRIBUTES = {"in": "in", "input": "in", "out": "out", "output": "out"}
+
+
 def _direction(node):
-    """``in`` or ``out`` for a module-scope stage input or output, else None."""
+    """``in`` or ``out`` for a module-scope stage input or output, else None.
+
+    The direction is a qualifier (``out vec4 color``) or, from the SPIR-V import, an ``@input`` or ``@output``
+    attribute.
+    """
     qualifiers = set(_qualifiers(node))
     if qualifiers & _STORAGE_QUALIFIERS:
         return None
-    directions = [direction for direction in _DIRECTIONS if direction in qualifiers]
+    directions = {direction for direction in _DIRECTIONS if direction in qualifiers}
+    directions.update(
+        _DIRECTION_ATTRIBUTES[name]
+        for name in (
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", None) or []
+        )
+        if name in _DIRECTION_ATTRIBUTES
+    )
     if len(directions) != 1:
         return None
     name = str(getattr(node, "name", "") or "")
     if not name or name.startswith("gl_"):
         # Built-in redeclarations keep their own lowering.
         return None
-    return directions[0]
+    return next(iter(directions))
 
 
 def _named_identifiers(codegen, root):
