@@ -2355,6 +2355,7 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         valid_names = {
             "domain",
+            "instance",
             "maxvertexcount",
             "maxtessfactor",
             "numthreads",
@@ -2461,7 +2462,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         shader_stage = self.slang_shader_stage_name(stage_name)
         allowed_by_stage = {
             "compute": {"numthreads"},
-            "geometry": {"maxvertexcount"},
+            # [instance(N)] runs the geometry stage N times per primitive, as GLSL's invocations = N.
+            "geometry": {"maxvertexcount", "instance"},
             "hull": {
                 "domain",
                 "maxtessfactor",
@@ -2671,6 +2673,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.validate_slang_stage_attribute_applicability(func, stage_name)
         self.validate_slang_stage_attribute_uniqueness(func, stage_name)
         self.validate_positive_slang_stage_attribute(func, stage_name, "maxvertexcount")
+        self.validate_positive_slang_stage_attribute(func, stage_name, "instance")
         self.validate_positive_slang_stage_attribute(
             func, stage_name, "outputcontrolpoints"
         )
