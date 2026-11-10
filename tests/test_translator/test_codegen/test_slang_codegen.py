@@ -11909,7 +11909,10 @@ def test_structured_buffers_emit_slang_load_store_dimensions_and_bindings():
     )
     assert "Particle particle = particlesIn.Load(tid.x);" in generated_code
     assert "float4 vectorValue = vectors.Load(0u);" in generated_code
-    assert "particlesOut.GetDimensions(len);" in generated_code
+    assert (
+        "len = cgl_bufferDimensions_RWStructuredBuffer_Particle(particlesOut);"
+        in generated_code
+    )
     assert "particlesOut[tid.x] = particle;" in generated_code
     assert "values[1][0u] = particle.mass;" in generated_code
     assert "buffer_load(" not in generated_code
@@ -24531,13 +24534,14 @@ def test_glsl_buffer_block_std140_matrices_and_fixed_arrays_lower_to_slang_offse
 
     assert "struct TransformBlock" not in generated_code
     assert "RWByteAddressBuffer data : register(u0);" in generated_code
+    # The block holds columns; a Slang matrix constructor fills rows and m[i] is a row.
     assert (
-        "float3x3 transform = float3x3(asfloat(data.Load3(0)), "
-        "asfloat(data.Load3(16)), asfloat(data.Load3(32)));" in generated_code
+        "float3x3 transform = transpose(float3x3(asfloat(data.Load3(0)), "
+        "asfloat(data.Load3(16)), asfloat(data.Load3(32))));" in generated_code
     )
-    assert "data.Store3(0, asuint(transform[0]));" in generated_code
-    assert "data.Store3(16, asuint(transform[1]));" in generated_code
-    assert "data.Store3(32, asuint(transform[2]));" in generated_code
+    assert "data.Store3(0, asuint(transform._m00_m10_m20));" in generated_code
+    assert "data.Store3(16, asuint(transform._m01_m11_m21));" in generated_code
+    assert "data.Store3(32, asuint(transform._m02_m12_m22));" in generated_code
     assert "float3 offset = asfloat(data.Load3(48));" in generated_code
     assert "data.Store(80, asuint(offset.x));" in generated_code
     assert "unsupported Slang GLSL buffer block" not in generated_code

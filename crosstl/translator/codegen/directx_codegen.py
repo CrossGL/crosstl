@@ -32221,12 +32221,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             return f"{buffer}.DecrementCounter()"
         if func_name == "buffer_dimensions" and len(args) >= 2:
-            buffer = self.generate_expression(args[0])
-            dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
-            return f"{buffer}.GetDimensions({dimensions})"
+            return self.hlsl_buffer_dimension_outputs(args[0], args[1:])
         if func_name == "buffer_dimensions" and len(args) == 1:
             return self.hlsl_buffer_element_count(args[0])
         return None
+
+    def hlsl_buffer_dimension_outputs(self, buffer_expr, output_exprs):
+        """``buffer_dimensions(b, out...)``: the outputs written through the GetDimensions ``b``'s resource declares."""
+        buffer = self.generate_expression(buffer_expr)
+        outputs = [self.generate_expression(arg) for arg in output_exprs]
+        resource_type = self.hlsl_buffer_helper_resource_type(buffer_expr)
+        resource_name = self.hlsl_resource_type_name(resource_type)
+        rendered = self.hlsl_buffer_length.dimension_outputs(
+            buffer,
+            resource_name,
+            self.map_type(resource_type) if resource_type else None,
+            outputs,
+        )
+        if rendered is None:
+            raise BufferLengthUnsupportedError(
+                "directx",
+                f"buffer_dimensions({buffer}, {', '.join(outputs)}) passes {len(outputs)} "
+                "output(s), and the GetDimensions of "
+                f"{resource_type or 'a non-buffer argument'} takes no such list",
+            )
+        return rendered
 
     def hlsl_buffer_element_count(self, buffer_expr):
         """``buffer_dimensions(b)``: the element count of a structured or typed buffer."""

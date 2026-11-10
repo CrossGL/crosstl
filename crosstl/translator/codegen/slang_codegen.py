@@ -12736,7 +12736,12 @@ class SlangCodeGen(LoweringRefusalMixin):
                     f"({column_offset})"
                 )
                 columns.append(f"asfloat({load})")
-            return f"{access['slang_type']}({', '.join(columns)})"
+            # The buffer holds columns and a Slang matrix constructor fills rows, as in HLSL.
+            transposed_type = (
+                f"{access['component_type']}{access['matrix_columns']}"
+                f"x{access['matrix_rows']}"
+            )
+            return f"transpose({transposed_type}({', '.join(columns)}))"
 
         if hlsl_byteaddress_is_typed_access(access):
             return hlsl_byteaddress_typed_load(self, buffer_name, offset, access)
@@ -12800,9 +12805,13 @@ class SlangCodeGen(LoweringRefusalMixin):
         for column, column_offset in matrix_column_offsets(
             offset, access["matrix_columns"], access["column_stride"]
         ):
+            # A Slang m[i] is a row, as in HLSL; the swizzle selects column ``column``.
+            swizzle = "".join(
+                f"_m{row}{column}" for row in range(access["matrix_rows"])
+            )
             lines.append(
                 f"{buffer_name}.{store_method}"
-                f"({column_offset}, asuint({value_expr}[{column}]))"
+                f"({column_offset}, asuint({value_expr}.{swizzle}))"
             )
         return "\n".join(lines)
 
@@ -13572,11 +13581,14 @@ class SlangCodeGen(LoweringRefusalMixin):
         buffer_type = self.structured_buffer_resource_type(args[0])
         if self.is_byte_address_buffer_resource_type(buffer_type):
             buffer = self.generate_expression(args[0])
-            if len(args) >= 2:
-                dimensions = ", ".join(
-                    self.generate_expression(arg) for arg in args[1:]
+            if len(args) > 2:
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_dimensions",
+                    "writes only the byte size",
+                    "uint",
                 )
-                return f"{buffer}.GetDimensions({dimensions})"
+            if len(args) == 2:
+                return f"{buffer}.GetDimensions({self.generate_expression(args[1])})"
 
             helper_name = self.buffer_dimensions_helper_name(buffer_type)
             return f"{helper_name}({buffer})"
@@ -13589,11 +13601,20 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
 
         buffer = self.generate_expression(args[0])
-        if len(args) >= 2:
+        if len(args) > 3:
+            return self.unsupported_structured_buffer_call(
+                "buffer_dimensions",
+                "writes only the element count and stride of a structured buffer",
+                "uint",
+            )
+        if len(args) == 3:
             dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
             return f"{buffer}.GetDimensions({dimensions})"
 
+        # A structured buffer's GetDimensions always writes the stride as well, so a lone output takes the count.
         helper_name = self.buffer_dimensions_helper_name(buffer_type)
+        if len(args) == 2:
+            return f"{self.generate_expression(args[1])} = {helper_name}({buffer})"
         return f"{helper_name}({buffer})"
 
     def buffer_dimensions_helper_name(self, buffer_type):

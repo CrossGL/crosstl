@@ -720,7 +720,8 @@ def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
         in hlsl
     )
     assert f"{buffer_case.hlsl_type} value = {source_name}.Load(tid.x);" in hlsl
-    assert f"{target_name}.GetDimensions(len);" in hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload.
+    assert f"len = cgl_buffer_count({target_name});" in hlsl
     assert f"{target_name}[tid.x] = value;" in hlsl
     assert "buffer_load" not in hlsl
     assert "buffer_store" not in hlsl
