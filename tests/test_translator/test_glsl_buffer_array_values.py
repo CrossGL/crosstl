@@ -93,7 +93,10 @@ def test_byte_address_output_reads_whole_arrays_as_values(tmp_path, backend):
     assert (
         "floatg[2][3]=crossgl_array_value_float_2_3(crossgl_array_value_float_3(asfloat(data.Load(20)),"
     ) in code
-    assert "Cellcs[2]=crossgl_array_value_Cell_2(__crossgl_load_rw_glsl_buffer_Cell_" in code
+    assert (
+        "Cellcs[2]=crossgl_array_value_Cell_2(__crossgl_load_rw_glsl_buffer_Cell_"
+        in code
+    )
     assert "sum4(crossgl_array_value_float_4(asfloat(data.Load(4))," in code
     assert "structCrossGLArrayValue_float_2_3{floatv[2][3];};" in code
 
@@ -105,7 +108,13 @@ def test_byte_address_output_writes_whole_arrays_element_by_element(tmp_path, ba
     assert "float__crossgl_array_store_0[4]=copy;" in code
     assert "data.Store(124,asuint(__crossgl_array_store_0[3]));" in code
     assert "data.Store(148,asuint(__crossgl_array_store_1[2]));" in code
-    assert "=crossgl_array_value_float_3(7.0,8.0,9.0).v;" in code
+    literal = {
+        "directx": (
+            "float__crossgl_array_store_2[3]=crossgl_array_value_float_3(7.0,8.0,9.0).v;"
+        ),
+        "slang": "float__crossgl_array_store_2[3]={7.0,8.0,9.0};",
+    }[backend]
+    assert literal in code
     assert "data.Store(136,asuint(__crossgl_array_store_2[2]));" in code
     assert "Cell__crossgl_array_store_3[2]=cs;" in code
     assert "data.Store(176,asuint(__crossgl_array_store_3[1].w));" in code
@@ -119,19 +128,22 @@ def test_metal_output_initializes_and_copies_element_by_element(tmp_path):
     assert "floatcopy[4]={(*reinterpret_cast<constdevicefloat*>(data+4))," in code
     assert "floatg[2][3]={{(*reinterpret_cast<constdevicefloat*>(data+20))," in code
     assert "__crossgl_array_index_0<3;" in code
-    assert "part[__crossgl_array_index_0]=(*reinterpret_cast<constdevicefloat*>(" in code
+    assert (
+        "part[__crossgl_array_index_0]=(*reinterpret_cast<constdevicefloat*>(" in code
+    )
     assert "(*reinterpret_cast<devicefloat*>(data+(112+__crossgl_array_index_" in code
 
 
-@pytest.mark.parametrize("backend", ["directx", "metal"])
-def test_subscripts_with_side_effects_are_refused(tmp_path, backend):
+def test_hlsl_refuses_subscripts_with_side_effects(tmp_path):
+    # Each element load repeats the byte offset, so 'i++' would step once per element.
     with pytest.raises(BufferBlockUnsupportedError, match="side effects"):
+        _translate(tmp_path, SIDE_EFFECT_SOURCE, "directx")
+
+
+@pytest.mark.parametrize("backend", ["slang", "metal"])
+def test_other_backends_refuse_subscripts_with_side_effects(tmp_path, backend):
+    with pytest.raises(Exception, match="effects"):
         _translate(tmp_path, SIDE_EFFECT_SOURCE, backend)
-
-
-def test_slang_refuses_subscripts_with_side_effects(tmp_path):
-    with pytest.raises(Exception, match="side effects"):
-        _translate(tmp_path, SIDE_EFFECT_SOURCE, "slang")
 
 
 def _run(command):

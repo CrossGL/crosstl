@@ -13177,13 +13177,17 @@ class SlangCodeGen(LoweringRefusalMixin):
                 lines = self.slang_byteaddress_aggregate_store_members(
                     element["buffer"], element_offset, element_value, element
                 )
-                return lines if lines is not None else [
-                    self.refuse_lowering(
-                        "Slang GLSL buffer block store: the array elements hold "
-                        "runtime arrays",
-                        ";",
-                    )
-                ]
+                return (
+                    lines
+                    if lines is not None
+                    else [
+                        self.refuse_lowering(
+                            "Slang GLSL buffer block store: the array elements hold "
+                            "runtime arrays",
+                            ";",
+                        )
+                    ]
+                )
             return self.slang_byteaddress_leaf_store(
                 element["buffer"], element_offset, element_value, element
             ).splitlines()
