@@ -196,11 +196,17 @@ def test_opengl_routes_every_round_trip_through_the_exact_helper(tmp_path):
     body = generated.split("void main()", 1)[1]
     assert "(b * crossgl_integer_float_int64_t(int64_t(quotient)))" in body, body
     assert "float truncated = crossgl_integer_float_int64_t(int64_t(quotient));" in body
-    assert "float explicit_value = crossgl_integer_float_int(int(a));" in body
-    assert "float assigned = crossgl_integer_float_int(int(a));" in body
-    assert "crossgl_integer_float_ivec2(ivec2(vec2(a, b)))" in body
-    assert "crossgl_integer_float_uint(uint(min(max(a, (-0.75)), 65536.0)))" in body
-    assert "(a * crossgl_integer_float_int(int(b)))" in body
+    assert (
+        "float explicit_value = crossgl_integer_float_int(cgl_rule_sat_ftoi(a));"
+        in body
+    )
+    assert "float assigned = crossgl_integer_float_int(cgl_rule_sat_ftoi(a));" in body
+    assert "crossgl_integer_float_ivec2(cgl_rule_sat_ftoi2(vec2(a, b)))" in body
+    assert (
+        "crossgl_integer_float_uint(cgl_rule_sat_ftou(min(max(a, (-0.75)), 65536.0)))"
+        in body
+    )
+    assert "(a * crossgl_integer_float_int(cgl_rule_sat_ftoi(b)))" in body
     assert "float(int" not in body and "float(uint" not in body
 
 

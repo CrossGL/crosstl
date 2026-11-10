@@ -188,6 +188,38 @@ def vkrun():
     return Tool("vkrun", (str(binary),), f"built from vkrun.c ({digest})")
 
 
+@functools.lru_cache(maxsize=None)
+def d3d12_worker():
+    """CrossTL's Direct3D 12 buffer-view worker, built with MSVC once per process.
+
+    The executable lives for the rest of the process and carries a copy of the d3d10warp.dll placed next to
+    python.exe, which Direct3D then loads from the worker's own directory.
+    """
+    explicit = _override("d3d12_worker")
+    if explicit:
+        if Path(explicit).is_file():
+            return Tool("d3d12-worker", (explicit,), None)
+        return Tool(
+            "d3d12-worker",
+            (),
+            None,
+            f"CROSSTL_CONFORMANCE_D3D12_WORKER does not exist: {explicit}",
+        )
+    try:
+        from crosstl.project import directx_runtime
+
+        executable = directx_runtime._worker()
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - why the worker did not build is the reason
+        return Tool(
+            "d3d12-worker", (), None, f"the D3D12 worker did not build: {error}"
+        )
+    return Tool(
+        "d3d12-worker", (str(executable),), "built from directx_runtime_worker.cpp"
+    )
+
+
 def mesa_image():
     """The pinned Mesa llvmpipe/lavapipe container used where the host has no Mesa drivers."""
     docker = tool("docker")

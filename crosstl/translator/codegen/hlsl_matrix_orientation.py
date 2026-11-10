@@ -20,6 +20,7 @@ import re
 
 from ..ast import ArrayAccessNode, MemberAccessNode
 from ..matrix_shape import crossgl_matrix_shape
+from .glsl_buffer_block_arrays import glsl_buffer_matrix_column_access
 
 __all__ = ["HLSLMatrixOrientation"]
 
@@ -178,6 +179,10 @@ class HLSLMatrixOrientation:
                 "when both have side effects"
             )
         base = _operand(generator.generate_expression(matrix_expr))
+        # Only the HLSL emitter works around DXC's tall-matrix row lowering (hlsl_tall_matrix_rows.py).
+        tall_rows = getattr(generator, "hlsl_tall_matrix_rows", None)
+        if tall_rows is not None:
+            base = tall_rows.row_read(matrix_expr, row_expr, base) or base
         column = generator.generate_expression(column_expr)
         row = generator.generate_expression(row_expr)
         return f"{base}[{row}][{column}]"
@@ -205,6 +210,9 @@ class HLSLMatrixOrientation:
         if dimensions is None or self.constant_index(index_expr) is not None:
             return None
         generator = self.generator
+        if glsl_buffer_matrix_column_access(generator, target) is not None:
+            # A buffer block matrix has no HLSL lvalue; its store writes the column's bytes.
+            return None
         if not statement_context:
             return generator.refuse_lowering(
                 "DirectX cannot use a dynamic matrix column assignment as a value"

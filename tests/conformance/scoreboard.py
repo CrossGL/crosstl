@@ -32,6 +32,19 @@ IMPROVEMENTS = {
     "runtime-error": {"refused", "diverged", "preserved"},
     "refused": {"preserved"},
 }
+# ``observed`` is the best outcome of a case without readings (a negative control): it executed with its
+# buffers intact and claims nothing about the values. Reaching it from a state that never executed, or that
+# corrupted memory, is progress; it never replaces a recorded match or refusal.
+for _failed in (
+    "translator-error",
+    "invalid",
+    "interface-changed",
+    "memory-corruption",
+    "driver-rejected",
+    "timeout",
+    "runtime-error",
+):
+    IMPROVEMENTS[_failed].add("observed")
 # A compile-only runtime has no execution evidence to lose: passing the native checker is its best outcome.
 COMPILE_ONLY_IMPROVEMENTS = {
     "translator-error": {"compiled-only"},

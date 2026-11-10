@@ -87,6 +87,12 @@ from .external_functions import refuse_external_function_calls
 from .generic_call_return_types import (
     deduced_call_return_type,
     expression_call_return_type,
+    same_arity_overloads,
+)
+from .generic_local_aliases import (
+    bind_generic_local_alias,
+    generic_alias_constructor,
+    refuse_unresolved_local_alias_type,
 )
 from .implicit_constructor_conversions import (
     convert_user_call_arguments,
@@ -2041,6 +2047,7 @@ class MetalToCrossGLConverter(
         self.current_struct_static_constant_owner = None
         self.struct_template_parameters = {}
         self.local_type_alias_names = set()
+        self.unresolved_local_type_aliases = {}
         self.local_struct_type_aliases = {}
         self.local_integral_constant_bindings = {}
         self.global_integral_constant_bindings = {}
@@ -3605,6 +3612,7 @@ class MetalToCrossGLConverter(
         # function bodies; these are inlined at their use sites rather than
         # emitted as typedefs.
         self.local_type_alias_names = set()
+        self.unresolved_local_type_aliases = {}
         self.local_struct_type_aliases = {}
         self.local_integral_constant_bindings = {}
         self.global_integral_constant_bindings = {}
@@ -8283,6 +8291,8 @@ class MetalToCrossGLConverter(
         if integer is not None:
             return integer.group(1)
         value = self.evaluate_value_template_constant_expression(normalized)
+        if value is None:
+            value = self.fold_constexpr_helper_calls_in_constant_text(normalized)
         if value is not None:
             return str(value)
 
@@ -8576,6 +8586,8 @@ class MetalToCrossGLConverter(
             return integer.group(1)
 
         value = self.evaluate_value_template_constant_expression(normalized)
+        if value is None:
+            value = self.fold_constexpr_helper_calls_in_constant_text(normalized)
         if value is not None:
             return str(value)
 
@@ -8595,6 +8607,44 @@ class MetalToCrossGLConverter(
             getattr(function, "template_source_location", None)
             or getattr(function, "source_location", None),
         )
+
+    def fold_constexpr_helper_calls_in_constant_text(self, text):
+        """Evaluate a template argument that calls concrete constexpr helpers.
+
+        A non-type template argument is a constant expression ([temp.arg.nontype]),
+        so a call such as ``work_per_thread_float()`` (a constexpr helper the
+        preprocessor materialized from a default argument) names one integral
+        value. The helper body is evaluated with the constexpr helper evaluator;
+        ``None`` keeps the caller's fail-closed diagnostic when any helper is
+        unknown, unsupported or not provably constant.
+        """
+
+        helpers = self.constexpr_value_template_functions
+        identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", text))
+        if not identifiers.intersection(helpers) and not identifiers.intersection(
+            {"sizeof", "alignof"}
+        ):
+            return None
+        try:
+            lexer = MetalLexer(text, preprocess=False)
+            parser = MetalParser(lexer.tokenize())
+            node = parser.parse_expression()
+            if parser.current_token[0] != "EOF":
+                return None
+        except (SyntaxError, ValueError, TypeError):
+            return None
+        self.push_materialized_constexpr_expression_context(
+            node,
+            required=False,
+            allow_concrete_without_bindings=True,
+        )
+        try:
+            rendered = self.generate_expression(node, False)
+        except MetalTemplateArgumentResolutionError:
+            return None
+        finally:
+            self.materialized_constexpr_expression_contexts.pop()
+        return self.evaluate_value_template_constant_expression(str(rendered))
 
     def evaluate_value_template_constant_expression(
         self, expression, *, constants=None
@@ -9176,6 +9226,7 @@ class MetalToCrossGLConverter(
         self.current_struct_static_constant_owner = None
         self.struct_template_parameters = {}
         self.local_type_alias_names = set()
+        self.unresolved_local_type_aliases = {}
         self.local_struct_type_aliases = {}
         self.local_integral_constant_bindings = {}
         self.global_integral_constant_bindings = {}
@@ -10126,6 +10177,9 @@ class MetalToCrossGLConverter(
             self.type_alias_pointee_qualifiers
         )
         previous_local_type_alias_names = set(self.local_type_alias_names)
+        previous_unresolved_local_type_aliases = dict(
+            self.unresolved_local_type_aliases
+        )
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_local_integral_constant_bindings = (
             self.local_integral_constant_bindings
@@ -10293,6 +10347,16 @@ class MetalToCrossGLConverter(
                     bound_value_names=active_value_bindings,
                 )
             )
+            if function_body is None and getattr(func, "is_template_prototype", False):
+                # A declaration-only primary that explicit specializations
+                # complete; generators select them per deduced argument tuple.
+                params = ", ".join(
+                    declaration for declaration in parameter_declarations if declaration
+                )
+                return (
+                    code
+                    + f"{generic_prefix}{return_type} {function_name}({params});\n\n"
+                )
             body = (
                 value_param_decls
                 + self.metal_mesh_body_prologue(func, indent + 1)
@@ -10337,6 +10401,7 @@ class MetalToCrossGLConverter(
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
+            self.unresolved_local_type_aliases = previous_unresolved_local_type_aliases
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.local_integral_constant_bindings = (
                 previous_local_integral_constant_bindings
@@ -11029,6 +11094,9 @@ class MetalToCrossGLConverter(
             self.type_alias_pointee_qualifiers
         )
         previous_local_type_alias_names = set(self.local_type_alias_names)
+        previous_unresolved_local_type_aliases = dict(
+            self.unresolved_local_type_aliases
+        )
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_local_integral_constant_bindings = dict(
             self.local_integral_constant_bindings
@@ -11046,6 +11114,7 @@ class MetalToCrossGLConverter(
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
+            self.unresolved_local_type_aliases = previous_unresolved_local_type_aliases
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.local_integral_constant_bindings = (
                 previous_local_integral_constant_bindings
@@ -11137,6 +11206,9 @@ class MetalToCrossGLConverter(
             self.type_alias_pointee_qualifiers
         )
         previous_local_type_alias_names = set(self.local_type_alias_names)
+        previous_unresolved_local_type_aliases = dict(
+            self.unresolved_local_type_aliases
+        )
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_local_integral_constant_bindings = dict(
             self.local_integral_constant_bindings
@@ -11160,6 +11232,7 @@ class MetalToCrossGLConverter(
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
+            self.unresolved_local_type_aliases = previous_unresolved_local_type_aliases
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.local_integral_constant_bindings = (
                 previous_local_integral_constant_bindings
@@ -11645,6 +11718,7 @@ class MetalToCrossGLConverter(
         alias_type = getattr(alias, "alias_type", None)
         if not name or not alias_type:
             return
+        self.unresolved_local_type_aliases.pop(name, None)
         alias_type = self.resolve_metal_decltype_type(alias_type) or alias_type
         alias_type = resolve_concrete_scoped_member_type(self, alias_type) or alias_type
         alias_qualifiers = list(getattr(alias, "qualifiers", None) or [])
@@ -11705,6 +11779,12 @@ class MetalToCrossGLConverter(
                 and not concrete_struct_alias
             )
         ):
+            if not (
+                set(alias_qualifiers) - {"const", "volatile"}
+                or getattr(alias, "array_sizes", None)
+                or getattr(alias, "declarator_type_suffix", "")
+            ):
+                bind_generic_local_alias(self, alias, alias_type, alias_qualifiers)
             return
         # Bind primitive dependencies now, before later declarations shadow them.
         self.type_aliases[name] = (
@@ -16115,6 +16195,7 @@ class MetalToCrossGLConverter(
 
     def map_metal_type_constructor_name(self, name):
         text = str(name)
+        refuse_unresolved_local_alias_type(self, text)
         decltype_type = self.resolve_metal_decltype_type(text)
         is_local_alias = text in self.local_type_alias_names
         is_type_alias = text in self.type_aliases
@@ -16146,6 +16227,7 @@ class MetalToCrossGLConverter(
             or normalized in self.type_map
             or normalized in self.struct_name_map
             or mapped != normalized
+            or generic_alias_constructor(self, text, mapped)
         ):
             return mapped
         return None
@@ -19569,6 +19651,7 @@ float {scalar}(float value) {{
         resolved_local_type = self.resolve_local_type_aliases(metal_type)
         if resolved_local_type != str(metal_type).strip():
             return self.map_type(resolved_local_type)
+        refuse_unresolved_local_alias_type(self, metal_type)
 
         empty_array = self.zero_extent_metal_array_type_parts(metal_type)
         if empty_array is not None:
@@ -23555,6 +23638,7 @@ float {scalar}(float value) {{
                     selected_callable,
                     expr.args,
                     self.selected_metal_callable_return_type(selected_callable),
+                    expr,
                 )
             builtin_result_type = self.metal_math_builtin_result_type(expr)
             if builtin_result_type is not None:
@@ -23590,19 +23674,14 @@ float {scalar}(float value) {{
                 # its name matches: it has the builtin's type, not the type of
                 # a user overload of the same arity.
                 return self.expression_metal_type(expr.args[0])
-            arity_candidates = [
-                candidate
-                for candidate in self.user_function_overloads_by_name.get(
-                    str(expr.name), []
-                )
-                if len(getattr(candidate, "params", []) or []) == len(expr.args)
-            ]
+            arity_candidates = same_arity_overloads(self, expr)
             if len(arity_candidates) == 1:
                 return expression_call_return_type(
                     self,
                     arity_candidates[0],
                     expr.args,
                     getattr(arity_candidates[0], "return_type", None),
+                    expr,
                 )
             if (
                 unscoped_name in self.metal_wave_intrinsics
@@ -24261,6 +24340,9 @@ float {scalar}(float value) {{
             self.type_alias_pointee_qualifiers
         )
         previous_local_type_alias_names = set(self.local_type_alias_names)
+        previous_unresolved_local_type_aliases = dict(
+            self.unresolved_local_type_aliases
+        )
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_local_integral_constant_bindings = dict(
             self.local_integral_constant_bindings
@@ -24289,6 +24371,7 @@ float {scalar}(float value) {{
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.type_alias_pointee_qualifiers = previous_type_alias_pointee_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
+            self.unresolved_local_type_aliases = previous_unresolved_local_type_aliases
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.local_integral_constant_bindings = (
                 previous_local_integral_constant_bindings

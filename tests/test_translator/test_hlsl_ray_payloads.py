@@ -18,7 +18,7 @@ from crosstl.translator.semantics import HlslRayPayloadUnsupportedError
 ALL_STAGES = "caller, closesthit, miss, anyhit"
 EVERY_ACCESS = f": read({ALL_STAGES}) : write({ALL_STAGES});"
 
-# The coverage probe shape for a closest-hit stage (tools/coverage/crossgl.py).
+# The coverage probe shape for a closest-hit stage (tools/coverage/crossgl/).
 CLOSEST_HIT_CGL = """
 shader Probe {
     struct Payload {

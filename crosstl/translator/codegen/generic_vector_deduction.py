@@ -13,8 +13,9 @@ into its signature, locals and ``vec2<T>(...)`` constructors.
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 
-from ..ast import PrimitiveType, VectorType
+from ..ast import ArrayType, PrimitiveType, VectorType
 from .crossgl_vector_names import crossgl_named_vector_type
 from .enum_utils import substitute_generic_type_name
 from .generic_pointer_deduction import concrete_generic_pointer_type
@@ -198,6 +199,16 @@ def substituted_generic_type(generator, type_value, substitutions):
     )
     if concrete is not None:
         return concrete
+    if isinstance(type_value, ArrayType):
+        # ``vec2<T> a[2]``: the generator spells the element ``T2``, which no string substitution can repair, so the
+        # element is substituted as a node.
+        element = _changed_generic_type(
+            generator, type_value.element_type, substitutions
+        )
+        if isinstance(element, str):
+            element = _parsed_type(element)
+        if element is not None:
+            return ArrayType(element, deepcopy(type_value.size))
     spelling = generator.type_name_string(type_value)
     substituted = substitute_generic_type_name(spelling, substitutions)
     if substituted == spelling and not isinstance(type_value, str):
@@ -205,6 +216,19 @@ def substituted_generic_type(generator, type_value, substitutions):
         # and qualifiers a spelling does not carry.
         return type_value
     return substituted
+
+
+def _parsed_type(spelling):
+    """The CrossGL type node a concrete spelling such as ``vec2`` names, else ``None``."""
+    from ..lexer import Lexer
+    from ..parser import Parser
+
+    try:
+        parser = Parser(Lexer(spelling).get_tokens())
+        node = parser.parse_type()
+    except (SyntaxError, ValueError, IndexError):
+        return None
+    return node if parser.current_token[0] == "EOF" else None
 
 
 def _changed_generic_type(generator, type_value, substitutions):

@@ -20,6 +20,24 @@ class Template:
 
 ABSENT = Template(entry="<absent>")
 
+# What only the graphics APIs have: fragment discard and every stage but compute.
+GRAPHICS_ONLY = (
+    "discard",
+    "vertex",
+    "fragment",
+    "geometry",
+    "tessellation-control",
+    "tessellation-evaluation",
+    "task",
+    "mesh",
+    "ray-generation",
+    "intersection",
+    "any-hit",
+    "closest-hit",
+    "miss",
+    "callable",
+)
+
 PAIR = "struct Pair {\n    float a;\n    float b;\n};"
 NESTED_STRUCTS = PAIR + "\nstruct Frame {\n    Pair p;\n    float w;\n};"
 MAKE_PAIR = "Pair make(float x) {\n    Pair p;\n    p.a = x;\n    p.b = x * 2.0;\n    return p;\n}"

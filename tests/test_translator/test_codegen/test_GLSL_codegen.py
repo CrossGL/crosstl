@@ -22793,6 +22793,7 @@ def test_glsl_combined_advanced_stage_entries_use_distinct_names():
         }
 
         tessellation_evaluation {
+            layout(triangles) in;
             void main() { }
         }
     }
@@ -38214,8 +38215,8 @@ def test_opengl_image_format_metadata_rejects_duplicate_metadata(shader, message
                 }
             }
             """,
-            "Invalid OpenGL image format metadata for 'colorOut': "
-            "format rgba64f is not a supported storage image format",
+            "Unsupported storage image format on global variable 'colorOut': "
+            "@format\\(rgba64f\\) is not a CrossGL storage image format",
         ),
         (
             """
@@ -38231,8 +38232,8 @@ def test_opengl_image_format_metadata_rejects_duplicate_metadata(shader, message
                 }
             }
             """,
-            "Invalid OpenGL image format metadata for 'image': "
-            "format slot is not a supported storage image format",
+            "Unsupported storage image format on parameter 'image' of function "
+            "'loadColor': @format\\(slot\\) is not a CrossGL storage image format",
         ),
         (
             """
@@ -41105,6 +41106,57 @@ def test_opengl_multisample_image_samples_queries_use_texture_samples_builtin():
     assert "imageSamples(" not in generated_code
     assert "unsupported GLSL texture samples query" not in generated_code
     assert "input." not in generated_code
+
+
+def test_opengl_multisample_storage_image_samples_queries_keep_image_samples_builtin(
+    tmp_path,
+):
+    shader = """
+    shader MultisampleStorageImageSamplesQuery {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer int* outp;
+            layout(rgba32f) uniform image2DMS u0;
+            layout(rgba32f) uniform image2DMSArray u1;
+            layout(r32i) uniform iimage2DMS u2;
+            layout(r32ui) uniform uimage2DMSArray u3;
+
+            void main() {
+                outp[0] = imageSamples(u0)
+                    + imageSamples(u1)
+                    + imageSamples(u2)
+                    + imageSamples(u3);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(rgba32f, binding = 0) uniform image2DMS u0;" in generated_code
+    assert "layout(rgba32f, binding = 1) uniform image2DMSArray u1;" in generated_code
+    assert "layout(r32i, binding = 2) uniform iimage2DMS u2;" in generated_code
+    assert "layout(r32ui, binding = 3) uniform uimage2DMSArray u3;" in generated_code
+    assert "imageSamples(u0)" in generated_code
+    assert "imageSamples(u1)" in generated_code
+    assert "imageSamples(u2)" in generated_code
+    assert "imageSamples(u3)" in generated_code
+    assert "textureSamples(" not in generated_code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        source_path = tmp_path / "storage_image_samples.comp"
+        source_path.write_text(generated_code, encoding="utf-8")
+        result = subprocess.run(
+            [glslang, "-S", "comp", str(source_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert (
+            result.returncode == 0
+        ), f"glslang failed:\n{result.stdout}\n{result.stderr}\nCode:\n{generated_code}"
 
 
 def test_opengl_integer_multisample_invalid_sampling_and_offsets_emit_typed_diagnostics():
@@ -49618,3 +49670,73 @@ def test_glsl_non_square_matrix_subscripts_select_columns(tmp_path):
     assert_glsl_compute_validates_if_available(
         generated_code, tmp_path, "non_square_matrix_subscripts"
     )
+
+
+def test_opengl_verbatim_issue_3925_bounded_stage_texture_array():
+    shader = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                int k = int(fin[0]) & 1;
+                outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;
+            }
+        }
+    }
+    """
+    code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "uniform sampler2D tex[2];" in code
+
+
+def stage_block_texture_array_shader(body):
+    return f"""
+    shader StageBlockTextureArray {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            uniform sampler2D tex[];
+            void main() {{
+                uint i = gl_GlobalInvocationID.x;
+                {body}
+            }}
+        }}
+    }}
+    """
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "outp[i] = textureLod(tex[3], vec2(fin[i], 0.5), 0.0).x;",
+        "float acc = 0.0;"
+        " for (int j = 0; j < 4; j++) {"
+        " acc += textureLod(tex[j], vec2(fin[i], 0.5), 0.0).x; }"
+        " outp[i] = acc;",
+    ],
+    ids=["constant-index", "loop-index"],
+)
+def test_opengl_stage_block_texture_array_is_sized_from_its_indices(tmp_path, body):
+    code = GLSLCodeGen().generate(
+        crosstl.translator.parse(stage_block_texture_array_shader(body))
+    )
+
+    assert "uniform sampler2D tex[4];" in code
+    assert_glsl_compute_validates_if_available(
+        code, tmp_path, "stage_block_texture_array"
+    )
+
+
+def test_opengl_stage_block_texture_array_refuses_an_unbounded_index():
+    shader = stage_block_texture_array_shader(
+        "int k = int(fin[0]);"
+        " outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;"
+    )
+
+    # As for a shader-scope array, no bound reaches the index.
+    with pytest.raises(ResourceArrayIndexUnboundedError, match="tex"):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))

@@ -1828,6 +1828,9 @@ class CudaCodeGen(
                 f"{qualifier_str}"
                 f"{self.format_typed_declarator(declaration_type, node.name)}"
             )
+            declaration = self.apply_restrict_qualifier_to_declaration(
+                declaration, node.name, node
+            )
             if initial_value is not None:
                 declaration += f" = {self.visit(initial_value)}"
             return declaration
@@ -10713,11 +10716,17 @@ class CudaCodeGen(
             return type_name
         if type_name.startswith("const "):
             return type_name
+        # Only a runtime-sized array becomes a pointer whose pointee can be
+        # const. A block object, sized array or scalar would be an
+        # uninitialized `__device__ const` object, which CUDA rejects, so it
+        # stays writable and the readonly diagnostics guard its writes.
         if "[" not in type_name or "]" not in type_name:
-            return f"const {type_name}"
+            return type_name
         open_bracket = type_name.find("[")
         base_type = type_name[:open_bracket].strip()
         array_suffix = type_name[open_bracket:]
+        if array_suffix != "[]":
+            return type_name
         return f"const {base_type}{array_suffix}"
 
     def glsl_buffer_block_metadata_comment(self, node, type_name):
@@ -11020,6 +11029,20 @@ class CudaCodeGen(
             if attr_name:
                 names.add(attr_name)
         return names
+
+    def apply_restrict_qualifier_to_declaration(self, declaration, name, node):
+        """Write a CrossGL ``restrict`` pointer declaration with ``__restrict__``, as HIP output does."""
+        if (
+            "*" not in declaration
+            or not name
+            or "__restrict__" in declaration
+            or "restrict" not in self.declaration_qualifier_names(node)
+        ):
+            return declaration
+        position = declaration.rfind(f" {name}")
+        if position < 0:
+            return declaration
+        return f"{declaration[:position]} __restrict__{declaration[position:]}"
 
     def apply_readonly_qualifier_to_type(self, type_name, node):
         """Apply readonly declaration qualifiers to pointer/reference types."""

@@ -101,6 +101,7 @@ from .static_assertion_syntax import (
     starts_static_assertion,
 )
 from .validation import validate_shader_cbuffers
+from .vulkan_memory_scope import VULKAN_MEMORY_SCOPE_QUALIFIERS
 from .wave_operations import GLSL_SUBGROUP_FUNCTIONS, WAVE_EXTENDED_OPERATIONS
 
 WAVE_INTRINSICS = {
@@ -1399,6 +1400,8 @@ class Parser:
         token_type, token_value = token
         if token_type == "BUFFER":
             return False
+        if token_type == "IDENTIFIER" and token_value in VULKAN_MEMORY_SCOPE_QUALIFIERS:
+            return True
         return self.token_is_variable_qualifier(token_type, token_value)
 
     def default_layout_buffer_instance_name(self, block_name):
@@ -3954,7 +3957,7 @@ class Parser:
         self.eat_type_greater_than()
         return params
 
-    def parse_generic_arguments(self):
+    def parse_generic_arguments(self, reject_logical_at_top_level=False):
         """Parse generic type arguments after ``<``."""
         self.eat("LESS_THAN")
         args = []
@@ -3963,7 +3966,11 @@ class Parser:
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated generic argument list")
 
-            args.append(self.parse_generic_argument())
+            args.append(
+                self.parse_generic_argument(
+                    reject_logical_at_top_level=reject_logical_at_top_level
+                )
+            )
 
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -3976,7 +3983,7 @@ class Parser:
         self.eat_type_greater_than()
         return args
 
-    def parse_generic_argument(self):
+    def parse_generic_argument(self, reject_logical_at_top_level=False):
         """Parse one angle-bracket type or value argument."""
         start_pos = self.pos
         saved_token = self.current_token
@@ -4029,7 +4036,10 @@ class Parser:
         self.undo_token_edits(token_mark)
         self.pos = start_pos
         self.current_token = saved_token
-        argument = self.parse_expression(stop_at_generic_close=True)
+        argument = self.parse_expression(
+            stop_at_generic_close=True,
+            reject_logical_at_top_level=reject_logical_at_top_level,
+        )
 
         if self.current_token[0] == "EOF":
             raise SyntaxError("Unterminated generic argument list")
@@ -4966,25 +4976,39 @@ class Parser:
         self.eat("SEMICOLON")
         return ReturnNode(value=value)
 
-    def parse_expression(self, stop_at_generic_close=False):
+    def parse_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse an expression using the highest-precedence entry point."""
-        return self.parse_assignment_expression(stop_at_generic_close)
+        return self.parse_assignment_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
-    def parse_range_expression(self, stop_at_generic_close=False):
+    def parse_range_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse range and inclusive-range expressions."""
-        left = self.parse_ternary_expression(stop_at_generic_close)
+        left = self.parse_ternary_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
         if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
             inclusive = self.current_token[0] == "RANGE_INCLUSIVE"
             self.eat(self.current_token[0])
-            right = self.parse_ternary_expression(stop_at_generic_close)
+            right = self.parse_ternary_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             return RangeNode(left, right, inclusive=inclusive)
 
         return left
 
-    def parse_assignment_expression(self, stop_at_generic_close=False):
+    def parse_assignment_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse assignment and compound-assignment expressions."""
-        left = self.parse_range_expression(stop_at_generic_close)
+        left = self.parse_range_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
         if self.current_token[0] in [
             "EQUALS",
@@ -5001,7 +5025,9 @@ class Parser:
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_assignment_expression(stop_at_generic_close)
+            right = self.parse_assignment_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             if op == "=":
                 self.apply_cooperative_matrix_result_constraint(
                     right,
@@ -5012,36 +5038,60 @@ class Parser:
 
         return left
 
-    def parse_ternary_expression(self, stop_at_generic_close=False):
+    def parse_ternary_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse a ternary conditional expression."""
-        condition = self.parse_logical_or_expression(stop_at_generic_close)
+        condition = self.parse_logical_or_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
         if self.current_token[0] == "QUESTION":
             self.eat("QUESTION")
-            true_expr = self.parse_expression(stop_at_generic_close)
+            true_expr = self.parse_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             self.eat("COLON")
-            false_expr = self.parse_ternary_expression(stop_at_generic_close)
+            false_expr = self.parse_ternary_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             return TernaryOpNode(condition, true_expr, false_expr)
 
         return condition
 
-    def parse_logical_or_expression(self, stop_at_generic_close=False):
+    def parse_logical_or_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse logical OR expressions."""
-        left = self.parse_logical_and_expression(stop_at_generic_close)
+        left = self.parse_logical_and_expression(
+            stop_at_generic_close, reject_logical_at_top_level
+        )
 
         while self.current_token[0] == "LOGICAL_OR":
+            if reject_logical_at_top_level:
+                raise SyntaxError(
+                    "Top-level '||' is not allowed in a generic argument list in expression context"
+                )
             op = self.current_token[1]
             self.eat("LOGICAL_OR")
-            right = self.parse_logical_and_expression(stop_at_generic_close)
+            right = self.parse_logical_and_expression(
+                stop_at_generic_close, reject_logical_at_top_level
+            )
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_logical_and_expression(self, stop_at_generic_close=False):
+    def parse_logical_and_expression(
+        self, stop_at_generic_close=False, reject_logical_at_top_level=False
+    ):
         """Parse logical AND expressions."""
         left = self.parse_bitwise_or_expression(stop_at_generic_close)
 
         while self.current_token[0] == "LOGICAL_AND":
+            if reject_logical_at_top_level:
+                raise SyntaxError(
+                    "Top-level '&&' is not allowed in a generic argument list in expression context"
+                )
             op = self.current_token[1]
             self.eat("LOGICAL_AND")
             right = self.parse_bitwise_or_expression(stop_at_generic_close)
@@ -5437,7 +5487,9 @@ class Parser:
                 and isinstance(left, (MemberAccessNode, PointerAccessNode))
                 and self.generic_suffix_is_call_suffix()
             ):
-                generic_args = self.parse_generic_arguments()
+                generic_args = self.parse_generic_arguments(
+                    reject_logical_at_top_level=True
+                )
                 self.eat("LPAREN")
                 arguments = self.parse_call_arguments()
                 self.eat("RPAREN")
@@ -5450,7 +5502,9 @@ class Parser:
                     or self.generic_suffix_is_expression_name_suffix()
                 )
             ):
-                generic_args = self.parse_generic_arguments()
+                generic_args = self.parse_generic_arguments(
+                    reject_logical_at_top_level=True
+                )
                 if (
                     left.name.rsplit("::", 1)[-1] == "CooperativeMatrix"
                     and self.current_token[0] == "LPAREN"
@@ -5692,7 +5746,9 @@ class Parser:
         saved_token = self.current_token
         token_mark = self.mark_token_edits()
         try:
-            generic_args = self.parse_generic_arguments()
+            generic_args = self.parse_generic_arguments(
+                reject_logical_at_top_level=True
+            )
             if self.current_token[0] == "LBRACE":
                 # ``vec<T, 2>{x, y}``: a braced constructor of a generic type, as MSL and HLSL write one. A
                 # relational chain is never followed by ``{``, but a single symbolic argument must name a type.
@@ -5723,7 +5779,9 @@ class Parser:
         saved_token = self.current_token
         token_mark = self.mark_token_edits()
         try:
-            generic_args = self.parse_generic_arguments()
+            generic_args = self.parse_generic_arguments(
+                reject_logical_at_top_level=True
+            )
             return self.current_token[0] == "LPAREN" and (
                 self.generic_member_arguments_are_unambiguous(generic_args)
             )

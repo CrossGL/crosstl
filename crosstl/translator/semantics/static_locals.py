@@ -15,6 +15,7 @@ import re
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from .enum_values import enumerator_names
 from .hub_types import iter_functions
 from .rewrite import child_slots, get_child
 
@@ -229,6 +230,8 @@ def _constant_names(program):
         }
         if qualifiers & {"const", "constexpr", "constant"}:
             names.add(getattr(variable, "name", None))
+    # An enumerator, ``Kind::Y``, is a constant expression.
+    names |= enumerator_names(program)
     names.discard(None)
     return names
 
