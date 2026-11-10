@@ -27,7 +27,13 @@ from __future__ import annotations
 
 import re
 
-from ..ast import ArrayAccessNode, ArrayLiteralNode, LiteralNode, PrimitiveType
+from ..ast import (
+    ArrayAccessNode,
+    ArrayLiteralNode,
+    LiteralNode,
+    MemberAccessNode,
+    PrimitiveType,
+)
 from ..semantics.rewrite import is_pure
 from .array_utils import fold_array_type_counts, split_array_type_suffix
 
@@ -148,6 +154,8 @@ class MetalArrayArguments:
     def _storage_address_space(self, arg):
         """Address space of an array argument's storage when it is not ``thread``, else ``None``."""
         codegen = self.codegen
+        if self._byte_block_array(arg):
+            return "device"
         address_space = codegen.argument_address_space(arg)
         root = codegen.assignment_target_root_name(arg)
         if address_space == "constant" and not self._is_parameter(root):
@@ -169,6 +177,20 @@ class MetalArrayArguments:
         ):
             return "constant"
         return None
+
+    def _byte_block_array(self, arg):
+        """Whether ``arg`` is an array member, or a row of one, of a GLSL buffer block held as ``device uchar*``.
+
+        Such a block has no member to name (:mod:`.metal_buffer_component_stores`), so its array cannot be passed
+        at all; each element is read through the block's byte offsets instead.
+        """
+        codegen = self.codegen
+        if not isinstance(arg, (MemberAccessNode, ArrayAccessNode)):
+            return False
+        access = codegen.glsl_buffer_block_member_access(
+            arg
+        ) or codegen.glsl_buffer_block_array_access(arg)
+        return bool(access and access.get("is_array"))
 
     def _is_parameter(self, name):
         codegen = self.codegen
