@@ -4,7 +4,8 @@
 importer looked the member's array dimensions up under the buffer's declared type, ``RWStructuredBuffer<E>``, found
 none, and took the subscript for a component selection of ``float3``. An assignment of a whole ``float3`` to the
 element was then truncated to its first component (``e[1].v[i] = (vec3(4.0, 5.0, 6.0)).x``), and an array of
-matrices was written and read as rows of one matrix. The struct is the element type of the indexed buffer.
+matrices was written and read as rows of one matrix. The struct is the element type of the indexed buffer, also
+when the array is a member of a member, ``e[1].n.c[i]``.
 """
 
 import shutil
@@ -36,10 +37,30 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 }
 """
 
+NESTED_SOURCE = """struct Inner {
+    float a;
+    float2 c[2];
+};
+struct Item {
+    float s;
+    Inner n;
+};
+RWStructuredBuffer<Item> e : register(u0);
+StructuredBuffer<Item> r : register(t1);
+[numthreads(1, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) {
+    uint i = id.x % 2u;
+    e[1].n.c[0] = float2(3.0, 4.0);
+    e[0].n.c[i] += r[1].n.c[1];
+    float2 y = r[0].n.c[i];
+    e[1].s = y.y + r[1].n.c[0].x;
+}
+"""
 
-def _translate(tmp_path, backend):
+
+def _translate(tmp_path, backend, source=SOURCE):
     path = tmp_path / "elements.hlsl"
-    path.write_text(SOURCE, encoding="utf-8")
+    path.write_text(source, encoding="utf-8")
     return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
@@ -49,6 +70,14 @@ def test_a_vector_element_of_a_buffer_struct_array_keeps_its_width(tmp_path):
     assert "e[1].v[0] += r[0].v[1];" in crossgl, crossgl
     assert "vec3 x = r[1].v[i];" in crossgl, crossgl
     assert ".x;" not in crossgl, crossgl
+
+
+def test_an_array_member_of_a_member_keeps_its_width(tmp_path):
+    crossgl = _translate(tmp_path, "cgl", NESTED_SOURCE)
+    assert "e[1].n.c[0] = vec2(3.0, 4.0);" in crossgl, crossgl
+    assert "e[0].n.c[i] += r[1].n.c[1];" in crossgl, crossgl
+    assert "vec2 y = r[0].n.c[i];" in crossgl, crossgl
+    assert "e[1].s = y.y + r[1].n.c[0].x;" in crossgl, crossgl
 
 
 def test_a_matrix_element_of_a_buffer_struct_array_is_one_matrix(tmp_path):
@@ -64,7 +93,7 @@ def test_glslang_compiles_the_glsl_output(tmp_path):
     if glslang is None:
         pytest.skip("glslangValidator is not available")
     shader = tmp_path / "elements.comp"
-    shader.write_text(_translate(tmp_path, "opengl"), encoding="utf-8")
+    shader.write_text(_translate(tmp_path, "opengl", NESTED_SOURCE), encoding="utf-8")
     result = subprocess.run(
         [glslang, "-V", str(shader), "-o", str(tmp_path / "elements.spv")],
         capture_output=True,
