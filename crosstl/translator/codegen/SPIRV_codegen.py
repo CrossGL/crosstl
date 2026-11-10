@@ -309,6 +309,12 @@ from .spirv_uniform_block_arrays import (
     lowered_constant_buffer_nodes,
     require_non_uniform_block_array_indexing,
 )
+from .spirv_value_result_arguments import (
+    VALUE_RESULT_WRITE_BACK,
+    prepare_value_result_binding,
+    value_result_qualifier,
+    write_back_value_result_binding,
+)
 from .spirv_value_subscripts import vector_value_subscript
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
@@ -24543,6 +24549,9 @@ class VulkanSPIRVCodeGen(
 
             result = self.inline_function_body(function_node)
             write_back_swizzle_reference_bindings(self, prepared_bindings)
+            for binding in prepared_bindings:
+                if VALUE_RESULT_WRITE_BACK in binding:
+                    write_back_value_result_binding(self, binding)
             if result is not None:
                 return result
             return self.default_value_for_function(function_node)
@@ -24574,7 +24583,10 @@ class VulkanSPIRVCodeGen(
             function_node, call_args
         ):
             param_name = getattr(param, "name", f"param{index}")
-            if not self.function_parameter_has_reachable_use(function_node, param_name):
+            if (
+                not self.function_parameter_has_reachable_use(function_node, param_name)
+                and value_result_qualifier(self, param) != "inout"
+            ):
                 if not self.side_effect_free_call_argument(arg):
                     self.process_call_argument(func_name, arg, index)
                 continue
@@ -24678,7 +24690,15 @@ class VulkanSPIRVCodeGen(
                         ),
                     )
                 prepared.append(
-                    {
+                    prepare_value_result_binding(
+                        self,
+                        param,
+                        param_name,
+                        pointer_arg,
+                        source_value_type,
+                        param_value_type,
+                    )
+                    or {
                         "kind": "reference",
                         "name": param_name,
                         "value": pointer_arg,

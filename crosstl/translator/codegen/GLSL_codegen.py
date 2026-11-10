@@ -599,6 +599,7 @@ from .private_vector_views import lower_private_vector_views
 from .push_constant_blocks import (
     glsl_push_constant_cbuffer,
     glsl_push_constant_struct_block,
+    glsl_push_constant_struct_pads,
     is_push_constant,
 )
 from .reference_aliases import lower_reference_aliases
@@ -57425,7 +57426,11 @@ complex64_t crossgl_complex64_mod_assign(
         layout = self.glsl_resource_layout_prefix("std140", binding=binding, node=node)
         code = resource_identity_marker(node, var_name)
         code += f"{layout} uniform {block_name} {{\n"
+        pads = glsl_push_constant_struct_pads(
+            self, node, struct, var_name, array_suffix
+        )
         for member in getattr(struct, "members", []) or []:
+            code += pads.get(getattr(member, "name", None), "")
             code += self.generate_struct_member_declaration(
                 member,
                 struct_name=struct_name,

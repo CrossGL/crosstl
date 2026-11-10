@@ -218,7 +218,8 @@ class MetalHlslBufferLayouts:
             _kind, name, members = resolved
             if name in stack:
                 raise HlslLayoutError(f"recursive struct '{name}' in an HLSL buffer")
-            # Members are ``(name, raw_type)`` or ``(name, raw_type, row_major)``.
+            # Members are ``(name, raw_type[, row_major[, offset, alignment]])``; ``offset`` and ``alignment``
+            # come from the member's ``@offset`` and ``@align``.
             return struct_type(
                 name,
                 [
@@ -230,6 +231,8 @@ class MetalHlslBufferLayouts:
                     )
                     for member in members
                 ],
+                [member[3] if len(member) > 3 else None for member in members],
+                [member[4] if len(member) > 4 else None for member in members],
             )
 
         metal_type = str(resolved)

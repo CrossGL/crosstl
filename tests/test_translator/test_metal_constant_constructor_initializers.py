@@ -1,11 +1,12 @@
 """Constant static members initialized by converting constructors on Metal.
 
-``static constexpr constant U init = U(0);`` with a record ``U`` imports as a
-call to a member-wise constructor helper. Metal needs a constant expression
-there, so the call folds to the aggregate the helper builds, and a helper
-left without callers is not emitted, because Metal compiles with
-``-Werror``. Entry scoping keeps helpers that retained records call from
-member initializers.
+``static constexpr constant U init = U(0);`` with a record ``U`` needs a
+constant expression on Metal. The Metal importer folds the constructor call
+to ``U(member values)``. CrossGL that calls a member-wise constructor helper
+in a constant initializer folds in the Metal generator to the aggregate the
+helper builds, and a helper left without callers is not emitted, because
+Metal compiles with ``-Werror``. Entry scoping keeps helpers that retained
+records call from member initializers.
 """
 
 import os
@@ -72,7 +73,7 @@ def _translate(tmp_path, target):
 def test_constructor_initializer_translates_and_compiles(tmp_path, target):
     generated = _translate(tmp_path, target)
     if target == "metal":
-        assert "init = {float(float(3)), float(float(0))};" in generated
+        assert "init = complex_t_float{float(float(3)), float(float(0))};" in generated
         # The helper's only call was folded, so it is not emitted.
         assert "_2_int" not in generated
     if shutil.which(TOOLS[target]):
@@ -96,8 +97,50 @@ def test_entry_scoped_round_trip_keeps_initializer_helpers(tmp_path):
     assert report["summary"]["failedCount"] == 0, report["diagnostics"]
     (artifact,) = report["artifacts"]
     generated = (tmp_path / artifact["path"]).read_text()
-    assert "init = {float(float(3)), float(float(0))};" in generated
+    assert "init = complex_t_float{float(float(3)), float(float(0))};" in generated
     assert "kernel void other" not in generated
+    if shutil.which("xcrun"):
+        _, module = _compile(generated, "metal", tmp_path)
+        assert module.is_file() and module.stat().st_size
+
+
+_HELPER_SOURCE = """shader main {
+    struct Pair {
+        float real;
+        float imag;
+    }
+
+    struct Holder {
+        static constant Pair init = make_pair_int(3);
+        float scale;
+    }
+
+    Pair make_pair_int(int x) @metal_static {
+        Pair value;
+        value.real = float(x);
+        value.imag = float(0);
+        return value;
+    }
+
+    compute {
+        @ stage_entry
+        void fill(RWStructuredBuffer<Pair> results @buffer(0), uint i @gl_GlobalInvocationID) {
+            Pair value = Holder::init;
+            buffer_store(results, i, value);
+        }
+    }
+}
+"""
+
+
+def test_crossgl_helper_call_in_constant_initializer_folds(tmp_path):
+    # The Metal importer folds constructor calls itself, so CrossGL written
+    # with a member-wise helper call is what exercises the generator fold.
+    path = tmp_path / "pair.cgl"
+    path.write_text(_HELPER_SOURCE, encoding="utf-8")
+    generated = crosstl.translate(str(path), backend="metal", format_output=False)
+    assert "init = {float(3), float(0)};" in generated
+    assert "make_pair_int" not in generated
     if shutil.which("xcrun"):
         _, module = _compile(generated, "metal", tmp_path)
         assert module.is_file() and module.stat().st_size

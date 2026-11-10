@@ -7,8 +7,11 @@ runtime descriptor array, which needs the ``RuntimeDescriptorArray`` capability 
 (core in SPIR-V 1.5). ``name[i].member`` is then one access chain: the descriptor index, then the member.
 
 The block members are laid out with std140, the layout of a uniform block (GLSL 4.60 section 7.6.2.2) and the one
-the single-buffer ``ConstantBuffer<T>`` lowering uses. A block that declares another ``@ buffer_layout`` is refused,
-as is an array whose element is not a struct.
+the single-buffer ``ConstantBuffer<T>`` lowering uses. When ``T``, or a struct it holds, places members with
+``@ offset`` or ``@ align``, or the array declares a ``@ buffer_layout`` std140 does not reproduce, the element block
+is a layout clone of ``T`` decorated with the planned offsets (:func:`spirv_placed_blocks.placed_struct_block`), as
+for one ``ConstantBuffer<T>``. A declared std430 or scalar layout without placements, which the planner leaves to the
+generator's own paths, is refused, as is an array whose element is not a struct.
 
 A descriptor index marked ``nonuniformEXT`` or ``NonUniformResourceIndex`` makes the access chain ``NonUniform``
 through the generator's usual propagation; indexing an array of uniform blocks that way also needs the
@@ -26,7 +29,7 @@ from ..semantics.constant_buffers import (
     is_constant_buffer_array,
     is_lowered_constant_buffer,
 )
-from .glsl_block_layout import declared_buffer_layout
+from .glsl_block_layout import STD140_LAYOUT, declared_buffer_layout
 
 __all__ = [
     "declare_uniform_block_array",
@@ -61,23 +64,43 @@ def _refuse(node, detail):
 
 def declare_uniform_block_array(codegen, node, value_type):
     """Declare ``node`` (``uniform T name[N]`` marked as a block array) as ``N`` uniform-block descriptors."""
-    layout = declared_buffer_layout(getattr(node, "attributes", None)) or "std140"
-    if layout != "std140":
-        raise _refuse(
-            node,
-            f"declares the {layout} layout; the SPIR-V emitter lays out arrays of uniform blocks with std140 only",
-        )
+    from .spirv_placed_blocks import (
+        ALWAYS_PLACED_LAYOUTS,
+        decorate_placed_uniform_block,
+        placed_member_type,
+        placed_struct_block,
+    )
+
+    layout = declared_buffer_layout(getattr(node, "attributes", None)) or STD140_LAYOUT
     array_info = codegen.array_type_info_from_type(value_type)
     if array_info is None:
         raise _refuse(node, "has no array type")
     element_type, size = array_info
-    if codegen.current_struct_members.get(element_type.type.base_type) is None:
+    element_members = codegen.current_struct_members.get(element_type.type.base_type)
+    if element_members is None:
         raise _refuse(node, "holds no struct, so it has no uniform block type")
-    block_type = codegen.storage_layout_type(element_type, "std140")
-    members = codegen.current_struct_members.get(block_type.type.base_type)
-    if members is None:
-        members = codegen.current_struct_members[element_type.type.base_type]
-    codegen.decorate_cbuffer_type(block_type, members)
+    plan = placed_struct_block(codegen, node, element_type)
+    if plan is None and layout not in (STD140_LAYOUT, *ALWAYS_PLACED_LAYOUTS):
+        raise _refuse(
+            node,
+            f"declares the {layout} layout; the SPIR-V emitter lays out arrays of uniform blocks with std140 or "
+            "with the placements of their members only",
+        )
+    if plan is not None:
+        laid_out = [
+            (placed_member_type(codegen, member_type, member_name, plan), member_name)
+            for member_type, member_name in element_members
+        ]
+        block_type = codegen.register_layout_struct_type(
+            element_type, f"{plan.clone_key}_block", laid_out
+        )
+        decorate_placed_uniform_block(codegen, block_type, plan)
+    else:
+        block_type = codegen.storage_layout_type(element_type, STD140_LAYOUT)
+        members = codegen.current_struct_members.get(block_type.type.base_type)
+        if members is None:
+            members = element_members
+        codegen.decorate_cbuffer_type(block_type, members)
     if size is None:
         codegen.require_capability("RuntimeDescriptorArray")
         codegen.require_extension("SPV_EXT_descriptor_indexing")

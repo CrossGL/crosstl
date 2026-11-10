@@ -73,6 +73,11 @@ from .color_attachments import (
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
 from .const_cast_buffer_writes import mark_const_cast_written_buffers
+from .constant_constructor_folding import (
+    constant_initialization,
+    fold_constant_constructor_call,
+    in_constant_initialization,
+)
 from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
@@ -3679,8 +3684,10 @@ class MetalToCrossGLConverter(
             and getattr(struct_node, "name", None)
         }
         self.struct_member_types = self.collect_struct_member_types(structs)
-        self.collect_struct_static_constants(structs)
+        # Static constants resolve eagerly; constructor calls in their
+        # initializers need the constructor contracts.
         self.prepare_metal_constructor_contracts(structs)
+        self.collect_struct_static_constants(structs)
         self.wide_vector_reserved_names.update(
             self.map_struct_name(struct_node.name)
             for struct_node in structs
@@ -4826,6 +4833,18 @@ class MetalToCrossGLConverter(
                     source_location,
                 )
             completed_arguments.append(default)
+        folded = None
+        if in_constant_initialization(self):
+            folded = self.fold_constant_constructor_initializer(
+                struct_node,
+                constructor,
+                completed_arguments,
+                value_bindings,
+                type_bindings,
+                is_main,
+            )
+        if folded is not None:
+            return folded
         helper = self.reserve_constructor_factory(
             struct_node,
             constructor,
@@ -4848,6 +4867,33 @@ class MetalToCrossGLConverter(
             if value_bindings:
                 self.template_value_bindings.pop()
         return f"{helper}({rendered})"
+
+    def fold_constant_constructor_initializer(
+        self,
+        struct_node,
+        constructor,
+        arguments,
+        value_bindings,
+        type_bindings,
+        is_main=False,
+    ):
+        if value_bindings:
+            self.template_value_bindings.append(value_bindings)
+        if type_bindings:
+            self.template_type_bindings.append(type_bindings)
+        try:
+            return fold_constant_constructor_call(
+                self,
+                struct_node,
+                constructor,
+                arguments,
+                [self.generate_expression(argument, is_main) for argument in arguments],
+            )
+        finally:
+            if type_bindings:
+                self.template_type_bindings.pop()
+            if value_bindings:
+                self.template_value_bindings.pop()
 
     def generate_default_constructor_initializer(self, declaration, is_main=False):
         owner = self.metal_declaration_expression_type(declaration)
@@ -5929,7 +5975,8 @@ class MetalToCrossGLConverter(
             if integer_value is not None:
                 rendered = self.render_static_integral_value(member, integer_value)
             else:
-                rendered = self.generate_expression(default_value, False)
+                with constant_initialization(self):
+                    rendered = self.generate_expression(default_value, False)
                 folded_value = self.evaluate_value_template_constant_expression(
                     rendered
                 )
@@ -9854,11 +9901,15 @@ class MetalToCrossGLConverter(
                 saved_types = self.current_variable_types
                 self.current_variable_types = {**static_member_types, **saved_types}
                 try:
-                    rendered_default = self.generate_expression(default_value, False)
+                    with constant_initialization(self):
+                        rendered_default = self.generate_expression(
+                            default_value, False
+                        )
                 finally:
                     self.current_variable_types = saved_types
             else:
-                rendered_default = self.generate_expression(default_value, False)
+                with constant_initialization(self):
+                    rendered_default = self.generate_expression(default_value, False)
             declaration += f" = {rendered_default}"
         return declaration
 

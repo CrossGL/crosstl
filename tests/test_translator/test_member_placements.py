@@ -95,9 +95,10 @@ def _outcomes(tmp_path, source):
             {"slang": "placement"},
         ),
         # slangc moves a push-constant [[vk::offset]] to the member's std430 alignment; GLSL cannot write it.
+        # Metal plans a push-constant block with its push-constant layout.
         (
             _cbuffer(" @push_constant", "float s; vec3 v @offset(4);", "s + v.y"),
-            {"opengl": "push-constant", "metal": "placement", "slang": "placement"},
+            {"opengl": "push-constant", "slang": "placement"},
         ),
         (_cbuffer(" @push_constant", "float s; vec3 v @offset(16);", "s + v.y"), {}),
         (
@@ -106,7 +107,7 @@ def _outcomes(tmp_path, source):
                 "ConstantBuffer<T> pc @push_constant;",
                 "pc.s + pc.v.y",
             ),
-            {"opengl": "push-constant", "metal": "placement", "slang": "placement"},
+            {"opengl": "push-constant", "slang": "placement"},
         ),
         # SPIR-V places the members of T itself; the other targets declare T without its offsets.
         (
@@ -123,7 +124,8 @@ def _outcomes(tmp_path, source):
             },
         ),
         # A declared layout declares a block holding one T, placed by the layout's rules; HLSL reads it from
-        # registers at the planned offsets.
+        # registers at the planned offsets, Metal pads T to its members' placements, and SPIR-V decorates T's
+        # members with the placed offsets.
         (
             _struct_buffer(
                 "float s; vec3 v @offset(32);",
@@ -131,9 +133,7 @@ def _outcomes(tmp_path, source):
                 "cb.s + cb.v.y",
             ),
             {
-                "vulkan": "placement",
                 "opengl": "placement",
-                "metal": "placement",
                 "slang": "placement",
             },
         ),
@@ -266,11 +266,13 @@ shader Probe {
 """
 
 
-@pytest.mark.parametrize("backend", ["vulkan", "directx", "opengl", "metal", "slang"])
+@pytest.mark.parametrize("backend", ["metal", "slang"])
 def test_a_placement_inside_a_struct_held_by_a_constant_buffer_is_refused(
     tmp_path, backend
 ):
-    # Issue #4245: SPIR-V wrote 'Offset 16', HLSL a semantic named 'offset' and GLSL a plain 'vec4 v;'.
+    # Issue #4245: SPIR-V wrote 'Offset 16', HLSL a semantic named 'offset' and GLSL a plain 'vec4 v;'. SPIR-V now
+    # places the member at byte 32 (test_spirv_nested_member_placements.py runs it on Vulkan), and GLSL and HLSL
+    # read it from registers (test_nested_member_placement_registers.py).
     path = tmp_path / "nested.cgl"
     path.write_text(NESTED_PLACEMENT.replace("OFFSET", "32"))
 
@@ -289,3 +291,91 @@ def test_a_nested_placement_that_matches_the_layout_is_accepted(tmp_path, backen
     )
 
     assert crosstl.translate(str(path), backend=backend)
+
+
+def _metal_offsets_hold(tmp_path, metal, offsets):
+    """The Metal compiler accepts ``metal`` with ``__builtin_offsetof(struct, member) == offset`` asserted for each item of
+    ``offsets``; ``None`` without the compiler."""
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return None
+    asserts = "".join(
+        f'static_assert(__builtin_offsetof({struct}, {member}) == {offset}, "{struct}.{member}");\n'
+        for struct, member, offset in offsets
+    )
+    source = tmp_path / "placed.metal"
+    source.write_text(metal + "\n" + asserts)
+    result = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(source),
+            "-o",
+            str(tmp_path / "placed.air"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if "unable to find utility" in result.stderr:
+        return None
+    assert result.returncode == 0, result.stderr
+    return True
+
+
+@pytest.mark.parametrize(
+    "source, offsets",
+    [
+        # std430 puts s at byte 12, right after v; the natural Metal layout put it at 16.
+        (
+            _cbuffer(" @push_constant", "vec3 v; float s;", "s + v.y"),
+            [("C", "v", 0), ("C", "s", 12)],
+        ),
+        (
+            _cbuffer(" @push_constant", "float s; vec3 v @offset(4);", "s + v.y"),
+            [("C", "s", 0), ("C", "v", 4)],
+        ),
+        (
+            _struct_buffer(
+                "vec3 v; float s;",
+                "ConstantBuffer<T> pc @push_constant;",
+                "pc.s + pc.v.y",
+            ),
+            [("T", "v", 0), ("T", "s", 12)],
+        ),
+        (
+            _struct_buffer(
+                "float s; vec3 v @offset(4);",
+                "ConstantBuffer<T> pc @push_constant;",
+                "pc.s + pc.v.y",
+            ),
+            [("T", "s", 0), ("T", "v", 4)],
+        ),
+        (
+            _struct_buffer(
+                "float s; vec3 v @offset(32);",
+                "ConstantBuffer<T> cb @binding(0) @buffer_layout(std140);",
+                "cb.s + cb.v.y",
+            ),
+            [("T", "s", 0), ("T", "v", 32)],
+        ),
+        (
+            _struct_buffer(
+                "float a @offset(272);",
+                "ConstantBuffer<T> cb @binding(0) @buffer_layout(hlsl_cbuffer);",
+                "cb.a",
+            ),
+            [("T", "a", 272)],
+        ),
+    ],
+)
+def test_metal_places_push_constant_blocks_and_the_structs_planned_blocks_hold(
+    tmp_path, source, offsets
+):
+    """Metal output lays a push-constant block out by its push-constant layout (std430 here), and pads a struct
+    that a planned block holds to its members' ``@offset``, where it had declared both in the natural MSL layout.
+    """
+    metal = _translate(tmp_path, source, "metal")
+    _metal_offsets_hold(tmp_path, metal, offsets)
