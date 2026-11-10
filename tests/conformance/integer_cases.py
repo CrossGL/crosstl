@@ -5,6 +5,10 @@ section 8.8) and SPIR-V's ``OpIAddCarry``, ``OpISubBorrow``, ``OpUMulExtended`` 
 section 3.52.13) are exact: the sum or difference modulo 2^32 with its carry or borrow, and the high and low words of
 the 64-bit product.
 
+``m_narrow_bit_functions``: MSL ``popcount`` and ``reverse_bits`` (MSL 3.2 section 6.13) of ``short``, ``ushort``,
+``char`` and ``uchar`` scalars and vectors count and reverse the bits of the value's own width, whatever register
+width a target computes them in.
+
 ``s_integer_signedness``: SPIR-V takes the signedness of an integer instruction from its opcode, not from its operand
 types (SPIR-V 1.6 section 3.3.6), so a logical shift of an ``int``, an unsigned comparison of ``int`` values or a
 signed division of ``uint`` values reads the operand bits with the opcode's signedness. Every input word is used both
@@ -181,3 +185,23 @@ def glsl_bit_scan_reference(inputs):
             _find_lsb(x >> 16),
         ]
     return np.array([value & _MASK for value in out], np.uint32)
+
+
+def _reverse(word, bits):
+    word &= (1 << bits) - 1
+    return int(format(word, f"0{bits}b")[::-1], 2)
+
+
+def _popcount(word, bits):
+    return bin(word & ((1 << bits) - 1)).count("1")
+
+
+def narrow_bit_function_reference(inputs):
+    """Eight words per thread, in the order ``m_narrow_bit_functions`` stores them."""
+    out = []
+    for x in (int(word) for word in inputs):
+        out += [_popcount(x, 16), _reverse(x, 16), _reverse(x >> 16, 16)]
+        out += [_reverse(x >> 4, 16), _popcount(x >> 8, 8)]
+        out += [_reverse(x, 8) | (_reverse(x >> 24, 8) << 8)]
+        out += [_popcount(x >> 4, 16), _popcount(x >> 16, 8)]
+    return np.array(out, np.uint32)

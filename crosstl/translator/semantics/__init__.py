@@ -21,6 +21,7 @@ from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .binding_constants import BindingIndexUnresolvedError, fold_binding_constants
+from .bit_functions import legalize_bit_functions
 from .block_matrix_orders import BlockMatrixOrderError, distribute_block_matrix_orders
 from .boolean_reductions import lower_boolean_reductions
 from .buffer_strides import materialize_buffer_strides
@@ -440,7 +441,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     textures or images are flattened into separate resources for SPIR-V, or refused with
     :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
     one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
-    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
+    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). HLSL's
+    ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
+    ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
+    integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width
+    (:mod:`.bit_functions`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
     non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
@@ -563,6 +568,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)
+    legalize_bit_functions(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
     wrap_narrow_arithmetic(program, report.source, report.target)
     refuse_spirv_instructions(program, report.target)
