@@ -26,17 +26,18 @@ __all__ = [
 
 
 # GLSL built-in outputs declared with a signed type whatever the CrossGL member naming them holds: GLSL 4.60
-# section 7.1.2 declares ``out int gl_SampleMask[]``, and sections 7.1.1 and 7.1.4 (with
-# GL_ARB_shader_viewport_layer_array for the vertex stage) ``out int gl_Layer`` and ``out int gl_ViewportIndex``.
+# section 7.1.2 declares ``out int gl_SampleMask[]``, sections 7.1.1 and 7.1.4 (with
+# GL_ARB_shader_viewport_layer_array for the vertex stage) ``out int gl_Layer`` and ``out int gl_ViewportIndex``, and
+# GL_ARB_shader_stencil_export ``out int gl_FragStencilRefARB``, which HLSL's ``SV_StencilRef`` declares ``uint``.
 _SIGNED_BUILTIN_OUTPUTS = frozenset(
-    {"gl_SampleMask[0]", "gl_Layer", "gl_ViewportIndex"}
+    {"gl_SampleMask[0]", "gl_Layer", "gl_ViewportIndex", "gl_FragStencilRefARB"}
 )
 
 
 def builtin_output_value(codegen, output_name, rendered, value_type):
     """``rendered``, a value of ``value_type``, converted for storing into the stage output ``output_name``.
 
-    A uint sample mask, layer or viewport index is stored as an int; GLSL's uint-to-int conversion keeps its bits
+    A uint sample mask, layer, viewport index or stencil reference is stored as an int; GLSL's uint-to-int conversion keeps its bits
     (section 5.4.1).
     """
     note_builtin_store(codegen, output_name)
