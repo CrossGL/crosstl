@@ -200,6 +200,8 @@ class MetalHlslResourceMixin:
         self.metal_hlsl_cbuffer_plans = {}
         self.metal_hlsl_struct_plans = {}
         self.metal_hlsl_structured_buffers = {}
+        # Subscripts that reach a structured buffer through its resource arrays: ``bufs[2]`` has one.
+        self.metal_hlsl_structured_buffer_ranks = {}
         self.metal_hlsl_pointer_parameters = {}
         self.metal_hlsl_cbuffer_array_members = {}
         planner = MetalHlslBufferLayouts(
@@ -288,6 +290,11 @@ class MetalHlslResourceMixin:
                     f"'{node.name}' in Metal: they hold different element types"
                 )
             self.metal_hlsl_structured_buffers[node.name] = storage
+            rank = 0
+            while self.is_array_type_node(vtype):
+                vtype = vtype.element_type
+                rank += 1
+            self.metal_hlsl_structured_buffer_ranks[node.name] = rank
         self.metal_hlsl_struct_plans = dict(planner.struct_plans)
 
     def metal_hlsl_pointer_storage(
@@ -337,6 +344,13 @@ class MetalHlslResourceMixin:
 
     def metal_hlsl_layout_member(self, expr):
         """The planned storage of a struct member access, if its struct has one."""
+        plan = self.metal_hlsl_layout_member_plan(expr)
+        if plan is None:
+            return None
+        return plan.member(str(getattr(expr, "member", "")))
+
+    def metal_hlsl_layout_member_plan(self, expr):
+        """The layout plan of the struct whose member ``expr`` accesses, if it has one."""
         plans = getattr(self, "metal_hlsl_struct_plans", None)
         if not plans or not isinstance(expr, MemberAccessNode):
             return None
@@ -345,10 +359,7 @@ class MetalHlslResourceMixin:
         if object_type is None:
             return None
         struct_name = self.type_name_string(self.member_lookup_type_name(object_type))
-        plan = plans.get(struct_name)
-        if plan is None:
-            return None
-        return plan.member(str(getattr(expr, "member", "")))
+        return plans.get(struct_name)
 
     def metal_hlsl_structured_buffer_storage(self, array_expr):
         storages = getattr(self, "metal_hlsl_structured_buffers", None)
@@ -357,12 +368,37 @@ class MetalHlslResourceMixin:
         name = self.expression_name(array_expr)
         if not isinstance(name, str) or name not in storages:
             return None
+        # Only the buffer itself, ``b`` or ``bufs[k]``, is indexed by element: ``b[i][j]`` subscripts the element.
+        base, depth = array_expr, 0
+        while isinstance(base, ArrayAccessNode):
+            base = getattr(base, "array", getattr(base, "array_expr", None))
+            depth += 1
+        ranks = getattr(self, "metal_hlsl_structured_buffer_ranks", None) or {}
+        if depth != ranks.get(name, 0):
+            return None
         local_type = self.local_variable_types.get(name)
         if local_type is not None and not self.is_structured_buffer_type(
             self.type_name_string(local_type)
         ):
             return None
         return storages[name]
+
+    def metal_hlsl_structured_element_definitions(self):
+        """Definitions of the matrix storage that structured buffers and buffer pointers hold as elements."""
+        planner = getattr(self, "metal_hlsl_layout_planner", None)
+        if planner is None:
+            return ""
+        storages = list(
+            (getattr(self, "metal_hlsl_structured_buffers", None) or {}).values()
+        )
+        storages += list(
+            (getattr(self, "metal_hlsl_pointer_parameters", None) or {}).values()
+        )
+        names = []
+        for storage in storages:
+            if storage[0] in planner.matrix_storages and storage[0] not in names:
+                names.append(storage[0])
+        return "".join(planner.matrix_storages[name] for name in names)
 
     def metal_hlsl_layout_element_access(self, expr):
         """``(access, read_conversion)`` for an element read with HLSL storage."""
@@ -431,10 +467,24 @@ class MetalHlslResourceMixin:
             member = self.metal_hlsl_layout_member(node)
             if member is not None and member.storage_type in planner.matrix_storages:
                 kind = "array" if member.element_load else "matrix"
+                layout = self.metal_hlsl_layout_member_plan(node).layout
+                if layout == HLSL_CBUFFER_LAYOUT:
+                    label, words = "HLSL constant-buffer", "register words"
+                elif layout == HLSL_STRUCTURED_LAYOUT:
+                    label, words = "HLSL structured-buffer", "words"
+                else:
+                    label, words = LAYOUT_LABELS[layout], "words"
                 raise ValueError(
-                    f"Cannot store to part of HLSL constant-buffer {kind} "
-                    f"'{node.member}' in Metal: it is held as register words"
+                    f"Cannot store to part of {label} {kind} '{node.member}' "
+                    f"in Metal: it is held as {words}"
                 )
+            if isinstance(node, ArrayAccessNode):
+                storage = self.metal_hlsl_structured_buffer_storage(node.array)
+                if storage is not None and storage[0] in planner.matrix_storages:
+                    raise ValueError(
+                        "Cannot store to part of a matrix element of HLSL structured buffer "
+                        f"'{self.expression_name(node)}' in Metal: it is held as words"
+                    )
         if isinstance(target, MemberAccessNode):
             member = self.metal_hlsl_layout_member(target)
             if (
@@ -492,6 +542,19 @@ class MetalHlslResourceMixin:
                             f"{access}{member.element_suffix}",
                             member.write_conversion,
                         )
+            if isinstance(array_expr, (MemberAccessNode, ArrayAccessNode)):
+                # A subscripted component of a vector whose reads convert is stored through the storage
+                # vector, ``v[i][2]``, as a named component is.
+                value_type = self.expression_result_type(array_expr)
+                value_type = self.type_name_string(value_type) if value_type else ""
+                if re.fullmatch(r"(?:bool|u?int|float|[biu]?vec)[2-4]", value_type):
+                    outer = self.metal_hlsl_layout_store_target(array_expr)
+                    if outer is not None:
+                        lhs, conversion = outer
+                        if conversion:
+                            conversion = re.sub(r"[234]$", "", conversion)
+                        index = self.generate_expression(index_expr)
+                        return f"{lhs}[{index}]", conversion
         return None
 
     def metal_global_resource_value_type(self, name):

@@ -63,7 +63,8 @@ from . import (
     vertices,
     workgroups,
 )
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY
 
 WGSL = {
     "if-else": C_FAMILY["if-else"],

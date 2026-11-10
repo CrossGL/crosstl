@@ -13,7 +13,8 @@ that each invocation holds a copy of.
 
 from __future__ import annotations
 
-from .base import ABSENT, PAIR, Template
+from .base import ABSENT, Template
+from .family import PAIR
 from .statements import c_text
 
 # twist changes all three of its by-value parameters, counting n down as a loop counter; the caller's stay as they were.

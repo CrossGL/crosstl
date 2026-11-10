@@ -14,7 +14,8 @@ but not ``^``, so its probe writes ``!=`` there.
 
 from __future__ import annotations
 
-from .base import ABSENT, PAIR, Template
+from .base import ABSENT, Template
+from .family import PAIR
 from .statements import c_text
 
 ENUM = "enum Mode {\n    Off,\n    Low = 2,\n    High\n};"

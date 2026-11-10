@@ -1,6 +1,6 @@
 import pytest
 
-from tools.coverage import decorations, validators
+from tools.coverage import decorations, lowering, validators
 from tools.coverage.model import Feature
 
 SAMPLE = Feature(
@@ -160,9 +160,9 @@ def test_a_compute_translation_must_keep_its_built_in():
 
 def test_a_constant_built_in_may_be_written_as_its_value(monkeypatch):
     size = _compute("workgroup-size", "BuiltIn.WorkgroupSize")
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
     monkeypatch.setattr(
-        validators,
+        lowering,
         "lower",
         lambda *args, **kwargs: ("%uint_1 = OpConstant %uint 1\n", ""),
     )
@@ -217,8 +217,8 @@ def test_a_translation_is_lowered_with_its_entry_point_and_automatic_locations(
         calls.append((language, entry, stage, options))
         return "OpDecorate %depth BuiltIn FragDepth\n", ""
 
-    monkeypatch.setattr(validators, "can_lower", lambda language: True)
-    monkeypatch.setattr(validators, "lower", lower)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
+    monkeypatch.setattr(lowering, "lower", lower)
     hlsl = "struct Out { float d : SV_Depth; };\nOut PSMain() { Out o; o.d = 0.5; return o; }\n"
     assert decorations.lost(DEPTH, "hlsl", hlsl) == ""
     assert calls == [
@@ -232,26 +232,26 @@ def test_a_translation_is_lowered_with_its_entry_point_and_automatic_locations(
 def test_a_translation_that_cannot_be_lowered_is_left_to_its_validator(
     monkeypatch, can_lower, lowered
 ):
-    monkeypatch.setattr(validators, "can_lower", lambda language: can_lower)
-    monkeypatch.setattr(validators, "lower", lambda *args, **kwargs: lowered)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: can_lower)
+    monkeypatch.setattr(lowering, "lower", lambda *args, **kwargs: lowered)
     assert decorations.lost(DEPTH, "hlsl", "float PSMain() : SV_Depth;") == ""
 
 
 def test_opengl_glsl_is_lowered_with_the_vulkan_names_of_the_vertex_and_instance_index():
     source = "gl_Position = vec4(float(gl_VertexID + gl_InstanceID), 0.0, 0.0, 1.0);"
-    assert validators.vulkan_glsl(source) == (
+    assert lowering.vulkan_glsl(source) == (
         "gl_Position = vec4(float(gl_VertexIndex + gl_InstanceIndex), 0.0, 0.0, 1.0);"
     )
-    assert validators.vulkan_glsl("int gl_VertexIDs;") == "int gl_VertexIDs;"
+    assert lowering.vulkan_glsl("int gl_VertexIDs;") == "int gl_VertexIDs;"
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_an_opengl_vertex_index_read():
     source = (
         "#version 460\nlayout(location = 0) in vec4 position;\nvoid main() {\n"
         "    gl_Position = position + vec4(float(gl_VertexID), 0.0, 0.0, 0.0);\n}\n"
     )
-    assembly, log = validators.lower("glsl", source, stage="vertex", raw_ids=False)
+    assembly, log = lowering.lower("glsl", source, stage="vertex", raw_ids=False)
     assert "BuiltIn VertexIndex" in assembly, log
 
 
@@ -310,8 +310,8 @@ def test_a_webgl_translation_is_lowered_as_glsl_es_3_10(monkeypatch):
         calls.append((language, source.splitlines()[0], stage))
         return "OpMemberDecorate %gl_PerVertex 0 Invariant\n", ""
 
-    monkeypatch.setattr(validators, "can_lower", lambda language: language == "glsl")
-    monkeypatch.setattr(validators, "lower", lower)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: language == "glsl")
+    monkeypatch.setattr(lowering, "lower", lower)
     webgl = "#version 300 es\ninvariant gl_Position;\nvoid main() {}\n"
     assert decorations.lost(INVARIANT, "webgl", webgl) == ""
     assert calls == [("glsl", "#version 310 es", "vertex")]
@@ -330,7 +330,7 @@ def test_the_metal_compiler_records_the_invariant_attribute_in_air():
     )
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_a_glsl_es_3_00_vertex_shader():
     source = (
         "#version 300 es\ninvariant gl_Position;\nin vec4 position;\n"
