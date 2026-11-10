@@ -25315,7 +25315,11 @@ class GLSLCodeGen(
         initial_value = getattr(node, "initial_value", None)
         if initial_value is None:
             return f"{'    ' * indent}{declaration};\n"
-        initializer = self.generate_expression_with_expected(initial_value, var_type)
+        # The one-element view is built by an array constructor, so a literal
+        # initializing a 64-bit scalar carries that type's suffix there too.
+        initializer = widened_integer_literal(
+            self, initial_value, var_type
+        ) or self.generate_expression_with_expected(initial_value, var_type)
         return f"{'    ' * indent}{declaration} = {self.map_type(var_type)}[1]({initializer});\n"
 
     def glsl_scalar_array_view_element_expression(self, name):

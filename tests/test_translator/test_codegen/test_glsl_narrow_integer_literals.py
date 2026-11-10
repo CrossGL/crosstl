@@ -92,3 +92,34 @@ def test_64_bit_scalars_calls_and_structs_keep_explicit_conversions(tmp_path):
     assert "int64_t sum = 0;" in glsl
     assert "bump(int64_t(3))" in glsl
     assert "Pair(int64_t(3), uint64_t(4u))" in glsl
+
+
+SCALAR_VIEW_SOURCE = """
+#include <metal_stdlib>
+using namespace metal;
+void bump(thread long t[1]) { t[0] += 1; }
+void bump_unsigned(thread ulong t[1]) { t[0] += 1; }
+kernel void k(const device int* in [[buffer(0)]], device long* out [[buffer(1)]],
+              device ulong* out_unsigned [[buffer(2)]]) {
+  int value = in[0];
+  long zero = 0;
+  long widened = value;
+  ulong seven = 7;
+  bump(&zero);
+  bump(&widened);
+  bump_unsigned(&seven);
+  out[0] = zero + widened;
+  out_unsigned[0] = seven;
+}
+"""
+
+
+def test_literals_initializing_64_bit_scalar_array_views_carry_the_type(tmp_path):
+    # A scalar passed by address to an array parameter becomes a one-element
+    # array built by an array constructor, where Mesa needs the 64-bit literal.
+    path = tmp_path / "views.metal"
+    path.write_text(SCALAR_VIEW_SOURCE)
+    glsl = crosstl.translate(str(path), backend="opengl", format_output=False)
+    assert "int64_t zero[1] = int64_t[1](0l);" in glsl
+    assert "uint64_t seven[1] = uint64_t[1](7ul);" in glsl
+    assert "int64_t widened[1] = int64_t[1](int64_t(value));" in glsl
