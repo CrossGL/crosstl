@@ -48,6 +48,7 @@ from .constant_reference_layouts import (
 )
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
 from .declaration_scopes import separate_initializer_scopes
+from .declared_functions import UndeclaredFunctionError, refuse_undeclared_functions
 from .declared_types import UndeclaredTypeError, refuse_undeclared_types
 from .default_buffer_layouts import mark_default_buffer_layouts
 from .descriptor_arrays import (
@@ -286,6 +287,7 @@ __all__ = [
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
     "TypeAliasUnsupportedError",
+    "UndeclaredFunctionError",
     "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
     "VoidCastError",
@@ -455,6 +457,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     distribute_block_matrix_orders(program, report.target)
     resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
+    refuse_undeclared_functions(program, report.target)
     lower_void_casts(program, report.target)
     refuse_void_values(program, report.target)
     resolve_builtin_names(program, report.target)

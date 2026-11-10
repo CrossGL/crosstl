@@ -825,19 +825,31 @@ def test_resource_effects_accept_statement_list_bodies(body, expected):
 
 
 @pytest.mark.parametrize(
-    "replacement",
+    "replacement,diagnostic",
     [
-        ("constant uint*", "const device uint*"),
-        ("read_count(counts, 1u)", "read_count(counts, lane)"),
-        ("return words[offset];", "return unknown(words, offset);"),
+        (
+            ("constant uint*", "const device uint*"),
+            "project.translate.opengl-software-subgroup-invalid",
+        ),
+        (
+            ("read_count(counts, 1u)", "read_count(counts, lane)"),
+            "project.translate.opengl-software-subgroup-invalid",
+        ),
+        # A call to an undeclared function is refused before the uniformity analysis.
+        (
+            ("return words[offset];", "return unknown(words, offset);"),
+            "project.translate.undeclared-function",
+        ),
     ],
 )
-def test_source_storage_returns_require_immutable_uniform_inputs(tmp_path, replacement):
+def test_source_storage_returns_require_immutable_uniform_inputs(
+    tmp_path, replacement, diagnostic
+):
     report = _report(
         tmp_path,
         "opengl",
         BUFFER_SOURCE.replace(*replacement),
-        diagnostic="project.translate.opengl-software-subgroup-invalid",
+        diagnostic=diagnostic,
     ).to_json()
     assert report["summary"]["translatedCount"] == 0
 
