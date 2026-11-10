@@ -158,6 +158,10 @@ from .push_constant_blocks import (
 )
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .slang_byte_address_words import (
+    SlangThreeComponentAccess,
+    slang_byte_address_vector_call,
+)
 from .slang_constant_references import slang_constant_reference_parameter
 from .slang_declaration_modifiers import (
     is_slang_declaration_metadata_attribute,
@@ -346,6 +350,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.glsl_buffer_block_struct_lowering_failures = {}
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.required_byteaddress_atomic_helpers = set()
+        self.slang_three_component_access = SlangThreeComponentAccess()
         self.slang_byteaddress_temp_variable_index = 0
         self.slang_mesh_payload_parameter_types = set()
         self.slang_ray_payload_parameter_types = set()
@@ -622,6 +627,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.collect_slang_glsl_buffer_blocks(ast)
             self.required_glsl_buffer_aggregate_load_helpers = {}
             self.required_byteaddress_atomic_helpers = set()
+            self.slang_three_component_access = SlangThreeComponentAccess()
             self.slang_byteaddress_temp_variable_index = 0
             self.slang_mesh_payload_parameter_types = set()
             self.slang_ray_payload_parameter_types = set()
@@ -788,7 +794,8 @@ class SlangCodeGen(LoweringRefusalMixin):
     def emit_struct_dependent_helper_functions(self):
         helpers = self.generate_slang_glsl_buffer_aggregate_load_helpers()
         helpers += self.generate_slang_byteaddress_atomic_helpers()
-        return helpers
+        # Generated last: the helpers above call the three-component accessors too.
+        return self.slang_three_component_access.declarations() + helpers
 
     def collect_user_function_names(self, node):
         names = set()
@@ -12723,6 +12730,20 @@ class SlangCodeGen(LoweringRefusalMixin):
     def slang_byteaddress_store_method(self, components):
         return "Store" if components == 1 else f"Store{components}"
 
+    def slang_byteaddress_word_load(self, buffer_name, components, offset):
+        """``components`` 32-bit words at byte ``offset``; three go through a helper (slang_byte_address_words)."""
+        if components == 3:
+            return self.slang_three_component_access.load(buffer_name, offset)
+        method = self.slang_byteaddress_load_method(components)
+        return f"{buffer_name}.{method}({offset})"
+
+    def slang_byteaddress_word_store(self, buffer_name, components, offset, value):
+        """Store ``components`` 32-bit words at byte ``offset``; three go through a helper."""
+        if components == 3:
+            return self.slang_three_component_access.store(buffer_name, offset, value)
+        method = self.slang_byteaddress_store_method(components)
+        return f"{buffer_name}.{method}({offset}, {value})"
+
     def slang_byteaddress_load(self, buffer_name, offset, access):
         if access.get("writeonly"):
             return self.unsupported_glsl_buffer_block_call(
@@ -12733,10 +12754,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             for _, column_offset in matrix_column_offsets(
                 offset, access["matrix_columns"], access["column_stride"]
             ):
-                load = (
-                    f"{buffer_name}."
-                    f"{self.slang_byteaddress_load_method(access['matrix_rows'])}"
-                    f"({column_offset})"
+                load = self.slang_byteaddress_word_load(
+                    buffer_name, access["matrix_rows"], column_offset
                 )
                 columns.append(f"asfloat({load})")
             # The buffer holds columns and a Slang matrix constructor fills rows, as in HLSL.
@@ -12757,9 +12776,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 values.append(f"({buffer_name}.Load({component_offset}) != 0u)")
             return f"{access['slang_type']}({', '.join(values)})"
 
-        load = (
-            f"{buffer_name}."
-            f"{self.slang_byteaddress_load_method(access['components'])}({offset})"
+        load = self.slang_byteaddress_word_load(
+            buffer_name, access["components"], offset
         )
         if access["component_type"] == "bool":
             return f"({load} != 0u)"
@@ -12803,7 +12821,6 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def slang_byteaddress_matrix_store(self, buffer_name, offset, value, access):
         value_expr = self.slang_indexable_expression(value)
-        store_method = self.slang_byteaddress_store_method(access["matrix_rows"])
         lines = []
         for column, column_offset in matrix_column_offsets(
             offset, access["matrix_columns"], access["column_stride"]
@@ -12813,19 +12830,24 @@ class SlangCodeGen(LoweringRefusalMixin):
                 f"_m{row}{column}" for row in range(access["matrix_rows"])
             )
             lines.append(
-                f"{buffer_name}.{store_method}"
-                f"({column_offset}, asuint({value_expr}.{swizzle}))"
+                self.slang_byteaddress_word_store(
+                    buffer_name,
+                    access["matrix_rows"],
+                    column_offset,
+                    f"asuint({value_expr}.{swizzle})",
+                )
             )
         return "\n".join(lines)
 
     def slang_byteaddress_bool_vector_store(self, buffer_name, offset, value, access):
         temp_name = self.next_slang_byteaddress_temp_variable("bool_store")
-        store_method = self.slang_byteaddress_store_method(access["components"])
         store_value = self.slang_byteaddress_store_value(temp_name, access)
         return "\n".join(
             [
                 f"{access['slang_type']} {temp_name} = {value}",
-                f"{buffer_name}.{store_method}({offset}, {store_value})",
+                self.slang_byteaddress_word_store(
+                    buffer_name, access["components"], offset, store_value
+                ),
             ]
         )
 
@@ -12976,8 +12998,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 buffer_name, offset, value, access
             )
         store_value = self.slang_byteaddress_store_value(value, access)
-        store_method = self.slang_byteaddress_store_method(access["components"])
-        return f"{buffer_name}.{store_method}({offset}, {store_value})"
+        return self.slang_byteaddress_word_store(
+            buffer_name, access["components"], offset, store_value
+        )
 
     def slang_byteaddress_aggregate_store_members(
         self, buffer_name, offset, value, access
@@ -13724,6 +13747,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
+            if member == "Load3" and len(args) == 1:
+                return self.slang_three_component_access.load(receiver_expr, args_expr)
             return f"{receiver_expr}.{member}({args_expr})"
 
         if self.is_byte_address_buffer_resource_type(receiver_type) and member in {
@@ -13747,6 +13772,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                     self.atomic_result_diagnostic_fallback_type("uint"),
                 )
             receiver_expr = self.generate_expression(receiver)
+            if member == "Store3" and len(args) == 2:
+                offset, value = (self.generate_expression(arg) for arg in args)
+                return self.slang_three_component_access.store(
+                    receiver_expr, offset, value
+                )
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{receiver_expr}.{member}({args_expr})"
 
@@ -14121,6 +14151,12 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if func_name == "buffer_store":
             return self.buffer_store_expression(args, statement_context)
+
+        vector_call = slang_byte_address_vector_call(
+            self, func_name, args, statement_context
+        )
+        if vector_call is not None:
+            return vector_call
 
         if func_name == "buffer_append":
             return self.buffer_append_expression(args)
