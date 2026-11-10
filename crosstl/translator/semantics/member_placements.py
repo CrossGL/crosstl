@@ -118,6 +118,62 @@ class _Structs:
             return True
         return placed != plain
 
+    def nested_placements_move(self, name, members, layout):
+        """Whether placements inside the structs ``members`` hold put a scalar where ``layout`` alone would not.
+
+        The block's own member placements are kept on both sides; the targets that call this place those.
+        """
+        top = self.tuples(members, True)
+        try:
+            placed = layout_scalar_offsets(
+                crossgl_struct_layout_type(
+                    name, top, lambda inner: self.members(inner, True), (name,)
+                ),
+                layout,
+            )
+            plain = layout_scalar_offsets(
+                crossgl_struct_layout_type(
+                    name, top, lambda inner: self.members(inner, False), (name,)
+                ),
+                layout,
+            )
+        except HlslLayoutError:
+            return True
+        return placed != plain
+
+
+def _check_nested_placements(structs, program, target, native):
+    """Refuse a constant block whose members' structs carry placements that move a scalar under the block's layout.
+
+    SPIR-V, HLSL and GLSL output place a block's own members (``Offset``, ``packoffset`` and ``layout(offset)``),
+    but declare the structs it holds once, by the layout's rules alone: GLSL ``layout(offset)`` and HLSL
+    ``packoffset`` apply to block members only (GLSL 4.60 section 4.4.5), and SPIR-V output decorates the nested
+    struct type with the layout's offsets.
+    """
+    for block in iter_structs(program):
+        if not getattr(block, "is_cbuffer", False):
+            continue
+        nested = [
+            member
+            for member in getattr(block, "members", None) or []
+            if isinstance(member, A.StructMemberNode)
+            and _struct_name(member.member_type) in structs.structs
+            and structs.holds_placements(
+                structs.structs[_struct_name(member.member_type)].members
+            )
+        ]
+        if not nested:
+            continue
+        layout = declared_buffer_layout(getattr(block, "attributes", None)) or native
+        if structs.nested_placements_move(block.name, block.members, layout):
+            names = ", ".join(sorted({_struct_name(m.member_type) for m in nested}))
+            _refuse(
+                target,
+                block.name,
+                f"the members of struct {names} carry @offset or @align, and {target} output declares a struct "
+                "inside a constant buffer by the buffer's layout rules alone",
+            )
+
 
 def _struct_name(type_node):
     while isinstance(type_node, A.ArrayType):
@@ -276,6 +332,7 @@ def refuse_unplaced_member_offsets(program, target) -> None:
     elif target in SLANG_TARGETS:
         _check_slang(structs, program, target)
     elif target in SPIRV_TARGETS:
+        _check_nested_placements(structs, program, target, TARGET_LAYOUTS[target])
         # SPIR-V output places the members of T itself when the buffer declares no layout (spirv_placed_blocks).
         _check_elements(
             structs, program, target, (), lambda _variable, declared: declared is None
@@ -285,6 +342,7 @@ def refuse_unplaced_member_offsets(program, target) -> None:
         # and reads a buffer that declares a layout from registers at the planned offsets
         # (hlsl_glsl_block_registers).
         hlsl = TARGET_LAYOUTS[target] == HLSL_CBUFFER_LAYOUT
+        _check_nested_placements(structs, program, target, TARGET_LAYOUTS[target])
         _check_elements(
             structs,
             program,

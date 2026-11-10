@@ -40,7 +40,9 @@ from .stage_varyings import int_literal, literal_int
 
 __all__ = ["convert_signed_builtin_outputs", "declare_builtin_outputs"]
 
-TARGETS = frozenset({"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
+TARGETS = frozenset(
+    {"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "slang"}
+)
 _FLOAT, _INT, _VEC4 = "float", "int", "vec4"
 _OUTPUTS = {
     "vertex": {

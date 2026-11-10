@@ -379,14 +379,16 @@ def glsl_buffer_struct_type_info(
             array_count = literal_int_value(member_info["array_size"])
             if array_count is None:
                 return None
-            members[member_name] = {
-                **member_info,
-                "offset": offset,
-                "stride": glsl_buffer_array_stride(member_info, layout),
-                "array_count": array_count,
-                "runtime_array": False,
-            }
-            offset += members[member_name]["stride"] * array_count
+            dimensions = glsl_buffer_array_dimensions(
+                member_info, layout, literal_int_value
+            )
+            if dimensions is None:
+                return None
+            stride, inner = dimensions
+            members[member_name] = glsl_buffer_array_member(
+                member_info, offset, stride, inner, array_count
+            )
+            offset += stride * array_count
             max_align = max(max_align, member_align)
             continue
 
@@ -427,11 +429,16 @@ def glsl_buffer_block_member_type(
     member_type = getattr(member, "member_type", None)
     is_array = False
     array_size = None
+    inner_array_sizes = []
     if member_type is not None:
         if str(type(member_type)).find("ArrayType") != -1:
             is_array = True
             array_size = member_type.size
             member_type = member_type.element_type
+            # ``T a[2][3]`` nests outermost first: two ``T[3]`` (GLSL 4.60 section 4.1.9).
+            while str(type(member_type)).find("ArrayType") != -1:
+                inner_array_sizes.append(member_type.size)
+                member_type = member_type.element_type
         type_name = convert_type_node_to_string(member_type)
         if type(member_type).__name__ == "MatrixType" and getattr(
             getattr(member_type, "element_type", None), "name", "float"
@@ -466,7 +473,7 @@ def glsl_buffer_block_member_type(
         )
     if type_info is None:
         return None
-    return {
+    member_info = {
         "type": type_name,
         "layout_type": layout_type_name,
         **type_info,
@@ -474,6 +481,39 @@ def glsl_buffer_block_member_type(
         "is_array": is_array,
         "array_size": array_size,
     }
+    if inner_array_sizes:
+        member_info["inner_array_sizes"] = tuple(inner_array_sizes)
+    return member_info
+
+
+def glsl_buffer_array_dimensions(member_info, layout, literal_int_value):
+    """``(outer stride, inner dimensions)`` of array member ``member_info``, or ``None``.
+
+    An array of arrays is an array of its inner array type, so each dimension's stride is
+    the next dimension's extent times its stride, and the innermost stride is the element's
+    std140 or std430 array stride. Inner dimensions are ``(count, stride)`` pairs, outermost
+    first. ``None`` means an inner extent is not a positive literal integer.
+    """
+    stride = glsl_buffer_array_stride(member_info, layout)
+    inner = []
+    for size in reversed(member_info.get("inner_array_sizes") or ()):
+        count = literal_int_value(size)
+        if count is None or count <= 0:
+            return None
+        inner.insert(0, (count, stride))
+        stride *= count
+    return stride, tuple(inner)
+
+
+def glsl_buffer_array_member(member_info, offset, stride, inner, array_count):
+    """The descriptor of an array member at ``offset``; ``array_count`` is ``None`` for a runtime array."""
+    member = {**member_info, "offset": offset, "stride": stride}
+    if array_count is not None:
+        member["array_count"] = array_count
+    member["runtime_array"] = array_count is None
+    if inner:
+        member["inner_arrays"] = inner
+    return member
 
 
 # Component widths every byte-offset lowering reads and writes with its own types.
@@ -592,6 +632,17 @@ def collect_lowered_glsl_buffer_blocks(
                 break
             if member_info["is_array"]:
                 offset = align_to(offset, glsl_buffer_array_align(member_info, layout))
+                dimensions = glsl_buffer_array_dimensions(
+                    member_info, layout, literal_int_value
+                )
+                if dimensions is None:
+                    failure_reason = (
+                        f"unsupported member {member_name}: inner array sizes "
+                        "must be literal integers"
+                    )
+                    members = {}
+                    break
+                stride, inner = dimensions
                 if member_info["array_size"] is None:
                     if index != len(struct_members) - 1:
                         failure_reason = (
@@ -601,12 +652,9 @@ def collect_lowered_glsl_buffer_blocks(
                         members = {}
                         break
                     runtime_array_name = member_name
-                    members[member_name] = {
-                        **member_info,
-                        "offset": offset,
-                        "stride": glsl_buffer_array_stride(member_info, layout),
-                        "runtime_array": True,
-                    }
+                    members[member_name] = glsl_buffer_array_member(
+                        member_info, offset, stride, inner, None
+                    )
                     continue
 
                 array_count = literal_int_value(member_info["array_size"])
@@ -617,14 +665,10 @@ def collect_lowered_glsl_buffer_blocks(
                     )
                     members = {}
                     break
-                members[member_name] = {
-                    **member_info,
-                    "offset": offset,
-                    "stride": glsl_buffer_array_stride(member_info, layout),
-                    "array_count": array_count,
-                    "runtime_array": False,
-                }
-                offset += members[member_name]["stride"] * array_count
+                members[member_name] = glsl_buffer_array_member(
+                    member_info, offset, stride, inner, array_count
+                )
+                offset += stride * array_count
                 continue
             offset = align_to(offset, member_info["align"])
             members[member_name] = {

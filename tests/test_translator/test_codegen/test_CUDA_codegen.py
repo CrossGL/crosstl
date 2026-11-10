@@ -7276,7 +7276,8 @@ class TestCudaCodeGen:
             "kind=glsl_buffer_block layout=std430 access=readonly set=0 "
             "binding=5 binding_source=explicit count=2"
         ) in cuda_code
-        assert "const ReadBlock readonlyBlocks[2];" in cuda_code
+        assert "__device__ ReadBlock readonlyBlocks[2];" in cuda_code
+        assert "const ReadBlock" not in cuda_code
         assert "struct WriteBlock" in cuda_code
         assert "float4 positions[2];" in cuda_code
         assert (
@@ -7290,6 +7291,52 @@ class TestCudaCodeGen:
         assert (
             "/* unsupported CUDA GLSL buffer block assignment: resource "
             "'readonlyBlocks' is readonly */ ((void)0);"
+        ) in cuda_code
+
+    def test_readonly_glsl_buffer_blocks_are_not_uninitialized_const_objects(self):
+        # #4192: a `__device__ const` object needs an initializer, so a
+        # readonly block, sized array or scalar is declared as HIP declares
+        # it; only a runtime-sized array keeps `const` on its pointee.
+        source_code = """
+        layout(std430, binding = 0) readonly buffer B0 { float fin[]; };
+        layout(std430, binding = 1) buffer B1 { float outp[]; };
+        layout(std430, binding = 2) readonly buffer R { float data[]; uint n; } r;
+        layout(std430, binding = 3) readonly buffer float sized[4];
+        layout(std430, binding = 7) readonly buffer float one;
+        layout(std430, binding = 8) readonly buffer float values[];
+
+        void scale(uint i) {
+            outp[i] = fin[i] * 2.0 + r.data[i] + sized[1] + one + values[i];
+        }
+
+        void blockedWrite(uint value) {
+            r.n = value;
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code, _ = cuda_partial_output(CudaCodeGen().generate, ast)
+
+        assert "__device__ B0 b0;" in cuda_code
+        assert "__device__ B1 b1;" in cuda_code
+        assert "__device__ R r;" in cuda_code
+        assert "__device__ float sized[4];" in cuda_code
+        assert "__device__ float one;" in cuda_code
+        assert "__device__ const float* values;" in cuda_code
+        for declaration in (
+            "const B0 b0",
+            "const R r",
+            "const float sized",
+            "const float one",
+        ):
+            assert declaration not in cuda_code
+        assert (
+            "b1.outp[i] = (((((b0.fin[i] * 2.0f) + r.data[i]) + sized[1]) + one)"
+            " + values[i]);"
+        ) in cuda_code
+        assert (
+            "/* unsupported CUDA GLSL buffer block assignment: resource "
+            "'r' is readonly */ ((void)0);"
         ) in cuda_code
 
     def test_glsl_buffer_block_runtime_arrays_and_atomics_emit_cuda(self):
