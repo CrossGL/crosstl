@@ -27,7 +27,14 @@ from __future__ import annotations
 
 import re
 
-from ..ast import ArrayAccessNode, ArrayLiteralNode, LiteralNode, PrimitiveType
+from ..ast import (
+    ArrayAccessNode,
+    ArrayLiteralNode,
+    FunctionCallNode,
+    LiteralNode,
+    MemberAccessNode,
+    PrimitiveType,
+)
 from ..semantics.rewrite import is_pure
 from .array_utils import fold_array_type_counts, split_array_type_suffix
 
@@ -88,10 +95,10 @@ class MetalArrayArguments:
         parameter_type = self._value_array_type(parameter)
         if parameter_type is None:
             return None
-        if (
-            not isinstance(arg, ArrayLiteralNode)
-            and self._storage_address_space(arg) is None
-        ):
+        returned = self._returned_array(func_name, arg, parameter_type)
+        if returned is not None:
+            return returned
+        if not self._needs_copy(arg, parameter):
             return None
         mapped = codegen.map_type(parameter_type)
         base, suffix = split_array_type_suffix(mapped)
@@ -104,6 +111,65 @@ class MetalArrayArguments:
             return None
         self.required = True
         return f"{METAL_ARRAY_VALUE_TYPE}<{element_spelling}, {extent}>{{{elements}}}.v"
+
+    def copies(self, func_name, index, arg, call_args):
+        """Whether argument ``index`` of a call to ``func_name`` is passed as a thread copy."""
+        parameter = self._parameter(func_name, index, call_args)
+        return (
+            parameter is not None
+            and self._value_array_type(parameter) is not None
+            and self._needs_copy(arg, parameter)
+        )
+
+    def _returned_array(self, func_name, arg, parameter_type):
+        """``f(...).data()`` for the ``array<T, N>`` result of a user function, or ``None`` for other arguments.
+
+        The Metal emitter returns a CrossGL array as ``metal::array<T, N>``, which does not convert to the ``T*`` a C
+        array parameter takes. Its ``data()`` points into the temporary, which lives until the end of the full
+        expression that contains the call ([class.temporary]/4). A nested array would need ``array<T, M>*`` to
+        become ``T (*)[M]``, so it is refused.
+        """
+        codegen = self.codegen
+        if not isinstance(arg, FunctionCallNode):
+            return None
+        callee = codegen.expression_name(getattr(arg, "name", None))
+        if callee not in codegen.user_function_names:
+            return None
+        selected = codegen.metal_user_function_overload_for_call(
+            callee, list(getattr(arg, "args", None) or [])
+        )
+        if selected is None:
+            return None
+        return_type = codegen.metal_effective_function_return_type(selected)
+        if not isinstance(return_type, str) or "[" not in return_type:
+            return None
+        parts = _array_parts(parameter_type)
+        if parts is None:
+            return None
+        if "[" in parts[0]:
+            return codegen.refuse_lowering(
+                f"array argument to '{func_name}': Metal returns the nested array of '{callee}' as "
+                "array<array<T, M>, N>, which has no conversion to a C array parameter"
+            )
+        return f"{codegen.generate_expression(arg)}.data()"
+
+    def _needs_copy(self, arg, parameter):
+        """An array literal, an array outside thread storage, or a read-only array bound to a mutable parameter.
+
+        A read-only array, such as a ``const`` local, is ``const`` thread storage. Its pointer converts to the
+        ``const`` parameter of a callee that only reads, but not to the non-``const`` one of a callee that writes
+        its copy, so it is copied for those.
+        """
+        if isinstance(arg, ArrayLiteralNode) or self._storage_address_space(arg):
+            return True
+        codegen = self.codegen
+        root = codegen.assignment_target_root_name(arg)
+        if not isinstance(root, str) or root not in (
+            getattr(codegen, "current_readonly_metal_parameters", None) or {}
+        ):
+            return False
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        return bool(codegen.is_mutable_metal_parameter(raw_type, parameter))
 
     def _parameter(self, func_name, index, call_args):
         codegen = self.codegen
@@ -148,6 +214,8 @@ class MetalArrayArguments:
     def _storage_address_space(self, arg):
         """Address space of an array argument's storage when it is not ``thread``, else ``None``."""
         codegen = self.codegen
+        if self._byte_block_array(arg):
+            return "device"
         address_space = codegen.argument_address_space(arg)
         root = codegen.assignment_target_root_name(arg)
         if address_space == "constant" and not self._is_parameter(root):
@@ -169,6 +237,20 @@ class MetalArrayArguments:
         ):
             return "constant"
         return None
+
+    def _byte_block_array(self, arg):
+        """Whether ``arg`` is an array member, or a row of one, of a GLSL buffer block held as ``device uchar*``.
+
+        Such a block has no member to name (:mod:`.metal_buffer_component_stores`), so its array cannot be passed
+        at all; each element is read through the block's byte offsets instead.
+        """
+        codegen = self.codegen
+        if not isinstance(arg, (MemberAccessNode, ArrayAccessNode)):
+            return False
+        access = codegen.glsl_buffer_block_member_access(
+            arg
+        ) or codegen.glsl_buffer_block_array_access(arg)
+        return bool(access and access.get("is_array"))
 
     def _is_parameter(self, name):
         codegen = self.codegen
