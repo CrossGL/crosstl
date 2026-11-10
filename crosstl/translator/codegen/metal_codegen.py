@@ -379,6 +379,7 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .matrix_compound_assignment import matrix_product_assignment
+from .metal_array_arguments import MetalArrayArguments
 from .metal_array_copies import (
     generate_metal_array_copy,
     generate_metal_array_initializer,
@@ -1174,6 +1175,7 @@ class MetalCodeGen(
         self.required_metal_wave_multi_prefix_helpers = set()
         self.required_metal_inverse_helpers = set()
         self.metal_matrix_builtins = MetalMatrixBuiltins(self)
+        self.metal_array_arguments = MetalArrayArguments(self)
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
@@ -2285,6 +2287,7 @@ class MetalCodeGen(
         self.required_pointer_atomic_compare_helpers = set()
         self.required_metal_inverse_helpers = set()
         self.metal_matrix_builtins = MetalMatrixBuiltins(self)
+        self.metal_array_arguments = MetalArrayArguments(self)
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
@@ -2532,6 +2535,7 @@ class MetalCodeGen(
         self.required_metal_wave_multi_prefix_helpers = set()
         self.required_metal_inverse_helpers = set()
         self.metal_matrix_builtins = MetalMatrixBuiltins(self)
+        self.metal_array_arguments = MetalArrayArguments(self)
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
@@ -3459,6 +3463,7 @@ class MetalCodeGen(
         code += self.generate_metal_inverse_helpers()
         code += self.metal_matrix_builtins.code()
         code += self.generate_metal_integer_dot_helper()
+        code += self.metal_array_arguments.code()
         code += functions_code
         if self.metal_emulated_matrix_shapes:
             index = self.metal_prelude_insertion_index
@@ -22939,6 +22944,12 @@ class MetalCodeGen(
             if self.is_unsupported_metal_acceleration_structure_array_parameter(
                 func_name, index
             ):
+                continue
+            array_copy = self.metal_array_arguments.argument(
+                func_name, index, arg, call_args
+            )
+            if array_copy is not None:
+                args.append(array_copy)
                 continue
             if (
                 isinstance(arg, ArrayLiteralNode)

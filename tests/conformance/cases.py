@@ -16,6 +16,7 @@ from typing import Callable
 import numpy as np
 
 from . import (
+    array_argument_cases,
     constants_cases,
     control_flow_cases,
     conversion_cases,
@@ -2171,6 +2172,18 @@ CASES = [
         constants_cases.glsl_reference,
         compare="ulp:0",
         constants=constants_cases.block(constants_cases.STD140),
+    ),
+    Case(
+        "g_array_arguments",
+        "S20",
+        "arrays passed by value from a std140 uniform block (vec4, float, mat2x3 and row-major mat2 elements) "
+        "and from shared memory, including helpers that write their copy",
+        "GLSL 4.60 section 6.1.1: an in array parameter is copied in; section 7.6.2.2 (std140)",
+        array_argument_cases.inputs(),
+        np.float32,
+        array_argument_cases.reference,
+        compare="ulp:0",
+        constants=array_argument_cases.block(),
     ),
     Case(
         "s_std140_uniform",
