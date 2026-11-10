@@ -205,3 +205,37 @@ def test_metal_output_compiles(tmp_path):
         pytest.skip("the Metal toolchain is not installed")
 
     assert code == 0, log
+
+
+RETURN_SOURCE = """#version 450
+layout(local_size_x = 1) in;
+layout(std430, binding = 1) buffer Data {
+    float head;
+    float row[4];
+    float tail[4];
+    int same;
+} data;
+float[4] getRow() { return data.row; }
+void main() {
+    float r[4] = getRow();
+    data.head = r[2];
+    data.same = (data.row == data.tail) ? 1 : 0;
+}
+"""
+
+
+def test_metal_returns_a_whole_array_as_a_brace_list(tmp_path):
+    code = _compact(_translate(tmp_path, RETURN_SOURCE, "metal"))
+
+    assert (
+        "array<float,4>getRow(deviceuchar*data){return{(*reinterpret_cast<constdevicefloat*>(data+4)),"
+    ) in code
+    assert "(*reinterpret_cast<constdevicefloat*>(data+16))};}" in code
+
+
+@pytest.mark.parametrize("backend", ["directx", "slang"])
+def test_byte_address_output_returns_and_compares_whole_arrays(tmp_path, backend):
+    code = _compact(_translate(tmp_path, RETURN_SOURCE, backend))
+
+    assert "crossgl_array_value_float_4(asfloat(data.Load(4))," in code
+    assert "asfloat(data.Load(20))" in code and "asfloat(data.Load(32))" in code
