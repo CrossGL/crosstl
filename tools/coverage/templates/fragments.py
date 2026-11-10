@@ -1,15 +1,14 @@
 """Fragment-coordinate, front-facing and fragment-depth probes: the built-in inputs and output of a fragment shader,
 in every language with a fragment stage.
 
-Each probe is the fragment probe of :mod:`.graphics` with one built-in added: it reads the fragment's window
+Each probe is the fragment probe of the language's module with one built-in added: it reads the fragment's window
 position or which face of the primitive it belongs to into the colour it writes, or writes the fragment's depth next
 to the colour. GLSL and WebGL 2 use ``gl_FragCoord``, ``gl_FrontFacing`` and ``gl_FragDepth``, HLSL and Slang the
 ``SV_Position``, ``SV_IsFrontFace`` and ``SV_Depth`` semantics, Metal the ``[[position]]``, ``[[front_facing]]`` and
 ``[[depth(any)]]`` attributes, WGSL the ``position``, ``front_facing`` and ``frag_depth`` built-ins, Rust the
 ``frag_coord``, ``front_facing`` and ``frag_depth`` attributes and CrossGL the GLSL names as member semantics. The
 probes leave out the coordinate's w component, which Direct3D and the other APIs define differently. The kernel
-languages have no fragment stage.
-"""
+languages have no fragment stage."""
 
 from __future__ import annotations
 
