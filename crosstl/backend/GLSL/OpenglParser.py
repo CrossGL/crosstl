@@ -454,6 +454,7 @@ class GLSLParser:
         self.current_token = self.tokens[self.index]
         self.anonymous_struct_count = 0
         self.known_type_names = set()
+        self.struct_member_type_names = {}
         self.current_xfb_output_buffer = None
         self.xfb_output_stride_by_buffer = {}
         self.current_output_stream = None
@@ -1675,6 +1676,9 @@ class GLSLParser:
 
         struct_node = StructNode(name, members)
         struct_node.nested_structs = nested_structs
+        self.struct_member_type_names[name] = [
+            str(getattr(member, "vtype", "") or "") for member in members
+        ]
         return struct_node, variables
 
     def next_anonymous_struct_name(self):
@@ -1741,12 +1745,14 @@ class GLSLParser:
 
         self.eat("RBRACE")
         self.skip_newlines()
-        if "uniform" in {str(qualifier).lower() for qualifier in qualifiers or []}:
+        if {"uniform", "buffer"} & {
+            str(qualifier).lower() for qualifier in qualifiers or []
+        }:
             member_layouts = member_layouts_with_block_matrix_order(
                 layout,
                 members,
                 [member.interface_member_layout for member in members],
-                self.known_type_names,
+                self.struct_member_type_names,
             )
             for member, member_layout in zip(members, member_layouts):
                 member.interface_member_layout = member_layout
