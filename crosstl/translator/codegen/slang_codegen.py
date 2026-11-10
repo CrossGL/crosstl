@@ -6095,7 +6095,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             semantic_str = self.semantic_suffix(semantic)
             declaration = (
-                struct_member_location_prefix(self, node, member, semantic)
+                struct_member_location_prefix(
+                    self, node, member, default_member_semantics
+                )
                 + self.slang_interpolation_attribute_prefix(member)
                 + slang_member_modifier_prefix(
                     self,

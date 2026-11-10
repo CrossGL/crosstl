@@ -104,27 +104,59 @@ def fragment_output_location_node_ids(codegen, ast):
     return node_ids
 
 
-def struct_member_location_prefix(codegen, struct_node, member, semantic):
-    """``[[vk::location(N)]] `` for a varying member of a placed stage structure, else ``""``.
+def _struct_member_locations(codegen, struct_node, default_semantics):
+    """Member name to location for the user varyings of a placed stage structure, or {} when it is not placed.
 
-    A structure is placed when a member has ``@location`` or when a fragment entry point returns it; its members
-    without ``@location`` take the index of their ``TEXCOORD<N>`` or ``SV_Target<N>`` semantic, so that no
-    direction mixes explicit and implicit locations.
+    A structure is placed when a member has ``@location`` or when a fragment entry point returns it. A member without
+    ``@location`` takes the index of its ``TEXCOORD<N>`` or ``SV_Target<N>`` semantic; one with another user
+    semantic, such as ``PSIZE``, takes the lowest location left free. System values take none.
     """
-    location = varying_location(member)
-    if location is not None:
-        return vk_location_prefix(location)
-    if semantic is None:
-        return ""
+    members = getattr(struct_node, "members", None) or []
     placed = getattr(
         struct_node, "name", None
     ) in codegen.fragment_entry_output_struct_names or any(
-        varying_location(other) is not None
-        for other in getattr(struct_node, "members", None) or []
+        varying_location(member) is not None for member in members
     )
     if not placed:
-        return ""
-    location = semantic_location_index(codegen.map_semantic(semantic))
+        return {}
+    locations = {}
+    unnumbered = []
+    for member in members:
+        name = getattr(member, "name", None)
+        location = varying_location(member)
+        if location is None:
+            semantic = codegen.semantic_from_node(member)
+            if semantic is None:
+                semantic = default_semantics.get(name)
+            if semantic is None:
+                continue
+            mapped = str(codegen.map_semantic(semantic) or "")
+            if mapped.upper().startswith("SV_") and not mapped.upper().startswith(
+                "SV_TARGET"
+            ):
+                continue
+            location = semantic_location_index(mapped)
+            if location is None:
+                unnumbered.append(name)
+                continue
+        locations[name] = location
+    used = set(locations.values())
+    location = 0
+    for name in unnumbered:
+        while location in used:
+            location += 1
+        locations[name] = location
+        used.add(location)
+    return locations
+
+
+def struct_member_location_prefix(codegen, struct_node, member, default_semantics):
+    """``[[vk::location(N)]] `` for a user varying member of a placed stage structure, else ``""``.
+
+    Every user varying of such a structure is placed, so that no direction mixes explicit and implicit locations.
+    """
+    locations = _struct_member_locations(codegen, struct_node, default_semantics)
+    location = locations.get(getattr(member, "name", None))
     return "" if location is None else vk_location_prefix(location)
 
 
