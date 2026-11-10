@@ -152,6 +152,7 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .matrix_compound_assignment import matrix_product_assignment
+from .operator_spellings import c_family_operator_spelling
 from .push_constant_blocks import (
     slang_push_constant_cbuffer,
     slang_push_constant_declaration,
@@ -8999,6 +9000,33 @@ class SlangCodeGen(LoweringRefusalMixin):
                 getattr(expr, "array", getattr(expr, "array_expr", None))
             ) and all(
                 self.hlsl_expression_is_repeatable(item) for item in indices or []
+            )
+        # Operators, conditionals and scalar conversions of repeatable operands write nothing, as in the HLSL
+        # emitter; an increment or decrement does.
+        if isinstance(expr, UnaryOpNode):
+            if c_family_operator_spelling(getattr(expr, "op", None)) in {"++", "--"}:
+                return False
+            return self.hlsl_expression_is_repeatable(getattr(expr, "operand", None))
+        if isinstance(expr, BinaryOpNode):
+            spelling = c_family_operator_spelling(getattr(expr, "op", None))
+            if spelling is None or (
+                spelling.endswith("=") and spelling not in {"==", "!=", "<=", ">="}
+            ):
+                return False
+            return self.hlsl_expression_is_repeatable(
+                getattr(expr, "left", None)
+            ) and self.hlsl_expression_is_repeatable(getattr(expr, "right", None))
+        if isinstance(expr, TernaryOpNode):
+            return all(
+                self.hlsl_expression_is_repeatable(getattr(expr, name, None))
+                for name in ("condition", "true_expr", "false_expr")
+            )
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", getattr(expr, "name", None))
+            func_name = getattr(func_expr, "name", func_expr)
+            args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            return self.is_scalar_value_type(func_name) and all(
+                self.hlsl_expression_is_repeatable(arg) for arg in args
             )
         return False
 
