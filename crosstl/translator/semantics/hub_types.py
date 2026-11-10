@@ -512,8 +512,14 @@ class TypeScope:
         return _TEXEL_KINDS[match.group(1)].with_lanes(4)
 
 
+# The ``x++``/``--x`` helpers (``step_values.STEP_HELPER_PREFIX``) write their operand.
+_WRITING_RULE_PREFIX = "cgl_rule_wrap_"
+
+
 def is_pure_callee(name: str) -> bool:
     """Value constructors, bit casts, rule intrinsics and math built-ins that neither write nor read memory."""
+    if name.startswith(_WRITING_RULE_PREFIX):
+        return False
     return (
         type_from_name(name) is not None
         or name.startswith(("__cgl_", "cgl_rule_"))

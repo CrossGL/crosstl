@@ -198,9 +198,15 @@ from .generic_struct_utils import (
     normalize_specialization_type_text,
     render_constructor_arguments,
 )
+from .glsl_buffer_block_arrays import (
+    glsl_buffer_array_elements,
+    glsl_buffer_block_indexed_access,
+    glsl_buffer_indexed_value_type,
+    glsl_buffer_matrix_column_access,
+    glsl_buffer_whole_array_reason,
+)
 from .glsl_buffer_layout import (
     byte_offset_add,
-    byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_block_node_type,
     glsl_buffer_compound_binary_operator,
@@ -10896,9 +10902,9 @@ class MetalCodeGen(
                 getattr(expr, "target", getattr(expr, "left", None))
             )
         if isinstance(expr, ArrayAccessNode):
-            block_member = self.glsl_buffer_block_member_access(expr.array)
-            if block_member is not None and block_member.get("is_array"):
-                return block_member["type"]
+            block_access = self.glsl_buffer_block_array_access(expr)
+            if block_access is not None:
+                return glsl_buffer_indexed_value_type(block_access)
             array_type = self.expression_result_type(expr.array)
             if not array_type:
                 array_type = self.unsupported_glsl_buffer_block_expression_type(
@@ -18592,6 +18598,9 @@ class MetalCodeGen(
                 continue
             if self.mutable_metal_pointer_member_argument(arg):
                 continue
+            if self.metal_array_arguments.copies(func_name, index, arg, call_args):
+                # A by-value array parameter receives a thread copy of the read-only array.
+                continue
             reason = self.current_readonly_metal_parameter_reasons.get(
                 arg_name, "readonly"
             )
@@ -23827,7 +23836,7 @@ class MetalCodeGen(
         parent = self.glsl_buffer_block_array_access(
             object_expr
         ) or self.glsl_buffer_block_member_access(object_expr)
-        if parent is None or not parent.get("members"):
+        if parent is None or not parent.get("members") or parent.get("subarray"):
             return None
         member = parent["members"].get(member_name)
         if member is None:
@@ -23842,16 +23851,7 @@ class MetalCodeGen(
         }
 
     def glsl_buffer_block_array_access(self, expr):
-        if not isinstance(expr, ArrayAccessNode):
-            return None
-        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
-        member = self.glsl_buffer_block_member_access(array_expr)
-        if member is None or not member.get("is_array"):
-            return None
-        index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
-        index = self.generate_expression(index_expr)
-        offset = byte_offset_expression(member["offset"], index, member["stride"])
-        return {**member, "offset": offset, "offset_expr": offset}
+        return glsl_buffer_block_indexed_access(self, expr)
 
     def metal_scalar_load(self, component_type, buffer_name, offset, memory=""):
         # ``memory`` is the block's coherent/volatile prefix: a cast that drops it
@@ -24008,6 +24008,8 @@ class MetalCodeGen(
                 str(member.get("stride")),
                 str(member.get("runtime_array")),
             ]
+            if member.get("inner_arrays"):
+                fields.append(str(member["inner_arrays"]))
             parts.append(":".join(fields))
             for child_name, child in (member.get("members") or {}).items():
                 visit(f"{member_name}.{child_name}", child)
@@ -24045,11 +24047,10 @@ class MetalCodeGen(
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_target = f"{member_target}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_target = f"{member_target}{subscripts}"
                     if member.get("members"):
                         nested_lines = self.metal_aggregate_load_assignments(
                             element_target,
@@ -24146,11 +24147,10 @@ class MetalCodeGen(
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_value = f"{member_value}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_value = f"{member_value}{subscripts}"
                     if member.get("members"):
                         nested_stores = self.metal_aggregate_store_members(
                             buffer_name, element_offset, element_value, field_access
@@ -24225,10 +24225,16 @@ class MetalCodeGen(
             f"{access['component_type']} buffer members",
         )
 
+    def metal_glsl_buffer_whole_array_check(self, access, *, indexed):
+        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
+        if reason is not None:
+            raise BufferBlockUnsupportedError("metal", "array value", reason)
+
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
-        if access is None or access.get("is_array"):
+        if access is None or access.get("runtime_array"):
             return None
+        self.metal_glsl_buffer_whole_array_check(access, indexed=False)
         if access.get("members"):
             return self.metal_aggregate_load(access["buffer"], access["offset"], access)
         return self.metal_buffer_load(access["buffer"], access["offset"], access)
@@ -24237,6 +24243,7 @@ class MetalCodeGen(
         access = self.glsl_buffer_block_array_access(expr)
         if access is None:
             return None
+        self.metal_glsl_buffer_whole_array_check(access, indexed=True)
         if access.get("members"):
             return self.metal_aggregate_load(
                 access["buffer"], access["offset_expr"], access
@@ -24247,13 +24254,17 @@ class MetalCodeGen(
         component_store = metal_buffer_component_store(self, target, rhs, op)
         if component_store is not None:
             return component_store
-        access = self.glsl_buffer_block_array_access(target)
+        access = self.glsl_buffer_block_array_access(
+            target
+        ) or glsl_buffer_matrix_column_access(self, target)
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
-            if access is None or access.get("is_array"):
+            if access is None or access.get("runtime_array"):
                 return None
+            self.metal_glsl_buffer_whole_array_check(access, indexed=False)
             offset = access["offset"]
         else:
+            self.metal_glsl_buffer_whole_array_check(access, indexed=True)
             offset = access["offset_expr"]
 
         if access.get("readonly"):
