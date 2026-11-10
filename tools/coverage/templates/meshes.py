@@ -1,9 +1,9 @@
 """Mesh-stage probes: the primitives a mesh stage emits, the per-primitive values it writes and the payload and IDs it
 reads.
 
-Each probe is the mesh probe of :mod:`.graphics`, a stage that writes one triangle, with one part changed: it emits a
-point or a line instead, writes a per-primitive output, culls its primitive, writes the primitive's ID, layer or
-viewport, or reads the payload a task stage hands it or the ID of its workgroup into the position of its second
+Each probe is the mesh probe of the language's module, a stage that writes one triangle, with one part changed: it
+emits a point or a line instead, writes a per-primitive output, culls its primitive, writes the primitive's ID, layer
+or viewport, or reads the payload a task stage hands it or the ID of its workgroup into the position of its second
 vertex. One probe runs three invocations instead of one, each writing the vertex its local invocation index names, and
 the first also the indices. GLSL states the topology in its ``layout`` qualifier, writes the indices through
 ``gl_Primitive*IndicesEXT`` and the per-primitive built-ins through ``gl_MeshPrimitivesEXT``, declares a per-primitive
