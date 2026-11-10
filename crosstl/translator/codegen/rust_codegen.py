@@ -8379,6 +8379,9 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return fields
 
     def rust_array_padding_expression(self, base_type, static_context=False):
+        enum_initializer = self.rust_empty_brace_enum_array_element(base_type)
+        if enum_initializer is not None:
+            return enum_initializer
         if static_context:
             rust_type = self.map_type(base_type)
             scalar_initializer = self.rust_scalar_default_literal(rust_type)
@@ -11041,6 +11044,22 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             next_value = None if value is None else value + 1
 
         raise RustEnumEmptyBraceError(enum_node.name, "no variant has the value 0")
+
+    def rust_empty_brace_enum_array_element(self, element_type):
+        """The zero value of an element of ``element_type``, an enumeration or an array of one.
+
+        An element left out of a brace list is value-initialized, as ``{}`` is: ``M::B`` for
+        ``enum M { A = 2, B = 0 }``, and ``[M::B; 3]`` for an ``M[3]`` element. Returns ``None``
+        for any other type; raises :class:`RustEnumEmptyBraceError` as
+        :meth:`rust_empty_brace_enum_initializer` does.
+        """
+        if self.is_array_type_name(element_type):
+            inner_type, size = self.c_array_outer_element_type_and_size(element_type)
+            if size is None:
+                return None
+            inner = self.rust_empty_brace_enum_array_element(inner_type)
+            return None if inner is None else f"[{inner}; {size}]"
+        return self.rust_empty_brace_enum_initializer(element_type)
 
     def enum_variant_call_path(self, enum_type, variant_name):
         rust_type = self.map_type(enum_type)

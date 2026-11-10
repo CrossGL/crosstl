@@ -57226,8 +57226,12 @@ complex64_t crossgl_complex64_mod_assign(
         )
         code = f"{layout_prefix} {qualifier_prefix}buffer {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
+            # A member of structure type keeps its row_major, which reaches the structure's matrices (GLSL 4.60
+            # section 4.4.5); row_major_members has already transposed the matrix members and dropped theirs.
+            orientation = self.glsl_uniform_member_orientation(member)
             code += self.generate_struct_member_declaration(
                 member,
+                indent=f"    {orientation}",
                 struct_name=source_block_name,
                 preserve_unsized_arrays=True,
             )
