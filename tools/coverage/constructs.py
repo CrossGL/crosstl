@@ -2,10 +2,10 @@
 
 The built-in function lists in :mod:`.features` say nothing about what a language can declare, how it branches, what
 its operators compute or which stages it has. The features here fill that in. Each one is anchored to the SPIR-V core
-grammar items it needs (an instruction, a capability, a storage class, a built-in, an image dimension or an execution
-model), and the anchors are checked against the pinned grammar. The stages are the grammar's shader execution models
-and the scalar types its width capabilities, so a new stage or width upstream shows up as untested until it has a
-probe.
+grammar items it needs (an instruction, a capability, a storage class, a built-in, an image dimension or format, or an
+execution model), and the anchors are checked against the pinned grammar. The stages are the grammar's shader
+execution models and the scalar types its width capabilities, so a new stage or width upstream shows up as untested
+until it has a probe.
 
 Probe templates are written per language: CrossGL's in :mod:`.crossgl`, the others in :mod:`.templates`. A language
 with no spelling for a feature, such as WGSL for a geometry stage, leaves it out of its feature list; one that has the
@@ -418,6 +418,32 @@ def _curated() -> list[Construct]:
         ),
         c(
             "compute",
+            "specialization-constant-float",
+            "OpSpecConstant",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-constant-vector",
+            "OpSpecConstantComposite",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-array-size",
+            "OpTypeArray",
+            "StorageClass.Workgroup",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
+            "specialization-constant-in-helper",
+            "OpFunctionCall",
+            "OpSpecConstant",
+            "Decoration.SpecId",
+        ),
+        c(
+            "compute",
             "restrict-buffer",
             "StorageClass.StorageBuffer",
             "Decoration.Restrict",
@@ -476,10 +502,89 @@ def _curated() -> list[Construct]:
         c("resource", "texture-cube-array", "OpTypeImage", "Dim.Cube"),
         c(
             "resource",
+            "texture-1d-array",
+            "OpTypeImage",
+            "Dim.1D",
+            "Capability.Sampled1D",
+        ),
+        c(
+            "resource",
             "texel-buffer",
             "OpTypeImage",
             "Dim.Buffer",
             "Capability.SampledBuffer",
+        ),
+        c("resource", "texture-in-helper", "OpFunctionCall", "OpTypeImage", "Dim.2D"),
+        c(
+            "resource",
+            "texture-argument",
+            "OpFunctionCall",
+            "OpFunctionParameter",
+            "Dim.2D",
+        ),
+        # An array of textures keeps its images as the elements of one array (decorations.ELEMENTS).
+        c("resource", "array-of-textures", "OpTypeArray", "OpTypeImage", "Dim.2D"),
+        c("resource", "read-write-image", "OpImageRead", "OpImageWrite", "Dim.2D"),
+        c(
+            "resource",
+            "array-of-textures-loop-index",
+            "OpTypeArray",
+            "OpLoopMerge",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
+            "array-of-textures-nonuniform-index",
+            "Capability.ShaderNonUniform",
+            "Decoration.NonUniform",
+            "OpTypeArray",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
+            "unsized-array-of-textures",
+            "Capability.RuntimeDescriptorArray",
+            "OpTypeRuntimeArray",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
+            "array-of-images",
+            "OpTypeArray",
+            "OpImageRead",
+            "OpImageWrite",
+            "Dim.2D",
+        ),
+        c("resource", "shared-sampler", "OpTypeSampler", "OpSampledImage", "Dim.2D"),
+        c(
+            "resource",
+            "storage-image-1d",
+            "OpImageWrite",
+            "Dim.1D",
+            "Capability.Image1D",
+        ),
+        c("resource", "storage-image-3d", "OpImageWrite", "Dim.3D"),
+        c("resource", "storage-image-array", "OpImageWrite", "Dim.2D"),
+        c(
+            "resource",
+            "storage-texel-buffer",
+            "OpImageWrite",
+            "Dim.Buffer",
+            "Capability.ImageBuffer",
+        ),
+        c(
+            "resource",
+            "unorm-storage-image",
+            "OpImageWrite",
+            "ImageFormat.Rgba8",
+            "Dim.2D",
+        ),
+        c(
+            "resource",
+            "integer-storage-image",
+            "OpImageWrite",
+            "ImageFormat.R32ui",
+            "Dim.2D",
         ),
         c(
             "resource",
@@ -690,6 +795,17 @@ def _curated() -> list[Construct]:
             "early-fragment-tests",
             "ExecutionMode.EarlyFragmentTests",
             stage="fragment",
+        ),
+        *(
+            c(
+                "graphics",
+                name,
+                "ExecutionMode.PixelInterlockOrderedEXT",
+                "Capability.FragmentShaderPixelInterlockEXT",
+                "OpBeginInvocationInterlockEXT",
+                stage="fragment",
+            )
+            for name in ("rasterizer-ordered-image", "rasterizer-ordered-buffer")
         ),
         c("graphics", "layer", "BuiltIn.Layer", stage="fragment"),
         c("graphics", "viewport-index", "BuiltIn.ViewportIndex", stage="fragment"),
@@ -1030,6 +1146,7 @@ def universe(grammar_text: str) -> list[Construct]:
         "ExecutionModel",
         "ExecutionMode",
         "Dim",
+        "ImageFormat",
     ):
         found |= {f"{kind}.{e['enumerant']}" for e in kinds[kind]}
     found |= {f"Capability.{name}" for name in capabilities}

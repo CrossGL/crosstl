@@ -49051,6 +49051,7 @@ complex64_t crossgl_complex64_mod_assign(
         if (
             not is_texture_samples_query_operation(func_name)
             and descriptor["multisample"]
+            and not descriptor["storage_image"]
         ):
             texture_name = self.generate_expression(texture_arg)
             return texture_samples_query_expression("GLSL", texture_name)

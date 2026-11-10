@@ -368,7 +368,7 @@ def run_input(feature: Feature, language: str) -> Result:
     lost = spirv_input.dropped(feature, translated) if language == "spirv" else ""
     if lost and not _encodes_otherwise(feature):
         return result("wrong", lost)
-    lost = decorations.lost(feature, emitted, translated)
+    lost = decorations.lost(feature, emitted, translated, imported=language)
     if lost:
         return result("wrong", f"after the round trip: {lost}")
     if emitted == language and _runs(feature, language):

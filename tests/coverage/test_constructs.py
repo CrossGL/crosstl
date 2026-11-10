@@ -19,7 +19,9 @@ from tools.coverage.templates import (
     draws,
     extensions,
     fragments,
+    images,
     interfaces,
+    interlocks,
     meshes,
     pipeline,
     primitives,
@@ -28,6 +30,7 @@ from tools.coverage.templates import (
     rays,
     relations,
     specializations,
+    storage,
     subgroups,
     tasks,
     tessellation,
@@ -68,6 +71,7 @@ def _grammar(drop: str = "") -> str:
         "ExecutionModel": [],
         "ExecutionMode": [],
         "Dim": [],
+        "ImageFormat": [],
     }
     instructions = []
     for anchor in sorted(anchors - {drop}):
@@ -533,6 +537,190 @@ def test_binding_probes_push_constants_and_bind_a_block_in_another_set():
         "descriptor-set",
     }
     for language in ("metal", "webgl", "cuda", "hip", "opencl", "mojo"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert not listed & names, language
+
+
+def test_image_probes_pass_sample_and_index_textures_and_update_an_image_in_place():
+    assert (
+        _feature("glsl", "array-of-textures").group == "OpTypeArray OpTypeImage Dim.2D"
+    )
+    assert _feature("hlsl", "read-write-image").category == "resource"
+    for language, name, line in (
+        ("glsl", "texture-in-helper", "float lookup(float x) {\n"),
+        ("glsl", "texture-argument", "float lookup(sampler2D t, float x) {\n"),
+        (
+            "glsl",
+            "array-of-textures",
+            "layout(binding = 3) uniform sampler2D tex[2];\n",
+        ),
+        (
+            "glsl",
+            "read-write-image",
+            "layout(r32f, binding = 4) uniform image2D img;\n",
+        ),
+        ("webgl", "texture-argument", "float lookup(highp sampler2D t, float x) {\n"),
+        ("webgl", "array-of-textures", "uniform highp sampler2D tex[2];\n"),
+        (
+            "hlsl",
+            "texture-argument",
+            "float lookup(Texture2D<float4> t, SamplerState s, float x) {\n",
+        ),
+        ("hlsl", "array-of-textures", "Texture2D<float4> tex[2] : register(t1);\n"),
+        ("slang", "read-write-image", "RWTexture2D<float> img;\n"),
+        ("metal", "array-of-textures", "array<texture2d<float>, 2> tex [[texture(0)]]"),
+        ("metal", "read-write-image", "texture2d<float, access::read_write> img"),
+        (
+            "wgsl",
+            "texture-argument",
+            "fn lookup(t: texture_2d<f32>, s: sampler, x: f32)",
+        ),
+        ("wgsl", "read-write-image", "texture_storage_2d<r32float, read_write>;\n"),
+        ("cuda", "texture-in-helper", "__device__ float lookup(cudaTextureObject_t t"),
+        ("hip", "read-write-image", "hipSurfaceObject_t img"),
+        ("opencl", "read-write-image", "__read_write image2d_t img"),
+        ("rust", "array-of-textures", "tex: &[Image!(2D, type=f32, sampled); 2]"),
+        ("glsl", "array-of-textures-loop-index", "    acc += textureLod(tex[k], "),
+        (
+            "glsl",
+            "array-of-textures-nonuniform-index",
+            "#extension GL_EXT_nonuniform_qualifier : require\n",
+        ),
+        ("glsl", "array-of-textures-nonuniform-index", "tex[nonuniformEXT(k)]"),
+        (
+            "hlsl",
+            "array-of-textures-nonuniform-index",
+            "tex[NonUniformResourceIndex(k)]",
+        ),
+        (
+            "metal",
+            "array-of-textures-nonuniform-index",
+            "uint k = uint(fin[i]) & 1u;\n",
+        ),
+        ("rust", "array-of-textures-loop-index", "for k in 0..2 {\n"),
+        (
+            "glsl",
+            "unsized-array-of-textures",
+            "layout(binding = 3) uniform sampler2D tex[];\n",
+        ),
+        ("glsl", "unsized-array-of-textures", "int k = int(fin[0]) & 1;\n"),
+        (
+            "hlsl",
+            "unsized-array-of-textures",
+            "Texture2D<float4> tex[] : register(t1);\n",
+        ),
+        (
+            "metal",
+            "unsized-array-of-textures",
+            "device const Slot* slots [[buffer(2)]]",
+        ),
+        (
+            "rust",
+            "unsized-array-of-textures",
+            "tex: &RuntimeArray<Image!(2D, type=f32, sampled)>",
+        ),
+        (
+            "glsl",
+            "array-of-images",
+            "layout(r32f, binding = 4) uniform image2D img[2];\n",
+        ),
+        ("hlsl", "array-of-images", "RWTexture2D<float> img[2] : register(u3);\n"),
+        (
+            "metal",
+            "array-of-images",
+            "array<texture2d<float, access::read_write>, 2> img",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "array-of-textures"), "crossgl").source
+    assert "        uniform sampler2D tex[2];\n" in crossgl
+    # CrossGL spells the non-uniform index as GLSL does, with no extension to enable.
+    crossgl = probes.build(
+        _feature("glsl", "array-of-textures-nonuniform-index"), "crossgl"
+    ).source
+    assert "tex[nonuniformEXT(k)]" in crossgl and "#extension" not in crossgl
+    # A helper samples a program-scope texture by name where the language has them, and takes it as a parameter
+    # where textures are entry-point parameters.
+    assert (
+        "lookup(fin[i])" in probes.build(
+            _feature("hlsl", "texture-in-helper"), "hlsl"
+        ).source
+    )
+    assert (
+        "lookup(tex, smp, fin[i])" in probes.build(
+            _feature("metal", "texture-in-helper"), "metal"
+        ).source
+    )
+    names = set(images.NAMES)
+    for language in ("glsl", "hlsl", "slang", "metal"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    arrays = {name for name in names if "array-of-" in name}
+    absent = {
+        "wgsl": arrays,
+        "webgl": {
+            "read-write-image",
+            "array-of-textures-loop-index",
+            "array-of-textures-nonuniform-index",
+            "unsized-array-of-textures",
+            "array-of-images",
+        },
+        "cuda": arrays,
+        "hip": arrays,
+        "opencl": arrays,
+        "rust": {"array-of-textures-nonuniform-index"},
+        "mojo": names,
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names & listed == names - missing, language
+
+
+def test_rasterizer_ordered_probes_order_the_accesses_of_overlapping_fragments():
+    feature = _feature("glsl", "rasterizer-ordered-image")
+    assert (feature.category, feature.stage) == ("graphics", "fragment")
+    assert feature.group == (
+        "ExecutionMode.PixelInterlockOrderedEXT Capability.FragmentShaderPixelInterlockEXT"
+        " OpBeginInvocationInterlockEXT"
+    )
+    for language, name, line in (
+        ("glsl", "rasterizer-ordered-image", "layout(pixel_interlock_ordered) in;\n"),
+        ("glsl", "rasterizer-ordered-buffer", "    beginInvocationInterlockARB();\n"),
+        ("glsl", "rasterizer-ordered-image", "    endInvocationInterlockARB();\n"),
+        (
+            "hlsl",
+            "rasterizer-ordered-image",
+            "RasterizerOrderedTexture2D<float4> accum : register(u1);\n",
+        ),
+        (
+            "slang",
+            "rasterizer-ordered-buffer",
+            "RasterizerOrderedStructuredBuffer<float4> accum : register(u1);\n",
+        ),
+        ("metal", "rasterizer-ordered-image", "[[texture(0), raster_order_group(0)]]"),
+        ("metal", "rasterizer-ordered-buffer", "[[buffer(0), raster_order_group(0)]]"),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    for name, line in (
+        (
+            "rasterizer-ordered-image",
+            "    image2D accum @rasterizer_ordered @rgba32f;\n",
+        ),
+        (
+            "rasterizer-ordered-buffer",
+            "    RWStructuredBuffer<vec4> accum @rasterizer_ordered;\n",
+        ),
+    ):
+        assert line in probes.build(_feature("glsl", name), "crossgl").source, name
+    # WGSL and GLSL ES 3.00 have no ordered fragment access, the kernel languages no fragment stage, and rust-gpu
+    # cannot open the interlocked region.
+    names = set(interlocks.NAMES)
+    for language in ("glsl", "hlsl", "slang", "metal"):
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert names <= listed, language
+    for language in ("wgsl", "webgl", "rust", "cuda", "hip", "opencl", "mojo"):
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert not listed & names, language
 
@@ -1602,6 +1790,39 @@ def test_specialization_probes_declare_each_languages_pipeline_constants():
             "specialization-constant",
             "#[spirv(spec_constant(id = 0, default = 3))] scale: u32",
         ),
+        (
+            "glsl",
+            "specialization-constant-float",
+            "layout(constant_id = 0) const float gain = 1.5;",
+        ),
+        (
+            "glsl",
+            "specialization-constant-vector",
+            "const ivec2 steps = ivec2(scale, 1);",
+        ),
+        ("glsl", "specialization-array-size", "shared float tile[count];"),
+        ("slang", "specialization-array-size", "groupshared float tile[count];"),
+        ("wgsl", "specialization-constant-float", "override gain: f32 = 1.5;"),
+        (
+            "wgsl",
+            "specialization-array-size",
+            "var<workgroup> tile: array<f32, count>;",
+        ),
+        (
+            "metal",
+            "specialization-constant-vector",
+            "constant int2 steps = int2(scale, 1);",
+        ),
+        (
+            "metal",
+            "specialization-constant-in-helper",
+            "return x * float(scale) + 1.0;",
+        ),
+        (
+            "rust",
+            "specialization-constant-in-helper",
+            "fn scaled(x: f32, scale: u32) -> f32",
+        ),
     ):
         probe = probes.build(_feature(language, name), language)
         assert line in probe.source, (language, name)
@@ -1609,15 +1830,24 @@ def test_specialization_probes_declare_each_languages_pipeline_constants():
         _feature("glsl", "specialization-constant-bool"), "crossgl"
     ).source
     assert "const bool negate @constant_id(0) = true;" in crossgl
-    # HLSL for Direct3D, GLSL ES 3.00 and the kernel languages have no specialization constants, Metal no specialized
-    # threadgroup size, and rust-gpu only u32 parameters.
+    crossgl = probes.build(
+        _feature("glsl", "specialization-array-size"), "crossgl"
+    ).source
+    assert "const int count @constant_id(0) = 4;" in crossgl
+    assert "shared float tile[count];" in crossgl
+    # HLSL for Direct3D, GLSL ES 3.00 and the kernel languages have no specialization constants. Metal has no
+    # specialized threadgroup size or array length, WGSL and Slang no vector computed from a constant, and rust-gpu
+    # only u32 parameters.
     names = set(specializations.NAMES)
+    vector = {"specialization-constant-vector"}
     absent = {
         "glsl": set(),
-        "slang": set(),
-        "wgsl": set(),
-        "metal": {"specialization-workgroup-size"},
-        "rust": names - {"specialization-constant"},
+        "slang": vector,
+        "wgsl": vector,
+        "metal": {"specialization-workgroup-size", "specialization-array-size"},
+        "rust": (
+            names - {"specialization-constant", "specialization-constant-in-helper"}
+        ),
         **dict.fromkeys(("hlsl", "webgl", "cuda", "hip", "opencl", "mojo"), names),
     }
     for language, missing in absent.items():
@@ -1706,21 +1936,87 @@ def test_texture_probes_read_each_shape_of_texture_per_language():
         ("opencl", "texel-buffer", "__read_only image1d_buffer_t tex"),
         ("rust", "texture-cube-array", "&Image!(cube, type=f32, sampled, arrayed)"),
         ("rust", "texel-buffer", "OpImageFetch typeof*{color} %image %coordinate"),
+        ("glsl", "texture-1d-array", "textureLod(tex, vec2(fin[i], 1.0), 0.0)"),
+        ("hlsl", "texture-1d-array", "Texture1DArray<float4> tex : register(t1);"),
+        ("cuda", "texture-1d-array", "tex1DLayeredLod<float4>(tex, fin[i], 1, 0.0f)"),
+        ("opencl", "texture-1d-array", "__read_only image1d_array_t tex"),
+        ("rust", "texture-1d-array", "OpImageSampleExplicitLod typeof*{color}"),
     ):
         probe = probes.build(_feature(language, name), language)
         assert line in probe.source, (language, name)
     crossgl = probes.build(_feature("glsl", "texture-cube"), "crossgl").source
     assert "uniform samplerCube tex;" in crossgl
-    # WGSL has no buffer textures, OpenCL C no cube images, GLSL ES 3.00 no 1D, cube-array or buffer textures, and
-    # Mojo's kernels no textures.
+    assert _feature("glsl", "texture-1d-array").group == (
+        "OpTypeImage Dim.1D Capability.Sampled1D"
+    )
+    # WGSL has no buffer or 1D array textures, OpenCL C no cube images, GLSL ES 3.00 no 1D, 1D-array, cube-array or
+    # buffer textures, and Mojo's kernels no textures.
     names = set(textures.NAMES)
     absent = {
         **dict.fromkeys(
             ("glsl", "hlsl", "slang", "metal", "cuda", "hip", "rust"), set()
         ),
-        "wgsl": {"texel-buffer"},
+        "wgsl": {"texel-buffer", "texture-1d-array"},
         "opencl": {"texture-cube", "texture-cube-array"},
-        "webgl": {"texture-1d", "texture-cube-array", "texel-buffer"},
+        "webgl": {
+            "texture-1d",
+            "texture-1d-array",
+            "texture-cube-array",
+            "texel-buffer",
+        },
+        "mojo": names,
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_storage_probes_write_each_shape_of_storage_image_per_language():
+    feature = _feature("glsl", "storage-image-1d")
+    assert (feature.category, feature.stage) == ("resource", "compute")
+    assert feature.group == "OpImageWrite Dim.1D Capability.Image1D"
+    assert _feature("hlsl", "storage-texel-buffer").group == (
+        "OpImageWrite Dim.Buffer Capability.ImageBuffer"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "storage-image-1d",
+            "layout(rgba32f, binding = 4) uniform writeonly image1D img;",
+        ),
+        (
+            "glsl",
+            "storage-image-array",
+            "imageStore(img, ivec3(0, 0, 1), vec4(fin[i]));",
+        ),
+        ("hlsl", "storage-texel-buffer", "RWBuffer<float4> img : register(u3);"),
+        ("slang", "storage-image-3d", "img[uint3(0, 0, 0)] = float4("),
+        ("metal", "storage-image-array", "img.write(float4(fin[i]), uint2(0, 0), 1);"),
+        ("metal", "storage-texel-buffer", "texture_buffer<float, access::write> img"),
+        (
+            "wgsl",
+            "storage-image-3d",
+            "var img: texture_storage_3d<rgba32float, write>;",
+        ),
+        ("cuda", "storage-image-array", "surf2DLayeredwrite(make_float4("),
+        ("hip", "storage-image-1d", "hipSurfaceObject_t img"),
+        ("opencl", "storage-texel-buffer", "__write_only image1d_buffer_t img"),
+        (
+            "rust",
+            "storage-image-array",
+            "&Image!(2D, arrayed, format = rgba32f, sampled = false)",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "storage-image-3d"), "crossgl").source
+    assert "layout(rgba32f) uniform writeonly image3D img;" in crossgl
+    # WGSL, CUDA and HIP have no storage texel buffers, and GLSL ES 3.00 and Mojo's kernels no storage images.
+    names = set(storage.NAMES)
+    absent = {
+        **dict.fromkeys(("glsl", "hlsl", "slang", "metal", "opencl", "rust"), set()),
+        **dict.fromkeys(("wgsl", "cuda", "hip"), {"storage-texel-buffer"}),
+        "webgl": names,
         "mojo": names,
     }
     for language, missing in absent.items():

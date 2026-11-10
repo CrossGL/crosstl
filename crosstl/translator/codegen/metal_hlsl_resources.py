@@ -56,6 +56,24 @@ def metal_layout_refusal(message, layout):
     )
 
 
+def metal_layout_subscripts(expr):
+    """``(root, indices)`` of the subscript chain ``root[i][j]...``, indices outermost first."""
+    indices = []
+    while isinstance(expr, ArrayAccessNode):
+        indices.append(getattr(expr, "index", getattr(expr, "index_expr", None)))
+        expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+    indices.reverse()
+    return expr, indices
+
+
+def metal_flattened_index(subscripts, inner_counts):
+    """Row-major index of the element ``subscripts`` select in an array whose inner extents are ``inner_counts``."""
+    flat = subscripts[0]
+    for subscript, count in zip(subscripts[1:], inner_counts):
+        flat = f"({flat}) * {count} + ({subscript})"
+    return flat
+
+
 class MetalHlslResourceMixin:
     """HLSL resource, binding and buffer-layout members of ``MetalCodeGen``."""
 
@@ -350,10 +368,12 @@ class MetalHlslResourceMixin:
         """``(access, read_conversion)`` for an element read with HLSL storage."""
         array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
         index_expr = getattr(expr, "index", getattr(expr, "index_expr", None))
-        name = self.expression_name(array_expr)
+        root, indices = metal_layout_subscripts(expr)
+        name = self.expression_name(root)
         cbuffer_arrays = getattr(self, "metal_hlsl_cbuffer_array_members", {}) or {}
+        storage = self.metal_hlsl_structured_buffer_storage(array_expr)
         if (
-            isinstance(array_expr, IdentifierNode)
+            isinstance(root, IdentifierNode)
             and isinstance(name, str)
             and name in cbuffer_arrays
             and name not in self.local_variable_types
@@ -361,33 +381,35 @@ class MetalHlslResourceMixin:
         ):
             member = cbuffer_arrays[name]
             base = self.cbuffer_member_references[name]
-            index = self.generate_expression(index_expr)
-            if member.element_load:
-                return f"{member.element_load}({base}, {index})", None
-            return f"{base}[{index}]{member.element_suffix}", member.read_conversion
-        storage = self.metal_hlsl_structured_buffer_storage(array_expr)
-        if storage is not None and storage[1]:
+        elif storage is not None and storage[1]:
             array = self.generate_expression(array_expr)
             index = self.generate_expression(index_expr)
             return f"{array}[{index}]", storage[1]
-        if isinstance(array_expr, MemberAccessNode):
-            member = self.metal_hlsl_layout_member(array_expr)
-            if member is not None and member.element_load:
-                array = self.generate_expression(array_expr)
-                index = self.generate_expression(index_expr)
-                return f"{member.element_load}({array}, {index})", None
-            if (
-                member is not None
-                and member.array_count is not None
-                and (member.element_suffix or member.read_conversion)
-            ):
-                array = self.generate_expression(array_expr)
-                index = self.generate_expression(index_expr)
-                return (
-                    f"{array}[{index}]{member.element_suffix}",
-                    member.read_conversion,
+        elif isinstance(root, MemberAccessNode):
+            member = self.metal_hlsl_layout_member(root)
+            if member is None or not (
+                member.element_load
+                or (
+                    member.array_count is not None
+                    and (member.element_suffix or member.read_conversion)
                 )
-        return None
+            ):
+                return None
+            base = None
+        else:
+            return None
+        if len(indices) != member.dimensions:
+            # More subscripts select within the element read below; fewer leave an inner array, which the array
+            # copies, initializers and arguments read element by element through this method.
+            return None
+        if base is None:
+            base = self.generate_expression(root)
+        subscripts = [self.generate_expression(index) for index in indices]
+        if member.element_load:
+            flat = metal_flattened_index(subscripts, member.inner_counts)
+            return f"{member.element_load}({base}, {flat})", None
+        access = base + "".join(f"[{index}]" for index in subscripts)
+        return f"{access}{member.element_suffix}", member.read_conversion
 
     def metal_hlsl_layout_member_object_code(self, expr):
         object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
@@ -454,19 +476,22 @@ class MetalHlslResourceMixin:
                 array = self.generate_expression(array_expr)
                 index = self.generate_expression(index_expr)
                 return f"{array}[{index}]", storage[2]
-            if isinstance(array_expr, MemberAccessNode):
-                member = self.metal_hlsl_layout_member(array_expr)
+            root, indices = metal_layout_subscripts(target)
+            if isinstance(root, MemberAccessNode):
+                member = self.metal_hlsl_layout_member(root)
                 if (
                     member is not None
                     and member.array_count is not None
                     and member.read_conversion
                 ):
-                    array = self.generate_expression(array_expr)
-                    index = self.generate_expression(index_expr)
-                    return (
-                        f"{array}[{index}]{member.element_suffix}",
-                        member.write_conversion,
-                    )
+                    if len(indices) == member.dimensions:
+                        access = self.generate_expression(root) + "".join(
+                            f"[{self.generate_expression(index)}]" for index in indices
+                        )
+                        return (
+                            f"{access}{member.element_suffix}",
+                            member.write_conversion,
+                        )
         return None
 
     def metal_global_resource_value_type(self, name):
