@@ -10,7 +10,8 @@ Changes:
 
 * HLSL declaration initializers now use an initializer list
   (``{2.0, {6.0, 7.0}}``).
-* Other HLSL expression contexts are refused with a typed diagnostic.
+* Other HLSL expression contexts pass the literal as the array member of a
+  constructed value struct (``crossgl_array_value_float_2(6.0, 7.0).v``).
 * Metal types program-scope constants, so an array constant copied into an
   array member is expanded element by element (``{WS[0], WS[1]}``).
 """
@@ -58,14 +59,18 @@ def test_hlsl_struct_constants_with_array_literals_use_initializer_lists(tmp_pat
     assert "static const P S0 = __crossgl_construct_P(1.0, WS);" in code
 
 
-def test_hlsl_array_literal_fields_outside_initializers_are_refused(tmp_path):
+def test_hlsl_array_literal_fields_outside_initializers_are_array_values(tmp_path):
     program = PROGRAM.replace(
         "const Q Q0 = Q(P(1.0, {2.0, 3.0}), 4.0);",
         "const Q Q0 = Q(P(1.0, {2.0, 3.0}), 4.0);\n"
         "const float V = P(2.0, {0.0, 1.0}).w[1];",
     )
-    with pytest.raises(ValueError, match="no fixed-array literal expression for a P"):
-        _translate(tmp_path, program, "directx")
+    code = _translate(tmp_path, program, "directx")
+    # The helper call takes the literal as the array member of a constructed value struct.
+    assert (
+        "static const float V = __crossgl_construct_P(2.0, "
+        "crossgl_array_value_float_2(0.0, 1.0).v).w[1];"
+    ) in code
 
 
 def test_metal_array_constants_are_copied_element_by_element(tmp_path):
