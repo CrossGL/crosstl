@@ -5959,6 +5959,12 @@ class WGSLCodeGen(
         return stride % 16 != 0
 
     def wgsl_type_size_and_align(self, vtype):
+        """The host-shareable size and alignment of ``vtype`` in bytes, or ``(None, None)`` when unknown.
+
+        WGSL's layout rules: a vector of 3 is aligned as a vector of 4, a matrix is an array of its column vectors,
+        an array's stride is its element size rounded up to the element alignment, and a structure is aligned to
+        its widest member. ``(None, None)`` makes the caller refuse the declaration.
+        """
         scalar_bytes = {
             "bool": (1, 1),
             "i8": (1, 1),
@@ -5973,11 +5979,19 @@ class WGSLCodeGen(
             "i64": (8, 8),
             "u64": (8, 8),
         }
-        try:
-            type_name = self.type_name_string(vtype) if vtype is not None else None
-        except Exception:
-            type_name = None
+        if isinstance(vtype, ArrayType):
+            count = self.resolve_integer_expression(vtype.size)
+            element_size, element_align = self.wgsl_type_size_and_align(
+                vtype.element_type
+            )
+            if count is None or element_size is None:
+                return None, None
+            stride = (
+                (element_size + element_align - 1) // element_align
+            ) * element_align
+            return count * stride, element_align
 
+        type_name = self.type_name_string(vtype) if vtype is not None else None
         if type_name in scalar_bytes:
             return scalar_bytes[type_name]
 
@@ -5986,7 +6000,9 @@ class WGSLCodeGen(
             if m_vec:
                 lanes = int(m_vec.group(1))
                 elem_name = m_vec.group(2)
-                elem_size, elem_align = scalar_bytes.get(elem_name, (4, 4))
+                if elem_name not in scalar_bytes:
+                    return None, None
+                elem_size, elem_align = scalar_bytes[elem_name]
                 if lanes == 2:
                     return elem_size * 2, elem_align * 2
                 elif lanes == 3:
@@ -5999,7 +6015,9 @@ class WGSLCodeGen(
                 cols = int(m_mat.group(1))
                 rows = int(m_mat.group(2))
                 elem_name = m_mat.group(3)
-                elem_size, elem_align = scalar_bytes.get(elem_name, (4, 4))
+                if elem_name not in scalar_bytes:
+                    return None, None
+                elem_size, elem_align = scalar_bytes[elem_name]
                 col_align = elem_align * (4 if rows > 2 else 2)
                 col_size = elem_size * rows
                 col_stride = ((col_size + col_align - 1) // col_align) * col_align
