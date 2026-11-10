@@ -79,6 +79,23 @@ class HlslBufferLength:
         )
         return f"cgl_buffer_count({buffer_code})"
 
+    def dimension_outputs(self, buffer_code, resource_name, hlsl_type, outputs):
+        """``buffer_dimensions(b, out...)`` as a statement writing ``outputs``, or ``None`` when ``b`` has no such query.
+
+        The outputs follow the resource's own ``GetDimensions``: count and stride for a structured buffer, count for a
+        typed buffer, bytes for a byte-address buffer. A structured buffer has no overload with only a count, so a lone
+        output is assigned the element count instead.
+        """
+        declared = COUNTED_BUFFERS.get(resource_name)
+        if declared is None and resource_name in BYTE_ADDRESS_BUFFERS:
+            declared = 1
+        if declared is None or not outputs or len(outputs) > declared:
+            return None
+        if len(outputs) == declared:
+            return f"{buffer_code}.GetDimensions({', '.join(outputs)})"
+        count = self.element_count(buffer_code, resource_name, hlsl_type)
+        return None if count is None else f"{outputs[0]} = {count}"
+
     def byte_size(self, buffer_code, resource_name):
         if resource_name not in BYTE_ADDRESS_BUFFERS:
             return None
