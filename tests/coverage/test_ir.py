@@ -218,6 +218,24 @@ def test_a_crossgl_probe_whose_spirv_has_the_native_id_is_expressed():
     assert runner.expressed(RUST_ABS, "rust", "GLSL.std.450:FSign") == ""
 
 
+@pytest.mark.skipif(
+    not validators.available("spirv"), reason="spirv-val is not installed"
+)
+def test_a_rust_subgroup_function_is_expressed_through_its_wave_spelling():
+    uint = Type("uint")
+    add = Feature(
+        "rust",
+        "function",
+        "subgroup_i_add",
+        Signature(uint, (Param(uint),)),
+        group="arch",
+        crossgl="WaveActiveSum",
+    )
+    # The operand type selects the integer instruction rust-gpu's native probe lowers to.
+    assert runner.expressed(add, "rust", "OpGroupNonUniformIAdd.Reduce") == "spirv"
+    assert runner.expressed(add, "rust", "OpGroupNonUniformFAdd.Reduce") == ""
+
+
 def test_no_route_for_spirv_itself_constructs_or_features_without_an_id():
     assert runner.expressed(RUST_ABS, "spirv", "GLSL.std.450:FAbs") == ""
     assert runner.expressed(RUST_ABS, "rust", "") == ""
