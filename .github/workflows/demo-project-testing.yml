@@ -3425,7 +3425,7 @@ jobs:
           script: |
             const prefix = `mlx-portable-host-${process.env.MLX_TARGET}-`;
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              owner: context.repo.owner, repo: context.repo.repo, run_id: context.runId, per_page: 100
+              owner: context.repo.owner, repo: context.repo.repo, run_id: 42829510482, per_page: 100
             });
             const candidates = artifacts.filter(item => !item.expired && item.name.startsWith(prefix)
               && /^\d+$/.test(item.name.slice(prefix.length)));
@@ -3435,6 +3435,8 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.host-artifact.outputs.id }}
+          run-id: 42829510482
+          github-token: ${{ github.token }}
           path: .mlx-portable-quantized/base
           merge-multiple: true
           skip-decompress: true
