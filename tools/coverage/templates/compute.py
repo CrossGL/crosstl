@@ -53,6 +53,7 @@ from . import (
     shapes,
     specializations,
     statements,
+    storage,
     subgroups,
     tasks,
     tessellation,
@@ -155,6 +156,7 @@ CUDA = {
     **textures.CUDA,
     **images.CUDA,
     **formats.CUDA,
+    **storage.CUDA,
     **samplers.KERNELS,
     # CUDA vector types are plain structs: no swizzles, no arithmetic operators, and no matrix types at all.
     "swizzle": ABSENT,
@@ -211,6 +213,7 @@ HIP = {
     **textures.HIP,
     **images.HIP,
     **formats.HIP,
+    **storage.HIP,
     **samplers.KERNELS,
     "half": scalar("__half", "fin", "#include <hip/hip_fp16.h>"),
     "sampled-texture": Template(
@@ -314,6 +317,7 @@ OPENCL = {
     **textures.OPENCL,
     **images.OPENCL,
     **formats.OPENCL,
+    **storage.OPENCL,
     **samplers.OPENCL,
     "vector-scalar-product": Template(
         "float2 v = (float2)(fin[i], 1.0f) * 4.0f;\nfloat2 w = 0.5f * v;\noutp[i] = w.x + w.y;"
@@ -486,6 +490,7 @@ MOJO = {
     **textures.MOJO,
     **images.MOJO,
     **formats.MOJO,
+    **storage.MOJO,
     **samplers.KERNELS,
     "half": _mojo_scalar("Float16", "fin"),
     "double": _mojo_scalar("Float64", "fin"),
@@ -725,6 +730,7 @@ RUST = {
     **textures.RUST,
     **images.RUST,
     **formats.RUST,
+    **storage.RUST,
     **samplers.RUST,
     "global-constant": Template("outp[i] = fin[i] * SCALE;", "const SCALE: f32 = 2.0;"),
     "runtime-array-length": Template("outp[i] = outp.len() as f32;"),

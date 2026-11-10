@@ -58,6 +58,7 @@ from .rows import WEBGL as _ROWS
 from .samplers import WEBGL as _SAMPLERS
 from .scopes import WEBGL as _SCOPES
 from .specializations import WEBGL as _SPECIALIZATIONS
+from .storage import WEBGL as _STORAGE
 from .subgroups import WEBGL as _SUBGROUPS
 from .tasks import WEBGL as _TASKS
 from .tessellation import WEBGL as _TESSELLATION
@@ -153,6 +154,7 @@ WEBGL = {
     **_IMAGES,
     **_FORMATS,
     **_SAMPLERS,
+    **_STORAGE,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

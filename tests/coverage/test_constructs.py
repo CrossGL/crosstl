@@ -30,6 +30,7 @@ from tools.coverage.templates import (
     rays,
     relations,
     specializations,
+    storage,
     subgroups,
     tasks,
     tessellation,
@@ -1935,21 +1936,87 @@ def test_texture_probes_read_each_shape_of_texture_per_language():
         ("opencl", "texel-buffer", "__read_only image1d_buffer_t tex"),
         ("rust", "texture-cube-array", "&Image!(cube, type=f32, sampled, arrayed)"),
         ("rust", "texel-buffer", "OpImageFetch typeof*{color} %image %coordinate"),
+        ("glsl", "texture-1d-array", "textureLod(tex, vec2(fin[i], 1.0), 0.0)"),
+        ("hlsl", "texture-1d-array", "Texture1DArray<float4> tex : register(t1);"),
+        ("cuda", "texture-1d-array", "tex1DLayeredLod<float4>(tex, fin[i], 1, 0.0f)"),
+        ("opencl", "texture-1d-array", "__read_only image1d_array_t tex"),
+        ("rust", "texture-1d-array", "OpImageSampleExplicitLod typeof*{color}"),
     ):
         probe = probes.build(_feature(language, name), language)
         assert line in probe.source, (language, name)
     crossgl = probes.build(_feature("glsl", "texture-cube"), "crossgl").source
     assert "uniform samplerCube tex;" in crossgl
-    # WGSL has no buffer textures, OpenCL C no cube images, GLSL ES 3.00 no 1D, cube-array or buffer textures, and
-    # Mojo's kernels no textures.
+    assert _feature("glsl", "texture-1d-array").group == (
+        "OpTypeImage Dim.1D Capability.Sampled1D"
+    )
+    # WGSL has no buffer or 1D array textures, OpenCL C no cube images, GLSL ES 3.00 no 1D, 1D-array, cube-array or
+    # buffer textures, and Mojo's kernels no textures.
     names = set(textures.NAMES)
     absent = {
         **dict.fromkeys(
             ("glsl", "hlsl", "slang", "metal", "cuda", "hip", "rust"), set()
         ),
-        "wgsl": {"texel-buffer"},
+        "wgsl": {"texel-buffer", "texture-1d-array"},
         "opencl": {"texture-cube", "texture-cube-array"},
-        "webgl": {"texture-1d", "texture-cube-array", "texel-buffer"},
+        "webgl": {
+            "texture-1d",
+            "texture-1d-array",
+            "texture-cube-array",
+            "texel-buffer",
+        },
+        "mojo": names,
+    }
+    for language, missing in absent.items():
+        listed = {f.name for f in constructs.features(language, GRAMMAR)}
+        assert listed & names == names - missing, language
+
+
+def test_storage_probes_write_each_shape_of_storage_image_per_language():
+    feature = _feature("glsl", "storage-image-1d")
+    assert (feature.category, feature.stage) == ("resource", "compute")
+    assert feature.group == "OpImageWrite Dim.1D Capability.Image1D"
+    assert _feature("hlsl", "storage-texel-buffer").group == (
+        "OpImageWrite Dim.Buffer Capability.ImageBuffer"
+    )
+    for language, name, line in (
+        (
+            "glsl",
+            "storage-image-1d",
+            "layout(rgba32f, binding = 4) uniform writeonly image1D img;",
+        ),
+        (
+            "glsl",
+            "storage-image-array",
+            "imageStore(img, ivec3(0, 0, 1), vec4(fin[i]));",
+        ),
+        ("hlsl", "storage-texel-buffer", "RWBuffer<float4> img : register(u3);"),
+        ("slang", "storage-image-3d", "img[uint3(0, 0, 0)] = float4("),
+        ("metal", "storage-image-array", "img.write(float4(fin[i]), uint2(0, 0), 1);"),
+        ("metal", "storage-texel-buffer", "texture_buffer<float, access::write> img"),
+        (
+            "wgsl",
+            "storage-image-3d",
+            "var img: texture_storage_3d<rgba32float, write>;",
+        ),
+        ("cuda", "storage-image-array", "surf2DLayeredwrite(make_float4("),
+        ("hip", "storage-image-1d", "hipSurfaceObject_t img"),
+        ("opencl", "storage-texel-buffer", "__write_only image1d_buffer_t img"),
+        (
+            "rust",
+            "storage-image-array",
+            "&Image!(2D, arrayed, format = rgba32f, sampled = false)",
+        ),
+    ):
+        probe = probes.build(_feature(language, name), language)
+        assert line in probe.source, (language, name)
+    crossgl = probes.build(_feature("glsl", "storage-image-3d"), "crossgl").source
+    assert "layout(rgba32f) uniform writeonly image3D img;" in crossgl
+    # WGSL, CUDA and HIP have no storage texel buffers, and GLSL ES 3.00 and Mojo's kernels no storage images.
+    names = set(storage.NAMES)
+    absent = {
+        **dict.fromkeys(("glsl", "hlsl", "slang", "metal", "opencl", "rust"), set()),
+        **dict.fromkeys(("wgsl", "cuda", "hip"), {"storage-texel-buffer"}),
+        "webgl": names,
         "mojo": names,
     }
     for language, missing in absent.items():

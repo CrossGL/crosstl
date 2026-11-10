@@ -502,6 +502,13 @@ def _curated() -> list[Construct]:
         c("resource", "texture-cube-array", "OpTypeImage", "Dim.Cube"),
         c(
             "resource",
+            "texture-1d-array",
+            "OpTypeImage",
+            "Dim.1D",
+            "Capability.Sampled1D",
+        ),
+        c(
+            "resource",
             "texel-buffer",
             "OpTypeImage",
             "Dim.Buffer",
@@ -549,6 +556,22 @@ def _curated() -> list[Construct]:
             "Dim.2D",
         ),
         c("resource", "shared-sampler", "OpTypeSampler", "OpSampledImage", "Dim.2D"),
+        c(
+            "resource",
+            "storage-image-1d",
+            "OpImageWrite",
+            "Dim.1D",
+            "Capability.Image1D",
+        ),
+        c("resource", "storage-image-3d", "OpImageWrite", "Dim.3D"),
+        c("resource", "storage-image-array", "OpImageWrite", "Dim.2D"),
+        c(
+            "resource",
+            "storage-texel-buffer",
+            "OpImageWrite",
+            "Dim.Buffer",
+            "Capability.ImageBuffer",
+        ),
         c(
             "resource",
             "unorm-storage-image",
