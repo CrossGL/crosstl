@@ -4376,8 +4376,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
         if (
             expected_type == "uint3"
-            and mapped_semantic
-            in {
+            and mapped_semantic in {
                 "SV_DispatchThreadID",
                 "SV_GroupThreadID",
                 "SV_GroupID",
