@@ -286,7 +286,7 @@ jobs:
           - os: ubuntu-latest
             adapter: vulkan
             required_tools: spirv-val,spirv-as
-            apt_packages: glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
+            apt_packages: glslang-tools libvulkan-dev libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
           - os: macOS-latest
             adapter: metal
             required_tools: xcrun
@@ -430,6 +430,17 @@ jobs:
             tests/test_translator/test_structured_buffer_member_layouts.py \
             tests/test_translator/test_metal_specialization_constants.py \
             tests/test_translator/test_metal_threadgroup_parameter_indices.py
+
+      # The conformance harness builds vkrun against libvulkan-dev and runs it on the host lavapipe ICD.
+      - name: Check SPIR-V member placements on lavapipe
+        if: matrix.adapter == 'vulkan' && steps.probe_runtime_parity.outputs.available == 'true'
+        shell: bash
+        env:
+          CROSSTL_CONFORMANCE_MESA: host
+          CROSSTL_REQUIRE_NESTED_MEMBER_PLACEMENT_EXECUTION: "1"
+        run: |
+          python -m pytest -q \
+            tests/test_translator/test_spirv_nested_member_placements.py
 
       - name: Record unavailable runtime parity adapter
         if: steps.probe_runtime_parity.outputs.available != 'true'

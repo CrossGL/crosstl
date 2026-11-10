@@ -15,7 +15,10 @@ std140. CrossGL keeps the layout of a constant block in ``@ buffer_layout(...)``
   :mod:`buffer_member_layout`), and ``layout(align = 32)`` raises its alignment.
 
 :func:`placed_uniform_block` computes those placements with the shared planners (:mod:`glsl_block_layout`,
-:mod:`hlsl_buffer_layout`). A block whose bytes match std140 everywhere keeps the generator's std140 path;
+:mod:`hlsl_buffer_layout`). The qualifiers of the members of a struct the block holds place them within that struct,
+as they do at the root: SPIR-V decorates every struct type's members with ``Offset`` (SPIR-V 1.6 section 2.16.2), so
+``struct Inner { float s; vec4 v @offset(32); }`` held by a block puts ``v`` 32 bytes after the start of the
+``Inner`` value. A block whose bytes match std140 everywhere keeps the generator's std140 path;
 any other block is declared through layout clones decorated with the planned offsets and strides by
 :func:`decorate_placed_uniform_block`. Such offsets break the extended alignment rules Vulkan applies to uniform
 buffers by default, and every one of them satisfies the scalar block layout (VK_EXT_scalar_block_layout, core in
@@ -26,10 +29,11 @@ glslang does for a GLSL block that needs it. A layout no planner reproduces rais
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
-from ..ast import ArrayNode, ArrayType, FunctionNode
+from ..ast import ArrayNode, ArrayType, FunctionNode, NamedType
 from .array_utils import evaluate_literal_int_expression
 from .buffer_member_layout import (
     member_explicit_offset,
@@ -133,6 +137,32 @@ def _has_explicit_placement(members):
     )
 
 
+def _member_struct_name(member):
+    """The name of the struct a member's type holds, through any array dimensions, or ``None``."""
+    member_type = _member_tuple(member)[1]
+    while isinstance(member_type, ArrayType):
+        member_type = member_type.element_type
+    if isinstance(member_type, NamedType):
+        return None if member_type.generic_args else member_type.name
+    if isinstance(member_type, str):
+        return re.sub(r"\s*\[.*$", "", member_type).strip() or None
+    return getattr(member_type, "name", None)
+
+
+def _holds_explicit_placement(structs, members, stack=()):
+    """Whether ``members``, or the members of a struct they hold at any depth, carry ``@offset`` or ``@align``."""
+    if _has_explicit_placement(members):
+        return True
+    for member in members:
+        name = _member_struct_name(member)
+        struct = structs.get(name) if name is not None else None
+        if struct is None or name in stack:
+            continue
+        if _holds_explicit_placement(structs, _block_members(struct), (*stack, name)):
+            return True
+    return False
+
+
 def _block_layout_type(codegen, node, members):
     structs = getattr(codegen, "struct_declarations", None) or {}
 
@@ -140,10 +170,7 @@ def _block_layout_type(codegen, node, members):
         struct = structs.get(name)
         if struct is None:
             return None
-        return [
-            (*_member_tuple(member)[:3], None, *_member_tuple(member)[4:])
-            for member in _block_members(struct)
-        ]
+        return [_member_tuple(member) for member in _block_members(struct)]
 
     constants = codegen.active_literal_int_constants()
     return crossgl_struct_layout_type(
@@ -293,10 +320,28 @@ def _check_validator_extents(
             _check_validator_extents(nested.struct_name, nested_placements, layout)
 
 
+def _without_placements(layout_type):
+    """``layout_type`` with the explicit offsets and alignments of every struct in it removed."""
+    if layout_type.kind == "array":
+        return replace(layout_type, element=_without_placements(layout_type.element))
+    if layout_type.kind != "struct":
+        return layout_type
+    return replace(
+        layout_type,
+        members=tuple(
+            (name, _without_placements(member_type))
+            for name, member_type in layout_type.members
+        ),
+        offsets=(),
+        alignments=(),
+    )
+
+
 def _plain_signature(layout_type, layout):
-    """The placements of a block's members under ``layout`` without explicit offsets or alignments, or ``None``
-    when ``layout`` has no layout for one (a packed vector)."""
-    plain_type = replace(layout_type, offsets=(), alignments=())
+    """The placements of a block's members under ``layout`` without explicit offsets or alignments, its own or
+    those of the structs it holds, or ``None`` when ``layout`` has no layout for one (a packed vector).
+    """
+    plain_type = _without_placements(layout_type)
     try:
         plain = _root_placements(plain_type, layout)
         return _placements_signature(plain, layout)
@@ -316,7 +361,9 @@ def placed_uniform_block(
     """
     layout = declared_buffer_layout(getattr(node, "attributes", None)) or plain_layout
     members = _block_members(node)
-    explicit = _has_explicit_placement(members)
+    explicit = _holds_explicit_placement(
+        getattr(codegen, "struct_declarations", None) or {}, members
+    )
     if layout not in ALWAYS_PLACED_LAYOUTS and not explicit:
         return None
     if layout not in PLACED_LAYOUTS:
