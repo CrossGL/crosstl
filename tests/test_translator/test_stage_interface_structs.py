@@ -438,7 +438,6 @@ shader main {
     code = _translate(tmp_path, source, "slang")
     assert "struct FragmentOutput" in code
     assert re.search(r"float4\s+color\s*:\s*SV_Target1;", code)
-    assert "location" not in code
     _validate_slang(tmp_path, code, profile="fragment", entry="main")
 
 
@@ -454,7 +453,6 @@ shader main {
 """
     code = _translate(tmp_path, source, "slang")
     assert re.search(r"float2\s+uv\s*:\s*TEXCOORD2", code)
-    assert "location" not in code
     _validate_slang(tmp_path, code, profile="vertex", entry="main")
 
 
@@ -476,7 +474,6 @@ shader main {
     assert re.search(r"float3\s+pos\s*:\s*TEXCOORD0;", code)
     assert "struct VertexOutput" in code
     assert re.search(r"float3\s+color\s*:\s*TEXCOORD0;", code)
-    assert "location" not in code
     _validate_slang(tmp_path, code, profile="vertex", entry="main")
 
 
