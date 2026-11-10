@@ -8,16 +8,17 @@ The parser keeps the parameters on the struct (``template_parameters``, as for f
 :mod:`.function_templates`), and the importer emits ``generic<T> struct Box``, keeps each use's arguments in CrossGL
 spellings (``Box<vec2>``), and lowers a member function to a generic function over its receiver (``generic<T> T
 Box_twice(in Box<T> __this)``), whose calls deduce ``T`` from the receiver. An explicit specialization (``template <>
-struct Box<int>``) becomes the concrete ``Box_int_specialization`` that uses with those arguments name. Value
-parameters and partial specializations have no CrossGL form yet: such a template is left undeclared, and a program
-that names it is refused.
+struct Box<int>``) becomes the concrete ``Box_int_specialization`` that uses with those arguments name. A value
+parameter (``template <typename T, uint N>``) is a generic parameter that each use binds (``Ring<float, 4u>``), with
+defaults spelled out at the use. Partial specializations have no CrossGL form yet: such a template is left
+undeclared, and a program that names it is refused.
 """
 
 from __future__ import annotations
 
 import re
 
-from .function_templates import TemplateParameter
+from .function_templates import TemplateParameter, template_argument
 from .namespaces import source_name
 
 __all__ = [
@@ -72,19 +73,14 @@ def _unsupported_reason(struct):
     parameters = struct_template_parameters(struct)
     if getattr(struct, "specialization_arguments", None) is True:
         return (
-            f"HLSL struct '{struct.name}' is a partial specialization, which CrossGL generic structures "
+            f"HLSL struct '{source_name(struct)}' is a partial specialization, which CrossGL generic structures "
             "cannot express"
         )
     if parameters == [] and explicit_struct_specialization_arguments(struct) is None:
-        return f"HLSL struct '{struct.name}' is an explicit specialization without arguments"
+        return f"HLSL struct '{source_name(struct)}' is an explicit specialization without arguments"
     for parameter in parameters or []:
-        if not parameter.is_type:
-            return (
-                f"HLSL struct template '{source_name(struct)}' declares the value parameter "
-                f"'{parameter.kind} {parameter.name}', which the importer does not translate yet"
-            )
         if not parameter.name:
-            return f"HLSL struct template '{struct.name}' declares an unnamed type parameter"
+            return f"HLSL struct template '{source_name(struct)}' declares an unnamed type parameter"
     return None
 
 
@@ -109,7 +105,7 @@ def unsupported_struct_templates(structs):
         ):
             reasons.setdefault(
                 struct.name,
-                f"HLSL struct '{struct.name}' is an explicit specialization of no struct template",
+                f"HLSL struct '{source_name(struct)}' is an explicit specialization of no struct template",
             )
     return reasons
 
@@ -126,7 +122,8 @@ def name_explicit_struct_specializations(codegen, structs):
         arguments = explicit_struct_specialization_arguments(struct)
         if arguments is None or struct.name in reasons:
             continue
-        mapped = tuple(_argument(codegen, argument) for argument in arguments)
+        template = getattr(codegen, "struct_templates", {}).get(struct.name, ())
+        mapped = _template_arguments(codegen, template, arguments)
         suffix = re.sub(r"\W+", "_", "_".join(mapped)).strip("_")
         name = f"{struct.name}_{suffix}_specialization"
         names[(struct.name, mapped)] = name
@@ -186,7 +183,8 @@ def struct_template_prefix(codegen, struct):
     rendered = []
     for parameter in parameters:
         text = parameter.name
-        if parameter.default is not None:
+        # Every use spells its arguments out (``_with_defaults``), so a value default needs no CrossGL form.
+        if parameter.default is not None and parameter.is_type:
             text += f" = {_argument(codegen, parameter.default)}"
         rendered.append(text)
     return f"generic<{', '.join(rendered)}> "
@@ -209,6 +207,17 @@ def _with_defaults(template, arguments):
     return arguments
 
 
+def _template_arguments(codegen, template, arguments):
+    """The CrossGL arguments of a use of ``template``, defaults spelled out, values typed by their parameters."""
+    template = list(template or [])
+    return tuple(
+        template_argument(
+            codegen, template[index] if index < len(template) else None, argument
+        )
+        for index, argument in enumerate(_with_defaults(template, arguments))
+    )
+
+
 def templated_struct_type(codegen, base, arguments):
     """``Box<vec2>`` for the use ``Box<float2>`` of a struct template, its explicit specialization's name when one
     matches the arguments, else ``None``. Default arguments are spelled out: ``Pair<vec2>`` of ``template
@@ -217,9 +226,7 @@ def templated_struct_type(codegen, base, arguments):
     template = getattr(codegen, "struct_templates", {}).get(base)
     if template is None:
         return None
-    mapped = tuple(
-        _argument(codegen, argument) for argument in _with_defaults(template, arguments)
-    )
+    mapped = _template_arguments(codegen, template, arguments)
     specialized = getattr(codegen, "explicit_struct_specializations", {}).get(
         (base, mapped)
     )
@@ -242,11 +249,8 @@ def struct_template_owner(codegen, raw_type):
     template = getattr(codegen, "struct_templates", {}).get(base)
     if template is None:
         return None
-    mapped = tuple(
-        _argument(codegen, argument)
-        for argument in _with_defaults(
-            template, codegen.split_generic_arguments(arguments[:-1])
-        )
+    mapped = _template_arguments(
+        codegen, template, codegen.split_generic_arguments(arguments[:-1])
     )
     return getattr(codegen, "explicit_struct_specializations", {}).get(
         (base, mapped), base

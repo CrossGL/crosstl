@@ -7,8 +7,10 @@ replaces the body of the primary for ``T = float`` ([temp.expl.spec]/1); it beco
 ``@ explicit_specialization(twice, float)``, so every instantiation of ``twice`` for ``float`` runs its body. Calls
 that spell template arguments (``twice<float2>(v)``) keep them in CrossGL spelling (``twice<vec2>(v)``).
 
-Template value parameters (``template <int N>``) have no CrossGL generic-function equivalent yet, so a function
-that declares one is refused rather than emitted with an unbound name.
+A template value parameter (``template <typename T, uint N>``) is a CrossGL generic parameter that each call binds to
+a value: ``sum<uint, 5>(x)`` imports as ``sum<uint, 5u>(x)``, the literal typed as the parameter is (see
+:func:`template_argument`). CrossGL generic parameters have no value defaults, so a function template that gives a
+value parameter one is refused.
 """
 
 from __future__ import annotations
@@ -237,6 +239,38 @@ def _crossgl_type_argument(codegen, argument):
     return str(codegen.map_type(argument)).strip()
 
 
+_UNSIGNED_VALUE_KINDS = frozenset(
+    {"uint", "unsigned", "unsigned int", "uint32_t", "dword", "uint64_t", "uint16_t"}
+)
+
+
+def template_argument(codegen, parameter, argument):
+    """The CrossGL spelling of one template argument for ``parameter``.
+
+    A type argument takes its CrossGL type (``vec2`` for ``float2``). A value argument keeps its expression, and an
+    integer literal for an unsigned parameter takes the ``u`` suffix, so the value CrossGL substitutes has the
+    parameter's type (``3u`` for ``uint N``), as the HLSL template parameter converts it (C++17 17.3.2).
+    """
+    argument = str(argument).strip()
+    if parameter is None or parameter.is_type:
+        return _crossgl_type_argument(codegen, argument)
+    kind = " ".join(str(parameter.kind).split())
+    literal = re.fullmatch(r"([+-]?\d+|0[xX][0-9A-Fa-f]+)[uUlL]*", argument)
+    if literal is not None:
+        digits = literal.group(1)
+        return f"{digits}u" if kind in _UNSIGNED_VALUE_KINDS else digits
+    return argument
+
+
+def template_value_parameter_names(func):
+    """The names of ``func``'s template value parameters, which its body reads as values."""
+    return frozenset(
+        parameter.name
+        for parameter in _template_parameters(func) or []
+        if not parameter.is_type and parameter.name
+    )
+
+
 def template_function_generic_prefix(codegen, func):
     """``generic<T, U = vec2> `` for a function template, ``""`` for any other function."""
     parameters = _template_parameters(func)
@@ -244,11 +278,15 @@ def template_function_generic_prefix(codegen, func):
         return ""
     rendered = []
     for parameter in parameters:
-        if not parameter.is_type:
+        if not parameter.is_type and parameter.default is not None:
             return codegen.refuse_import(
-                f"HLSL function template '{source_name(func)}' declares the value parameter "
-                f"'{parameter.kind} {parameter.name}', which CrossGL generic functions cannot express"
+                f"HLSL function template '{source_name(func)}' gives the value parameter "
+                f"'{parameter.kind} {parameter.name}' a default, which CrossGL generic functions cannot express"
             )
+        if not parameter.is_type:
+            # A value parameter is substituted by the value each call names (``scale<float, 3u>``).
+            rendered.append(parameter.name)
+            continue
         if not parameter.name:
             return codegen.refuse_import(
                 f"HLSL function template '{func.name}' declares an unnamed type parameter"
@@ -364,10 +402,15 @@ def specialization_identifier_renames(codegen, functions, used_names):
 def templated_call_name(codegen, func_name):
     """``twice<vec2>`` for a call of a function template that spells HLSL template arguments."""
     base, arguments = _split_templated_name(func_name)
-    if base is None or not _primary_templates(codegen, base):
+    primaries = _primary_templates(codegen, base) if base is not None else []
+    if not primaries:
         return func_name
+    parameters = list(_template_parameters(primaries[0]) or [])
     mapped = ", ".join(
-        _crossgl_type_argument(codegen, argument) for argument in arguments
+        template_argument(
+            codegen, parameters[index] if index < len(parameters) else None, argument
+        )
+        for index, argument in enumerate(arguments)
     )
     return f"{codegen.render_function_identifier(base)}<{mapped}>"
 

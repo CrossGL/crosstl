@@ -236,12 +236,12 @@ def test_struct_template_prefix_does_not_reach_member_functions():
     ("code", "reason"),
     [
         (
-            "template <typename T, int N> T scale(T x) { return x * (T)N; }",
-            "declares the value parameter 'int N'",
+            "template <typename T, int N = 2> T scale(T x) { return x * (T)N; }",
+            "gives the value parameter 'int N' a default",
         ),
         (
-            "namespace util { template <typename T, int N> T scale(T x) { return x * (T)N; } }",
-            "function template 'util::scale' declares the value parameter 'int N'",
+            "namespace util { template <typename T, int N = 2> T scale(T x) { return x * (T)N; } }",
+            "function template 'util::scale' gives the value parameter 'int N' a default",
         ),
         (
             "template <typename T> T twice(T x);\n"
