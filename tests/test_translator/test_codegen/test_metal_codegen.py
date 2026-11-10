@@ -17883,6 +17883,129 @@ def test_metal_transitively_threads_cbuffer_parameter():
     assert "float value = applyScale(2.0, constants);" in generated_code
 
 
+def test_metal_generic_specialization_threads_shader_scope_buffer():
+    code = """
+    shader P {
+        buffer float* outp;
+        T pick<T>(T x) { return x; }
+        T twice<T>(T x) { return pick(x) + T(outp[0]); }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float v = 1.0;
+                outp[0] = twice<float>(v);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float twice_float(float x, device float* outp)" in generated_code
+    assert "outp[0] = twice_float(v, outp);" in generated_code
+    # pick never reads the buffer, so its specialization takes no buffer parameter.
+    assert "float pick_float(float x) {" in generated_code
+    assert "return pick_float(x) + float(outp[0]);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_transitively_threads_buffer_to_helper_calling_generic():
+    code = """
+    shader P {
+        buffer float* outp;
+        T pick<T>(T x) { return x; }
+        T twice<T>(T x) { return pick(x) + T(outp[0]); }
+        float invokeTwice(float x) {
+            return twice<float>(x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float v = 1.0;
+                outp[0] = invokeTwice(v);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float invokeTwice(float x, device float* outp)" in generated_code
+    assert "float twice_float(float x, device float* outp)" in generated_code
+    assert "return twice_float(x, outp);" in generated_code
+    assert "outp[0] = invokeTwice(v, outp);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_generic_and_nongeneric_overload_buffer_threading():
+    code = """
+    shader P {
+        buffer float* outp;
+        float helper(float x) {
+            return x * 10.0;
+        }
+        T helper<T>(T x, T y) {
+            return x + y + T(outp[0]);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float a = 1.0;
+                float r1 = helper(a);
+                float r2 = helper<float>(a, 2.0);
+                outp[0] = r1 + r2;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    # The non-generic overload never reads the buffer; only the specialization takes it.
+    assert "float helper(float x) {" in generated_code
+    assert "float r1 = helper(a);" in generated_code
+    assert "float helper_float(float x, float y, device float* outp)" in generated_code
+    assert "float r2 = helper_float(a, 2.0, outp);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_generic_specialization_threads_global_texture_parameter():
+    code = """
+    shader TextureHelperScope {
+        sampler2D colorMap;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        T sampleAs<T>(vec2 uv) {
+            return T(texture(colorMap, uv));
+        }
+
+        fragment {
+            vec4 main(FSInput input) {
+                return sampleAs<vec4>(input.uv);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
+
+    assert (
+        "float4 sampleAs_vec4(float2 uv, texture2d<float> colorMap, sampler colorMapSampler)"
+        in generated_code
+    )
+    assert (
+        "return sampleAs_vec4(input.uv, colorMap, colorMapSampler);" in generated_code
+    )
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_helper_local_cbuffer_member_name_does_not_thread_parameter():
     code = """
     shader CBufferScope {

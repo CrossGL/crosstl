@@ -18,6 +18,11 @@ in WGSL), whatever type the enumeration names (``enum Mode : uint``), so the zer
 alone: CUDA output declares the variable with the enumeration's own type, for which ``Mode m = {};`` is already zero
 and ``Mode m = 0;`` is an error, and a Rust enum has no integer value. An enumeration whose variants carry data is a
 structure on most targets and keeps its braces.
+
+A singleton list of a plain enumeration becomes its sole value on every target, unconverted, as if
+``Mode m = Mode::B;`` were written; nested singleton lists are unwrapped too. An empty inner list is zero where the
+enumeration is written as ``int``, and stays an empty list on CUDA and Rust, which value-initialize it themselves.
+More than one value is refused with :class:`ScalarBraceInitializerError`.
 """
 
 from __future__ import annotations
@@ -92,11 +97,13 @@ def zero_empty_scalar_initializers(program, target) -> int:
         and getattr(node, "is_type_alias", False)
         and isinstance(node.name, str)
     }
+    enums = {
+        enum.name for enum in collect_plain_enums(nodes) if isinstance(enum.name, str)
+    }
     empty_aliases = dict(aliases)
     if target not in _ENUM_TYPED_TARGETS:
-        for enum in collect_plain_enums(nodes):
-            if isinstance(enum.name, str):
-                empty_aliases.setdefault(enum.name, "int")
+        for name in enums:
+            empty_aliases.setdefault(name, "int")
     count = 0
     for node in nodes:
         if isinstance(node, A.VariableNode) and not getattr(
@@ -111,8 +118,11 @@ def zero_empty_scalar_initializers(program, target) -> int:
         if not isinstance(value, A.ArrayLiteralNode):
             continue
         declared = getattr(node, type_field, None)
-        # Only empty enum lists are integers on enum-erasing targets. Non-empty
-        # enum lists retain their existing semantics, including CUDA and Rust.
+        if value.elements and _enum_name(declared, aliases, enums) is not None:
+            setattr(node, value_field, _enum_value(target, node, value, enums))
+            count += 1
+            continue
+        # Only empty enum lists are integers on enum-erasing targets.
         scalar_type = _scalar_type(
             declared, aliases if value.elements else empty_aliases
         )
@@ -143,6 +153,41 @@ def zero_empty_scalar_initializers(program, target) -> int:
         setattr(node, value_field, value)
         count += 1
     return count
+
+
+def _enum_value(target, node, value, enums):
+    """Unwrap a plain enumeration's singleton list to its value, which keeps its own type."""
+    while isinstance(value, A.ArrayLiteralNode):
+        if len(value.elements) > 1:
+            raise ScalarBraceInitializerError(
+                target,
+                node.name,
+                len(value.elements),
+                source_location=getattr(value, "source_location", None),
+            )
+        if not value.elements:
+            # CUDA and Rust value-initialize the enumeration from ``{}``; elsewhere it is ``int``.
+            if target in _ENUM_TYPED_TARGETS:
+                return value
+            return A.LiteralNode(0, A.PrimitiveType("int"))
+        value = value.elements[0]
+    return value
+
+
+def _enum_name(type_node, aliases, enums):
+    """Resolve a plain enumeration's name through aliases."""
+    seen = set()
+    while True:
+        if isinstance(type_node, (A.PrimitiveType, A.NamedType)) and not getattr(
+            type_node, "generic_args", None
+        ):
+            type_node = type_node.name
+        if not isinstance(type_node, str) or type_node in seen:
+            return None
+        if type_node in enums:
+            return type_node
+        seen.add(type_node)
+        type_node = aliases.get(type_node)
 
 
 def _scalar_type(type_node, aliases):

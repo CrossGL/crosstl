@@ -165,7 +165,15 @@ RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
-KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL", "RESTRICT"}
+KEYWORD_IDENTIFIER_TOKENS = {
+    "BUFFER",
+    "SAMPLER",
+    "METAL",
+    "RESTRICT",
+    "READ",
+    "WRITE",
+    "READ_WRITE",
+}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 GNU_EXTENSION_PREFIXES = {"__extension__"}
 STRUCT_METHOD_PREFIXES = {"virtual"}
@@ -1782,8 +1790,31 @@ class MetalParser:
             idx += 1
         return False
 
+    def is_contextual_access_identifier_at(self, idx):
+        if idx >= len(self.tokens) or self.tokens[idx][0] not in {
+            "READ",
+            "WRITE",
+            "READ_WRITE",
+        }:
+            return False
+        next_type = self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
+        return next_type in {
+            "SEMICOLON",
+            "COMMA",
+            "EQUALS",
+            "LPAREN",
+            "LBRACE",
+            "LBRACKET",
+            "LESS_THAN",
+            "SCOPE",
+            "RPAREN",
+            "GREATER_THAN",
+        }
+
     def is_qualifier_token_at(self, idx):
         if idx >= len(self.tokens):
+            return False
+        if self.is_contextual_access_identifier_at(idx):
             return False
         tok_type, value = self.tokens[idx]
         if tok_type in QUALIFIER_TOKENS or (
@@ -2580,6 +2611,8 @@ class MetalParser:
         return idx
 
     def is_type_qualifier_start(self):
+        if self.is_contextual_access_identifier_at(self.pos):
+            return False
         if self.current_token[0] in QUALIFIER_TOKENS:
             return True
         if (
