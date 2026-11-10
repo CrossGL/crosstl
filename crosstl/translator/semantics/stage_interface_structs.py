@@ -39,7 +39,9 @@ from .rewrite import child_slots, get_child, set_child
 
 __all__ = ["StageInterfaceUnsupportedError", "gather_stage_interface_variables"]
 
-_TARGETS = frozenset({"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
+_TARGETS = frozenset(
+    {"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "slang"}
+)
 _STRUCT_NAMES = {
     "vertex": ("VertexInput", "VertexOutput"),
     "fragment": ("FragmentInput", "FragmentOutput"),

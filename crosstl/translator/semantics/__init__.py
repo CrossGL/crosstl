@@ -21,6 +21,7 @@ from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .binding_constants import BindingIndexUnresolvedError, fold_binding_constants
+from .block_matrix_orders import BlockMatrixOrderError, distribute_block_matrix_orders
 from .boolean_reductions import lower_boolean_reductions
 from .buffer_strides import materialize_buffer_strides
 from .builtin_input_reads import pass_builtin_inputs
@@ -225,6 +226,7 @@ __all__ = [
     "AmbiguousMatrixSpellingError",
     "ArrayConstructorUnsupportedError",
     "BindingIndexUnresolvedError",
+    "BlockMatrixOrderError",
     "BuiltinValueUnsupportedError",
     "ComputeEntryValueNameError",
     "ConstantReferenceLayoutError",
@@ -403,6 +405,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     Direct3D, which writes the call back unchanged (:mod:`.shader_execution_reordering`).
     Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
     User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
+    A block-level ``row_major`` on a constant buffer or block instance is placed on its matrix members
+    (:mod:`.block_matrix_orders`).
     Row-major struct members are stored as their column-major transpose, with every use rewritten, for targets
     whose structs cannot carry a matrix layout (:mod:`.row_major_members`), and so are the row-major members of
     Metal's unmarked constant blocks (:mod:`.row_major_constant_members`).
@@ -447,6 +451,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
+    distribute_block_matrix_orders(program, report.target)
     resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
     lower_void_casts(program, report.target)

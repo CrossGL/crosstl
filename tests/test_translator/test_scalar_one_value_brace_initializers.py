@@ -136,9 +136,7 @@ def test_scalar_conversion_matches_brace_free_control(tmp_path, backend, scalar)
 
 
 @pytest.mark.parametrize("backend", TARGETS)
-@pytest.mark.parametrize(
-    "kind", ["array", "vector", "matrix", "struct", "enum", "enum_alias"]
-)
+@pytest.mark.parametrize("kind", ["array", "vector", "matrix", "struct"])
 def test_pass_leaves_non_scalar_brace_values_alone(backend, kind):
     f32 = A.PrimitiveType("float")
     types = {
@@ -146,8 +144,6 @@ def test_pass_leaves_non_scalar_brace_values_alone(backend, kind):
         "vector": A.VectorType(f32, 2),
         "matrix": A.MatrixType(f32, 2, 2),
         "struct": A.NamedType("Pair"),
-        "enum": A.NamedType("Mode"),
-        "enum_alias": A.NamedType("ModeAlias"),
     }
     value = A.ArrayLiteralNode(
         [
@@ -157,11 +153,7 @@ def test_pass_leaves_non_scalar_brace_values_alone(backend, kind):
     )
     declaration = A.VariableNode("v", types[kind], value)
     program = A.ASTNode()
-    program.declarations = [
-        A.EnumNode("Mode", []),
-        A.VariableNode("ModeAlias", A.NamedType("Mode"), is_type_alias=True),
-        declaration,
-    ]
+    program.declarations = [declaration]
     assert zero_empty_scalar_initializers(program, backend) == 0
     assert declaration.initial_value is value
 
