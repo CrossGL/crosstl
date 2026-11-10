@@ -28,16 +28,14 @@
 
 - name: backend:glsl
   color: c5def5
-  description: OpenGL and WebGL GLSL
+  description: OpenGL GLSL
   renamed-from: [opengl backend]
   paths:
     - crosstl/backend/glsl/*
     - crosstl/translator/codegen/glsl_*
-    - crosstl/translator/codegen/webgl_*
     - tests/test_backend/test_glsl/*
     - tests/test_translator/*test_glsl_*
     - tests/test_translator/*test_opengl_*
-    - tests/test_translator/*test_webgl_*
 - name: backend:hlsl
   color: c5def5
   description: DirectX HLSL
@@ -74,6 +72,12 @@
   paths:
     - crosstl/translator/codegen/wgsl_*
     - tests/test_translator/*test_wgsl_*
+- name: backend:webgl
+  color: c5def5
+  description: GLSL ES 3.00 for WebGL 2
+  paths:
+    - crosstl/translator/codegen/webgl_*
+    - tests/test_translator/*test_webgl_*
 - name: backend:cuda
   color: c5def5
   description: CUDA
