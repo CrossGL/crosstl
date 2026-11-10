@@ -367,6 +367,7 @@ from .hlsl_storage_array_views import (
 )
 from .hlsl_struct_initializers import hlsl_brace_struct_initializer
 from .hlsl_struct_varyings import assign_struct_varying_semantic
+from .hlsl_tall_matrix_rows import HlslTallMatrixRows
 from .hlsl_texel_buffers import (
     HLSL_TEXEL_BUFFER_TYPES,
     STORAGE_TEXEL_BUFFER_TYPES,
@@ -2587,6 +2588,7 @@ class HLSLCodeGen(
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
+        self.hlsl_tall_matrix_rows = HlslTallMatrixRows(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
         self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
         self.hlsl_image_load_swizzle_extent = None
@@ -4011,6 +4013,7 @@ class HLSLCodeGen(
         self.required_texture_query_helpers = set()
         self.hlsl_buffer_length = HlslBufferLength()
         self.hlsl_texel_buffers = HLSLTexelBuffers(self)
+        self.hlsl_tall_matrix_rows = HlslTallMatrixRows(self)
         self.hlsl_atomic_resources = HLSLAtomicResources(self)
         self.storage_parameter_texels = StorageParameterTexels(self.resource_base_type)
         self.hlsl_image_load_swizzle_extent = None
@@ -5549,6 +5552,7 @@ class HLSLCodeGen(
             code[:storage_helper_offset]
             + self.hlsl_half_storage.declarations()
             + self.generate_hlsl_struct_constructor_helpers()
+            + self.hlsl_tall_matrix_rows.declarations()
             + hlsl_ray_query_helpers(self)
             + code[storage_helper_offset:]
         )
@@ -14905,6 +14909,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"{'    ' * (indent + 1)}{variable} = "
                     f"uint({software_subgroup_entry_index});\n"
                 )
+            self.hlsl_tall_matrix_rows.mark_writes(body)
             if self.current_hlsl_tail_recursive_call_ids:
                 code += f"{'    ' * (indent + 1)}while (true) {{\n"
                 code += self.generate_statement_body(body, indent + 2)
@@ -25689,6 +25694,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             target = node.left
             value = node.right
             op = getattr(node, "operator", "=")
+        self.hlsl_tall_matrix_rows.mark_chain(target)
 
         # HLSL *= on matrices is component-wise; CrossGL's is the product.
         matrix_product = matrix_product_assignment(
@@ -28231,6 +28237,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
             if mapped_op in {"++", "--"}:
+                self.hlsl_tall_matrix_rows.mark_chain(getattr(expr, "operand", None))
                 self.hlsl_private_pointer_word_view_write_error(
                     getattr(expr, "operand", None)
                 )
@@ -28394,6 +28401,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 index_expr,
                 index,
                 rendered_resource=array,
+            )
+            array = (
+                self.hlsl_tall_matrix_rows.row_read(array_expr, index_expr, array)
+                or array
             )
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
@@ -47778,6 +47789,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     ),
                 )
                 argument_assignments.extend(assignments)
+                self.hlsl_tall_matrix_rows.mark_chain(arg)
                 rendered_args.append(self.generate_expression_with_expected(arg, None))
             else:
                 rendered_args.append(
