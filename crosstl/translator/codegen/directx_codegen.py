@@ -264,6 +264,12 @@ from .glsl_block_layout import (
     hlsl_packoffsets_for_block,
     member_explicit_alignment,
 )
+from .glsl_buffer_array_values import (
+    glsl_buffer_array_store_lines,
+    glsl_buffer_array_value,
+    glsl_buffer_array_value_type,
+    glsl_buffer_subscripts_are_repeatable,
+)
 from .glsl_buffer_block_arrays import (
     glsl_buffer_array_elements,
     glsl_buffer_block_indexed_access,
@@ -19127,6 +19133,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
             if block_access is not None:
+                if glsl_buffer_whole_array_reason(block_access, indexed=False):
+                    return glsl_buffer_array_value_type(block_access)
                 return block_access["type"]
             object_type = self.expression_result_type(
                 expr.object
@@ -25782,8 +25790,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if byte_update is not None:
                 return byte_update
 
-        if isinstance(value, ArrayLiteralNode) and self.hlsl_outer_array_type(
-            target_type
+        if (
+            isinstance(value, ArrayLiteralNode)
+            and self.hlsl_outer_array_type(target_type)
+            and not self.hlsl_glsl_buffer_whole_array_target(target)
         ):
             if op != "=" or not self.hlsl_repeatable_array_assignment_target(target):
                 self.hlsl_fixed_array_aggregate_initializer(value, target_type)
@@ -55223,16 +55233,95 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             f"{access['component_type']} buffer members",
         )
 
-    def hlsl_glsl_buffer_whole_array_check(self, access, *, indexed):
-        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
-        if reason is not None:
-            raise BufferBlockUnsupportedError("directx", "array value", reason)
+    def hlsl_glsl_buffer_array_value(self, expr, access):
+        """The whole block array ``access`` read as one value (glsl_buffer_array_values)."""
+        if not glsl_buffer_subscripts_are_repeatable(expr):
+            raise BufferBlockUnsupportedError(
+                "directx",
+                "array value",
+                f"{access.get('member')} is read element by element, and its "
+                "subscripts have side effects",
+            )
+
+        def load_element(element):
+            if element.get("members"):
+                return self.hlsl_byteaddress_aggregate_load(
+                    element["buffer"], element["offset"], element
+                )
+            return self.hlsl_byteaddress_load(
+                element["buffer"], element["offset"], element
+            )
+
+        return glsl_buffer_array_value(
+            access,
+            load_element=load_element,
+            value_struct=self.hlsl_array_value_arguments.value_struct,
+            map_type=self.map_type,
+        )
+
+    def hlsl_glsl_buffer_whole_array_target(self, target):
+        """Whether ``target`` is a whole array of a lowered GLSL buffer block."""
+        access = self.glsl_buffer_block_array_access(target)
+        if access is not None:
+            return glsl_buffer_whole_array_reason(access, indexed=True) is not None
+        access = self.glsl_buffer_block_member_access(target)
+        return glsl_buffer_whole_array_reason(access, indexed=False) is not None
+
+    def hlsl_glsl_buffer_array_store(self, target, access, offset, value, op):
+        """Statements storing array ``value`` into the whole block array ``access``."""
+        if op != "=":
+            raise BufferBlockUnsupportedError(
+                "directx",
+                "array value",
+                f"operator {op} does not apply to the array {access.get('member')}",
+            )
+        if not glsl_buffer_subscripts_are_repeatable(target):
+            raise BufferBlockUnsupportedError(
+                "directx",
+                "array value",
+                f"{access.get('member')} is written element by element, and its "
+                "subscripts have side effects",
+            )
+        value_type = glsl_buffer_array_value_type(access)
+        rhs = None
+        if isinstance(value, ArrayLiteralNode):
+            rhs = self.hlsl_array_value_arguments.argument(value, value_type)
+        if rhs is None:
+            rhs = self.generate_expression_with_expected(value, value_type)
+
+        def store_element(element, element_offset, element_value):
+            if element.get("members"):
+                lines = self.hlsl_byteaddress_aggregate_store_members(
+                    element["buffer"], element_offset, element_value, element
+                )
+                if lines is None:
+                    raise BufferBlockUnsupportedError(
+                        "directx",
+                        "array value",
+                        f"the elements of {access.get('member')} hold runtime arrays",
+                    )
+                return lines
+            return self.hlsl_byteaddress_leaf_store(
+                element["buffer"], element_offset, element_value, element
+            ).splitlines()
+
+        return "\n".join(
+            glsl_buffer_array_store_lines(
+                access,
+                offset,
+                rhs,
+                self.next_hlsl_temp_variable("array_store"),
+                store_element=store_element,
+                map_type=self.map_type,
+            )
+        )
 
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
         if access is None or access.get("runtime_array"):
             return None
-        self.hlsl_glsl_buffer_whole_array_check(access, indexed=False)
+        if glsl_buffer_whole_array_reason(access, indexed=False) is not None:
+            return self.hlsl_glsl_buffer_array_value(expr, access)
         if access.get("members"):
             return self.hlsl_byteaddress_aggregate_load(
                 access["buffer"], access["offset"], access
@@ -55243,7 +55332,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         access = self.glsl_buffer_block_array_access(expr)
         if access is None:
             return None
-        self.hlsl_glsl_buffer_whole_array_check(access, indexed=True)
+        if glsl_buffer_whole_array_reason(access, indexed=True) is not None:
+            return self.hlsl_glsl_buffer_array_value(expr, access)
         if access.get("members"):
             return self.hlsl_byteaddress_aggregate_load(
                 access["buffer"], access["offset_expr"], access
@@ -55254,15 +55344,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def generate_glsl_buffer_block_store(self, target, value, op):
         access = self.glsl_buffer_block_array_access(target)
+        indexed = access is not None
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
                 return buffer_component_store(self, target, value, op)
-            self.hlsl_glsl_buffer_whole_array_check(access, indexed=False)
             offset = access["offset"]
         else:
-            self.hlsl_glsl_buffer_whole_array_check(access, indexed=True)
             offset = access["offset_expr"]
+        whole_array = glsl_buffer_whole_array_reason(access, indexed=indexed)
 
         if access.get("readonly"):
             raise BufferBlockUnsupportedError(
@@ -55271,6 +55361,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"{access['buffer']} is a readonly block, and a readonly "
                 "ByteAddressBuffer cannot be written",
             )
+        if whole_array is not None:
+            return self.hlsl_glsl_buffer_array_store(target, access, offset, value, op)
         if access.get("members"):
             if op != "=":
                 raise BufferBlockUnsupportedError(

@@ -198,6 +198,7 @@ from .generic_struct_utils import (
     normalize_specialization_type_text,
     render_constructor_arguments,
 )
+from .glsl_buffer_array_values import glsl_buffer_array_value_type
 from .glsl_buffer_block_arrays import (
     glsl_buffer_array_elements,
     glsl_buffer_block_indexed_access,
@@ -8737,9 +8738,19 @@ class MetalCodeGen(
                         f"{indent_str}{address_space_conflict}\n"
                         f"{indent_str}{conflict_declaration};\n"
                     )
-                init_expr = self.generate_expression_with_expected(
-                    initial_value, var_type
-                )
+                # An array initializer renders the value's elements, so the value itself is rendered only when
+                # it is used: a whole buffer block array has no Metal expression.
+                array_initializer = None
+                if value_array_type is None and not is_atomic_local:
+                    array_initializer = generate_metal_array_initializer(
+                        self, initial_value, var_type
+                    )
+                if array_initializer is not None:
+                    init_expr = array_initializer
+                else:
+                    init_expr = self.generate_expression_with_expected(
+                        initial_value, var_type
+                    )
                 if self.local_pointer_initializer_needs_address(stmt, initial_value):
                     init_expr = f"&{init_expr}"
                 address_space_mismatch = (
@@ -8763,11 +8774,6 @@ class MetalCodeGen(
                     if address_space_mismatch is not None
                     else ""
                 )
-                if value_array_type is None:
-                    init_expr = (
-                        generate_metal_array_initializer(self, initial_value, var_type)
-                        or init_expr
-                    )
                 return f"{diagnostic_prefix}{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
@@ -10953,6 +10959,8 @@ class MetalCodeGen(
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
             if block_access is not None:
+                if glsl_buffer_whole_array_reason(block_access, indexed=False):
+                    return glsl_buffer_array_value_type(block_access)
                 return block_access["type"]
             object_type = self.expression_result_type(
                 expr.object
@@ -11615,6 +11623,12 @@ class MetalCodeGen(
         )
         if remainder is not None:
             return self.generate_assignment(remainder)
+        if op == "=":
+            # Copied element by element, so the value itself is never rendered: a whole buffer block array has no
+            # Metal expression.
+            array_copy = generate_metal_array_copy(self, target, value)
+            if array_copy is not None:
+                return array_copy
         rhs = self.generate_expression_with_expected(
             value, self.metal_assignment_value_type(target, value, op)
         )
@@ -11622,9 +11636,6 @@ class MetalCodeGen(
             converted = self.metal_registered_structure_assignment(target, value)
             if converted is not None:
                 rhs = converted
-            array_copy = generate_metal_array_copy(self, target, value)
-            if array_copy is not None:
-                return array_copy
 
         reference_declaration = self.generate_local_reference_assignment_declaration(
             target, value, rhs
