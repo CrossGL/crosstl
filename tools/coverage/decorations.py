@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 
-from . import validators
+from . import lowering, validators
 from .model import Feature
 from .templates import ABSENT, TEMPLATES
 
@@ -265,14 +265,14 @@ def _compiled(feature: Feature, language: str, source: str) -> str:
         return validators.air(source)
     if language == "webgl":
         language, source = "glsl", _ESSL_300.sub(r"\g<1>310\2", source, count=1)
-    if not validators.can_lower(language):
+    if not lowering.can_lower(language):
         return ""
     entry = (
         validators.hlsl_entry(source, feature.stage)
         if language in ("hlsl", "slang")
         else "main"
     )
-    assembly, _ = validators.lower(
+    assembly, _ = lowering.lower(
         language, source, entry, feature.stage, raw_ids=False, auto_locations=True
     )
     return assembly

@@ -2,7 +2,7 @@ from collections import Counter
 
 import pytest
 
-from tools.coverage import semantic, spellings, validators
+from tools.coverage import lowering, semantic, spellings
 from tools.coverage.model import Feature, Param, Signature, Type
 
 VEC2 = Type("float", (2,))
@@ -92,7 +92,7 @@ def test_c_and_msl_fmin_and_fmax_share_the_nan_aware_instructions_id(
 
 
 @pytest.mark.skipif(
-    not validators.can_lower("glsl"), reason="glslangValidator or spirv-dis is missing"
+    not lowering.can_lower("glsl"), reason="glslangValidator or spirv-dis is missing"
 )
 @pytest.mark.parametrize(
     ("feature", "expected"),
@@ -109,7 +109,7 @@ def test_glsl_features_lower_to_their_instruction(feature, expected):
 
 
 @pytest.mark.skipif(
-    not validators.can_lower("glsl"), reason="glslangValidator or spirv-dis is missing"
+    not lowering.can_lower("glsl"), reason="glslangValidator or spirv-dis is missing"
 )
 def test_a_spirv_core_instruction_takes_the_id_of_its_glsl_call():
     uvec2 = Type("uint", (2,))
@@ -150,7 +150,7 @@ def slang(name, result, *params):
 
 
 @pytest.mark.skipif(
-    not validators.can_lower("slang"), reason="slangc or spirv-dis is missing"
+    not lowering.can_lower("slang"), reason="slangc or spirv-dis is missing"
 )
 @pytest.mark.parametrize(
     ("feature", "expected"),

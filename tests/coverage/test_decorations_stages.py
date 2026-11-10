@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from tools.coverage import decorations, validators
+from tools.coverage import decorations, lowering
 from tools.coverage.model import Feature
 
 
@@ -59,7 +59,7 @@ def test_an_hlsl_or_slang_stream_translation_keeps_a_second_stream_parameter(lan
     )
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_geometry_primitives_instances_and_streams():
     lines = _geometry("glsl", "geometry-input-lines", "ExecutionMode.InputLines")
     source = (
@@ -165,7 +165,7 @@ def test_a_metal_tessellation_translation_keeps_its_quad_patch_and_per_patch_inp
     ]
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_tessellation_domains_spacing_and_patch_values():
     quads = _patch(
         "glsl",
@@ -287,7 +287,7 @@ def test_a_metal_mesh_translation_keeps_its_topology_primitive_data_and_payload_
         ]
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_mesh_topologies_per_primitive_outputs_and_payloads():
     header = "#version 460\n#extension GL_EXT_mesh_shader : require\nlayout(local_size_x = 1) in;\n"
     lines = _mesh(
@@ -333,7 +333,7 @@ def test_glslang_lowers_mesh_topologies_per_primitive_outputs_and_payloads():
     )
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_the_ids_a_task_stage_reads():
     feature = Feature(
         "glsl",

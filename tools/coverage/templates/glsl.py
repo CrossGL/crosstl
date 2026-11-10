@@ -51,7 +51,8 @@ from . import (
     vertices,
     workgroups,
 )
-from .base import C_FAMILY, Template, scalar
+from .base import Template, scalar
+from .family import C_FAMILY
 
 
 def _glsl_extension(name: str) -> str:

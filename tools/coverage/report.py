@@ -13,7 +13,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import ir, upstream, validators
+from . import ir, lowering, upstream, validators
 from .features import metal
 from .model import DIRECTIONS, OUTCOMES, Result, Score
 
@@ -135,7 +135,7 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
         # Slang functions that SPIR-V lacks, or that slangc cannot write as valid SPIR-V, are compiled for HLSL and
         # checked by DXC.
         | ({"dxc"} if "slang" in languages else set())
-        | ({"spirv-dis"} if set(languages) & set(validators.SPIRV_COMPILERS) else set())
+        | ({"spirv-dis"} if set(languages) & set(lowering.SPIRV_COMPILERS) else set())
         # SPIR-V input probes are glslang's output, and DXC's for the constructs GLSL cannot spell.
         | (
             {"glslangValidator", "dxc", "spirv-dis"}
