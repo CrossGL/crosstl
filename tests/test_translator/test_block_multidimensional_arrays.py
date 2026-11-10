@@ -4,7 +4,12 @@ The block layout planners refused every array of arrays, so a GLSL uniform block
 reach HLSL or even GLSL output, and an HLSL ``cbuffer`` with one could not reach GLSL or SPIR-V output. The layout
 rules already nest (GLSL 4.60 section 7.6.2.2 rules 4 and 10; HLSL packing starts every array element on a
 register), so the planners now accept them. The spelling ``float[2][3]`` lists its outermost dimension first:
-two arrays of three floats. Metal output still refuses them, because its member storage describes one dimension.
+two arrays of three floats.
+
+Metal declares such a member with every extent, ``float4 a[2][3]``, because each layout's outer strides are the
+inner extent times the innermost stride. The innermost element keeps its one-dimensional storage, so an element
+read takes every subscript before its suffix or conversion applies (``params.a[i][j].x``), and register words
+shared with the next member are read through the flattened index ``(i) * 3 + (j)``.
 """
 
 from __future__ import annotations
@@ -59,7 +64,7 @@ RWStructuredBuffer<float> o : register(u1);
 def _translate(tmp_path, source, suffix, backend):
     path = tmp_path / f"blocks{suffix}"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 @pytest.mark.parametrize(
@@ -123,14 +128,123 @@ def test_hlsl_cbuffer_reaches_spirv_with_nested_strides(tmp_path):
     assert offsets == [("0", "0"), ("1", "84"), ("2", "96"), ("3", "184")], offsets
 
 
-@pytest.mark.parametrize(
-    ("source", "suffix"), [(GLSL_SOURCE, ".comp"), (HLSL_SOURCE, ".hlsl")]
-)
-def test_metal_refuses_multidimensional_buffer_arrays(tmp_path, source, suffix):
-    with pytest.raises(
-        Exception, match="multidimensional arrays in (std140|HLSL) buffers"
+ROW_SOURCE = """#version 450
+layout(local_size_x = 1) in;
+layout(std140, binding = 0) uniform Params {
+    vec3 a[2][3];
+    float f[2][2];
+    mat2 m[2][2];
+    bool b[2][2];
+    vec2 g;
+};
+layout(std430, binding = 1) buffer Data { float o[]; };
+float pick(vec3 v[3], int k) { return v[k].y; }
+void main() {
+    int i = int(g.x) % 2;
+    o[0] = a[i][1].z + f[1][i] + m[1][i][1].y + (b[i][1] ? 1.0 : 0.0);
+    vec3 row[3] = a[i];
+    float all[2][2] = f;
+    o[1] = row[2].x + pick(a[1], 2) + all[1][0];
+}
+"""
+
+STRUCTURED_SOURCE = """struct E {
+    float3 v[2][2];
+    bool b[2][3];
+};
+RWStructuredBuffer<E> e : register(u0);
+RWStructuredBuffer<float> o : register(u1);
+[numthreads(1, 1, 1)] void CSMain(uint3 id : SV_DispatchThreadID) {
+    uint i = id.x % 2u;
+    o[0] = e[0].v[1][i].y + (e[0].b[i][2] ? 1.0 : 0.0);
+    e[1].b[1][i] = o[0] > 0.0;
+}
+"""
+
+
+def test_metal_declares_std140_arrays_with_every_extent(tmp_path):
+    code = _translate(tmp_path, GLSL_SOURCE, ".comp", "metal")
+    params = code[code.index("struct Params {") :]
+    params = params[: params.index("};")]
+    for member in (
+        "float4 a[2][3];",
+        "S s[2][2];",
+        "float3x3 m[2][2];",
+        "int4 iv[3][1];",
     ):
-        _translate(tmp_path, source, suffix, "metal")
+        assert member in params, params
+    # The element suffix and the read conversion follow the last subscript.
+    assert "params.a[i % 2u][i % 3u].x + params.t0" in code, code
+    assert "float3(params.s[i % 2u][i / 2u % 2u].p)[i % 3u]" in code, code
+    assert "float(params.iv[i % 3u][0].xyz[i % 3u])" in code, code
+
+
+def test_metal_reads_shared_hlsl_registers_by_flattened_index(tmp_path):
+    code = _translate(tmp_path, HLSL_SOURCE, ".hlsl", "metal")
+    # t0 shares the last register of a, and t1 that of v, so both arrays are held as register words.
+    assert "crosstl_hlsl_cbuffer_float_array6 a;" in code, code
+    assert "crosstl_hlsl_cbuffer_float2_array6 v;" in code, code
+    assert (
+        "crosstl_hlsl_cbuffer_float_array6_element(params.a, (i % 2u) * 3 + (i % 3u))"
+        in code
+    ), code
+    assert "params.v, (i % 3u) * 2 + (i / 3u % 2u))[i % 2u]" in code, code
+
+
+def test_metal_copies_inner_arrays_element_by_element(tmp_path):
+    code = _translate(tmp_path, ROW_SOURCE, ".comp", "metal")
+    assert "float4 a[2][3];" in code and "uint4 b[2][2];" in code, code
+    assert "crosstl_hlsl_cbuffer_float2x2_padded m[2][2];" in code, code
+    assert "params.a[i][1].xyz.z + params.f[1][i].x" in code, code
+    assert "crosstl_hlsl_cbuffer_float2x2_padded_load(params.m[1][i])[1].y" in code
+    assert "bool(params.b[i][1].x)" in code, code
+    assert (
+        "float3 row[3] = {params.a[i][0].xyz, params.a[i][1].xyz, params.a[i][2].xyz};"
+        in code
+    ), code
+    assert "float all[2][2] = {{params.f[0][0].x, params.f[0][1].x}," in code, code
+    assert "crosstl_array_value<float3, 3>{" in code, code
+    assert "{params.a[1][0].xyz, params.a[1][1].xyz, params.a[1][2].xyz}}" in code
+    # No inner array of storage elements is used as a value.
+    assert not re.search(r"params\.[afb]\[[^\]]+\][^\[]", code), code
+
+
+def test_metal_converts_nested_arrays_of_structured_buffer_elements(tmp_path):
+    code = _translate(tmp_path, STRUCTURED_SOURCE, ".hlsl", "metal")
+    assert "packed_float3 v[2][2];" in code and "uint b[2][3];" in code, code
+    assert "float3(e[0].v[1][i]).y + (bool(e[0].b[i][2]) ? 1.0 : 0.0)" in code, code
+    assert "e[1].b[1][i] = o[0] > 0.0;" in code, code
+
+
+@pytest.mark.parametrize(
+    ("source", "suffix"),
+    [
+        (GLSL_SOURCE, ".comp"),
+        (HLSL_SOURCE, ".hlsl"),
+        (ROW_SOURCE, ".comp"),
+        (STRUCTURED_SOURCE, ".hlsl"),
+    ],
+)
+def test_xcrun_metal_compiles_nested_buffer_arrays(tmp_path, source, suffix):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+    probe = subprocess.run(
+        [xcrun, "-sdk", "macosx", "-f", "metal"], capture_output=True, timeout=30
+    )
+    if probe.returncode != 0:
+        pytest.skip("xcrun cannot locate metal")
+    shader = tmp_path / "blocks.metal"
+    shader.write_text(_translate(tmp_path, source, suffix, "metal"), encoding="utf-8")
+    result = subprocess.run(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(shader)]
+        + ["-o", str(tmp_path / "blocks.air")],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.skipif(shutil.which("dxc") is None, reason="dxc is not available")
