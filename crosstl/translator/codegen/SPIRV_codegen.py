@@ -236,6 +236,10 @@ from .spirv_ray_builtins import (
 )
 from .spirv_ray_locations import ray_location_variable, ray_variable_location
 from .spirv_refusals import SpirvRefusals
+from .spirv_row_major_arrays import (
+    row_major_array_has_own_type,
+    uniform_block_member_layout_type,
+)
 from .spirv_separate_textures import separate_texture_type_info
 from .spirv_shading_rate import (
     require_shading_rate_capability,
@@ -7896,7 +7900,17 @@ class VulkanSPIRVCodeGen(
         Logical addressing accepts only memory object declarations as pointer operands of ``OpFunctionCall`` (SPIR-V
         1.6, section 2.16.1, "Universal Validation Rules"), so an ``OpAccessChain`` result cannot be the argument.
         The callee copies a by-value array parameter on entry, so a copy taken here keeps the same meaning.
+        An array that is a value rather than a pointer (an ``OpConstantComposite`` such as a program-scope
+        ``const`` array, a composite construct or a call result) is stored into a Function variable in the
+        same way.
         """
+        if (
+            value is not None
+            and expected_type is not None
+            and value.type.storage_class is None
+            and expected_type.type.storage_class == "Function"
+        ):
+            return self.spill_array_value_argument(value, expected_type)
         if (
             value is None
             or expected_type is None
@@ -7913,6 +7927,25 @@ class VulkanSPIRVCodeGen(
             return value
         copied = self.copy_array_pointer_to_function_storage(value, expected_pointee)
         return value if copied is None else copied
+
+    def spill_array_value_argument(self, value, expected_type):
+        """Store an array value into a Function variable so it can be a by-value array argument."""
+        expected_pointee = self.pointer_type_pointee_type(expected_type)
+        if (
+            expected_pointee is None
+            or self.array_type_info_from_type(expected_pointee) is None
+        ):
+            return value
+        converted = self.convert_value_to_type(value, expected_pointee)
+        if not self.value_has_type(converted, expected_pointee):
+            self.refuse_lowering(
+                "SPIR-V cannot pass an array value of a different type "
+                "to a by-value array parameter"
+            )
+            return value
+        scratch_array = self.create_variable(expected_pointee, "Function")
+        self.store_to_variable(scratch_array, converted)
+        return scratch_array
 
     def contains_lambda_expression(self, expr) -> bool:
         if isinstance(expr, FunctionCallNode):
@@ -18193,11 +18226,16 @@ class VulkanSPIRVCodeGen(
                     (
                         placed_member_type(self, member_type, member_name, placed)
                         if placed is not None
-                        else self.storage_layout_type(member_type, layout)
+                        else uniform_block_member_layout_type(
+                            self,
+                            member_type,
+                            layout,
+                            member_index in row_major_members,
+                        )
                     ),
                     member_name,
                 )
-                for member_type, member_name in members
+                for member_index, (member_type, member_name) in enumerate(members)
             ]
             cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
             if placed is not None:
@@ -18793,10 +18831,12 @@ class VulkanSPIRVCodeGen(
             cbuffer_type.type.base_type, members
         )
         self.decorations.append(f"OpDecorate %{cbuffer_type.id} Block")
-        # The block's own members are decorated below, with their orientation; only nested types here.
+        # The block's own members are decorated below, with their orientation; only nested types here. A row-major
+        # member holds only matrices, whose arrays take their row-major strides below.
         decorated_structs = {cbuffer_type.id}
-        for member_type, _member_name in members:
-            self.decorate_uniform_nested_type(member_type, decorated_structs)
+        for member_index, (member_type, _member_name) in enumerate(members):
+            if member_index not in row_major_members:
+                self.decorate_uniform_nested_type(member_type, decorated_structs)
 
         offset = 0
         for member_index, (member_type, member_name) in enumerate(members):
@@ -18837,16 +18877,13 @@ class VulkanSPIRVCodeGen(
                     missing_capabilities=("spirv.row_major_layout",),
                 )
             return
-        if row_major and matrix_type is not member_type:
-            column_type, columns = self.matrix_type_info_from_type(matrix_type)
-            _component, rows = self.vector_type_info_from_type(column_type)
-            if rows != columns:
-                # The array type is shared with column-major uses, whose element stride differs.
-                raise UnsupportedSPIRVFeatureError(
-                    "row-major array of non-square matrices",
-                    f"uniform member {member_name} is an array of row-major non-square matrices",
-                    missing_capabilities=("spirv.row_major_layout",),
-                )
+        if row_major and not row_major_array_has_own_type(self, member_type):
+            # The array type is shared with column-major uses, whose element stride differs.
+            raise UnsupportedSPIRVFeatureError(
+                "row-major array of non-square matrices",
+                f"uniform member {member_name} is an array of row-major non-square matrices",
+                missing_capabilities=("spirv.row_major_layout",),
+            )
         orientation = "RowMajor" if row_major else "ColMajor"
         stride = self.uniform_matrix_stride(matrix_type, row_major)
         self.decorations.append(
@@ -18903,18 +18940,26 @@ class VulkanSPIRVCodeGen(
         self.validate_specialization_sized_member_layout(
             type_id.type.base_type, members
         )
+        # A struct member declared row_major (the row-major copies of semantics/row_major_struct_members.py)
+        # is decorated RowMajor, as a block member is; the std140 copy names its source struct.
+        row_major_names = self.uniform_struct_row_major_member_names(type_id)
         offset = 0
         for member_index, (member_type, member_name) in enumerate(members):
-            offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
+            row_major = member_name in row_major_names
+            offset = self.align_to(
+                offset, self.uniform_layout_alignment(member_type, row_major)
+            )
             self.decorations.append(
                 f"OpMemberDecorate %{type_id.id} {member_index} Offset {offset}"
             )
             self.decorate_uniform_matrix_member(
-                type_id, member_index, member_type, False, member_name
+                type_id, member_index, member_type, row_major, member_name
             )
+            if row_major:
+                self.decorate_uniform_array_strides(member_type, row_major)
             self.decorate_uniform_nested_type(member_type, decorated_structs)
             if member_index + 1 < len(members):
-                offset += self.uniform_layout_size(member_type)
+                offset += self.uniform_layout_size(member_type, row_major)
 
     def align_to(self, value: int, alignment: int) -> int:
         if alignment <= 1:
@@ -18973,11 +19018,14 @@ class VulkanSPIRVCodeGen(
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
+            row_major_names = self.uniform_struct_row_major_member_names(type_id)
             return self.align_to(
                 max(
                     (
-                        self.uniform_layout_alignment(member_type)
-                        for member_type, _ in struct_members
+                        self.uniform_layout_alignment(
+                            member_type, member_name in row_major_names
+                        )
+                        for member_type, member_name in struct_members
                     ),
                     default=1,
                 ),
@@ -19025,11 +19073,13 @@ class VulkanSPIRVCodeGen(
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
+            row_major_names = self.uniform_struct_row_major_member_names(type_id)
             offset = 0
-            for member_type, _ in struct_members:
-                alignment = self.uniform_layout_alignment(member_type)
+            for member_type, member_name in struct_members:
+                member_row_major = member_name in row_major_names
+                alignment = self.uniform_layout_alignment(member_type, member_row_major)
                 offset = self.align_to(offset, alignment)
-                offset += self.uniform_layout_size(member_type)
+                offset += self.uniform_layout_size(member_type, member_row_major)
             return self.align_to(offset, self.uniform_layout_alignment(type_id))
 
         vector_info = self.vector_type_info_from_type(type_id)
@@ -19038,6 +19088,19 @@ class VulkanSPIRVCodeGen(
             return self.uniform_scalar_size(component_type) * component_count
 
         return self.uniform_scalar_size(type_id)
+
+    def uniform_struct_row_major_member_names(self, type_id: SpirvId) -> set:
+        """Names of the members of struct ``type_id`` (or of the struct a layout copy was made from) declared
+        row_major, such as the row-major copies of semantics/row_major_struct_members.py.
+        """
+        source_type = self.layout_struct_source_types.get(type_id.id, type_id)
+        metadata = self.struct_member_metadata.get(source_type.type.base_type, {})
+        return {
+            name
+            for name, entry in metadata.items()
+            if (entry or {}).get("node") is not None
+            and self.uniform_member_is_row_major(entry["node"])
+        }
 
     def uniform_scalar_size(self, type_id: SpirvId) -> int:
         primitive_name = self.normalize_primitive_name(type_id.type.base_type)

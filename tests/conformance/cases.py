@@ -16,6 +16,7 @@ from typing import Callable
 import numpy as np
 
 from . import (
+    array_argument_cases,
     constants_cases,
     control_flow_cases,
     conversion_cases,
@@ -777,6 +778,38 @@ def o_assignment_operand(inp):
     return np.array(out, dtype=np.int32)
 
 
+def o_constant_array_arguments(inp):
+    """Helpers called with constant arrays see the constants, and their writes stay in their own copies."""
+    w, m, cs, lo = (
+        (1.0, 2.0, 3.0, 4.0),
+        ((5.0, 6.0), (7.0, 8.0)),
+        (9.0, 10.0, 11.0, 12.0),
+        (13.0, 14.0, 15.0, 16.0),
+    )
+
+    def dot4(v, k):
+        return sum(v[j] * (k + j) for j in range(4)) + 100.0
+
+    def pick2(v, i):
+        v = list(v)
+        v[i % 2] = -1.0
+        return v[0] * 3.0 + v[1]
+
+    out = []
+    for i, k in enumerate(inp.astype(np.float64)):
+        out += [
+            dot4(w, k),
+            pick2(m[i % 2], i),
+            dot4(cs, k),
+            dot4((17.0, 18.0, k, 20.0), 1.0),
+            dot4((k, k + 1.0, k + 2.0, k + 3.0), 2.0),
+            dot4(lo, k),
+            pick2(m[1], i + 1),
+            w[i % 4] + m[i % 2][1] + cs[(i + 1) % 4] + lo[(i + 2) % 4],
+        ]
+    return np.array(out, dtype=np.float32)
+
+
 def row_major_inputs():
     """64 row-major std430 mat3x2 values: two 16-byte rows of three small integers and one padding word each."""
     rows = (np.arange(64 * 6, dtype=np.int64).reshape(64, 2, 3) * 7 % 23 - 11).astype(
@@ -804,6 +837,28 @@ def o_row_major_members(inp):
         out_w.extend(w.reshape(-1))
         out_o.extend([w[0, 0], w[1, 0], w[0, 1], w[1, 1]])
     return np.array(out_w + out_o, dtype=np.float32)
+
+
+def row_major_struct_inputs():
+    """64 std430 row-major ``L`` structures of 20 distinct small integers each, padding words included."""
+    return ((np.arange(64 * 20, dtype=np.int64) * 37 % 1283) - 641).astype(np.float32)
+
+
+def o_row_major_struct_members(inp):
+    """Reads of the row-major matrices of ``L`` and its nested ``Inner``, three vec4 results per invocation.
+
+    In each 20-word ``L``: ``inner.n`` (mat2x3) row r, column c is word 2r + c; ``c`` is words 8-11; ``k``
+    (mat3x2) row r, column c is word 12 + 4r + c.
+    """
+    ls = inp.reshape(64, 20).astype(np.float64)
+    out = []
+    for i in range(64):
+        a, b = ls[i], ls[63 - i]
+        kv = [sum(a[12 + 4 * r + c] * (c + 1.0) for c in range(3)) for r in range(2)]
+        out.extend([a[0], a[2], a[4], a[18]])
+        out.extend([b[1], b[3], b[5], a[11]])
+        out.extend([kv[0], kv[1], b[12], b[16]])
+    return np.array(out, dtype=np.float32)
 
 
 def o_mirror(inp):
@@ -2131,6 +2186,17 @@ CASES = [
         o_assignment_operand,
     ),
     Case(
+        "g_constant_array_arguments",
+        "S20",
+        "const arrays, a row of a const array of arrays, a const struct member, array constructors, a call result "
+        "and a local const array passed by value to helpers that write their copy",
+        "GLSL 4.60 section 6.1.1: an in array parameter is copied in; section 4.3.3: a const variable is read-only",
+        np.arange(64, dtype=np.float32),
+        np.float32,
+        o_constant_array_arguments,
+        compare="ulp:0",
+    ),
+    Case(
         "g_row_major_members",
         "S20",
         "layout(row_major) mat3x2 and mat4x2 block members: matrix, column and element reads, a matrix times a "
@@ -2139,6 +2205,16 @@ CASES = [
         row_major_inputs(),
         np.float32,
         o_row_major_members,
+    ),
+    Case(
+        "g_row_major_struct_members",
+        "S20",
+        "layout(row_major) on a buffer block reaches the mat2x3 of a nested structure and the mat3x2 of an "
+        "arrayed structure: matrix, column and element reads and a matrix times a vector",
+        "GLSL 4.60 section 4.4.5: row_major applies to the matrices of structures nested in the block, at any depth",
+        row_major_struct_inputs(),
+        np.float32,
+        o_row_major_struct_members,
     ),
     Case(
         "u_array_values",
@@ -2171,6 +2247,18 @@ CASES = [
         constants_cases.glsl_reference,
         compare="ulp:0",
         constants=constants_cases.block(constants_cases.STD140),
+    ),
+    Case(
+        "g_array_arguments",
+        "S20",
+        "arrays passed by value from a std140 uniform block (vec4, float, mat2x3 and row-major mat2 elements) "
+        "and from shared memory, including helpers that write their copy",
+        "GLSL 4.60 section 6.1.1: an in array parameter is copied in; section 7.6.2.2 (std140)",
+        array_argument_cases.inputs(),
+        np.float32,
+        array_argument_cases.reference,
+        compare="ulp:0",
+        constants=array_argument_cases.block(),
     ),
     Case(
         "s_std140_uniform",

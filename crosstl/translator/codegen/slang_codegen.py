@@ -65,6 +65,7 @@ from .array_utils import (
 )
 from .assignment_values import assignment_value_expression
 from .ast_walk import walk_ast_values
+from .buffer_length import HlslBufferLength
 from .buffer_member_layout import MEMBER_LAYOUT_QUALIFIERS
 from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .c_family_operands import postfix_operand, prefix_unary_operand
@@ -116,10 +117,15 @@ from .generic_function_utils import (
 )
 from .generic_struct_utils import named_struct_constructor_arguments
 from .global_specialization_constants import split_global_specialization_constants
+from .glsl_buffer_block_arrays import (
+    glsl_buffer_array_elements,
+    glsl_buffer_block_indexed_access,
+    glsl_buffer_matrix_column_access,
+    glsl_buffer_whole_array_reason,
+)
 from .glsl_buffer_layout import (
     align_to,
     byte_offset_add,
-    byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_block_node_type,
     glsl_buffer_compound_binary_operator,
@@ -152,12 +158,18 @@ from .match_utils import (
     is_switch_lowerable_match,
 )
 from .matrix_compound_assignment import matrix_product_assignment
+from .operator_spellings import c_family_operator_spelling
 from .push_constant_blocks import (
     slang_push_constant_cbuffer,
     slang_push_constant_declaration,
 )
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .slang_buffer_lengths import slang_glsl_buffer_block_length
+from .slang_byte_address_words import (
+    SlangThreeComponentAccess,
+    slang_byte_address_vector_call,
+)
 from .slang_constant_references import slang_constant_reference_parameter
 from .slang_declaration_modifiers import (
     is_slang_declaration_metadata_attribute,
@@ -346,8 +358,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.glsl_buffer_block_struct_lowering_failures = {}
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.required_byteaddress_atomic_helpers = set()
+        self.slang_three_component_access = SlangThreeComponentAccess()
         self.slang_byteaddress_temp_variable_index = 0
         self.slang_mesh_payload_parameter_types = set()
+        self.slang_buffer_length = HlslBufferLength()
         self.slang_ray_payload_parameter_types = set()
         self.slang_callable_data_parameter_types = set()
         self.slang_hit_attribute_parameter_types = set()
@@ -622,8 +636,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             self.collect_slang_glsl_buffer_blocks(ast)
             self.required_glsl_buffer_aggregate_load_helpers = {}
             self.required_byteaddress_atomic_helpers = set()
+            self.slang_three_component_access = SlangThreeComponentAccess()
             self.slang_byteaddress_temp_variable_index = 0
             self.slang_mesh_payload_parameter_types = set()
+            self.slang_buffer_length = HlslBufferLength()
             self.slang_ray_payload_parameter_types = set()
             self.slang_callable_data_parameter_types = set()
             self.slang_hit_attribute_parameter_types = set()
@@ -778,6 +794,7 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def emit_helper_functions(self):
         helpers = self.hlsl_matrix_orientation.helper_code()
+        helpers += self.slang_buffer_length.code()
         if self.helper_functions:
             helpers += "\n\n".join(self.helper_functions.values()) + "\n\n"
         return helpers
@@ -788,7 +805,8 @@ class SlangCodeGen(LoweringRefusalMixin):
     def emit_struct_dependent_helper_functions(self):
         helpers = self.generate_slang_glsl_buffer_aggregate_load_helpers()
         helpers += self.generate_slang_byteaddress_atomic_helpers()
-        return helpers
+        # Generated last: the helpers above call the three-component accessors too.
+        return self.slang_three_component_access.declarations() + helpers
 
     def collect_user_function_names(self, node):
         names = set()
@@ -2355,6 +2373,7 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         valid_names = {
             "domain",
+            "instance",
             "maxvertexcount",
             "maxtessfactor",
             "numthreads",
@@ -2461,7 +2480,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         shader_stage = self.slang_shader_stage_name(stage_name)
         allowed_by_stage = {
             "compute": {"numthreads"},
-            "geometry": {"maxvertexcount"},
+            # [instance(N)] runs the geometry stage N times per primitive, as GLSL's invocations = N.
+            "geometry": {"maxvertexcount", "instance"},
             "hull": {
                 "domain",
                 "maxtessfactor",
@@ -2671,6 +2691,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.validate_slang_stage_attribute_applicability(func, stage_name)
         self.validate_slang_stage_attribute_uniqueness(func, stage_name)
         self.validate_positive_slang_stage_attribute(func, stage_name, "maxvertexcount")
+        self.validate_positive_slang_stage_attribute(func, stage_name, "instance")
         self.validate_positive_slang_stage_attribute(
             func, stage_name, "outputcontrolpoints"
         )
@@ -9000,6 +9021,33 @@ class SlangCodeGen(LoweringRefusalMixin):
             ) and all(
                 self.hlsl_expression_is_repeatable(item) for item in indices or []
             )
+        # Operators, conditionals and scalar conversions of repeatable operands write nothing, as in the HLSL
+        # emitter; an increment or decrement does.
+        if isinstance(expr, UnaryOpNode):
+            if c_family_operator_spelling(getattr(expr, "op", None)) in {"++", "--"}:
+                return False
+            return self.hlsl_expression_is_repeatable(getattr(expr, "operand", None))
+        if isinstance(expr, BinaryOpNode):
+            spelling = c_family_operator_spelling(getattr(expr, "op", None))
+            if spelling is None or (
+                spelling.endswith("=") and spelling not in {"==", "!=", "<=", ">="}
+            ):
+                return False
+            return self.hlsl_expression_is_repeatable(
+                getattr(expr, "left", None)
+            ) and self.hlsl_expression_is_repeatable(getattr(expr, "right", None))
+        if isinstance(expr, TernaryOpNode):
+            return all(
+                self.hlsl_expression_is_repeatable(getattr(expr, name, None))
+                for name in ("condition", "true_expr", "false_expr")
+            )
+        if isinstance(expr, FunctionCallNode):
+            func_expr = getattr(expr, "function", getattr(expr, "name", None))
+            func_name = getattr(func_expr, "name", func_expr)
+            args = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            return self.is_scalar_value_type(func_name) and all(
+                self.hlsl_expression_is_repeatable(arg) for arg in args
+            )
         return False
 
     def hlsl_matrix_shape(self, vtype):
@@ -10041,6 +10089,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
                 if geometry_stream_call is not None:
                     return geometry_stream_call
+                block_length = slang_glsl_buffer_block_length(
+                    self, func_expr, node.args
+                )
+                if block_length is not None:
+                    return block_length
                 resource_member_call = self.generate_resource_member_call(
                     func_expr,
                     node.args,
@@ -12688,7 +12741,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         parent = self.glsl_buffer_block_array_access(
             object_expr
         ) or self.glsl_buffer_block_member_access(object_expr)
-        if parent is None or not parent.get("members"):
+        if parent is None or not parent.get("members") or parent.get("subarray"):
             return None
         member = parent["members"].get(member_name)
         if member is None:
@@ -12703,22 +12756,27 @@ class SlangCodeGen(LoweringRefusalMixin):
         }
 
     def glsl_buffer_block_array_access(self, expr):
-        if not isinstance(expr, ArrayAccessNode):
-            return None
-        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
-        member = self.glsl_buffer_block_member_access(array_expr)
-        if member is None or not member.get("is_array"):
-            return None
-        index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
-        index = self.generate_expression(index_expr)
-        offset = byte_offset_expression(member["offset"], index, member["stride"])
-        return {**member, "offset": offset, "offset_expr": offset}
+        return glsl_buffer_block_indexed_access(self, expr)
 
     def slang_byteaddress_load_method(self, components):
         return "Load" if components == 1 else f"Load{components}"
 
     def slang_byteaddress_store_method(self, components):
         return "Store" if components == 1 else f"Store{components}"
+
+    def slang_byteaddress_word_load(self, buffer_name, components, offset):
+        """``components`` 32-bit words at byte ``offset``; three go through a helper (slang_byte_address_words)."""
+        if components == 3:
+            return self.slang_three_component_access.load(buffer_name, offset)
+        method = self.slang_byteaddress_load_method(components)
+        return f"{buffer_name}.{method}({offset})"
+
+    def slang_byteaddress_word_store(self, buffer_name, components, offset, value):
+        """Store ``components`` 32-bit words at byte ``offset``; three go through a helper."""
+        if components == 3:
+            return self.slang_three_component_access.store(buffer_name, offset, value)
+        method = self.slang_byteaddress_store_method(components)
+        return f"{buffer_name}.{method}({offset}, {value})"
 
     def slang_byteaddress_load(self, buffer_name, offset, access):
         if access.get("writeonly"):
@@ -12730,10 +12788,8 @@ class SlangCodeGen(LoweringRefusalMixin):
             for _, column_offset in matrix_column_offsets(
                 offset, access["matrix_columns"], access["column_stride"]
             ):
-                load = (
-                    f"{buffer_name}."
-                    f"{self.slang_byteaddress_load_method(access['matrix_rows'])}"
-                    f"({column_offset})"
+                load = self.slang_byteaddress_word_load(
+                    buffer_name, access["matrix_rows"], column_offset
                 )
                 columns.append(f"asfloat({load})")
             # The buffer holds columns and a Slang matrix constructor fills rows, as in HLSL.
@@ -12754,9 +12810,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 values.append(f"({buffer_name}.Load({component_offset}) != 0u)")
             return f"{access['slang_type']}({', '.join(values)})"
 
-        load = (
-            f"{buffer_name}."
-            f"{self.slang_byteaddress_load_method(access['components'])}({offset})"
+        load = self.slang_byteaddress_word_load(
+            buffer_name, access["components"], offset
         )
         if access["component_type"] == "bool":
             return f"({load} != 0u)"
@@ -12800,7 +12855,6 @@ class SlangCodeGen(LoweringRefusalMixin):
 
     def slang_byteaddress_matrix_store(self, buffer_name, offset, value, access):
         value_expr = self.slang_indexable_expression(value)
-        store_method = self.slang_byteaddress_store_method(access["matrix_rows"])
         lines = []
         for column, column_offset in matrix_column_offsets(
             offset, access["matrix_columns"], access["column_stride"]
@@ -12810,19 +12864,24 @@ class SlangCodeGen(LoweringRefusalMixin):
                 f"_m{row}{column}" for row in range(access["matrix_rows"])
             )
             lines.append(
-                f"{buffer_name}.{store_method}"
-                f"({column_offset}, asuint({value_expr}.{swizzle}))"
+                self.slang_byteaddress_word_store(
+                    buffer_name,
+                    access["matrix_rows"],
+                    column_offset,
+                    f"asuint({value_expr}.{swizzle})",
+                )
             )
         return "\n".join(lines)
 
     def slang_byteaddress_bool_vector_store(self, buffer_name, offset, value, access):
         temp_name = self.next_slang_byteaddress_temp_variable("bool_store")
-        store_method = self.slang_byteaddress_store_method(access["components"])
         store_value = self.slang_byteaddress_store_value(temp_name, access)
         return "\n".join(
             [
                 f"{access['slang_type']} {temp_name} = {value}",
-                f"{buffer_name}.{store_method}({offset}, {store_value})",
+                self.slang_byteaddress_word_store(
+                    buffer_name, access["components"], offset, store_value
+                ),
             ]
         )
 
@@ -12853,6 +12912,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 str(member.get("stride")),
                 str(member.get("runtime_array")),
             ]
+            if member.get("inner_arrays"):
+                fields.append(str(member["inner_arrays"]))
             parts.append(":".join(fields))
             for child_name, child in (member.get("members") or {}).items():
                 visit(f"{member_name}.{child_name}", child)
@@ -12895,11 +12956,10 @@ class SlangCodeGen(LoweringRefusalMixin):
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_target = f"{member_target}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_target = f"{member_target}{subscripts}"
                     if member.get("members"):
                         nested_lines = (
                             self.slang_byteaddress_aggregate_load_assignments(
@@ -12973,8 +13033,9 @@ class SlangCodeGen(LoweringRefusalMixin):
                 buffer_name, offset, value, access
             )
         store_value = self.slang_byteaddress_store_value(value, access)
-        store_method = self.slang_byteaddress_store_method(access["components"])
-        return f"{buffer_name}.{store_method}({offset}, {store_value})"
+        return self.slang_byteaddress_word_store(
+            buffer_name, access["components"], offset, store_value
+        )
 
     def slang_byteaddress_aggregate_store_members(
         self, buffer_name, offset, value, access
@@ -12994,11 +13055,10 @@ class SlangCodeGen(LoweringRefusalMixin):
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_value = f"{member_value}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_value = f"{member_value}{subscripts}"
                     if member.get("members"):
                         nested_stores = self.slang_byteaddress_aggregate_store_members(
                             buffer_name, element_offset, element_value, field_access
@@ -13094,10 +13154,22 @@ class SlangCodeGen(LoweringRefusalMixin):
             f"Slang GLSL buffer block: {operation} {reason}", placeholder
         )
 
+    def slang_glsl_buffer_whole_array_refusal(self, access, *, indexed):
+        """Refuse reading or writing ``access`` as a whole array; the placeholder, or ``None``."""
+        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
+        if reason is None:
+            return None
+        return self.unsupported_glsl_buffer_block_call(
+            "array value", reason, access["type"]
+        )
+
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
         if access is None or access.get("runtime_array"):
             return None
+        refusal = self.slang_glsl_buffer_whole_array_refusal(access, indexed=False)
+        if refusal is not None:
+            return refusal
         if access.get("writeonly"):
             return self.unsupported_glsl_buffer_block_call(
                 "load", "requires readable buffer block resource", access["type"]
@@ -13112,6 +13184,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         access = self.glsl_buffer_block_array_access(expr)
         if access is None:
             return None
+        refusal = self.slang_glsl_buffer_whole_array_refusal(access, indexed=True)
+        if refusal is not None:
+            return refusal
         if access.get("writeonly"):
             return self.unsupported_glsl_buffer_block_call(
                 "load", "requires readable buffer block resource", access["type"]
@@ -13125,7 +13200,10 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
 
     def generate_glsl_buffer_block_store(self, target, value, op):
-        access = self.glsl_buffer_block_array_access(target)
+        access = self.glsl_buffer_block_array_access(
+            target
+        ) or glsl_buffer_matrix_column_access(self, target)
+        indexed = access is not None
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
@@ -13134,6 +13212,11 @@ class SlangCodeGen(LoweringRefusalMixin):
         else:
             offset = access["offset_expr"]
 
+        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
+        if reason is not None:
+            return self.refuse_lowering(
+                f"Slang GLSL buffer block store: array value {reason}", ";"
+            )
         if access.get("readonly"):
             return self.refuse_lowering(
                 "Slang GLSL buffer block store: "
@@ -13721,6 +13804,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
+            if member == "Load3" and len(args) == 1:
+                return self.slang_three_component_access.load(receiver_expr, args_expr)
             return f"{receiver_expr}.{member}({args_expr})"
 
         if self.is_byte_address_buffer_resource_type(receiver_type) and member in {
@@ -13744,6 +13829,11 @@ class SlangCodeGen(LoweringRefusalMixin):
                     self.atomic_result_diagnostic_fallback_type("uint"),
                 )
             receiver_expr = self.generate_expression(receiver)
+            if member == "Store3" and len(args) == 2:
+                offset, value = (self.generate_expression(arg) for arg in args)
+                return self.slang_three_component_access.store(
+                    receiver_expr, offset, value
+                )
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{receiver_expr}.{member}({args_expr})"
 
@@ -14118,6 +14208,12 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         if func_name == "buffer_store":
             return self.buffer_store_expression(args, statement_context)
+
+        vector_call = slang_byte_address_vector_call(
+            self, func_name, args, statement_context
+        )
+        if vector_call is not None:
+            return vector_call
 
         if func_name == "buffer_append":
             return self.buffer_append_expression(args)

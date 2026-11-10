@@ -54,6 +54,16 @@ def _flat(code):
     return re.sub(r"\s+", " ", code)
 
 
+def _column_load(load):
+    if load.startswith("load3("):
+        return f"__crossgl_load3_uint(itemsStorage, {load[len('load3('):-1]})"
+    return f"itemsStorage.{load}"
+
+
+def _method_call(match):
+    return f"{match.group(2)}.{match.group(1).capitalize()}3("
+
+
 def _tool(name):
     path = shutil.which(name)
     if path is None:
@@ -64,8 +74,9 @@ def _tool(name):
 @pytest.mark.parametrize(
     ("matrix", "columns_type", "loads"),
     [
-        ("mat3", "float3x3", ("Load3(0)", "Load3(16)", "Load3(32)")),
-        ("mat2x3", "float2x3", ("Load3(0)", "Load3(16)")),
+        # Three-row columns go through the helper that works around slangc's Load3 (slang_byte_address_words).
+        ("mat3", "float3x3", ("load3(0)", "load3(16)", "load3(32)")),
+        ("mat2x3", "float2x3", ("load3(0)", "load3(16)")),
         ("mat3x2", "float3x2", ("Load2(0)", "Load2(8)", "Load2(16)")),
     ],
 )
@@ -74,15 +85,22 @@ def test_slang_matrix_load_transposes_the_columns(
 ):
     code = _flat(_translate(tmp_path, matrix, "slang"))
 
-    columns = ", ".join(f"asfloat(itemsStorage.{load})" for load in loads)
+    columns = ", ".join(f"asfloat({_column_load(load)})" for load in loads)
     assert f"transpose({columns_type}({columns}))" in code
 
 
 def test_slang_matrix_store_writes_columns(tmp_path):
     code = _flat(_translate(tmp_path, "mat2x3", "slang"))
 
-    assert "itemsStorage.Store3(48, asuint((a * 2.0)._m00_m10_m20))" in code
-    assert "itemsStorage.Store3(64, asuint((a * 2.0)._m01_m11_m21))" in code
+    assert (
+        "__crossgl_store3_uint(itemsStorage, 48, asuint((a * 2.0)._m00_m10_m20))"
+        in code
+    )
+    assert (
+        "__crossgl_store3_uint(itemsStorage, 64, asuint((a * 2.0)._m01_m11_m21))"
+        in code
+    )
+    assert "Store3(" not in code
     assert "(a * 2.0)[0]" not in code
 
 
@@ -90,6 +108,8 @@ def test_slang_matrix_store_writes_columns(tmp_path):
 def test_slang_matrix_accesses_match_hlsl(tmp_path, matrix):
     def body(backend):
         code = _flat(_translate(tmp_path, matrix, backend))
+        # Slang moves three words through helpers (slang_byte_address_words); HLSL calls the methods.
+        code = re.sub(r"__crossgl_(load|store)3_uint\((\w+), ", _method_call, code)
         statements = re.findall(r"(?:itemsStorage|values\[)[^;]*;", code)
         return [
             statement.replace("((a * 2.0))", "(a * 2.0)") for statement in statements

@@ -41,7 +41,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from .array_utils import fold_array_type_counts
+from .array_utils import fold_array_type_counts, split_outer_array_dimension
 from .glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
     SCALAR_BLOCK_LAYOUT,
@@ -192,14 +192,10 @@ class MetalHlslBufferLayouts:
     def layout_type(self, raw_type, stack=(), row_major=False):
         """The layout type of ``raw_type``; ``row_major`` orients a matrix (or the matrices of an array)."""
         raw_type = fold_array_type_counts(str(raw_type).strip(), self.int_constants)
-        array_match = re.fullmatch(r"(.+?)\s*\[\s*(\d+)\s*\]", raw_type)
-        if array_match is not None:
-            element = self.layout_type(array_match.group(1), stack, row_major)
-            if element.kind == "array":
-                raise HlslLayoutError(
-                    "multidimensional arrays in HLSL buffers are not supported"
-                )
-            return array_type(element, int(array_match.group(2)))
+        array_parts = split_outer_array_dimension(raw_type)
+        if array_parts is not None and array_parts[1].isdigit():
+            element = self.layout_type(array_parts[0], stack, row_major)
+            return array_type(element, int(array_parts[1]))
         if raw_type.endswith("[]"):
             raise HlslLayoutError("unsized arrays in HLSL buffers are not supported")
 
@@ -412,6 +408,11 @@ class MetalHlslBufferLayouts:
         element = layout_type.element
         count = layout_type.count
         label = LAYOUT_LABELS[layout]
+        if element.kind == "array":
+            # Element storage, its read conversion and its suffix describe one array dimension.
+            raise HlslLayoutError(
+                f"multidimensional arrays in {label} buffers are not supported"
+            )
         if layout in REGISTER_LAYOUTS and element.kind in ("scalar", "vector"):
             storage, size = METAL_SCALAR_STORAGE[element.scalar]
             if size != 4:

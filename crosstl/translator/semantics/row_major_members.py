@@ -138,6 +138,24 @@ def _block_type_names(program):
         name = _type_name(var_type)
         if name:
             names.add(name)
+    # The structs a block holds, directly or nested, keep their bytes in the block too, such as the row-major
+    # copies of row_major_struct_members.py.
+    structs = {
+        struct.name: struct
+        for struct in getattr(program, "structs", None) or []
+        if isinstance(struct, A.StructNode) and getattr(struct, "name", None)
+    }
+    pending = list(names)
+    while pending:
+        struct = structs.get(pending.pop())
+        for member in getattr(struct, "members", None) or []:
+            member_type = getattr(member, "member_type", None)
+            while isinstance(member_type, A.ArrayType):
+                member_type = member_type.element_type
+            nested = _type_name(member_type)
+            if nested in structs and nested not in names:
+                names.add(nested)
+                pending.append(nested)
     return names
 
 

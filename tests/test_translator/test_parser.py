@@ -4933,6 +4933,81 @@ def test_member_comparisons_are_not_parsed_as_generic_call_suffixes():
     assert isinstance(parenthesized.left.left, MemberAccessNode)
 
 
+def test_logical_operators_in_relational_chains_not_parsed_as_generic_calls():
+    code = """
+    shader RelationalChains {
+        void kernel() {
+            bool c1 = a < b && b > (c);
+            bool c2 = a < b || b > (c);
+            bool c3 = i < n && n > (i + 1);
+            bool c4 = object.member < b && b > (c);
+            auto c5 = f<(a && b)>(x);
+            auto c6 = f<T>(x);
+        }
+        void with_type_generic(Flag<A && B> param) {}
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    statements = ast.functions[0].body.statements
+
+    c1 = statements[0].initial_value
+    assert isinstance(c1, BinaryOpNode)
+    assert c1.operator == "&&"
+    assert isinstance(c1.left, BinaryOpNode) and c1.left.operator == "<"
+    assert c1.left.left.name == "a" and c1.left.right.name == "b"
+    assert isinstance(c1.right, BinaryOpNode) and c1.right.operator == ">"
+    assert c1.right.left.name == "b" and c1.right.right.name == "c"
+
+    c2 = statements[1].initial_value
+    assert isinstance(c2, BinaryOpNode)
+    assert c2.operator == "||"
+    assert isinstance(c2.left, BinaryOpNode) and c2.left.operator == "<"
+    assert c2.left.left.name == "a" and c2.left.right.name == "b"
+    assert isinstance(c2.right, BinaryOpNode) and c2.right.operator == ">"
+    assert c2.right.left.name == "b" and c2.right.right.name == "c"
+
+    c3 = statements[2].initial_value
+    assert isinstance(c3, BinaryOpNode)
+    assert c3.operator == "&&"
+    assert isinstance(c3.left, BinaryOpNode) and c3.left.operator == "<"
+    assert c3.left.left.name == "i" and c3.left.right.name == "n"
+    assert isinstance(c3.right, BinaryOpNode) and c3.right.operator == ">"
+    assert c3.right.left.name == "n"
+    assert isinstance(c3.right.right, BinaryOpNode) and c3.right.right.operator == "+"
+    assert c3.right.right.left.name == "i" and c3.right.right.right.value == 1
+
+    c4 = statements[3].initial_value
+    assert isinstance(c4, BinaryOpNode)
+    assert c4.operator == "&&"
+    assert isinstance(c4.left, BinaryOpNode) and c4.left.operator == "<"
+    assert isinstance(c4.left.left, MemberAccessNode)
+    assert c4.left.left.object_expr.name == "object" and c4.left.left.member == "member"
+    assert c4.left.right.name == "b"
+    assert isinstance(c4.right, BinaryOpNode) and c4.right.operator == ">"
+    assert c4.right.left.name == "b" and c4.right.right.name == "c"
+
+    c5 = statements[4].initial_value
+    assert isinstance(c5, FunctionCallNode)
+    assert c5.function.name == "f<a && b>"
+    assert len(c5.arguments) == 1 and c5.arguments[0].name == "x"
+
+    c6 = statements[5].initial_value
+    assert isinstance(c6, FunctionCallNode)
+    assert c6.function.name == "f<T>"
+    assert len(c6.arguments) == 1 and c6.arguments[0].name == "x"
+
+    fn_with_type = ast.functions[1]
+    param_type = fn_with_type.parameters[0].param_type
+    assert isinstance(param_type, NamedType)
+    assert param_type.name == "Flag"
+    assert len(param_type.generic_args) == 1
+    assert isinstance(param_type.generic_args[0], BinaryOpNode)
+    assert param_type.generic_args[0].operator == "&&"
+    assert param_type.generic_args[0].left.name == "A"
+    assert param_type.generic_args[0].right.name == "B"
+
+
 def test_matrix_type_keywords_parse():
     code = """
     shader Matrices {

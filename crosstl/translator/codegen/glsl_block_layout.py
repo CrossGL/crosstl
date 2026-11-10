@@ -48,6 +48,7 @@ import re
 from dataclasses import replace
 
 from ..ast import ArrayType, MatrixType, NamedType, PrimitiveType, VectorType
+from .array_utils import split_outer_array_dimension
 from .hlsl_buffer_layout import (
     BUFFER_LAYOUT_ATTRIBUTE,
     HLSL_BUFFER_LAYOUTS,
@@ -382,9 +383,9 @@ def crossgl_layout_type(
             type_name, struct_members, row_major, stack, constant_value
         )
     type_name = re.sub(r"\s+", " ", str(type_name)).strip()
-    array_match = re.fullmatch(r"(.+?)\s*\[\s*([^\]]*)\s*\]", type_name)
-    if array_match is not None:
-        count_text = array_match.group(2).strip()
+    array_parts = split_outer_array_dimension(type_name)
+    if array_parts is not None:
+        element_text, count_text = array_parts
         if not count_text:
             raise HlslLayoutError("unsized arrays in uniform blocks are not supported")
         try:
@@ -394,12 +395,8 @@ def crossgl_layout_type(
                 f"array size '{count_text}' in a uniform block is not a constant"
             ) from None
         element = crossgl_layout_type(
-            array_match.group(1), struct_members, row_major, stack, constant_value
+            element_text, struct_members, row_major, stack, constant_value
         )
-        if element.kind == "array":
-            raise HlslLayoutError(
-                "multidimensional arrays in uniform blocks are not supported"
-            )
         return array_type(element, count)
     if type_name in CROSSGL_SCALARS:
         return scalar_type(CROSSGL_SCALARS[type_name])
@@ -477,10 +474,6 @@ def crossgl_type_node_layout_type(
         element = crossgl_type_node_layout_type(
             type_node.element_type, struct_members, row_major, stack, constant_value
         )
-        if element.kind == "array":
-            raise HlslLayoutError(
-                "multidimensional arrays in uniform blocks are not supported"
-            )
         return array_type(element, int(count))
     if isinstance(type_node, NamedType):
         return crossgl_layout_type(

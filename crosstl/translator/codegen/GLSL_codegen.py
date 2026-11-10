@@ -320,6 +320,11 @@ from .glsl_shadow_lod import (
     require_shadow_lod_extension,
     zero_lod_compare_gradient_call,
 )
+from .glsl_shared_array_values import (
+    allow_shared_array_value,
+    is_shared_array_value,
+    shared_array_value_root,
+)
 from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
@@ -30954,6 +30959,8 @@ class GLSLCodeGen(
         binding = self.current_glsl_workgroup_pointer_aliases.get(name)
         if binding is None or binding.get("kind") != "workgroup-pointer":
             return
+        if is_shared_array_value(self, name):
+            return
         raise OpenGLWorkgroupPointerError(
             f"OpenGL cannot emit a workgroup pointer as a first-class value: {name}",
             parameter_name=name,
@@ -33360,7 +33367,10 @@ class GLSLCodeGen(
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = expected_type
         try:
-            generated = self.generate_expression(expr)
+            with allow_shared_array_value(
+                self, shared_array_value_root(self, expr, expected_type)
+            ):
+                generated = self.generate_expression(expr)
         finally:
             self.current_expression_expected_type = previous_expected_type
         converted = self.glsl_expected_type_conversion(expr, generated, expected_type)
@@ -40630,7 +40640,11 @@ complex64_t crossgl_complex64_mod_assign(
                 if none_value is not None:
                     return none_value
             binding = self.current_glsl_workgroup_pointer_aliases.get(expr)
-            if binding is not None and binding.get("kind") == "workgroup-pointer":
+            if (
+                binding is not None
+                and binding.get("kind") == "workgroup-pointer"
+                and not is_shared_array_value(self, expr)
+            ):
                 raise OpenGLWorkgroupPointerError(
                     "OpenGL cannot emit a workgroup pointer as a first-class value: "
                     f"{expr}",
@@ -47057,7 +47071,10 @@ complex64_t crossgl_complex64_mod_assign(
                     reason="mutable-reference-requires-lvalue",
                     source_location=getattr(arg, "source_location", None),
                 )
-            return self.generate_expression(arg)
+            with allow_shared_array_value(
+                self, shared_array_value_root(self, arg, param_type)
+            ):
+                return self.generate_expression(arg)
         generated = self.glsl_wide_integer_literal_argument(
             arg,
             self.generate_expression_with_expected(arg, param_type),
@@ -57227,8 +57244,12 @@ complex64_t crossgl_complex64_mod_assign(
         )
         code = f"{layout_prefix} {qualifier_prefix}buffer {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
+            # A member of structure type keeps its row_major, which reaches the structure's matrices (GLSL 4.60
+            # section 4.4.5); row_major_members has already transposed the matrix members and dropped theirs.
+            orientation = self.glsl_uniform_member_orientation(member)
             code += self.generate_struct_member_declaration(
                 member,
+                indent=f"    {orientation}",
                 struct_name=source_block_name,
                 preserve_unsized_arrays=True,
             )

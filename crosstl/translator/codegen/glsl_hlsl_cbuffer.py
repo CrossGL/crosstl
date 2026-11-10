@@ -40,6 +40,7 @@ from .array_utils import (
     evaluate_literal_int_expression,
     fold_array_type_counts,
     format_c_style_array_declaration,
+    split_outer_array_dimension,
 )
 from .buffer_member_layout import (
     member_explicit_offset,
@@ -335,16 +336,12 @@ class GLSLHlslConstantBuffers:
         raw_type = fold_array_type_counts(
             str(raw_type or "").strip(), getattr(self, "literal_int_constants", None)
         )
-        array_match = ARRAY_PATTERN.fullmatch(raw_type)
-        if array_match is not None:
+        array_parts = split_outer_array_dimension(raw_type)
+        if array_parts is not None and array_parts[1].isdigit():
             element = self.glsl_hlsl_cbuffer_layout_type(
-                array_match.group("element"), stack, row_major
+                array_parts[0], stack, row_major
             )
-            if element.kind == "array":
-                raise HlslLayoutError(
-                    "multidimensional arrays in HLSL buffers are not supported"
-                )
-            return array_type(element, int(array_match.group("count")))
+            return array_type(element, int(array_parts[1]))
         if raw_type.endswith("]"):
             raise HlslLayoutError(
                 f"array type '{raw_type}' needs a constant size in an HLSL buffer"
