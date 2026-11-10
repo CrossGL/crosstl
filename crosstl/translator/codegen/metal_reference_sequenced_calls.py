@@ -180,8 +180,12 @@ def _copy_back(codegen, call, argument, source, name):
     return f"{target} = {value}"
 
 
-def _sequence_call(codegen, sequence, stmt, call, copied):
-    """Fill ``sequence`` with the steps of ``call``; ``copied`` maps argument ids to ``(qualifier, parameter)``."""
+def _sequence_call(codegen, sequence, stmt, call, copied, discarded=False):
+    """Fill ``sequence`` with the steps of ``call``; ``copied`` maps argument ids to ``(qualifier, parameter)``.
+
+    The value of a ``discarded`` call is not used (a ``for`` update), so the comma expression ends with the last
+    copy-back instead of the call's result.
+    """
     written = _statement_written_names(codegen, stmt)
     shared_names = _storage_helpers_can_write(codegen)
     arguments = _call_arguments(call)
@@ -224,7 +228,7 @@ def _sequence_call(codegen, sequence, stmt, call, copied):
             ]
         )
     result = None
-    if result_type == "void":
+    if result_type == "void" or discarded:
         sequence.steps.append(call_code)
     else:
         result = sequence.temporary("__crossgl_call", codegen.map_type(result_type))
@@ -248,7 +252,9 @@ def _nested_copies(codegen, call, writebacks):
     )
 
 
-def generate_sequenced_call_statement(codegen, stmt, indent, call, writebacks):
+def generate_sequenced_call_statement(
+    codegen, stmt, indent, call, writebacks, discarded=False
+):
     """Emit ``stmt`` with ``call`` evaluated in place as a comma expression that stores its copies back."""
     arguments = _call_arguments(call)
     copied = {
@@ -266,7 +272,7 @@ def generate_sequenced_call_statement(codegen, stmt, indent, call, writebacks):
         )
     sequence = _Sequence(codegen, indent)
     try:
-        _sequence_call(codegen, sequence, stmt, call, copied)
+        _sequence_call(codegen, sequence, stmt, call, copied, discarded)
     finally:
         codegen.metal_argument_substitutions = sequence.previous
     expression = f"({', '.join(sequence.steps)})"
@@ -285,17 +291,25 @@ def generate_sequenced_call_statement(codegen, stmt, indent, call, writebacks):
     return sequence.declarations + body
 
 
-def generate_conditional_call_statement(codegen, stmt, indent, calls, writebacks):
+def generate_conditional_call_statement(
+    codegen, stmt, indent, calls, writebacks, discarded=()
+):
     """Emit ``stmt`` when ``calls`` copy reference arguments in operands that are evaluated conditionally.
 
     Copies made before the statement and stored back after it would run whether or not the operand is evaluated.
     Each such call is evaluated in place instead, so its copies are made and stored back only when it runs. An
     inner call is sequenced before the call whose argument holds it; the statement is generated again for the rest.
+    ``discarded`` holds the calls whose value is not used.
     """
     for call in calls:
         if not _nested_copies(codegen, call, writebacks):
             return generate_sequenced_call_statement(
-                codegen, stmt, indent, call, writebacks
+                codegen,
+                stmt,
+                indent,
+                call,
+                writebacks,
+                any(call is other for other in discarded),
             )
     raise MetalLoweringRefused(
         [
