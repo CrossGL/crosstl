@@ -8850,6 +8850,9 @@ class MetalCodeGen(
                         f"{indent_str}return {return_wrapper['struct_name']}"
                         f"{{{value}}};\n"
                     )
+                array_return = self.metal_glsl_buffer_array_return(stmt.value)
+                if array_return is not None:
+                    return f"{indent_str}return {array_return};\n"
                 value = self.generate_expression_with_expected(
                     stmt.value, self.current_function_return_type
                 )
@@ -24226,6 +24229,22 @@ class MetalCodeGen(
             "compound store",
             f"operator {op} is not supported for "
             f"{access['component_type']} buffer members",
+        )
+
+    def metal_glsl_buffer_array_return(self, value):
+        """``{e0, e1, ...}`` returning a whole buffer block array from an array-valued function, or ``None``.
+
+        A Metal function returns ``array<T, N>``, which a brace list of the element loads initializes; the array
+        itself has no Metal expression (glsl_buffer_array_values).
+        """
+        access = self.glsl_buffer_block_array_access(value)
+        indexed = access is not None
+        if access is None:
+            access = self.glsl_buffer_block_member_access(value)
+        if glsl_buffer_whole_array_reason(access, indexed=indexed) is None:
+            return None
+        return generate_metal_array_initializer(
+            self, value, glsl_buffer_array_value_type(access)
         )
 
     def metal_glsl_buffer_whole_array_check(self, access, *, indexed):
