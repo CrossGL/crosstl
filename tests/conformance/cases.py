@@ -777,6 +777,38 @@ def o_assignment_operand(inp):
     return np.array(out, dtype=np.int32)
 
 
+def o_constant_array_arguments(inp):
+    """Helpers called with constant arrays see the constants, and their writes stay in their own copies."""
+    w, m, cs, lo = (
+        (1.0, 2.0, 3.0, 4.0),
+        ((5.0, 6.0), (7.0, 8.0)),
+        (9.0, 10.0, 11.0, 12.0),
+        (13.0, 14.0, 15.0, 16.0),
+    )
+
+    def dot4(v, k):
+        return sum(v[j] * (k + j) for j in range(4)) + 100.0
+
+    def pick2(v, i):
+        v = list(v)
+        v[i % 2] = -1.0
+        return v[0] * 3.0 + v[1]
+
+    out = []
+    for i, k in enumerate(inp.astype(np.float64)):
+        out += [
+            dot4(w, k),
+            pick2(m[i % 2], i),
+            dot4(cs, k),
+            dot4((17.0, 18.0, k, 20.0), 1.0),
+            dot4((k, k + 1.0, k + 2.0, k + 3.0), 2.0),
+            dot4(lo, k),
+            pick2(m[1], i + 1),
+            w[i % 4] + m[i % 2][1] + cs[(i + 1) % 4] + lo[(i + 2) % 4],
+        ]
+    return np.array(out, dtype=np.float32)
+
+
 def row_major_inputs():
     """64 row-major std430 mat3x2 values: two 16-byte rows of three small integers and one padding word each."""
     rows = (np.arange(64 * 6, dtype=np.int64).reshape(64, 2, 3) * 7 % 23 - 11).astype(
@@ -2151,6 +2183,17 @@ CASES = [
         np.arange(-20, 44, dtype=np.int32),
         np.int32,
         o_assignment_operand,
+    ),
+    Case(
+        "g_constant_array_arguments",
+        "S20",
+        "const arrays, a row of a const array of arrays, a const struct member, array constructors, a call result "
+        "and a local const array passed by value to helpers that write their copy",
+        "GLSL 4.60 section 6.1.1: an in array parameter is copied in; section 4.3.3: a const variable is read-only",
+        np.arange(64, dtype=np.float32),
+        np.float32,
+        o_constant_array_arguments,
+        compare="ulp:0",
     ),
     Case(
         "g_row_major_members",
