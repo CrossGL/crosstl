@@ -1479,6 +1479,10 @@ jobs:
           demos/integrations/mlx/tests/host/test_random_packages.py
           demos/integrations/mlx/tests/host/test_reduction_cache.py
           demos/integrations/mlx/tests/host/test_portable_upstream_ops.py
+          --deselect demos/integrations/mlx/tests/host/test_portable_small_rows.py::test_small_row_ci_requires_native_execution_on_all_targets
+          --deselect demos/integrations/mlx/tests/host/test_portable_integer64.py::test_integer64_ci_requires_all_three_native_targets
+          --deselect demos/integrations/mlx/tests/host/test_portable_padding.py::test_padding_ci_requires_native_execution_and_retained_evidence
+          --deselect demos/integrations/mlx/tests/host/test_portable_slice_update_workloads.py::test_slice_update_ci_requires_native_execution_and_evidence
       - name: Validate platform host ABI
         id: platform-host-abi
         if: runner.os != 'Linux'
