@@ -324,6 +324,10 @@ from .hlsl_byteaddress_typed_access import (
 )
 from .hlsl_call_argument_order import hlsl_ordered_call_expression
 from .hlsl_constant_matrices import hlsl_constant_matrix_member_type
+from .hlsl_exact_float_builtins import (
+    emit_hlsl_exact_float_helpers,
+    hlsl_exact_float_expression,
+)
 from .hlsl_extension_builtins import (
     HLSL_GLSL_SYSTEM_VALUES,
     HLSL_NOPERSPECTIVE_BARYCENTRICS,
@@ -2753,6 +2757,7 @@ class HLSLCodeGen(
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_wave_extension_helpers = {}
         self.hlsl_pack_helpers = {}
+        self.hlsl_exact_float_helpers = {}
         self.hlsl_byte_address_atomic_helpers = {}
         self.hlsl_bitfield_helpers = {}
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
@@ -4174,6 +4179,7 @@ class HLSLCodeGen(
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_wave_extension_helpers = {}
         self.hlsl_pack_helpers = {}
+        self.hlsl_exact_float_helpers = {}
         self.hlsl_byte_address_atomic_helpers = {}
         self.hlsl_bitfield_helpers = {}
         self.required_hlsl_defined_relative_wave_shuffle_helpers = set()
@@ -5544,6 +5550,7 @@ class HLSLCodeGen(
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
         code += emit_hlsl_wave_extension_helpers(self)
         code += emit_hlsl_pack_helpers(self)
+        code += emit_hlsl_exact_float_helpers(self)
         code += emit_hlsl_bitfield_helpers(self)
         code += emit_hlsl_extended_arithmetic_helpers(self)
         code += self.generate_hlsl_trailing_zero_helpers()
@@ -27978,9 +27985,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         builtin_read = hlsl_stage_builtin_read(self, expr)
         if builtin_read is not None:
             return builtin_read
+        # Arguments first: the ordered call renders the call itself through this method again.
         ordered_call = hlsl_ordered_call_expression(self, expr)
         if ordered_call is not None:
             return ordered_call
+        exact_float = hlsl_exact_float_expression(self, expr)
+        if exact_float is not None:
+            return exact_float
         if expr is None:
             return ""
         elif isinstance(expr, CooperativeMatrixOpNode):

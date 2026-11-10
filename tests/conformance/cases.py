@@ -709,6 +709,12 @@ def o_fmod(inp):
     )
 
 
+def o_hlsl_remainder(inp):
+    x, y = inp[0::2].astype(np.float64), inp[1::2].astype(np.float64)
+    columns = (np.fmod(x, y), np.fmod(np.abs(x), np.abs(y)))
+    return np.stack(columns, axis=1).reshape(-1).astype(np.float32)
+
+
 def o_array_values(inp):
     """sum3(a) = 3x + 3, 2 * sum3(taps) = 12x + 16 (taps = (x, 2(x + 1), 3(x + 2))), corner(g) = x + 2."""
     x = inp.astype(np.int64)
@@ -1538,6 +1544,16 @@ CASES = [
         _fmod_pairs(),
         np.float32,
         o_fmod,
+        compare="bits",
+    ),
+    Case(
+        "h_fmod_remainder",
+        "fmod",
+        "fmod(x, y) and the floating-point % of magnitudes",
+        "HLSL fmod: x = i * y + f with f the sign of x and |f| < |y|; % on operands of one sign",
+        _fmod_pairs(),
+        np.float32,
+        o_hlsl_remainder,
         compare="bits",
     ),
     Case(
