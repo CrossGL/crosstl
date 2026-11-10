@@ -13,9 +13,16 @@ plans. Two generators wrote other declarations silently:
   and it writes the ``[[vk::offset(N)]]`` of a push-constant ``cbuffer`` member, which slangc moves to the member's
   std430 alignment when ``N`` is not a multiple of it.
 
-For those targets :func:`refuse_unplaced_member_offsets` raises :class:`MemberPlacementError` when the declared
-placements put any scalar somewhere other than the target's own rules would. Placements that agree with them, such
-as the offsets an importer writes for every member, are accepted.
+HLSL and GLSL output place the members of a constant block only, not those of a struct the block holds, and every
+target but SPIR-V declared the ``T`` of an array of ``ConstantBuffer<T>`` without its placements. For those targets
+:func:`refuse_unplaced_member_offsets` raises :class:`MemberPlacementError` when the declared placements put any
+scalar somewhere other than the target's own rules would. Placements that agree with them, such as the offsets an
+importer writes for every member, are accepted.
+
+SPIR-V output decorates every struct type's members with their ``Offset`` (SPIR-V 1.6 section 2.16.2), so it places
+the members of a block, of the structs it holds at any depth and of the ``T`` of a ``ConstantBuffer<T>`` or an array
+of them at the bytes they declare (:mod:`..codegen.spirv_placed_blocks`), and refuses a placement its layout rules
+reject with its own typed diagnostic.
 """
 
 from __future__ import annotations
@@ -44,7 +51,11 @@ from .constant_buffer_layouts import TARGET_LAYOUTS
 from .constant_buffers import constant_buffer_element
 from .hub_types import iter_structs
 
-__all__ = ["MemberPlacementError", "refuse_unplaced_member_offsets"]
+__all__ = [
+    "ConstantBufferArrayLayoutError",
+    "MemberPlacementError",
+    "refuse_unplaced_member_offsets",
+]
 
 METAL_TARGETS = frozenset({"metal"})
 SLANG_TARGETS = frozenset({"slang"})
@@ -57,6 +68,12 @@ class MemberPlacementError(TranslationDiagnostic):
     """A constant-buffer member placement the target's declaration would not reproduce."""
 
     code = f"{CODE_PREFIX}member-placement-unsupported"
+
+
+class ConstantBufferArrayLayoutError(TranslationDiagnostic):
+    """An array of ``ConstantBuffer<T>`` whose element bytes the target's declaration of ``T`` would move."""
+
+    code = f"{CODE_PREFIX}constant-buffer-array-layout-unsupported"
 
 
 class _Structs:
@@ -146,10 +163,9 @@ class _Structs:
 def _check_nested_placements(structs, program, target, native):
     """Refuse a constant block whose members' structs carry placements that move a scalar under the block's layout.
 
-    SPIR-V, HLSL and GLSL output place a block's own members (``Offset``, ``packoffset`` and ``layout(offset)``),
-    but declare the structs it holds once, by the layout's rules alone: GLSL ``layout(offset)`` and HLSL
-    ``packoffset`` apply to block members only (GLSL 4.60 section 4.4.5), and SPIR-V output decorates the nested
-    struct type with the layout's offsets.
+    HLSL and GLSL output place a block's own members (``packoffset`` and ``layout(offset)``), but declare the
+    structs it holds once, by the layout's rules alone: GLSL ``layout(offset)`` and HLSL ``packoffset`` apply to
+    block members only (GLSL 4.60 section 4.4.5).
     """
     for block in iter_structs(program):
         if not getattr(block, "is_cbuffer", False):
@@ -196,13 +212,61 @@ def _variables(program):
 
 
 def _element_struct(structs, variable):
-    """The struct a ``ConstantBuffer<T>``, or a push-constant ``T``, holds, or ``None``."""
+    """The struct a ``ConstantBuffer<T>``, an array of them, or a push-constant ``T`` holds, or ``None``."""
     var_type = getattr(variable, "var_type", None)
     element = constant_buffer_element(var_type)
+    if element is None and isinstance(var_type, A.ArrayType):
+        inner = var_type
+        while isinstance(inner, A.ArrayType):
+            inner = inner.element_type
+        element = constant_buffer_element(inner)
     if element is None and is_push_constant(variable):
         element = var_type
     name = _struct_name(element) if element is not None else None
     return structs.structs.get(name) if name is not None else None
+
+
+def _check_constant_buffer_arrays(structs, program, target, native):
+    """Refuse an array of ``ConstantBuffer<T>`` whose ``T`` the target would lay out at other bytes than declared.
+
+    Each element of the array is a buffer of its own, so the block :mod:`.constant_buffer_layouts` declares for one
+    buffer with a declared layout cannot hold it, and HLSL and GLSL output declare the array's ``T`` once, by the
+    target's own constant-buffer rules (``native``) and without member placements. The host writes each element by
+    the declared ``@ buffer_layout``, or by ``native`` when there is none, with the placements of ``T`` and of the
+    structs it holds.
+    """
+    for variable in _variables(program):
+        if not isinstance(getattr(variable, "var_type", None), A.ArrayType):
+            continue
+        struct = _element_struct(structs, variable)
+        if struct is None:
+            continue
+        declared = declared_buffer_layout(getattr(variable, "attributes", None))
+        layout = declared or native
+        try:
+            wanted = layout_scalar_offsets(
+                structs.layout_type(struct.name, struct.members, True), layout
+            )
+            written = layout_scalar_offsets(
+                structs.layout_type(struct.name, struct.members, False), native
+            )
+        except HlslLayoutError as exc:
+            reason = f"its elements cannot be laid out by the {layout} rules: {exc}"
+        else:
+            if wanted == written:
+                continue
+            cause = (
+                f"the {declared} layout it declares"
+                if declared not in (None, native)
+                else f"the @offset or @align of the members of struct '{struct.name}'"
+            )
+            reason = (
+                f"{target} output declares the struct '{struct.name}' of every element by the {native} rules "
+                f"without placements, which moves members that {cause} places elsewhere"
+            )
+        raise ConstantBufferArrayLayoutError(
+            f"array of constant buffers '{variable.name}': {reason}", target=target
+        )
 
 
 def _check_blocks(structs, program, target, layouts, planned, push_constants):
@@ -340,16 +404,14 @@ def refuse_unplaced_member_offsets(program, target) -> None:
     elif target in SLANG_TARGETS:
         _check_slang(structs, program, target)
     elif target in SPIRV_TARGETS:
-        _check_nested_placements(structs, program, target, TARGET_LAYOUTS[target])
-        # SPIR-V output places the members of T itself when the buffer declares no layout (spirv_placed_blocks).
-        _check_elements(
-            structs, program, target, (), lambda _variable, declared: declared is None
-        )
+        # SPIR-V output places every member at its declared bytes (spirv_placed_blocks).
+        return
     elif target in TARGET_LAYOUTS:
         # GLSL output refuses the members of a push-constant T itself. HLSL output places them (hlsl_push_constants)
         # and reads a buffer that declares a layout from registers at the planned offsets
         # (hlsl_glsl_block_registers).
         hlsl = TARGET_LAYOUTS[target] == HLSL_CBUFFER_LAYOUT
+        _check_constant_buffer_arrays(structs, program, target, TARGET_LAYOUTS[target])
         _check_nested_placements(structs, program, target, TARGET_LAYOUTS[target])
         _check_elements(
             structs,

@@ -1,4 +1,4 @@
-"""Composite-type probes in the languages that do not write them as the C family does (:data:`.base.C_FAMILY`).
+"""Composite-type probes in the languages that do not write them as the C family does (:data:`.family.C_FAMILY`).
 
 HLSL indexes a matrix by rows, WGSL and Rust can only read swizzles, OpenCL C converts with casts, and CUDA, HIP and
 Mojo have no swizzles or matrices.
@@ -6,7 +6,8 @@ Mojo have no swizzles or matrices.
 
 from __future__ import annotations
 
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY
 
 _NESTED_BODY = C_FAMILY["nested-struct"].body
 

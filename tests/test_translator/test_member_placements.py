@@ -124,7 +124,8 @@ def _outcomes(tmp_path, source):
             },
         ),
         # A declared layout declares a block holding one T, placed by the layout's rules; HLSL reads it from
-        # registers at the planned offsets, and Metal pads T to its members' placements.
+        # registers at the planned offsets, Metal pads T to its members' placements, and SPIR-V decorates T's
+        # members with the placed offsets.
         (
             _struct_buffer(
                 "float s; vec3 v @offset(32);",
@@ -132,7 +133,6 @@ def _outcomes(tmp_path, source):
                 "cb.s + cb.v.y",
             ),
             {
-                "vulkan": "placement",
                 "opengl": "placement",
                 "slang": "placement",
             },
@@ -266,11 +266,12 @@ shader Probe {
 """
 
 
-@pytest.mark.parametrize("backend", ["vulkan", "directx", "opengl", "metal", "slang"])
+@pytest.mark.parametrize("backend", ["directx", "opengl", "metal", "slang"])
 def test_a_placement_inside_a_struct_held_by_a_constant_buffer_is_refused(
     tmp_path, backend
 ):
-    # Issue #4245: SPIR-V wrote 'Offset 16', HLSL a semantic named 'offset' and GLSL a plain 'vec4 v;'.
+    # Issue #4245: SPIR-V wrote 'Offset 16', HLSL a semantic named 'offset' and GLSL a plain 'vec4 v;'. SPIR-V now
+    # places the member at byte 32 (test_spirv_nested_member_placements.py runs it on Vulkan).
     path = tmp_path / "nested.cgl"
     path.write_text(NESTED_PLACEMENT.replace("OFFSET", "32"))
 
