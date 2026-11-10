@@ -13,6 +13,7 @@ time, so such reads and writes are now refused. A component write to a vector el
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 
@@ -120,6 +121,10 @@ def _compact(text):
     return "".join(text.split())
 
 
+def _method_call(match):
+    return f"{match.group(2)}.{match.group(1).capitalize()}3("
+
+
 def test_inner_dimensions_take_the_next_extent_times_its_stride():
     member = {"size": 12, "align": 16, "array_stride": 16, "inner_array_sizes": (2, 3)}
 
@@ -150,6 +155,9 @@ def test_array_elements_are_listed_in_memory_order():
 @pytest.mark.parametrize("backend", ["directx", "slang"])
 def test_byte_address_output_indexes_every_dimension(tmp_path, backend):
     output = _compact(_translate(tmp_path, GLSL_SOURCE, backend))
+    if backend == "slang":
+        # Slang moves three words through helpers (slang_byte_address_words); compare in the method form.
+        output = re.sub(r"__crossgl_(load|store)3_uint\((\w+),", _method_call, output)
 
     # std430 float[2][3]: 12-byte rows of 4-byte elements.
     assert "data.Store(((a*12)+b*4),asuint(acc));" in output
