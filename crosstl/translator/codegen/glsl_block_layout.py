@@ -52,11 +52,13 @@ from .array_utils import split_outer_array_dimension
 from .hlsl_buffer_layout import (
     BUFFER_LAYOUT_ATTRIBUTE,
     HLSL_BUFFER_LAYOUTS,
+    HLSL_CBUFFER_LAYOUT,
     HlslLayoutError,
     HlslMemberPlacement,
     align_to,
     array_type,
     cbuffer_array_stride,
+    cbuffer_held_struct_placements,
     cbuffer_matrix_vector_stride,
     cbuffer_struct_placements,
     oriented_matrix_type,
@@ -354,9 +356,13 @@ def block_struct_placements(layout_type, layout, root=False):
 
 
 def layout_struct_placements(layout_type, layout, root=False):
-    """Member placements and size of a struct under ``layout`` (an HLSL or a block layout)."""
+    """Member placements and size of a struct under ``layout`` (an HLSL or a block layout), or of a block when
+    ``root``. A struct a constant buffer holds places a member without ``@ offset`` after the member above it.
+    """
     if layout in BLOCK_LAYOUTS:
         return block_struct_placements(layout_type, layout, root)
+    if layout == HLSL_CBUFFER_LAYOUT and not root:
+        return cbuffer_held_struct_placements(layout_type)
     return struct_placements(layout_type, layout)
 
 
