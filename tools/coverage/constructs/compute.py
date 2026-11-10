@@ -1,0 +1,125 @@
+"""Compute features: invocation, workgroup and subgroup ids, shared memory and barriers, specialization constants
+and buffer memory qualifiers."""
+
+from .base import c
+
+COMPUTE = (
+    c("compute", "shared-memory", "StorageClass.Workgroup", "OpControlBarrier"),
+    c("compute", "local-invocation-id", "BuiltIn.LocalInvocationId"),
+    c("compute", "workgroup-id", "BuiltIn.WorkgroupId"),
+    c("compute", "local-invocation-index", "BuiltIn.LocalInvocationIndex"),
+    c("compute", "num-workgroups", "BuiltIn.NumWorkgroups"),
+    c("compute", "subgroup-size", "BuiltIn.SubgroupSize"),
+    c(
+        "compute",
+        "subgroup-invocation-id",
+        "BuiltIn.SubgroupLocalInvocationId",
+    ),
+    c("compute", "num-subgroups", "BuiltIn.NumSubgroups"),
+    c("compute", "subgroup-id", "BuiltIn.SubgroupId"),
+    c("compute", "workgroup-size", "BuiltIn.WorkgroupSize"),
+    c("compute", "specialization-constant", "OpSpecConstant", "Decoration.SpecId"),
+    c(
+        "compute",
+        "specialization-constant-bool",
+        "OpSpecConstantTrue",
+        "Decoration.SpecId",
+    ),
+    c(
+        "compute",
+        "specialization-constant-expression",
+        "OpSpecConstantOp",
+        "Decoration.SpecId",
+    ),
+    c(
+        "compute",
+        "specialization-workgroup-size",
+        "BuiltIn.WorkgroupSize",
+        "Decoration.SpecId",
+    ),
+    c(
+        "compute",
+        "specialization-constant-float",
+        "OpSpecConstant",
+        "Decoration.SpecId",
+    ),
+    c(
+        "compute",
+        "specialization-constant-vector",
+        "OpSpecConstantComposite",
+        "Decoration.SpecId",
+    ),
+    c(
+        "compute",
+        "specialization-array-size",
+        "OpTypeArray",
+        "StorageClass.Workgroup",
+        "Decoration.SpecId",
+    ),
+    c(
+        "compute",
+        "specialization-constant-in-helper",
+        "OpFunctionCall",
+        "OpSpecConstant",
+        "Decoration.SpecId",
+    ),
+    c(
+        "compute",
+        "restrict-buffer",
+        "StorageClass.StorageBuffer",
+        "Decoration.Restrict",
+    ),
+    c(
+        "compute",
+        "coherent-buffer",
+        "StorageClass.StorageBuffer",
+        "Decoration.Coherent",
+    ),
+    c(
+        "compute",
+        "volatile-buffer",
+        "StorageClass.StorageBuffer",
+        "Decoration.Volatile",
+    ),
+    c(
+        "compute",
+        "write-only-buffer",
+        "StorageClass.StorageBuffer",
+        "Decoration.NonReadable",
+    ),
+    c(
+        "compute",
+        "invocation-id-in-helper",
+        "OpFunctionCall",
+        "BuiltIn.GlobalInvocationId",
+    ),
+    c(
+        "compute",
+        "shared-memory-in-helper",
+        "OpFunctionCall",
+        "StorageClass.Workgroup",
+        "OpControlBarrier",
+    ),
+    c("compute", "barrier-in-loop", "OpLoopMerge", "OpControlBarrier"),
+    c(
+        "compute",
+        "shared-vector-array",
+        "StorageClass.Workgroup",
+        "OpTypeVector",
+        "OpControlBarrier",
+    ),
+    c(
+        "compute",
+        "shared-struct-array",
+        "StorageClass.Workgroup",
+        "OpTypeStruct",
+        "OpControlBarrier",
+    ),
+    c(
+        "compute",
+        "shared-2d-array",
+        "StorageClass.Workgroup",
+        "OpTypeArray",
+        "OpControlBarrier",
+    ),
+)
