@@ -49,7 +49,12 @@ for a single full run of a branch. Pull requests that change the MLX demo,
 core, tests or toolchains run a short Linux smoke job that translates pinned integer
 and float32 `arange` entries to all three targets, checks their artifact hashes,
 validates HLSL/GLSL and executes their numerical cases with Mesa EGL, including
-input observations and output guards. The selector
+input observations and output guards. The same job runs the complete-family
+canary (`python -m demos.integrations.mlx.smoke_canary`): a few bfloat16,
+float16 and complex64 workloads of the complete unary, binary, copy, reduce and
+quantized proofs, through the full tier's own tests on every target they cover,
+with DXC and glslang validation. It reports generated-artifact pin drift instead
+of failing on it, and fails when any of its tests skips. The selector
 compares the complete Git diff, including deleted and renamed paths.
 Each job and matrix leg has its own queue.
 Active project-demo jobs finish even when a newer revision arrives. The pending
