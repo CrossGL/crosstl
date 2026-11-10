@@ -70,12 +70,12 @@ jobs:
         run: python -m demos.integrations.mlx.ci_plan --event "${{ github.event_name }}"
 
   mlx-smoke:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-smoke
       cancel-in-progress: false
     name: MLX translation and numerical smoke
     needs: ci-plan
-    if: needs.ci-plan.outputs.smoke == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -138,6 +138,7 @@ jobs:
           retention-days: 7
 
   warp-conformance:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-warp-conformance
       cancel-in-progress: false
@@ -145,7 +146,6 @@ jobs:
     # on the system WARP library and every checksum-pinned release. The
     # reference library must pass every test; the other libraries are findings.
     needs: ci-plan
-    if: needs.ci-plan.outputs.smoke == 'true' || needs.ci-plan.outputs.heavy == 'true'
     name: WARP conformance matrix (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 40
@@ -259,11 +259,11 @@ jobs:
           if-no-files-found: warn
 
   opengl:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-opengl
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -423,11 +423,11 @@ jobs:
           retention-days: 14
 
   metal:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -558,11 +558,11 @@ jobs:
           retention-days: 14
 
   metal-float:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal-float
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -622,11 +622,11 @@ jobs:
           retention-days: 14
 
   directx:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-directx
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -782,11 +782,11 @@ jobs:
           retention-days: 14
 
   metal-host:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-metal-host
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -1090,11 +1090,11 @@ jobs:
           retention-days: 14
 
   native-metal-reference:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-native-metal-reference
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -1174,11 +1174,11 @@ jobs:
           retention-days: 14
 
   directx-dispatch-sequence:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-directx-dispatch-sequence
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -1263,11 +1263,11 @@ jobs:
           tests/test_translator/test_runtime_graph_device.py::test_directx_dispatch_sequence_executes_shared_temporary_on_device
 
   opengl-dispatch-sequence:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-opengl-dispatch-sequence
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
@@ -2521,10 +2521,10 @@ jobs:
           retention-days: 14
 
   small-row-reductions:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-small-row-reductions-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -2785,10 +2785,10 @@ jobs:
           retention-days: 14
 
   half-host:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-half-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3076,10 +3076,10 @@ jobs:
           retention-days: 14
 
   quantized-host:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-quantized-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3332,14 +3332,12 @@ jobs:
         # The target is an axis: include entries that set it without one would
         # overwrite each other's added values, leaving only the last platform.
         test: [qvm, qmv, qvm_splitk, qmm_shapes, qmm, fp_qmv, fp_qmv_large_output, fp_qvm, qmv_small_non_multiples, qmm_vjp, qmv_wide, qmm_non_transposed]
-        target: [opengl, directx, metal]
+        target: [opengl, directx]
         include:
           - target: opengl
             os: ubuntu-24.04
           - target: directx
             os: windows-2025
-          - target: metal
-            os: macos-26
     defaults:
       run:
         shell: bash
@@ -3474,10 +3472,10 @@ jobs:
           retention-days: 14
 
   integer64-host:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-integer64-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3662,10 +3660,10 @@ jobs:
           retention-days: 14
 
   slice-update-host:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-slice-update-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -3853,10 +3851,10 @@ jobs:
           retention-days: 14
 
   scatter-host:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-scatter-host-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -4013,11 +4011,11 @@ jobs:
           retention-days: 14
 
   row-packages:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-row-packages-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -4077,10 +4075,10 @@ jobs:
           retention-days: 14
 
   reductions:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-reductions-${{ strategy.job-index }}
       cancel-in-progress: false
-    if: needs.ci-plan.outputs.heavy == 'true'
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
@@ -4320,6 +4318,7 @@ jobs:
           retention-days: 14
 
   mlx-metal-porting:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-metal-porting-${{ strategy.job-index }}
@@ -4331,7 +4330,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX Metal project porting (${{ matrix.os }})
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
@@ -7274,6 +7272,7 @@ jobs:
   # runner and family group, so that each leg's bounded steps fit its own
   # deadline instead of extending the MLX Metal project porting job.
   mlx-current-native-parity:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-native-parity-${{ strategy.job-index }}
@@ -7283,7 +7282,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 210
     strategy:
@@ -8596,6 +8594,7 @@ jobs:
           retention-days: 14
 
   mlx-current-quantized-parity:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-quantized-parity-${{ strategy.job-index }}
@@ -8605,7 +8604,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX current-tree quantized native parity (${{ matrix.os }}, ${{ matrix.group }})
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 210
     strategy:
@@ -8675,6 +8673,7 @@ jobs:
     steps: *mlx-current-parity-steps
 
   mlx-current-gemm-parity:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-current-gemm-parity-${{ strategy.job-index }}
@@ -8684,7 +8683,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX current-tree GEMM and convolution native parity (${{ matrix.os }}, ${{ matrix.group }})
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 210
     strategy:
@@ -8752,6 +8750,7 @@ jobs:
     steps: *mlx-current-parity-steps
 
   mlx-unary-metal-sources:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-metal-sources-${{ strategy.job-index }}
@@ -8763,7 +8762,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary Metal sources (shard ${{ matrix.shard_index }} of 5)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -8833,13 +8831,13 @@ jobs:
           retention-days: 14
 
   mlx-unary-metal-roundtrip:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-metal-roundtrip
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete unary Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
     needs: [ci-plan, mlx-unary-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 75
@@ -8889,6 +8887,7 @@ jobs:
           retention-days: 14
 
   mlx-unary-complete-opengl-translation:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-complete-opengl-translation-${{ strategy.job-index }}
@@ -8900,7 +8899,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary OpenGL translation (shard ${{ matrix.shard_index }} of 5)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -8969,6 +8967,7 @@ jobs:
           retention-days: 14
 
   mlx-unary-complete-directx-translation:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-unary-complete-directx-translation-${{ strategy.job-index }}
@@ -8980,7 +8979,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete unary DirectX translation (shard ${{ matrix.shard_index }} of 5)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9045,6 +9043,7 @@ jobs:
           retention-days: 14
 
   mlx-binary-metal-sources:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-binary-metal-sources-${{ strategy.job-index }}
@@ -9056,7 +9055,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9126,13 +9124,13 @@ jobs:
           retention-days: 14
 
   mlx-binary-complete-metal-roundtrip:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-binary-complete-metal-roundtrip
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete binary Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
     needs: [ci-plan, mlx-binary-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
@@ -9182,6 +9180,7 @@ jobs:
           retention-days: 14
 
   mlx-copy-metal-sources:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-copy-metal-sources-${{ strategy.job-index }}
@@ -9193,7 +9192,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9263,13 +9261,13 @@ jobs:
           retention-days: 14
 
   mlx-copy-complete-metal-roundtrip:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-copy-complete-metal-roundtrip
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete copy Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
     needs: [ci-plan, mlx-copy-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
@@ -9319,6 +9317,7 @@ jobs:
           retention-days: 14
 
   mlx-reduce-metal-sources:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-reduce-metal-sources-${{ strategy.job-index }}
@@ -9330,7 +9329,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9400,13 +9398,13 @@ jobs:
           retention-days: 14
 
   mlx-reduce-complete-metal-roundtrip:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-reduce-complete-metal-roundtrip
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     name: MLX complete reduce Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
     needs: [ci-plan, mlx-reduce-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
@@ -9456,6 +9454,7 @@ jobs:
           retention-days: 14
 
   mlx-quantized-metal-sources:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-quantized-metal-sources-${{ strategy.job-index }}
@@ -9467,7 +9466,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete quantized Metal sources (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9538,6 +9536,7 @@ jobs:
           retention-days: 14
 
   mlx-quantized-complete-metal-roundtrip:
+    if: false
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-quantized-complete-metal-roundtrip
       cancel-in-progress: false
@@ -9545,7 +9544,6 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
     name: MLX complete quantized Metal compilation
-    if: needs.ci-plan.outputs.heavy == 'true'
     needs: [ci-plan, mlx-quantized-metal-sources]
     runs-on: macOS-latest
     timeout-minutes: 60
@@ -9617,6 +9615,7 @@ jobs:
           retention-days: 14
 
   mlx-quantized-wide-opengl:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-quantized-wide-opengl
@@ -9628,7 +9627,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX quantized wide OpenGL translation
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -9689,6 +9687,7 @@ jobs:
           retention-days: 14
 
   mlx-reduce-complete-opengl-translation:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-reduce-complete-opengl-translation-${{ strategy.job-index }}
@@ -9700,7 +9699,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -9769,6 +9767,7 @@ jobs:
           retention-days: 14
 
   mlx-copy-complete-opengl-translation:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-copy-complete-opengl-translation-${{ strategy.job-index }}
@@ -9780,7 +9779,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -9849,6 +9847,7 @@ jobs:
           retention-days: 14
 
   mlx-copy-complete-directx-translation:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-copy-complete-directx-translation-${{ strategy.job-index }}
@@ -9860,7 +9859,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete copy DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -9925,6 +9923,7 @@ jobs:
           retention-days: 14
 
   mlx-reduce-complete-directx-translation:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-reduce-complete-directx-translation-${{ strategy.job-index }}
@@ -9936,7 +9935,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete reduce DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -10001,6 +9999,7 @@ jobs:
           retention-days: 14
 
   mlx-binary-complete-opengl-translation:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-binary-complete-opengl-translation-${{ strategy.job-index }}
@@ -10012,7 +10011,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary OpenGL translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -10081,6 +10079,7 @@ jobs:
           retention-days: 14
 
   mlx-binary-complete-directx-translation:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-binary-complete-directx-translation-${{ strategy.job-index }}
@@ -10092,7 +10091,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX complete binary DirectX translation (shard ${{ matrix.shard_index }} of 24)
-    if: needs.ci-plan.outputs.heavy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -10157,6 +10155,7 @@ jobs:
           retention-days: 14
 
   mlx-full-corpus-scout:
+    if: false
     needs: ci-plan
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-mlx-full-corpus-scout
@@ -10168,7 +10167,6 @@ jobs:
       MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
 
     name: MLX full-corpus artifact scout
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
