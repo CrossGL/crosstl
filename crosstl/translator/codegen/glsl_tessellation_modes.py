@@ -179,6 +179,24 @@ def refuse_unstated_modes(codegen, func, domain, spacing, order, point_mode):
         )
 
 
+def refuse_missing_domain(codegen, func, domain):
+    """Refuse an evaluation entry for which no stage of the program states the primitive mode.
+
+    A GLSL tessellation evaluation shader must declare ``triangles``, ``quads`` or ``isolines`` in its input
+    layout (GLSL 4.60 section 4.4.1.2: at least one evaluation compilation unit must declare a primitive mode), and
+    glslang refuses to link one that does not. A CrossGL evaluation stage may leave the domain to a control stage
+    outside the program, as a SPIR-V evaluation entry may, but GLSL output has nowhere to take it from.
+    """
+    if domain is not None:
+        return
+    codegen.refuse_lowering(
+        f"GLSL tessellation_evaluation entry '{getattr(func, 'name', '<unnamed>')}' states no domain "
+        "(triangles, quads or isolines) and no tessellation_control stage in the program states one; a GLSL "
+        "evaluation shader must declare its primitive mode in its input layout; translate the tessellation "
+        "stages together or state the domain"
+    )
+
+
 def merge_control_stage_modes(codegen, func, domain, spacing, order, point_mode):
     """Fill the evaluation stage's unstated tessellation modes from the program's control stage.
 
@@ -195,5 +213,6 @@ def merge_control_stage_modes(codegen, func, domain, spacing, order, point_mode)
         )
         order = _merged(order, control_order, "winding")
         point_mode = point_mode or control_point_mode
+    refuse_missing_domain(codegen, func, domain)
     refuse_unstated_modes(codegen, func, domain, spacing, order, point_mode)
     return domain, spacing, order, point_mode
