@@ -3365,6 +3365,7 @@ class MetalCodeGen(
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
+        code += self.metal_hlsl_structured_element_definitions()
 
         stage_entry_names = self.stage_entry_names(ast, target_stage)
         self.metal_compute_only_program = self.metal_program_is_compute_only(

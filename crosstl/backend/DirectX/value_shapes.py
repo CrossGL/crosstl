@@ -580,6 +580,31 @@ class HLSLValueShapeMixin:
                 return f"{size} {label}"
         return None
 
+    def structured_buffer_element_type_name(self, argument):
+        """The CrossGL spelling of a structured buffer's element type.
+
+        A matrix element is mapped as a declaration's matrix type is, so
+        ``StructuredBuffer<float2x3>`` holds ``mat3x2``: CrossGL reads
+        ``float2x3`` as both shapes. Other element types keep their spelling.
+        """
+        canonical = self.canonical_composite_type(argument)
+        orientation = re.match(r"(row_major|column_major)\s+(\S.*)", canonical)
+        if orientation is not None:
+            # DXC's DXIL output ignores the qualifier (the element stays column-major), while its SPIR-V output
+            # honours it, so the element's layout has no single meaning.
+            return self.refuse_import(
+                f"a structured buffer of {orientation.group(1)} {orientation.group(2)}: an orientation "
+                "qualifier on a structured buffer's element type has no single layout (DXC's DXIL output "
+                "ignores it and its SPIR-V output applies it); declare the matrix in a struct instead",
+                placeholder=self.sanitize_type_name(orientation.group(2)),
+            )
+        mapped = self.map_type(canonical)
+        if isinstance(mapped, str) and re.fullmatch(
+            r"(?:(?:f16|d)?mat[2-4](?:x[2-4])?|(?:u?int|bool)[2-4]x[2-4])", mapped
+        ):
+            return mapped
+        return self.sanitize_type_name(canonical)
+
     def map_type_preserving_matrix_shape(self, hlsl_type):
         """Map an HLSL type name to CrossGL keeping matrix rows and columns."""
         if not hlsl_type:
@@ -626,7 +651,7 @@ class HLSLValueShapeMixin:
                 return subpass_input_type
             if base in self.structured_buffer_types:
                 mapped_args = ", ".join(
-                    self.sanitize_type_name(self.canonical_composite_type(arg))
+                    self.structured_buffer_element_type_name(arg)
                     for arg in self.split_generic_arguments(generic_type)
                 )
                 return f"{self.sanitize_type_name(base)}<{mapped_args}>"
