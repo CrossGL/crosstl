@@ -178,6 +178,13 @@ from .slang_resource_memory import (
     slang_resource_parameter_memory_prefix,
 )
 from .slang_specialization_constants import plan_slang_specialization_constants
+from .slang_stage_io_globals import (
+    STAGE_IO_PARAMETER_ANNOTATION,
+    collect_stage_io_globals,
+    stage_io_global_declaration,
+    stage_io_parameters,
+    stage_io_prologue,
+)
 from .slang_varying_locations import (
     entry_parameter_location_prefix,
     fragment_output_location_node_ids,
@@ -339,6 +346,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.fragment_entry_input_struct_names = set()
         self.fragment_entry_output_struct_names = set()
         self.slang_fragment_output_location_ids = set()
+        self.slang_stage_io_globals = {}
+        self.slang_stage_io_global_ids = set()
         self.literal_int_constants = {}
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -527,6 +536,9 @@ class SlangCodeGen(LoweringRefusalMixin):
             )
             self.slang_fragment_output_location_ids = fragment_output_location_node_ids(
                 self, ast
+            )
+            self.slang_stage_io_globals, self.slang_stage_io_global_ids = (
+                collect_stage_io_globals(self, ast)
             )
             self.user_enum_nodes = self.collect_user_enums(ast)
             self.generic_enum_struct_definitions = (
@@ -5973,6 +5985,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         )
 
     def generate_global_variable(self, node):
+        if id(node) in self.slang_stage_io_global_ids:
+            # A stage input or output; its entry points carry it as a parameter (slang_stage_io_globals.py).
+            return stage_io_global_declaration(self, node)
         direct_buffer_type = self.slang_glsl_buffer_array_resource_type(node)
         if direct_buffer_type is not None:
             self.register_variable_type(node.name, direct_buffer_type, node)
@@ -6185,12 +6200,26 @@ class SlangCodeGen(LoweringRefusalMixin):
         body = getattr(node, "body", [])
         body_statements = self.get_statements(body)
         param_list = getattr(node, "parameters", getattr(node, "params", []))
+        stage_io_parameter_list = (
+            stage_io_parameters(
+                self,
+                node,
+                self.slang_shader_stage_name(shader_type) == "fragment",
+            )
+            if shader_type is not None and emit_stage_decorations
+            else []
+        )
         param_list = self.slang_merge_function_parameters(
-            param_list, extra_parameters, shader_type
+            param_list,
+            list(extra_parameters or []) + stage_io_parameter_list,
+            shader_type,
         )
         fragment_output_rewrite = None
         if self.convert_type(ret_type_name) == "void" and semantic is None:
             for parameter in param_list:
+                if parameter.get_annotation(STAGE_IO_PARAMETER_ANNOTATION) is not None:
+                    # Its value is the output global's at return, which the deferred copy assigns.
+                    continue
                 parameter_semantic = self.semantic_from_node(parameter)
                 if is_fragment_output_parameter(
                     shader_type,
@@ -6537,6 +6566,7 @@ class SlangCodeGen(LoweringRefusalMixin):
             result += f"{self.indent()}{local_type} {local_name};\n"
         for declaration in local_alias_declarations:
             result += f"{self.indent()}{declaration}\n"
+        result += stage_io_prologue(self, stage_io_parameter_list, self.indent())
 
         for statement_index, stmt in enumerate(body_statements):
             result += (
