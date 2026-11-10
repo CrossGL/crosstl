@@ -314,6 +314,7 @@ jobs:
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_STORAGE_WORD_VIEW_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
@@ -353,6 +354,7 @@ jobs:
               tests/test_translator/test_atomic_resource_runtime.py \
               demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_storage_word_views.py \
               tests/test_translator/test_atomic_load_runtime.py \
               demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py \
               tests/test_translator/test_atomic_compare_exchange_runtime.py \
@@ -467,6 +469,7 @@ jobs:
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_STORAGE_WORD_VIEW_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
@@ -493,6 +496,7 @@ jobs:
               tests/test_translator/test_atomic_resource_runtime.py \
               demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_storage_word_views.py \
               tests/test_translator/test_atomic_load_runtime.py \
               demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py \
               tests/test_translator/test_atomic_compare_exchange_runtime.py \
@@ -707,6 +711,7 @@ jobs:
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_STORAGE_WORD_VIEW_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
@@ -748,6 +753,7 @@ jobs:
               tests/test_translator/test_atomic_resource_runtime.py \
               demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_storage_word_views.py \
               tests/test_translator/test_atomic_load_runtime.py \
               demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py \
               tests/test_translator/test_atomic_compare_exchange_runtime.py \
