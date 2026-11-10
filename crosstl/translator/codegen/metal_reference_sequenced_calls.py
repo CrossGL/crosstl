@@ -16,7 +16,9 @@ exact when an enclosing call reaches that storage itself while it runs:
 * ``scale(tile[l], bump(tile[l]))``: ``scale``'s own copy of ``tile[l]`` is copied in before ``bump`` runs and
   stored back after ``scale`` returns, so the store of ``bump``'s copy must come between the two;
 * a program function that reads or writes the storage as a module-scope variable, or through a pointer or array
-  argument, after the call in its arguments returned.
+  argument, after the call in its arguments returned;
+* a call in an operand that is evaluated conditionally (the right operand of ``&&`` or ``||``, an arm of ``?:``,
+  section 5.9): copies around the statement would run, and store back, whether or not the operand runs.
 
 Such a call is evaluated in place as a comma expression, whose operands C++ sequences from left to right (C++14
 [expr.comma]): the indices of each copied l-value that the statement could change are fixed, the copies are made
@@ -45,7 +47,11 @@ from .metal_reference_argument_order import (
 from .metal_refusals import MetalLoweringRefused
 from .wgsl_conditional_effects import is_effectful_builtin
 
-__all__ = ["enclosing_call_reaches_copies", "generate_sequenced_call_statement"]
+__all__ = [
+    "enclosing_call_reaches_copies",
+    "generate_conditional_call_statement",
+    "generate_sequenced_call_statement",
+]
 
 
 def _names(codegen, expr, roots):
@@ -174,8 +180,12 @@ def _copy_back(codegen, call, argument, source, name):
     return f"{target} = {value}"
 
 
-def _sequence_call(codegen, sequence, stmt, call, copied):
-    """Fill ``sequence`` with the steps of ``call``; ``copied`` maps argument ids to ``(qualifier, parameter)``."""
+def _sequence_call(codegen, sequence, stmt, call, copied, discarded=False):
+    """Fill ``sequence`` with the steps of ``call``; ``copied`` maps argument ids to ``(qualifier, parameter)``.
+
+    The value of a ``discarded`` call is not used (a ``for`` update), so the comma expression ends with the last
+    copy-back instead of the call's result.
+    """
     written = _statement_written_names(codegen, stmt)
     shared_names = _storage_helpers_can_write(codegen)
     arguments = _call_arguments(call)
@@ -218,7 +228,7 @@ def _sequence_call(codegen, sequence, stmt, call, copied):
             ]
         )
     result = None
-    if result_type == "void":
+    if result_type == "void" or discarded:
         sequence.steps.append(call_code)
     else:
         result = sequence.temporary("__crossgl_call", codegen.map_type(result_type))
@@ -228,7 +238,23 @@ def _sequence_call(codegen, sequence, stmt, call, copied):
         sequence.steps.append(result)
 
 
-def generate_sequenced_call_statement(codegen, stmt, indent, call, writebacks):
+def _nested_copies(codegen, call, writebacks):
+    """Whether a copied argument of ``writebacks`` lies inside an argument of ``call`` without being one."""
+    arguments = _call_arguments(call)
+    return any(
+        not any(argument is candidate for candidate in arguments)
+        and any(
+            node is argument
+            for candidate in arguments
+            for node in codegen.iter_ast_nodes(candidate)
+        )
+        for argument, _qualifier, _parameter in writebacks
+    )
+
+
+def generate_sequenced_call_statement(
+    codegen, stmt, indent, call, writebacks, discarded=False
+):
     """Emit ``stmt`` with ``call`` evaluated in place as a comma expression that stores its copies back."""
     arguments = _call_arguments(call)
     copied = {
@@ -236,17 +262,7 @@ def generate_sequenced_call_statement(codegen, stmt, indent, call, writebacks):
         for argument, qualifier, parameter in writebacks
         if any(argument is candidate for candidate in arguments)
     }
-    nested = [
-        argument
-        for argument, _qualifier, _parameter in writebacks
-        if id(argument) not in copied
-        and any(
-            node is argument
-            for candidate in arguments
-            for node in codegen.iter_ast_nodes(candidate)
-        )
-    ]
-    if nested:
+    if _nested_copies(codegen, call, writebacks):
         raise MetalLoweringRefused(
             [
                 f"reference arguments of '{codegen.function_call_name(call)}' copied back before the call that "
@@ -256,7 +272,7 @@ def generate_sequenced_call_statement(codegen, stmt, indent, call, writebacks):
         )
     sequence = _Sequence(codegen, indent)
     try:
-        _sequence_call(codegen, sequence, stmt, call, copied)
+        _sequence_call(codegen, sequence, stmt, call, copied, discarded)
     finally:
         codegen.metal_argument_substitutions = sequence.previous
     expression = f"({', '.join(sequence.steps)})"
@@ -273,3 +289,31 @@ def generate_sequenced_call_statement(codegen, stmt, indent, call, writebacks):
         sequenced.discard(id(call))
         codegen.metal_argument_substitutions = sequence.previous
     return sequence.declarations + body
+
+
+def generate_conditional_call_statement(
+    codegen, stmt, indent, calls, writebacks, discarded=()
+):
+    """Emit ``stmt`` when ``calls`` copy reference arguments in operands that are evaluated conditionally.
+
+    Copies made before the statement and stored back after it would run whether or not the operand is evaluated.
+    Each such call is evaluated in place instead, so its copies are made and stored back only when it runs. An
+    inner call is sequenced before the call whose argument holds it; the statement is generated again for the rest.
+    ``discarded`` holds the calls whose value is not used.
+    """
+    for call in calls:
+        if not _nested_copies(codegen, call, writebacks):
+            return generate_sequenced_call_statement(
+                codegen,
+                stmt,
+                indent,
+                call,
+                writebacks,
+                any(call is other for other in discarded),
+            )
+    raise MetalLoweringRefused(
+        [
+            f"reference arguments of '{codegen.function_call_name(calls[0])}' in a conditionally evaluated "
+            "expression: each call that copies arguments holds another such call"
+        ]
+    )

@@ -407,6 +407,8 @@ jobs:
           CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"
           CROSSTL_REQUIRE_BUFFER_COUNTER_EXECUTION: "1"
           CROSSTL_REQUIRE_BUFFER_ARRAY_EXECUTION: "1"
+          CROSSTL_REQUIRE_SPECIALIZED_MEMBER_TYPE_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
+          CROSSTL_REQUIRE_CLASS_TEMPLATE_MEMBER_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
           CROSSTL_REQUIRE_APPEND_CONSUME_EXECUTION: "1"
           CROSSTL_REQUIRE_STRUCTURED_MEMBER_LAYOUT_EXECUTION: ${{ matrix.adapter == 'opengl' && '1' || '' }}
           CROSSTL_REQUIRE_BUFFER_ARRAY_LAYOUT_EXECUTION: "1"
@@ -427,8 +429,12 @@ jobs:
             tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py \
             tests/test_backend/test_directx/test_hlsl_structured_buffer_matrices.py \
             tests/test_translator/test_metal_reference_aliasing.py \
+            tests/test_translator/test_metal_conditional_reference_copies.py \
+            tests/test_translator/test_metal_loop_reference_copies.py \
             tests/test_translator/test_structured_buffer_counters.py \
             tests/test_translator/test_metal_buffer_arrays.py \
+            tests/test_backend/test_metal/test_specialized_member_types.py \
+            tests/test_backend/test_metal/test_class_template_member_uses.py \
             tests/test_translator/test_append_consume_layouts.py \
             tests/test_translator/test_structured_buffer_array_layouts.py \
             tests/test_translator/test_structured_buffer_member_layouts.py \

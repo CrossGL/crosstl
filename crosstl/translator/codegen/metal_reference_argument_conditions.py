@@ -16,10 +16,13 @@ This module gives each header evaluation a statement of its own, keeping the GLS
   the update first, which stays in the loop header;
 * a ``for`` initializer is emitted as a statement in a block that encloses the loop;
 * a ``switch`` selector of type ``int`` or ``uint`` is evaluated into a temporary in a block that encloses the
-  ``switch``.
+  ``switch``;
+* a ``do``/``while`` condition and a ``for`` update are reached by a ``continue`` in the body, so no statement runs
+  before every evaluation. Each call in them that copies arguments is evaluated in place as a comma expression
+  (:mod:`.metal_reference_sequenced_calls`), whose temporaries are declared before the loop; the copies are made
+  and stored back on every evaluation, and only then.
 
-A ``do``/``while`` condition and a ``for`` update are refused: a ``continue`` reaches them from the body, so no
-statement runs before every evaluation. So is a selector of another type, which needs a conversion first.
+A selector of another type needs a conversion first, and is refused with :class:`.MetalLoweringRefused`.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from ..ast import (
     BreakNode,
     DoWhileNode,
     ForNode,
+    FunctionCallNode,
     IdentifierNode,
     IfNode,
     PrimitiveType,
@@ -43,6 +47,8 @@ from ..ast import (
     VariableNode,
     WhileNode,
 )
+from .metal_reference_sequenced_calls import generate_conditional_call_statement
+from .metal_refusals import MetalLoweringRefused
 
 __all__ = ["generate_header_writeback_statement", "rewrite_metal_else_if_chain"]
 
@@ -57,7 +63,7 @@ def _needs_copies(codegen, expression):
         return False
     expressions = expression if isinstance(expression, list) else [expression]
     return any(
-        codegen.metal_reference_argument_writebacks(_probe(item))
+        codegen.metal_reference_argument_writebacks(_probe(item), [])
         for item in expressions
         if item is not None
     )
@@ -104,12 +110,38 @@ def rewrite_metal_else_if_chain(codegen, node):
     return node
 
 
-def _refuse(kind, codegen, expression):
-    if _needs_copies(codegen, expression):
-        raise ValueError(
-            f"Metal cannot copy a reference argument in and out in a {kind}: the argument is not in the thread "
-            "address space and no statement runs before every evaluation; assign it to a local first"
-        )
+def _copying_calls(codegen, expression):
+    """The calls in ``expression`` that copy reference arguments, and the copies of the whole expression."""
+    writebacks = codegen.metal_reference_argument_writebacks(_probe(expression), [])
+    calls = []
+    for node in codegen.iter_ast_nodes(expression):
+        if isinstance(node, FunctionCallNode) and any(
+            argument is candidate
+            for argument, _qualifier, _parameter in writebacks
+            for candidate in list(getattr(node, "args", None) or [])
+        ):
+            if not any(node is call for call in calls):
+                calls.append(node)
+    return calls, writebacks
+
+
+def _generate_in_place(codegen, stmt, indent, expression, discarded=False):
+    """Emit ``stmt`` with the copying calls of ``expression``, one of its headers, evaluated in place.
+
+    When the header's value is ``discarded`` (a ``for`` update), so are the values of the calls that make it up.
+    """
+    if expression is None:
+        return None
+    calls, writebacks = _copying_calls(codegen, expression)
+    if not calls:
+        return None
+    items = expression if isinstance(expression, list) else [expression]
+    unused = [
+        item for item in items if discarded and isinstance(item, FunctionCallNode)
+    ]
+    return generate_conditional_call_statement(
+        codegen, stmt, indent, calls, writebacks, unused
+    )
 
 
 _SELECTOR_TYPES = frozenset({"int", "uint"})
@@ -121,9 +153,11 @@ def _generate_switch(codegen, stmt, indent):
         return None
     type_name = codegen.type_name_string(codegen.expression_result_type(selector))
     if type_name not in _SELECTOR_TYPES:
-        raise ValueError(
-            "Metal cannot copy a reference argument in and out in a switch selector of type "
-            f"'{type_name}': the selector must be evaluated into an int or uint local first"
+        raise MetalLoweringRefused(
+            [
+                "a reference argument copied in and out in a switch selector of type "
+                f"'{type_name}': the selector must be evaluated into an int or uint local first"
+            ]
         )
     codegen.metal_writeback_temporary_count += 1
     name = f"__crossgl_selector{codegen.metal_writeback_temporary_count}"
@@ -175,11 +209,16 @@ def _generate_for(codegen, stmt, indent):
     init = getattr(stmt, "init", None)
     condition = getattr(stmt, "condition", None)
     with _loop_scope(codegen, init):
-        _refuse("for loop update", codegen, getattr(stmt, "update", None))
+        # The update sees the initializer's variables; the whole loop is generated again for the rest.
+        update_code = _generate_in_place(
+            codegen, stmt, indent, getattr(stmt, "update", None), discarded=True
+        )
+        if update_code is not None:
+            return update_code
         condition_needs_copies = _needs_copies(codegen, condition)
     init_needs_copies = isinstance(
         init, (VariableNode, BackendVariableNode, AssignmentNode, BackendAssignmentNode)
-    ) and bool(codegen.metal_reference_argument_writebacks(init))
+    ) and bool(codegen.metal_reference_argument_writebacks(init, []))
     if not (init_needs_copies or condition_needs_copies):
         return None
     lowered = copy.copy(stmt)
@@ -208,5 +247,7 @@ def generate_header_writeback_statement(codegen, stmt, indent):
     if isinstance(stmt, SwitchNode):
         return _generate_switch(codegen, stmt, indent)
     if isinstance(stmt, DoWhileNode):
-        _refuse("do-while condition", codegen, getattr(stmt, "condition", None))
+        return _generate_in_place(
+            codegen, stmt, indent, getattr(stmt, "condition", None)
+        )
     return None

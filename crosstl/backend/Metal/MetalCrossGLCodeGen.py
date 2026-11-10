@@ -158,7 +158,14 @@ from .texture_types import (
 )
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
-from .using_declared_library_names import using_declared_library_names
+from .unused_generic_definitions import (
+    raise_referenced_deferred_definitions,
+    render_generic_definition,
+)
+from .using_declared_library_names import (
+    using_declared_alias_targets,
+    using_declared_library_names,
+)
 
 _PLAIN_TYPE_NAME = re.compile(r"[A-Za-z_]\w*")
 
@@ -2011,6 +2018,7 @@ class MetalToCrossGLConverter(
         self.alias_template_structs = []
         self.alias_template_structs_by_qualified_name = {}
         self.alias_template_using_namespaces = []
+        self.alias_template_using_declarations = []
         self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
         self.callable_type_aliases = {}
@@ -3587,6 +3595,7 @@ class MetalToCrossGLConverter(
         self.alias_template_structs = []
         self.alias_template_structs_by_qualified_name = {}
         self.alias_template_using_namespaces = []
+        self.alias_template_using_declarations = []
         self.current_type_resolution_context = None
         typedefs = getattr(ast, "typedefs", []) or []
         self.collect_callable_type_aliases(typedefs)
@@ -3974,6 +3983,7 @@ class MetalToCrossGLConverter(
 
         ordinary_function_code = []
         deferred_template_functions = []
+        self.deferred_generic_definition_errors = []
         for f in functions:
             if id(f) in self.suppressed_out_of_line_call_operator_ids:
                 continue
@@ -3989,9 +3999,15 @@ class MetalToCrossGLConverter(
             ):
                 continue
             ordinary_function_code.append(
-                self.generate_top_level_function(
+                render_generic_definition(
+                    self,
                     f,
-                    template_value_bindings=default_bindings,
+                    lambda f=f, default_bindings=default_bindings: (
+                        self.generate_top_level_function(
+                            f,
+                            template_value_bindings=default_bindings,
+                        )
+                    ),
                 )
             )
 
@@ -4024,7 +4040,13 @@ class MetalToCrossGLConverter(
                 if id(function) in self.suppressed_value_template_function_ids:
                     continue
                 deferred_template_code.append(
-                    self.generate_top_level_function(function)
+                    render_generic_definition(
+                        self,
+                        function,
+                        lambda function=function: self.generate_top_level_function(
+                            function
+                        ),
+                    )
                 )
         finally:
             self.preserve_unmaterialized_template_calls = False
@@ -4073,6 +4095,7 @@ class MetalToCrossGLConverter(
             1,
         )
         code = self.propagate_cooperative_matrix_fragment_type_contracts(code)
+        raise_referenced_deferred_definitions(self, code)
         return code
 
     def generate_top_level_function(
@@ -6240,6 +6263,9 @@ class MetalToCrossGLConverter(
         self.alias_template_using_namespaces = list(
             getattr(ast, "using_namespace_directives", []) or []
         )
+        self.alias_template_using_declarations = list(
+            getattr(ast, "using_declarations", []) or []
+        )
         self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
 
@@ -6487,6 +6513,16 @@ class MetalToCrossGLConverter(
         for scope in self.namespace_lookup_scopes(namespace):
             direct = f"{scope}::{raw_name}" if scope else raw_name
             tiers.append([direct])
+            # ``using c10::metal::opmath_t;`` makes the name a member of the scope it appears in
+            # ([namespace.udecl]/1), ahead of the namespaces a using-directive nominates.
+            declared = using_declared_alias_targets(
+                self.alias_template_using_declarations,
+                scope,
+                raw_name,
+                self.normalize_qualified_type_name,
+            )
+            if declared:
+                tiers.append(declared)
             imported = [
                 f"{target}::{raw_name}"
                 for target in self.visible_using_namespace_targets(scope)

@@ -180,8 +180,13 @@ class MetalHlslFunctionMixin:
             return [getattr(stmt, "value", None)]
         return []
 
-    def metal_reference_argument_writebacks(self, stmt):
-        """Find reference arguments that need copy-in/copy-out temporaries."""
+    def metal_reference_argument_writebacks(self, stmt, conditional_calls=None):
+        """Find reference arguments that need copy-in/copy-out temporaries.
+
+        A call that copies arguments in a conditionally evaluated operand (the right operand of ``&&`` or ``||``,
+        an arm of ``?:``) is appended to ``conditional_calls``; it must be evaluated in place
+        (:mod:`.metal_reference_sequenced_calls`). Without that list such a call is refused.
+        """
         if not getattr(self, "function_overloads_by_name", None):
             return []
         writebacks = []
@@ -251,7 +256,10 @@ class MetalHlslFunctionMixin:
                             f"parameter of '{self.function_call_name(expr)}': it is not "
                             f"whole {space} storage"
                         )
-                    if conditional:
+                    if conditional and conditional_calls is not None:
+                        if not any(expr is call for call in conditional_calls):
+                            conditional_calls.append(expr)
+                    elif conditional:
                         what = (
                             "an lvalue that other accesses during the call alias"
                             if binds
