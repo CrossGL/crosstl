@@ -248,3 +248,44 @@ def test_improper_straddle(offset, size, straddles):
 )
 def test_relaxed_vector_offset(layout_type, offset, layout, relaxed):
     assert relaxed_vector_offset(layout_type, offset, layout) is relaxed
+
+
+NESTED_PLACEMENT = """
+shader Probe {
+    struct Inner { float s; vec4 v @offset(OFFSET); };
+    cbuffer C { Inner n; };
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            outp[i] = n.s + n.v.y;
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["vulkan", "directx", "opengl", "metal", "slang"])
+def test_a_placement_inside_a_struct_held_by_a_constant_buffer_is_refused(
+    tmp_path, backend
+):
+    # Issue #4245: SPIR-V wrote 'Offset 16', HLSL a semantic named 'offset' and GLSL a plain 'vec4 v;'.
+    path = tmp_path / "nested.cgl"
+    path.write_text(NESTED_PLACEMENT.replace("OFFSET", "32"))
+
+    with pytest.raises(MemberPlacementError, match="constant buffer 'C'"):
+        crosstl.translate(str(path), backend=backend)
+
+
+@pytest.mark.parametrize("backend", ["vulkan", "directx", "opengl"])
+def test_a_nested_placement_that_matches_the_layout_is_accepted(tmp_path, backend):
+    # Importers place every member. std140 and HLSL packing both start the vec4 at byte 16.
+    path = tmp_path / "nested.cgl"
+    path.write_text(
+        NESTED_PLACEMENT.replace("OFFSET", "16").replace(
+            "float s;", "float s @offset(0);"
+        )
+    )
+
+    assert crosstl.translate(str(path), backend=backend)
