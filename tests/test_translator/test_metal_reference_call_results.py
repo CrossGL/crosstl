@@ -177,9 +177,13 @@ def test_hlsl_groupshared_store_and_compound_component(tmp_path):
     assert body[copy_back + 1].startswith("v.y = as_type<int>(as_type<uint>(v.y) + ")
 
 
-def test_conditionally_evaluated_copy_is_refused(tmp_path):
-    with pytest.raises(ValueError, match="conditionally evaluated"):
-        _translate(tmp_path, CONDITIONAL)
+def test_conditionally_evaluated_copy_is_made_in_place(tmp_path):
+    body = _kernel(_translate(tmp_path, CONDITIONAL))
+    assert (
+        "__attribute__((unused)) int q = c ? (__crossgl_ref1 = tile[l], "
+        "__crossgl_call2 = bump(__crossgl_ref1), tile[l] = __crossgl_ref1, "
+        "__crossgl_call2) : tile[l];"
+    ) in body, body
 
 
 def _metal_available():

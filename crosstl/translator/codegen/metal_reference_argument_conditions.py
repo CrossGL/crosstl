@@ -57,7 +57,7 @@ def _needs_copies(codegen, expression):
         return False
     expressions = expression if isinstance(expression, list) else [expression]
     return any(
-        codegen.metal_reference_argument_writebacks(_probe(item))
+        codegen.metal_reference_argument_writebacks(_probe(item), [])
         for item in expressions
         if item is not None
     )
@@ -179,7 +179,7 @@ def _generate_for(codegen, stmt, indent):
         condition_needs_copies = _needs_copies(codegen, condition)
     init_needs_copies = isinstance(
         init, (VariableNode, BackendVariableNode, AssignmentNode, BackendAssignmentNode)
-    ) and bool(codegen.metal_reference_argument_writebacks(init))
+    ) and bool(codegen.metal_reference_argument_writebacks(init, []))
     if not (init_needs_copies or condition_needs_copies):
         return None
     lowered = copy.copy(stmt)

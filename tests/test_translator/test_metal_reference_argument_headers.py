@@ -173,16 +173,8 @@ def test_device_element_in_a_while_condition(tmp_path):
             "for (int j = 0; j < 3; j = j + take(tile[3])) { n = n + 1; }",
             "in a for loop update",
         ),
-        (
-            "while (n < 3 && below(tile[3], 103)) { n = n + 1; }",
-            "conditionally evaluated expression",
-        ),
-        (
-            "if (n < 3 ? below(tile[3], 103) : false) { n = n + 1; }",
-            "conditionally evaluated expression",
-        ),
     ],
-    ids=["do-while", "for-update", "short-circuit", "ternary"],
+    ids=["do-while", "for-update"],
 )
 def test_headers_without_a_statement_before_each_evaluation_are_refused(
     tmp_path, replacement, message

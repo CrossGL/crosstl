@@ -11,22 +11,13 @@ expression (C++14 [expr.comma]).
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import shutil
-import struct
-import subprocess
-import sys
 import textwrap
-from pathlib import Path
 
 import pytest
 
 import crosstl
-from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
+from tests.metal_compute_dispatch import compile_metal_library, dispatch_word_buffer
 
-ROOT = Path(__file__).resolve().parents[2]
 REQUIRE_ENV = "CROSSTL_REQUIRE_REFERENCE_ALIASING_EXECUTION"
 
 PROBE = """
@@ -211,84 +202,22 @@ def test_metal_source_references_keep_their_aliasing(tmp_path):
     assert "h(m, m);" in body, body
 
 
-def test_aliased_argument_in_a_conditional_expression_is_refused(tmp_path):
-    with pytest.raises(MetalLoweringRefused, match="conditionally evaluated"):
-        _translate(tmp_path, CONDITIONAL)
-
-
-def _metal_compiler():
-    xcrun = shutil.which("xcrun")
-    if xcrun is None:
-        return None
-    probe = subprocess.run(
-        [xcrun, "-sdk", "macosx", "-f", "metal"], capture_output=True, text=True
-    )
-    return xcrun if probe.returncode == 0 else None
-
-
-def _run(command):
-    completed = subprocess.run(
-        [str(item) for item in command], capture_output=True, text=True, timeout=180
-    )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-
-
-def _compile(source, tmp_path):
-    xcrun = _metal_compiler()
-    if xcrun is None:
-        if os.environ.get(REQUIRE_ENV) == "1":
-            pytest.fail(f"{REQUIRE_ENV}=1 needs the Metal toolchain")
-        pytest.skip("the Metal toolchain is not installed")
-    shader = tmp_path / "aliasing.metal"
-    shader.write_text(source, encoding="utf-8")
-    air, library = tmp_path / "aliasing.air", tmp_path / "aliasing.metallib"
-    _run([xcrun, "-sdk", "macosx", "metal", "-Werror", "-c", shader, "-o", air])
-    _run([xcrun, "-sdk", "macosx", "metallib", air, "-o", library])
-    return library
+def test_aliased_argument_in_a_conditional_expression_is_copied_in_place(tmp_path):
+    body = _kernel_body(_translate(tmp_path, CONDITIONAL))
+    assert (
+        "int q = c ? (__crossgl_ref1 = m, __crossgl_arg2 = bump(m), "
+        "__crossgl_call3 = pick(__crossgl_ref1, __crossgl_arg2), m = __crossgl_ref1, "
+        "__crossgl_call3) : 0;"
+    ) in body, body
 
 
 def test_probe_compiles(probe_metal, tmp_path):
-    _compile(probe_metal, tmp_path)
+    compile_metal_library(probe_metal, tmp_path, REQUIRE_ENV)
 
 
 def test_probe_matches_glsl_copy_in_copy_out_on_metal(probe_metal, tmp_path):
-    if sys.platform != "darwin" or shutil.which("swiftc") is None:
-        if os.environ.get(REQUIRE_ENV) == "1":
-            pytest.fail(f"{REQUIRE_ENV}=1 needs macOS with swiftc")
-        pytest.skip("Metal dispatch needs macOS with swiftc")
-    library = _compile(probe_metal, tmp_path)
-    kernel = re.search(r"kernel void (\w+)\((.*?)\) \{", probe_metal, re.S)
-    assert kernel is not None, probe_metal
-    assert re.findall(r"\[\[buffer\((\d+)\)\]\]", kernel.group(2)) == ["0"]
-    payload = tmp_path / "buffer-0.in"
-    payload.write_bytes(struct.pack("<I", 0xDEADBEEF) * len(EXPECTED))
-    runner = tmp_path / "runner"
-    _run(
-        [
-            "swiftc",
-            ROOT / "tests/fixtures/runtime_verification/metal_raw_buffers.swift",
-            "-o",
-            runner,
-        ]
-    )
-    request = tmp_path / "request.json"
-    request.write_text(
-        json.dumps(
-            {
-                "buffers": [str(payload)],
-                "workgroupCount": [1, 1, 1],
-                "workgroupSize": [1, 1, 1],
-                "simdWidth": 32,
-            }
-        ),
-        encoding="utf-8",
-    )
-    output = tmp_path / "output"
-    _run([runner, library, kernel.group(1), request, output])
-    got = struct.unpack(
-        f"<{len(EXPECTED)}i",
-        (output / "buffer-0.bin").read_bytes()[: 4 * len(EXPECTED)],
-    )
+    words = [-559038737] * len(EXPECTED)
+    got = dispatch_word_buffer(probe_metal, tmp_path, words, REQUIRE_ENV)
     for slot, (value, expected) in enumerate(zip(got, EXPECTED)):
         allowed = expected if isinstance(expected, tuple) else (expected,)
         assert value in allowed, (slot, got)
