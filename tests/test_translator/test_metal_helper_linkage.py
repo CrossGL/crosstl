@@ -328,7 +328,7 @@ def test_generated_native_support_helpers_have_internal_linkage():
     definitions = re.findall(r"^((?:static )?\w+ __crossgl_\w+\()", wave, re.MULTILINE)
     assert len(definitions) == 3 + len(generator.METAL_WAVE_MULTI_PREFIX_HELPERS)
     assert all(line.startswith("static ") for line in definitions)
-    generator.required_buffer_atomic_compare_helpers = {"uint", "int"}
+    generator.required_buffer_atomic_compare_helpers = {("uint", ""), ("int", "")}
     atomics = generator.generate_buffer_atomic_compare_helpers()
     assert "static uint __crossgl_buffer_atomic_compare_exchange_uint(" in atomics
     assert "static int __crossgl_buffer_atomic_compare_exchange_int(" in atomics

@@ -2015,8 +2015,10 @@ def test_codegen_namespace_block_scoped_call_imports_to_parseable_crossgl():
         }
     """)
 
-    assert "float Weight(float value)" in crossgl
-    assert "CrossBilateral::Weight(value)" in crossgl
+    # The namespaced declaration and its qualified call share one flat CrossGL name.
+    assert "float CrossBilateral_Weight(float value)" in crossgl
+    assert "return CrossBilateral_Weight(value);" in crossgl
+    assert "::" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -6874,7 +6876,9 @@ def test_codegen_get_dimensions_mapping():
     assert "buffer_dimensions" in output
 
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
-    assert "buf.GetDimensions(len);" in regenerated_hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload, so the lone count is assigned.
+    assert "len = cgl_buffer_count(buf);" in regenerated_hlsl
+    assert "buf.GetDimensions(len);" not in regenerated_hlsl
     assert "texture_dimensions" not in regenerated_hlsl
     assert "buffer_dimensions" not in regenerated_hlsl
 
@@ -7596,8 +7600,10 @@ def test_codegen_template_specialized_struct_declarations_reparse_crossgl():
 
     output = generate_crossgl(code)
 
-    assert output.count("struct TemplateValue") == 2
-    assert "TemplateValue selected;" in output
+    # The explicit specialization is the concrete structure that ``TemplateValue<float>`` names.
+    assert "generic<T> struct TemplateValue {" in output
+    assert "struct TemplateValue_float_specialization {" in output
+    assert "TemplateValue_float_specialization selected;" in output
     assert "TemplateValue<float>" not in output
     parse_crossgl(output)
 
@@ -7620,14 +7626,14 @@ def test_codegen_elaborated_template_struct_variable_from_dxc_reparse():
 
     output = generate_crossgl(code)
 
-    assert "struct TS" in output
-    assert "TS ts;" in output
+    assert "generic<T> struct TS {" in output
+    assert "TS<vec4> ts;" in output
     assert "TS<float4>" not in output
     assert "return ts.t;" in output
     parse_crossgl(output)
 
 
-def test_codegen_dependent_typename_scoped_template_return_reparse_crossgl():
+def test_codegen_dependent_typename_scoped_template_traits_are_refused():
     # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
     # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl
     code = textwrap.dedent("""
@@ -7664,13 +7670,13 @@ def test_codegen_dependent_typename_scoped_template_return_reparse_crossgl():
         }
     """).strip()
 
-    output = generate_crossgl(code)
-
-    assert "struct Wrapper" in output
-    assert "Wrapper wf;" in output
-    assert "float f = wf.Get();" in output
-    assert "typename" not in output
-    parse_crossgl(output)
+    # ``enable_if`` and ``is_arithmetic`` are type traits computed through a value parameter and specializations,
+    # which CrossGL cannot express; the importer used to emit ``Wrapper wf;`` with an undeclared ``T`` member.
+    with pytest.raises(
+        DirectXImportRefused,
+        match=r"HLSL struct template 'hlsl::enable_if' declares the value parameter 'bool B'",
+    ):
+        generate_crossgl(code)
 
 
 def test_codegen_upstream_declarations_defaults_and_for_update_sequences():

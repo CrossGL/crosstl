@@ -18,7 +18,12 @@ from __future__ import annotations
 from .. import ast as A
 from .rewrite import child_slots, get_child, set_child
 
-__all__ = ["enum_values", "lower_enum_values"]
+__all__ = [
+    "enum_values",
+    "enumerator_names",
+    "lower_enum_values",
+    "scalar_enum_names",
+]
 
 _CARRYING = frozenset({"cgl", "crossgl", ""})
 _OPERATORS = {
@@ -82,6 +87,32 @@ def enum_values(program) -> dict:
             values.setdefault(variant.name, value)
             next_value = value + 1
     return values
+
+
+def _is_scalar_enum(enum):
+    """Whether ``enum`` has no payload variants, so each of its values is an integer."""
+    return not any(
+        getattr(variant, "fields", None) or getattr(variant, "data", None)
+        for variant in getattr(enum, "variants", None) or []
+    )
+
+
+def scalar_enum_names(program) -> frozenset:
+    """The names of the program's enums without payload variants: their values are integers, not aggregates."""
+    return frozenset(
+        enum.name for enum in _enums(program) if enum.name and _is_scalar_enum(enum)
+    )
+
+
+def enumerator_names(program) -> frozenset:
+    """``E::A`` for every enumerator of an enum without payloads; each is a constant expression (C++17 10.2)."""
+    return frozenset(
+        f"{enum.name}::{variant.name}"
+        for enum in _enums(program)
+        if enum.name and _is_scalar_enum(enum)
+        for variant in getattr(enum, "variants", None) or []
+        if getattr(variant, "name", None)
+    )
 
 
 def _underlying(enum):

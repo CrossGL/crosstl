@@ -27,11 +27,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 __all__ = [
     "AliasTemplate",
     "expand_alias_template_types",
+    "expand_concrete_alias_template_references",
     "find_alias_templates",
     "fold_expression_decltypes",
 ]
@@ -222,9 +223,16 @@ def _alias_reference_type(
 
 
 def expand_alias_template_types(
-    preprocessor: Any, text: str, aliases: Mapping[str, Sequence[AliasTemplate]]
+    preprocessor: Any,
+    text: str,
+    aliases: Mapping[str, Sequence[AliasTemplate]],
+    namespace_at: Callable[[int], str] | None = None,
 ) -> str:
-    """Replace references to ``aliases`` that name one built-in scalar or vector type."""
+    """Replace references to ``aliases`` that name one built-in scalar or vector type.
+
+    With ``namespace_at``, the namespace that encloses a position of ``text``, an unqualified reference considers only
+    the alias templates its enclosing namespaces declare ([basic.lookup.unqual]/4).
+    """
 
     names = [name for name in sorted(aliases) if name in text]
     if not names:
@@ -246,10 +254,16 @@ def expand_alias_template_types(
         arguments = preprocessor._split_top_level_commas(
             text[angle_start + 1 : angle_end]
         )
+        candidates = aliases[match.group("name")]
+        if namespace_at is not None and not match.group("qualifier").strip():
+            enclosing = namespace_at(match.start("name"))
+            candidates = [
+                alias for alias in candidates if _encloses(alias.namespace, enclosing)
+            ]
         replacement = _alias_reference_type(
             preprocessor,
             match.group("qualifier"),
-            aliases[match.group("name")],
+            candidates,
             [argument.strip() for argument in arguments],
         )
         if replacement is None:
@@ -261,3 +275,58 @@ def expand_alias_template_types(
         position = angle_end + 1
     pieces.append(text[position:])
     return "".join(pieces)
+
+
+def _encloses(namespace: str, enclosing: str) -> bool:
+    """Whether ``namespace`` is ``enclosing`` or one of the namespaces that contain it."""
+
+    outer = [part for part in namespace.split("::") if part]
+    inner = [part for part in enclosing.split("::") if part]
+    return inner[: len(outer)] == outer
+
+
+def _member_alias_template_names(preprocessor: Any, code: str) -> set[str]:
+    """Names of the alias templates that aggregates of ``code`` declare."""
+
+    masked = preprocessor._mask_comments_and_literals(code)
+    aggregates = None
+    names: set[str] = set()
+    for match in re.finditer(r"\btemplate\s*<", masked):
+        angle_end = preprocessor._find_matching_angle(code, match.end() - 1)
+        head = (
+            None if angle_end is None else _ALIAS_HEAD_RE.match(masked, angle_end + 1)
+        )
+        if head is None:
+            continue
+        if aggregates is None:
+            aggregates = _aggregate_spans(preprocessor, code)
+        if any(start <= match.start() < end for start, end in aggregates):
+            names.add(head.group("name"))
+    return names
+
+
+def expand_concrete_alias_template_references(preprocessor: Any, code: str) -> str:
+    """Spell each reference to a namespace-scope alias template that names one built-in type as that type.
+
+    A materialized instantiation of ``template <typename T, typename U> common_dtype<T, U> div(T, U)`` declares its
+    result as ``common_dtype<float, float>``, which is ``float`` ([temp.alias]/2). Spelling it so lets the result type
+    a call has, and the type of an ``auto`` local it initializes, be read from the declaration like any other.
+
+    A name that an aggregate also declares as a member alias template is left alone: inside that aggregate the member
+    hides the namespace-scope alias, and this scan does not tell the two apart.
+    """
+
+    aliases = find_alias_templates(preprocessor, code)
+    if not aliases:
+        return code
+    hidden = _member_alias_template_names(preprocessor, code)
+    aliases = {name: found for name, found in aliases.items() if name not in hidden}
+    if not aliases:
+        return code
+    namespace_spans = preprocessor._find_namespace_spans(code)
+    return expand_alias_template_types(
+        preprocessor,
+        code,
+        aliases,
+        lambda position: preprocessor._namespace_at(namespace_spans, position),
+    )
