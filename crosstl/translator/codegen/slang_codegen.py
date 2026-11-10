@@ -182,6 +182,7 @@ from .slang_stage_io_globals import (
     STAGE_IO_PARAMETER_ANNOTATION,
     collect_stage_io_globals,
     stage_io_global_declaration,
+    stage_io_output_names,
     stage_io_parameters,
     stage_io_prologue,
 )
@@ -348,6 +349,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.slang_fragment_output_location_ids = set()
         self.slang_stage_io_globals = {}
         self.slang_stage_io_global_ids = set()
+        self.slang_stage_io_output_names = set()
         self.literal_int_constants = {}
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -6214,6 +6216,10 @@ class SlangCodeGen(LoweringRefusalMixin):
             list(extra_parameters or []) + stage_io_parameter_list,
             shader_type,
         )
+        saved_stage_io_output_names = self.slang_stage_io_output_names
+        self.slang_stage_io_output_names = stage_io_output_names(
+            stage_io_parameter_list
+        )
         fragment_output_rewrite = None
         if self.convert_type(ret_type_name) == "void" and semantic is None:
             for parameter in param_list:
@@ -6515,6 +6521,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 hull_output_rewrite,
                 fragment_output_rewrite,
                 local_alias_declarations,
+                stage_io_parameter_list,
             )
         self.variable_types = saved_variable_types
         self.image_resource_types = saved_image_resource_types
@@ -6529,6 +6536,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         self.current_generic_function_substitutions = (
             saved_generic_function_substitutions
         )
+        self.slang_stage_io_output_names = saved_stage_io_output_names
         return result
 
     def emit_slang_function_body(
@@ -6539,6 +6547,7 @@ class SlangCodeGen(LoweringRefusalMixin):
         hull_output_rewrite,
         fragment_output_rewrite,
         local_alias_declarations,
+        stage_io_parameter_list=(),
     ):
         """The braced body of a function whose ``signature`` :meth:`generate_function` has built."""
         result = f"{signature}\n{{\n"
@@ -8476,6 +8485,9 @@ class SlangCodeGen(LoweringRefusalMixin):
 
             target = getattr(node, "left", getattr(node, "target", None))
             target_name = self.slang_stage_builtin_output_target_name(target)
+            if target_name in self.slang_stage_io_output_names:
+                # A declared output variable that an entry parameter carries (slang_stage_io_globals.py).
+                continue
             if self.slang_stage_builtin_return_type(shader_type, target_name):
                 assignments.append((node, target_name))
         return assignments

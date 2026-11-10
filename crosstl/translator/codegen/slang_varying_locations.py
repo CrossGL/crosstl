@@ -165,6 +165,9 @@ def entry_parameter_location_prefix(codegen, parameter, semantic, shader_type):
     if shader_type is None:
         return ""
     location = varying_location(parameter)
+    if location is None:
+        # A stage variable's user-semantic built-in output (slang_stage_io_globals.py) has a planned location.
+        location = parameter.get_annotation("slang_stage_io_location")
     if location is not None:
         return vk_location_prefix(location)
     if (

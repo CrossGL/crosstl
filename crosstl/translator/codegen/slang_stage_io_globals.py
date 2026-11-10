@@ -27,14 +27,17 @@ from ..ast import (
 from .slang_varying_locations import varying_location
 
 __all__ = [
+    "STAGE_IO_LOCATION_ANNOTATION",
     "STAGE_IO_PARAMETER_ANNOTATION",
     "collect_stage_io_globals",
     "stage_io_global_declaration",
+    "stage_io_output_names",
     "stage_io_parameters",
     "stage_io_prologue",
 ]
 
 STAGE_IO_PARAMETER_ANNOTATION = "slang_stage_io_global"
+STAGE_IO_LOCATION_ANNOTATION = "slang_stage_io_location"
 
 _DIRECTIONS = ("in", "out")
 _LOWERED_STAGES = {"vertex", "fragment"}
@@ -81,10 +84,12 @@ def _direction(node):
     if len(directions) != 1:
         return None
     name = str(getattr(node, "name", "") or "")
-    if not name or name.startswith("gl_"):
-        # Built-in redeclarations keep their own lowering.
-        return None
-    return next(iter(directions))
+    return next(iter(directions)) if name else None
+
+
+def _is_builtin_input(variable, direction):
+    """A ``gl_`` input, which an entry point reads through its system-value parameters instead."""
+    return direction == "in" and str(getattr(variable, "name", "")).startswith("gl_")
 
 
 def _named_identifiers(codegen, root):
@@ -191,14 +196,20 @@ def collect_stage_io_globals(codegen, ast):
         for entry_id, selected in used.items()
         if not any(id(variable) in refused_ids for variable, _direction in selected)
     }
+    # Unused stage variables become static too: as uniforms they would be shader parameters (slangc E39019).
     variable_ids = {
-        id(variable) for selected in used.values() for variable, _direction in selected
+        id(variable)
+        for variable, direction in candidates
+        + [item for items in stage_candidates.values() for item in items]
+        if direction is not None and id(variable) not in refused_ids
     }
     return used, variable_ids
 
 
 def stage_io_global_declaration(codegen, node):
-    """The ``static`` declaration of a stage input or output variable."""
+    """The ``static`` declaration of a stage input or output variable, or none for a built-in input."""
+    if _is_builtin_input(node, _direction(node)):
+        return ""
     vtype = codegen.variable_declaration_type(node)
     codegen.register_variable_type(node.name, vtype, node)
     declaration = codegen.format_declaration(vtype, node.name, node)
@@ -232,19 +243,30 @@ def stage_io_parameters(codegen, entry, fragment_stage):
         return []
     used_names = set(codegen.user_symbol_names)
     used_locations = {direction: set() for direction in _DIRECTIONS}
+    selected = [
+        (variable, direction)
+        for variable, direction in selected
+        if not _is_builtin_input(variable, direction)
+    ]
     for variable, direction in selected:
         location = varying_location(variable)
         if location is not None:
             used_locations[direction].add(location)
 
     parameters = []
+    unnumbered = []
     for variable, direction in selected:
         attributes = [
             attribute
             for attribute in getattr(variable, "attributes", None) or []
             if str(getattr(attribute, "name", "")).lower() == "location"
         ]
-        if varying_location(variable) is None:
+        builtin = _builtin_output_attribute(codegen, variable)
+        if builtin is not None:
+            # A built-in output such as gl_Position keeps its system value and takes no location, unless Slang
+            # spells it with a user semantic (gl_PointSize is PSIZE), which is placed after the others.
+            attributes = [builtin]
+        elif varying_location(variable) is None:
             location = 0
             while location in used_locations[direction]:
                 location += 1
@@ -267,10 +289,43 @@ def stage_io_parameters(codegen, entry, fragment_stage):
             source_location=getattr(variable, "source_location", None),
         )
         parameter.add_annotation(STAGE_IO_PARAMETER_ANNOTATION, variable)
-        if fragment_stage and direction == "out":
+        if builtin is not None:
+            mapped = str(codegen.map_semantic(builtin.name) or "")
+            if not mapped.upper().startswith("SV_"):
+                unnumbered.append((parameter, direction))
+        elif fragment_stage and direction == "out":
             codegen.slang_fragment_output_location_ids.add(id(parameter))
         parameters.append(parameter)
+    for parameter, direction in unnumbered:
+        location = 0
+        while location in used_locations[direction]:
+            location += 1
+        used_locations[direction].add(location)
+        parameter.add_annotation(STAGE_IO_LOCATION_ANNOTATION, location)
     return parameters
+
+
+def _builtin_output_attribute(codegen, variable):
+    """The attribute naming the built-in that a ``gl_`` output variable writes, or None for a user varying."""
+    name = str(getattr(variable, "name", "") or "")
+    if not name.startswith("gl_"):
+        return None
+    for attribute in getattr(variable, "attributes", None) or []:
+        if str(getattr(attribute, "name", "")) == name or str(
+            getattr(attribute, "name", "")
+        ).startswith("gl_"):
+            return attribute
+    return AttributeNode(name)
+
+
+def stage_io_output_names(parameters):
+    """Names of the output variables that ``parameters`` carry, which no other output lowering may claim."""
+    names = set()
+    for parameter in parameters:
+        variable = parameter.get_annotation(STAGE_IO_PARAMETER_ANNOTATION)
+        if variable is not None and "out" in _qualifiers(parameter):
+            names.add(variable.name)
+    return names
 
 
 def stage_io_prologue(codegen, parameters, indent):

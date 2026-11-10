@@ -224,3 +224,65 @@ def test_spirv_import_stage_variables_become_entry_parameters(tmp_path):
         "spirv-asm",
     )
     assert _spirv_locations(spirv) == {"color": 0, "uv": 0, "extra": 1, "normal": 1}
+
+
+CGL_SPIRV_VERTEX = """
+shader main {
+    vertex {
+        float2 uv @output @location(1);
+        float3 pos @input @location(0);
+        int gl_VertexID @input @gl_VertexID;
+        float4 gl_Position @output @gl_Position;
+        float gl_ClipDistance[1] @output @gl_ClipDistance;
+        void main() {
+            uv = pos.xy + float2(float(gl_VertexID), 0.0);
+            gl_Position = float4(pos[0], pos[1], pos[2], 1.0);
+            return;
+        }
+    }
+}
+"""
+
+CGL_SPIRV_FRAGMENT = """
+shader main {
+    fragment {
+        float4 color @output @location(0);
+        float2 uv @input @location(0);
+        float4 gl_FragCoord @input @gl_FragCoord;
+        float gl_FragDepth @output @gl_FragDepth;
+        void main() {
+            color = float4(uv[0], uv[1], gl_FragCoord[0], 1.0);
+            gl_FragDepth = 0.5;
+        }
+    }
+}
+"""
+
+
+def test_spirv_import_builtin_outputs_keep_their_system_values(tmp_path):
+    code = _flat(_slang(tmp_path, CGL_SPIRV_VERTEX, ".cgl"))
+    assert "out float4 crossgl_out_gl_Position : SV_Position" in code, code
+    assert "crossgl_out_gl_Position = gl_Position;" in code, code
+    # A built-in input is read through its system-value parameter, not declared as a uniform.
+    assert "int gl_VertexID;" not in code and ": SV_VertexID" in code, code
+    # An unused output is static rather than a shader parameter.
+    assert "static float gl_ClipDistance[1];" in code, code
+    spirv = _slangc(
+        tmp_path, _slang(tmp_path, CGL_SPIRV_VERTEX, ".cgl"), "vertex", "spirv-asm"
+    )
+    assert re.search(r"OpDecorate %\S+ BuiltIn Position", spirv), spirv
+    assert _spirv_locations(spirv) == {"pos": 0, "uv": 1}
+
+
+def test_declared_builtin_output_is_not_also_returned(tmp_path):
+    # Without a return statement the generator would otherwise also return gl_FragDepth as SV_Depth.
+    code = _flat(_slang(tmp_path, CGL_SPIRV_FRAGMENT, ".cgl"))
+    assert "void main(" in code, code
+    assert code.count("SV_Depth") == 1, code
+    assert "crossgl_out_gl_FragDepth = gl_FragDepth;" in code, code
+    spirv = _slangc(
+        tmp_path, _slang(tmp_path, CGL_SPIRV_FRAGMENT, ".cgl"), "fragment", "spirv-asm"
+    )
+    assert re.search(r"OpDecorate %\S+ BuiltIn FragDepth", spirv), spirv
+    assert re.search(r"OpDecorate %\S+ BuiltIn FragCoord", spirv), spirv
+    assert _spirv_locations(spirv) == {"color": 0, "uv": 0}
