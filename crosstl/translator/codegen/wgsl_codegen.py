@@ -5018,9 +5018,7 @@ class WGSLCodeGen(
             return
         sampler_name = self.generate_expression(sampler)
         texture_name = (
-            texture
-            if isinstance(texture, str)
-            else self.generate_expression(texture)
+            texture if isinstance(texture, str) else self.generate_expression(texture)
         )
         if bias:
             raise WGSLTextureBiasUnsupportedError(
