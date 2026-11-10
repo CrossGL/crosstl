@@ -12815,14 +12815,12 @@ class VulkanSPIRVCodeGen(
     ) -> Optional[SpirvId]:
         primitive_name = self.normalize_primitive_name(function_name)
         if (
-            primitive_name
-            not in {
+            primitive_name not in {
                 "bool",
                 "float",
                 "double",
                 self.BFLOAT16_TYPE_NAME,
-            }
-            | self.INTEGER_TYPE_NAMES
+            } | self.INTEGER_TYPE_NAMES
         ):
             return None
 
@@ -20618,8 +20616,7 @@ class VulkanSPIRVCodeGen(
             # task_payload_variables.py: a task entry's DispatchMesh payload is task-payload storage.
             payload = (
                 self.current_execution_model == "TaskEXT"
-                and node.name
-                in dispatch_mesh_payload_names(
+                and node.name in dispatch_mesh_payload_names(
                     getattr(self.current_function_node, "body", None)
                 )
             )
@@ -27142,8 +27139,9 @@ class VulkanSPIRVCodeGen(
         if isinstance(expression, ConstructorNode):
             return all(
                 self.side_effect_free_call_argument(argument)
-                for argument in list(expression.arguments)
-                + list(expression.named_arguments.values())
+                for argument in list(expression.arguments) + list(
+                    expression.named_arguments.values()
+                )
             )
         if isinstance(expression, FunctionCallNode):
             callee_name = self.function_call_name(expression)
@@ -31298,8 +31296,7 @@ class VulkanSPIRVCodeGen(
                 return
         if (
             self.include_resource_interface_variables
-            and variable.type.storage_class
-            in {
+            and variable.type.storage_class in {
                 "StorageBuffer",
                 "Uniform",
                 "UniformConstant",
