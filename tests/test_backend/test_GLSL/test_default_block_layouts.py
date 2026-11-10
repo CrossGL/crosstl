@@ -149,3 +149,67 @@ def test_default_row_major_reaches_every_target(tmp_path):
     # Without SPIRV-Tools the ids stay numeric, so match the block id loosely.
     spirv = translate(str(crossgl), backend="vulkan")
     assert re.search(r"OpMemberDecorate %\w+ 0 RowMajor", spirv)
+
+
+def test_block_matrix_order_reaches_storage_block_members():
+    crossgl = generate_crossgl(
+        """
+        #version 450
+        layout(local_size_x = 1) in;
+        struct Light { mat2 n; vec4 c; };
+        layout(std430, row_major, binding = 0) buffer Src {
+            mat3 m;
+            layout(column_major) mat4 kept;
+            Light light;
+            vec4 v;
+        } src;
+        layout(std430, binding = 1) buffer Dst { vec4 o; } dst;
+        void main() { dst.o = vec4(src.m[0], src.kept[1][2]) + src.v + src.light.c; }
+        """,
+        "compute",
+    )
+    assert member_line(crossgl, "m") == "mat3 m @row_major;"
+    assert member_line(crossgl, "kept") == "mat4 kept @column_major;"
+    assert member_line(crossgl, "light") == "Light light @row_major;"
+    assert member_line(crossgl, "v") == "vec4 v;"
+
+
+def test_default_buffer_matrix_order_reaches_storage_block_members():
+    crossgl = generate_crossgl(
+        """
+        #version 450
+        layout(local_size_x = 1) in;
+        layout(row_major) buffer;
+        layout(std430, binding = 0) buffer Src { mat3 m; } src;
+        layout(std430, binding = 1) buffer Dst { vec4 o; } dst;
+        void main() { dst.o = vec4(src.m[0], 1.0); }
+        """,
+        "compute",
+    )
+    assert "buffer;" not in crossgl
+    assert member_line(crossgl, "m") == "mat3 m @row_major;"
+
+
+@pytest.mark.parametrize(
+    "backend, stored_row_major",
+    [
+        # The storage block's member is declared as its transpose, so a read of a column transposes it back.
+        ("opengl", r"transpose\(src\.m\)\[0\]"),
+        ("vulkan", r"OpTranspose"),
+        ("metal", r"transpose\("),
+        # Byte-address buffers: the transposed member is loaded column by column, then transposed back.
+        ("directx", r"transpose\(transpose\("),
+    ],
+)
+def test_storage_block_matrix_order_reaches_every_target(
+    tmp_path, backend, stored_row_major
+):
+    source = tmp_path / "rows.comp"
+    source.write_text("""
+        #version 450
+        layout(local_size_x = 1) in;
+        layout(std430, row_major, binding = 0) buffer Src { mat3 m; } src;
+        layout(std430, binding = 1) buffer Dst { vec4 o[2]; } dst;
+        void main() { dst.o[0] = vec4(src.m[0], src.m[1][2]); dst.o[1] = vec4(src.m[2], 0.0); }
+        """)
+    assert re.search(stored_row_major, translate(str(source), backend=backend))

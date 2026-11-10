@@ -1741,7 +1741,9 @@ class GLSLParser:
 
         self.eat("RBRACE")
         self.skip_newlines()
-        if "uniform" in {str(qualifier).lower() for qualifier in qualifiers or []}:
+        if {"uniform", "buffer"} & {
+            str(qualifier).lower() for qualifier in qualifiers or []
+        }:
             member_layouts = member_layouts_with_block_matrix_order(
                 layout,
                 members,
