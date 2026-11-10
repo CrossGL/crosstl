@@ -5225,8 +5225,8 @@ def test_wgsl_codegen_cuda_constant_scalar_array_lowering(
     __constant__ {cuda_type};
     __constant__ float gain;
 
-    __global__ void k(float *out) {{
-        out[0] = gain * table[0];
+    __global__ void k() {{
+        float value = gain * float(table[0]);
     }}
     """
     source = tmp_path / "kernel.cu"
@@ -5237,8 +5237,7 @@ def test_wgsl_codegen_cuda_constant_scalar_array_lowering(
     assert "var<uniform> gain: f32;" in generated
     assert "var<uniform> table" not in generated
 
-    if shutil.which("naga") is not None:
-        validate_wgsl_with_naga(tmp_path, generated)
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_cuda_constant_vec4_array_stays_uniform(tmp_path):
@@ -5246,8 +5245,8 @@ def test_wgsl_codegen_cuda_constant_vec4_array_stays_uniform(tmp_path):
     __constant__ float4 table[4];
     __constant__ float gain;
 
-    __global__ void k(float4 *out) {
-        out[0] = table[0];
+    __global__ void k() {
+        float4 value = table[0] * gain;
     }
     """
     source = tmp_path / "kernel.cu"
@@ -5257,8 +5256,7 @@ def test_wgsl_codegen_cuda_constant_vec4_array_stays_uniform(tmp_path):
     assert "var<uniform> table: array<vec4<f32>, 4>;" in generated
     assert "var<storage, read> table" not in generated
 
-    if shutil.which("naga") is not None:
-        validate_wgsl_with_naga(tmp_path, generated)
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_cuda_constant_struct_array_lowering(tmp_path):
@@ -5270,8 +5268,8 @@ def test_wgsl_codegen_cuda_constant_struct_array_lowering(tmp_path):
 
     __constant__ TwoFloats table[4];
 
-    __global__ void k(float *out) {
-        out[0] = table[0].a + table[0].b;
+    __global__ void k() {
+        float value = table[0].a + table[0].b;
     }
     """
     source = tmp_path / "kernel.cu"
@@ -5280,6 +5278,7 @@ def test_wgsl_codegen_cuda_constant_struct_array_lowering(tmp_path):
 
     assert "var<storage, read> table: array<TwoFloats, 4>;" in generated
     assert "var<uniform> table" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_cuda_constant_struct_with_vec4_array_stays_uniform(tmp_path):
@@ -5290,8 +5289,8 @@ def test_wgsl_codegen_cuda_constant_struct_with_vec4_array_stays_uniform(tmp_pat
 
     __constant__ WithVec4 table[4];
 
-    __global__ void k(float4 *out) {
-        out[0] = table[0].v;
+    __global__ void k() {
+        float4 value = table[0].v;
     }
     """
     source = tmp_path / "kernel.cu"
@@ -5300,6 +5299,30 @@ def test_wgsl_codegen_cuda_constant_struct_with_vec4_array_stays_uniform(tmp_pat
 
     assert "var<uniform> table: array<WithVec4, 4>;" in generated
     assert "var<storage, read> table" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_cuda_constant_struct_with_vec4_array_member_stays_uniform(
+    tmp_path,
+):
+    # The structure's array member is sized, so its 32-byte stride keeps it uniform.
+    code = """
+    struct Rows {
+        float4 rows[2];
+    };
+
+    __constant__ Rows table[4];
+
+    __global__ void k() {
+        float4 value = table[1].rows[1];
+    }
+    """
+    source = tmp_path / "kernel.cu"
+    source.write_text(code, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "var<uniform> table: array<Rows, 4>;" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_unresolvable_uniform_array_raises_typed_error():
