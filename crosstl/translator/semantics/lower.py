@@ -16,10 +16,12 @@ from .compound_values import CompoundValueHoister
 from .conversions import UNRESOLVED, native_conversion
 from .helpers import HelperSet
 from .hub_types import call_name
+from .nan_conversions import ORIGIN, lower_conversion
 from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 from .rule_table import (
     CONVERSION_SIGNATURES,
     CONVERT_SAT_GENERIC,
+    FTOI_NAN_INTRINSICS,
     HELPERS,
     INTRINSIC_FAMILY,
     INTRINSICS,
@@ -119,6 +121,8 @@ class Lowerer:
                 target=self.target,
             )
         entry = self.entry(intrinsic)
+        if intrinsic in FTOI_NAN_INTRINSICS and ORIGIN in node.annotations:
+            return lower_conversion(node, entry.kind, self.helpers)
         if entry.kind == "native":
             if intrinsic in CONVERSION_SIGNATURES:
                 result_type = node.annotations.get("cgl_rule_type")

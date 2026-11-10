@@ -3389,8 +3389,8 @@ def test_parse_template_declaration_preserves_existing_source_location(monkeypat
     }
     original_parse_function = MetalParser.parse_function
 
-    def parse_function_with_existing_location(parser):
-        function = original_parse_function(parser)
+    def parse_function_with_existing_location(parser, *args, **kwargs):
+        function = original_parse_function(parser, *args, **kwargs)
         function.source_location = existing_location
         return function
 

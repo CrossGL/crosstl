@@ -1050,7 +1050,9 @@ class WGSLCodeGen(
         self._builtin_option_specializations = (
             self.collect_builtin_option_specializations(ast)
         )
-        generic_functions = WGSLGenericFunctionSpecializer(self, helper_function_nodes)
+        generic_functions = WGSLGenericFunctionSpecializer(
+            self, helper_function_nodes, ast
+        )
         concrete_helper_function_nodes = [
             func
             for func in helper_function_nodes
@@ -2428,9 +2430,14 @@ class WGSLCodeGen(
                 vtype.cols,
             )
         if isinstance(vtype, ArrayType):
+            size = vtype.size
+            # A size may be a value parameter: ``T items[N]`` in ``generic<T, N> struct Ring``.
+            size_name = size.name if isinstance(size, IdentifierNode) else size
+            if isinstance(size_name, str) and size_name.strip() in substitutions:
+                size = substitutions[size_name.strip()]
             return ArrayType(
                 self.substitute_generic_struct_type(vtype.element_type, substitutions),
-                copy.deepcopy(vtype.size),
+                copy.deepcopy(size),
             )
         if isinstance(vtype, PointerType):
             return PointerType(
@@ -2539,6 +2546,17 @@ class WGSLCodeGen(
         )
 
     def generic_type_key(self, vtype):
+        if isinstance(vtype, LiteralNode):
+            # The argument of a value parameter: ``4`` in ``Ring<float, 4>``.
+            if isinstance(vtype.value, bool):
+                return "true" if vtype.value else "false"
+            return str(vtype.value)
+        if (
+            isinstance(vtype, UnaryOpNode)
+            and getattr(vtype, "operator", None) == "-"
+            and isinstance(getattr(vtype, "operand", None), LiteralNode)
+        ):
+            return f"-{self.generic_type_key(vtype.operand)}"
         if isinstance(vtype, PrimitiveType):
             return self.PRIMITIVE_TYPE_MAP.get(vtype.name.lower(), vtype.name)
         if isinstance(vtype, VectorType):
@@ -8411,6 +8429,9 @@ class WGSLCodeGen(
         )
         resource_parameters = {}
         for function in functions:
+            if getattr(function, "generic_params", None):
+                # A generic signature (``Box<T>``) names no concrete structure; its specializations are concrete.
+                continue
             parameter_paths = {}
             for index, parameter in enumerate(
                 getattr(function, "parameters", []) or []

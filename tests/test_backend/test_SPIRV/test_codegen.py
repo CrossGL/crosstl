@@ -6211,7 +6211,7 @@ def test_spirv_cross_decoration_group_resource_layout_codegen_reparse():
 
     assert ("BufferBlock", []) in ast.spirv_decorations["%Values"]
     assert ("0", "Offset", ["0"]) in ast.spirv_member_decorations["%Values"]
-    assert "RWStructuredBuffer<values> values @set(0) @binding(2);" in generated_code
+    assert "RWStructuredBuffer<Values> values @set(0) @binding(2);" in generated_code
     assert "float member0[];" in generated_code
     parse_crossgl(generated_code)
 
@@ -7006,8 +7006,8 @@ def test_spirv_tools_reserved_fallback_resource_names_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "cbuffer var_ @set(0) @binding(0) @buffer_layout(std140) {" in generated_code
-    assert "RWStructuredBuffer<in_> in_ @set(0) @binding(1);" in generated_code
-    assert "RWStructuredBuffer<out_> out_ @set(0) @binding(2);" in generated_code
+    assert "RWStructuredBuffer<struct_> in_ @set(0) @binding(1);" in generated_code
+    assert "RWStructuredBuffer<struct_> out_ @set(0) @binding(2);" in generated_code
     assert "cbuffer var @set" not in generated_code
     assert "RWStructuredBuffer<in> in @set" not in generated_code
     assert "RWStructuredBuffer<out> out @set" not in generated_code
@@ -7066,9 +7066,11 @@ def test_spirv_assembly_specialization_constant_composite_and_op_codegen():
         "const uint WORKGROUP_TOTAL = (WORKGROUP_WIDTH + WORKGROUP_HEIGHT);"
         in generated_code
     )
+    # The WorkgroupSize composite overrides LocalSize 1 1 1 and is the gl_WorkGroupSize built-in.
+    assert "gl_WorkGroupSize @gl_WorkGroupSize" not in generated_code
     assert (
-        "const uint3 gl_WorkGroupSize @gl_WorkGroupSize = "
-        "uint3(WORKGROUP_WIDTH, WORKGROUP_HEIGHT, 1);" in generated_code
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1, "
+        "local_size_x_id = 0, local_size_y_id = 1) in;" in generated_code
     )
     assert "OpSpecConstant" not in generated_code
     assert "Unhandled statement type" not in generated_code
@@ -7080,7 +7082,15 @@ def test_glslang_workgroup_size_array_lengths_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "groupshared uint keys[7][(2 * 5)];" in generated_code
+    # The arrays follow the specialized workgroup size, as GLSL's shared uint keys[gl_WorkGroupSize.z] does.
+    assert (
+        "groupshared uint keys[gl_WorkGroupSize.z]"
+        "[(gl_WorkGroupSize.x * gl_WorkGroupSize.y)];" in generated_code
+    )
+    assert (
+        "layout(local_size_x = 2, local_size_y = 5, local_size_z = 7, local_size_x_id = 18, "
+        "local_size_y_id = 10, local_size_z_id = 19) in;" in generated_code
+    )
     assert "uint3(2, 5, 7)[0]" not in generated_code
     assert "uint3(2, 5, 7)[1]" not in generated_code
     assert "uint3(2, 5, 7)[2]" not in generated_code
@@ -8269,8 +8279,8 @@ def test_spirv_assembly_local_size_id_codegen():
 
     assert "compute {" in generated_code
     assert (
-        "layout(local_size_x = WORKGROUP_WIDTH, local_size_y = WORKGROUP_HEIGHT, "
-        "local_size_z = 1) in;" in generated_code
+        "layout(local_size_x = 8, local_size_y = 4, local_size_z = 1, "
+        "local_size_x_id = 0, local_size_y_id = 1) in;" in generated_code
     )
     assert "const uint WORKGROUP_WIDTH @constant_id(0) = 8;" in generated_code
     assert "const uint WORKGROUP_HEIGHT @constant_id(1) = 4;" in generated_code
@@ -8710,7 +8720,7 @@ def test_naga_empty_global_name_fallback_identifier_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert "RWStructuredBuffer<global_> global_ @set(0) @binding(0);" in generated_code
+    assert "RWStructuredBuffer<block> global_ @set(0) @binding(0);" in generated_code
     assert "global_[0].member0 = (global_[0].member0 + 1);" in generated_code
     assert "struct global {" not in generated_code
 
@@ -8738,7 +8748,8 @@ def test_translate_api_accepts_linkage_pointer_type_only_spirv_assembly(tmp_path
         str(shader_path), backend="cgl", format_output=False
     )
 
-    assert generated_code == "shader main {\n}\n"
+    # SPIR-V defines wrapping integer arithmetic, which the CrossGL program declares (rule_pragmas.py).
+    assert generated_code == "#pragma cgl_rules(wrap)\nshader main {\n}\n"
 
 
 def test_vulkan_layout_blocks_emit_crossgl_resources():

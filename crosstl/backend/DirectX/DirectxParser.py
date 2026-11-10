@@ -41,7 +41,15 @@ from .DirectxAst import (
     WhileNode,
 )
 from .entry_stage_hints import demote_name_hinted_helpers, entry_name_stage_hint
+from .function_templates import (
+    begin_template_declaration,
+    expire_template_declaration,
+    parse_specialization_declarator_arguments,
+    skip_specialization_declarator_arguments_at,
+    take_template_parameters,
+)
 from .matrix_pack_pragma import apply_matrix_orientation, pack_matrix_orientation
+from .namespaces import qualify_namespace_declarations, using_directive_path
 
 TYPE_TOKENS = {
     "FLOAT",
@@ -383,6 +391,8 @@ class HLSLParser:
         self.effect_stage_entries = {}
         # The orientation the last ``#pragma pack_matrix`` set, if any.
         self.matrix_pack_orientation = None
+        # ``(scope, kind, target)`` for each file- or namespace-scope ``using`` directive (see .namespaces).
+        self.hlsl_using_directives = []
 
     def parse(self):
         structs = []
@@ -393,8 +403,9 @@ class HLSLParser:
         typedefs = []
 
         while self.current_token[0] != "EOF":
+            expire_template_declaration(self)
             if self.current_token_is_keyword("USING", "using"):
-                alias = self.parse_using_directive()
+                alias = self.parse_using_directive(record=True)
                 if alias is not None:
                     typedefs.append(alias)
                 continue
@@ -449,7 +460,7 @@ class HLSLParser:
                 continue
 
             if self.is_template_declaration_prefix():
-                self.parse_template_declaration_prefix()
+                begin_template_declaration(self)
                 continue
 
             if self.is_effect_metadata_block():
@@ -500,7 +511,9 @@ class HLSLParser:
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
-            name = self.parse_function_declarator_name()
+            name = parse_specialization_declarator_arguments(
+                self, self.parse_function_declarator_name()
+            )
 
             if self.current_token[0] == "LPAREN":
                 synthetic_start = len(self.synthetic_structs)
@@ -527,7 +540,7 @@ class HLSLParser:
         self.apply_struct_parameter_stage_qualifiers(functions, structs)
         self.apply_effect_stage_entries(functions)
 
-        return ShaderNode(
+        shader = ShaderNode(
             includes=[],
             functions=functions,
             structs=structs,
@@ -536,6 +549,8 @@ class HLSLParser:
             enums=enums,
             typedefs=typedefs,
         )
+        shader.hlsl_using_directives = list(self.hlsl_using_directives)
+        return shader
 
     def is_effect_metadata_block(self):
         if self.current_token[0] != "IDENTIFIER":
@@ -812,17 +827,14 @@ class HLSLParser:
         self.eat("COLON")
         self.eat("COLON")
 
-    def parse_using_directive(self):
+    def parse_using_directive(self, record=False):
+        """Parse a ``using`` alias, directive or declaration; ``record`` keeps a file-scope directive."""
         self.eat_keyword("USING", "using")
         if self.current_token_is_keyword("NAMESPACE", "namespace"):
             self.eat_keyword("NAMESPACE", "namespace")
-            while self.current_token[0] not in {"SEMICOLON", "EOF"}:
-                if self.current_token_is_double_colon():
-                    self.eat_double_colon()
-                else:
-                    self.eat(self.current_token[0])
-            if self.current_token[0] == "SEMICOLON":
-                self.eat("SEMICOLON")
+            path = self.skip_using_target()
+            if record:
+                self.hlsl_using_directives.append(((), "namespace", path))
             return None
 
         if (
@@ -846,14 +858,23 @@ class HLSLParser:
             alias.array_sizes = array_sizes
             return alias
 
+        path = self.skip_using_target()
+        if record and len(path) > 1:
+            self.hlsl_using_directives.append(((), "declaration", path))
+        return None
+
+    def skip_using_target(self):
+        """Consume the rest of a ``using`` directive; returns the identifiers of the path it names."""
+        names = []
         while self.current_token[0] not in {"SEMICOLON", "EOF"}:
             if self.current_token_is_double_colon():
                 self.eat_double_colon()
             else:
+                names.append(self.current_token[1])
                 self.eat(self.current_token[0])
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-        return None
+        return using_directive_path(names)
 
     def is_class_declaration_prefix(self):
         return self.current_token_is_keyword(
@@ -923,10 +944,13 @@ class HLSLParser:
 
     def parse_namespace_block(self):
         self.eat_keyword("NAMESPACE", "namespace")
+        path = []
         if self.current_token[0] == "IDENTIFIER":
+            path.append(self.current_token[1])
             self.eat("IDENTIFIER")
             while self.current_token_is_double_colon():
                 self.eat_double_colon()
+                path.append(self.current_token[1])
                 self.eat("IDENTIFIER")
 
         self.eat("LBRACE")
@@ -956,6 +980,11 @@ class HLSLParser:
         parser.synthetic_enum_count = self.synthetic_enum_count
         namespace_ast = parser.parse()
         self.synthetic_enum_count = parser.synthetic_enum_count
+        self.hlsl_using_directives.extend(
+            qualify_namespace_declarations(
+                namespace_ast, path, parser.hlsl_using_directives
+            )
+        )
         return namespace_ast
 
     def parse_preprocessor_directive(self):
@@ -1495,13 +1524,20 @@ class HLSLParser:
     def parse_struct(self, declaration_qualifiers=None, declaration_attributes=None):
         declaration_qualifiers = list(declaration_qualifiers or [])
         declaration_attributes = list(declaration_attributes or [])
+        # A struct template's parameters belong to the struct, not to its members (see .struct_templates).
+        template_parameters = take_template_parameters(self)
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
         name = None
+        specialization_arguments = None
         if self.is_identifier_token(self.current_token[0]):
             name = self.parse_identifier()
-            if self.current_token[0] == "LESS_THAN":
+            if self.current_token[0] == "LESS_THAN" and template_parameters == []:
+                # ``template <> struct Box<float>``: an explicit specialization keeps its arguments.
+                specialization_arguments = self.parse_generic_arguments()
+            elif self.current_token[0] == "LESS_THAN":
                 self.skip_template_argument_list()
+                specialization_arguments = True
 
         semantic = None
         base_classes = []
@@ -1597,6 +1633,8 @@ class HLSLParser:
         struct_node.semantic = semantic
         struct_node.base_classes = base_classes
         struct_node.methods = methods
+        struct_node.template_parameters = template_parameters
+        struct_node.specialization_arguments = specialization_arguments
         return struct_node
 
     def parse_nested_struct_member(
@@ -2154,6 +2192,7 @@ class HLSLParser:
         return name
 
     def parse_function(self, return_type, name, qualifiers, attributes):
+        template_parameters = take_template_parameters(self)
         params = self.parse_parameters()
         qualifiers = qualifiers + self.parse_trailing_function_qualifiers()
         return_array_sizes = self.parse_array_suffixes()
@@ -2199,6 +2238,7 @@ class HLSLParser:
             array_sizes=return_array_sizes,
         )
         function.is_prototype = is_prototype
+        function.template_parameters = template_parameters
         return function
 
     def parse_trailing_function_qualifiers(self):
@@ -2951,7 +2991,7 @@ class HLSLParser:
         if not self.is_declarator_identifier_token_at(idx):
             return False
 
-        idx += 1
+        idx = skip_specialization_declarator_arguments_at(self, idx + 1)
         idx = self.skip_array_suffixes_at(idx)
         if idx is None or idx >= len(self.tokens):
             return False
@@ -4050,7 +4090,8 @@ class HLSLParser:
             scoped_name = self.parse_identifier()
             if self.current_token_is_double_colon():
                 scoped_name = self.parse_scoped_name(scoped_name)
-            return scoped_name
+            # ``::f`` names the global ``f`` even inside a namespace that declares one (see .namespaces).
+            return f"::{scoped_name}"
         if self.is_template_type_constructor_start():
             type_name = self.parse_type()
             args = self.parse_call_arguments()

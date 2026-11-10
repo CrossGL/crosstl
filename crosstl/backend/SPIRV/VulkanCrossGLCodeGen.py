@@ -1,5 +1,6 @@
 """Reverse code generator that emits CrossGL from Vulkan SPIR-V AST nodes."""
 
+from ...translator.codegen.image_access_contracts import SUPPORTED_IMAGE_FORMATS
 from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
@@ -9,6 +10,10 @@ from .statement_import import (
     unsupported_statement,
 )
 from .tessellation_control_import import tessellation_control_mode_attributes
+from .tessellation_evaluation_import import (
+    evaluation_leaves_modes_to_control_stage,
+    tessellation_evaluation_mode_attributes,
+)
 from .VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -35,6 +40,7 @@ from .VulkanAst import (
     VariableNode,
     WhileNode,
 )
+from .workgroup_size_import import workgroup_size_layout_qualifiers
 
 
 class VulkanToCrossGLConverter:
@@ -652,6 +658,13 @@ class VulkanToCrossGLConverter:
         return "fragment"
 
     def spirv_compute_execution_layouts(self, node):
+        dimensions = getattr(node, "spirv_workgroup_size", None)
+        if dimensions is not None:
+            return [
+                LayoutNode(
+                    workgroup_size_layout_qualifiers(dimensions), layout_type="in"
+                )
+            ]
         layouts = []
         for mode in getattr(node, "spirv_execution_modes", []) or []:
             if mode.get("mode") not in {"LocalSize", "LocalSizeId"}:
@@ -775,8 +788,12 @@ class VulkanToCrossGLConverter:
             "VertexOrderCcw": "ccw",
             "PointMode": "point_mode",
         }
+        execution_modes = getattr(node, "spirv_execution_modes", []) or []
+        if evaluation_leaves_modes_to_control_stage(execution_modes):
+            # The entry point carries them as attributes; see tessellation_evaluation_import.
+            return []
         qualifiers = []
-        for mode in getattr(node, "spirv_execution_modes", []) or []:
+        for mode in execution_modes:
             mapped_name = modes.get(mode.get("mode"))
             if mapped_name is not None:
                 qualifiers.append((mapped_name, None))
@@ -1263,44 +1280,7 @@ class VulkanToCrossGLConverter:
         return isinstance(type_name, str) and type_name.endswith("imageBuffer")
 
     def supported_image_formats(self):
-        return {
-            "r8",
-            "r8_snorm",
-            "r8i",
-            "r8ui",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r16i",
-            "r16ui",
-            "r32f",
-            "r32i",
-            "r32ui",
-            "rg8",
-            "rg8_snorm",
-            "rg8i",
-            "rg8ui",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg16i",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-            "rgba8",
-            "rgba8_snorm",
-            "rgba8i",
-            "rgba8ui",
-            "rgba16",
-            "rgba16_snorm",
-            "rgba16f",
-            "rgba16i",
-            "rgba16ui",
-            "rgba32f",
-            "rgba32i",
-            "rgba32ui",
-        }
+        return set(SUPPORTED_IMAGE_FORMATS)
 
     def interface_layout_attribute_suffix(
         self,
@@ -1550,6 +1530,12 @@ class VulkanToCrossGLConverter:
         if stage == "tessellation_control":
             attributes.extend(
                 tessellation_control_mode_attributes(
+                    getattr(node, "spirv_execution_modes", None)
+                )
+            )
+        elif stage == "tessellation_evaluation":
+            attributes.extend(
+                tessellation_evaluation_mode_attributes(
                     getattr(node, "spirv_execution_modes", None)
                 )
             )
