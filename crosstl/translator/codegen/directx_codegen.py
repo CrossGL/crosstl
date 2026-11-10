@@ -334,7 +334,12 @@ from .hlsl_extension_builtins import (
     hlsl_stage_builtin_read,
     refuse_unmapped_hlsl_builtin,
 )
-from .hlsl_glsl_block_registers import HlslGlslBlockRegisters, HlslRegisterBlockPlan
+from .hlsl_glsl_block_registers import (
+    HlslGlslBlockRegisters,
+    HlslRegisterBlockPlan,
+    hlsl_cbuffer_register_plan,
+    hlsl_members_hold_struct_placements,
+)
 from .hlsl_glsl_tessellation_interface import (
     refuse_glsl_style_tessellation_interface,
 )
@@ -13505,13 +13510,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             for member in getattr(node, "members", []) or []
             if getattr(member, "name", None) and not isinstance(member, FunctionNode)
         ]
-        if not any(member_explicit_offset(member) is not None for member in members):
-            return {}
         structs = {
             struct.name: struct
             for struct in getattr(ast, "structs", []) or []
             if getattr(struct, "name", None)
         }
+        explicit = any(member_explicit_offset(member) is not None for member in members)
+        if not explicit and not hlsl_members_hold_struct_placements(
+            structs, members, self.hlsl_block_member
+        ):
+            return {}
 
         def struct_members(name):
             struct = structs.get(name)
@@ -13532,6 +13540,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 (node.name,),
                 self.hlsl_constant_int_value,
             )
+            # A struct member's placement that moves a scalar from where HLSL packs it is read from registers.
+            plan = hlsl_cbuffer_register_plan(layout_type)
+            if plan is not None:
+                return plan
+            if not explicit:
+                return {}
             offsets = []
             natural = []
             cursor = natural_cursor = 0

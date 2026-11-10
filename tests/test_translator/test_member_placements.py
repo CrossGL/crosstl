@@ -265,12 +265,13 @@ shader Probe {
 """
 
 
-@pytest.mark.parametrize("backend", ["directx", "opengl", "metal", "slang"])
+@pytest.mark.parametrize("backend", ["metal", "slang"])
 def test_a_placement_inside_a_struct_held_by_a_constant_buffer_is_refused(
     tmp_path, backend
 ):
     # Issue #4245: SPIR-V wrote 'Offset 16', HLSL a semantic named 'offset' and GLSL a plain 'vec4 v;'. SPIR-V now
-    # places the member at byte 32 (test_spirv_nested_member_placements.py runs it on Vulkan).
+    # places the member at byte 32 (test_spirv_nested_member_placements.py runs it on Vulkan), and GLSL and HLSL
+    # read it from registers (test_nested_member_placement_registers.py).
     path = tmp_path / "nested.cgl"
     path.write_text(NESTED_PLACEMENT.replace("OFFSET", "32"))
 
