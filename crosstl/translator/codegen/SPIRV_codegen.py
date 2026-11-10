@@ -236,6 +236,10 @@ from .spirv_ray_builtins import (
 )
 from .spirv_ray_locations import ray_location_variable, ray_variable_location
 from .spirv_refusals import SpirvRefusals
+from .spirv_row_major_arrays import (
+    row_major_array_has_own_type,
+    uniform_block_member_layout_type,
+)
 from .spirv_separate_textures import separate_texture_type_info
 from .spirv_shading_rate import (
     require_shading_rate_capability,
@@ -18193,11 +18197,16 @@ class VulkanSPIRVCodeGen(
                     (
                         placed_member_type(self, member_type, member_name, placed)
                         if placed is not None
-                        else self.storage_layout_type(member_type, layout)
+                        else uniform_block_member_layout_type(
+                            self,
+                            member_type,
+                            layout,
+                            member_index in row_major_members,
+                        )
                     ),
                     member_name,
                 )
-                for member_type, member_name in members
+                for member_index, (member_type, member_name) in enumerate(members)
             ]
             cbuffer_type = self.register_struct_type(cbuffer_node.name, members)
             if placed is not None:
@@ -18793,10 +18802,12 @@ class VulkanSPIRVCodeGen(
             cbuffer_type.type.base_type, members
         )
         self.decorations.append(f"OpDecorate %{cbuffer_type.id} Block")
-        # The block's own members are decorated below, with their orientation; only nested types here.
+        # The block's own members are decorated below, with their orientation; only nested types here. A row-major
+        # member holds only matrices, whose arrays take their row-major strides below.
         decorated_structs = {cbuffer_type.id}
-        for member_type, _member_name in members:
-            self.decorate_uniform_nested_type(member_type, decorated_structs)
+        for member_index, (member_type, _member_name) in enumerate(members):
+            if member_index not in row_major_members:
+                self.decorate_uniform_nested_type(member_type, decorated_structs)
 
         offset = 0
         for member_index, (member_type, member_name) in enumerate(members):
@@ -18837,16 +18848,13 @@ class VulkanSPIRVCodeGen(
                     missing_capabilities=("spirv.row_major_layout",),
                 )
             return
-        if row_major and matrix_type is not member_type:
-            column_type, columns = self.matrix_type_info_from_type(matrix_type)
-            _component, rows = self.vector_type_info_from_type(column_type)
-            if rows != columns:
-                # The array type is shared with column-major uses, whose element stride differs.
-                raise UnsupportedSPIRVFeatureError(
-                    "row-major array of non-square matrices",
-                    f"uniform member {member_name} is an array of row-major non-square matrices",
-                    missing_capabilities=("spirv.row_major_layout",),
-                )
+        if row_major and not row_major_array_has_own_type(self, member_type):
+            # The array type is shared with column-major uses, whose element stride differs.
+            raise UnsupportedSPIRVFeatureError(
+                "row-major array of non-square matrices",
+                f"uniform member {member_name} is an array of row-major non-square matrices",
+                missing_capabilities=("spirv.row_major_layout",),
+            )
         orientation = "RowMajor" if row_major else "ColMajor"
         stride = self.uniform_matrix_stride(matrix_type, row_major)
         self.decorations.append(
