@@ -154,6 +154,10 @@ from .texture_types import (
 )
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
+from .unused_generic_definitions import (
+    raise_referenced_deferred_definitions,
+    render_generic_definition,
+)
 from .using_declared_library_names import (
     using_declared_alias_targets,
     using_declared_library_names,
@@ -3975,6 +3979,7 @@ class MetalToCrossGLConverter(
 
         ordinary_function_code = []
         deferred_template_functions = []
+        self.deferred_generic_definition_errors = []
         for f in functions:
             if id(f) in self.suppressed_out_of_line_call_operator_ids:
                 continue
@@ -3990,9 +3995,15 @@ class MetalToCrossGLConverter(
             ):
                 continue
             ordinary_function_code.append(
-                self.generate_top_level_function(
+                render_generic_definition(
+                    self,
                     f,
-                    template_value_bindings=default_bindings,
+                    lambda f=f, default_bindings=default_bindings: (
+                        self.generate_top_level_function(
+                            f,
+                            template_value_bindings=default_bindings,
+                        )
+                    ),
                 )
             )
 
@@ -4025,7 +4036,13 @@ class MetalToCrossGLConverter(
                 if id(function) in self.suppressed_value_template_function_ids:
                     continue
                 deferred_template_code.append(
-                    self.generate_top_level_function(function)
+                    render_generic_definition(
+                        self,
+                        function,
+                        lambda function=function: self.generate_top_level_function(
+                            function
+                        ),
+                    )
                 )
         finally:
             self.preserve_unmaterialized_template_calls = False
@@ -4074,6 +4091,7 @@ class MetalToCrossGLConverter(
             1,
         )
         code = self.propagate_cooperative_matrix_fragment_type_contracts(code)
+        raise_referenced_deferred_definitions(self, code)
         return code
 
     def generate_top_level_function(

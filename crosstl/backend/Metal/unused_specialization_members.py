@@ -66,6 +66,25 @@ def _lowered_definitions(
     return definitions
 
 
+def _implicit_member_call(masked: str, start: int, end: int) -> bool:
+    """Whether the identifier at ``masked[start:end]`` is an unqualified call, so names a member of the implicit
+    object rather than a member of another object (``a.f()``, ``p->f()``) or a qualified name (``N::f()``).
+    """
+
+    before = start - 1
+    while before >= 0 and masked[before].isspace():
+        before -= 1
+    if before >= 0 and (
+        masked[before] == "."
+        or (before >= 1 and masked[before - 1 : before + 1] in {"->", "::"})
+    ):
+        return False
+    after = end
+    while after < len(masked) and masked[after].isspace():
+        after += 1
+    return after < len(masked) and masked[after] == "("
+
+
 def _referencing_definitions(
     masked: str,
     definitions: Dict[str, List[Tuple[int, int, str, str]]],
@@ -77,10 +96,19 @@ def _referencing_definitions(
     """
     callees: Dict[str, Set[str]] = {name: set() for name in definitions}
     external: Set[str] = set()
+    by_member: Dict[Tuple[str, str], List[str]] = {}
+    for name, entries in definitions.items():
+        for _start, _end, specialization, member in entries:
+            by_member.setdefault((specialization, member), []).append(name)
+    owner_specializations = {
+        name: {specialization for _s, _e, specialization, _m in entries}
+        for name, entries in definitions.items()
+    }
+    member_names = {member for _specialization, member in by_member}
     span_index = 0
     for match in _IDENTIFIER_RE.finditer(masked):
         name = match.group()
-        if name not in definitions:
+        if name not in definitions and name not in member_names:
             continue
         position = match.start()
         while span_index < len(spans) and spans[span_index][1] <= position:
@@ -88,16 +116,19 @@ def _referencing_definitions(
         owner = ""
         if span_index < len(spans) and spans[span_index][0] <= position:
             owner = spans[span_index][2]
+        if name not in definitions:
+            # A member body may call a sibling through the implicit object, as in ``post_in(x)``; member lowering
+            # leaves a call among overloads for code generation to resolve, so it names every overload of the member.
+            if owner and _implicit_member_call(masked, match.start(), match.end()):
+                for specialization in owner_specializations[owner]:
+                    callees[owner].update(by_member.get((specialization, name), ()))
+            continue
         if owner == name:
             continue
         if owner:
             callees[owner].add(name)
         else:
             external.add(name)
-    by_member: Dict[Tuple[str, str], List[str]] = {}
-    for name, entries in definitions.items():
-        for _start, _end, specialization, member in entries:
-            by_member.setdefault((specialization, member), []).append(name)
     for match in _QUALIFIED_MEMBER_RE.finditer(masked):
         external.update(
             by_member.get((match.group("owner"), match.group("member")), ())
