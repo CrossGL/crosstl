@@ -4207,6 +4207,15 @@ class SlangCodeGen(LoweringRefusalMixin):
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
         return not array_suffix and base_type == "uint"
 
+    def is_slang_render_target_type(self, type_name):
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and bool(
+            re.fullmatch(r"(?:float|half|int|uint)[1-4]?", base_type)
+        )
+
     def is_slang_float_vector_width(self, type_name, width):
         mapped_type = self.convert_type(type_name)
         if mapped_type is None:
@@ -4221,6 +4230,15 @@ class SlangCodeGen(LoweringRefusalMixin):
         if kind in {"tess_factor", "inside_tess_factor"}:
             return
 
+        if kind == "color" and str(semantic).lower() != "gl_fragcolor":
+            # A render target SV_Target<N> takes a float, half, int or uint scalar or vector, as in HLSL; GLSL
+            # declares an integer colour output for an integer attachment.
+            if self.is_slang_render_target_type(type_name):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "expected a scalar or vector of float, half, int or uint"
+            )
         if kind in {"position", "color"}:
             if self.is_slang_float_vector_width(type_name, 4):
                 return

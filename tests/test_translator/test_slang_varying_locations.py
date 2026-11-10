@@ -190,3 +190,23 @@ def test_unnumbered_user_semantic_takes_a_free_location(tmp_path):
         tmp_path, _slang(tmp_path, GLSL_POINT_SIZE, ".vert"), "vertex", "spirv-asm"
     )
     assert _spirv_locations(spirv)["uv"] == 0
+
+
+GLSL_INTEGER_OUTPUT = """#version 450
+layout(location = 0) flat in int id;
+layout(location = 0) out uvec4 o;
+void main() { o = uvec4(id); }
+"""
+
+
+def test_integer_render_target_is_accepted(tmp_path):
+    # SV_Target takes an integer vector for an integer attachment, as in HLSL.
+    code = _flat(_slang(tmp_path, GLSL_INTEGER_OUTPUT, ".frag"))
+    assert "uint4 main(FragmentInput input) : SV_Target0" in code, code
+    spirv = _slangc(
+        tmp_path,
+        _slang(tmp_path, GLSL_INTEGER_OUTPUT, ".frag"),
+        "fragment",
+        "spirv-asm",
+    )
+    assert "OpTypeVector %uint 4" in spirv
