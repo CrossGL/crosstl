@@ -49,6 +49,20 @@ void main() {
 }
 """
     ),
+    # Row-major arrays of non-square matrices have their own array types, with row strides (as glslang declares).
+    "row_major_matrix_arrays": (
+        """#version 450
+layout(std140, binding = 0) uniform Arrays {
+    mat2x3 c[2]; layout(row_major) mat2x3 r[2]; layout(row_major) mat3x2 s[2][3]; mat3x2 t[3];
+    layout(row_major) mat3 u[2]; float tail;
+} arrays;
+layout(location = 0) out vec4 color;
+void main() {
+    color = vec4(arrays.c[1][0] + arrays.r[1][1],
+                 arrays.s[1][2][2].y + arrays.t[2][1].x + arrays.u[1][2].z + arrays.tail);
+}
+"""
+    ),
     "nested_structs": (
         """#version 450
 struct Inner { vec3 p; float q; };
@@ -187,10 +201,7 @@ def test_row_major_members_stay_row_major(tmp_path):
 
 @pytest.mark.parametrize(
     ("member", "reason"),
-    (
-        ("layout(row_major) mat2x3 r[2];", "array of row-major non-square matrices"),
-        ("layout(row_major) float r;", "holds no matrix"),
-    ),
+    (("layout(row_major) float r;", "holds no matrix"),),
 )
 def test_spirv_refuses_row_major_layouts_it_cannot_express(tmp_path, member, reason):
     source = f"""#version 450
