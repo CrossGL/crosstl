@@ -87,13 +87,23 @@ def _require_native_16_bit(codegen, access):
         codegen.requires_hlsl_native_16_bit_types = True
 
 
+def _slang_three_component_access(codegen, access):
+    """The Slang emitter's three-component accessor for a ``T3`` access, or ``None`` (slang_byte_address_words)."""
+    if access["components"] != 3:
+        return None
+    return getattr(codegen, "slang_three_component_access", None)
+
+
 def hlsl_byteaddress_typed_load(codegen, buffer_name, offset, access):
     """``buffer.Load<T>(offset)`` of a 16- or 64-bit scalar or vector member."""
     _require_native_16_bit(codegen, access)
-    storage = _typed_name(
-        _STORAGE_SCALARS[access["component_type"]], access["components"]
-    )
-    load = f"{buffer_name}.Load<{storage}>({offset})"
+    scalar = _STORAGE_SCALARS[access["component_type"]]
+    storage = _typed_name(scalar, access["components"])
+    three_components = _slang_three_component_access(codegen, access)
+    if three_components is not None:
+        load = three_components.load(buffer_name, offset, storage=scalar)
+    else:
+        load = f"{buffer_name}.Load<{storage}>({offset})"
     if access["component_type"] == "float16_t":
         return f"asfloat16({load})"
     return load
@@ -109,4 +119,9 @@ def hlsl_byteaddress_typed_store(codegen, buffer_name, offset, value, access):
     stored = f"{value_type}({value})"
     if component_type == "float16_t":
         stored = f"asuint16({stored})"
+    three_components = _slang_three_component_access(codegen, access)
+    if three_components is not None:
+        return three_components.store(
+            buffer_name, offset, stored, storage=_STORAGE_SCALARS[component_type]
+        )
     return f"{buffer_name}.Store<{storage}>({offset}, {stored})"
