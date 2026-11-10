@@ -122,7 +122,7 @@ def test_buffer_parameter_survives_prototype(tmp_path):
     signatures = re.findall(r"void put\(([^)]*)\)", code)
     assert len(signatures) == 2
     for signature in signatures:
-        assert re.search(r"device uint \*?\s*values", signature), signature
+        assert re.search(r"device uint\s*\*\s*values", signature), signature
         assert signature.rstrip().endswith("uint i")
     assert "put(data, i)" in code
     _compile(tmp_path, code)
