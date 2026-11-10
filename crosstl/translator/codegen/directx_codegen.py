@@ -572,6 +572,12 @@ from .image_access_contracts import (
 )
 from .index_range_contracts import truncating_division_interval
 from .interface_conflicts import InterfaceLocationConflictError
+from .lane_symmetry import (
+    SYMMETRIC,
+    UNIFORM,
+    LaneSymmetryAnalysis,
+    SymmetryRules,
+)
 from .loop_induction import (
     checked_induction_value,
     fixed_stride_loop_terminates,
@@ -5700,18 +5706,126 @@ class HLSLCodeGen(
                     continue
                 metal_name = self.hlsl_metal_simd_shuffle_name(function_name)
                 if metal_name is not None:
-                    operation = {
-                        "simd_broadcast": "WaveReadLaneAt",
-                        "simd_shuffle": "WaveReadLaneAt",
-                        "simd_shuffle_down": "WaveShuffleDown",
-                        "simd_shuffle_up": "WaveShuffleUp",
-                        "simd_shuffle_and_fill_up": "WaveShuffleAndFillUp",
-                    }[metal_name]
+                    operation = self.HLSL_METAL_SIMD_SHUFFLE_OPERATIONS[metal_name]
                 elif function_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                     operation = function_name
             if operation in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 records.append((operation, node))
         return records
+
+    HLSL_METAL_SIMD_SHUFFLE_OPERATIONS = {
+        "simd_broadcast": "WaveReadLaneAt",
+        "simd_shuffle": "WaveReadLaneAt",
+        "simd_shuffle_down": "WaveShuffleDown",
+        "simd_shuffle_up": "WaveShuffleUp",
+        "simd_shuffle_and_fill_up": "WaveShuffleAndFillUp",
+    }
+
+    def hlsl_software_subgroup_collective_operation(self, node):
+        """The subgroup value operation ``node`` performs, or None."""
+        if isinstance(node, WaveOpNode):
+            operation = node.operation
+        elif isinstance(node, FunctionCallNode):
+            function_name = self.function_call_name(node)
+            if function_name in self.function_return_types:
+                return None
+            metal_name = self.hlsl_metal_simd_shuffle_name(function_name)
+            operation = (
+                self.HLSL_METAL_SIMD_SHUFFLE_OPERATIONS[metal_name]
+                if metal_name is not None
+                else function_name
+            )
+        else:
+            return None
+        return operation if operation in self.HLSL_WAVE_INTRINSIC_ARITIES else None
+
+    def hlsl_software_subgroup_uniform_exit(self, node):
+        """Whether every invocation takes the exit ``node`` together.
+
+        The lane-symmetry facts of the function under validation prove it
+        when every condition guarding the exit, and every exit before it, is
+        workgroup-uniform.
+        """
+        symmetry = getattr(self, "hlsl_software_subgroup_symmetry", None)
+        return symmetry is not None and symmetry.reach(node) == UNIFORM
+
+    def hlsl_software_subgroup_lane_symmetry_analysis(
+        self, resolved_calls, call_mutations, invocation_count
+    ):
+        """Lane-symmetry rules for the software subgroups of this program."""
+        analysis = self.hlsl_software_subgroup_uniform_returns
+        width = self.software_subgroup_width
+
+        def call_writes(call):
+            if id(call) in call_mutations:
+                return call_mutations[id(call)]
+            return self.hlsl_software_subgroup_expression_identifier_names(
+                list(call.arguments or [])
+            )
+
+        def storage_parameter(parameter):
+            parameter_type = getattr(parameter, "param_type", None)
+            if isinstance(parameter_type, PointerType):
+                return True
+            if isinstance(parameter_type, ReferenceType):
+                return parameter_type.address_space not in {None, "", "thread"}
+            return bool(
+                analysis.resource_type(parameter_type, parameter, read_only=False)
+            )
+
+        def private_reference(parameter):
+            parameter_type = getattr(parameter, "param_type", None)
+            if isinstance(parameter_type, ReferenceType):
+                return not storage_parameter(parameter)
+            return bool(
+                set(self.hlsl_parameter_qualifiers(parameter)) & {"out", "inout"}
+            ) and bool(analysis.value_type(parameter_type))
+
+        def seeded_parameter(parameter):
+            parameter_type = getattr(parameter, "param_type", None)
+            return (
+                not isinstance(parameter_type, ReferenceType)
+                and not set(self.hlsl_parameter_qualifiers(parameter))
+                & {"out", "inout"}
+                and bool(
+                    analysis.value_type(parameter_type)
+                    or analysis.resource_type(parameter_type, parameter)
+                )
+            )
+
+        return LaneSymmetryAnalysis(
+            SymmetryRules(
+                walk=self.walk_ast,
+                map_operator=self.map_operator,
+                collective=self.hlsl_software_subgroup_collective_operation,
+                call_target=lambda call: resolved_calls.get(id(call)),
+                pure_call=lambda call: id(call)
+                in self.hlsl_software_subgroup_uniform_calls,
+                call_dependencies=analysis.dependencies,
+                volatile=lambda declaration: any(
+                    analysis._qualified(node, {"volatile"})
+                    for node in (declaration, getattr(declaration, "var_type", None))
+                ),
+                storage_parameter=storage_parameter,
+                private_reference=private_reference,
+                storage_load=analysis.storage_load,
+                constant_int=lambda expression: evaluate_literal_int_expression(
+                    expression, self.literal_int_constants
+                ),
+                call_writes=call_writes,
+                seeded_parameter=seeded_parameter,
+                width=width,
+                full_subgroups=bool(invocation_count) and invocation_count % width == 0,
+                reductions=frozenset(self.HLSL_SOFTWARE_SUBGROUP_REDUCTIONS),
+                broadcasts=frozenset({"WaveReadLaneAt"}),
+                lane_preserving=frozenset(
+                    {
+                        *self.HLSL_SOFTWARE_SUBGROUP_SCANS,
+                        *self.HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES,
+                    }
+                ),
+            )
+        )
 
     SOFTWARE_SUBGROUP_SYSTEM_INPUTS = frozenset(
         {
@@ -5823,6 +5937,16 @@ class HLSLCodeGen(
         self, expression, uniform_names, uniform_components
     ):
         if isinstance(expression, LiteralNode):
+            return True
+        symmetry = getattr(self, "hlsl_software_subgroup_symmetry", None)
+        if (
+            symmetry is not None
+            and symmetry.collective_derived(expression)
+            and symmetry.level(expression) == UNIFORM
+        ):
+            # A collective of lane-symmetric values, or a name or helper result
+            # built from one, that every invocation holding it agrees on.
+            # Values without a collective keep the proofs below.
             return True
         if isinstance(expression, IdentifierNode):
             return expression.name in uniform_names
@@ -6114,7 +6238,10 @@ class HLSLCodeGen(
             else set()
         )
         return self.hlsl_software_subgroup_loop_controls_preserved(
-            node, bound_names | stride_names | {loop_name}, call_mutations
+            node,
+            bound_names | stride_names | {loop_name},
+            call_mutations,
+            uniform_exits=True,
         )
 
     def hlsl_software_subgroup_static_for(self, node, constants, call_mutations):
@@ -6146,7 +6273,7 @@ class HLSLCodeGen(
         for part in (node.condition, node.update):
             controls |= self.hlsl_software_subgroup_expression_identifier_names(part)
         return self.hlsl_software_subgroup_loop_controls_preserved(
-            node, controls, call_mutations
+            node, controls, call_mutations, uniform_exits=True
         )
 
     def hlsl_software_subgroup_counter_loop_uniform(
@@ -6274,18 +6401,21 @@ class HLSLCodeGen(
         return True
 
     def hlsl_software_subgroup_loop_controls_preserved(
-        self, node, control_names, call_mutations
+        self, node, control_names, call_mutations, *, uniform_exits=False
     ):
         """Whether ``node``'s body leaves its counter, bound and stride alone.
 
         The body may not exit the loop early, redeclare a control in its
         outermost scope, write one, take its address or pass it to a
-        possibly mutating call.
+        possibly mutating call. With ``uniform_exits``, an exit every
+        invocation takes together keeps the trips of all invocations equal.
         """
         for child, visible in walk_control_scopes(
             getattr(node, "body", None), control_names
         ):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
+                if uniform_exits and self.hlsl_software_subgroup_uniform_exit(child):
+                    continue
                 return False
             if isinstance(child, VariableNode) and child.name in visible:
                 return False
@@ -8017,6 +8147,7 @@ class HLSLCodeGen(
         self.hlsl_software_subgroup_fresh_counter_loops = set()
         self.hlsl_software_subgroup_proven_counter_loops = set()
         self.hlsl_software_subgroup_modular_stride_loops = set()
+        self.hlsl_software_subgroup_symmetry = None
         if self.software_subgroup_width is None:
             return
 
@@ -8420,6 +8551,13 @@ class HLSLCodeGen(
         }
         if invocation_count <= self.software_subgroup_width:
             uniform_semantics.add("gl_SubgroupID")
+        lane_symmetry = self.hlsl_software_subgroup_lane_symmetry_analysis(
+            resolved_calls, call_mutations, invocation_count
+        )
+        # Lane-symmetric parameters, and whether every subgroup enters a
+        # helper with the same lanes, from every reachable call.
+        symmetric_parameters = {}
+        symmetric_entries = {}
         uniform_parameters = {}
         # Checked metadata bounds every call passes to a helper parameter.
         parameter_bounds = {}
@@ -8575,23 +8713,72 @@ class HLSLCodeGen(
                     self.walk_ast,
                 )
             )
-            self.validate_hlsl_software_subgroup_control_flow(
+            seeds = {name: UNIFORM for name in uniform_names}
+            for index, parameter in enumerate(parameters):
+                if parameter.name not in seeds and (
+                    index in symmetric_parameters.get(function_id, set())
+                    or (
+                        function is entry_function
+                        and self.semantic_from_node(parameter)
+                        == "gl_SubgroupInvocationID"
+                    )
+                ):
+                    seeds[parameter.name] = SYMMETRIC
+            symmetry = lane_symmetry.analyze(
                 function,
-                dependent_calls,
-                uniform_names,
-                call_mutations,
-                mutable_names,
-                uniform_components,
-                uniform_call_arguments,
-                entry=function is entry_function,
-                offset_names=offset_names,
-                metadata_bounds=metadata_bounds,
-                unreachable_calls=unreachable_calls,
+                seeds,
+                function is entry_function or symmetric_entries.get(function_id, False),
             )
+            self.hlsl_software_subgroup_symmetry = symmetry
+            try:
+                self.validate_hlsl_software_subgroup_control_flow(
+                    function,
+                    dependent_calls,
+                    uniform_names,
+                    call_mutations,
+                    mutable_names,
+                    uniform_components,
+                    uniform_call_arguments,
+                    entry=function is entry_function,
+                    offset_names=offset_names,
+                    metadata_bounds=metadata_bounds,
+                    unreachable_calls=unreachable_calls,
+                )
+            finally:
+                self.hlsl_software_subgroup_symmetry = None
             for call, target in call_edges[function_id]:
                 if id(call) in unreachable_calls:
                     continue
+                levels = [symmetry.level(argument) for argument in call.arguments]
+                symmetric = {
+                    index for index, level in enumerate(levels) if level >= SYMMETRIC
+                }
+                if target not in symmetric_parameters:
+                    symmetric_parameters[target] = symmetric
+                else:
+                    symmetric_parameters[target].intersection_update(symmetric)
+                symmetric_entries[target] = symmetric_entries.get(
+                    target, True
+                ) and symmetry.entered_symmetrically(call)
+                # A uniformly reached call also passes the uniform values the
+                # lane facts prove: collective results, and names the checks
+                # below accept where the existing call-site proof stops, such
+                # as the right operand of a uniform short-circuit condition.
                 facts = uniform_call_arguments.get(id(call), set())
+                if symmetry.reach(call) == UNIFORM:
+                    facts = facts | {
+                        index
+                        for index, level in enumerate(levels)
+                        if level == UNIFORM
+                        and (
+                            symmetry.collective_derived(call.arguments[index])
+                            or self.hlsl_software_subgroup_uniform_expression(
+                                call.arguments[index],
+                                uniform_names,
+                                uniform_components,
+                            )
+                        )
+                    }
                 if target not in uniform_parameters:
                     uniform_parameters[target] = set(facts)
                 else:
