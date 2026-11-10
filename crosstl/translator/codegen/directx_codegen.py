@@ -264,9 +264,15 @@ from .glsl_block_layout import (
     hlsl_packoffsets_for_block,
     member_explicit_alignment,
 )
+from .glsl_buffer_block_arrays import (
+    glsl_buffer_array_elements,
+    glsl_buffer_block_indexed_access,
+    glsl_buffer_indexed_value_type,
+    glsl_buffer_matrix_column_access,
+    glsl_buffer_whole_array_reason,
+)
 from .glsl_buffer_layout import (
     byte_offset_add,
-    byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
     glsl_buffer_block_node_type,
     glsl_buffer_compound_binary_operator,
@@ -19080,7 +19086,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(expr, ArrayAccessNode):
             block_access = self.glsl_buffer_block_array_access(expr)
             if block_access is not None:
-                return block_access["type"]
+                return glsl_buffer_indexed_value_type(block_access)
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if not array_type:
                 array_type = self.unsupported_glsl_buffer_block_expression_type(
@@ -54839,7 +54845,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parent = self.glsl_buffer_block_array_access(
             object_expr
         ) or self.glsl_buffer_block_member_access(object_expr)
-        if parent is None or not parent.get("members"):
+        if parent is None or not parent.get("members") or parent.get("subarray"):
             return None
         member_name = getattr(expr, "member", None)
         member = parent["members"].get(member_name)
@@ -54854,16 +54860,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
 
     def glsl_buffer_block_array_access(self, expr):
-        if not isinstance(expr, ArrayAccessNode):
-            return None
-        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
-        member = self.glsl_buffer_block_member_access(array_expr)
-        if member is None or not member.get("is_array"):
-            return None
-        index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
-        index = self.generate_expression(index_expr)
-        offset = byte_offset_expression(member["offset"], index, member["stride"])
-        return {**member, "offset": offset, "offset_expr": offset}
+        return glsl_buffer_block_indexed_access(self, expr)
 
     def hlsl_byteaddress_load_method(self, components):
         return "Load" if components == 1 else f"Load{components}"
@@ -55000,6 +54997,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 str(member.get("stride")),
                 str(member.get("runtime_array")),
             ]
+            if member.get("inner_arrays"):
+                fields.append(str(member["inner_arrays"]))
             parts.append(":".join(fields))
             for child_name, child in (member.get("members") or {}).items():
                 visit(f"{member_name}.{child_name}", child)
@@ -55041,11 +55040,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_target = f"{member_target}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_target = f"{member_target}{subscripts}"
                     if member.get("members"):
                         nested_lines = self.hlsl_byteaddress_aggregate_load_assignments(
                             element_target,
@@ -55138,11 +55136,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 array_count = member.get("array_count")
                 if member.get("runtime_array") or array_count is None:
                     return None
-                for index in range(array_count):
-                    element_offset = byte_offset_add(
-                        member_offset, index * member["stride"]
-                    )
-                    element_value = f"{member_value}[{index}]"
+                for subscripts, element_offset in glsl_buffer_array_elements(
+                    member, member_offset
+                ):
+                    element_value = f"{member_value}{subscripts}"
                     if member.get("members"):
                         nested_stores = self.hlsl_byteaddress_aggregate_store_members(
                             buffer_name, element_offset, element_value, field_access
@@ -55227,10 +55224,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             f"{access['component_type']} buffer members",
         )
 
+    def hlsl_glsl_buffer_whole_array_check(self, access, *, indexed):
+        reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
+        if reason is not None:
+            raise BufferBlockUnsupportedError("directx", "array value", reason)
+
     def generate_glsl_buffer_block_member_load(self, expr):
         access = self.glsl_buffer_block_member_access(expr)
         if access is None or access.get("runtime_array"):
             return None
+        self.hlsl_glsl_buffer_whole_array_check(access, indexed=False)
         if access.get("members"):
             return self.hlsl_byteaddress_aggregate_load(
                 access["buffer"], access["offset"], access
@@ -55241,6 +55244,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         access = self.glsl_buffer_block_array_access(expr)
         if access is None:
             return None
+        self.hlsl_glsl_buffer_whole_array_check(access, indexed=True)
         if access.get("members"):
             return self.hlsl_byteaddress_aggregate_load(
                 access["buffer"], access["offset_expr"], access
@@ -55250,13 +55254,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def generate_glsl_buffer_block_store(self, target, value, op):
-        access = self.glsl_buffer_block_array_access(target)
+        access = self.glsl_buffer_block_array_access(
+            target
+        ) or glsl_buffer_matrix_column_access(self, target)
         if access is None:
             access = self.glsl_buffer_block_member_access(target)
             if access is None or access.get("runtime_array"):
                 return buffer_component_store(self, target, value, op)
+            self.hlsl_glsl_buffer_whole_array_check(access, indexed=False)
             offset = access["offset"]
         else:
+            self.hlsl_glsl_buffer_whole_array_check(access, indexed=True)
             offset = access["offset_expr"]
 
         if access.get("readonly"):

@@ -20,6 +20,7 @@ import re
 
 from ..ast import ArrayAccessNode, MemberAccessNode
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
+from .glsl_buffer_block_arrays import glsl_buffer_matrix_column_access
 from .glsl_buffer_layout import (
     byte_offset_add,
     byte_offset_expression,
@@ -90,8 +91,14 @@ def _swizzle(member):
 
 
 def _vector_access(codegen, base):
+    column = glsl_buffer_matrix_column_access(codegen, base)
+    if column is not None:
+        return column, column["offset_expr"]
     access = codegen.glsl_buffer_block_array_access(base)
     if access is not None:
+        if access.get("subarray"):
+            # ``base`` still has array dimensions, so a subscript of it selects an element, not a component.
+            return None, None
         # The access describes the array member; ``base`` is one of its elements, which is not an array (a block
         # member's element type is a value or struct type).
         return {**access, "is_array": False}, access["offset_expr"]

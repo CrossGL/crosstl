@@ -5595,7 +5595,7 @@ def test_metal_readonly_device_pointer_alias_rejects_writes_and_mutable_calls():
     assert "mutate(alias);" not in generated_code
 
 
-def test_metal_const_local_array_rejects_writes_and_mutable_calls():
+def test_metal_const_local_array_rejects_writes_and_copies_for_mutable_calls():
     shader = """
     shader MetalConstLocalArrayAlias {
         float readValue(const float values[2], int index) {
@@ -5626,9 +5626,11 @@ def test_metal_const_local_array_rejects_writes_and_mutable_calls():
     assert (
         "parameter store: parameter 'values' is const-qualified local array" in refusal
     )
+    # ``mutate`` takes its array by value, so it receives a thread copy it may write.
+    assert "parameter call" not in refusal
     assert (
-        "parameter call: readonly parameter 'values' cannot be passed to "
-        "mutable parameter 'values' of 'mutate'" in refusal
+        "mutate(crosstl_array_value<float, 2>{{values[0], values[1]}}.v);"
+        in generated_code
     )
     assert "values[0] = value;" not in generated_code
     assert "mutate(values);" not in generated_code
@@ -5705,7 +5707,7 @@ def test_metal_constant_pointer_and_reference_aliases_reject_writes_and_mutable_
     assert "mutateReference(referenceAlias);" not in generated_code
 
 
-def test_metal_nested_constant_local_array_rejects_writes_and_mutable_calls():
+def test_metal_nested_constant_local_array_rejects_writes_and_copies_for_mutable_calls():
     shader = """
     shader MetalNestedConstantLocalArray {
         float readValue(const float values[2][2], int row, int col) {
@@ -5737,10 +5739,11 @@ def test_metal_nested_constant_local_array_rejects_writes_and_mutable_calls():
         "parameter store: parameter 'values' is constant-qualified local "
         "array" in refusal
     )
+    assert "parameter call" not in refusal
     assert (
-        "parameter call: readonly parameter 'values' cannot be passed to "
-        "mutable parameter 'values' of 'mutate'" in refusal
-    )
+        "mutate(crosstl_array_value<float[2], 2>{{{values[0][0], values[0][1]}, "
+        "{values[1][0], values[1][1]}}}.v);"
+    ) in generated_code
     assert "values[0][1] = value;" not in generated_code
     assert "mutate(values);" not in generated_code
 
