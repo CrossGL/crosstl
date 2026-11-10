@@ -40,7 +40,8 @@ def _compact(text):
 
 
 def test_the_block_is_byte_addressed(metal):
-    assert "device uchar *outp [[buffer(0)]]" in metal
+    # Compared without whitespace: the pointer spacing depends on whether clang-format is installed.
+    assert "deviceuchar*outp[[buffer(0)]]" in _compact(metal)
 
 
 def test_array_members_are_copied_element_by_element(metal):
