@@ -21708,16 +21708,32 @@ class MetalCodeGen(
         return parameter_nodes
 
     def collect_unused_array_parameter_indices(self, functions):
-        skipped = {}
+        """Map names to the array parameter indices every overload leaves unused.
+
+        Call sites only know the callee's name, so an index is dropped only when
+        each signature declared under that name ignores it.  A prototype has no
+        body to inspect: its definition decides, and a prototype without a
+        definition keeps every parameter.
+        """
+        indices_by_signature = {}
         for func in functions or []:
             func_name = getattr(func, "name", None)
             if not func_name:
                 continue
-            indices = set()
-            body = getattr(func, "body", [])
-            for index, param in enumerate(
+            params = list(
                 getattr(func, "parameters", getattr(func, "params", [])) or []
-            ):
+            )
+            signature = tuple(
+                self.type_name_string(self.parameter_raw_type(param))
+                for param in params
+            )
+            signatures = indices_by_signature.setdefault(func_name, {})
+            body = getattr(func, "body", None)
+            if body is None:
+                signatures.setdefault(signature, set())
+                continue
+            indices = set()
+            for index, param in enumerate(params):
                 param_name = getattr(param, "name", None)
                 if not param_name:
                     continue
@@ -21728,6 +21744,10 @@ class MetalCodeGen(
                     continue
                 if not self.function_body_uses_identifier(body, param_name):
                     indices.add(index)
+            signatures[signature] = indices
+        skipped = {}
+        for func_name, signatures in indices_by_signature.items():
+            indices = set.intersection(*signatures.values())
             if indices:
                 skipped[func_name] = indices
         return skipped
