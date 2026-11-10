@@ -121,8 +121,16 @@ def test_glsl_buffer_block_members_are_transposed_everywhere(tmp_path, backend):
     if backend == "metal":
         # The row-major mat3x2 takes two 16-byte rows, so `o` starts at byte 32.
         assert "(b + 32)" in code
-    if backend in ("directx", "slang"):
+    if backend == "directx":
         assert "Load3" in code and "(32)" not in code.replace(" ", "")
+    if backend == "slang":
+        # Slang moves three words through a helper (slang_byte_address_words).
+        flat = code.replace(" ", "")
+        assert (
+            "__crossgl_load3_uint(b,0)" in flat and "__crossgl_load3_uint(b,16)" in flat
+        )
+        assert "(32)" not in flat and ",32)" not in flat
+    if backend in ("directx", "slang"):
         assert "row_major" not in code
 
 

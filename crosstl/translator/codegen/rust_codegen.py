@@ -61,7 +61,7 @@ from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_output_parameters import RustOutputParameterMixin
-from .rust_refusals import RustLoweringRefused
+from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import (
     is_fragment_output_parameter,
@@ -630,6 +630,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         self.enum_variant_field_types = {}
         self.enum_variant_payload_type_map = {}
         self.enum_generic_params = {}
+        self.enum_nodes_by_name = {}
         self.non_copy_type_names = set()
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
@@ -701,6 +702,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             ast
         )
         self.enum_generic_params = self.collect_enum_generic_params(ast)
+        self.enum_nodes_by_name = self.collect_enum_nodes_by_name(ast)
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.register_constant_types(ast)
         self.current_mutated_names = set()
@@ -2447,6 +2449,40 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
         collect(node)
         return variants
+
+    def collect_enum_nodes_by_name(self, node):
+        """Map each enumeration name to its AST node for empty brace initializers."""
+        enums = {}
+
+        def add_enum(name, enum_node):
+            if not name or enum_node is None:
+                return
+            enums[name] = enum_node
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+            if isinstance(current, EnumNode):
+                add_enum(current.name, current)
+            elif isinstance(current, StructNode):
+                for member in getattr(current, "members", []) or []:
+                    if isinstance(member, EnumNode):
+                        collect(member)
+            for struct in getattr(current, "structs", []):
+                collect(struct)
+            for struct in getattr(current, "local_structs", []):
+                collect(struct)
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage in stages.values():
+                    collect(stage)
+
+        collect(node)
+        return enums
 
     def collect_enum_variant_field_types(self, node):
         """Collect named payload fields for struct-like enum variants."""
@@ -8241,6 +8277,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
     def generate_array_literal_expression(
         self, expr, target_type=None, static_context=False
     ):
+        if not (getattr(expr, "elements", None) or []):
+            enum_initializer = self.rust_empty_brace_enum_initializer(target_type)
+            if enum_initializer is not None:
+                return enum_initializer
+
         element_target_type = None
         target_size = None
 
@@ -8338,6 +8379,9 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return fields
 
     def rust_array_padding_expression(self, base_type, static_context=False):
+        enum_initializer = self.rust_empty_brace_enum_array_element(base_type)
+        if enum_initializer is not None:
+            return enum_initializer
         if static_context:
             rust_type = self.map_type(base_type)
             scalar_initializer = self.rust_scalar_default_literal(rust_type)
@@ -10970,6 +11014,52 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             return None
 
         return enum_type, variant_name, field_types
+
+    def rust_empty_brace_enum_initializer(self, target_type):
+        """``Mode::First`` for ``Mode m = {};`` when a plain variant's discriminant is 0.
+
+        Returns ``None`` when ``target_type`` is not an enumeration. Raises
+        :class:`RustEnumEmptyBraceError` when none of the variants is the value 0, or
+        when the variants carry data, so that the enumeration has no zero value.
+        """
+        type_name = self.type_name_string(target_type)
+        if not type_name:
+            return None
+        base_name = type_name.split("<", 1)[0].strip()
+        enum_node = self.enum_nodes_by_name.get(base_name)
+        if enum_node is None:
+            return None
+
+        variants = getattr(enum_node, "variants", []) or []
+        if any(self.enum_variant_data(variant) for variant in variants):
+            raise RustEnumEmptyBraceError(enum_node.name, "its variants carry data")
+
+        next_value = 0
+        for variant in variants:
+            value = next_value
+            if getattr(variant, "value", None) is not None:
+                value = self.literal_int_value(variant.value)
+            if value == 0:
+                return self.enum_variant_call_path(enum_node.name, variant.name)
+            next_value = None if value is None else value + 1
+
+        raise RustEnumEmptyBraceError(enum_node.name, "no variant has the value 0")
+
+    def rust_empty_brace_enum_array_element(self, element_type):
+        """The zero value of an element of ``element_type``, an enumeration or an array of one.
+
+        An element left out of a brace list is value-initialized, as ``{}`` is: ``M::B`` for
+        ``enum M { A = 2, B = 0 }``, and ``[M::B; 3]`` for an ``M[3]`` element. Returns ``None``
+        for any other type; raises :class:`RustEnumEmptyBraceError` as
+        :meth:`rust_empty_brace_enum_initializer` does.
+        """
+        if self.is_array_type_name(element_type):
+            inner_type, size = self.c_array_outer_element_type_and_size(element_type)
+            if size is None:
+                return None
+            inner = self.rust_empty_brace_enum_array_element(inner_type)
+            return None if inner is None else f"[{inner}; {size}]"
+        return self.rust_empty_brace_enum_initializer(element_type)
 
     def enum_variant_call_path(self, enum_type, variant_name):
         rust_type = self.map_type(enum_type)

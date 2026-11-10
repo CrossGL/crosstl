@@ -26,6 +26,12 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Iterator, Mapping, Sequence
 
+from .alias_template_types import (
+    expand_alias_template_types,
+    find_alias_templates,
+    fold_expression_decltypes,
+)
+
 __all__ = [
     "CallResultScope",
     "CallResultTypes",
@@ -122,6 +128,15 @@ def _declared_return_type(
             declared = preprocessor._materialized_template_function_return_type(
                 declaration, {}
             )
+    if declared is None and not template_parameters and "decltype" in source:
+        # A dependent result type leaves a decltype of built-in operands in each instantiation
+        # (dependent_result_templates.py) until preprocessing folds it.
+        folded = fold_expression_decltypes(preprocessor, source)
+        if folded != source:
+            declaration.source = folded
+            declared = preprocessor._materialized_template_function_return_type(
+                declaration, {}
+            )
     return declared
 
 
@@ -151,6 +166,7 @@ def collect_call_result_types(preprocessor, code: str) -> CallResultTypes:
 
     declared: dict[str, list[str | None]] = {}
     template_bodies: list[tuple[int, int]] = []
+    alias_templates = None
     for template in templates:
         template_bodies.append((template.body_start, template.span[1]))
         if preprocessor._containing_span(template.span[0], aggregate_spans):
@@ -166,9 +182,21 @@ def collect_call_result_types(preprocessor, code: str) -> CallResultTypes:
     for definition in definitions:
         start = _definition_header_start(definition, namespace_spans)
         header = code[start : definition.body_span[0] - 1]
-        declared.setdefault(definition.name, []).append(
-            _declared_return_type(preprocessor, definition.name, header + "{}", ())
+        return_type = _declared_return_type(
+            preprocessor, definition.name, header + "{}", ()
         )
+        if return_type is None and "<" in header:
+            # A materialized instantiation can name its type through an alias template (alias_template_types.py).
+            if alias_templates is None:
+                alias_templates = find_alias_templates(preprocessor, code)
+            expanded = expand_alias_template_types(
+                preprocessor, header, alias_templates
+            )
+            if expanded != header:
+                return_type = _declared_return_type(
+                    preprocessor, definition.name, expanded + "{}", ()
+                )
+        declared.setdefault(definition.name, []).append(return_type)
 
     names = sorted(
         name

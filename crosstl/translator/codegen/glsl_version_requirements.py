@@ -713,7 +713,43 @@ def with_es_default_precisions(code):
         ),
         0,
     )
-    while insert_at < len(lines) and lines[insert_at].strip().startswith("#extension"):
-        insert_at += 1
+    insert_at = extension_directives_end(lines, insert_at)
     lines[insert_at:insert_at] = [f"precision highp {kind};" for kind in missing]
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
+def extension_directives_end(lines, start):
+    """Return the index after the ``#extension`` directives that start at ``start``.
+
+    GLSL ES 3.20 section 3.4 requires ``#extension`` directives to precede every non-preprocessor token, so
+    statements inserted after ``#version`` go after them. A conditional block counts as part of the directives
+    when it holds nothing but ``#extension`` directives and nested conditionals.
+    """
+    index = start
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if stripped.startswith("#extension"):
+            index += 1
+            continue
+        if not stripped.startswith("#if"):
+            break
+        block_end = _extension_block_end(lines, index)
+        if block_end is None:
+            break
+        index = block_end
+    return index
+
+
+def _extension_block_end(lines, start):
+    depth = 0
+    for index in range(start, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("#if"):
+            depth += 1
+        elif stripped.startswith("#endif"):
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        elif not stripped.startswith(("#extension", "#else", "#elif")):
+            return None
+    return None

@@ -11,8 +11,10 @@ import pytest
 
 import crosstl
 from crosstl.translator.semantics import RuleInexpressibleError
+from crosstl.translator.semantics.hub_types import is_pure_callee
 from crosstl.translator.semantics.step_values import (
     STEP_HELPER_TARGETS,
+    step_helper_name,
     step_helper_source,
 )
 
@@ -366,3 +368,56 @@ def test_metal_step_values_wrap_at_the_int32_edges(tmp_path):
     assert values[: len(expected)] == expected
     # The output buffer is prefilled with the guard word; the kernel writes nothing past its results.
     assert values[len(expected) :] == GUARD
+
+
+@pytest.mark.parametrize("intrinsic", ["__cgl_wrap_add", "__cgl_wrap_sub"])
+@pytest.mark.parametrize("postfix", [True, False])
+@pytest.mark.parametrize("lanes", [1, 3])
+def test_step_helpers_are_not_pure(intrinsic, postfix, lanes):
+    # A step helper writes its operand, so an expression that calls it must not be evaluated twice.
+    assert not is_pure_callee(step_helper_name(intrinsic, postfix, lanes))
+    assert is_pure_callee(intrinsic)
+
+
+ARRAY_COPY_STEP = """#version 450
+layout(local_size_x = 1) in;
+layout(std430, binding = 1) buffer Data { float o[8]; } data;
+void main() {
+    float b[2][3] = float[2][3](float[3](1.0, 2.0, 3.0), float[3](4.0, 5.0, 6.0));
+    int i = 0;
+    float part[3];
+    part = b[i++];
+    data.o[0] = part[0] + part[2];
+    data.o[1] = float(i);
+}
+"""
+
+
+def test_metal_binds_a_stepped_array_row_once(tmp_path):
+    # Metal copies C arrays element by element. The stepped row is bound to a thread reference first, so 'i' steps
+    # once; the copy loop used to repeat 'b[cgl_rule_wrap_postinc(i)][k]' for every element.
+    path = tmp_path / "copy.comp"
+    path.write_text(ARRAY_COPY_STEP)
+
+    code = "".join(crosstl.translate(str(path), backend="metal").split())
+
+    assert "threadauto&__crossgl_array_source_0=b[cgl_rule_wrap_postinc(i)];" in code
+    assert (
+        "part[__crossgl_array_index_1]=__crossgl_array_source_0[__crossgl_array_index_1];"
+        in code
+    )
+    assert code.count("cgl_rule_wrap_postinc(i)") == 1
+
+
+def test_metal_refuses_a_stepped_copy_from_threadgroup_storage(tmp_path):
+    # Only thread storage is bound by reference; a shared array would need a threadgroup reference.
+    path = tmp_path / "copy.comp"
+    path.write_text(
+        ARRAY_COPY_STEP.replace(
+            "    float b[2][3] = float[2][3](float[3](1.0, 2.0, 3.0), float[3](4.0, 5.0, 6.0));\n",
+            "    b[0][0] = 1.0;\n",
+        ).replace("void main() {", "shared float b[2][3];\nvoid main() {")
+    )
+
+    with pytest.raises(Exception, match="operands have effects"):
+        crosstl.translate(str(path), backend="metal")

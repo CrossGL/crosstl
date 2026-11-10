@@ -637,8 +637,9 @@ def test_codegen_ssbo_length_uses_buffer_dimensions_contract():
     assert shader_ast is not None
 
     hlsl = HLSLCodeGen().generate(shader_ast)
-    assert "valuesBlock.GetDimensions(len);" in hlsl
-    assert "layers[1].GetDimensions(layerLen);" in hlsl
+    # StructuredBuffer::GetDimensions has only the (count, stride) overload.
+    assert "len = cgl_buffer_count(valuesBlock);" in hlsl
+    assert "layerLen = cgl_buffer_count(layers[1]);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "constant uint* valuesBlockLength [[buffer(3)]]" in metal
@@ -692,7 +693,7 @@ def test_codegen_unsized_ssbo_instance_arrays_preserve_dynamic_receivers():
     assert "int value = buffers[dynamicIndex].Load(2);" in hlsl
     assert "buffers[dynamicIndex][3] = (value + 1);" in hlsl
     assert "buffers[dynamicIndex].Store(" not in hlsl
-    assert "buffers[dynamicIndex].GetDimensions(len);" in hlsl
+    assert "len = cgl_buffer_count(buffers[dynamicIndex]);" in hlsl
 
     metal = MetalCodeGen().generate(shader_ast)
     assert "int value = buffers[dynamicIndex][2];" in metal
@@ -2651,19 +2652,20 @@ def test_codegen_mixed_ssbo_block_arrays_lower_to_byte_address_arrays():
     }
     """
     expected_metal = """
+    #pragma METAL internals : enable
     #include <metal_stdlib>
     using namespace metal;
 
     // Compute Shader
-    kernel void kernel_main(device uchar* mixedBlocks_0 [[buffer(72)]], device uchar* mixedBlocks_1 [[buffer(73)]]) {
-        array<device uchar*, 2> mixedBlocks = {mixedBlocks_0, mixedBlocks_1};
-        uint i = (*reinterpret_cast<const device uint*>(mixedBlocks[1] + 0));
-        float4 value = float4((*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 4))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 8))), (*reinterpret_cast<const device float*>(mixedBlocks[1] + (16 + i * 16 + 12))));
+    kernel void kernel_main(coherent device uchar* mixedBlocks_0 [[buffer(72)]], coherent device uchar* mixedBlocks_1 [[buffer(73)]]) {
+        array<coherent device uchar*, 2> mixedBlocks = {mixedBlocks_0, mixedBlocks_1};
+        uint i = (*reinterpret_cast<coherent const device uint*>(mixedBlocks[1] + 0));
+        float4 value = float4((*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 4))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 8))), (*reinterpret_cast<coherent const device float*>(mixedBlocks[1] + (16 + i * 16 + 12))));
         float4 __crossgl_buffer_store_0 = value;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16))) = __crossgl_buffer_store_0.x;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 4))) = __crossgl_buffer_store_0.y;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 8))) = __crossgl_buffer_store_0.z;
-        (*reinterpret_cast<device float*>(mixedBlocks[0] + (16 + i * 16 + 12))) = __crossgl_buffer_store_0.w;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16))) = __crossgl_buffer_store_0.x;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 4))) = __crossgl_buffer_store_0.y;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 8))) = __crossgl_buffer_store_0.z;
+        (*reinterpret_cast<coherent device float*>(mixedBlocks[0] + (16 + i * 16 + 12))) = __crossgl_buffer_store_0.w;
     }
     """
     expected_glsl = """
@@ -4737,9 +4739,9 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "signedValue)));" in glsl
     )
     assert (
-        "int sampleCount = (((textureSamples(colorImage) + "
-        "textureSamples(layerImage)) + textureSamples(countImage)) + "
-        "textureSamples(signedImage));" in glsl
+        "int sampleCount = (((imageSamples(colorImage) + "
+        "imageSamples(layerImage)) + imageSamples(countImage)) + "
+        "imageSamples(signedImage));" in glsl
     )
     assert (
         "vec4 direct = touchImages_glsl_colorImage_msColor_layerImage_msLayers_"
@@ -4762,7 +4764,7 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "imageStore(counters, readPixel(msImageBlock), readSample(msImageBlock), "
         "uvec4(readCount(msImageBlock)));" in glsl
     )
-    assert "imageSamples(" not in glsl
+    assert "textureSamples(" not in glsl
 
 
 def test_codegen_multisample_image_query_helpers_cover_vector_integer_formats():
@@ -4822,8 +4824,8 @@ def test_codegen_multisample_image_query_helpers_cover_vector_integer_formats():
     assert "layout(rgba32ui, binding = 1) uniform uimage2DMSArray rgbaU;" in glsl
     assert "ivec2 intSize = imageSize(rgbaI);" in glsl
     assert "ivec3 uintArraySize = imageSize(rgbaU);" in glsl
-    assert "int samples = (textureSamples(rgbaI) + textureSamples(rgbaU));" in glsl
-    assert "imageSamples(" not in glsl
+    assert "int samples = (imageSamples(rgbaI) + imageSamples(rgbaU));" in glsl
+    assert "textureSamples(" not in glsl
 
 
 def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats():
@@ -4926,13 +4928,13 @@ def test_codegen_multisample_image_resource_array_queries_keep_explicit_formats(
     assert "ivec2 queryColorSize(image2DMS images[4], int layer)" in glsl
     assert "int queryCounterSamples(uimage2DMSArray images[4], int layer)" in glsl
     assert "return imageSize(images[layer]);" in glsl
-    assert "return textureSamples(images[layer]);" in glsl
+    assert "return imageSamples(images[layer]);" in glsl
     assert "uvec4 count = imageLoad(counterLayers[layer], ivec3(0, 1, 2), 3);" in glsl
     assert (
         "imageStore(counterLayers[layer], ivec3(0, 1, 2), 3, (count + uvec4(1u)));"
         in glsl
     )
-    assert "imageSamples(" not in glsl
+    assert "textureSamples(" not in glsl
 
 
 def test_codegen_for_in_do_while_sampled_query_arrays_infer_size():
@@ -5180,9 +5182,9 @@ def test_codegen_for_in_do_while_image_query_arrays_infer_size():
     assert glsl.count("do {") == 4
     assert glsl.count("} while (false);") == 4
     assert "imageSize(images[3])" in glsl
-    assert "ivec2(textureSamples(images[1]))" in glsl
+    assert "ivec2(imageSamples(images[1]))" in glsl
     assert "imageSize(afterImage)" in glsl
-    assert "imageSamples(" not in glsl
+    assert "textureSamples(" not in glsl
     assert "DoWhileNode(" not in glsl
     assert "ForInNode(" not in glsl
     assert "image2DMS colorImages[]" not in glsl

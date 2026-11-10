@@ -3,6 +3,7 @@
 import re
 
 from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from crosstl.translator.codegen.image_access_contracts import SUPPORTED_IMAGE_FORMATS
 from crosstl.translator.codegen.texture_lod_clamp import (
     TextureLodClampUnsupportedError,
 )
@@ -115,6 +116,7 @@ class GLSLToCrossGLConverter:
         "perviewnv": "perview",
     }
     VULKAN_MEMORY_MODEL_QUALIFIER_ATTRIBUTES = {
+        "devicecoherent": "devicecoherent",
         "workgroupcoherent": "workgroupcoherent",
         "subgroupcoherent": "subgroupcoherent",
         "queuefamilycoherent": "queuefamilycoherent",
@@ -1496,8 +1498,11 @@ class GLSLToCrossGLConverter:
         instance_name = self.anonymous_ssbo_block_instances[struct.name]
         code = f"{layout} {qualifier_prefix}buffer {block_name} {{\n"
         self.increase_indent()
+        block_qualifiers = {qualifier.lower() for qualifier in qualifiers}
         for member in getattr(struct, "members", []) or getattr(struct, "fields", []):
-            code += self.indent() + self.anonymous_ssbo_member_declaration(member)
+            code += self.indent() + self.anonymous_ssbo_member_declaration(
+                member, block_qualifiers
+            )
         self.decrease_indent()
         code += self.indent_str + f"}} {instance_name};"
         return code
@@ -1524,11 +1529,16 @@ class GLSLToCrossGLConverter:
 
         return f"layout({', '.join(parts)})"
 
-    def anonymous_ssbo_member_declaration(self, member):
+    def anonymous_ssbo_member_declaration(self, member, block_qualifiers=frozenset()):
         var_type = self.convert_type(getattr(member, "vtype", ""))
         var_name = getattr(member, "name", "")
         attributes = self.interface_member_layout_attribute_suffix(member)
-        attributes += self.vulkan_memory_model_qualifier_attribute_suffix(member)
+        # The parser copies the block's qualifiers onto each member; the block header already carries them.
+        attributes += "".join(
+            f" {attribute}"
+            for attribute in self.vulkan_memory_model_qualifier_attributes(member)
+            if attribute[1:] not in block_qualifiers
+        )
         return f"{var_type} {var_name}{self.array_suffix(member)}{attributes};\n"
 
     def structured_buffer_declaration(self, var):
@@ -1539,47 +1549,26 @@ class GLSLToCrossGLConverter:
         return (
             f"{self.structured_buffer_type(var, member)} {var.name}{array_suffix}"
             f"{self.ssbo_binding_attribute_suffix(var)}"
+            f"{self.structured_buffer_memory_attribute_suffix(var)}"
         )
 
+    def structured_buffer_memory_attribute_suffix(self, var):
+        """Carry the block's memory qualifiers onto its element-buffer form.
+
+        ``StructuredBuffer`` already says ``readonly``; every other qualifier
+        becomes the attribute the block form writes, so it reaches the target.
+        """
+        qualifiers = self._qualifier_set(var)
+        attributes = [
+            f"@{qualifier}"
+            for qualifier in ("coherent", "volatile", "restrict", "writeonly")
+            if qualifier in qualifiers
+        ]
+        attributes.extend(self.vulkan_memory_model_qualifier_attributes(var))
+        return f" {' '.join(attributes)}" if attributes else ""
+
     def supported_image_formats(self):
-        return {
-            "r8",
-            "r8_snorm",
-            "r8i",
-            "r8ui",
-            "r16",
-            "r16_snorm",
-            "r16f",
-            "r16i",
-            "r16ui",
-            "r32f",
-            "r32i",
-            "r32ui",
-            "rg8",
-            "rg8_snorm",
-            "rg8i",
-            "rg8ui",
-            "rg16",
-            "rg16_snorm",
-            "rg16f",
-            "rg16i",
-            "rg16ui",
-            "rg32f",
-            "rg32i",
-            "rg32ui",
-            "rgba8",
-            "rgba8_snorm",
-            "rgba8i",
-            "rgba8ui",
-            "rgba16",
-            "rgba16_snorm",
-            "rgba16f",
-            "rgba16i",
-            "rgba16ui",
-            "rgba32f",
-            "rgba32i",
-            "rgba32ui",
-        }
+        return set(SUPPORTED_IMAGE_FORMATS)
 
     def image_resource_attribute_suffix(self, var):
         var_type = getattr(var, "vtype", None)

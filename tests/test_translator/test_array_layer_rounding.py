@@ -221,7 +221,7 @@ def test_metal_import_keeps_layer_truncation(tmp_path):
 def test_metal_import_truncates_float_layers_for_rounding_targets(tmp_path, backend):
     code = _flat(_translate(tmp_path, METAL_FLOAT_LAYERS, backend, "s.metal"))
     if backend == "opengl":
-        assert "texture(colorArray, vec3(uvw.xy, uint(uvw.z)))" in code
+        assert "texture(colorArray, vec3(uvw.xy, cgl_rule_sat_ftou(uvw.z)))" in code
     else:
         assert "OpConvertFToU" in code
 

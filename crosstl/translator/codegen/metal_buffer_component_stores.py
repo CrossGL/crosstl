@@ -20,6 +20,7 @@ import re
 
 from ..ast import ArrayAccessNode, MemberAccessNode
 from .buffer_block_diagnostics import BufferBlockUnsupportedError
+from .glsl_buffer_block_arrays import glsl_buffer_matrix_column_access
 from .glsl_buffer_layout import (
     byte_offset_add,
     byte_offset_expression,
@@ -90,8 +91,14 @@ def _swizzle(member):
 
 
 def _vector_access(codegen, base):
+    column = glsl_buffer_matrix_column_access(codegen, base)
+    if column is not None:
+        return column, column["offset_expr"]
     access = codegen.glsl_buffer_block_array_access(base)
     if access is not None:
+        if access.get("subarray"):
+            # ``base`` still has array dimensions, so a subscript of it selects an element, not a component.
+            return None, None
         # The access describes the array member; ``base`` is one of its elements, which is not an array (a block
         # member's element type is a value or struct type).
         return {**access, "is_array": False}, access["offset_expr"]
@@ -155,6 +162,7 @@ def metal_buffer_component_store(codegen, target, rhs, op):
         if binary_op is None:
             return codegen.metal_buffer_compound_store_diagnostic(op, access)
     buffer_name = access["buffer"]
+    memory = access.get("memory", "")
     lines = []
     if len(offsets) == 1:
         sources = [f"({rhs})"]
@@ -167,9 +175,13 @@ def metal_buffer_component_store(codegen, target, rhs, op):
         sources = [f"{temp}.{'xyzw'[position]}" for position in range(len(offsets))]
     for offset, source in zip(offsets, sources):
         if binary_op is not None:
-            current = codegen.metal_scalar_load(component_type, buffer_name, offset)
+            current = codegen.metal_scalar_load(
+                component_type, buffer_name, offset, memory
+            )
             source = f"({current} {binary_op} {source})"
         lines.append(
-            codegen.metal_scalar_store(component_type, buffer_name, offset, source)
+            codegen.metal_scalar_store(
+                component_type, buffer_name, offset, source, memory
+            )
         )
     return "\n".join(lines)

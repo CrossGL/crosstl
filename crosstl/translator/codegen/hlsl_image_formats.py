@@ -34,6 +34,15 @@ NORMALIZED_FORMAT_MODIFIERS = {
     "r16_snorm": "snorm",
     "rg16_snorm": "snorm",
     "rgba16_snorm": "snorm",
+    "rgb10_a2": "unorm",
+}
+
+# DXC's ``vk::image_format`` names where they differ from CrossGL's beyond the
+# ``_snorm`` underscore.
+DXC_IMAGE_FORMAT_NAMES = {
+    "rgb10_a2": "rgb10a2",
+    "rgb10_a2ui": "rgb10a2ui",
+    "r11f_g11f_b10f": "r11g11b10f",
 }
 
 # The formats DXC gives a storage image whose texel is a 32-bit scalar or a
@@ -73,7 +82,9 @@ def dxc_vulkan_image_format_prefix(image_format):
     if image_format is None or dxc_derived_format(image_format) == image_format:
         return ""
     # DXC spells a signed normalized format without the underscore: rg8snorm.
-    dxc_format = image_format.replace("_snorm", "snorm")
+    dxc_format = DXC_IMAGE_FORMAT_NAMES.get(
+        image_format, image_format.replace("_snorm", "snorm")
+    )
     return "#ifdef __spirv__\n" f'[[vk::image_format("{dxc_format}")]]\n' "#endif\n"
 
 

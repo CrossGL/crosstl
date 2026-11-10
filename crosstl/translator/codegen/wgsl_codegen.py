@@ -53,6 +53,7 @@ from ..host_workgroup_size import (
 from ..semantics.enum_values import enum_values
 from ..semantics.implicit_lod import ImplicitLodStageUnsupportedError
 from ..semantics.rewrite import is_pure
+from ..semantics.structured_layouts import StructuredLayoutUnsupportedError
 from .array_utils import prepend_array_dimension
 from .c_family_operands import prefix_unary_operand
 from .call_graph import validate_recursion_free
@@ -132,6 +133,7 @@ from .wgsl_integer_textures import (
 )
 from .wgsl_loop_continuing import WGSLContinuingLoopNode, WGSLLoopContinuingMixin
 from .wgsl_must_use import wgsl_call_statement
+from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_numeric_types import (
     refuse_unsupported_wgsl_numeric_type,
     unsupported_wgsl_numeric_family,
@@ -1049,7 +1051,9 @@ class WGSLCodeGen(
         self._builtin_option_specializations = (
             self.collect_builtin_option_specializations(ast)
         )
-        generic_functions = WGSLGenericFunctionSpecializer(self, helper_function_nodes)
+        generic_functions = WGSLGenericFunctionSpecializer(
+            self, helper_function_nodes, ast
+        )
         concrete_helper_function_nodes = [
             func
             for func in helper_function_nodes
@@ -2427,9 +2431,14 @@ class WGSLCodeGen(
                 vtype.cols,
             )
         if isinstance(vtype, ArrayType):
+            size = vtype.size
+            # A size may be a value parameter: ``T items[N]`` in ``generic<T, N> struct Ring``.
+            size_name = size.name if isinstance(size, IdentifierNode) else size
+            if isinstance(size_name, str) and size_name.strip() in substitutions:
+                size = substitutions[size_name.strip()]
             return ArrayType(
                 self.substitute_generic_struct_type(vtype.element_type, substitutions),
-                copy.deepcopy(vtype.size),
+                copy.deepcopy(size),
             )
         if isinstance(vtype, PointerType):
             return PointerType(
@@ -2538,6 +2547,17 @@ class WGSLCodeGen(
         )
 
     def generic_type_key(self, vtype):
+        if isinstance(vtype, LiteralNode):
+            # The argument of a value parameter: ``4`` in ``Ring<float, 4>``.
+            if isinstance(vtype.value, bool):
+                return "true" if vtype.value else "false"
+            return str(vtype.value)
+        if (
+            isinstance(vtype, UnaryOpNode)
+            and getattr(vtype, "operator", None) == "-"
+            and isinstance(getattr(vtype, "operand", None), LiteralNode)
+        ):
+            return f"-{self.generic_type_key(vtype.operand)}"
         if isinstance(vtype, PrimitiveType):
             return self.PRIMITIVE_TYPE_MAP.get(vtype.name.lower(), vtype.name)
         if isinstance(vtype, VectorType):
@@ -2700,7 +2720,13 @@ class WGSLCodeGen(
                 self.explicit_binding_attributes(node) or self.next_binding_attributes()
             )
         elif "uniform" in qualifier_names:
-            address_space = "uniform"
+            if self.is_unsupported_uniform_array_stride(
+                node.var_type, variable_name=node.name
+            ):
+                address_space = "storage"
+                access = ", read"
+            else:
+                address_space = "uniform"
             attributes = (
                 self.explicit_binding_attributes(node) or self.next_binding_attributes()
             )
@@ -4275,10 +4301,7 @@ class WGSLCodeGen(
             )
         resource, index, value = node.arguments
         self.require_writable_structured_buffer_resource(resource, "buffer_store")
-        return (
-            f"{self.structured_buffer_index_expression(resource, index)} = "
-            f"{self.generate_expression(value)}"
-        )
+        return self.structured_buffer_store_expression(resource, index, value)
 
     def generate_structured_buffer_member_helper_call(self, node, helper_name):
         receiver = node.function.object_expr
@@ -4297,10 +4320,46 @@ class WGSLCodeGen(
                 f"2 arguments; got {len(node.arguments)}"
             )
         self.require_writable_structured_buffer_resource(receiver, "Store")
+        return self.structured_buffer_store_expression(receiver, *node.arguments)
+
+    def structured_buffer_store_expression(self, resource, index, value):
+        """``buffer[index] = value``, the value converted to the element type as an assignment converts it.
+
+        WGSL has no implicit conversions (section 15.7), so an ``int`` stored into a ``uint`` buffer needs ``u32()``.
+        """
+        element_type = self.expression_type(ArrayAccessNode(resource, index))
         return (
-            f"{self.structured_buffer_index_expression(receiver, node.arguments[0])} = "
-            f"{self.generate_expression(node.arguments[1])}"
+            f"{self.structured_buffer_index_expression(resource, index)} = "
+            f"{self.generate_expression_for_target(value, element_type)}"
         )
+
+    def structured_buffer_load_access(self, node, function_name):
+        """``buffer[index]`` for ``buffer_load(buffer, index)`` or ``buffer.Load(index)``, as generation emits it.
+
+        Typing the load as that subscript lets callers such as generic deduction see the element type.
+        """
+        if isinstance(node.function, MemberAccessNode):
+            if (
+                self.semantic_key(node.function.member) != "load"
+                or len(node.arguments) != 1
+            ):
+                return None
+            resource, index = node.function.object_expr, node.arguments[0]
+        elif (
+            self.semantic_key(function_name or "") == "buffer_load"
+            and len(node.arguments) == 2
+            and not self.is_user_function_name(function_name)
+        ):
+            resource, index = node.arguments
+        else:
+            return None
+        resource_type = self.expression_type(resource)
+        if self.structured_buffer_element_type(resource_type) is None and not (
+            isinstance(resource, IdentifierNode)
+            and self.is_pointer_identifier(resource.name)
+        ):
+            return None
+        return ArrayAccessNode(resource, index)
 
     def structured_buffer_index_expression(self, resource, index):
         if isinstance(resource, IdentifierNode) and self.is_pointer_identifier(
@@ -5801,7 +5860,8 @@ class WGSLCodeGen(
                         "WGSL target only supports StructuredBuffer resources as "
                         "module-scope storage bindings"
                     )
-                return f"array<{self.type_name_string(storage_element)}>"
+                word = narrow_storage_word_type(storage_element)
+                return f"array<{self.type_name_string(word or storage_element)}>"
             generic_vector = self.generic_vector_type_name(vtype)
             if generic_vector is not None:
                 return generic_vector
@@ -5874,6 +5934,138 @@ class WGSLCodeGen(
         if scalar_type in {"f32", "i32", "u32"}:
             return scalar_type
         return None
+
+    def is_opaque_resource_type(self, vtype):
+        leaf = self.array_element_type(vtype)
+        res_name = self.resource_type_name(leaf)
+        if res_name is not None and self.is_resource_type_name(res_name):
+            return True
+        if self.is_sampler_type(leaf):
+            return True
+        if self.sampled_texture_type(leaf) is not None:
+            return True
+        if self.storage_texture_type(leaf, None) is not None:
+            return True
+        return False
+
+    def is_unsupported_uniform_array_stride(self, vtype, variable_name=None):
+        if not isinstance(vtype, ArrayType):
+            return False
+        if self.is_opaque_resource_type(vtype):
+            return False
+        stride = self.uniform_array_element_stride(
+            vtype.element_type, variable_name=variable_name
+        )
+        return stride % 16 != 0
+
+    def wgsl_type_size_and_align(self, vtype):
+        """The host-shareable size and alignment of ``vtype`` in bytes, or ``(None, None)`` when unknown.
+
+        WGSL's layout rules: a vector of 3 is aligned as a vector of 4, a matrix is an array of its column vectors,
+        an array's stride is its element size rounded up to the element alignment, and a structure is aligned to
+        its widest member. ``(None, None)`` makes the caller refuse the declaration.
+        """
+        scalar_bytes = {
+            "bool": (1, 1),
+            "i8": (1, 1),
+            "u8": (1, 1),
+            "f16": (2, 2),
+            "i16": (2, 2),
+            "u16": (2, 2),
+            "f32": (4, 4),
+            "i32": (4, 4),
+            "u32": (4, 4),
+            "f64": (8, 8),
+            "i64": (8, 8),
+            "u64": (8, 8),
+        }
+        if isinstance(vtype, ArrayType):
+            count = self.resolve_integer_expression(vtype.size)
+            element_size, element_align = self.wgsl_type_size_and_align(
+                vtype.element_type
+            )
+            if count is None or element_size is None:
+                return None, None
+            stride = (
+                (element_size + element_align - 1) // element_align
+            ) * element_align
+            return count * stride, element_align
+
+        type_name = self.type_name_string(vtype) if vtype is not None else None
+        if type_name in scalar_bytes:
+            return scalar_bytes[type_name]
+
+        if type_name:
+            m_vec = re.fullmatch(r"vec([234])<([^>]+)>", type_name)
+            if m_vec:
+                lanes = int(m_vec.group(1))
+                elem_name = m_vec.group(2)
+                if elem_name not in scalar_bytes:
+                    return None, None
+                elem_size, elem_align = scalar_bytes[elem_name]
+                if lanes == 2:
+                    return elem_size * 2, elem_align * 2
+                elif lanes == 3:
+                    return elem_size * 3, elem_align * 4
+                else:
+                    return elem_size * 4, elem_align * 4
+
+            m_mat = re.fullmatch(r"mat([234])x([234])<([^>]+)>", type_name)
+            if m_mat:
+                cols = int(m_mat.group(1))
+                rows = int(m_mat.group(2))
+                elem_name = m_mat.group(3)
+                if elem_name not in scalar_bytes:
+                    return None, None
+                elem_size, elem_align = scalar_bytes[elem_name]
+                col_align = elem_align * (4 if rows > 2 else 2)
+                col_size = elem_size * rows
+                col_stride = ((col_size + col_align - 1) // col_align) * col_align
+                return cols * col_stride, col_align
+
+        struct_name = type_name or (
+            getattr(vtype, "name", None) if isinstance(vtype, NamedType) else None
+        )
+        struct_node = self._structs_by_name.get(struct_name)
+        if struct_node is not None:
+            struct_align = 1
+            offset = 0
+            for member in getattr(struct_node, "members", []) or []:
+                m_type = getattr(member, "member_type", None) or getattr(
+                    member, "vtype", None
+                )
+                m_size, m_align = self.wgsl_type_size_and_align(m_type)
+                if m_size is None or m_align is None:
+                    return None, None
+                offset = ((offset + m_align - 1) // m_align) * m_align
+                offset += m_size
+                struct_align = max(struct_align, m_align)
+            struct_size = ((offset + struct_align - 1) // struct_align) * struct_align
+            return struct_size, struct_align
+
+        return None, None
+
+    def uniform_array_element_stride(self, element_type, variable_name=None):
+        # Recursively return the leaf element stride on purpose: any non-16
+        # leaf stride is invalid in uniform space, regardless of outer array size.
+        if isinstance(element_type, ArrayType):
+            return self.uniform_array_element_stride(
+                element_type.element_type, variable_name=variable_name
+            )
+
+        if self.is_opaque_resource_type(element_type):
+            return None
+
+        size, align = self.wgsl_type_size_and_align(element_type)
+        if size is None or align is None:
+            type_name = getattr(element_type, "name", None) or str(element_type)
+            decl_name = f"'{variable_name}'" if variable_name else "declaration"
+            raise StructuredLayoutUnsupportedError(
+                f"WGSL target cannot determine uniform array stride for {decl_name} "
+                f"with unresolvable element type {type_name!r}"
+            )
+
+        return ((size + align - 1) // align) * align
 
     def generate_uniform_scalar_array_wrappers(self):
         sections = []
@@ -6448,6 +6640,13 @@ class WGSLCodeGen(
             access = self.structured_buffer_access(getattr(variable, "var_type", None))
             if access:
                 modes[variable.name] = access
+            elif "uniform" in {
+                str(q).lower() for q in getattr(variable, "qualifiers", []) or []
+            } and self.is_unsupported_uniform_array_stride(
+                getattr(variable, "var_type", None),
+                variable_name=getattr(variable, "name", None),
+            ):
+                modes[variable.name] = "read"
         for parameter in stage_resource_parameters:
             access = self.structured_buffer_access(
                 getattr(parameter, "param_type", None)
@@ -6517,7 +6716,10 @@ class WGSLCodeGen(
         return vtype.pointee_type
 
     def buffer_pointer_storage_type(self, vtype):
-        element_type = self.type_name_string(self.buffer_pointer_element_type(vtype))
+        element = self.buffer_pointer_element_type(vtype)
+        element_type = self.type_name_string(
+            narrow_storage_word_type(element) or element
+        )
         return f"array<{element_type}>"
 
     def buffer_pointer_parameter_type(self, vtype):
@@ -7350,6 +7552,9 @@ class WGSLCodeGen(
                 return array_type
             if function_name == "buffer_dimensions" and len(expr.arguments) == 1:
                 return "uint"
+            loaded = self.structured_buffer_load_access(expr, function_name)
+            if loaded is not None:
+                return self.expression_type(loaded)
             packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(
                 self.semantic_key(function_name)
             )
@@ -7420,10 +7625,11 @@ class WGSLCodeGen(
             if isinstance(array_type, ArrayType):
                 return array_type.element_type
             storage_element = self.structured_buffer_element_type(array_type)
+            if storage_element is None and isinstance(array_type, PointerType):
+                storage_element = array_type.pointee_type
             if storage_element is not None:
-                return storage_element
-            if isinstance(array_type, PointerType):
-                return array_type.pointee_type
+                # Narrow storage holds one 32-bit word per element (:mod:`.wgsl_narrow_storage`).
+                return narrow_storage_word_type(storage_element) or storage_element
             # Indexing a matrix gives a column and indexing a vector a component.
             matrix = self.matrix_shape(array_type)
             if matrix is not None:
@@ -8369,6 +8575,9 @@ class WGSLCodeGen(
         )
         resource_parameters = {}
         for function in functions:
+            if getattr(function, "generic_params", None):
+                # A generic signature (``Box<T>``) names no concrete structure; its specializations are concrete.
+                continue
             parameter_paths = {}
             for index, parameter in enumerate(
                 getattr(function, "parameters", []) or []

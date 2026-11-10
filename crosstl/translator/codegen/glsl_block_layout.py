@@ -24,6 +24,12 @@ packing or the natural layout of Metal:
 * ``layout(offset = N)`` places a member at byte ``N``, which must be a
   multiple of its alignment and must not reach back into the previous member;
   ``layout(align = N)`` raises a member's alignment to ``N`` (section 4.4.5).
+  Under std140 and std430 an explicit offset may also put a vector at a
+  multiple of its scalar where it does not improperly straddle a 16-byte
+  boundary (Vulkan 1.3 section 15.6.4, VK_KHR_relaxed_block_layout, core in
+  Vulkan 1.1). DXC's default push-constant and constant-buffer layouts place
+  ``float s; float3 v;`` that way, with ``v`` at byte 4; GLSL itself cannot
+  write such an offset, so a GLSL generator must refuse it.
 
 CrossGL keeps such a block as a ``cbuffer`` marked ``@ buffer_layout(std140)``
 (or ``std430``, ``scalar``); the shapes are the :class:`HlslLayoutType` values
@@ -42,6 +48,7 @@ import re
 from dataclasses import replace
 
 from ..ast import ArrayType, MatrixType, NamedType, PrimitiveType, VectorType
+from .array_utils import split_outer_array_dimension
 from .hlsl_buffer_layout import (
     BUFFER_LAYOUT_ATTRIBUTE,
     HLSL_BUFFER_LAYOUTS,
@@ -272,6 +279,37 @@ def member_alignments(layout_type):
     return layout_type.alignments or (None,) * len(layout_type.members)
 
 
+RELAXED_VECTOR_LAYOUTS = (STD140_LAYOUT, STD430_LAYOUT)
+
+
+def improperly_straddles(offset, size):
+    """Whether a vector of ``size`` bytes at ``offset`` improperly straddles (Vulkan 1.3 section 15.6.4): it crosses
+    a 16-byte boundary, or, when larger than 16 bytes, does not start on one."""
+    if size <= VEC4_ALIGNMENT:
+        return offset // VEC4_ALIGNMENT != (offset + size - 1) // VEC4_ALIGNMENT
+    return offset % VEC4_ALIGNMENT != 0
+
+
+def relaxed_vector_offset(layout_type, offset, layout):
+    """Whether an explicit ``offset`` is a relaxed placement of a vector under ``layout``: a multiple of its scalar
+    that does not improperly straddle a 16-byte boundary (VK_KHR_relaxed_block_layout, core in Vulkan 1.1).
+    """
+    if layout not in RELAXED_VECTOR_LAYOUTS or layout_type.kind != "vector":
+        return False
+    if layout_type.packed or offset % layout_type.scalar_size:
+        return False
+    return not improperly_straddles(offset, block_size(layout_type, layout))
+
+
+def _relaxed_refusal(layout_type, layout):
+    if layout not in RELAXED_VECTOR_LAYOUTS or layout_type.kind != "vector":
+        return ""
+    return (
+        f", and a vector there is not a multiple of its scalar size "
+        f"{layout_type.scalar_size} or improperly straddles a 16-byte boundary"
+    )
+
+
 def block_struct_placements(layout_type, layout, root=False):
     """Member placements and size of a struct, or of a block when ``root``.
 
@@ -288,11 +326,16 @@ def block_struct_placements(layout_type, layout, root=False):
     ):
         alignment = block_alignment(member_type, layout)
         if offset is not None:
-            if offset % alignment:
+            if offset % alignment and not relaxed_vector_offset(
+                member_type, offset, layout
+            ):
                 raise HlslLayoutError(
                     f"offset {offset} of '{name}' is not a multiple of its {layout} "
-                    f"alignment {alignment}"
+                    f"alignment {alignment}{_relaxed_refusal(member_type, layout)}"
                 )
+            if offset % alignment:
+                # A relaxed vector keeps its scalar alignment (rule 3 of Vulkan 1.3 section 15.6.4).
+                alignment = member_type.scalar_size
             if offset < cursor:
                 raise HlslLayoutError(
                     f"offset {offset} of '{name}' lies within or before the previous "
@@ -340,9 +383,9 @@ def crossgl_layout_type(
             type_name, struct_members, row_major, stack, constant_value
         )
     type_name = re.sub(r"\s+", " ", str(type_name)).strip()
-    array_match = re.fullmatch(r"(.+?)\s*\[\s*([^\]]*)\s*\]", type_name)
-    if array_match is not None:
-        count_text = array_match.group(2).strip()
+    array_parts = split_outer_array_dimension(type_name)
+    if array_parts is not None:
+        element_text, count_text = array_parts
         if not count_text:
             raise HlslLayoutError("unsized arrays in uniform blocks are not supported")
         try:
@@ -352,12 +395,8 @@ def crossgl_layout_type(
                 f"array size '{count_text}' in a uniform block is not a constant"
             ) from None
         element = crossgl_layout_type(
-            array_match.group(1), struct_members, row_major, stack, constant_value
+            element_text, struct_members, row_major, stack, constant_value
         )
-        if element.kind == "array":
-            raise HlslLayoutError(
-                "multidimensional arrays in uniform blocks are not supported"
-            )
         return array_type(element, count)
     if type_name in CROSSGL_SCALARS:
         return scalar_type(CROSSGL_SCALARS[type_name])
@@ -435,10 +474,6 @@ def crossgl_type_node_layout_type(
         element = crossgl_type_node_layout_type(
             type_node.element_type, struct_members, row_major, stack, constant_value
         )
-        if element.kind == "array":
-            raise HlslLayoutError(
-                "multidimensional arrays in uniform blocks are not supported"
-            )
         return array_type(element, int(count))
     if isinstance(type_node, NamedType):
         return crossgl_layout_type(
