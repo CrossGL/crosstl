@@ -178,6 +178,10 @@ class HLSLMatrixOrientation:
                 "when both have side effects"
             )
         base = _operand(generator.generate_expression(matrix_expr))
+        # Only the HLSL emitter works around DXC's tall-matrix row lowering (hlsl_tall_matrix_rows.py).
+        tall_rows = getattr(generator, "hlsl_tall_matrix_rows", None)
+        if tall_rows is not None:
+            base = tall_rows.row_read(matrix_expr, row_expr, base) or base
         column = generator.generate_expression(column_expr)
         row = generator.generate_expression(row_expr)
         return f"{base}[{row}][{column}]"
