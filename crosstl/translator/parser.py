@@ -412,7 +412,12 @@ class Parser:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
-        """Consume one token of the expected type or raise ``SyntaxError``."""
+        """Consume one token of the expected type or raise ``SyntaxError``.
+
+        The end of input is never consumed: a construct that tries to read past it is unterminated.
+        """
+        if token_type == "EOF" and self.current_token[0] == "EOF":
+            raise SyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (

@@ -6,6 +6,7 @@ import struct
 
 from ..common_ast import InitializerListNode
 from .access_chains import chain_base_pointee, walk_indices
+from .assembly_validation import check_defined_ids
 from .barrier_import import spirv_barrier_statements
 from .block_arrays import SpirvBlockArrayUnsupportedError, block_array_element
 from .block_layout_import import spirv_block_layout
@@ -777,7 +778,14 @@ class VulkanParser:
                 self.current_token = ("EOF", None)
         return
 
+    def expect_end_of_input(self):
+        if self.current_token[0] != "EOF":
+            raise SyntaxError(f"Expected EOF, got {self.current_token[0]}")
+
     def eat(self, token_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if token_type == "EOF" and self.current_token[0] == "EOF":
+            raise SyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -882,7 +890,7 @@ class VulkanParser:
 
     def parse(self):
         module = self.parse_module()
-        self.eat("EOF")
+        self.expect_end_of_input()
         return module
 
     def parse_module(self):
@@ -5017,6 +5025,7 @@ class VulkanParser:
 
         tokens = self.spirv_assembly_tokens(code)
         index = 0
+        id_operands = []
 
         while index < len(tokens):
             instruction_start = index
@@ -5048,9 +5057,31 @@ class VulkanParser:
                     "Expected SPIR-V opcode on line "
                     f"{instruction_line_number}, got {opcode}"
                 )
+            unquoted = [
+                (text, line_number)
+                for text, quoted, line_number in instruction_tokens[
+                    len(parts) - len(operands) :
+                ]
+                if not quoted
+            ]
+            for text, line_number in unquoted:
+                if text == "=":
+                    raise SyntaxError(
+                        f"Expected SPIR-V opcode after '=' on line {line_number}"
+                    )
+            id_operands.append(
+                (
+                    instruction_line_number,
+                    opcode,
+                    [text for text, _line in unquoted if text.startswith("%")],
+                )
+            )
             instructions.append((result_id, opcode, operands, instruction_line_number))
             index = next_index
 
+        check_defined_ids(
+            id_operands, {result_id for result_id, *_ in instructions if result_id}
+        )
         return instructions
 
     def looks_like_legacy_glslang_spirv_disassembly(self, code):

@@ -407,6 +407,9 @@ class RustParser:
         )
 
     def eat(self, expected_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if expected_type == "EOF" and self.current_token[0] == "EOF":
+            raise SyntaxError("Unexpected end of input")
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
