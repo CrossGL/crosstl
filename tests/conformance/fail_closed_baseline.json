@@ -54,23 +54,6 @@
   "crosstl/backend/slang/SlangCrossGLCodeGen.py::SlangToCrossGLConverter.map_generic_vector_type::identity-fallback": 1,
   "crosstl/backend/slang/SlangCrossGLCodeGen.py::SlangToCrossGLConverter.texture_overload_extras_diagnostic::fallback-text": 1,
   "crosstl/translator/arithmetic_conversions.py::source_integer_shape::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.expression_result_type::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.fragment_output_member_name::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.generate_expression::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.generate_glsl_runtime_global_initializers::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_boolean_reduction_result_type::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_compile_time_bitcast_contract::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_componentwise_boolean_result_type::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_componentwise_unary_result_type::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_fixed_array_readonly_intrinsic::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_interface_block_value_expression::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_member_access_name::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_private_pointer_display_name::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.glsl_struct_member_name::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.is_fragment_only_call_name::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_mesh_intrinsic::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_ray_tracing_intrinsic::identity-fallback": 1,
-  "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_semantic::identity-fallback": 1,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_builtin_function::identity-fallback": 1,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.derivative_function_opcode::identity-fallback": 1,
   "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.mesh_output_member_builtin::identity-fallback": 1,
@@ -206,6 +189,6 @@
  "totals": {
   "empty-block-recovery": 1,
   "fallback-text": 42,
-  "identity-fallback": 174
+  "identity-fallback": 157
  }
 }
