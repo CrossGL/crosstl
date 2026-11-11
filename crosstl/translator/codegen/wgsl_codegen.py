@@ -115,6 +115,7 @@ from .wgsl_float_classification import (
     is_float_classification_call,
     wgsl_float_classification_call,
 )
+from .wgsl_foreign_calls import WGSLForeignBuiltinCallError, is_foreign_wgsl_call
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
@@ -136,6 +137,11 @@ from .wgsl_integer_textures import (
     is_integer_sampler_type_name,
 )
 from .wgsl_loop_continuing import WGSLContinuingLoopNode, WGSLLoopContinuingMixin
+from .wgsl_matrix_inverse import (
+    is_matrix_inverse_call,
+    wgsl_matrix_inverse_call,
+    wgsl_matrix_inverse_helpers,
+)
 from .wgsl_must_use import wgsl_call_statement
 from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_numeric_types import (
@@ -893,6 +899,7 @@ class WGSLCodeGen(
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
+        self._matrix_inverse_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
         self._specialization_default_values = {}
@@ -977,6 +984,7 @@ class WGSLCodeGen(
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
+        self._matrix_inverse_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
         self._specialization_default_values = {}
@@ -1239,6 +1247,10 @@ class WGSLCodeGen(
         frexp_modf_helpers = wgsl_frexp_modf_helpers(self)
         if frexp_modf_helpers:
             emitted_sections.append(frexp_modf_helpers)
+
+        matrix_inverse_helpers = wgsl_matrix_inverse_helpers(self)
+        if matrix_inverse_helpers:
+            emitted_sections.append(matrix_inverse_helpers)
 
         if emitted_sections:
             lines.append("")
@@ -4081,6 +4093,8 @@ class WGSLCodeGen(
             return self.generate_packed_dot4add_call(node, function_name, packed_dot)
         if is_two_argument_frexp_or_modf(self, node):
             return wgsl_frexp_modf_call(self, node)
+        if is_matrix_inverse_call(self, node):
+            return wgsl_matrix_inverse_call(self, node)
         if is_float_classification_call(self, node):
             return wgsl_float_classification_call(self, node)
 
@@ -4117,7 +4131,7 @@ class WGSLCodeGen(
         args = self.generate_call_arguments(
             function_name, node.arguments, function=resolved_function
         )
-        mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
+        mapped_name = self.FUNCTION_NAME_MAP.get(function_name)
         if (
             function_name == "atan"
             and len(node.arguments) == 2
@@ -4127,16 +4141,38 @@ class WGSLCodeGen(
             # GLSL atan(y, x) is the two-argument arctangent; WGSL's atan takes one
             # argument and spells the two-argument form atan2(y, x).
             return f"atan2({args})"
-        if mapped_name == function_name and isinstance(node.function, IdentifierNode):
+        if (
+            function_name == "log10"
+            and len(node.arguments) == 1
+            and isinstance(node.function, IdentifierNode)
+            and not self.is_user_function_name(function_name)
+        ):
+            # WGSL declares log2 but no log10 (WGSL section 17.5); the
+            # identity log10(x) = log2(x) * log10(2) is the polyfill the
+            # GLSL target writes for the same call.
+            return f"(log2({args}) * 0.3010299956639812)"
+        if mapped_name is None and isinstance(node.function, IdentifierNode):
             if resolved_function is not None:
                 mapped_name = self.function_declaration_identifier_name(
                     resolved_function
                 )
             else:
                 mapped_name = self.function_identifier_name(function_name)
+                self.refuse_foreign_wgsl_call(function_name, mapped_name)
         elif isinstance(node.function, MemberAccessNode):
             mapped_name = self.generate_expression(node.function)
+        elif mapped_name is None:
+            # A callee that is neither a name nor a member access is written as the expression names it.
+            mapped_name = function_name
+            self.refuse_foreign_wgsl_call(function_name, mapped_name)
         return f"{mapped_name}({args})"
+
+    def refuse_foreign_wgsl_call(self, function_name, written_name):
+        """Refuse a call that would be written with a built-in function name of another language."""
+        if self.is_user_function_name(function_name):
+            return
+        if is_foreign_wgsl_call(function_name, written_name):
+            raise WGSLForeignBuiltinCallError(function_name)
 
     # HLSL 8-bit pack intrinsics and their WGSL builtins (WGSL sections
     # 17.9.3 and 17.9.8): the WGSL argument type each takes, the builtin, and
@@ -7601,6 +7637,9 @@ class WGSLCodeGen(
                 if operand is not None:
                     element, columns, rows = operand
                     return f"mat{rows}x{columns}<{element}>"
+            if is_matrix_inverse_call(self, expr):
+                # inverse(m) has m's type (GLSL 4.60 section 8.6).
+                return self.expression_type(expr.arguments[0])
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )
@@ -7994,7 +8033,9 @@ class WGSLCodeGen(
         if mapped_type is not None:
             return re.sub(r"[^0-9A-Za-z]+", "_", mapped_type).strip("_") or "value"
         if isinstance(vtype, PrimitiveType):
-            return self.PRIMITIVE_TYPE_MAP.get(vtype.name.lower(), vtype.name.lower())
+            # type_name_string spells every scalar PRIMITIVE_TYPE_MAP holds, so this scalar has no WGSL spelling and
+            # its declaration is refused; the overload suffix only has to tell it apart, so it names the source type.
+            return vtype.name.lower()
         if isinstance(vtype, VectorType):
             element = self.function_type_signature(vtype.element_type)
             return f"vec{vtype.size}_{element}"

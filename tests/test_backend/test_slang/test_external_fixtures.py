@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import crosstl.translator as cgl_translator
@@ -1192,24 +1194,8 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "sampler shadowSampler;",
-            "sampler2D shadowMap2D;",
-            "sampler2DArray shadowMap2DArray;",
-            "samplerCube shadowMapCube;",
-            "textureCompare(shadowMap2D, shadowSampler, input.texCoord, input.depth)",
-            (
-                "textureCompareOffset(shadowMap2DArray, shadowSampler, "
-                "vec3(input.texCoord, 0), input.depth, offset2)"
-            ),
-            "textureCompare(shadowMapCube, shadowSampler, cubeDir, input.depth)",
-            (
-                "unsupported Slang texture overload extras for SampleCmpBias: "
-                "dropped LOD bias"
-            ),
-        ],
-        "not_contains": ["SampleCmpBias("],
+        # CrossGL's textureCompare operations take no LOD bias.
+        "refused": "SampleCmpBias: CrossGL has no operand for LOD bias",
     },
     {
         "id": "slang_texture2d_getdimensions_querysize_lod_from_spirv_generated",
@@ -2463,6 +2449,11 @@ def generate_crossgl(ast):
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda item: item["id"])
 def test_external_fixture_codegen_crossgl_reparse(fixture):
     ast = parse_slang(fixture["source"])
+    refused = fixture.get("refused")
+    if refused is not None:
+        with pytest.raises(SlangImportRefused, match=re.escape(refused)):
+            generate_crossgl(ast)
+        return
     generated = generate_crossgl(ast)
 
     enum_underlying_types = fixture.get("enum_underlying_types", {})

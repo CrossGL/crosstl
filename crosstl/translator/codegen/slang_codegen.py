@@ -51,6 +51,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..renames import renamed
 from ..semantics.builtin_names import is_crossgl_gl_builtin
 from ..semantics.builtin_values import glsl_builtin_name
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
@@ -183,6 +184,12 @@ from .slang_declaration_modifiers import (
     slang_member_modifier_prefix,
     slang_packoffset_suffix,
     slang_precise_prefix,
+)
+from .slang_exact_lookups import (
+    SLANG_BITCAST_INTRINSICS,
+    slang_foreign_call_reason,
+    slang_semantic_spelling_is_valid,
+    slang_shader_stage,
 )
 from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_projected_compare import (
@@ -2145,23 +2152,8 @@ class SlangCodeGen(LoweringRefusalMixin):
         return None
 
     def slang_shader_stage_name(self, stage_name):
-        """Return the Slang [shader(...)] spelling for a CrossGL stage name."""
-        stage_map = {
-            "tessellation_control": "hull",
-            "tessellation_evaluation": "domain",
-            "tesscontrol": "hull",
-            "tesseval": "domain",
-            "task": "amplification",
-            "object": "amplification",
-            "ray_generation": "raygeneration",
-            "raygen": "raygeneration",
-            "ray_intersection": "intersection",
-            "ray_closest_hit": "closesthit",
-            "ray_any_hit": "anyhit",
-            "ray_miss": "miss",
-            "ray_callable": "callable",
-        }
-        return stage_map.get(stage_name, stage_name)
+        """Return the Slang [shader(...)] spelling for a CrossGL stage name; refuse a name that is no stage."""
+        return slang_shader_stage(stage_name)
 
     def collect_stage_entry_name_overrides(self, stages):
         """Return replacement entry names for stage blocks with duplicate names."""
@@ -4156,7 +4148,9 @@ class SlangCodeGen(LoweringRefusalMixin):
         frag_data = re.fullmatch(r"gl_FragData\[(\d+)\]", semantic_name)
         if frag_data:
             return f"SV_Target{frag_data.group(1)}"
-        return self.semantic_map.get(semantic_name, semantic_name)
+        # ``semantic_map`` renames CrossGL built-ins to Slang system values; a user semantic keeps its spelling, and
+        # ``semantic_suffix`` refuses an unrenamed built-in where a declaration would carry it.
+        return renamed(self.semantic_map, semantic_name)
 
     def slang_semantic_output_kind(self, semantic):
         if semantic is None:
@@ -4508,7 +4502,12 @@ class SlangCodeGen(LoweringRefusalMixin):
         """
         mapped_semantic = self.map_semantic(semantic, shader_type)
         name = str(mapped_semantic or "")
-        if (
+        if name and not slang_semantic_spelling_is_valid(name):
+            self.refuse_lowering(
+                f"'{name}' is not a Slang semantic; a semantic is an identifier "
+                "with an optional numeric index"
+            )
+        elif (
             name.startswith("gl_")
             and is_crossgl_gl_builtin(name)
             and not name.lower().startswith(("gl_fragcolor", "gl_fragdata"))
@@ -9714,10 +9713,16 @@ class SlangCodeGen(LoweringRefusalMixin):
     def slang_bitcast_intrinsic_callee(self, callee):
         if not isinstance(callee, str) or callee in self.user_function_names:
             return None
-        mapped_callee = self.function_map.get(callee, callee)
-        if mapped_callee in {"asfloat", "asint", "asuint"}:
-            return mapped_callee
-        return None
+        return SLANG_BITCAST_INTRINSICS.get(callee)
+
+    def slang_callee_name(self, callee):
+        """The Slang name of a call to ``callee``, which the program does not declare; refuses a foreign built-in."""
+        if callee in self.function_map:
+            return self.function_map[callee]
+        reason = slang_foreign_call_reason(callee, self.function_map)
+        if reason is not None:
+            return self.refuse_lowering(reason, callee)
+        return callee
 
     def builtin_alias_call_result_type(self, func_name, args):
         if not isinstance(func_name, str) or func_name in self.user_function_names:
@@ -9963,7 +9968,8 @@ class SlangCodeGen(LoweringRefusalMixin):
                 enum_value = enum_value_expression(self, node.name)
                 if enum_value is not None:
                     return enum_value
-            return self.identifier_aliases.get(node.name, node.name)
+            # ``identifier_aliases`` holds the stage system values an entry renames; other names keep theirs.
+            return renamed(self.identifier_aliases, node.name)
         elif isinstance(node, LiteralNode):
             return self.generate_literal(node)
         elif isinstance(node, ExpressionStatementNode):
@@ -10141,10 +10147,17 @@ class SlangCodeGen(LoweringRefusalMixin):
                 and callee not in self.user_function_names
             ):
                 return self.generate_slang_matrix_builtin_call(callee, node.args)
-            if callee == "lambda":
+            if callee == "lambda" and callee not in self.user_function_names:
                 lambda_expr = self.generate_lambda_expression(node.args)
                 if lambda_expr is not None:
                     return lambda_expr
+                # Written as a call, ``lambda(...)`` would name a function no Slang module declares.
+                return self.refuse_lowering(
+                    "lambda: Slang lambda expressions take typed parameters "
+                    "(`(int x) => x + 1`); this lambda's parameters or body "
+                    "have no Slang spelling",
+                    "lambda()",
+                )
             enum_constructor = generate_enum_constructor_call(self, callee, node.args)
             if enum_constructor is not None:
                 return enum_constructor
@@ -10198,7 +10211,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 bit_query = self.generate_slang_bit_query_call(callee, node.args, args)
                 if bit_query is not None:
                     return bit_query
-                callee = self.function_map.get(callee, callee)
+                callee = self.slang_callee_name(callee)
             return f"{callee}({args})"
         elif isinstance(node, ConstructorNode):
             enum_constructor = generate_enum_constructor_expression(self, node)

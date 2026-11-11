@@ -28,6 +28,7 @@ from crosstl.translator.ast import (
     VectorType,
 )
 from crosstl.translator.host_workgroup_size import function_entry_execution_config
+from crosstl.translator.renames import renamed
 
 OPENCL_TARGET_UNSUPPORTED_CODE = "opencl.target.unsupported"
 OPENCL_TARGET_UNRESOLVED_HELPER_CODE = "opencl.target.unresolved-helper"
@@ -374,8 +375,9 @@ def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
 
 def _clone_target_type(type_node):
     if isinstance(type_node, PrimitiveType):
+        # The aliases rename WGSL-style scalar spellings; every other name is a CrossGL scalar already.
         return PrimitiveType(
-            _TARGET_SCALAR_TYPE_ALIASES.get(type_node.name, type_node.name),
+            renamed(_TARGET_SCALAR_TYPE_ALIASES, type_node.name),
             size_bits=type_node.size_bits,
         )
     if isinstance(type_node, VectorType):

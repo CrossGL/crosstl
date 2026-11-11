@@ -4,6 +4,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from crosstl.translator.integer_literals import crossgl_legacy_octal
+from crosstl.translator.renames import renamed
 from crosstl.translator.stage_utils import requested_stage_name
 
 from ..import_refusals import SlangImportRefused
@@ -143,6 +144,18 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         "transpose",
         "trunc",
     }
+    # Cube texture types, whose sample methods take no texel offset.
+    CUBE_TEXTURE_RESOURCE_BASES = frozenset(
+        {
+            "TextureCube",
+            "TextureCubeArray",
+            "SamplerCube",
+            "SamplerCubeArray",
+            "SamplerCubeShadow",
+            "SamplerCubeArrayShadow",
+        }
+    )
+
     SAMPLE_METHOD_MAP = {
         "Sample": "texture",
         "SampleBias": "texture",
@@ -1059,7 +1072,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         return name_map
 
     def format_function_name(self, name):
-        return self.function_name_map.get(name, name)
+        # ``function_name_map`` holds the CrossGL name of every function the program declares, and only declared
+        # functions are written or called through it.
+        return self.function_name_map[name]
 
     def register_global_identifier_renames(self, ast):
         for node in getattr(ast, "global_vars", []) or []:
@@ -1139,9 +1154,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
 
     def format_struct_member_name(self, struct, member_name):
         struct_name = getattr(struct, "name", struct)
-        return self.struct_member_name_maps.get(struct_name, {}).get(
-            member_name, member_name
-        )
+        # Members of a type the program does not declare (a vector's ``x``, a built-in structure's fields) keep
+        # their name; the maps hold the declared structures' members.
+        return renamed(self.struct_member_name_maps.get(struct_name, {}), member_name)
 
     def format_member_access_name(self, expr):
         object_type = self.unwrap_resource_container_type(
@@ -2238,7 +2253,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             elif function_name in self.type_map and function_name[:1].islower():
                 name = self.map_type(function_name)
             else:
-                name = self.function_map.get(function_name, function_name)
+                name = self.crossgl_intrinsic_name(function_name)
             return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)
@@ -2612,6 +2627,17 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return self.map_generic_matrix_type(slang_type)
         return None
 
+    def crossgl_intrinsic_name(self, name):
+        """The CrossGL name of callee ``name``: the CrossGL spelling of a Slang intrinsic ``function_map`` renames.
+
+        Any other callee is carried as written: a constructor, or a Slang or HLSL built-in that CrossGL spells the
+        same way. The IR accepts HLSL built-ins as plain calls for the generators to map or refuse, and
+        ``declared_functions`` refuses any other name (``builtin_function_names``).
+        """
+        if name in self.function_map:
+            return self.function_map[name]
+        return name
+
     def map_generic_vector_type(self, slang_type):
         args = self.generic_type_arguments(slang_type)
         if len(args) != 2:
@@ -2623,7 +2649,8 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return None
 
         if vector_size == "1":
-            return self.type_map.get(scalar_type, scalar_type)
+            # CrossGL has no one-component vector; ``vector<T, 1>`` holds one ``T``.
+            return self.map_type(scalar_type)
 
         vector_prefixes = {
             "float": "vec",
@@ -3386,17 +3413,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return "textureLod", prefix + [coord, *extra_args]
 
         if expr.method == "SampleGrad":
-            if len(extra_args) > 2:
-                ddx, ddy, offset, *rest = extra_args
-                texture_func = "textureGradOffset"
-                if rest:
-                    diagnostic = self.texture_overload_extras_diagnostic(
-                        "SampleGrad",
-                        self.texture_gradient_extra_parameters(rest),
-                    )
-                    texture_func = f"{diagnostic} {texture_func}"
-                return texture_func, prefix + [coord, ddx, ddy, offset]
-            return "textureGrad", prefix + [coord, *extra_args]
+            return self.crossgl_texture_gradient_call_parts(
+                expr, prefix, coord, extra_args
+            )
 
         if expr.method == "SampleCmp":
             if len(extra_args) > 1:
@@ -3430,72 +3449,81 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         if expr.method == "SampleCmpGrad":
             if len(extra_args) > 3:
                 compare, ddx, ddy, offset, *rest = extra_args
-                texture_func = "textureCompareGradOffset"
                 if rest:
-                    diagnostic = self.texture_overload_extras_diagnostic(
+                    self.refuse_texture_overload_extras(
                         "SampleCmpGrad",
                         self.texture_gradient_extra_parameters(
                             rest, includes_lod_clamp=False
                         ),
                     )
-                    texture_func = f"{diagnostic} {texture_func}"
                 return (
-                    texture_func,
+                    "textureCompareGradOffset",
                     prefix + [coord, compare, ddx, ddy, offset],
                 )
             return "textureCompareGrad", prefix + [coord, *extra_args]
 
         return self.SAMPLE_METHOD_MAP[expr.method], prefix + [coord, *extra_args]
 
+    def crossgl_texture_gradient_call_parts(self, expr, prefix, coord, extra_args):
+        """``SampleGrad(s, location, ddx, ddy[, offset][, lodClamp][, out status])`` as a CrossGL texture call.
+
+        A cube texture takes no offset. CrossGL carries the minimum-LOD clamp as ``textureGradClamp`` and
+        ``textureGradOffsetClamp``; a status output, which reports tile residency, is refused.
+        """
+        if len(extra_args) <= 2:
+            return "textureGrad", prefix + [coord, *extra_args]
+        resource_base = self.resource_type_base(
+            self.sampleable_resource_expression_type(expr.object)
+        )
+        if resource_base in self.CUBE_TEXTURE_RESOURCE_BASES:
+            ddx, ddy, *rest = extra_args
+            if len(rest) == 1:
+                return "textureGradClamp", prefix + [coord, ddx, ddy, rest[0]]
+        else:
+            ddx, ddy, offset, *rest = extra_args
+            if not rest:
+                return "textureGradOffset", prefix + [coord, ddx, ddy, offset]
+            if len(rest) == 1:
+                return (
+                    "textureGradOffsetClamp",
+                    prefix + [coord, ddx, ddy, offset, rest[0]],
+                )
+        dropped_parameters = ["status output"]
+        if len(rest) > 2:
+            dropped_parameters.append("extra arguments")
+        self.refuse_texture_overload_extras("SampleGrad", dropped_parameters)
+
     def crossgl_texture_compare_bias_call_parts(self, expr, prefix, coord, extra_args):
         if len(extra_args) < 2:
             return "textureCompare", prefix + [coord, *extra_args]
 
-        compare = extra_args[0]
+        # SampleCmpBias(s, location, compare, bias[, offset][, clamp][, status]): CrossGL's textureCompare has no
+        # bias operand, so every call with a bias is refused, naming each operand that would be lost.
         resource_base = self.resource_type_base(
             self.sampleable_resource_expression_type(expr.object)
         )
-        offset_index = (
-            2
-            if len(extra_args) > 2
-            and resource_base not in {
-                "TextureCube",
-                "TextureCubeArray",
-                "SamplerCube",
-                "SamplerCubeArray",
-                "SamplerCubeShadow",
-                "SamplerCubeArrayShadow",
-            }
-            else None
+        has_offset = (
+            len(extra_args) > 2
+            and resource_base not in self.CUBE_TEXTURE_RESOURCE_BASES
         )
+        trailing_args = extra_args[3:] if has_offset else extra_args[2:]
         dropped_parameters = ["LOD bias"]
-
-        if offset_index is None:
-            texture_func = "textureCompare"
-            args = prefix + [coord, compare]
-            trailing_args = extra_args[2:]
-        else:
-            texture_func = "textureCompareOffset"
-            args = prefix + [coord, compare, extra_args[offset_index]]
-            trailing_args = extra_args[offset_index + 1 :]
-
         if trailing_args:
             dropped_parameters.append("LOD clamp")
         if len(trailing_args) > 1:
             dropped_parameters.append("status output")
         if len(trailing_args) > 2:
             dropped_parameters.append("extra arguments")
+        self.refuse_texture_overload_extras("SampleCmpBias", dropped_parameters)
 
-        diagnostic = self.texture_overload_extras_diagnostic(
-            "SampleCmpBias", dropped_parameters
-        )
-        return f"{diagnostic} {texture_func}", args
-
-    def texture_overload_extras_diagnostic(self, member, dropped_parameters):
+    def refuse_texture_overload_extras(self, member, dropped_parameters):
+        """Refuse a texture method call whose trailing operands CrossGL's texture functions have no place for."""
         parameters = ", ".join(dropped_parameters)
-        return (
-            f"/* unsupported Slang texture overload extras for {member}: "
-            f"dropped {parameters} */"
+        raise SlangImportRefused(
+            [
+                f"texture overload extras for {member}: CrossGL has no operand for "
+                f"{parameters}"
+            ]
         )
 
     def texture_gradient_extra_parameters(self, trailing_args, includes_lod_clamp=True):
