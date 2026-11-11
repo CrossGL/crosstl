@@ -141,16 +141,6 @@
   "crosstl/translator/codegen/loop_induction.py::offset_counter_loop_terminates::identity-fallback": 1,
   "crosstl/translator/codegen/loop_induction.py::static_loop_trip_count::identity-fallback": 1,
   "crosstl/translator/codegen/loop_induction.py::subgroup_strided_trips::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::CharTypeMapper.map_char_type::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.canonical_metal_semantic::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.generate_function::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.map_semantic::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.metal_attribute_index_from_semantic::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.metal_color_index_from_semantic::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.metal_compute_builtin_expression_name::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.metal_graphics_builtin_expression_name::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.metal_local_identifier_name::identity-fallback": 1,
-  "crosstl/translator/codegen/metal_codegen.py::MetalCodeGen.spirv_builtin_semantic::identity-fallback": 1,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.canonical_buffer_resource_type::identity-fallback": 1,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.explicit_image_format_resource_type::identity-fallback": 1,
   "crosstl/translator/codegen/mojo_codegen.py::MojoCodeGen.generate_expression::identity-fallback": 1,
@@ -202,6 +192,6 @@
  "totals": {
   "empty-block-recovery": 1,
   "fallback-text": 42,
-  "identity-fallback": 170
+  "identity-fallback": 160
  }
 }
