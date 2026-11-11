@@ -401,6 +401,7 @@ from .hlsl_texture_residency import (
     hlsl_texture_residency_call,
     hlsl_texture_resident_call,
 )
+from .hlsl_type_name_memo import memoized_bare_hlsl_type
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_unrepresentable_memory import hlsl_unrepresentable_memory_qualifier
 from .hlsl_wave_extended import (
@@ -16146,6 +16147,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def type_name_string(self, vtype):
         if vtype is None:
             return None
+        if vtype.__class__ is str:
+            return vtype
         if isinstance(vtype, ReferenceType) or hasattr(vtype, "referenced_type"):
             return self.convert_type_node_to_string(vtype)
         if isinstance(vtype, PointerType) or hasattr(vtype, "pointee_type"):
@@ -56905,8 +56908,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return ((bits >> 16) | 0x40) & 0xFFFF
         return ((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16) & 0xFFFF
 
-    def map_type(self, vtype):
-        """Map types to DirectX equivalents, handling both strings and TypeNode objects."""
+    def map_type(self, vtype, *, memoized=True):
+        """Map types to DirectX equivalents, handling both strings and TypeNode objects.
+
+        ``memoized=False`` skips the bare type-name memo (``hlsl_type_name_memo``).
+        """
+        if memoized and vtype.__class__ is str:
+            return memoized_bare_hlsl_type(self, vtype)
         if vtype is None:
             return "float"
 
