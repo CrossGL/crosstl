@@ -1,7 +1,7 @@
 """Helpers for monomorphizing generic functions in C-style shader outputs."""
 
-from copy import deepcopy
 import re
+from copy import deepcopy
 
 from ..ast import (
     AssignmentNode,
