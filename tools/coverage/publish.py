@@ -136,10 +136,11 @@ def _executed(report: dict) -> list[str]:
         f"{' '.join(label(r))}, {r['executed']} probes on {r['runtime']}" for r in rows
     )
     return [
-        "Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one "
-        "input buffer also runs: the native probe and CrossTL's translation get the same inputs, and a "
-        "translation that binds other resources or writes other results is wrong. HLSL, Slang and WGSL probes run as the SPIR-V their "
-        "reference compiler writes for them, and so do GLSL probes that llvmpipe's OpenGL rejects. "
+        "Where Core's conformance harness has a runtime for the language, a supported compute probe whose "
+        "translation reads the native probe's input buffers also runs: the two get the same inputs, and a "
+        "translation that binds other resources or writes other results is wrong. HLSL, Slang, WGSL and Rust "
+        "probes run as the SPIR-V their reference compiler writes for them, and so do GLSL probes that "
+        "llvmpipe's OpenGL rejects. "
         f"Executed: {ran}.",
         "",
     ]

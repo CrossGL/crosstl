@@ -204,18 +204,31 @@ def test_slang_probes_run_in_the_environment_of_the_spirv_slangc_writes(
     assert result.runtime == hlsl.runtime == "vulkan-lavapipe"
 
 
+# Rust's sine is a method of the Float trait; the other languages call a function.
+_SINE = {"rust": ("Float::sin", ".sin")}
+
+
 @pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
 def test_the_native_probe_runs_as_the_spirv_its_compiler_writes(language):
-    """A native compute probe, lowered by its reference compiler, runs on a Vulkan runtime and computes."""
+    """A native compute probe, lowered by its reference compiler, runs on a Vulkan runtime and computes, and a
+    translation that computes the cosine instead is wrong."""
     if not lowering.can_lower(language):
         pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
-    feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
+    name, spelling = _SINE.get(language, ("sin", ""))
+    feature = Feature(
+        language, "function", name, SIN.signature, crossgl="sin", spelling=spelling
+    )
     native = probes.build(feature, language).source
+    cosine = native.replace("sin(", "cos(")
+    assert cosine != native
     probe = Result(feature, "output", "supported", sources=(native, native))
-    [result], used = execution.run([probe], workers=1)
+    other = Result(feature, "output", "supported", sources=(native, cosine))
+    [result, wrong], used = execution.run([probe, other], workers=1)
     if not used:
         pytest.skip("no Vulkan runtime")
     assert (result.outcome, result.runtime) == ("supported", used[0])
+    assert (wrong.outcome, wrong.runtime) == ("wrong", used[0])
+    assert execution.found(wrong.detail)
 
 
 def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypatch):
