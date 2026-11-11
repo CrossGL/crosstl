@@ -249,3 +249,105 @@ def test_language_sets_are_the_inventory_builtin_functions(language, group):
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             names.add(name)
     assert group == frozenset(names)
+
+
+# A generic structure's static member calls a function the program never declares. Live code calls the built-in
+# ``min``, so the member is named; the structure itself is named only when live code declares ``Limits<float>``.
+TEMPLATE_STATIC = """
+shader Templates {
+    struct Pair<T> {
+        T a;
+        T b;
+    }
+
+    struct Limits<T> {
+        static constant Pair<T> min = makePair(T(0), T(0));
+    }
+
+    compute {
+        buffer float values[];
+
+        @compute @workgroup_size(1, 1, 1)
+        void main() {
+            %s
+            values[0] = min(values[1], 1.0);
+        }
+    }
+}
+"""
+UNNAMED_TEMPLATE = TEMPLATE_STATIC % ""
+NAMED_TEMPLATE = TEMPLATE_STATIC % "Limits<float> limits;"
+INSTANTIATING = ["metal", "directx", "opengl"]
+
+# The Metal importer keeps a partial specialization (``Limits<pair_t<T>>``) as a generic structure whose static
+# member constructs ``pair_t<T>`` under its mangled name, which no declaration spells.
+METAL_PARTIAL_SPECIALIZATION = """
+#include <metal_stdlib>
+using namespace metal;
+
+template <typename T>
+struct pair_t {
+  T a;
+  T b;
+  constexpr pair_t(T a, T b) thread : a(a), b(b) {}
+};
+
+template <typename U>
+struct Limits {
+  static const constant U min = metal::numeric_limits<U>::lowest();
+};
+
+template <typename T>
+struct Limits<pair_t<T>> {
+  static constexpr constant pair_t<T> min =
+      pair_t<T>(-metal::numeric_limits<T>::infinity(), -metal::numeric_limits<T>::infinity());
+};
+
+kernel void clamp_low(device float* out [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+  out[i] = min(out[i], 1.0f);
+}
+"""
+
+
+@pytest.mark.parametrize("target", INSTANTIATING)
+def test_calls_in_generic_structures_no_live_code_names_are_not_checked(target):
+    assert undeclared_function_calls(_program(UNNAMED_TEMPLATE), target) == []
+
+
+@pytest.mark.parametrize("target", INSTANTIATING)
+def test_calls_in_generic_structures_live_code_names_are_checked(target):
+    calls = undeclared_function_calls(_program(NAMED_TEMPLATE), target)
+    assert [name for name, _ in calls] == ["makePair"]
+
+
+@pytest.mark.parametrize("target", [None, "vulkan", "rust", "slang"])
+def test_calls_in_generic_structures_are_checked_for_targets_that_emit_templates(
+    target,
+):
+    calls = undeclared_function_calls(_program(UNNAMED_TEMPLATE), target)
+    assert [name for name, _ in calls] == ["makePair"]
+
+
+@pytest.mark.parametrize("target", INSTANTIATING)
+def test_an_unnamed_generic_structure_call_does_not_block_translation(tmp_path, target):
+    path = _write(tmp_path, "template.cgl", UNNAMED_TEMPLATE)
+    generated = crosstl.translate(path, backend=target)
+    assert "makePair" not in generated and generated.strip()
+
+
+@pytest.mark.parametrize("target", INSTANTIATING + ["vulkan"])
+def test_a_named_generic_structure_calling_an_undeclared_function_is_refused(
+    tmp_path, target
+):
+    path = _write(tmp_path, "template.cgl", NAMED_TEMPLATE)
+    with pytest.raises(UndeclaredFunctionError, match="makePair"):
+        crosstl.translate(path, backend=target)
+
+
+@pytest.mark.parametrize("target", INSTANTIATING)
+def test_an_imported_partial_specialization_does_not_block_translation(
+    tmp_path, target
+):
+    path = _write(tmp_path, "partial.metal", METAL_PARTIAL_SPECIALIZATION)
+    generated = crosstl.translate(path, backend=target)
+    assert "pair_t_u3cT_u3e" not in generated and generated.strip()

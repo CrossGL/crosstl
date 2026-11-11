@@ -411,6 +411,11 @@ from .metal_buffer_resource_types import metal_buffer_resource_scope_type
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
+from .metal_constant_initializers import (
+    folded_helper_is_unused,
+    metal_constant_initializer,
+    restore_static_initializer_helpers,
+)
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
@@ -519,6 +524,7 @@ from .storage_image_texels import (
     texel_store_value,
     texel_vector_type,
 )
+from .storage_word_views import reinterpret_source_layout
 from .texture_lod_clamp import (
     is_texture_lod_clamp_operation,
     metal_texture_lod_clamp_call,
@@ -531,6 +537,10 @@ from .texture_residency import (
     metal_texture_resident_call,
 )
 from .workgroup_size_extents import fold_workgroup_size_extents
+from .written_function_names import (
+    METAL_CALLABLE_FUNCTION_NAMES,
+    refuse_written_foreign_calls,
+)
 from .written_type_names import (
     METAL_TYPE_NAMES,
     refuse_written_foreign_types,
@@ -1845,6 +1855,7 @@ class MetalCodeGen(
         scoped_ast.metal_constant_conversion_operators = (
             self.collect_metal_constant_conversion_operators(self.all_functions(ast))
         )
+        restore_static_initializer_helpers(self, ast, scoped_ast)
         return scoped_ast
 
     def entry_scoped_functions(self, ast, entry_function):
@@ -2126,6 +2137,7 @@ class MetalCodeGen(
             refuse_written_foreign_types(
                 output, self.written_foreign_type_names, "Metal"
             )
+            refuse_written_foreign_calls(output, METAL_CALLABLE_FUNCTION_NAMES, "Metal")
         finally:
             self.written_foreign_type_names = None
         refuse_metal_double_values(output, self.refuse_lowering)
@@ -3448,7 +3460,7 @@ class MetalCodeGen(
                         func
                     ),
                 )
-            else:
+            elif not folded_helper_is_unused(self, func):
                 functions_code += self.generate_function(func)
 
         if hasattr(ast, "stages") and ast.stages:
@@ -4929,7 +4941,10 @@ class MetalCodeGen(
                 source_location=getattr(member, "source_location", None),
             )
 
-        initializer = self.generate_expression_with_expected(default_value, raw_type)
+        # A member-wise constructor helper is not a constant expression.
+        initializer = metal_constant_initializer(
+            self, default_value, raw_type
+        ) or self.generate_expression_with_expected(default_value, raw_type)
         dependencies = self.metal_struct_type_dependencies(mapped_type)
         return (
             f"    static constant constexpr {mapped_type} {member_name} = "
@@ -29163,6 +29178,16 @@ class MetalCodeGen(
             ):
                 self.metal_storage_pointer_reinterpret_error(
                     expression, contract, "source-alignment-unproven", source_type
+                )
+
+        if contract.get("scalarWrapperView"):
+            # The source words must be one 32-bit scalar or such a wrapper.
+            source_layout, _ = reinterpret_source_layout(
+                source_pointee, self.structs_by_name
+            )
+            if source_layout is None or source_layout.bit_width != 32:
+                self.metal_storage_pointer_reinterpret_error(
+                    expression, contract, "source-element-layout-mismatch", source_type
                 )
 
         if contract.get("aggregateHomogeneousScalarArrayRead"):

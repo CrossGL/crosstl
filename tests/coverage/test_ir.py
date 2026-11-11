@@ -70,6 +70,12 @@ def test_a_call_that_spells_its_generic_arguments_is_keyed_by_its_name():
     assert list(by_name(entry)) == ["slang/bit_cast"]
 
 
+def test_an_operation_crossgl_writes_as_an_expression_is_keyed_by_its_name():
+    spelled = {"crossgl": "ivec3(gl_WorkGroupSize)"}
+    entry = ir.build([row("slang", ("WorkgroupSize", "supported", spelled))])
+    assert list(by_name(entry)) == ["slang/WorkgroupSize"]
+
+
 def test_input_rows_do_not_widen_the_universe():
     entry = ir.build([{**row("glsl", ("abs", "supported", {})), "direction": "input"}])
     assert entry is None
@@ -132,6 +138,34 @@ def test_a_function_with_no_id_takes_the_one_id_of_functions_spelled_alike():
     # Two ids share the spelling log10, so neither is taken; a method takes no function's id.
     assert features["cuda/log10"]["members"] == ["cuda/log10f"]
     assert features["metal/Load"]["members"] == ["metal/texture2d.read"]
+
+
+def test_functions_without_an_id_that_crossgl_spells_alike_are_one_feature():
+    method = row("metal", ("vec.erf", "wrong", {"crossgl": "erf", "detail": "bad"}))
+    method["features"][0]["category"] = "method"
+    entry = ir.build(
+        [
+            row(
+                "cuda",
+                ("erff", "supported", {"crossgl": "erf"}),
+                ("__clz", "supported", {}),
+                ("__fdividef", "refused", {"detail": "gap"}),
+            ),
+            row("hip", ("__clz", "supported", {})),
+            row("mojo", ("erf", "wrong", {"detail": "global variables"})),
+            method,
+        ]
+    )
+    features = by_name(entry)
+    # Mojo's generator fails erf, but CrossGL's erf translates correctly to CUDA.
+    assert features["crossgl/erf"]["members"] == ["cuda/erff", "mojo/erf"]
+    assert features["crossgl/erf"]["outcome"] == "supported"
+    assert features["crossgl/erf"]["group"] == "shared"
+    assert features["crossgl/__clz"]["members"] == ["cuda/__clz", "hip/__clz"]
+    # A spelling one language has keeps that language's name, and a method stays its own.
+    assert features["cuda/__fdividef"]["outcome"] == "refused"
+    assert features["metal/erf"]["members"] == ["metal/vec.erf"]
+    assert entry["counts"] == {"supported": 2, "refused": 1, "wrong": 1, "untested": 0}
 
 
 def test_a_gap_names_its_member_as_the_feature_of_its_cause():

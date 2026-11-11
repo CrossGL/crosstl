@@ -290,6 +290,15 @@ class Rust(Dialect):
             return f"let mut {name}: {self.type(kind)} = Default::default();"
         return f"let {name}: {self.type(kind)} = {value};"
 
+    def retain(self, kind: Type, name: str, statement: str) -> list[str]:
+        # rust-gpu removes values nothing uses. A baseline that only declared a boolean argument would lose the
+        # comparison that makes it, and the comparison would then join the id of every call that takes one, as
+        # OpFOrdGreaterThan did subgroup_all's. Each component guards the store instead.
+        parts = (
+            [f"{name}.{c}" for c in "xyzw"[: kind.shape[0]]] if kind.shape else [name]
+        )
+        return [f"if {part} {{ {statement} }}" for part in parts]
+
     def call(self, name: str, arguments: list[str]) -> str:
         unsafe = name.startswith("unsafe ")
         name = name.removeprefix("unsafe ")

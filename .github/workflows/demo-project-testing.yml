@@ -80,6 +80,7 @@ jobs:
     timeout-minutes: 15
     env:
       MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       LIBGL_ALWAYS_SOFTWARE: "1"
       EGL_PLATFORM: surfaceless
@@ -108,6 +109,15 @@ jobs:
           git -C mlx-smoke-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-smoke-upstream fetch --depth=1 origin "$MLX_COMMIT"
           git -C mlx-smoke-upstream checkout --detach FETCH_HEAD
+      - name: Checkout complete-family MLX kernels
+        run: |
+          git init mlx-canary-upstream
+          git -C mlx-canary-upstream config core.autocrlf false
+          git -C mlx-canary-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-canary-upstream sparse-checkout init --cone
+          git -C mlx-canary-upstream sparse-checkout set mlx/backend/metal/kernels
+          git -C mlx-canary-upstream fetch --depth=1 origin "$MLX_CORPUS_COMMIT"
+          git -C mlx-canary-upstream checkout --detach FETCH_HEAD
       - name: Install pinned Linux DXC
         uses: ./.github/actions/install-linux-dxc
         with:
@@ -128,6 +138,15 @@ jobs:
               'demos/integrations/mlx/tests/kernels/test_current_arange.py::test_current_mlx_arange_native_parity[arangeint32]' \
               'demos/integrations/mlx/tests/kernels/test_current_arange.py::test_current_mlx_arange_native_parity[arangefloat32]' \
               2>&1 | tee mlx-smoke-results/execution.log
+      - name: Run complete-family canary
+        # A few workloads of every complete family, the full tier's proofs on each target.
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-canary-upstream
+        run: |
+          set -euo pipefail
+          python tools/run_bounded_command.py --timeout-seconds 600 --label "MLX complete-family canary" -- \
+            python -m demos.integrations.mlx.smoke_canary --junitxml=mlx-smoke-results/canary.xml \
+              2>&1 | tee mlx-smoke-results/canary.log
       - name: Upload smoke diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -314,6 +333,7 @@ jobs:
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_STORAGE_WORD_VIEW_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
@@ -353,6 +373,7 @@ jobs:
               tests/test_translator/test_atomic_resource_runtime.py \
               demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_storage_word_views.py \
               tests/test_translator/test_atomic_load_runtime.py \
               demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py \
               tests/test_translator/test_atomic_compare_exchange_runtime.py \
@@ -457,6 +478,7 @@ jobs:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
           CROSTL_REQUIRE_MLX_GENERAL_GATHER: "1"
           CROSTL_REQUIRE_METAL_EMPTY_ARRAYS: "1"
+          CROSTL_REQUIRE_METAL_CONSTANT_INITIALIZER_RUNTIME: "1"
           CROSTL_REQUIRE_FLOAT_ATOMIC_MEMORY: "1"
           CROSTL_REQUIRE_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_VOID_RETURN_EFFECTS: "1"
@@ -467,6 +489,7 @@ jobs:
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_STORAGE_WORD_VIEW_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
@@ -482,6 +505,7 @@ jobs:
               --junitxml=.mlx-gather/results.xml \
               demos/integrations/mlx/tests/kernels/test_general_gather.py \
               tests/test_translator/test_metal_empty_arrays.py \
+              tests/test_translator/test_metal_constant_constructor_initializers.py \
               tests/test_translator/test_float_atomic_memory.py \
               demos/integrations/mlx/tests/kernels/test_float_atomic_memory.py \
               tests/test_translator/test_resource_aggregates.py \
@@ -493,6 +517,7 @@ jobs:
               tests/test_translator/test_atomic_resource_runtime.py \
               demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_storage_word_views.py \
               tests/test_translator/test_atomic_load_runtime.py \
               demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py \
               tests/test_translator/test_atomic_compare_exchange_runtime.py \
@@ -707,6 +732,7 @@ jobs:
           CROSTL_REQUIRE_ATOMIC_RESOURCE_RUNTIME: "1"
           CROSTL_REQUIRE_MLX_GENERAL_SCATTER: "1"
           CROSTL_REQUIRE_ATOMIC_STORE_RUNTIME: "1"
+          CROSTL_REQUIRE_STORAGE_WORD_VIEW_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_LOAD_RUNTIME: "1"
           CROSTL_REQUIRE_ATOMIC_COMPARE_EXCHANGE_RUNTIME: "1"
           CROSTL_REQUIRE_METAL_CONSTEXPR_RUNTIME: "1"
@@ -748,6 +774,7 @@ jobs:
               tests/test_translator/test_atomic_resource_runtime.py \
               demos/integrations/mlx/tests/kernels/test_general_scatter_runtime.py \
               tests/test_translator/test_atomic_store_runtime.py \
+              tests/test_translator/test_storage_word_views.py \
               tests/test_translator/test_atomic_load_runtime.py \
               demos/integrations/mlx/tests/kernels/test_atomic_load_runtime.py \
               tests/test_translator/test_atomic_compare_exchange_runtime.py \
@@ -1539,6 +1566,8 @@ jobs:
         env:
           CROSTL_REQUIRE_SUBGROUP_GUARDED_RETURNS: "1"
           CROSTL_REQUIRE_SUBGROUP_UNIFORM_EXITS: "1"
+          CROSTL_REQUIRE_SUBGROUP_EARLY_EXIT_RUNTIME: "1"
+          CROSTL_REQUIRE_SUBGROUP_EXIT_VALUE_SHUFFLE_RUNTIME: "1"
           CROSTL_REQUIRE_SUBGROUP_DIVERGENT_BARRIER_RUNTIME: "1"
           CROSTL_REQUIRE_FLOAT_SELF_COMPARISONS: "1"
           EGL_PLATFORM: surfaceless
@@ -1556,6 +1585,8 @@ jobs:
               tests/test_translator/test_opengl_vector_comparisons.py \
               tests/test_translator/test_opengl_subgroup_exit_uniformity.py \
               tests/test_translator/test_subgroup_uniform_exits.py \
+              tests/test_translator/test_subgroup_early_exits.py \
+              tests/test_translator/test_subgroup_exit_value_shuffles.py \
               tests/test_translator/test_subgroup_divergent_barriers.py \
               2>&1 | tee .mlx-portable-host/subgroup-returns.log
       - name: Validate collective helper arguments
@@ -1588,6 +1619,8 @@ jobs:
           CROSTL_REQUIRE_WORKGROUP_VIEW_IDENTITY_BRANCHES: "1"
           CROSTL_REQUIRE_SUBGROUP_BRANCH_REASSIGNMENTS: "1"
           CROSTL_REQUIRE_IMMUTABLE_STORAGE: "1"
+          CROSTL_REQUIRE_ORDERED_WAVE_IDS: "1"
+          CROSTL_REQUIRE_LANE_SYMMETRIC_UNIFORMITY: "1"
           CROSTL_REQUIRE_WORKGROUP_IDENTITY_REINTERPRET: "1"
           CROSTL_REQUIRE_RESOURCE_STORAGE_VIEWS: "1"
           CROSTL_REQUIRE_BINARY16_ALIAS_AGGREGATES: "1"
@@ -1599,6 +1632,8 @@ jobs:
           CROSTL_REQUIRE_WORKGROUP_RECORD_TRANSFERS: "1"
           CROSTL_REQUIRE_WORKGROUP_RESOURCE_AGGREGATES: "1"
           CROSTL_REQUIRE_NARROW_WORKGROUP_RESOURCE_AGGREGATES: "1"
+          CROSTL_REQUIRE_LANE_RECORD_VIEWS: "1"
+          CROSTL_REQUIRE_METAL_MEMBER_SPELLINGS: "1"
           CROSTL_REQUIRE_VECTOR_COMPONENT_NARROWING: "1"
           CROSTL_REQUIRE_AGGREGATE_RECORD_TRANSFERS: "1"
           CROSTL_REQUIRE_RESOURCE_ALLOCATION_ORIGINS: "1"
@@ -1643,6 +1678,8 @@ jobs:
               tests/test_translator/test_directx_narrow_buffer_extents.py::test_narrow_buffer_extent_execute \
               tests/test_translator/test_subgroup_uniform_arguments.py \
               tests/test_translator/test_subgroup_uniform_returns.py \
+              tests/test_translator/test_directx_ordered_wave_ids.py \
+              tests/test_translator/test_lane_symmetric_uniformity.py \
               tests/test_translator/test_collective_loop_strides.py \
               tests/test_translator/test_subgroup_strided_trips.py \
               tests/test_translator/test_matrix_transfers.py \
@@ -1682,6 +1719,8 @@ jobs:
               tests/test_translator/test_narrow_workgroup_resource_aggregates.py \
               tests/test_translator/test_directx_vector_component_narrowing.py \
               tests/test_translator/test_aggregate_record_transfers.py \
+              tests/test_translator/test_lane_record_views.py \
+              tests/test_translator/test_metal_member_spellings.py \
               tests/test_translator/test_resource_allocation_origins.py \
               2>&1 | tee .mlx-portable-host/subgroup-arguments.log
           mkdir -p .mlx-portable-host/resource-values
@@ -2310,6 +2349,7 @@ jobs:
               tests/test_translator/test_metal_log2.py::test_log2_profiles_execute \
               tests/test_translator/test_metal_log2.py::test_log2_narrow_promotion_executes_once \
               tests/test_translator/test_metal_log2.py::test_log2_unspecified_operand_policy_keeps_native_subnormals \
+              tests/test_translator/test_metal_log10.py::test_log10_profiles_execute \
               tests/test_translator/test_metal_precise_sqrt.py::test_precise_sqrt_executes \
               tests/test_translator/test_metal_precise_sqrt.py::test_precise_sqrt_promotes_narrow_alias_once \
               tests/test_translator/test_metal_round.py::test_round_executes \

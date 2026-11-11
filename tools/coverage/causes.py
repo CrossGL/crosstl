@@ -47,8 +47,9 @@ def headline(text: str) -> str:
 def cause(feature: dict, language: str = "") -> str:
     """The diagnostic of a wrong result with what is particular to its probe removed: line and column numbers, the
     names every probe uses, and the feature's own name or CrossGL spelling, including the name CrossGL gives a
-    ``language`` built-in (:data:`.spellings.RENAMES`). Wrong results with one cause are one bug, so a generator that
-    emits twenty builtins unchanged has one issue rather than twenty.
+    ``language`` built-in (:data:`.spellings.RENAMES`, :data:`.spellings.WAVES` and :data:`.spellings.OTHER_NAMES`).
+    Wrong results with one cause are one bug, so a generator that emits twenty builtins unchanged has one issue rather
+    than twenty.
     """
     detail = diagnostic(feature)
     prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
@@ -64,8 +65,19 @@ def cause(feature: dict, language: str = "") -> str:
         names |= member_names
     # An operator spelling such as spellings.SUBSCRIPT names no function a diagnostic could mention.
     names -= {None, "", spellings.SUBSCRIPT, spellings.ELEMENT}
-    renames = spellings.RENAMES.get(language, {}) | spellings.WAVES.get(language, {})
+    renames = (
+        spellings.RENAMES.get(language, {})
+        | spellings.WAVES.get(language, {})
+        | spellings.OTHER_NAMES.get(language, {})
+    )
     names |= {renames[name] for name in names if name in renames}
+    # An expression spelling such as ``clockRealtime2x32EXT().x`` is named in a diagnostic by what it calls.
+    names |= {
+        n
+        for name in names
+        if spellings.is_expression(name)
+        for n in spellings.named(name)
+    }
     for name in sorted(names, key=lambda n: (-len(n), n)):
         rest = re.sub(rf"(?<![\w.:]){re.escape(name)}(?!\w|::)", FEATURE, rest)
     return prefix + rest
