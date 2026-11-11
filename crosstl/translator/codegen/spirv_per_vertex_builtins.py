@@ -163,19 +163,17 @@ class _PerVertexLowering:
 
 # Geometry-stage built-ins (GLSL 4.60 section 7.1.4): a geometry stage writes the layer, viewport and primitive id of
 # the primitive it emits and reads the incoming primitive id as gl_PrimitiveIDIn; a fragment stage reads all three.
+# Vertex and tessellation evaluation stages write the layer and viewport under SPV_EXT_shader_viewport_index_layer
+# (GL_ARB_shader_viewport_layer_array in GLSL, SV_RenderTargetArrayIndex and SV_ViewportArrayIndex in HLSL).
+_LAYER_STORAGE = {
+    "Vertex": "Output",
+    "TessellationEvaluation": "Output",
+    "Geometry": "Output",
+    "Fragment": "Input",
+}
 _PRIMITIVE_BUILTINS = {
-    "gl_Layer": (
-        "int",
-        "Layer",
-        {"Geometry": "Output", "Fragment": "Input"},
-        {"Geometry", "Fragment"},
-    ),
-    "gl_ViewportIndex": (
-        "int",
-        "ViewportIndex",
-        {"Geometry": "Output", "Fragment": "Input"},
-        {"Geometry", "Fragment"},
-    ),
+    "gl_Layer": ("int", "Layer", _LAYER_STORAGE, set(_LAYER_STORAGE)),
+    "gl_ViewportIndex": ("int", "ViewportIndex", _LAYER_STORAGE, set(_LAYER_STORAGE)),
     "gl_PrimitiveIDIn": ("int", "PrimitiveId", "Input", {"Geometry"}),
     "gl_PrimitiveID": (
         "int",

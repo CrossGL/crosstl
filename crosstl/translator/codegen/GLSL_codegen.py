@@ -1702,6 +1702,15 @@ def _opengl_cooperative_matrix_fragment_contract_message(contract):
     )
 
 
+# GLSL types of the fragment built-ins an entry parameter of another integer type converts from.
+GLSL_CONVERTED_FRAGMENT_BUILTIN_TYPES = {
+    "gl_FragFullyCoveredNV": "bool",
+    "gl_ShadingRateEXT": "int",
+    "gl_Layer": "int",
+    "gl_ViewportIndex": "int",
+}
+
+
 class GLSLCodeGen(
     GLSLNarrowVectorMixin,
     GLSLDescriptorSetBindingsMixin,
@@ -24504,6 +24513,12 @@ class GLSLCodeGen(
             if mapped_type == "uint":
                 return f"uint({source})"
             return None
+
+        # Built-ins GLSL declares as bool or int that HLSL delivers as uint: SV_InnerCoverage (gl_FullyCoveredEXT),
+        # SV_ShadingRate, SV_RenderTargetArrayIndex and SV_ViewportArrayIndex.
+        glsl_type = GLSL_CONVERTED_FRAGMENT_BUILTIN_TYPES.get(builtin)
+        if glsl_type is not None and mapped_type in {"uint", "int"}:
+            return None if mapped_type == glsl_type else f"{mapped_type}({builtin})"
 
         return None
 
