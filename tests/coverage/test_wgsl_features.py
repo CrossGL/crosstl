@@ -73,6 +73,13 @@ def test_wgsl_counts_zero_bits_with_the_crossgl_functions_metal_names():
     assert spellings.spelling("mojo", "count_leading_zeros", set()) == "clz"
 
 
+def test_wgsl_packs_8_bit_integers_with_the_hlsl_functions():
+    assert spellings.spelling("wgsl", "pack4xI8", set()) == "pack_s8"
+    assert spellings.spelling("wgsl", "unpack4xU8", set()) == "unpack_u8u32"
+    # pack_clamp_u8 clamps signed components, and pack4xU8Clamp unsigned ones.
+    assert spellings.spelling("wgsl", "pack4xU8Clamp", set()) == "pack4xU8Clamp"
+
+
 WGSL_TEXTURES = """
 match fiu32: f32 | i32 | u32
 match iu32: i32 | u32
