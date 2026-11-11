@@ -53,9 +53,9 @@ WGSL = {
         "        }\n    }\n    acc += 0.5;\n}\noutp[i] = acc;"
     ),
     "do-while-continue": Template(
-        "let m = 5 + (iin[i] & 3);\nvar k = 0;\nvar acc = fin[i];\nloop {\n    k++;\n    if (k > 20) {\n"
+        "let m = 5 + (iin[i] & 3);\nvar k = 0;\nvar acc: f32 = 0.0;\nloop {\n    k++;\n    if (k > 20) {\n"
         "        break;\n    }\n    if (k > 4) {\n        acc += 0.5;\n        continue;\n    }\n"
-        "    acc += f32(k);\n    continuing {\n        break if k >= m;\n    }\n}\noutp[i] = acc;"
+        "    acc += f32(k);\n    continuing {\n        break if k >= m;\n    }\n}\noutp[i] = acc + fin[i];"
     ),
     "chained-conditional": Template(
         "let a = iin[i];\nlet b = select(3.0, select(2.0, 1.0, a > 9), a > 1);\n"
