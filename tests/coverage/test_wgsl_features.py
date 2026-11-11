@@ -76,8 +76,15 @@ def test_wgsl_counts_zero_bits_with_the_crossgl_functions_metal_names():
 def test_wgsl_packs_8_bit_integers_with_the_hlsl_functions():
     assert spellings.spelling("wgsl", "pack4xI8", set()) == "pack_s8"
     assert spellings.spelling("wgsl", "unpack4xU8", set()) == "unpack_u8u32"
-    # pack_clamp_u8 clamps signed components, and pack4xU8Clamp unsigned ones.
-    assert spellings.spelling("wgsl", "pack4xU8Clamp", set()) == "pack4xU8Clamp"
+    # pack_clamp_u8 clamps signed components, so pack4xU8Clamp packs unsigned ones min() has clamped to 255.
+    assert (
+        spellings.spelling("wgsl", "pack4xU8Clamp", set())
+        == "pack_u8(min({0}, uvec4(255u)))"
+    )
+    assert (
+        spellings.spelling("wgsl", "dot4I8Packed", set())
+        == "dot4add_i8packed({0}, {1}, 0)"
+    )
 
 
 WGSL_TEXTURES = """

@@ -508,13 +508,21 @@ OTHER_NAMES = {
         "countLeadingZeros": "clz",
         "countTrailingZeros": "ctz",
         # WGSL's 8-bit integer packing is HLSL's: component i in bits 8i to 8i + 7, unpacked with sign or zero
-        # extension (WGSL, "Data Packing Built-in Functions"). pack4xU8Clamp clamps unsigned components, where
-        # pack_clamp_u8 clamps signed ones, so it keeps its own name.
+        # extension (WGSL, "Data Packing Built-in Functions"). pack4xU8Clamp clamps unsigned components to
+        # [0, 255], where pack_clamp_u8 clamps signed ones, so it packs the components min() has clamped.
         "pack4xI8": "pack_s8",
         "pack4xU8": "pack_u8",
         "pack4xI8Clamp": "pack_clamp_s8",
+        "pack4xU8Clamp": "pack_u8(min({0}, uvec4(255u)))",
         "unpack4xI8": "unpack_s8s32",
         "unpack4xU8": "unpack_u8u32",
+        # WGSL's packed dot products are HLSL's with a zero accumulator (WGSL, "Dot Product Built-in Functions";
+        # HLSL Shader Model 6.4, dot4add_i8packed and dot4add_u8packed).
+        "dot4I8Packed": "dot4add_i8packed({0}, {1}, 0)",
+        "dot4U8Packed": "dot4add_u8packed({0}, {1}, 0u)",
+        # quantizeToF16 rounds each component to binary16 and back, which for vec2<f32> is
+        # unpack2x16float(pack2x16float(e)) (WGSL, "quantizeToF16"): HLSL's f16tof32 of its f32tof16.
+        "quantizeToF16": "f16tof32(f32tof16({0}))",
         # textureSampleBaseClampToEdge samples level 0 with its coordinates clamped to [half_texel, 1 - half_texel],
         # where half_texel is vec2(0.5) / vec2<f32>(textureDimensions(t, 0)) (WGSL, "textureSampleBaseClampToEdge").
         "textureSampleBaseClampToEdge": (
@@ -564,7 +572,7 @@ OTHER_NAMES = {
         # quotient is inexact and, for align_down, negative or, for align_up, positive. ceildiv of a Float32 is the
         # ceiling of the quotient.
         "recip": "rcp",
-        "inf": "infinity()",
+        "inf": "(INFINITY)",
         "iota": "(0.0)",
         "mulwide": "(uint64({0}) * uint64({1}))",
         "align_down": (
@@ -581,6 +589,12 @@ OTHER_NAMES = {
         "isclose": (
             "(({0} == {1}) || (isfinite({0}) && isfinite({1})"
             " && abs({0} - {1}) <= max(1e-08, 1e-05 * max(abs({0}), abs({1})))))"
+        ),
+        # ulp as std/math/math.mojo computes it: NaN for NaN, the magnitude of an infinity, and otherwise the gap
+        # from the magnitude to the next float up or, when that is infinite, down.
+        "ulp": (
+            "(isnan({0}) ? {0} : (isinf(abs({0})) ? abs({0}) : (isinf(nextafter(abs({0}), INFINITY))"
+            " ? abs({0}) - nextafter(abs({0}), -INFINITY) : nextafter(abs({0}), INFINITY) - abs({0}))))"
         ),
     },
     "rust": {
@@ -645,7 +659,7 @@ OTHER_NAMES = {
         "Float::max_value": "(3.40282347e38)",
         "Float::min_value": "(-3.40282347e38)",
         "Float::min_positive_value": "(1.17549435e-38)",
-        "Float::neg_infinity": "(-infinity())",
+        "Float::neg_infinity": "(-INFINITY)",
         "Float::neg_zero": "(-0.0)",
         # glam's Vec3 methods that glam writes in Rust arithmetic (glam 0.34, src/f32/vec3.rs), written with the same
         # CrossGL operations. glam's length_squared is dot(v, v). Its max_element and min_element compare with > and
