@@ -6230,9 +6230,7 @@ class CudaToCrossGLConverter:
         )
 
     def format_cuda_surface_write_diagnostic(self, base_name, member):
-        return self.format_unsupported_cuda_resource_expression(
-            "surface", member, "0"
-        )
+        return self.format_unsupported_cuda_resource_expression("surface", member, "0")
 
     def strip_surface_byte_offset(self, expression, value_type):
         text = str(expression).strip()

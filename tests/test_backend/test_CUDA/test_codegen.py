@@ -9035,13 +9035,10 @@ class TestCudaCodeGen:
         )
         assert (
             "/* cuda surface.surf2Dwrite boundary mode "
-            "'cudaBoundaryModeZero' not directly supported in CrossGL */"
-            in result
+            "'cudaBoundaryModeZero' not directly supported in CrossGL */" in result
         )
         assert "imageStore(img, vec2<i32>(x, y), clamped)" not in result
-        assert (
-            "var trapped: f32 = imageLoad(img, vec2<i32>(x, y));" in result
-        )
+        assert "var trapped: f32 = imageLoad(img, vec2<i32>(x, y));" in result
         assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y));" in result
         assert (
             "var lineClamped: f32 = imageLoad(line, "
@@ -9049,8 +9046,7 @@ class TestCudaCodeGen:
         )
         assert (
             "var voxelClamped: f32 = imageLoad(vol, "
-            "min(vec3<i32>(x, y, z), imageSize(vol) - vec3<i32>(1, 1, 1)));"
-            in result
+            "min(vec3<i32>(x, y, z), imageSize(vol) - vec3<i32>(1, 1, 1)));" in result
         )
         assert (
             "var faceClamped: f32 = imageLoad(cube, vec3<i32>("
