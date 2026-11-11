@@ -5064,6 +5064,27 @@ class TestHipCodeGen:
         with pytest.raises(HipLoweringRefused, match="cannot assign to a component"):
             HipCodeGen().generate(Parser(Lexer(write_source).tokens).parse())
 
+    def test_compute_builtin_subscript_in_an_assigned_index_is_read(self):
+        # The built-in subscript is the index of the assigned element, a read, not the assignment's target.
+        source_code = """
+        shader TestShader {
+            buffer float* outp;
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    outp[gl_GlobalInvocationID[0]] = 1.0;
+                    outp[outp_index(gl_LocalInvocationID[1])] += 2.0;
+                }
+            }
+            uint outp_index(uint i) { return i; }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "outp[(blockIdx.x * blockDim.x + threadIdx.x)] = 1.0f;" in hip_code
+        assert "outp[outp_index(threadIdx.y)] += 2.0f;" in hip_code
+
     def test_hlsl_compute_builtin_parameters_lower_to_hip_expressions(self):
         source_code = """
         shader TestShader {

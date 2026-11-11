@@ -327,6 +327,8 @@ class CudaCodeGen(
         self.cuda_function_capture_params = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -472,6 +474,8 @@ class CudaCodeGen(
         )
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -6514,10 +6518,14 @@ class CudaCodeGen(
         else:
             array = self.visit(node.array)
 
-        if hasattr(node, "index_expr"):
-            index = self.visit(node.index_expr)
-        else:
-            index = self.visit(node.index)
+        self.subscript_index_depth += 1
+        try:
+            if hasattr(node, "index_expr"):
+                index = self.visit(node.index_expr)
+            else:
+                index = self.visit(node.index)
+        finally:
+            self.subscript_index_depth -= 1
 
         return f"{array}[{index}]"
 
@@ -6544,7 +6552,7 @@ class CudaCodeGen(
             role = self.cuda_compute_builtin_role_for_name(name)
         if role is None:
             return None
-        if self.assignment_lhs_depth > 0:
+        if self.assignment_lhs_depth > 0 and self.subscript_index_depth == 0:
             raise CudaLoweringRefused(
                 [f"cannot assign to a component of compute built-in '{name}' in CUDA"]
             )

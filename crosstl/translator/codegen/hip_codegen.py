@@ -387,6 +387,8 @@ class HipCodeGen(
         self.hip_function_capture_params = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -885,6 +887,8 @@ class HipCodeGen(
         self.helper_functions = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -9245,7 +9249,11 @@ class HipCodeGen(
         if builtin_component is not None:
             return builtin_component
         array = self.visit(node.array)
-        index = self.visit(node.index)
+        self.subscript_index_depth += 1
+        try:
+            index = self.visit(node.index)
+        finally:
+            self.subscript_index_depth -= 1
         return f"{array}[{index}]"
 
     def hip_compute_builtin_index_component(self, node):
@@ -9271,7 +9279,7 @@ class HipCodeGen(
             role = self.hip_compute_builtin_role_for_name(name)
         if role is None:
             return None
-        if self.assignment_lhs_depth > 0:
+        if self.assignment_lhs_depth > 0 and self.subscript_index_depth == 0:
             raise HipLoweringRefused(
                 [f"cannot assign to a component of compute built-in '{name}' in HIP"]
             )
