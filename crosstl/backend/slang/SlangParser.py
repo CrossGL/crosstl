@@ -171,7 +171,14 @@ class SlangParser:
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
+    def expect_end_of_input(self):
+        if self.current_token[0] != "EOF":
+            raise SyntaxError(f"Expected EOF, got {self.current_token[0]}")
+
     def eat(self, token_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if token_type == "EOF" and self.current_token[0] == "EOF":
+            raise SyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -190,7 +197,7 @@ class SlangParser:
 
     def parse(self):
         shader = self.parse_shader()
-        self.eat("EOF")
+        self.expect_end_of_input()
         return shader
 
     def parse_shader(self):

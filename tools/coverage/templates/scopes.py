@@ -95,7 +95,7 @@ RUST = {
     ),
     "integer-vector-arithmetic": Template(
         "let a = $ivec2::new(iin[i], 3);\nlet b = a * 2 + $ivec2::new(1, 5);\n"
-        "let c = (b >> 1) ^ (b & $ivec2::splat(6));\nlet d = b / 3 + b % 4;\n"
+        "let c = (b >> 1i32) ^ (b & $ivec2::splat(6));\nlet d = b / 3 + b % 4;\n"
         "outp[i] = (c.x * 100 + c.y * 10 + d.x + d.y * 1000) as f32;"
     ),
     "block-scope": Template(
