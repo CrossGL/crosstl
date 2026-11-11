@@ -1,3 +1,5 @@
+import pytest
+
 from crosstl import translate
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
@@ -5,6 +7,7 @@ from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.local_memory_spaces import crossgl_zero_value
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from crosstl.translator.semantics.declared_functions import UndeclaredFunctionError
 
 
 class TestCudaCodeGen:
@@ -9030,41 +9033,91 @@ class TestCudaCodeGen:
         result = codegen.generate(ast)
 
         assert (
-            "var clamped: f32 = imageLoad(img, min(vec2<i32>(x, y), "
-            "imageSize(img) - vec2<i32>(1, 1)));" in result
+            "var clamped: f32 = imageLoad(img, clamp(vec2<i32>(x, y), "
+            "vec2<i32>(0, 0), imageSize(img) - vec2<i32>(1, 1)));" in result
         )
+        # cudaBoundaryModeZero and a mode that is not a constant keep the CUDA call, which every target refuses.
         assert (
-            "/* cuda surface.surf2Dwrite boundary mode "
-            "'cudaBoundaryModeZero' not directly supported in CrossGL */" in result
+            "surf2Dwrite(clamped, img, (x * sizeof(float)), y, cudaBoundaryModeZero);"
+            in result
         )
-        assert "imageStore(img, vec2<i32>(x, y), clamped)" not in result
+        assert "imageStore(img" not in result
         assert "var trapped: f32 = imageLoad(img, vec2<i32>(x, y));" in result
         assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y));" in result
         assert (
             "var lineClamped: f32 = imageLoad(line, "
-            "min(x, imageSize(line) - 1));" in result
+            "clamp(x, 0, imageSize(line) - 1));" in result
         )
         assert (
-            "var voxelClamped: f32 = imageLoad(vol, "
-            "min(vec3<i32>(x, y, z), imageSize(vol) - vec3<i32>(1, 1, 1)));" in result
+            "var voxelClamped: f32 = imageLoad(vol, clamp(vec3<i32>(x, y, z), "
+            "vec3<i32>(0, 0, 0), imageSize(vol) - vec3<i32>(1, 1, 1)));" in result
         )
         assert (
             "var faceClamped: f32 = imageLoad(cube, vec3<i32>("
-            "min(x, imageSize(cube).x - 1), "
-            "min(y, imageSize(cube).y - 1), z));" in result
+            "clamp(x, 0, imageSize(cube).x - 1), "
+            "clamp(y, 0, imageSize(cube).y - 1), z));" in result
         )
         assert (
-            "/* cuda surface.surf2Dread boundary mode 'someMode' "
-            "not directly supported in CrossGL */" in result
+            "var unknown: f32 = surf2Dread<float>(img, (x * sizeof(float)), y, "
+            "someMode);" in result
         )
         assert "cudaBoundaryModeClamp" not in result
         assert "cudaBoundaryModeTrap" not in result
-        assert "surf2Dread<float>" not in result
-        assert "surf2Dwrite(" not in result
         assert "surf1Dread<float>" not in result
         assert "surf3Dread<float>" not in result
         assert "surfCubemapread<float>" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_cuda_layered_surface_clamp_leaves_the_layer(self):
+        # A layer index or a cubemap face is not a texel coordinate: imageSize of a layered cubemap counts cubes.
+        code = """
+        __global__ void probe(
+            float* outp, cudaSurfaceObject_t layers, cudaSurfaceObject_t cubes,
+            cudaSurfaceObject_t lines, int x, int y, int layer
+        ) {
+            float a = surf2DLayeredread<float>(
+                layers, x * sizeof(float), y, layer, cudaBoundaryModeClamp
+            );
+            float b = surf1DLayeredread<float>(
+                lines, x * sizeof(float), layer, cudaBoundaryModeClamp
+            );
+            surfCubemapLayeredwrite(
+                a + b, cubes, x * sizeof(float), y, layer, cudaBoundaryModeClamp
+            );
+            outp[0] = a + b;
+        }
+        """
+        result = CudaToCrossGLConverter().generate(
+            CudaParser(CudaLexer(code).tokenize()).parse()
+        )
+
+        assert (
+            "var a: f32 = imageLoad(layers, vec3<i32>("
+            "clamp(x, 0, imageSize(layers).x - 1), "
+            "clamp(y, 0, imageSize(layers).y - 1), layer));" in result
+        )
+        assert (
+            "var b: f32 = imageLoad(lines, vec2<i32>("
+            "clamp(x, 0, imageSize(lines).x - 1), layer));" in result
+        )
+        assert (
+            "imageStore(cubes, vec3<i32>(clamp(x, 0, imageSize(cubes).x - 1), "
+            "clamp(y, 0, imageSize(cubes).y - 1), layer), (a + b));" in result
+        )
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_cuda_surface_zero_boundary_mode_is_refused_downstream(self, tmp_path):
+        source = tmp_path / "zero.cu"
+        source.write_text(
+            'extern "C" __global__ void probe(float* outp, cudaSurfaceObject_t img, int x, int y) {\n'
+            "    float b = surf2Dread<float>(img, x * sizeof(float), y, cudaBoundaryModeZero);\n"
+            "    outp[0] = b;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        for backend in ("opengl", "metal", "directx", "vulkan"):
+            with pytest.raises(UndeclaredFunctionError, match="surf2Dread"):
+                translate(str(source), backend=backend)
 
     def test_cuda_texture_gather_helpers_convert(self):
         code = """

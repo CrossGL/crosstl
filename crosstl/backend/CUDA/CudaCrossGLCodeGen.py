@@ -176,6 +176,16 @@ class CudaToCrossGLConverter:
         "cudaBoundaryModeClamp": "clamp",
         "cudaBoundaryModeZero": "zero",
     }
+    # The coordinates of each surface shape that are texel coordinates, before a layer index or cubemap face.
+    CUDA_SURFACE_TEXEL_DIMENSIONS = {
+        "1D": 1,
+        "1DLayered": 1,
+        "2D": 2,
+        "2DLayered": 2,
+        "3D": 3,
+        "Cubemap": 2,
+        "CubemapLayered": 2,
+    }
     CUDA_SURFACE_VALUE_BYTE_SIZES = {
         "char": 1,
         "signed char": 1,
@@ -5960,7 +5970,7 @@ class CudaToCrossGLConverter:
                 "surfCubemapLayeredread": 3,
             }[base_name]
             return self.format_cuda_surface_read(
-                args, dimensions, value_type, base_name, raw_args
+                args, dimensions, value_type, base_name
             )
 
         if base_name in {
@@ -6087,24 +6097,17 @@ class CudaToCrossGLConverter:
             "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
         )
 
-    def format_cuda_surface_read(
-        self, args, dimensions, value_type, base_name, raw_args=None
-    ):
+    def format_cuda_surface_read(self, args, dimensions, value_type, base_name):
         if len(args) < dimensions + 1:
             return None
         surface_name = args[0]
         coord_args = [self.strip_surface_byte_offset(args[1], value_type)]
         coord_args.extend(args[2 : dimensions + 1])
-        if len(args) > dimensions + 1:
-            return self.format_cuda_surface_read_boundary_mode(
-                base_name,
-                surface_name,
-                coord_args,
-                dimensions,
-                value_type,
-                args[dimensions + 1 :],
-            )
-        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
+        coord = self.format_cuda_surface_coordinate(
+            base_name, surface_name, coord_args, dimensions, args[dimensions + 1 :]
+        )
+        if coord is None:
+            return None
         return f"imageLoad({surface_name}, {coord})"
 
     def format_cuda_surface_write(
@@ -6118,17 +6121,38 @@ class CudaToCrossGLConverter:
         surface_name = args[1]
         coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
         coord_args.extend(args[3 : dimensions + 2])
-        if len(args) > dimensions + 2:
-            return self.format_cuda_surface_write_boundary_mode(
-                base_name,
-                surface_name,
-                coord_args,
-                dimensions,
-                value,
-                args[dimensions + 2 :],
-            )
-        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
+        coord = self.format_cuda_surface_coordinate(
+            base_name, surface_name, coord_args, dimensions, args[dimensions + 2 :]
+        )
+        if coord is None:
+            return None
         return f"imageStore({surface_name}, {coord}, {value})"
+
+    def format_cuda_surface_coordinate(
+        self, base_name, surface_name, coord_args, dimensions, mode_args
+    ):
+        """The image coordinate of a surface access, or ``None`` to keep the CUDA call as it is.
+
+        ``mode_args`` holds the arguments after the coordinates: none, or the boundary mode. With no mode or
+        ``cudaBoundaryModeTrap``, the default, the coordinate is used as it is. ``cudaBoundaryModeClamp`` clamps it
+        to the surface. ``cudaBoundaryModeZero``, under which a load out of range reads zero and a store out of
+        range is skipped, has no CrossGL form yet, and neither does a mode that is not one of the three names (a
+        variable, say). The call then stays as CUDA wrote it, and every target refuses it as an undeclared
+        function instead of reading or writing the surface without the mode.
+        """
+        if not mode_args:
+            mode = "trap"
+        elif len(mode_args) == 1:
+            mode = self.cuda_surface_boundary_mode(mode_args[0])
+        else:
+            mode = None
+        if mode == "trap":
+            return self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
+        if mode == "clamp":
+            return self.format_cuda_surface_clamped_coordinate(
+                base_name, surface_name, coord_args, dimensions
+            )
+        return None
 
     def cuda_surface_boundary_mode(self, mode_text):
         """Return 'trap', 'clamp' or 'zero' for a boundary-mode argument."""
@@ -6146,91 +6170,38 @@ class CudaToCrossGLConverter:
     def format_cuda_surface_clamped_coordinate(
         self, base_name, surface_name, coord_args, dimensions
     ):
-        if base_name in {"surfCubemapread", "surfCubemapwrite"}:
-            # imageSize of a cubemap is ivec2 while the coordinate also
-            # carries the face, so only the texel coordinates are clamped.
-            x, y, face = coord_args[0], coord_args[1], coord_args[2]
+        """``coord_args`` clamped to the texels of ``surface_name``, as ``cudaBoundaryModeClamp`` reads them.
+
+        Each texel coordinate is clamped to ``[0, size - 1]``, so a negative one reads the first texel. A layer
+        index or a cubemap face is not a texel coordinate and is left as it is: ``imageSize`` of a cubemap has no
+        face component, and that of a layered cubemap counts cubes, not faces.
+        """
+        texel_dimensions = self.CUDA_SURFACE_TEXEL_DIMENSIONS[
+            base_name.removeprefix("surf").removesuffix("read").removesuffix("write")
+        ]
+        size = f"imageSize({surface_name})"
+        if texel_dimensions == dimensions:
+            coord = self.format_vector_constructor(
+                f"vec{dimensions}", coord_args, "i32"
+            )
+            if dimensions == 1:
+                return f"clamp({coord}, 0, {size} - 1)"
+            zeros = ", ".join(["0"] * dimensions)
+            ones = ", ".join(["1"] * dimensions)
             return (
-                f"vec3<i32>(min({x}, imageSize({surface_name}).x - 1), "
-                f"min({y}, imageSize({surface_name}).y - 1), {face})"
+                f"clamp({coord}, vec{dimensions}<i32>({zeros}), "
+                f"{size} - vec{dimensions}<i32>({ones}))"
             )
-        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
-        if dimensions == 1:
-            return f"min({coord}, imageSize({surface_name}) - 1)"
-        ones = ", ".join(["1"] * dimensions)
-        return (
-            f"min({coord}, imageSize({surface_name}) "
-            f"- vec{dimensions}<i32>({ones}))"
+        if texel_dimensions == 1:
+            clamped = [f"clamp({coord_args[0]}, 0, {size}.x - 1)"]
+        else:
+            clamped = [
+                f"clamp({coord_args[index]}, 0, {size}.{'xyz'[index]} - 1)"
+                for index in range(texel_dimensions)
+            ]
+        return self.format_vector_constructor(
+            f"vec{dimensions}", clamped + list(coord_args[texel_dimensions:]), "i32"
         )
-
-    def format_cuda_surface_read_boundary_mode(
-        self, base_name, surface_name, coord_args, dimensions, value_type, extra_args
-    ):
-        if len(extra_args) > 1:
-            return self.format_cuda_surface_read_diagnostic(
-                base_name,
-                f"{base_name} has unexpected extra arguments",
-                value_type,
-            )
-        mode = self.cuda_surface_boundary_mode(extra_args[0])
-        if mode is None:
-            return self.format_cuda_surface_read_diagnostic(
-                base_name,
-                f"{base_name} boundary mode '{extra_args[0]}'",
-                value_type,
-            )
-        if mode == "clamp":
-            coord = self.format_cuda_surface_clamped_coordinate(
-                base_name, surface_name, coord_args, dimensions
-            )
-            return f"imageLoad({surface_name}, {coord})"
-        if mode == "zero":
-            return self.format_cuda_surface_read_diagnostic(
-                base_name,
-                f"{base_name} boundary mode 'cudaBoundaryModeZero'",
-                value_type,
-            )
-        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
-        return f"imageLoad({surface_name}, {coord})"
-
-    def format_cuda_surface_write_boundary_mode(
-        self, base_name, surface_name, coord_args, dimensions, value, extra_args
-    ):
-        if len(extra_args) > 1:
-            return self.format_cuda_surface_write_diagnostic(
-                base_name, f"{base_name} has unexpected extra arguments"
-            )
-        mode = self.cuda_surface_boundary_mode(extra_args[0])
-        if mode is None:
-            return self.format_cuda_surface_write_diagnostic(
-                base_name, f"{base_name} boundary mode '{extra_args[0]}'"
-            )
-        if mode == "clamp":
-            coord = self.format_cuda_surface_clamped_coordinate(
-                base_name, surface_name, coord_args, dimensions
-            )
-            return f"imageStore({surface_name}, {coord}, {value})"
-        if mode == "zero":
-            return self.format_cuda_surface_write_diagnostic(
-                base_name,
-                f"{base_name} boundary mode 'cudaBoundaryModeZero'",
-            )
-        coord = self.format_vector_constructor(f"vec{dimensions}", coord_args, "i32")
-        return f"imageStore({surface_name}, {coord}, {value})"
-
-    def format_cuda_surface_read_diagnostic(self, base_name, member, value_type):
-        fallback = "0"
-        if value_type:
-            crossgl_type = self.convert_cuda_type_to_crossgl(value_type)
-            zero = crossgl_zero_value(crossgl_type)
-            if zero != "{}":
-                fallback = zero
-        return self.format_unsupported_cuda_resource_expression(
-            "surface", member, fallback
-        )
-
-    def format_cuda_surface_write_diagnostic(self, base_name, member):
-        return self.format_unsupported_cuda_resource_expression("surface", member, "0")
 
     def strip_surface_byte_offset(self, expression, value_type):
         text = str(expression).strip()
