@@ -488,6 +488,45 @@ def test_affine_cache_verifies_selected_source_entry(
         assert cache._load(tmp_path, identity) == (descriptor, tmp_path / "package")
 
 
+@pytest.mark.parametrize("target", ("metal", "opengl", "directx"))
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "affine_dequantize_bfloat16_t_gs_32_b_2",
+        "affine_dequantize_float16_t_gs_64_b_8",
+        "affine_quantize_float_gs_32_b_4",
+    ),
+)
+def test_affine_package_recipe_reproduces_metal_contraction(
+    tmp_path, monkeypatch, target, entry
+):
+    """affine_dequantize's `scale * d + bias` rounds once on Metal.
+
+    The Metal compiler fuses it even under -fno-fast-math, so the generated
+    targets select the contraction profile; Metal keeps the native expression.
+    """
+
+    class ObservedRecipe(Exception):
+        pass
+
+    def translate(config, **kwargs):
+        assert config.include_patterns == [quantization_packages.SOURCE]
+        options = config.source_options["metal"]
+        assert "floating_contraction_profile" not in options
+        if target == "metal":
+            assert "target_options" not in options
+        else:
+            settings = options["target_options"][target]
+            assert settings["floating_contraction_profile"] == "rne-flush"
+            assert settings["software_subgroup_width"] == 32
+        raise ObservedRecipe
+
+    monkeypatch.setattr(quantization_packages, "translate_project", translate)
+    cache = QuantizationPackageCache(tmp_path, tmp_path, target)
+    with pytest.raises(ObservedRecipe):
+        cache._build(entry, tmp_path)
+
+
 def test_affine_ci_uses_existing_platform_jobs_and_retains_evidence():
     import yaml
 
