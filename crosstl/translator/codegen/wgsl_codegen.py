@@ -343,6 +343,8 @@ class WGSLCodeGen(
     FUNCTION_NAME_MAP = {
         "atan2": "atan2",
         "bitfieldReverse": "reverseBits",
+        "clz": "countLeadingZeros",
+        "ctz": "countTrailingZeros",
         "faceforward": "faceForward",
         "packHalf2x16": "pack2x16float",
         "packSnorm2x16": "pack2x16snorm",
