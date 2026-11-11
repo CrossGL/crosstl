@@ -362,21 +362,61 @@ def test_slang_generic_type_parameters_nothing_fixes_are_untested():
     text = """
 //@public:
 [ForceInline]
+bool hasTrait<T : ITrait>()
+{
+    return false;
+}
+"""
+    query = by_name(slang.parse(text, ""))["hasTrait"]
+    assert (query.signature, query.spelling, query.target) == (None, "", "")
+    assert query.note == "no probe type for the generic parameter T : ITrait"
+    with pytest.raises(
+        probes.ProbeError, match="no probe type for the generic parameter T"
+    ):
+        probes.build(query, "slang")
+
+
+def test_slang_descriptor_functions_are_probed_with_a_float_buffer():
+    text = """
+//@public:
+[ForceInline]
 bool usesNativeSpirvDescriptorHandle<T : IOpaqueDescriptor>()
 {
     return false;
 }
 
 T getDescriptorFromExplicitHeapIndex<T:IOpaqueDescriptor>(uint2 handle);
+
+T defaultGetDescriptorFromHandle<T:IOpaqueDescriptor>(DescriptorHandle<T> handleValue, constexpr BindlessDescriptorOptions bindlessOptions = BindlessDescriptorOptions.VkMutable);
+
+__intrinsic_op($(kIROp_NonUniformResourceIndex))
+DescriptorHandle<T> nonuniform<T:IOpaqueDescriptor>(DescriptorHandle<T> ptr);
 """
     features = by_name(slang.parse(text, ""))
+    handle = Type.other("DescriptorHandle<StructuredBuffer<float>>")
+    # slangc infers no descriptor type from the result or from nothing, so the probe names it.
     query = features["usesNativeSpirvDescriptorHandle"]
-    assert (query.signature, query.spelling, query.target) == (None, "", "")
-    assert query.note == "no probe type for the generic parameter T : IOpaqueDescriptor"
-    with pytest.raises(
-        probes.ProbeError, match="no probe type for the generic parameter T"
-    ):
-        probes.build(query, "slang")
-    # The result names the parameter, so the probe reaches the descriptor type and reports that instead.
+    assert query.signature == Signature(Type("bool"), ())
+    assert query.spelling == "usesNativeSpirvDescriptorHandle<StructuredBuffer<float>>"
     heap = features["getDescriptorFromExplicitHeapIndex"]
-    assert heap.signature is not None and heap.note == ""
+    assert (
+        heap.spelling == "getDescriptorFromExplicitHeapIndex<StructuredBuffer<float>>"
+    )
+    source = probes.build(heap, "slang").source
+    assert (
+        "float r = getDescriptorFromExplicitHeapIndex<StructuredBuffer<float>>(a0)[0];"
+        in source
+    )
+    # A handle is a uniform the probe declares, and a descriptor result is read through its first element.
+    default = features["defaultGetDescriptorFromHandle"]
+    assert default.signature.params[0].type == handle
+    source = probes.build(default, "slang").source
+    assert "uniform DescriptorHandle<StructuredBuffer<float>> u0;" in source
+    assert (
+        "float r = defaultGetDescriptorFromHandle(u0, BindlessDescriptorOptions.None)[0];"
+        in source
+    )
+    assert features["nonuniform"].signature == Signature(handle, (Param(handle),))
+    source = probes.build(features["nonuniform"], "crossgl").source
+    assert "uniform DescriptorHandle<StructuredBuffer<float>> u0;" in source
+    assert "float r = nonuniform(u0)[0];" in source
