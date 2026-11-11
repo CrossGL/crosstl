@@ -47,8 +47,9 @@ def headline(text: str) -> str:
 def cause(feature: dict, language: str = "") -> str:
     """The diagnostic of a wrong result with what is particular to its probe removed: line and column numbers, the
     names every probe uses, and the feature's own name or CrossGL spelling, including the name CrossGL gives a
-    ``language`` built-in (:data:`.spellings.RENAMES`). Wrong results with one cause are one bug, so a generator that
-    emits twenty builtins unchanged has one issue rather than twenty.
+    ``language`` built-in (:data:`.spellings.RENAMES`, :data:`.spellings.WAVES` and :data:`.spellings.OTHER_NAMES`).
+    Wrong results with one cause are one bug, so a generator that emits twenty builtins unchanged has one issue rather
+    than twenty.
     """
     detail = diagnostic(feature)
     prefix = _ROUND_TRIP if detail.startswith(_ROUND_TRIP) else ""
