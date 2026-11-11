@@ -9,6 +9,9 @@ import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
+from crosstl.translator.codegen.wgsl_comparison_samplers import (
+    WGSLComparisonSamplerUnsupportedError,
+)
 from crosstl.translator.codegen.wgsl_cube_texture_offsets import (
     WGSLCubeTextureOffsetUnsupportedError,
 )
@@ -2044,6 +2047,245 @@ def test_wgsl_codegen_passes_buffer_pointer_parameter_to_array_length():
     assert "outp[0] = f32(count(&outp));" in generated
 
 
+def test_wgsl_codegen_converts_mixed_integer_comparison_and_buffer_length_loop(
+    tmp_path,
+):
+    # Mixing uint and int in comparisons converts the signed operand to u32 (#3628).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = 2u;
+                int k = 3;
+                if (i < k) {
+                    outp[0] = 1.0;
+                }
+                for (uint j = 0u; j < values.length(); j++) {
+                    outp[j] = values[j];
+                }
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((i < u32(k)))" in generated
+    assert "(j < u32(i32(arrayLength(&values))))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_sized_and_structured_buffer_length_comparison(
+    tmp_path,
+):
+    # Buffer length comparison converts for sized arrays and StructuredBuffers (#3628).
+    shader = """
+    shader Probe {
+        buffer float values[4];
+        StructuredBuffer<float> items;
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                for (uint j = 0u; j < values.length(); j++) {
+                    outp[j] = values[j];
+                }
+                for (uint m = 0u; m < items.length(); m++) {
+                    outp[m] = items[m];
+                }
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "(j < u32(i32(4)))" in generated
+    assert "(m < u32(i32(arrayLength(&items))))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_binary_comparisons_and_arithmetic(
+    tmp_path,
+):
+    # Mixed uint and int operands convert the signed side to u32 (#3628).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer uint* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint u = 5u;
+                int k = 3;
+                if (u < k) { outp[0] = 1u; }
+                if (k < u) { outp[0] = 2u; }
+                if (u == k) { outp[0] = 3u; }
+                if (u != k) { outp[0] = 4u; }
+                uint a = u + k;
+                uint b = u - k;
+                uint c = k * u;
+                uint d = u / k;
+                uint e = u % k;
+                uint last = values.length() - 1u;
+                outp[1] = a + b + c + d + e + last;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((u < u32(k)))" in generated
+    assert "if ((u32(k) < u))" in generated
+    assert "if ((u == u32(k)))" in generated
+    assert "if ((u != u32(k)))" in generated
+    assert "var a: u32 = (u + u32(k));" in generated
+    assert "var b: u32 = (u - u32(k));" in generated
+    assert "var c: u32 = (u32(k) * u);" in generated
+    assert "var d: u32 = (u / u32(k));" in generated
+    assert "var e: u32 = (u % u32(k));" in generated
+    assert "var last: u32 = (u32(i32(arrayLength(&values))) - 1u);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_min_max_clamp(tmp_path):
+    # Built-ins min, max and clamp convert signed arguments to u32 when combined with uint (#3628).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer uint* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int k = 3;
+                uint u = 5u;
+                uint m1 = min(k, u);
+                uint m2 = min(u, k);
+                uint m3 = min(values.length(), 4u);
+                uint mx1 = max(k, u);
+                uint mx2 = max(u, k);
+                uint c1 = clamp(k, 0u, 10u);
+                uint c2 = clamp(u, k, 10);
+                outp[0] = m1 + m2 + m3 + mx1 + mx2 + c1 + c2;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var m1: u32 = min(u32(k), u);" in generated
+    assert "var m2: u32 = min(u, u32(k));" in generated
+    assert "var m3: u32 = min(u32(i32(arrayLength(&values))), 4u);" in generated
+    assert "var mx1: u32 = max(u32(k), u);" in generated
+    assert "var mx2: u32 = max(u, u32(k));" in generated
+    assert "var c1: u32 = clamp(u32(k), 0u, 10u);" in generated
+    assert "var c2: u32 = clamp(u, u32(k), 10);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_signed_argument_beside_mixed_integer_min_max(tmp_path):
+    # A min, max or clamp of a uint and an int is a u32, so an int beside it converts too (#3628).
+    shader = """
+    shader Probe {
+        buffer uint* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int k = 3;
+                uint u = 5u;
+                uint g = max(min(u, k), k);
+                uint h = min(k, max(k, u)) + k;
+                bool b = clamp(k, u, 9u) < k;
+                outp[0] = g + h + uint(b);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var g: u32 = max(min(u, u32(k)), u32(k));" in generated
+    assert "var h: u32 = (min(u32(k), max(u32(k), u)) + u32(k));" in generated
+    assert "var b: bool = (clamp(u32(k), u, 9u) < u32(k));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_negative_literal_in_unsigned_comparison_and_arithmetic(
+    tmp_path,
+):
+    # A negative literal compared with or added to a uint becomes u32(-Ni) (#3628, #3690).
+    shader = """
+    shader Probe {
+        buffer uint* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint u = 10u;
+                if (u == -1) { outp[0] = 1u; }
+                if (-1 < u) { outp[0] = 2u; }
+                uint a = u + -1;
+                outp[1] = a;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((u == u32(-1i)))" in generated
+    assert "if ((u32(-1i) < u))" in generated
+    assert "var a: u32 = (u + u32(-1i));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_preserves_abstract_integers_and_pure_signed_unsigned(
+    tmp_path,
+):
+    # Non-negative integer literals stay abstract; pure signed/unsigned stay unchanged (#3628).
+    shader = """
+    shader Probe {
+        buffer int* s_out;
+        buffer uint* u_out;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint u = 5u;
+                int k = 3;
+                if (u < 3) { u_out[0] = u; }
+                if (3 < u) { u_out[0] = u; }
+                if (u < uint(k)) { u_out[0] = u; }
+                uint m = min(u, 4);
+                uint c = clamp(u, 0, 10);
+                int si = 2;
+                int sk = 3;
+                if (si < sk) { s_out[0] = si + sk; }
+                uint ui = 2u;
+                uint uk = 3u;
+                if (ui < uk) { u_out[1] = ui + uk; }
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((u < 3))" in generated
+    assert "if ((3 < u))" in generated
+    assert "if ((u < u32(k)))" in generated
+    assert "u32(u32" not in generated
+    assert "u32(3)" not in generated
+    assert "var m: u32 = min(u, 4);" in generated
+    assert "var c: u32 = clamp(u, 0, 10);" in generated
+    assert "if ((si < sk))" in generated
+    assert "if ((ui < uk))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 @pytest.mark.parametrize(
     ("statement", "expected"),
     [
@@ -2286,6 +2528,57 @@ def test_wgsl_codegen_escapes_reserved_resources_functions_and_locals():
     assert "fn match(" not in generated
     assert "var while:" not in generated
     assert "textureSample(type," not in generated
+
+
+ACCESS_MODE_FUNCTION_SHADER = """
+shader main {{
+    float {name}(float v) {{ return v + 1.0; }}
+    compute {{
+        StructuredBuffer<float> values @buffer(0);
+        RWStructuredBuffer<float> results @buffer(1);
+        @numthreads(1, 1, 1)
+        void main(uint3 gid @gl_GlobalInvocationID) {{
+            results[gid.x] = {name}(values[gid.x]);
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize("name", ["read", "read_write"])
+def test_wgsl_renames_function_that_hides_a_used_storage_access_mode(name, tmp_path):
+    generated = WGSLCodeGen().generate(
+        parse_shader(ACCESS_MODE_FUNCTION_SHADER.format(name=name))
+    )
+    renamed = f"{name}_"
+
+    assert "var<storage, read> values: array<f32>;" in generated
+    assert "var<storage, read_write> results: array<f32>;" in generated
+    assert f"fn {renamed}(v: f32) -> f32" in generated
+    assert f"results[gid.x] = {renamed}(values[gid.x]);" in generated
+    assert f"fn {name}(" not in generated
+    assert f" = {name}(" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_keeps_read_function_when_access_mode_is_unused(tmp_path):
+    shader = """
+    shader main {
+        float read(float v) { return v + 1.0; }
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(read(1.0));
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn read(v: f32) -> f32" in generated
+    assert "return vec4<f32>(read(1.0));" in generated
+    assert "fn read_(" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_aliases_format_as_noop_wgsl():
@@ -3015,6 +3308,219 @@ def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_in_compute():
     assert raised.value.code == (
         "project.translate.wgsl-implicit-lod-stage-unsupported"
     )
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture():
+    shader = """
+    shader WGSLExplicitComparisonSamplerTexture {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(t, s, uv);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"texture\(\) on t: textureSample takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_lod():
+    shader = """
+    shader WGSLExplicitComparisonSamplerLod {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureLod(t, s, uv, 0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureLod\(\) on t: textureSampleLevel takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_offset():
+    shader = """
+    shader WGSLExplicitComparisonSamplerOffset {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureOffset(t, s, uv, ivec2(1, 1));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureOffset\(\) on t: textureSample takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_offset_bias():
+    shader = """
+    shader WGSLExplicitComparisonSamplerOffsetBias {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureOffset(t, s, uv, ivec2(1, 1), 0.5);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLTextureBiasUnsupportedError,
+        match=r"bias on t: textureSampleBias takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_in_compute():
+    shader = """
+    shader WGSLExplicitComparisonSamplerCompute {
+        sampler2D t;
+        comparison_sampler s;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer vec4* outp;
+            void main() {
+                outp[0] = texture(t, s, vec2(0.5));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"texture\(\) on t: textureSampleLevel takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_lod_offset():
+    shader = """
+    shader WGSLExplicitComparisonSamplerLodOffset {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureLodOffset(t, s, uv, 0.0, ivec2(1, 1));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureLodOffset\(\) on t: textureSampleLevel takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_grad():
+    shader = """
+    shader WGSLExplicitComparisonSamplerGrad {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGrad(t, s, uv, vec2(0.1, 0.1), vec2(0.2, 0.2));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureGrad\(\) on t: textureSampleGrad takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_grad_offset():
+    shader = """
+    shader WGSLExplicitComparisonSamplerGradOffset {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGradOffset(t, s, uv, vec2(0.1, 0.1), vec2(0.2, 0.2), ivec2(1, 1));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureGradOffset\(\) on t: textureSampleGrad takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_explicit_non_comparison_sampler_preserves_wgsl_output(tmp_path):
+    shader = """
+    shader WGSLExplicitSamplerRegression {
+        sampler2D t;
+        sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(t, s, uv)
+                    + textureLod(t, s, uv, 0.0)
+                    + textureOffset(t, s, uv, ivec2(1, 1))
+                    + textureOffset(t, s, uv, ivec2(1, 1), 0.5)
+                    + textureLodOffset(t, s, uv, 0.0, ivec2(1, 1))
+                    + textureGrad(t, s, uv, vec2(0.1, 0.1), vec2(0.2, 0.2))
+                    + textureGradOffset(t, s, uv, vec2(0.1, 0.1), vec2(0.2, 0.2), ivec2(1, 1));
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+    assert "textureSample(t, s, uv)" in generated
+    assert "textureSampleLevel(t, s, uv, 0.0)" in generated
+    assert "textureSample(t, s, uv, vec2<i32>(1, 1))" in generated
+    assert "textureSampleBias(t, s, uv, 0.5, vec2<i32>(1, 1))" in generated
+    assert "textureSampleLevel(t, s, uv, 0.0, vec2<i32>(1, 1))" in generated
+    assert (
+        "textureSampleGrad(t, s, uv, vec2<f32>(0.1, 0.1), vec2<f32>(0.2, 0.2))"
+        in generated
+    )
+    assert (
+        "textureSampleGrad(t, s, uv, vec2<f32>(0.1, 0.1), vec2<f32>(0.2, 0.2), vec2<i32>(1, 1))"
+        in generated
+    )
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings():

@@ -7728,6 +7728,13 @@ class VulkanSPIRVCodeGen(
             if arg_index not in skipped_arg_indices
             and arg_index not in mesh_output_arg_indices
         ]
+        struct_members = self.current_struct_members.get(function_name)
+        if struct_members is not None and function_name in self.struct_types:
+            contextual_types = {}
+            for parameter_index, (arg_index, _arg) in enumerate(emitted_arguments):
+                if parameter_index < len(struct_members):
+                    contextual_types[arg_index] = struct_members[parameter_index][0]
+            return contextual_types, set(), None, set()
         implicit_parameter_count = len(
             self.required_function_stage_object_argument_names(function_name)
         )
