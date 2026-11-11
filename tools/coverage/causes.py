@@ -64,7 +64,11 @@ def cause(feature: dict, language: str = "") -> str:
         names |= member_names
     # An operator spelling such as spellings.SUBSCRIPT names no function a diagnostic could mention.
     names -= {None, "", spellings.SUBSCRIPT, spellings.ELEMENT}
-    renames = spellings.RENAMES.get(language, {}) | spellings.WAVES.get(language, {})
+    renames = (
+        spellings.RENAMES.get(language, {})
+        | spellings.WAVES.get(language, {})
+        | spellings.OTHER_NAMES.get(language, {})
+    )
     names |= {renames[name] for name in names if name in renames}
     for name in sorted(names, key=lambda n: (-len(n), n)):
         rest = re.sub(rf"(?<![\w.:]){re.escape(name)}(?!\w|::)", FEATURE, rest)

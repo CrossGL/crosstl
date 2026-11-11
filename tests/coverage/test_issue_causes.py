@@ -196,8 +196,17 @@ def test_a_method_shares_a_cause_under_the_name_crossgl_gives_it():
             "after the round trip: error[E30015]: undefined identifier '{}'",
             {"fwidth_coarse": "fwidthCoarse", "fwidth_fine": "fwidthFine"},
         ),
+        # Names CrossGL has for a function that are no GLSL function: a wave operation and a built-in value.
+        (
+            "slang",
+            "error[E30015]: undefined identifier '{}'",
+            {
+                "WavePrefixMax": "WavePrefixExclusiveMax",
+                "WaveGetNumWaves": "gl_NumSubgroups",
+            },
+        ),
     ],
-    ids=["opencl", "slang"],
+    ids=["opencl", "slang", "slang-other-names"],
 )
 def test_a_function_shares_a_cause_under_the_crossgl_name_of_its_language(
     language, detail, spelled

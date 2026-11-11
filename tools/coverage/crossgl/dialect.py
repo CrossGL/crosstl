@@ -318,8 +318,9 @@ class CrossGL(Dialect):
         if name == SUBSCRIPT:
             vector, index = arguments
             return f"{vector}[{index}]"
-        # An operation CrossGL writes as an expression, such as SPIR-V's NClamp, is spelled with a hole per argument.
-        if "{}" in name:
+        # An operation CrossGL writes as an expression, such as SPIR-V's NClamp, is spelled with a hole per argument,
+        # and a built-in value (:data:`.spellings.OTHER_NAMES`) is read rather than called.
+        if "{}" in name or name.startswith("gl_"):
             return name.format(*arguments)
         return super().call(name, arguments)
 
