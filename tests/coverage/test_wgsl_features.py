@@ -1,6 +1,6 @@
 """The WGSL feature list read from Tint's ``wgsl.def``."""
 
-from tools.coverage import probes
+from tools.coverage import probes, spellings
 from tools.coverage.features import wgsl
 from tools.coverage.model import Param, Signature, Type
 
@@ -65,6 +65,12 @@ def test_wgsl_takes_crossgl_spellings_from_the_template_layer():
     features = by_name(wgsl.parse(WGSL_DEF, {"atan", "dFdx", "atomicAdd"}))
     assert features["atan2"].crossgl == "atan"
     assert features["dpdx"].crossgl == "dFdx"
+
+
+def test_wgsl_counts_zero_bits_with_the_crossgl_functions_metal_names():
+    assert spellings.spelling("wgsl", "countLeadingZeros", set()) == "clz"
+    assert spellings.spelling("wgsl", "countTrailingZeros", set()) == "ctz"
+    assert spellings.spelling("mojo", "count_leading_zeros", set()) == "clz"
 
 
 WGSL_TEXTURES = """

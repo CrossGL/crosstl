@@ -172,6 +172,11 @@ RENAMES = {
         "workgroup_memory_barrier_with_group_sync": "barrier",
         "device_memory_barrier": "memoryBarrierBuffer",
         "all_memory_barrier": "memoryBarrier",
+        # spirv-std computes these with GLSL.std.450 SMax, SMin, UMax and UMin; CrossGL's operand types select them.
+        "signed_max": "max",
+        "signed_min": "min",
+        "unsigned_max": "max",
+        "unsigned_min": "min",
         "atomic_i_add": "atomicAdd",
         "atomic_f_add": "atomicAdd",
         "atomic_s_min": "atomicMin",
@@ -309,13 +314,18 @@ COUNTERPARTS = {
     # Rust returns the sine and the cosine as a tuple, where CrossGL, like HLSL, writes them to output parameters. Rust
     # names a geometry stream with a constant generic parameter, which CrossGL, like GLSL, passes as an argument.
     # glam's Vec3A is a 3-vector aligned to 16 bytes, as CrossGL's vec3 is in a buffer, so CrossGL converts to it
-    # with the vec3 constructor, which also builds a vector from an array's or a slice's first three elements.
+    # with the vec3 constructor, which also builds a vector from an array's or a slice's first three elements. glam's
+    # extend, truncate and as_dvec3 are vector constructors in CrossGL, as in GLSL (GLSL 4.60 section 5.4.2): vec4
+    # appends an element, vec2 keeps the first two and dvec3 widens each one.
     "rust": {
         "Float::sin_cos": "void sincos(float, out float, out float)",
         "Vec3::sin_cos": "void sincos(vec3, out vec3, out vec3)",
         "Vec3::to_vec3a": "vec3 vec3(vec3)",
         "Vec3::from_array": "vec3 vec3(float, float, float)",
         "Vec3::from_slice": "vec3 vec3(float, float, float)",
+        "Vec3::extend": "vec4 vec4(vec3, float)",
+        "Vec3::truncate": "vec2 vec2(vec3)",
+        "Vec3::as_dvec3": "dvec3 dvec3(vec3)",
         "emit_stream_vertex": "void EmitStreamVertex(const int)",
         "end_stream_primitive": "void EndStreamPrimitive(const int)",
     },
@@ -432,12 +442,43 @@ OTHER_NAMES = {
         "copysign_half": "copysign",
         "copysign_double": "copysign",
     },
-    # WGSL's quad operations are HLSL's.
+    # WGSL's quad operations are HLSL's. Its leading and trailing zero counts are Metal's clz and ctz, which count
+    # every bit of a zero operand, as WGSL's do (MSL 4.1, "Integer Functions"). Mojo's are the same functions.
     "wgsl": {
         "quadBroadcast": "QuadReadLaneAt",
         "quadSwapX": "QuadReadAcrossX",
         "quadSwapY": "QuadReadAcrossY",
         "quadSwapDiagonal": "QuadReadAcrossDiagonal",
+        "countLeadingZeros": "clz",
+        "countTrailingZeros": "ctz",
+    },
+    "mojo": {
+        "count_leading_zeros": "clz",
+        "count_trailing_zeros": "ctz",
+        # Mojo's gamma is the C library's tgamma.
+        "gamma": "tgamma",
+    },
+    "rust": {
+        # The C math functions of CUDA's device library and MSL compute what these methods of a scalar do. glam's
+        # Vec3::is_finite tests every element at once, and is_finite_mask each one.
+        "Float::exp_m1": "expm1",
+        "Float::ln_1p": "log1p",
+        "Float::is_finite": "isfinite",
+        "Float::is_normal": "isnormal",
+        "Float::is_sign_negative": "signbit",
+        "Vec3::is_finite_mask": "isfinite",
+        # spirv-std documents these as exact implementations of the HLSL barriers.
+        "all_memory_barrier_with_group_sync": "AllMemoryBarrierWithGroupSync",
+        "device_memory_barrier_with_group_sync": "DeviceMemoryBarrierWithGroupSync",
+        # OpKill, and the ray tracing and mesh shading instructions GL_EXT_ray_tracing and GL_EXT_mesh_shader name.
+        "kill": "discard",
+        "report_intersection": "reportIntersectionEXT",
+        "ignore_intersection": "ignoreIntersectionEXT",
+        "terminate_ray": "terminateRayEXT",
+        "emit_mesh_tasks_ext": "EmitMeshTasksEXT",
+        "set_mesh_outputs_ext": "SetMeshOutputsEXT",
+        # A lane given as a constant broadcasts, as for Slang's WaveBroadcastLaneAt.
+        "subgroup_broadcast": "subgroupBroadcast",
     },
 }
 
