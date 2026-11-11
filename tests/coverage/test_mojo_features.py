@@ -1,5 +1,6 @@
 """The Mojo feature list, read from the standard library packages."""
 
+from tools.coverage import probes
 from tools.coverage.features import mojo
 from tools.coverage.model import (
     Param,
@@ -169,3 +170,25 @@ def test_mojo_names_the_parameters_no_argument_fixes():
     assert features["rotate_bits_left"].spelling == "rotate_bits_left[shift=1]"
     assert features["rotate_bits_left"].signature.params == (Param(Type("int")),)
     assert features["sqrt"].spelling == ""
+
+
+def test_mojo_writes_bit_and_math_functions_crossgl_lacks_as_expressions():
+    features = by_name(
+        mojo.parse(MOJO_MATH_INIT, MOJO_MATH, MOJO_NUMERICS, MOJO_BIT_INIT, MOJO_BIT)
+    )
+    # rotate_bits_left[shift=1] shifts the value left by one and brings its top bit back in at the bottom.
+    rotate = features["rotate_bits_left"]
+    assert rotate.crossgl == "(({0} << 1) | int(uint({0}) >> 31u))"
+    assert (
+        "int r = ((a0 << 1) | int(uint(a0) >> 31u));" in probes.build(
+            rotate, "crossgl"
+        ).source
+    )
+    # mulwide widens both 32-bit factors before it multiplies them.
+    assert (
+        "uint64_t r = (uint64(a0) * uint64(a1));" in probes.build(
+            features["mulwide"], "crossgl"
+        ).source
+    )
+    # gcd needs a loop, so its probe still calls Mojo's name.
+    assert features["gcd"].crossgl == "gcd"

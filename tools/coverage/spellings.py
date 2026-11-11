@@ -500,6 +500,39 @@ OTHER_NAMES = {
         "count_trailing_zeros": "ctz",
         # Mojo's gamma is the C library's tgamma.
         "gamma": "tgamma",
+        # std.bit as Mojo 1.2.0 writes it (std/bit/bit.mojo), for the Int32 a probe passes. For a signed value,
+        # bit_width counts the bits of the value or, when it is negative, of its complement, which is GLSL's findMSB
+        # plus one (GLSL 4.60 section 8.8). log2_floor is -1 for zero and for a negative value, and the powers of two
+        # are 1 shifted by a bit width. rotate_bits_left and rotate_bits_right are funnel shifts of the value with
+        # itself, by the shift of 1 the probe passes.
+        "bit_not": "(~{0})",
+        "bit_width": "(findMSB({0}) + 1)",
+        "log2_floor": "({0} < 0 ? -1 : findMSB({0}))",
+        "log2_ceil": "({0} <= 1 ? 0 : findMSB({0} - 1) + 1)",
+        "next_power_of_two": "({0} > 1 ? 1 << (findMSB({0} - 1) + 1) : 1)",
+        "prev_power_of_two": "({0} > 0 ? 1 << findMSB({0}) : 0)",
+        "rotate_bits_left": "(({0} << 1) | int(uint({0}) >> 31u))",
+        "rotate_bits_right": "(int(uint({0}) >> 1u) | ({0} << 31))",
+        "byte_swap": (
+            "int((uint({0}) << 24u) | ((uint({0}) & 0xFF00u) << 8u) | ((uint({0}) >> 8u) & 0xFF00u)"
+            " | (uint({0}) >> 24u))"
+        ),
+        # std.math (std/math/math.mojo): recip is 1.0 / x, inf the float32 infinity, and iota of width 1 its offset,
+        # 0 by default. mulwide widens both factors before it multiplies. Mojo's // rounds towards negative
+        # infinity, so align_down and align_up, which divide with it, correct CrossGL's truncating division when the
+        # quotient is inexact and, for align_down, negative or, for align_up, positive. ceildiv of a Float32 is the
+        # ceiling of the quotient.
+        "recip": "rcp",
+        "inf": "infinity()",
+        "iota": "(0.0)",
+        "mulwide": "(uint64({0}) * uint64({1}))",
+        "align_down": (
+            "(({0} / {1} - ({0} != {0} / {1} * {1} && ({0} < 0) != ({1} < 0) ? 1 : 0)) * {1})"
+        ),
+        "align_up": (
+            "(({0} / {1} + ({0} != {0} / {1} * {1} && ({0} < 0) == ({1} < 0) ? 1 : 0)) * {1})"
+        ),
+        "ceildiv": "ceil({0} / {1})",
     },
     "rust": {
         # The C math functions of CUDA's device library and MSL compute what these methods of a scalar do. glam's
@@ -635,7 +668,7 @@ def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) ->
 
 
 # A CrossGL scalar conversion or vector constructor, which converts rather than names an operation.
-_CONSTRUCTOR = re.compile(r"(?:[biud]|f16)?vec[234]|float|double|int|uint|bool")
+_CONSTRUCTOR = re.compile(r"(?:[biud]|f16)?vec[234]|float|double|u?int(?:64)?|bool")
 _NAMED = re.compile(r"\bgl_\w+|\b[A-Za-z_]\w*(?=\()")
 
 

@@ -236,6 +236,7 @@ def test_expression_spellings_name_what_they_call():
     assert spellings.named("clockRealtime2x32EXT().x") == ["clockRealtime2x32EXT"]
     assert spellings.named("pow({0}, float({1}))") == ["pow"]
     assert spellings.named("(3.40282347e38)") == []
+    assert spellings.named("(uint64({0}) * uint64({1}))") == []
 
 
 def test_slang_stages_targets_and_explicit_generic_arguments():
