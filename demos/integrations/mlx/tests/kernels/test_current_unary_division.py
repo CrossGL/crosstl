@@ -54,16 +54,16 @@ PROFILE = "rne-flush"
 # reconstructs the previous 10,678-byte source.
 ARTIFACTS = {
     "metal": {
-        "sha256": "36bf16346124ecb209ccd5acb2ca2fea1b41f966b4128d45600a63f7658bbefa",
-        "sizeBytes": 6526,
+        "sha256": "97a3eb9b659d1852629055bf245a196c0b99184bd6fe7dd0b66fe6c9fd893b9d",
+        "sizeBytes": 6538,
     },
     "opengl": {
-        "sha256": "3817bf50664d32406d446ecfc24d0dfe982c17dd8b2d5cadff6f1835194c7bba",
-        "sizeBytes": 10727,
+        "sha256": "2ddf1edb5fa54a5e65e369a3b44fea1edb8675916009dfc0debb927737fa058a",
+        "sizeBytes": 11177,
     },
     "directx": {
-        "sha256": "d16c5a2ca22282d6445e13d642e80ef0d0e9f75761740a0e3cc125f99bb59169",
-        "sizeBytes": 11785,
+        "sha256": "88e7ec8b40f91209d535c2c6f4317e6fbf2ce0614af73d7289a02d415658b2f8",
+        "sizeBytes": 12121,
     },
 }
 # Original Metal 3.1, -fno-fast-math readbacks at MLX_COMMIT. These cover the

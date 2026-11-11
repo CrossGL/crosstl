@@ -52,6 +52,20 @@ def test_causes_keep_an_operator_spelling():
     assert causes.cause(feature) == detail
 
 
+def test_causes_name_what_an_expression_spelling_calls():
+    # Slang's getRealtimeClockLow is CrossGL's clockRealtime2x32EXT().x, which fails as getRealtimeClock does.
+    detail = (
+        "probe.slang:9:14: error[E30015]: undefined identifier 'clockRealtime2x32EXT'"
+    )
+    low = {"name": "getRealtimeClockLow", "detail": detail}
+    full = {"name": "getRealtimeClock", "detail": detail}
+    assert (
+        causes.cause(low, "slang")
+        == causes.cause(full, "slang")
+        == ("probe.slang:N:N: error[E30015]: undefined identifier '<feature>'")
+    )
+
+
 def test_features_whose_diagnostics_name_them_share_a_cause():
     row = backend_row(
         "wgsl",

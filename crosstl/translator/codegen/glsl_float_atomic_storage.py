@@ -12,6 +12,8 @@ from ..ast import (
     VariableNode,
 )
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
+from .glsl_word_views import glsl_word_view_float_atomic_storage
+from .storage_word_views import is_same_width_word_view
 
 
 class OpenGLFloatAtomicStorageError(ValueError):
@@ -196,7 +198,13 @@ class FloatAtomicStorage:
                 expr, g.glsl_storage_pointer_aliases()
             )
         if binding is not None:
-            if binding.get("pointer_reinterpretation"):
+            reinterpretation = binding.get("pointer_reinterpretation")
+            if reinterpretation:
+                if is_same_width_word_view(reinterpretation) and (
+                    reinterpretation["source_layout"].kind == "integer"
+                ):
+                    # Integer backing words are never converted float storage.
+                    return None
                 raise OpenGLFloatAtomicStorageError("reinterpreted-storage-view", expr)
             return binding["root"]
         return alias
@@ -265,6 +273,13 @@ class FloatAtomicStorage:
             )
         if len(args) != self.OPERATIONS[operation]:
             raise OpenGLFloatAtomicStorageError("atomic-argument-count", args[0])
+        word_storage = glsl_word_view_float_atomic_storage(g, args[0])
+        if word_storage is not None:
+            # The backing words are already uint storage; no plan is needed.
+            g.validate_glsl_buffer_block_atomic_value_arguments(
+                operation, args, args[0], "float"
+            )
+            return self.helper_call(operation, word_storage, args[1:])
         for builtin in (
             "floatBitsToUint",
             "uintBitsToFloat",

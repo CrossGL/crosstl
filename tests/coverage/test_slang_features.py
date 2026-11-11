@@ -191,20 +191,52 @@ def test_slang_functions_crossgl_names_otherwise_take_crossgl_names():
         spellings.spelling("slang", "WaveGetLaneEqMask", set()) == "gl_SubgroupEqMask"
     )
     assert spellings.spelling("wgsl", "quadSwapX", set()) == "QuadReadAcrossX"
-    # A half-precision unpack returns half vectors, which GLSL's do not.
+    # A half-precision unpack returns half vectors, which GLSL's do not, so it converts GLSL's result as Slang does.
     assert spellings.spelling("slang", "unpackHalf2x16ToHalf", glsl_names) == (
-        "unpackHalf2x16ToHalf"
+        "f16vec2(unpackHalf2x16({}))"
+    )
+    # Slang's pack_s8 calls packInt4x8, and its WaveMultiPrefixSum is the exclusive scan.
+    assert spellings.spelling("slang", "packInt4x8", set()) == "pack_s8"
+    assert spellings.spelling("slang", "unpackUint4x8ToUint16", set()) == "unpack_u8u16"
+    assert spellings.spelling("slang", "WaveMultiPrefixExclusiveSum", set()) == (
+        "WaveMultiPrefixSum"
+    )
+    # Slang writes an inclusive multi-prefix scan for HLSL as the exclusive scan combined with the lane's value.
+    assert spellings.spelling("slang", "WaveMultiPrefixInclusiveSum", set()) == (
+        "(WaveMultiPrefixSum({0}, {1}) + {0})"
+    )
+    assert spellings.spelling("slang", "getRealtimeClockLow", set()) == (
+        "clockRealtime2x32EXT().x"
     )
 
 
 def test_other_names_are_names_crossgl_defines():
     for language, names in spellings.OTHER_NAMES.items():
         for name, spelled in names.items():
-            base = spelled.split("[", 1)[0]
-            if base.startswith("gl_"):
-                assert is_crossgl_gl_builtin(base), (language, name)
-            else:
-                assert base in BUILTIN_FUNCTION_NAMES, (language, name)
+            # An expression may be arithmetic on its arguments or a literal, which names no function.
+            expression = spellings.is_expression(spelled)
+            used = spellings.named(spelled) if expression else [spelled]
+            assert used or expression, (language, name)
+            for base in used:
+                if base.startswith("gl_"):
+                    assert is_crossgl_gl_builtin(base), (language, name)
+                else:
+                    assert base in BUILTIN_FUNCTION_NAMES, (language, name)
+
+
+def test_expression_spellings_name_what_they_call():
+    assert spellings.is_expression("WaveActiveBallot(true)")
+    assert spellings.is_expression("gl_HitTriangleVertexPositionsEXT[{}]")
+    assert not spellings.is_expression("gl_NumSubgroups")
+    assert spellings.named("f16vec2(unpackHalf2x16({}))") == ["unpackHalf2x16"]
+    assert spellings.named("ivec3(gl_WorkGroupSize)") == ["gl_WorkGroupSize"]
+    assert spellings.named("(WaveMultiPrefixBitXor({0}, {1}) ^ {0})") == [
+        "WaveMultiPrefixBitXor"
+    ]
+    assert spellings.named("clockRealtime2x32EXT().x") == ["clockRealtime2x32EXT"]
+    assert spellings.named("pow({0}, float({1}))") == ["pow"]
+    assert spellings.named("(3.40282347e38)") == []
+    assert spellings.named("(uint64({0}) * uint64({1}))") == []
 
 
 def test_slang_stages_targets_and_explicit_generic_arguments():
