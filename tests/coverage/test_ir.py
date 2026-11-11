@@ -134,6 +134,34 @@ def test_a_function_with_no_id_takes_the_one_id_of_functions_spelled_alike():
     assert features["metal/Load"]["members"] == ["metal/texture2d.read"]
 
 
+def test_functions_without_an_id_that_crossgl_spells_alike_are_one_feature():
+    method = row("metal", ("vec.erf", "wrong", {"crossgl": "erf", "detail": "bad"}))
+    method["features"][0]["category"] = "method"
+    entry = ir.build(
+        [
+            row(
+                "cuda",
+                ("erff", "supported", {"crossgl": "erf"}),
+                ("__clz", "supported", {}),
+                ("__fdividef", "refused", {"detail": "gap"}),
+            ),
+            row("hip", ("__clz", "supported", {})),
+            row("mojo", ("erf", "wrong", {"detail": "global variables"})),
+            method,
+        ]
+    )
+    features = by_name(entry)
+    # Mojo's generator fails erf, but CrossGL's erf translates correctly to CUDA.
+    assert features["crossgl/erf"]["members"] == ["cuda/erff", "mojo/erf"]
+    assert features["crossgl/erf"]["outcome"] == "supported"
+    assert features["crossgl/erf"]["group"] == "shared"
+    assert features["crossgl/__clz"]["members"] == ["cuda/__clz", "hip/__clz"]
+    # A spelling one language has keeps that language's name, and a method stays its own.
+    assert features["cuda/__fdividef"]["outcome"] == "refused"
+    assert features["metal/erf"]["members"] == ["metal/vec.erf"]
+    assert entry["counts"] == {"supported": 2, "refused": 1, "wrong": 1, "untested": 0}
+
+
 def test_a_gap_names_its_member_as_the_feature_of_its_cause():
     detail = 'probe.cu(9): error: no instance of overloaded function "{}" matches'
     entry = ir.build(
