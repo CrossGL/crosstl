@@ -30,7 +30,11 @@ from ...translator.math_namespaces import (
     metal_precise_math_operation,
 )
 from ...translator.precise_exp import binary32_exp_support
-from ...translator.precise_log2 import binary32_log2_support
+from ...translator.precise_log2 import (
+    LOG2_PROFILED_OPERATIONS,
+    LOG10_OF_TWO,
+    binary32_log2_support,
+)
 from ...translator.precise_power import binary32_power_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
@@ -16617,8 +16621,12 @@ class MetalToCrossGLConverter(
         return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def generate_metal_log2_call(self, expression, is_main=False):
+        # log10 shares the profiled base-two logarithm: log10(x) is
+        # log2(x) * log10(2), so its result keeps the helper's finite
+        # accuracy and operand policy instead of the target's log2 near one.
+        operation = str(expression.name).rsplit("::", 1)[-1]
         if (
-            str(expression.name).rsplit("::", 1)[-1] != "log2"
+            operation not in LOG2_PROFILED_OPERATIONS
             or self.metal_math_builtin_namespace_mode(expression.name) == "fast"
             or (
                 self.binary32_log2_operand_profile is None
@@ -16639,7 +16647,7 @@ class MetalToCrossGLConverter(
             result_type = "float"
         elif (
             self.resolve_metal_math_builtin_name(expression.name, expression.args)
-            == "log2"
+            == operation
         ):
             result_type = self.metal_math_builtin_result_type(expression)
         else:
@@ -16653,14 +16661,14 @@ class MetalToCrossGLConverter(
         width = info["width"]
         if element not in {"float", "half"} or width not in {1, 2, 3, 4}:
             raise MetalPreciseMathLoweringError(
-                "log2",
+                operation,
                 result_type,
                 "the selected profile requires binary32 computation",
                 getattr(expression, "source_location", None),
             )
         if self.current_function is None:
             raise MetalPreciseMathLoweringError(
-                "log2",
+                operation,
                 result_type,
                 "global initializers cannot call the runtime logarithm helper",
                 getattr(expression, "source_location", None),
@@ -16679,6 +16687,8 @@ class MetalToCrossGLConverter(
             value = f"{self.map_type(parameter_type)}({value})"
         mapped = "float" if width == 1 else f"vec{width}"
         result = f"{self.metal_log2_helper_name(width)}({mapped}({value}))"
+        if operation == "log10":
+            result = f"({result} * {LOG10_OF_TWO})"
         return (
             f"{self.map_type(result_type)}({result})" if element == "half" else result
         )

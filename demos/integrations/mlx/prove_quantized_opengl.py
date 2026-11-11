@@ -141,9 +141,19 @@ _GENERATED_SEMANTIC_SENTINELS = {
 }"""
     ),
     "edgeRounding": "float q0 = crossgl_metal_round_float(float((edge / scale)));",
+    # Metal converts float to uint8_t with saturation and NaN to zero (MSL 2.13), so the stored value
+    # passes through the saturating conversion before the 8-bit clamp.
+    "saturatingConversion": (
+        "int cgl_rule_sat_ftoi(float x0) {\n"
+        "    return (((floatBitsToUint(x0) & 2147483647u) < 1325400064u) ? int(uintBitsToFloat("
+        "(((floatBitsToUint(x0) & 2147483647u) < 1325400064u) ? floatBitsToUint(x0) : 0u))) : "
+        "(((floatBitsToUint(x0) & 2147483647u) > 2139095040u) ? 0 : ((floatBitsToUint(x0) >= "
+        "2147483648u) ? int(2147483648u) : 2147483647)));\n"
+        "}"
+    ),
     "quantization": (
-        "uint val = bitfieldExtract(uint(min(crossgl_metal_round_float(float(((w_thread[i] - bias) / "
-        "scale))), n_bins)), 0, 8);"
+        "uint val = bitfieldExtract(uint(clamp(cgl_rule_sat_ftoi(min(crossgl_metal_round_float("
+        "float(((w_thread[i] - bias) / scale))), n_bins)), 0, 255)), 0, 8);"
     ),
     "subgroupPacking": "uint sval = subgroupShuffleDown(val, (uint(j) & 65535u));",
 }

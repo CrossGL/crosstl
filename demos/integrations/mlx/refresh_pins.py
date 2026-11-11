@@ -9,12 +9,17 @@ pins under ``demos/integrations/mlx``:
 
 * every drifted SHA-256, wherever it is recorded: contracts, tests, harness tables,
   ``expected-gaps.json`` and the README;
-* the size recorded with it: a ``sizeBytes``, ``size_bytes`` or
-  ``generatedSizeBytes`` field of the same object, a compact ``"<sha>:<size>"``
-  value, or an ``N-byte``/``N bytes`` phrase in the same Markdown paragraph;
+* the size recorded with it: a ``sizeBytes``, ``size_bytes``,
+  ``artifact_size_bytes`` or ``generatedSizeBytes`` field of the same object,
+  a compact ``"<sha>:<size>"`` value, or an ``N-byte``/``N bytes`` phrase in
+  the same Markdown paragraph;
 * contract summaries derived from the contract's ``entries``
   (``generatedSizeBytesTotal`` and ``generatedSizeRange``), together with their
   mirrors in the tests and the README that name the contract;
+* every drifted template-materialization digest (``materializationSha256``) and
+  the ``specializationCount`` field of the same object, with the contract's
+  ``specializationCount`` total and ``specializationCountsByShape`` and the
+  copies of that total in the tests, harness tables and README that name it;
 * the SHA-256 and size of every file the refresh changes, wherever they are pinned.
 
 A value changes only where its old value is found exactly. An ambiguous or missing
@@ -65,7 +70,13 @@ SELF_FILES = frozenset(
 DRIFT_PREFIX = "MLX-PIN-DRIFT "
 HASH_FIELD = "generatedHash"
 SIZE_FIELD = "generatedSizeBytes"
-SIZE_KEYS = ("sizeBytes", "size_bytes", "generatedSizeBytes")
+SIZE_KEYS = ("sizeBytes", "size_bytes", "artifact_size_bytes", "generatedSizeBytes")
+MATERIALIZATION_FIELD = "materializationSha256"
+COUNT_FIELD = "specializationCount"
+COUNT_KEYS = (COUNT_FIELD,)
+COUNT_SHAPE_KEY = "specializationCountsByShape"
+# Each pinned digest and the positive integer pinned with it.
+PIN_FIELDS = {HASH_FIELD: SIZE_FIELD, MATERIALIZATION_FIELD: COUNT_FIELD}
 NATIVE_IDENTITY_KEYS = ("dxilSha256",)
 TOTAL_KEY = "generatedSizeBytesTotal"
 RANGE_KEY = "generatedSizeRange"
@@ -73,10 +84,13 @@ MAX_CASCADE_ROUNDS = 10
 
 _DRIFT_LINE = re.compile(r"MLX-PIN-DRIFT (\S.*?)\s*$")
 _SHA256 = re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{64}(?![0-9a-fA-F])")
-_SIZE_FIELD = re.compile(
-    r"(?<![\w])(?P<q>[\"']?)(?:" + "|".join(SIZE_KEYS) + r")(?P=q)\s*[:=]\s*"
-    r"(?P<value>\d+)(?![\d.])"
-)
+_SIZE_FIELDS = {
+    keys: re.compile(
+        r"(?<![\w])(?P<q>[\"']?)(?:" + "|".join(keys) + r")(?P=q)\s*[:=]\s*"
+        r"(?P<value>\d+)(?![\d.])"
+    )
+    for keys in (SIZE_KEYS, COUNT_KEYS)
+}
 _COMPACT_SIZE = re.compile(r":(\d+)(?![\d.])")
 _NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)"
 # A size in prose, alone or in a list: "175,436-byte", "7,135 and 7,197 bytes".
@@ -107,12 +121,21 @@ class RefreshError(ValueError):
 
 @dataclass(frozen=True)
 class Pin:
-    """One drifted artifact: its pinned and its current SHA-256 and size."""
+    """One drifted pin: its pinned and current SHA-256 and the integer pinned with it.
+
+    ``size_keys`` name the fields that hold that integer: a generated artifact's
+    byte size, or a template materialization's specialization count.
+    """
 
     expected_sha256: str
     actual_sha256: str
     expected_size: int | None = None
     actual_size: int | None = None
+    size_keys: tuple[str, ...] = SIZE_KEYS
+
+    @property
+    def counts_specializations(self) -> bool:
+        return self.size_keys == COUNT_KEYS
 
 
 @dataclass
@@ -233,6 +256,8 @@ def fetch_run_records(repo: str, run_id: int, workers: int = 6) -> list[dict[str
 def _merge_pin(existing: Pin | None, pin: Pin) -> Pin:
     if existing is None:
         return pin
+    if existing.size_keys != pin.size_keys:
+        raise RefreshError(f"Pin {pin.expected_sha256} pins two kinds of value")
     if existing.actual_sha256 != pin.actual_sha256:
         raise RefreshError(
             f"Pin {pin.expected_sha256} drifted to both "
@@ -250,7 +275,13 @@ def _merge_pin(existing: Pin | None, pin: Pin) -> Pin:
     if not sizes:
         return existing
     ((expected_size, actual_size),) = sizes
-    return Pin(pin.expected_sha256, pin.actual_sha256, expected_size, actual_size)
+    return Pin(
+        pin.expected_sha256,
+        pin.actual_sha256,
+        expected_size,
+        actual_size,
+        pin.size_keys,
+    )
 
 
 def build_pins(
@@ -258,14 +289,15 @@ def build_pins(
 ) -> tuple[dict[str, Pin], list[dict]]:
     """Pair hash and size drift per pinned subject and key them by old SHA-256.
 
-    Returns the pins and the size records without a hash record, which cannot be
-    located on their own.
+    A generated hash pairs with its byte size and a materialization digest with its
+    specialization count. Returns the pins and the size or count records without
+    their digest record, which cannot be located on their own.
     """
 
     groups: dict[tuple[str, str], dict[str, tuple[Any, Any]]] = defaultdict(dict)
     for record in records:
         name = record["field"]
-        if name not in (HASH_FIELD, SIZE_FIELD):
+        if name not in PIN_FIELDS and name not in PIN_FIELDS.values():
             raise RefreshError(f"Unknown drift field {name!r}")
         key = (str(record.get("subject", "")), str(record.get("test", "")))
         value = (record["expected"], record["actual"])
@@ -275,21 +307,26 @@ def build_pins(
     pins: dict[str, Pin] = {}
     size_only = []
     for (subject, test), fields in sorted(groups.items()):
-        digest = fields.get(HASH_FIELD)
-        size = fields.get(SIZE_FIELD)
-        if digest is None:
-            size_only.append({"subject": subject, "test": test, "size": size})
-            continue
-        for value in digest:
-            if not (isinstance(value, str) and _SHA256.fullmatch(value)):
-                raise RefreshError(f"{subject}: {value!r} is not a SHA-256")
-        if size is not None and not all(
-            isinstance(value, int) and not isinstance(value, bool) and value > 0
-            for value in size
-        ):
-            raise RefreshError(f"{subject}: sizes {size!r} are not positive integers")
-        pin = Pin(digest[0], digest[1], *(size or (None, None)))
-        pins[pin.expected_sha256] = _merge_pin(pins.get(pin.expected_sha256), pin)
+        for hash_field, size_field in PIN_FIELDS.items():
+            digest = fields.get(hash_field)
+            size = fields.get(size_field)
+            if digest is None:
+                if size is not None:
+                    size_only.append({"subject": subject, "test": test, "size": size})
+                continue
+            for value in digest:
+                if not (isinstance(value, str) and _SHA256.fullmatch(value)):
+                    raise RefreshError(f"{subject}: {value!r} is not a SHA-256")
+            if size is not None and not all(
+                isinstance(value, int) and not isinstance(value, bool) and value > 0
+                for value in size
+            ):
+                raise RefreshError(
+                    f"{subject}: {size_field} {size!r} are not positive integers"
+                )
+            keys = COUNT_KEYS if size_field == COUNT_FIELD else SIZE_KEYS
+            pin = Pin(digest[0], digest[1], *(size or (None, None)), size_keys=keys)
+            pins[pin.expected_sha256] = _merge_pin(pins.get(pin.expected_sha256), pin)
     return pins, size_only
 
 
@@ -347,13 +384,13 @@ def _object_span(text: str, structure: _Structure, string: tuple[int, int, int])
     return index
 
 
-def _direct_size_fields(text, structure, index, expected):
+def _direct_size_fields(text, structure, index, expected, keys=SIZE_KEYS):
     start, end, _ = structure.intervals[index]
     nested = [
         structure.intervals[child][:2] for child in structure.children.get(index, ())
     ]
     found = []
-    for match in _SIZE_FIELD.finditer(text, start, end):
+    for match in _SIZE_FIELDS[keys].finditer(text, start, end):
         if int(match.group("value")) != expected:
             continue
         if any(a < match.start() < b for a, b in nested):
@@ -429,8 +466,9 @@ def leaf_edits(path: str, text: str, pins: Mapping[str, Pin], report: Report):
     structure = None if markdown else _structure(text, path.endswith(".py"))
     for match in occurrences:
         pin = pins[match.group()]
+        counts = pin.counts_specializations
         edits.append((match.start(), match.end(), pin.actual_sha256))
-        report.applied["sha256"] += 1
+        report.applied[MATERIALIZATION_FIELD if counts else "sha256"] += 1
         index = string = None
         if structure is not None:
             string = structure.string_at(match.start())
@@ -439,15 +477,20 @@ def leaf_edits(path: str, text: str, pins: Mapping[str, Pin], report: Report):
                 _note_native_identities(text, structure, index, path, report)
         if pin.actual_size is None or pin.actual_size == pin.expected_size:
             continue
+        # A specialization count is located only as a field of the digest's own
+        # object; the compact, prose and sibling forms record byte sizes.
         spans = []
-        compact = _COMPACT_SIZE.match(text, match.end())
+        compact = None if counts else _COMPACT_SIZE.match(text, match.end())
         if compact and int(compact.group(1)) == pin.expected_size:
             spans = [compact.span(1)]
         elif markdown:
-            spans = _paragraph_sizes(text, match.start(), pin.expected_size)
+            if not counts:
+                spans = _paragraph_sizes(text, match.start(), pin.expected_size)
         elif index is not None:
-            spans = _direct_size_fields(text, structure, index, pin.expected_size)
-        if not spans and string is not None and path.endswith(".py"):
+            spans = _direct_size_fields(
+                text, structure, index, pin.expected_size, pin.size_keys
+            )
+        if not spans and not counts and string is not None and path.endswith(".py"):
             spans = _python_sibling_sizes(text, string[0], pin.expected_size)
         if len(spans) != 1:
             report.unresolved.append(
@@ -456,7 +499,8 @@ def leaf_edits(path: str, text: str, pins: Mapping[str, Pin], report: Report):
                     "line": _line(text, match.start()),
                     "sha256": pin.expected_sha256,
                     "reason": (
-                        f"found {len(spans)} size fields equal to {pin.expected_size}"
+                        f"found {len(spans)} {COUNT_FIELD if counts else 'size'} "
+                        f"fields equal to {pin.expected_size}"
                     ),
                 }
             )
@@ -465,7 +509,7 @@ def leaf_edits(path: str, text: str, pins: Mapping[str, Pin], report: Report):
         edits.append(
             (start, end, _format_like(text[start:end], pin.actual_size, prose=markdown))
         )
-        report.applied["size"] += 1
+        report.applied[COUNT_FIELD if counts else "size"] += 1
     return edits, {m.group() for m in occurrences}
 
 
@@ -533,6 +577,57 @@ def size_summary(entries: Sequence[Mapping[str, Any]]) -> tuple[int, dict]:
     }
 
 
+def count_summary(
+    entries: Sequence[Mapping[str, Any]],
+) -> tuple[int, dict[str, int] | None] | None:
+    """Return the specialization total and per-shape totals the tests derive from
+    entries, or ``None`` when the entries do not record specialization counts."""
+
+    if not all(
+        type(entry.get(COUNT_FIELD)) is int and entry[COUNT_FIELD] > 0
+        for entry in entries
+    ):
+        return None
+    by_shape: dict[str, int] | None = None
+    if all(isinstance(entry.get("shape"), str) for entry in entries):
+        by_shape = defaultdict(int)
+        for entry in entries:
+            by_shape[entry["shape"]] += entry[COUNT_FIELD]
+        by_shape = dict(by_shape)
+    return sum(entry[COUNT_FIELD] for entry in entries), by_shape
+
+
+def _replace_count_summaries(
+    value: Any, old: tuple, new: tuple, counts: Counter, top: bool = True
+) -> None:
+    """Replace the contract's specialization total and per-shape totals.
+
+    The entries' own ``specializationCount`` fields are pins, not summaries, so the
+    top-level ``entries`` list is never searched.
+    """
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if top and key == "entries":
+                continue
+            if key == COUNT_FIELD and type(item) is int and item == old[0] != new[0]:
+                value[key] = new[0]
+                counts["specializationTotals"] += 1
+            elif (
+                key == COUNT_SHAPE_KEY
+                and old[1] is not None
+                and new[1] is not None
+                and item == old[1] != new[1]
+            ):
+                value[key] = {shape: new[1][shape] for shape in item}
+                counts["specializationShapes"] += 1
+            else:
+                _replace_count_summaries(item, old, new, counts, top=False)
+    elif isinstance(value, list):
+        for item in value:
+            _replace_count_summaries(item, old, new, counts, top=False)
+
+
 def _replace_summaries(value: Any, old: tuple, new: tuple, counts: Counter) -> None:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -562,30 +657,41 @@ def _dump_like(original: str, value: Any) -> str | None:
 
 
 def refresh_summaries(path: str, old_text: str, new_text: str, report: Report):
-    """Recompute entry-derived totals and ranges; return text and mirror changes."""
+    """Recompute entry-derived totals and ranges; return text and mirror changes.
+
+    The mirror changes map ``"size"`` to the old and new size summaries and
+    ``"count"`` to the old and new specialization totals, for whichever changed.
+    """
 
     if not path.endswith(".json") or old_text == new_text:
-        return new_text, None
+        return new_text, {}
     old_entries = _entries(json.loads(old_text))
     contract = json.loads(new_text)
     new_entries = _entries(contract)
     if old_entries is None or new_entries is None:
-        return new_text, None
-    old, new = size_summary(old_entries), size_summary(new_entries)
-    if old == new:
-        return new_text, None
+        return new_text, {}
+    mirrors: dict[str, tuple] = {}
     counts: Counter = Counter()
-    _replace_summaries(contract, old, new, counts)
+    old, new = size_summary(old_entries), size_summary(new_entries)
+    if old != new:
+        mirrors["size"] = (old, new)
+        _replace_summaries(contract, old, new, counts)
+    old_count, new_count = count_summary(old_entries), count_summary(new_entries)
+    if old_count is not None and new_count is not None and old_count != new_count:
+        if old_count[0] != new_count[0]:
+            mirrors["count"] = (old_count[0], new_count[0])
+        _replace_count_summaries(contract, old_count, new_count, counts)
     if not counts:
-        return new_text, (old, new)
+        return new_text, mirrors
     dumped = _dump_like(old_text, contract)
     if dumped is None:
+        kind = "size" if set(counts) <= {"totals", "ranges"} else "contract"
         report.unresolved.append(
-            {"path": path, "reason": "derived size summary in hand-laid-out JSON"}
+            {"path": path, "reason": f"derived {kind} summary in hand-laid-out JSON"}
         )
-        return new_text, (old, new)
+        return new_text, mirrors
     report.applied.update(counts)
-    return dumped, (old, new)
+    return dumped, mirrors
 
 
 def _range_mirrors(text: str, before: Mapping[str, Any]):
@@ -708,6 +814,68 @@ def mirror_edits(path: str, text: str, old: tuple, new: tuple, report: Report):
             edits.append((*match.span(), replacement))
             report.applied["mirroredRanges"] += 1
     return edits
+
+
+def _count_mirror_changes(
+    summaries: Mapping[str, Mapping[str, tuple]], report: Report
+) -> dict[int, int]:
+    """Old to new specialization totals that are safe to restate everywhere.
+
+    Contracts of one family often share a total, so a total is restated only when
+    every contract that had it moved to the same new total, and only when no new
+    total is another contract's old one.
+    """
+
+    moves: dict[int, set[int]] = defaultdict(set)
+    for mirrors in summaries.values():
+        if "count" in mirrors:
+            old, new = mirrors["count"]
+            moves[old].add(new)
+    changes = {}
+    for old, values in sorted(moves.items()):
+        if len(values) == 1 and not values & set(moves):
+            changes[old] = next(iter(values))
+        else:
+            report.unresolved.append(
+                {"reason": f"specialization total {old} moved to {sorted(values)}"}
+            )
+    return changes
+
+
+def count_mirror_edits(path: str, text: str, old: int, new: int, report: Report):
+    """Edits for a test, harness table or README that restates a contract's
+    specialization total.
+
+    Python is matched by integer literal, Markdown by the comma-grouped total and
+    JSON by a plain integer. A contract with counted entries derives its own
+    total and is left to :func:`refresh_summaries`.
+    """
+
+    if path.endswith(".py"):
+        tree, starts = _python_literal_spans(text)
+        spans = [
+            _span(node, starts)
+            for node in ast.walk(tree)
+            if _constant(node, int) == old
+        ]
+    elif path.endswith(".md"):
+        pattern = re.compile(rf"(?<![\d,.]){re.escape(f'{old:,}')}(?![\d,])")
+        spans = [match.span() for match in pattern.finditer(text)]
+    elif path.endswith(".json"):
+        try:
+            entries = _entries(json.loads(text))
+        except json.JSONDecodeError:
+            entries = None
+        if entries is not None and count_summary(entries) is not None:
+            return []
+        spans = _integer_literals(text, old)
+    else:
+        return []
+    report.applied["mirroredSpecializationTotals"] += len(spans)
+    return [
+        (start, end, _format_like(text[start:end], new, prose=path.endswith(".md")))
+        for start, end in spans
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -833,15 +1001,26 @@ def refresh(
             for start, end, value in edits:
                 if re.fullmatch(r"\d{1,3}(?:,\d{3})+", text[start:end]):
                     prose[text[start:end]].add(value)
-        texts[path], summary = refresh_summaries(path, text, texts[path], report)
-        if summary is not None:
-            summaries[Path(path).name] = summary
-    for name, (old, new) in sorted(summaries.items()):
+        texts[path], mirrors = refresh_summaries(path, text, texts[path], report)
+        if mirrors:
+            summaries[Path(path).name] = mirrors
+    count_changes = _count_mirror_changes(summaries, report)
+    for name, mirrors in sorted(summaries.items()):
         for path, text in list(texts.items()):
-            if Path(path).name != name and name in text:
-                edits = mirror_edits(path, text, old, new, report)
-                if edits:
-                    texts[path] = apply_edits(text, edits)
+            if Path(path).name == name or name not in text:
+                continue
+            edits = []
+            if "size" in mirrors:
+                edits.extend(mirror_edits(path, text, *mirrors["size"], report))
+            old_count = mirrors.get("count", (None,))[0]
+            if old_count in count_changes:
+                edits.extend(
+                    count_mirror_edits(
+                        path, text, old_count, count_changes[old_count], report
+                    )
+                )
+            if edits:
+                texts[path] = apply_edits(text, edits)
     _mirror_prose_sizes(texts, prose, report)
     report.unmatched = sorted(set(pins) - seen)
     _cascade_file_pins(original, texts, report)

@@ -3062,6 +3062,21 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
                 spans,
             ) in self._dedupe_explicit_template_function_calls(instantiations):
                 key = self._template_specialization_key(struct_name, template_arguments)
+                canonical_arguments = self._canonical_materialized_struct_arguments(
+                    template_arguments, materialized_names
+                )
+                canonical_key = self._template_specialization_key(
+                    struct_name, canonical_arguments
+                )
+                if canonical_key != key and canonical_key in materialized_names:
+                    # `Tile<float, BaseFrag<float, 8, 8>>` and `Tile<float,
+                    # BaseFrag_float_8_8>` name one type once the inner
+                    # specialization exists, so they share one specialization.
+                    replacements.extend(
+                        (span[0], span[1], materialized_names[canonical_key])
+                        for span in spans
+                    )
+                    continue
                 partial_selection = selected_partial_specializations.get(key)
                 primary_template = templates_by_name[struct_name]
                 if partial_selection is None and not (
@@ -29146,6 +29161,34 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         if identifier[0].isdigit():
             identifier = f"{function_name}_{identifier}"
         return identifier
+
+    def _canonical_materialized_struct_arguments(
+        self,
+        arguments: List[str],
+        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str],
+    ) -> List[str]:
+        """Spell each argument naming a materialized struct by its concrete name.
+
+        Only a whole argument of the form ``Name<...>`` whose specialization
+        key, with its own arguments canonicalized the same way, is already
+        materialized is replaced.
+        """
+        canonical = []
+        for argument in arguments:
+            match = re.fullmatch(
+                r"\s*([A-Za-z_]\w*)\s*<(.*)>\s*", str(argument), re.DOTALL
+            )
+            if match is not None:
+                inner = self._canonical_materialized_struct_arguments(
+                    self._split_top_level_commas(match.group(2)), materialized_names
+                )
+                concrete = materialized_names.get(
+                    self._template_specialization_key(match.group(1), inner)
+                )
+                if concrete is not None:
+                    argument = concrete
+            canonical.append(argument)
+        return canonical
 
     def _unique_struct_specialization_identifier(
         self, struct_name: str, key: Tuple[str, Tuple[str, ...]]

@@ -39,7 +39,7 @@ BINARY_SCALAR_METAL_CONTRACT_PATH = (
     / "binary.scalar-metal-roundtrip.json"
 )
 BINARY_SCALAR_METAL_CONTRACT_SHA256 = (
-    "7fc0bbdf6a5199e073ce4f653612d5805f01afe6ac79f1cca266a62899cb8b4d"
+    "7742a83f7fb5808b2c53f796429cbb3c8b358941c7055bea32df6db85b5563e7"
 )
 
 
@@ -246,10 +246,10 @@ def test_current_mlx_binary_scalar_metal_contract_is_complete_and_classified():
         "hostInterfaceStatus": "ready",
         "hostResourceCountPerArtifact": 3,
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 243117,
+        "generatedSizeBytesTotal": 243181,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "ss_Addfloat16", "sizeBytes": 772},
-            "maximum": {"entryPoint": "ss_ArcTan2bfloat16", "sizeBytes": 6661},
+            "maximum": {"entryPoint": "ss_ArcTan2bfloat16", "sizeBytes": 6667},
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
         "requiresNonemptyAirArtifact": True,
