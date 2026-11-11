@@ -25,12 +25,6 @@ LEFT_OUT_NAMES = {
     "atomicStoreMin": "Chromium extension (atomic_vec2u_min_max)",
     "inputAttachmentLoad": "Chromium extension (chromium_internal_input_attachments)",
 }
-# Operations CrossGL has no spelling for, with the reason.
-UNSPELLED = {
-    "textureSampleBaseClampToEdge": (
-        "no CrossGL sample clamps its coordinates half a texel inside the edge"
-    ),
-}
 _SCALARS = {"f32": "float", "i32": "int", "u32": "uint", "bool": "bool"}
 _IMPLICIT_ORDER = ("f32", "i32", "u32", "bool")
 _EXPLICIT_ORDER = ("u32", "i32", "f32", "bool")
@@ -255,9 +249,10 @@ def parse(
         group, stage, template, _ = next(o for o in overloads if o[3] is chosen)
         spelling, counterpart = spellings.spelling("wgsl", name, glsl_names), None
         if name in spellings.COUNTERPARTS["wgsl"]:
-            spelling, counterpart = prototype(spellings.COUNTERPARTS["wgsl"][name])
-        if name in UNSPELLED:
-            spelling = ""
+            called, counterpart = prototype(spellings.COUNTERPARTS["wgsl"][name])
+            # An expression spelling takes the counterpart's arguments in place of WGSL's.
+            if not spellings.is_expression(spelling):
+                spelling = called
         features.append(
             Feature(
                 "wgsl",
@@ -268,7 +263,6 @@ def parse(
                 crossgl=spelling,
                 stage=stage,
                 spelling=f"{name}<{template}>" if template else "",
-                note=UNSPELLED.get(name, ""),
                 counterpart=counterpart,
             )
         )

@@ -26,6 +26,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from ..semantics.constant_buffers import constant_buffer_element
 from .buffer_member_layout import member_explicit_offset, member_is_row_major
 from .glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
@@ -39,6 +40,7 @@ from .hlsl_buffer_layout import (
     HlslLayoutError,
 )
 from .metal_hlsl_buffer_layout import LAYOUT_LABELS, MetalHlslBufferLayouts
+from .push_constant_blocks import is_push_constant, push_constant_block_layout
 
 # Element layouts of structured buffers and buffer pointers that Metal declarations reproduce: HLSL's, and the
 # std430 rules of a CrossGL buffer (marked by ``semantics.default_buffer_layouts`` where MSL's differ).
@@ -174,11 +176,15 @@ class MetalHlslResourceMixin:
         struct = self.structs_by_name.get(name)
         if struct is not None:
             static_members = self.metal_static_struct_members.get(name, set())
+            # A member's @offset and @align place it inside the struct as they do in a block (Vulkan 1.3
+            # section 15.6.4); the planner pads the Metal struct to those bytes.
             members = [
                 (
                     member.name,
                     self.struct_member_raw_type(member),
                     member_is_row_major(member),
+                    member_explicit_offset(member),
+                    member_explicit_alignment(member),
                 )
                 for member in getattr(struct, "members", []) or []
                 if getattr(member, "name", None)
@@ -210,7 +216,7 @@ class MetalHlslResourceMixin:
         )
         self.metal_hlsl_layout_planner = planner
         for cbuffer in self.cbuffer_variables or []:
-            layout = declared_buffer_layout(getattr(cbuffer, "attributes", None))
+            layout = self.metal_constant_block_layout(cbuffer, cbuffer.name)
             if layout != HLSL_CBUFFER_LAYOUT and layout not in GLSL_BLOCK_LAYOUTS:
                 continue
             try:
@@ -240,6 +246,7 @@ class MetalHlslResourceMixin:
                 ):
                     self.metal_hlsl_cbuffer_array_members[member.name] = member
         for node in self.metal_hlsl_structured_declarations(ast):
+            self.plan_metal_push_constant_struct(planner, node)
             layout = declared_buffer_layout(getattr(node, "attributes", None))
             if layout not in ELEMENT_LAYOUTS:
                 continue
@@ -296,6 +303,41 @@ class MetalHlslResourceMixin:
                 rank += 1
             self.metal_hlsl_structured_buffer_ranks[node.name] = rank
         self.metal_hlsl_struct_plans = dict(planner.struct_plans)
+
+    @staticmethod
+    def metal_constant_block_layout(node, name):
+        """The layout a constant block or buffer declares, or the layout of a push-constant block (std430 unless it
+        declares std140 or scalar, :mod:`.push_constant_blocks`), which the host pushes as Vulkan lays it out.
+        """
+        if is_push_constant(node):
+            return push_constant_block_layout(node, "metal", name)
+        return declared_buffer_layout(getattr(node, "attributes", None))
+
+    def plan_metal_push_constant_struct(self, planner, node):
+        """Plan the struct ``T`` of a push-constant ``ConstantBuffer<T>`` or ``uniform T`` with the push-constant
+        layout, so that its Metal declaration holds every member at the byte the host pushes it to. A push-constant
+        buffer that declares a layout is a block holding one ``T`` (:mod:`..semantics.constant_buffer_layouts`), and
+        the block's plan places it."""
+        if not is_push_constant(node) or declared_buffer_layout(
+            getattr(node, "attributes", None)
+        ):
+            return
+        vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+        element = constant_buffer_element(vtype)
+        if element is None:
+            element = vtype
+        type_name = str(self.resource_base_type(element))
+        if type_name not in self.structs_by_name:
+            return
+        layout = self.metal_constant_block_layout(node, node.name)
+        try:
+            planner.require_struct(planner.layout_type(type_name), layout)
+        except HlslLayoutError as exc:
+            raise metal_layout_refusal(
+                f"Cannot reproduce the {LAYOUT_LABELS[layout]} layout of push-constant buffer "
+                f"'{node.name}' in Metal: {exc}",
+                layout,
+            ) from exc
 
     def metal_hlsl_pointer_storage(
         self, planner, node, element_type, kind, layout=HLSL_STRUCTURED_LAYOUT

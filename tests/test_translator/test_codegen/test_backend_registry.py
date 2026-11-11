@@ -7,6 +7,7 @@ import pytest
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import CodeFormatter, ShaderLanguage
 from crosstl.translator import parse
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.registry import BackendRegistry, BackendSpec
 from crosstl.translator.codegen.SPIRV_codegen import SPIRVBuiltinLoweringError
 from crosstl.translator.plugin_loader import discover_backend_plugins
@@ -594,8 +595,20 @@ def test_backend_codegen_smoke(backend):
 # Backends that refuse ADVANCED_SMOKE_SHADER's call through a Metal visible
 # function table: Vulkan SPIR-V has no function pointers (SPV_INTEL_function_pointers
 # requires the Kernel execution model).
+# HLSL and GLSL have no function tables, so `visible_function_table vft;` must not be copied into their output.
 ADVANCED_SMOKE_REFUSALS = {
-    "vulkan": (SPIRVBuiltinLoweringError, "no function pointers")
+    "vulkan": (SPIRVBuiltinLoweringError, "no function pointers"),
+    **{
+        backend: (
+            LoweringRefused,
+            f"the built-in type 'visible_function_table' has no {label} spelling",
+        )
+        for backend, label in (
+            ("directx", "DirectX"),
+            ("opengl", "OpenGL"),
+            ("webgl", "WebGL"),
+        )
+    },
 }
 
 

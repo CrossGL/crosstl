@@ -86,12 +86,6 @@ _FUNCTION_STAGES = {
     # OpExecuteCallableKHR passes on callable data, which a callable shader receives as a parameter.
     "execute_callable": "callable",
 }
-# Functions whose bare name is a CrossGL function that computes something else, so they have no CrossGL spelling.
-_DIFFERENT = {
-    "Float::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
-    "Vec3::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
-    "Float::log": "Float::log takes a base; CrossGL's log is the natural logarithm",
-}
 # Functions whose result no CrossGL function computes, with the reason.
 _UNSPELLED = {
     "Float::integer_decode": (
@@ -104,12 +98,6 @@ _UNSPELLED = {
         "no CrossGL function returns a vector's direction and length together"
     ),
     "Vec3::try_normalize": "no CrossGL function returns an optional value",
-    "Vec3::max_position": (
-        "no CrossGL function returns the index of a vector's largest element"
-    ),
-    "Vec3::min_position": (
-        "no CrossGL function returns the index of a vector's smallest element"
-    ),
     "Float::classify": "no CrossGL function returns a float's category",
     "Vec3::to_array": "no CrossGL function converts a vector to an array",
     "Vec3::write_to_slice": (
@@ -509,8 +497,6 @@ def _feature(
     counterpart = None
     if name in _CONSTRUCTORS:
         spelled = _CONSTRUCTORS[name]
-    elif name in _DIFFERENT:
-        spelled, note = "", note or _DIFFERENT[name]
     elif name in _UNSPELLED:
         spelled, note = "", note or _UNSPELLED[name]
     elif name in spellings.COUNTERPARTS["rust"]:

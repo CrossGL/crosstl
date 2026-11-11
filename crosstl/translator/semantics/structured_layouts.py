@@ -1297,10 +1297,12 @@ def _plan_buffer(declaration, shapes, target, inline, passed=False):
         else ""
     )
     array = _is_buffer_array(slot, var_type)
-    # The generator's own struct copies cover single indexed buffers only, so queues and arrays are lowered here.
+    # The generator's own struct copies cover single indexed buffers of structs of scalars and vectors only, so
+    # queues, arrays of buffers and elements holding arrays, matrices or 16- and 64-bit values are lowered here.
     if (
         source == "hlsl"
         and shape.form == "struct"
+        and _generator_copies(shape)
         and target in _GENERATOR_LOWERS_STRUCTS
         and not inline
         and not passed
@@ -1437,6 +1439,16 @@ def _canonicalize_buffer_calls(node, names):
             set_child(node, slot_field, key, child)
         if isinstance(child, A.ASTNode):
             _canonicalize_buffer_calls(child, names)
+
+
+def _generator_copies(shape):
+    """Whether the OpenGL generator's struct copies (``glsl_hlsl_structured``) can hold ``shape``: 32-bit scalars,
+    vectors and structs of them. It keeps any other struct as declared, under std430."""
+    if shape.form in ("scalar", "vector"):
+        return True
+    if shape.form != "struct":
+        return False
+    return all(_generator_copies(member) for _name, member, _offset in shape.members)
 
 
 def _holds_bool(shape):

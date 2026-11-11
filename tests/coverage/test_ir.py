@@ -1,5 +1,7 @@
-from tools.coverage import causes, ir, report
-from tools.coverage.model import Feature, Result, Signature, Type
+import pytest
+
+from tools.coverage import causes, ir, report, runner, validators
+from tools.coverage.model import Feature, Param, Result, Signature, Type
 
 FLOAT = Type("float")
 
@@ -68,6 +70,12 @@ def test_a_call_that_spells_its_generic_arguments_is_keyed_by_its_name():
     assert list(by_name(entry)) == ["slang/bit_cast"]
 
 
+def test_an_operation_crossgl_writes_as_an_expression_is_keyed_by_its_name():
+    spelled = {"crossgl": "ivec3(gl_WorkGroupSize)"}
+    entry = ir.build([row("slang", ("WorkgroupSize", "supported", spelled))])
+    assert list(by_name(entry)) == ["slang/WorkgroupSize"]
+
+
 def test_input_rows_do_not_widen_the_universe():
     entry = ir.build([{**row("glsl", ("abs", "supported", {})), "direction": "input"}])
     assert entry is None
@@ -100,6 +108,66 @@ def test_a_feature_with_no_id_borrows_the_glsl_id_of_its_crossgl_spelling():
     assert features["GLSL.std.450:Frexp"]["members"] == ["glsl/frexp", "wgsl/frexp"]
 
 
+def test_a_function_with_no_id_takes_the_one_id_of_functions_spelled_alike():
+    cospi = "GLSL.std.450:Cos+OpVectorTimesScalar"
+    method = row("metal", ("texture2d.read", "supported", {"crossgl": "Load"}))
+    method["features"][0]["category"] = "method"
+    entry = ir.build(
+        [
+            row(
+                "slang",
+                ("cospi", "refused", {"semantic": cospi, "detail": "gap"}),
+                ("log10", "supported", {"semantic": "GLSL.std.450:Log+OpFMul"}),
+                ("Load", "supported", {"semantic": "OpImageFetch"}),
+            ),
+            row(
+                "hlsl",
+                ("log10", "supported", {"semantic": "GLSL.std.450:Log2+OpFMul"}),
+            ),
+            row(
+                "cuda",
+                ("cospif", "supported", {"crossgl": "cospi"}),
+                ("log10f", "supported", {"crossgl": "log10"}),
+            ),
+            method,
+        ]
+    )
+    features = by_name(entry)
+    assert features[cospi]["members"] == ["cuda/cospif", "slang/cospi"]
+    assert features[cospi]["outcome"] == "supported"
+    # Two ids share the spelling log10, so neither is taken; a method takes no function's id.
+    assert features["cuda/log10"]["members"] == ["cuda/log10f"]
+    assert features["metal/Load"]["members"] == ["metal/texture2d.read"]
+
+
+def test_functions_without_an_id_that_crossgl_spells_alike_are_one_feature():
+    method = row("metal", ("vec.erf", "wrong", {"crossgl": "erf", "detail": "bad"}))
+    method["features"][0]["category"] = "method"
+    entry = ir.build(
+        [
+            row(
+                "cuda",
+                ("erff", "supported", {"crossgl": "erf"}),
+                ("__clz", "supported", {}),
+                ("__fdividef", "refused", {"detail": "gap"}),
+            ),
+            row("hip", ("__clz", "supported", {})),
+            row("mojo", ("erf", "wrong", {"detail": "global variables"})),
+            method,
+        ]
+    )
+    features = by_name(entry)
+    # Mojo's generator fails erf, but CrossGL's erf translates correctly to CUDA.
+    assert features["crossgl/erf"]["members"] == ["cuda/erff", "mojo/erf"]
+    assert features["crossgl/erf"]["outcome"] == "supported"
+    assert features["crossgl/erf"]["group"] == "shared"
+    assert features["crossgl/__clz"]["members"] == ["cuda/__clz", "hip/__clz"]
+    # A spelling one language has keeps that language's name, and a method stays its own.
+    assert features["cuda/__fdividef"]["outcome"] == "refused"
+    assert features["metal/erf"]["members"] == ["metal/vec.erf"]
+    assert entry["counts"] == {"supported": 2, "refused": 1, "wrong": 1, "untested": 0}
+
+
 def test_a_gap_names_its_member_as_the_feature_of_its_cause():
     detail = 'probe.cu(9): error: no instance of overloaded function "{}" matches'
     entry = ir.build(
@@ -120,3 +188,109 @@ def test_a_gap_names_its_member_as_the_feature_of_its_cause():
             ["cuda/atomicAdd_block", "cuda/atomicOr_block"],
         )
     ]
+
+
+def test_a_member_its_generator_fails_counts_when_spirv_expresses_it():
+    expm1 = "GLSL.std.450:Exp+OpFSub"
+    entry = ir.build(
+        [
+            row(
+                "rust",
+                (
+                    "Float::exp_m1",
+                    "wrong",
+                    {"semantic": expm1, "detail": "no std", "expressed": "spirv"},
+                ),
+                ("Float::ln_1p", "wrong", {"semantic": "OpY", "detail": "no std"}),
+            ),
+        ]
+    )
+    features = by_name(entry)
+    assert features[expm1]["outcome"] == "supported"
+    assert features[expm1]["via"] == ["spirv"]
+    assert "detail" not in features[expm1]
+    # Without the route the generator's failure is still the IR gap.
+    assert features["OpY"]["outcome"] == "wrong"
+    assert features["OpY"]["detail"] == "rust: no std"
+
+
+def test_the_report_keeps_the_route_of_a_result_that_is_not_supported():
+    feature = Feature(
+        "rust", "function", "Float::exp_m1", Signature(FLOAT, ()), crossgl="expm1"
+    )
+    result = Result(
+        feature,
+        "output",
+        "wrong",
+        "no std",
+        semantic="GLSL.std.450:Exp+OpFSub",
+        expressed="spirv",
+    )
+    data = report.loads(report.dumps(report.build([result], ["rust"], ["output"])))
+    rust, crossgl = data["backends"]
+    assert rust["features"][0]["expressed"] == "spirv"
+    assert rust["score"] == 0.0
+    assert crossgl["score"] == 100.0
+
+
+RUST_ABS = Feature(
+    "rust",
+    "function",
+    "Float::abs",
+    Signature(FLOAT, (Param(FLOAT),)),
+    group="float",
+    crossgl="abs",
+)
+
+
+@pytest.mark.skipif(
+    not validators.available("spirv"), reason="spirv-val is not installed"
+)
+def test_a_crossgl_probe_whose_spirv_has_the_native_id_is_expressed():
+    assert runner.expressed(RUST_ABS, "rust", "GLSL.std.450:FAbs") == "spirv"
+    # The translation's call must lower to the native probe's id, not merely validate.
+    assert runner.expressed(RUST_ABS, "rust", "GLSL.std.450:FSign") == ""
+
+
+@pytest.mark.skipif(
+    not validators.available("spirv"), reason="spirv-val is not installed"
+)
+def test_a_rust_subgroup_function_is_expressed_through_its_wave_spelling():
+    uint = Type("uint")
+    add = Feature(
+        "rust",
+        "function",
+        "subgroup_i_add",
+        Signature(uint, (Param(uint),)),
+        group="arch",
+        crossgl="WaveActiveSum",
+    )
+    # The operand type selects the integer instruction rust-gpu's native probe lowers to.
+    assert runner.expressed(add, "rust", "OpGroupNonUniformIAdd.Reduce") == "spirv"
+    assert runner.expressed(add, "rust", "OpGroupNonUniformFAdd.Reduce") == ""
+
+
+def test_no_route_for_spirv_itself_constructs_or_features_without_an_id():
+    assert runner.expressed(RUST_ABS, "spirv", "GLSL.std.450:FAbs") == ""
+    assert runner.expressed(RUST_ABS, "rust", "") == ""
+    assert runner.expressed(RUST_ABS, "rust", "construct:control-flow/loop") == ""
+
+
+def test_only_output_results_that_are_not_supported_look_for_the_route(monkeypatch):
+    asked = []
+    monkeypatch.setattr(
+        runner,
+        "expressed",
+        lambda feature, language, semantic: asked.append(language) or "spirv",
+    )
+    for outcome in ("supported", "wrong", "refused", "untested"):
+        monkeypatch.setattr(
+            runner,
+            "run_output",
+            lambda feature, language, outcome=outcome: Result(
+                feature, "output", outcome, semantic="GLSL.std.450:FAbs"
+            ),
+        )
+        result = runner._job((RUST_ABS, "output", "rust"))
+        assert result.expressed == ("spirv" if outcome in ("wrong", "refused") else "")
+    assert asked == ["rust", "rust"]

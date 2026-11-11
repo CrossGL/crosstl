@@ -100,6 +100,47 @@ def spirv_named_variable(spv_code, name, pointer_type=None, storage_class=None):
     raise AssertionError(f"Missing variable {name}")
 
 
+def spirv_whole_copies(spv_code):
+    """``(line, destination, source)`` for every ``OpStore`` of a value loaded whole from another variable."""
+    lines = spv_code.splitlines()
+    loads = {}
+    copies = []
+    for line_number, line in enumerate(lines):
+        load = re.match(r"\s*(%\d+) = OpLoad %\d+ (%\d+)\s*$", line)
+        if load:
+            loads[load.group(1)] = load.group(2)
+            continue
+        store = re.match(r"\s*OpStore (%\d+) (%\d+)\s*$", line)
+        if store and store.group(2) in loads:
+            copies.append((line_number, store.group(1), loads[store.group(2)]))
+    return copies
+
+
+def spirv_value_result_temporaries(spv_code, variable):
+    """The unnamed Function variables an ``out``/``inout`` argument ``variable`` is copied into or back from.
+
+    GLSL 4.60 section 6.1.1 and HLSL pass ``out`` and ``inout`` by value-result, so the parameter has its own
+    variable: the argument is copied in (``inout``) when it is evaluated and copied back after the call.
+    """
+    named = set(re.findall(r"OpName (%\d+) ", spv_code))
+    function_variables = {
+        variable
+        for variable in re.findall(r"(%\d+) = OpVariable %\d+ Function\b", spv_code)
+        if variable not in named
+    }
+    copies = spirv_whole_copies(spv_code)
+    related = {variable}
+    changed = True
+    while changed:
+        changed = False
+        for _line, destination, source in copies:
+            for a, b in ((destination, source), (source, destination)):
+                if a in related and b not in related and b in function_variables:
+                    related.add(b)
+                    changed = True
+    return related - {variable}
+
+
 def spirv_pointer_type(spv_code, pointee_type, storage_class):
     match = re.search(
         rf"(%\d+) = OpTypePointer {storage_class} {re.escape(pointee_type)}\b",
@@ -3118,7 +3159,7 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_function_calls_use_declared_parameter_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_inout_fixed_array_parameter_aliases_caller_storage(self, tmp_path):
+    def test_inout_fixed_array_parameter_copies_in_and_back(self, tmp_path):
         source_code = """
         shader WritableArrayParameter {
             compute {
@@ -3139,17 +3180,27 @@ class TestVulkanSPIRVCodeGen:
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        array_type = re.search(r"(%\d+) = OpTypeArray %\d+ %\d+", spv_code)
-        assert array_type is not None
         caller_array = spirv_named_variable(
             spv_code, "values", storage_class="Function"
         )
+        copies = spirv_whole_copies(spv_code)
+        (parameter,) = spirv_value_result_temporaries(spv_code, caller_array)
+        copy_in = [
+            line for line, dst, src in copies if (dst, src) == (parameter, caller_array)
+        ]
+        copy_out = [
+            line for line, dst, src in copies if (dst, src) == (caller_array, parameter)
+        ]
+        write = [
+            number
+            for number, line in enumerate(spv_code.splitlines())
+            if re.search(rf"OpAccessChain %\d+ {re.escape(parameter)} %\d+", line)
+        ]
 
-        assert re.search(
-            rf"OpAccessChain %\d+ {re.escape(caller_array)} %\d+", spv_code
-        )
+        # Copied in, written through the parameter's own variable, then copied back.
+        assert copy_in and write and copy_out
+        assert copy_in[0] < write[0] < copy_out[-1]
         assert "OpFunctionCall" not in spv_code
-        assert not re.search(rf"OpLoad {re.escape(array_type.group(1))}\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -3214,7 +3265,7 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_out_scalar_parameter_aliases_caller_storage(self, tmp_path):
+    def test_out_scalar_parameter_is_copied_back(self, tmp_path):
         source_code = """
         shader WritableScalarParameter {
             void assign(out int value) {
@@ -3237,13 +3288,18 @@ class TestVulkanSPIRVCodeGen:
 
         result = spirv_named_variable(spv_code, "result", storage_class="Function")
         integer_constants = spirv_integer_constant_values(spv_code)
+        (parameter,) = spirv_value_result_temporaries(spv_code, result)
         stored_values = [
             stored_value
             for pointer, stored_value in re.findall(r"OpStore (%\d+) (%\d+)", spv_code)
-            if pointer == result
+            if pointer == parameter
         ]
+        copies = {(dst, src) for _line, dst, src in spirv_whole_copies(spv_code)}
 
-        assert 7 in {integer_constants.get(stored) for stored in stored_values}
+        # An out parameter is not copied in; its final value is copied back.
+        assert integer_constants.get(stored_values[0]) == 7
+        assert (parameter, result) not in copies
+        assert (result, parameter) in copies
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -3285,12 +3341,18 @@ class TestVulkanSPIRVCodeGen:
 
         state = spirv_named_variable(spv_code, "state", storage_class="Function")
         scalar = spirv_named_variable(spv_code, "scalar", storage_class="Function")
-        state_members = set(
-            re.findall(
-                rf"(%\d+) = OpAccessChain %\d+ {re.escape(state)} %\d+",
+        # leaf's parameters are copied from relay's, which are copied from main's variables, and back.
+        states = spirv_value_result_temporaries(spv_code, state)
+        scalars = spirv_value_result_temporaries(spv_code, scalar)
+        assert len(states) == len(scalars) == 2 and not states & scalars
+        state_members = {
+            member
+            for variable in states
+            for member in re.findall(
+                rf"(%\d+) = OpAccessChain %\d+ {re.escape(variable)} %\d+",
                 spv_code,
             )
-        )
+        }
         integer_constants = spirv_integer_constant_values(spv_code)
         stores = re.findall(r"OpStore (%\d+) (%\d+)", spv_code)
         assert any(
@@ -3305,7 +3367,7 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert seven is not None
-        assert (scalar, seven.group(1)) in stores
+        assert any((variable, seven.group(1)) in stores for variable in scalars)
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -3334,7 +3396,9 @@ class TestVulkanSPIRVCodeGen:
         assert "argument 1" in str(error)
         assert "not addressable" in str(error)
 
-    def test_inlined_storage_buffer_helper_aliases_inout_fixed_array(self, tmp_path):
+    def test_inlined_storage_buffer_helper_copies_back_inout_fixed_array(
+        self, tmp_path
+    ):
         source_code = """
         shader WritableArrayInline {
             StructuredBuffer<float> input @binding(0);
@@ -3359,18 +3423,21 @@ class TestVulkanSPIRVCodeGen:
         )
 
         values = spirv_named_variable(spv_code, "values", storage_class="Function")
-        array_type = re.search(r"(%\d+) = OpTypeArray %\d+ %\d+", spv_code)
-        assert array_type is not None
-        accesses = re.findall(rf"OpAccessChain %\d+ {re.escape(values)} %\d+", spv_code)
+        (parameter,) = spirv_value_result_temporaries(spv_code, values)
+        copies = {(dst, src) for _line, dst, src in spirv_whole_copies(spv_code)}
 
-        assert len(accesses) >= 2
+        # dst[0] is written through the parameter's variable, copied back, and read from values.
+        assert re.search(rf"OpAccessChain %\d+ {re.escape(parameter)} %\d+", spv_code)
+        assert (values, parameter) in copies
+        assert re.search(rf"OpAccessChain %\d+ {re.escape(values)} %\d+", spv_code)
         assert not spirv_named_ids(spv_code, "load")
         assert "OpFunctionCall" not in spv_code
-        assert not re.search(rf"OpLoad {re.escape(array_type.group(1))}\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_nested_inout_fixed_array_helpers_share_caller_storage(self, tmp_path):
+    def test_nested_inout_fixed_array_helpers_copy_back_to_caller_storage(
+        self, tmp_path
+    ):
         source_code = """
         shader NestedWritableArrayParameter {
             compute {
@@ -3395,16 +3462,24 @@ class TestVulkanSPIRVCodeGen:
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        array_type = re.search(r"(%\d+) = OpTypeArray %\d+ %\d+", spv_code)
-        assert array_type is not None
         caller_array = spirv_named_variable(
             spv_code, "values", storage_class="Function"
+        )
+        # relay's and writeAt's parameters, each copied in and back in turn.
+        parameters = spirv_value_result_temporaries(spv_code, caller_array)
+        assert len(parameters) == 2
+        assert any(
+            re.search(rf"OpAccessChain %\d+ {re.escape(parameter)} %\d+", spv_code)
+            for parameter in parameters
+        )
+        assert any(
+            dst == caller_array and src in parameters
+            for _line, dst, src in spirv_whole_copies(spv_code)
         )
         assert re.search(
             rf"OpAccessChain %\d+ {re.escape(caller_array)} %\d+", spv_code
         )
         assert "OpFunctionCall" not in spv_code
-        assert not re.search(rf"OpLoad {re.escape(array_type.group(1))}\b", spv_code)
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 

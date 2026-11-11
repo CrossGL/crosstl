@@ -1,0 +1,40 @@
+#version 450
+// The arguments of a call are evaluated once, in order, from left to right, and an inout argument is copied in
+// at its turn; an out argument's location is fixed at its turn too. This holds for the shader's functions and
+// for built-in functions (DXC's DXIL code generator evaluates call arguments from right to left).
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Inp { int a[]; };
+layout(std430, binding = 1) buffer Outp { int o[]; };
+shared int tile[64];
+int counter;
+int bump(inout int t) { t = t * 3 + 1; return t - 2; }
+int two(int p, int q) { return p * 100 + q; }
+int three(int p, int q, int r) { return (p * 100 + q) * 100 + r; }
+void scale(inout int p, int q) { p = p * 10 + q; }
+void put(out int dst, int v) { dst = v; }
+int next() { counter = counter * 2 + 1; return counter; }
+void main() {
+    uint l = gl_LocalInvocationIndex;
+    uint g = gl_GlobalInvocationID.x;
+    int x = a[g];
+    int y = x;
+    o[8u * g] = two(y, bump(y));
+    y = x;
+    o[8u * g + 1u] = max(bump(y), y);
+    counter = x;
+    o[8u * g + 2u] = three(next(), next(), counter);
+    int m = x;
+    scale(m, bump(m));
+    o[8u * g + 3u] = m;
+    tile[l] = x;
+    o[8u * g + 4u] = two(bump(tile[l]), tile[l]);
+    y = x;
+    o[8u * g + 5u] = clamp(y, bump(y), y + 100);
+    tile[l] = x;
+    int before = atomicAdd(tile[l], bump(tile[l]));
+    o[8u * g + 6u] = before * 3 + tile[l];
+    int slots[8] = int[8](0, 0, 0, 0, 0, 0, 0, 0);
+    int k = x & 1;
+    put(slots[k], bump(k));
+    o[8u * g + 7u] = slots[x & 1] * 16 + slots[k];
+}

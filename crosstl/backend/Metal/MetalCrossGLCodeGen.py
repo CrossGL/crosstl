@@ -30,7 +30,11 @@ from ...translator.math_namespaces import (
     metal_precise_math_operation,
 )
 from ...translator.precise_exp import binary32_exp_support
-from ...translator.precise_log2 import binary32_log2_support
+from ...translator.precise_log2 import (
+    LOG2_PROFILED_OPERATIONS,
+    LOG10_OF_TWO,
+    binary32_log2_support,
+)
 from ...translator.precise_power import binary32_power_support
 from ...translator.precise_trig import TRIG_HELPER_KEYS, binary32_trig_support
 from ...translator.remainder_math import binary32_remainder_support
@@ -69,6 +73,11 @@ from .color_attachments import (
 from .comparison_samplers import collect_comparison_sampler_ids
 from .conditional_types import split_template_arguments
 from .const_cast_buffer_writes import mark_const_cast_written_buffers
+from .constant_constructor_folding import (
+    constant_initialization,
+    fold_constant_constructor_call,
+    in_constant_initialization,
+)
 from .default_samplers import is_default_sampler_local
 from .dependent_builtins import (
     NOT_DEPENDENT,
@@ -149,7 +158,14 @@ from .texture_types import (
 )
 from .type_layout import metal_type_layout
 from .unscoped_enums import unscoped_enumerator_owners
-from .using_declared_library_names import using_declared_library_names
+from .unused_generic_definitions import (
+    raise_referenced_deferred_definitions,
+    render_generic_definition,
+)
+from .using_declared_library_names import (
+    using_declared_alias_targets,
+    using_declared_library_names,
+)
 
 _PLAIN_TYPE_NAME = re.compile(r"[A-Za-z_]\w*")
 
@@ -2002,6 +2018,7 @@ class MetalToCrossGLConverter(
         self.alias_template_structs = []
         self.alias_template_structs_by_qualified_name = {}
         self.alias_template_using_namespaces = []
+        self.alias_template_using_declarations = []
         self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
         self.callable_type_aliases = {}
@@ -3578,6 +3595,7 @@ class MetalToCrossGLConverter(
         self.alias_template_structs = []
         self.alias_template_structs_by_qualified_name = {}
         self.alias_template_using_namespaces = []
+        self.alias_template_using_declarations = []
         self.current_type_resolution_context = None
         typedefs = getattr(ast, "typedefs", []) or []
         self.collect_callable_type_aliases(typedefs)
@@ -3675,8 +3693,10 @@ class MetalToCrossGLConverter(
             and getattr(struct_node, "name", None)
         }
         self.struct_member_types = self.collect_struct_member_types(structs)
-        self.collect_struct_static_constants(structs)
+        # Static constants resolve eagerly; constructor calls in their
+        # initializers need the constructor contracts.
         self.prepare_metal_constructor_contracts(structs)
+        self.collect_struct_static_constants(structs)
         self.wide_vector_reserved_names.update(
             self.map_struct_name(struct_node.name)
             for struct_node in structs
@@ -3963,6 +3983,7 @@ class MetalToCrossGLConverter(
 
         ordinary_function_code = []
         deferred_template_functions = []
+        self.deferred_generic_definition_errors = []
         for f in functions:
             if id(f) in self.suppressed_out_of_line_call_operator_ids:
                 continue
@@ -3978,9 +3999,15 @@ class MetalToCrossGLConverter(
             ):
                 continue
             ordinary_function_code.append(
-                self.generate_top_level_function(
+                render_generic_definition(
+                    self,
                     f,
-                    template_value_bindings=default_bindings,
+                    lambda f=f, default_bindings=default_bindings: (
+                        self.generate_top_level_function(
+                            f,
+                            template_value_bindings=default_bindings,
+                        )
+                    ),
                 )
             )
 
@@ -4013,7 +4040,13 @@ class MetalToCrossGLConverter(
                 if id(function) in self.suppressed_value_template_function_ids:
                     continue
                 deferred_template_code.append(
-                    self.generate_top_level_function(function)
+                    render_generic_definition(
+                        self,
+                        function,
+                        lambda function=function: self.generate_top_level_function(
+                            function
+                        ),
+                    )
                 )
         finally:
             self.preserve_unmaterialized_template_calls = False
@@ -4062,6 +4095,7 @@ class MetalToCrossGLConverter(
             1,
         )
         code = self.propagate_cooperative_matrix_fragment_type_contracts(code)
+        raise_referenced_deferred_definitions(self, code)
         return code
 
     def generate_top_level_function(
@@ -4822,6 +4856,18 @@ class MetalToCrossGLConverter(
                     source_location,
                 )
             completed_arguments.append(default)
+        folded = None
+        if in_constant_initialization(self):
+            folded = self.fold_constant_constructor_initializer(
+                struct_node,
+                constructor,
+                completed_arguments,
+                value_bindings,
+                type_bindings,
+                is_main,
+            )
+        if folded is not None:
+            return folded
         helper = self.reserve_constructor_factory(
             struct_node,
             constructor,
@@ -4844,6 +4890,33 @@ class MetalToCrossGLConverter(
             if value_bindings:
                 self.template_value_bindings.pop()
         return f"{helper}({rendered})"
+
+    def fold_constant_constructor_initializer(
+        self,
+        struct_node,
+        constructor,
+        arguments,
+        value_bindings,
+        type_bindings,
+        is_main=False,
+    ):
+        if value_bindings:
+            self.template_value_bindings.append(value_bindings)
+        if type_bindings:
+            self.template_type_bindings.append(type_bindings)
+        try:
+            return fold_constant_constructor_call(
+                self,
+                struct_node,
+                constructor,
+                arguments,
+                [self.generate_expression(argument, is_main) for argument in arguments],
+            )
+        finally:
+            if type_bindings:
+                self.template_type_bindings.pop()
+            if value_bindings:
+                self.template_value_bindings.pop()
 
     def generate_default_constructor_initializer(self, declaration, is_main=False):
         owner = self.metal_declaration_expression_type(declaration)
@@ -5925,7 +5998,8 @@ class MetalToCrossGLConverter(
             if integer_value is not None:
                 rendered = self.render_static_integral_value(member, integer_value)
             else:
-                rendered = self.generate_expression(default_value, False)
+                with constant_initialization(self):
+                    rendered = self.generate_expression(default_value, False)
                 folded_value = self.evaluate_value_template_constant_expression(
                     rendered
                 )
@@ -6189,6 +6263,9 @@ class MetalToCrossGLConverter(
         self.alias_template_using_namespaces = list(
             getattr(ast, "using_namespace_directives", []) or []
         )
+        self.alias_template_using_declarations = list(
+            getattr(ast, "using_declarations", []) or []
+        )
         self.struct_member_alias_resolution_stack = []
         self.current_type_resolution_context = None
 
@@ -6436,6 +6513,16 @@ class MetalToCrossGLConverter(
         for scope in self.namespace_lookup_scopes(namespace):
             direct = f"{scope}::{raw_name}" if scope else raw_name
             tiers.append([direct])
+            # ``using c10::metal::opmath_t;`` makes the name a member of the scope it appears in
+            # ([namespace.udecl]/1), ahead of the namespaces a using-directive nominates.
+            declared = using_declared_alias_targets(
+                self.alias_template_using_declarations,
+                scope,
+                raw_name,
+                self.normalize_qualified_type_name,
+            )
+            if declared:
+                tiers.append(declared)
             imported = [
                 f"{target}::{raw_name}"
                 for target in self.visible_using_namespace_targets(scope)
@@ -9850,11 +9937,15 @@ class MetalToCrossGLConverter(
                 saved_types = self.current_variable_types
                 self.current_variable_types = {**static_member_types, **saved_types}
                 try:
-                    rendered_default = self.generate_expression(default_value, False)
+                    with constant_initialization(self):
+                        rendered_default = self.generate_expression(
+                            default_value, False
+                        )
                 finally:
                     self.current_variable_types = saved_types
             else:
-                rendered_default = self.generate_expression(default_value, False)
+                with constant_initialization(self):
+                    rendered_default = self.generate_expression(default_value, False)
             declaration += f" = {rendered_default}"
         return declaration
 
@@ -16530,8 +16621,12 @@ class MetalToCrossGLConverter(
         return "".join(pad + line + "\n" for line in code.strip().splitlines())
 
     def generate_metal_log2_call(self, expression, is_main=False):
+        # log10 shares the profiled base-two logarithm: log10(x) is
+        # log2(x) * log10(2), so its result keeps the helper's finite
+        # accuracy and operand policy instead of the target's log2 near one.
+        operation = str(expression.name).rsplit("::", 1)[-1]
         if (
-            str(expression.name).rsplit("::", 1)[-1] != "log2"
+            operation not in LOG2_PROFILED_OPERATIONS
             or self.metal_math_builtin_namespace_mode(expression.name) == "fast"
             or (
                 self.binary32_log2_operand_profile is None
@@ -16552,7 +16647,7 @@ class MetalToCrossGLConverter(
             result_type = "float"
         elif (
             self.resolve_metal_math_builtin_name(expression.name, expression.args)
-            == "log2"
+            == operation
         ):
             result_type = self.metal_math_builtin_result_type(expression)
         else:
@@ -16566,14 +16661,14 @@ class MetalToCrossGLConverter(
         width = info["width"]
         if element not in {"float", "half"} or width not in {1, 2, 3, 4}:
             raise MetalPreciseMathLoweringError(
-                "log2",
+                operation,
                 result_type,
                 "the selected profile requires binary32 computation",
                 getattr(expression, "source_location", None),
             )
         if self.current_function is None:
             raise MetalPreciseMathLoweringError(
-                "log2",
+                operation,
                 result_type,
                 "global initializers cannot call the runtime logarithm helper",
                 getattr(expression, "source_location", None),
@@ -16592,6 +16687,8 @@ class MetalToCrossGLConverter(
             value = f"{self.map_type(parameter_type)}({value})"
         mapped = "float" if width == 1 else f"vec{width}"
         result = f"{self.metal_log2_helper_name(width)}({mapped}({value}))"
+        if operation == "log10":
+            result = f"({result} * {LOG10_OF_TWO})"
         return (
             f"{self.map_type(result_type)}({result})" if element == "half" else result
         )

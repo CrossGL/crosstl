@@ -287,6 +287,48 @@ def test_ambiguous_sizes_are_reported_and_left_alone(tmp_path):
     assert sorted(report.unmatched) == sorted({OLD_A, OLD_B, OLD_C})
 
 
+def test_artifact_size_bytes_pairs_with_the_artifact_hash(tmp_path):
+    # Gap evidence pins a corrected artifact as artifact_sha256 with
+    # artifact_size_bytes, in JSON and in the Python mirror of the same record.
+    gaps = tmp_path / SCOPE / "expected-gaps.json"
+    harness = tmp_path / SCOPE / "tests" / "test_harness.py"
+    harness.parent.mkdir(parents=True)
+    gaps.write_text(
+        json.dumps(
+            {
+                "corrected": {
+                    "artifact_sha256": OLD_A,
+                    "artifact_size_bytes": 100,
+                    "output_element_count": 100,
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    harness.write_text(
+        "CORRECTED = {\n"
+        f'    "artifact_sha256": (\n        "{OLD_A}"\n    ),\n'
+        '    "artifact_size_bytes": 100,\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    pins, _ = refresh_pins.build_pins(_drift("out/k.hlsl", OLD_A, NEW_A, 100, 104))
+
+    report = refresh_pins.refresh(pins, tmp_path, (SCOPE,), write=True)
+
+    assert report.unresolved == []
+    corrected = json.loads(gaps.read_text())["corrected"]
+    assert corrected == {
+        "artifact_sha256": NEW_A,
+        "artifact_size_bytes": 104,
+        "output_element_count": 100,
+    }
+    assert f'"{NEW_A}"' in harness.read_text()
+    assert '"artifact_size_bytes": 104,' in harness.read_text()
+
+
 def test_command_line_reads_drift_and_writes_a_summary(tmp_path, capsys):
     paths = _tree(tmp_path)
     drift = tmp_path / "drift"
@@ -350,3 +392,252 @@ def test_the_tool_and_its_tests_are_never_rewritten(tmp_path):
         f"{SCOPE}/README.md",
         f"{SCOPE}/tests/test_kept.py",
     ]
+
+
+OLD_M, NEW_M = "5" * 64, "6" * 64
+OLD_N, NEW_N = "7" * 64, "8" * 64
+SHARED_M = "9" * 64
+
+
+def _materialization_drift(subject, old_sha, new_sha, old_count, new_count):
+    return [
+        _record(subject, "materializationSha256", old_sha, new_sha),
+        _record(subject, "specializationCount", old_count, new_count),
+    ]
+
+
+def test_materialization_digests_pair_with_specialization_counts():
+    records = [
+        *_drift("out/k.metal", OLD_A, NEW_A, 100, 120),
+        *_materialization_drift("out/k.metal", OLD_M, NEW_M, 5, 6),
+        _record("out/j.metal", "specializationCount", 2, 3),
+    ]
+    pins, count_only = refresh_pins.build_pins(records)
+    assert pins == {
+        OLD_A: refresh_pins.Pin(OLD_A, NEW_A, 100, 120),
+        OLD_M: refresh_pins.Pin(OLD_M, NEW_M, 5, 6, size_keys=refresh_pins.COUNT_KEYS),
+    }
+    assert count_only == [
+        {"subject": "out/j.metal", "test": "t.py::case", "size": (2, 3)}
+    ]
+    with pytest.raises(refresh_pins.RefreshError, match="two kinds of value"):
+        refresh_pins.build_pins(
+            [
+                *_drift("out/a.metal", OLD_A, NEW_A),
+                _record("out/b.metal", "materializationSha256", OLD_A, NEW_A),
+            ]
+        )
+
+
+def _counted_contract(materializations):
+    entries = [
+        {
+            "entryPoint": f"k_{index}",
+            "shape": shape,
+            "sha256": UNCHANGED if index else OLD_A,
+            "sizeBytes": 100 + index,
+            "specializationCount": count,
+            "materializationSha256": digest,
+        }
+        for index, (shape, count, digest) in enumerate(materializations)
+    ]
+    return {
+        "entries": entries,
+        "artifactContract": {
+            "specializationCount": sum(e[1] for e in materializations),
+            "specializationCountsByShape": {
+                "row": sum(e[1] for e in materializations if e[0] == "row"),
+                "col": sum(e[1] for e in materializations if e[0] == "col"),
+            },
+            "unsupportedSpecializationCount": 0,
+        },
+    }
+
+
+def _counted_tree(root: Path):
+    base = root / SCOPE
+    (base / "contracts").mkdir(parents=True)
+    (base / "tests").mkdir()
+    first = base / "contracts" / "family.metal.json"
+    other = base / "contracts" / "family.opengl.json"
+    first.write_text(
+        json.dumps(
+            _counted_contract([("row", 5, OLD_M), ("col", 3, SHARED_M)]), indent=2
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    other.write_text(
+        json.dumps(
+            _counted_contract([("row", 5, OLD_N), ("col", 3, SHARED_M)]), indent=2
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    test = base / "tests" / "test_family.py"
+    test.write_text(
+        f"""CONTRACTS = ("contracts/family.metal.json", "contracts/family.opengl.json")
+FAMILY_METAL_CONTRACT_SHA256 = (
+    "{_sha(first)}"
+)
+FAMILY_SPECIALIZATION_COUNT = 8
+""",
+        encoding="utf-8",
+    )
+    gaps = base / "gaps.json"
+    gaps.write_text(
+        '{\n  "path": "contracts/family.opengl.json",\n'
+        '  "specialization_count": 8,\n  "entries": 2\n}\n',
+        encoding="utf-8",
+    )
+    readme = base / "README.md"
+    readme.write_text(
+        "`contracts/family.metal.json` pins 8 exact materializations.\n",
+        encoding="utf-8",
+    )
+    return {
+        "first": first,
+        "other": other,
+        "test": test,
+        "gaps": gaps,
+        "readme": readme,
+    }
+
+
+def test_refresh_rewrites_materialization_pins_and_their_totals(tmp_path):
+    paths = _counted_tree(tmp_path)
+    pins, count_only = refresh_pins.build_pins(
+        [
+            *_materialization_drift("out/k_0.metal", OLD_M, NEW_M, 5, 6),
+            *_materialization_drift("out/k_0.glsl", OLD_N, NEW_N, 5, 6),
+            *_drift("out/k_0.metal", OLD_A, NEW_A),
+        ]
+    )
+    assert count_only == []
+
+    report = refresh_pins.refresh(pins, tmp_path, (SCOPE,), write=True)
+    assert report.complete, report.to_json()
+
+    for name, digest in (("first", NEW_M), ("other", NEW_N)):
+        contract = json.loads(paths[name].read_text())
+        assert paths[name].read_text() == json.dumps(contract, indent=2) + "\n"
+        assert [
+            (e["materializationSha256"], e["specializationCount"], e["sha256"])
+            for e in contract["entries"]
+        ] == [(digest, 6, NEW_A), (SHARED_M, 3, UNCHANGED)]
+        assert contract["artifactContract"] == {
+            "specializationCount": 9,
+            "specializationCountsByShape": {"row": 6, "col": 3},
+            "unsupportedSpecializationCount": 0,
+        }
+    test = paths["test"].read_text()
+    assert "FAMILY_SPECIALIZATION_COUNT = 9\n" in test
+    assert f'    "{_sha(paths["first"])}"\n' in test
+    assert '"specialization_count": 9,\n  "entries": 2\n' in paths["gaps"].read_text()
+    assert "pins 9 exact materializations" in paths["readme"].read_text()
+    assert dict(report.applied) == {
+        "sha256": 2,
+        "materializationSha256": 2,
+        "specializationCount": 2,
+        "specializationTotals": 2,
+        "specializationShapes": 2,
+        "mirroredSpecializationTotals": 3,
+        "fileSha256": 1,
+    }
+
+
+def test_conflicting_specialization_totals_are_reported_and_left_alone(tmp_path):
+    paths = _counted_tree(tmp_path)
+    pins, _ = refresh_pins.build_pins(
+        [
+            *_materialization_drift("out/k_0.metal", OLD_M, NEW_M, 5, 6),
+            *_materialization_drift("out/k_0.glsl", OLD_N, NEW_N, 5, 7),
+        ]
+    )
+
+    report = refresh_pins.refresh(pins, tmp_path, (SCOPE,), write=True)
+
+    assert report.unresolved == [{"reason": "specialization total 8 moved to [9, 10]"}]
+    assert (
+        json.loads(paths["first"].read_text())["artifactContract"][
+            "specializationCount"
+        ]
+        == 9
+    )
+    assert (
+        json.loads(paths["other"].read_text())["artifactContract"][
+            "specializationCount"
+        ]
+        == 10
+    )
+    assert "FAMILY_SPECIALIZATION_COUNT = 8\n" in paths["test"].read_text()
+    assert '"specialization_count": 8,' in paths["gaps"].read_text()
+
+
+def test_a_specialization_count_is_located_only_beside_its_digest(tmp_path):
+    readme = tmp_path / SCOPE / "README.md"
+    readme.parent.mkdir(parents=True)
+    readme.write_text(f"A 5-specialization record `{OLD_M}`.\n", encoding="utf-8")
+    pins, _ = refresh_pins.build_pins(
+        _materialization_drift("out/k.metal", OLD_M, NEW_M, 5, 6)
+    )
+
+    report = refresh_pins.refresh(pins, tmp_path, (SCOPE,), write=True)
+
+    assert report.unresolved == [
+        {
+            "path": "demos/integrations/mlx/README.md",
+            "line": 1,
+            "sha256": OLD_M,
+            "reason": "found 0 specializationCount fields equal to 5",
+        }
+    ]
+    assert readme.read_text() == f"A 5-specialization record `{NEW_M}`.\n"
+
+
+def test_range_tuples_are_laid_out_as_black_lays_them_out():
+    long_entry = "row_reduce_looped_large_5_reduce_mincomplex64_with_a_long_tail"
+    text = (
+        'FAMILY_GENERATED_SIZE_MAXIMUM = ("k_small", 1500)\n'
+        "FAMILY_GENERATED_SIZE_MINIMUM = (\n"
+        f'    "{long_entry}",\n'
+        "    200,\n"
+        ")\n"
+        "\n"
+        "\n"
+        "def test_family():\n"
+        '    assert summary["maximum"] == (1500, "k_small")\n'
+    )
+    old = (
+        0,
+        {
+            "minimum": {"entryPoint": long_entry, "sizeBytes": 200},
+            "maximum": {"entryPoint": "k_small", "sizeBytes": 1500},
+        },
+    )
+    new = (
+        0,
+        {
+            "minimum": {"entryPoint": "k_middle", "sizeBytes": 190},
+            "maximum": {"entryPoint": long_entry, "sizeBytes": 30222},
+        },
+    )
+    report = refresh_pins.Report()
+
+    edits = refresh_pins.mirror_edits("t.py", text, old, new, report)
+
+    assert refresh_pins.apply_edits(text, edits) == (
+        "FAMILY_GENERATED_SIZE_MAXIMUM = (\n"
+        f'    "{long_entry}",\n'
+        "    30222,\n"
+        ")\n"
+        'FAMILY_GENERATED_SIZE_MINIMUM = ("k_middle", 190)\n'
+        "\n"
+        "\n"
+        "def test_family():\n"
+        '    assert summary["maximum"] == (\n'
+        "        30222,\n"
+        f'        "{long_entry}",\n'
+        "    )\n"
+    )
+    assert report.applied["mirroredRanges"] == 3

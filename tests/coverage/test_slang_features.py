@@ -2,6 +2,8 @@
 
 import pytest
 
+from crosstl.translator.semantics.builtin_function_names import BUILTIN_FUNCTION_NAMES
+from crosstl.translator.semantics.builtin_names import is_crossgl_gl_builtin
 from tools.coverage import probes, spellings
 from tools.coverage.features import slang
 from tools.coverage.model import (
@@ -171,6 +173,70 @@ def test_slang_spells_its_coarse_and_fine_fwidth_as_crossgl_does():
     # HLSL has no coarse or fine fwidth, and Slang's additions leave its table alone.
     assert "fwidth_coarse" not in spellings.RENAMES["hlsl"]
     assert spellings.RENAMES["slang"]["lerp"] == "mix"
+
+
+def test_slang_functions_crossgl_names_otherwise_take_crossgl_names():
+    glsl_names = {"unpackHalf2x16", "interpolateAtCentroid"}
+    assert spellings.spelling("slang", "unpackHalf2x16ToFloat", glsl_names) == (
+        "unpackHalf2x16"
+    )
+    assert spellings.spelling("slang", "EvaluateAttributeAtCentroid", glsl_names) == (
+        "interpolateAtCentroid"
+    )
+    # A name GLSL lacks applies without the GLSL feature list.
+    assert (
+        spellings.spelling("slang", "WavePrefixMax", set()) == "WavePrefixExclusiveMax"
+    )
+    assert (
+        spellings.spelling("slang", "WaveGetLaneEqMask", set()) == "gl_SubgroupEqMask"
+    )
+    assert spellings.spelling("wgsl", "quadSwapX", set()) == "QuadReadAcrossX"
+    # A half-precision unpack returns half vectors, which GLSL's do not, so it converts GLSL's result as Slang does.
+    assert spellings.spelling("slang", "unpackHalf2x16ToHalf", glsl_names) == (
+        "f16vec2(unpackHalf2x16({}))"
+    )
+    # Slang's pack_s8 calls packInt4x8, and its WaveMultiPrefixSum is the exclusive scan.
+    assert spellings.spelling("slang", "packInt4x8", set()) == "pack_s8"
+    assert spellings.spelling("slang", "unpackUint4x8ToUint16", set()) == "unpack_u8u16"
+    assert spellings.spelling("slang", "WaveMultiPrefixExclusiveSum", set()) == (
+        "WaveMultiPrefixSum"
+    )
+    # Slang writes an inclusive multi-prefix scan for HLSL as the exclusive scan combined with the lane's value.
+    assert spellings.spelling("slang", "WaveMultiPrefixInclusiveSum", set()) == (
+        "(WaveMultiPrefixSum({0}, {1}) + {0})"
+    )
+    assert spellings.spelling("slang", "getRealtimeClockLow", set()) == (
+        "clockRealtime2x32EXT().x"
+    )
+
+
+def test_other_names_are_names_crossgl_defines():
+    for language, names in spellings.OTHER_NAMES.items():
+        for name, spelled in names.items():
+            # An expression may be arithmetic on its arguments or a literal, which names no function.
+            expression = spellings.is_expression(spelled)
+            used = spellings.named(spelled) if expression else [spelled]
+            assert used or expression, (language, name)
+            for base in used:
+                if base.startswith("gl_"):
+                    assert is_crossgl_gl_builtin(base), (language, name)
+                else:
+                    assert base in BUILTIN_FUNCTION_NAMES, (language, name)
+
+
+def test_expression_spellings_name_what_they_call():
+    assert spellings.is_expression("WaveActiveBallot(true)")
+    assert spellings.is_expression("gl_HitTriangleVertexPositionsEXT[{}]")
+    assert not spellings.is_expression("gl_NumSubgroups")
+    assert spellings.named("f16vec2(unpackHalf2x16({}))") == ["unpackHalf2x16"]
+    assert spellings.named("ivec3(gl_WorkGroupSize)") == ["gl_WorkGroupSize"]
+    assert spellings.named("(WaveMultiPrefixBitXor({0}, {1}) ^ {0})") == [
+        "WaveMultiPrefixBitXor"
+    ]
+    assert spellings.named("clockRealtime2x32EXT().x") == ["clockRealtime2x32EXT"]
+    assert spellings.named("pow({0}, float({1}))") == ["pow"]
+    assert spellings.named("(3.40282347e38)") == []
+    assert spellings.named("(uint64({0}) * uint64({1}))") == []
 
 
 def test_slang_stages_targets_and_explicit_generic_arguments():
@@ -362,21 +428,61 @@ def test_slang_generic_type_parameters_nothing_fixes_are_untested():
     text = """
 //@public:
 [ForceInline]
+bool hasTrait<T : ITrait>()
+{
+    return false;
+}
+"""
+    query = by_name(slang.parse(text, ""))["hasTrait"]
+    assert (query.signature, query.spelling, query.target) == (None, "", "")
+    assert query.note == "no probe type for the generic parameter T : ITrait"
+    with pytest.raises(
+        probes.ProbeError, match="no probe type for the generic parameter T"
+    ):
+        probes.build(query, "slang")
+
+
+def test_slang_descriptor_functions_are_probed_with_a_float_buffer():
+    text = """
+//@public:
+[ForceInline]
 bool usesNativeSpirvDescriptorHandle<T : IOpaqueDescriptor>()
 {
     return false;
 }
 
 T getDescriptorFromExplicitHeapIndex<T:IOpaqueDescriptor>(uint2 handle);
+
+T defaultGetDescriptorFromHandle<T:IOpaqueDescriptor>(DescriptorHandle<T> handleValue, constexpr BindlessDescriptorOptions bindlessOptions = BindlessDescriptorOptions.VkMutable);
+
+__intrinsic_op($(kIROp_NonUniformResourceIndex))
+DescriptorHandle<T> nonuniform<T:IOpaqueDescriptor>(DescriptorHandle<T> ptr);
 """
     features = by_name(slang.parse(text, ""))
+    handle = Type.other("DescriptorHandle<StructuredBuffer<float>>")
+    # slangc infers no descriptor type from the result or from nothing, so the probe names it.
     query = features["usesNativeSpirvDescriptorHandle"]
-    assert (query.signature, query.spelling, query.target) == (None, "", "")
-    assert query.note == "no probe type for the generic parameter T : IOpaqueDescriptor"
-    with pytest.raises(
-        probes.ProbeError, match="no probe type for the generic parameter T"
-    ):
-        probes.build(query, "slang")
-    # The result names the parameter, so the probe reaches the descriptor type and reports that instead.
+    assert query.signature == Signature(Type("bool"), ())
+    assert query.spelling == "usesNativeSpirvDescriptorHandle<StructuredBuffer<float>>"
     heap = features["getDescriptorFromExplicitHeapIndex"]
-    assert heap.signature is not None and heap.note == ""
+    assert (
+        heap.spelling == "getDescriptorFromExplicitHeapIndex<StructuredBuffer<float>>"
+    )
+    source = probes.build(heap, "slang").source
+    assert (
+        "float r = getDescriptorFromExplicitHeapIndex<StructuredBuffer<float>>(a0)[0];"
+        in source
+    )
+    # A handle is a uniform the probe declares, and a descriptor result is read through its first element.
+    default = features["defaultGetDescriptorFromHandle"]
+    assert default.signature.params[0].type == handle
+    source = probes.build(default, "slang").source
+    assert "uniform DescriptorHandle<StructuredBuffer<float>> u0;" in source
+    assert (
+        "float r = defaultGetDescriptorFromHandle(u0, BindlessDescriptorOptions.None)[0];"
+        in source
+    )
+    assert features["nonuniform"].signature == Signature(handle, (Param(handle),))
+    source = probes.build(features["nonuniform"], "crossgl").source
+    assert "uniform DescriptorHandle<StructuredBuffer<float>> u0;" in source
+    assert "float r = nonuniform(u0)[0];" in source

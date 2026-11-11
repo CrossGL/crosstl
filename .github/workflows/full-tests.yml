@@ -403,14 +403,19 @@ jobs:
         shell: bash
         env:
           CROSSTL_REQUIRE_BUFFER_STRIDE_EXECUTION: "1"
+          CROSSTL_REQUIRE_NESTED_MEMBER_PLACEMENT_OPENGL_EXECUTION: ${{ matrix.adapter == 'opengl' && '1' || '' }}
           CROSSTL_REQUIRE_HLSL_VALUE_ARRAY_EXECUTION: "1"
           CROSSTL_REQUIRE_BUFFER_COUNTER_EXECUTION: "1"
           CROSSTL_REQUIRE_BUFFER_ARRAY_EXECUTION: "1"
+          CROSSTL_REQUIRE_SPECIALIZED_MEMBER_TYPE_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
+          CROSSTL_REQUIRE_CLASS_TEMPLATE_MEMBER_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
           CROSSTL_REQUIRE_APPEND_CONSUME_EXECUTION: "1"
+          CROSSTL_REQUIRE_STRUCTURED_MEMBER_LAYOUT_EXECUTION: ${{ matrix.adapter == 'opengl' && '1' || '' }}
           CROSSTL_REQUIRE_BUFFER_ARRAY_LAYOUT_EXECUTION: "1"
           CROSSTL_REQUIRE_MESA_NIR_EXACTNESS: ${{ matrix.adapter == 'opengl' && '1' || '' }}
           CROSSTL_REQUIRE_BUFFER_PARAMETER_EXECUTION: "1"
           CROSSTL_REQUIRE_FUNCTION_CONSTANT_EXECUTION: "1"
+          CROSSTL_REQUIRE_REFERENCE_ALIASING_EXECUTION: ${{ matrix.adapter == 'metal' && '1' || '' }}
           CROSSTL_REQUIRE_THREADGROUP_BINDING_EXECUTION: "1"
           CROSSTL_REQUIRE_HLSL_STRUCTURED_MATRIX_EXECUTION: "1"
           EGL_PLATFORM: surfaceless
@@ -418,14 +423,21 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_translator/test_buffer_strides.py \
+            tests/test_translator/test_nested_member_placement_registers.py \
             tests/test_backend/test_directx/test_hlsl_value_array_parameters.py \
             tests/test_backend/test_directx/test_hlsl_buffer_parameter_layouts.py \
             tests/test_backend/test_directx/test_hlsl_precise_arithmetic.py \
             tests/test_backend/test_directx/test_hlsl_structured_buffer_matrices.py \
+            tests/test_translator/test_metal_reference_aliasing.py \
+            tests/test_translator/test_metal_conditional_reference_copies.py \
+            tests/test_translator/test_metal_loop_reference_copies.py \
             tests/test_translator/test_structured_buffer_counters.py \
             tests/test_translator/test_metal_buffer_arrays.py \
+            tests/test_backend/test_metal/test_specialized_member_types.py \
+            tests/test_backend/test_metal/test_class_template_member_uses.py \
             tests/test_translator/test_append_consume_layouts.py \
             tests/test_translator/test_structured_buffer_array_layouts.py \
+            tests/test_translator/test_structured_buffer_member_layouts.py \
             tests/test_translator/test_metal_specialization_constants.py \
             tests/test_translator/test_metal_threadgroup_parameter_indices.py
 
@@ -438,7 +450,8 @@ jobs:
           CROSSTL_REQUIRE_NESTED_MEMBER_PLACEMENT_EXECUTION: "1"
         run: |
           python -m pytest -q \
-            tests/test_translator/test_spirv_nested_member_placements.py
+            tests/test_translator/test_spirv_nested_member_placements.py \
+            tests/test_translator/test_nested_member_placement_registers.py
 
       - name: Record unavailable runtime parity adapter
         if: steps.probe_runtime_parity.outputs.available != 'true'

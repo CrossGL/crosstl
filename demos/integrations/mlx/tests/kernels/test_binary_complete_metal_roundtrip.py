@@ -46,7 +46,7 @@ BINARY_SCALAR_METAL_CONTRACT_PATH = (
     / "binary.scalar-metal-roundtrip.json"
 )
 BINARY_SCALAR_METAL_CONTRACT_SHA256 = (
-    "7fc0bbdf6a5199e073ce4f653612d5805f01afe6ac79f1cca266a62899cb8b4d"
+    "7742a83f7fb5808b2c53f796429cbb3c8b358941c7055bea32df6db85b5563e7"
 )
 BINARY_METAL_CONTRACT_PATH = (
     ROOT
@@ -57,7 +57,7 @@ BINARY_METAL_CONTRACT_PATH = (
     / "binary.metal-roundtrip.json"
 )
 BINARY_METAL_CONTRACT_SHA256 = (
-    "0f7b86380245c72005f0f6ab19b1a27db33fe08b482b3af3ca6e60bba0ee9fd6"
+    "392013d7f4cc26501d229db086a73b52b1bc74eda03c7d39460961cf5d955c3b"
 )
 
 
@@ -453,10 +453,10 @@ def test_current_mlx_binary_metal_contract_is_complete_and_classified():
         "reflectedResourceCount": 19106,
         "reflectedResourceCountsByShape": resource_counts,
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 6122996,
+        "generatedSizeBytesTotal": 6124082,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "ss_Addfloat16", "sizeBytes": 772},
-            "maximum": {"entryPoint": "gn4large_ArcTan2bfloat16", "sizeBytes": 7895},
+            "maximum": {"entryPoint": "gn4large_ArcTan2bfloat16", "sizeBytes": 7901},
         },
         "nativeCompiler": "xcrun -sdk macosx metal -Werror -c",
         "requiresNonemptyAirArtifact": True,

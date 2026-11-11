@@ -59,7 +59,7 @@ shader main {
     sampler linearSampler @binding(4);
     fragment {
         vec4 main(uint idx @location(0) @flat) @location(0) {
-            return sample(textures[NonUniformResourceIndex(idx)], linearSampler, vec2(0.5, 0.5));
+            return texture(textures[NonUniformResourceIndex(idx)], linearSampler, vec2(0.5, 0.5));
         }
     }
 }

@@ -35,6 +35,7 @@ from crosstl.translator.codegen.resource_aggregates import (
     _pointer_type,
     lower_resource_aggregates,
 )
+from crosstl.translator.semantics import UndeclaredFunctionError
 from tests.ci_helpers import assert_paths_covered
 from tests.metal_refusal_helpers import refused_metal
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
@@ -494,8 +495,9 @@ def test_resource_aggregate_executes_natively(tmp_path, case):
         ("cursor.input = 0;", "pointer-contract-mismatch"),
         ("first[tid] = sizeof(Cursor);", "resource-reference-escape"),
         ("first[tid] = sizeof(cursor);", "resource-reference-escape"),
-        ("first[tid] = unknown(cursor);", "resource-reference-escape"),
-        ("first[tid] = unknown(cursor.input);", "resource-reference-escape"),
+        # A call to an undeclared function is refused before any aggregate analysis.
+        ("first[tid] = unknown(cursor);", "undeclared-function"),
+        ("first[tid] = unknown(cursor.input);", "undeclared-function"),
         ("cursor.output[tid] += 4;", "compound-resource-write"),
     ],
 )
@@ -504,6 +506,10 @@ def test_resource_aggregate_rejects_unproven_operations(tmp_path, body, reason, 
     source = _source("cursor").replace("cursor.output[tid] = cursor.input[tid];", body)
     path = tmp_path / "unsupported.metal"
     path.write_text(source)
+    if reason == "undeclared-function":
+        with pytest.raises(UndeclaredFunctionError, match="'unknown' is not declared"):
+            translate(str(path), backend=target, format_output=False)
+        return
     if "sizeof(" in body:
         with pytest.raises(
             MetalSizeofResolutionError, match="aggregate object layout is not available"
