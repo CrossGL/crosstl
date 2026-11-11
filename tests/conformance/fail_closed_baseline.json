@@ -19,20 +19,6 @@
   "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.record_member_narrow_external_storage_type::identity-fallback": 1,
   "crosstl/backend/HIP/HipCrossGLCodeGen.py::HipToCrossGLConverter.visit_HipBuiltinNode::identity-fallback": 1,
   "crosstl/backend/HIP/HipParser.py::HipParser.normalized_operator_value::identity-fallback": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.infer_constructor_template_bindings::identity-fallback": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.render_metal_sizeof_expression::identity-fallback": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.replace_alias_template_identifiers::identity-fallback": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.resolve_lowered_static_struct_owner::identity-fallback": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.substitute_template_type_text::identity-fallback": 1,
-  "crosstl/backend/Metal/MetalCrossGLCodeGen.py::MetalToCrossGLConverter.substitute_template_value_text::identity-fallback": 1,
-  "crosstl/backend/Metal/MetalParser.py::MetalParser.parse_type_specifier::identity-fallback": 1,
-  "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._canonical_type_trait_operand::identity-fallback": 1,
-  "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._replace_identifiers::identity-fallback": 1,
-  "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._resolve_constraint_type::identity-fallback": 1,
-  "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._scalar_and_width::identity-fallback": 2,
-  "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._static_constexpr_scalar_type::identity-fallback": 1,
-  "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._try_rewrite_call_at::identity-fallback": 4,
-  "crosstl/backend/Metal/preprocessor.py::MetalPreprocessor._try_rewrite_nested_member_call_at::identity-fallback": 1,
   "crosstl/backend/Mojo/MojoCrossGLCodeGen.py::MojoToCrossGLConverter.map_attribute::identity-fallback": 1,
   "crosstl/backend/Mojo/MojoCrossGLCodeGen.py::MojoToCrossGLConverter.resolve_mojo_dtype_type::identity-fallback": 1,
   "crosstl/backend/OpenCL/OpenCLCrossGLCodeGen.py::OpenCLToCrossGLConverter.format_unsupported_opencl_sizeof_expression::fallback-text": 1,
@@ -202,6 +188,6 @@
  "totals": {
   "empty-block-recovery": 1,
   "fallback-text": 42,
-  "identity-fallback": 170
+  "identity-fallback": 152
  }
 }

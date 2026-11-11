@@ -165,6 +165,13 @@ RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
+# The Metal type ``unsigned`` makes of each integer a SIGNED_PREFIX_TYPE_TOKENS token spells (MSL 3.2 section 2.1).
+UNSIGNED_INTEGER_TYPES = {
+    "char": "uchar",
+    "short": "ushort",
+    "int": "uint",
+    "long": "ulong",
+}
 KEYWORD_IDENTIFIER_TOKENS = {
     "BUFFER",
     "SAMPLER",
@@ -2540,12 +2547,7 @@ class MetalParser:
             else:
                 base_type = "int"
             if signed_prefix == "unsigned":
-                base_type = {
-                    "char": "uchar",
-                    "short": "ushort",
-                    "int": "uint",
-                    "long": "ulong",
-                }.get(base_type, base_type)
+                base_type = UNSIGNED_INTEGER_TYPES[base_type]
         else:
             base_type = self.current_token[1]
             self.eat(self.current_token[0])
