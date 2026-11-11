@@ -57,6 +57,7 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import evaluate_literal_int_expression
+from .lane_records import lane_load, lane_record_layout, lane_store, lane_view
 from .resource_origins import ResourceOriginAnalysis
 from .resource_storage_views import (
     combined_load,
@@ -541,6 +542,8 @@ class _Lowering:
         # (element, space) -> elements some view of its handles yields.
         self.view_targets = {}
         self.viewed_loads = set()
+        # (element, space) pairs whose load or store helpers read lane views.
+        self.lane_accesses = set()
         self.generated = []
         self.entry_handles = {
             param.name: self.fresh(f"crosstl_reference_{param.name}")
@@ -625,10 +628,14 @@ class _Lowering:
             # Binary16 and bfloat16 scalars keep their own element type; the
             # target backends already lay out and convert shared 16-bit arrays.
             narrow_float = _name(element) in _NARROW_FLOAT_ELEMENTS
+            # Padding-free records of one 32-bit scalar type are element types
+            # the targets load, store and copy whole.
+            lane_record = self.lane_record(element)
             if (
                 extent is None
                 or extent <= 0
                 or not narrow_float
+                and not lane_record
                 and (
                     numeric is None
                     or numeric.bits != 32
@@ -704,6 +711,13 @@ class _Lowering:
                 handle,
                 root,
             )
+
+    def lane_record(self, value):
+        """Whether ``value`` names a padding-free record of one 32-bit scalar."""
+
+        if not isinstance(value, NamedType) or value.generic_args:
+            return False
+        return lane_record_layout(self.structs.get(value.name)) is not None
 
     def handle_name(self, pointer):
         if pointer.element not in self.handles:
@@ -1208,6 +1222,8 @@ class _Lowering:
             return replace(
                 source, writable=source.writable and target.writable, readable=readable
             )
+        if self.lane_view(source.element, target.element) is not None:
+            return self.lane_pointer_view(source, target, readable, node)
         if source.space == "threadgroup":
             return None
         space = source.space
@@ -1226,6 +1242,29 @@ class _Lowering:
             self.register_view(storage, target.element, space, node)
         return _Pointer(target.element, space, False, readable)
 
+    def lane_view(self, source_element, target_element):
+        """The scalar view of ``source_element`` lane records, or None."""
+
+        return lane_view(self.structs.get(source_element), target_element)
+
+    def lane_pointer_view(self, source, target, readable, node):
+        """A scalar view of lane-record handles in any space.
+
+        Lane ``j`` of the view is member ``j % n`` of record ``j / n``. Each
+        lane is a whole 32-bit member, so loads and stores through the view
+        reach exactly that member, and the view keeps the access both
+        pointers grant. Record handles that already name other storage have
+        no lanes.
+        """
+        space = source.space
+        if self.storage_views.get((source.element, space)):
+            return None
+        self.view_targets.setdefault((source.element, space), set()).add(target.element)
+        self.register_view(source.element, target.element, space, node)
+        return _Pointer(
+            target.element, space, source.writable and target.writable, readable
+        )
+
     def register_view(self, storage, element, space, node):
         """Record that ``element`` handles in ``space`` may name ``storage``.
 
@@ -1235,14 +1274,19 @@ class _Lowering:
         if storage == element:
             # The handle's own element: load helpers read it directly.
             return
-        if not restorable_view(storage, element):
+        if (
+            not restorable_view(storage, element)
+            and self.lane_view(storage, element) is None
+        ):
             # Neither whole nor adjacent storage elements form the element.
             raise ResourceAggregateError("widened-narrow-storage", node)
         key = element, space
         viewed = self.storage_views.setdefault(key, set())
         if storage in viewed:
             return
-        if key in self.viewed_loads:
+        if key in self.viewed_loads or (
+            key in self.lane_accesses and self.lane_view(storage, element) is not None
+        ):
             # A load helper of this element no longer covers every view.
             raise ResourceAggregateError("late-storage-view", node)
         viewed.add(storage)
@@ -1279,7 +1323,9 @@ class _Lowering:
         A narrowing view counts ``ratio`` view elements per source element; a
         widening view divides the offset back into its wider elements.
         """
-        view = storage_view(source.element, target.element)
+        view = self.lane_view(source.element, target.element) or storage_view(
+            source.element, target.element
+        )
         if view is None:
             view = storage_view(target.element, source.element)
             operator = "/"
@@ -1426,6 +1472,15 @@ class _Lowering:
             if operation == "load" and not pointer.writable:
                 self.viewed_loads.add((pointer.element, pointer.space))
                 viewed = self.storage_views.get((pointer.element, pointer.space), set())
+            # Lane views are exact for reads and writes through any handle.
+            self.lane_accesses.add((pointer.element, pointer.space))
+            viewed = set(viewed) | {
+                storage
+                for storage in self.storage_views.get(
+                    (pointer.element, pointer.space), set()
+                )
+                if self.lane_view(storage, pointer.element) is not None
+            }
             candidates = [
                 (index, resource_name, resource.element)
                 for index, (_param, resource, resource_name) in enumerate(
@@ -1444,11 +1499,14 @@ class _Lowering:
                 position = BinaryOpNode(
                     _member(_id("reference"), "offset"), "+", _id("index")
                 )
+                lanes = self.lane_view(element, pointer.element)
                 if element == pointer.element:
                     access = ArrayAccessNode(_id(resource_name), position)
                 elif members:
                     # A member of a storage view's element has no storage.
                     raise ResourceAggregateError("member-write-through-storage-view")
+                elif lanes is not None:
+                    access = lane_load(lanes, _id(resource_name), position)
                 elif storage_view(element, pointer.element) is not None:
                     access = view_load(
                         storage_view(element, pointer.element),
@@ -1465,14 +1523,20 @@ class _Lowering:
                 written = access
                 for member in members:
                     written = _member(written, member)
-                statements = (
-                    [ReturnNode(access)]
-                    if operation == "load"
-                    else [
+                if operation == "load":
+                    statements = [ReturnNode(access)]
+                elif lanes is not None:
+                    statements = [
+                        lane_store(
+                            lanes, _id(resource_name), position, _id("value"), operator
+                        ),
+                        ReturnNode(_id("value")),
+                    ]
+                else:
+                    statements = [
                         AssignmentNode(written, _id("value"), operator),
                         ReturnNode(deepcopy(written) if members else _id("value")),
                     ]
-                )
                 # Every handle originates at one of these compatible bindings.
                 if index == candidates[-1][0]:
                     body.extend(statements)

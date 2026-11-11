@@ -11,7 +11,7 @@ import pytest
 
 import crosstl.translator
 from crosstl.project import ProjectConfig, translate_project
-from crosstl.translator.codegen import GLSL_codegen
+from crosstl.translator.codegen import GLSL_codegen, glsl_affine_relations
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen, OpenGLIndexTypeError
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
@@ -207,3 +207,176 @@ def test_rebased_metal_pointers_refuse_a_wrapping_row(tmp_path):
     assert artifacts == []
     codes = {diagnostic["code"] for diagnostic in payload["diagnostics"]}
     assert "project.translate.opengl-index-type-unsupported" in codes
+
+
+# With ``rows`` known only to lie in [1, 4096], intervals give
+# ``rows - 1 - check`` the range [-4095, 4095]; only the difference the guard
+# states, ``check - rows + 1 <= 0``, keeps it non-negative.
+RANGED_ROWS = """#include <metal_stdlib>
+using namespace metal;
+
+template <int N>
+[[kernel]] void ranged_rows(
+    const device float* in [[buffer(0)]],
+    device float* out [[buffer(1)]],
+    const constant size_t& rows [[buffer(2)]],
+    const constant size_t& stride [[buffer(3)]],
+    uint3 lid [[thread_position_in_threadgroup]]) {
+  size_t offset = lid.y * rows * stride;
+  in += offset;
+  out += offset;
+  for (uint j = 0; j < rows; j += 32 / N) {
+    uint row = j + lid.x / N;
+    uint check = row;
+    row = rows - 1 - row;
+    if (GUARD) {
+      STEP
+      if (INNER) {
+        for (int i = 0; i < N; i++) {
+          out[row * stride + i] = in[row * stride + i];
+        }
+      }
+    }
+  }
+}
+
+template [[host_name("ranged_rows_4")]] [[kernel]] void ranged_rows<4>(
+    const device float* in [[buffer(0)]],
+    device float* out [[buffer(1)]],
+    const constant size_t& rows [[buffer(2)]],
+    const constant size_t& stride [[buffer(3)]],
+    uint3 lid [[thread_position_in_threadgroup]]);
+"""
+
+SIGNED_GUARD = """#include <metal_stdlib>
+using namespace metal;
+
+template <typename T>
+[[kernel]] void guarded_difference(
+    const device float* in [[buffer(0)]],
+    device float* out [[buffer(1)]],
+    const constant size_t& rows [[buffer(2)]],
+    uint3 lid [[thread_position_in_threadgroup]]) {
+  T c = T(lid.x) OFFSET;
+  uint d = c - rows;
+  if (c >= rows) {
+    out[lid.x] = in[d * rows];
+  }
+}
+
+template [[host_name("guarded_difference_t")]] [[kernel]] void
+guarded_difference<TYPE>(
+    const device float* in [[buffer(0)]],
+    device float* out [[buffer(1)]],
+    const constant size_t& rows [[buffer(2)]],
+    uint3 lid [[thread_position_in_threadgroup]]);
+"""
+
+
+def _translate_ranged(tmp_path, kernel, entry, parameters):
+    source = "ranged.metal"
+    (tmp_path / source).write_text(kernel, "utf-8")
+    config = ProjectConfig(
+        root=tmp_path,
+        include_patterns=(source,),
+        targets=("opengl",),
+        output_dir="out",
+        entry_points={source: (entry,)},
+        workgroup_size_rules={source: (32, 2, 1)},
+        metadata_preconditions=[
+            {
+                "source": source,
+                "entryPoint": entry,
+                "parameter": name,
+                "minimum": 1,
+                "maximum": 4096,
+            }
+            for name in parameters
+        ],
+        source_options={"metal": {"preserve_resource_origins": True}},
+    )
+    payload = translate_project(config, format_output=False).to_json()
+    return payload, sorted((tmp_path / "out").rglob("*.glsl"))
+
+
+def _ranged_rows(tmp_path, guard, step="", inner="true"):
+    kernel = (
+        RANGED_ROWS.replace("GUARD", guard)
+        .replace("STEP", step)
+        .replace("INNER", inner)
+    )
+    return _translate_ranged(tmp_path, kernel, "ranged_rows_4", ("rows", "stride"))
+
+
+def _assert_refused(payload, artifacts):
+    assert artifacts == []
+    codes = {diagnostic["code"] for diagnostic in payload["diagnostics"]}
+    assert "project.translate.opengl-index-type-unsupported" in codes
+
+
+@pytest.mark.parametrize(
+    "guard, step, inner",
+    [
+        ("check < rows", "", "true"),
+        ("rows > check", "", "true"),
+        ("check < rows && check < 64", "", "true"),
+        ("true", "", "check < rows"),
+        # Stepping both locals keeps row + check; the new guard restates the
+        # fact for the new check.
+        ("check < rows", "row -= 1; check += 1;", "check < rows"),
+    ],
+)
+def test_guard_differences_bound_rows_of_a_ranged_size(tmp_path, guard, step, inner):
+    payload, artifacts = _ranged_rows(tmp_path, guard, step, inner)
+    assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
+    (artifact,) = artifacts
+    _compile(artifact.read_text(encoding="utf-8"), "opengl", tmp_path)
+
+
+def test_ranged_rows_are_unproven_without_guard_facts(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        glsl_affine_relations._Relations, "_guard_facts", lambda *args: []
+    )
+    _assert_refused(*_ranged_rows(tmp_path, "check < rows"))
+
+
+@pytest.mark.parametrize(
+    "guard, step",
+    [
+        ("true", ""),
+        # check == rows wraps row to 0xffffffff.
+        ("check <= rows", ""),
+        # The guard bounds a difference the subscript does not use.
+        ("check < stride", ""),
+        # A disjunction states neither comparison.
+        ("check < rows || check < 2", ""),
+        # The step changes check, so the guard no longer describes it: for
+        # check == rows - 1 at the guard, row wraps.
+        ("check < rows", "row -= 1; check += 1;"),
+    ],
+)
+def test_guards_that_do_not_bound_the_ranged_row_are_refused(tmp_path, guard, step):
+    _assert_refused(*_ranged_rows(tmp_path, guard, step))
+
+
+def _guarded_difference(tmp_path, type_name, offset):
+    kernel = SIGNED_GUARD.replace("TYPE", type_name).replace("OFFSET", offset)
+    return _translate_ranged(tmp_path, kernel, "guarded_difference_t", ("rows",))
+
+
+def test_an_exact_unsigned_guard_bounds_the_difference(tmp_path):
+    payload, artifacts = _guarded_difference(tmp_path, "uint", "+ 16")
+    assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]
+    (artifact,) = artifacts
+    _compile(artifact.read_text(encoding="utf-8"), "opengl", tmp_path)
+
+
+def test_a_signed_operand_converted_to_unsigned_states_no_fact(tmp_path, monkeypatch):
+    # c < 0 converts to a value above every rows, so c >= rows holds while
+    # d = c - rows wraps.
+    _assert_refused(*_guarded_difference(tmp_path, "int", "- 16"))
+    # Treating the comparison as exact would accept it.
+    monkeypatch.setattr(glsl_affine_relations, "_exact_comparison", lambda *args: True)
+    (tmp_path / "exact").mkdir()
+    payload, _ = _guarded_difference(tmp_path / "exact", "int", "- 16")
+    assert payload["summary"]["failedCount"] == 0, payload["diagnostics"]

@@ -12,7 +12,15 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from . import decorations, execution, probes, rustgpu, spirv_input, validators
+from . import (
+    decorations,
+    execution,
+    placeholders,
+    probes,
+    rustgpu,
+    spirv_input,
+    validators,
+)
 from .features.spirv import is_core
 from .model import ROUND_TRIPS, Feature, Result, kept_folder
 from .semantic import identify, instructions, lower
@@ -280,6 +288,9 @@ def run_output(feature: Feature, language: str) -> Result:
     verdict = _validated(language, translated, feature.stage, "", feature.target)
     if not verdict.accepted:
         return result("wrong", verdict.log)
+    comment = placeholders.placeholder(translated)
+    if comment:
+        return result("wrong", placeholders.detail(comment))
     lost = decorations.lost(feature, language, translated)
     if lost:
         return result("wrong", lost)
@@ -371,6 +382,7 @@ def run_input(feature: Feature, language: str) -> Result:
         return result("untested", f"the probe itself is rejected: {native.log}")
     backend = INPUT_BACKENDS[language]
     emitted = ROUND_TRIPS.get(language, language)
+    crossgl = ""
     try:
         # A language CrossTL cannot generate goes through CrossTL's own pipeline to the emitted language, which
         # imports the probe to CrossGL and, for OpenCL C, lowers its kernel parameters for the target in one call.
@@ -396,6 +408,10 @@ def run_input(feature: Feature, language: str) -> Result:
     verdict = _validated(emitted, translated, feature.stage, "", feature.target)
     if not verdict.accepted:
         return result("wrong", f"after the round trip: {verdict.log}")
+    # A placeholder in the CrossGL import is gone from the translation back, which writes only its neutral value.
+    comment = placeholders.placeholder(crossgl) or placeholders.placeholder(translated)
+    if comment:
+        return result("wrong", placeholders.detail(comment, "after the round trip: "))
     lost = spirv_input.dropped(feature, translated) if language == "spirv" else ""
     if lost and not _encodes_otherwise(feature):
         return result("wrong", lost)

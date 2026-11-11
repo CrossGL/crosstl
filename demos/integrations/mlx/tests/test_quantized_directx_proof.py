@@ -177,7 +177,7 @@ void CSMain(uint3 index : SV_DispatchThreadID) {{
     int64_t ws_offset = index.x;
     int row = 0;
     int in_vec_size_w = 4;
-    int64_t wl_offset = 0;
+    int64_t wl_offset = int64_t((ws_offset + (row * in_vec_size_w)));
     uint x_idx = index.x;
     int64_t x_shape_offset = 0;
     int64_t x_strides_offset = 0;
@@ -198,7 +198,7 @@ void CSMain(uint3 index : SV_DispatchThreadID) {{
     uint logical_x_offset = {index_helper_call};
     output[0] = qdot_float_16_2(
         w,
-        int64_t((((w_offset * 4) + (ws_offset + (row * in_vec_size_w))) + wl_offset)),
+        int64_t(((w_offset * 4) + wl_offset)),
         x_thread,
         0,
         1.0,
@@ -379,15 +379,15 @@ def test_quantized_directx_proof_pins_revision_source_header_and_entry():
     assert module.GENERATED_ARTIFACTS == {
         module.MLX_QUANTIZED_ENTRY_POINT: {
             "sha256": (
-                "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e"
+                "b20a8d475b5054089763be475610bd0c4b186131bd03e995b9ed5185cc32da0b"
             ),
-            "sizeBytes": 5721,
+            "sizeBytes": 6239,
         },
         module.MLX_QUANTIZED_GATHER_ENTRY_POINT: {
             "sha256": (
-                "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a"
+                "0c49438127581efadd22a83acd9ac6afc7fdbb4231d4a1986ecbe96f0b90dc5f"
             ),
-            "sizeBytes": 17917,
+            "sizeBytes": 18355,
         },
     }
     assert module.DIRECTX_TARGET_PROFILE == "directx-12"
@@ -729,9 +729,13 @@ def test_quantized_gather_directx_generated_contract_is_exact(tmp_path):
         ("[WaveSize(32)]", "", "32-lane"),
         ("& 255u", "& 65535u", "unpack"),
         (
-            "int64_t((((w_offset * 4) + "
-            "(ws_offset + (row * in_vec_size_w))) + wl_offset))",
+            "int64_t(((w_offset * 4) + wl_offset))",
             "int64_t(wl_offset)",
+            "compose",
+        ),
+        (
+            "int64_t((ws_offset + (row * in_vec_size_w)));",
+            "int64_t(ws_offset);",
             "compose",
         ),
         (
@@ -1039,6 +1043,7 @@ def test_quantized_directx_run_fails_closed_on_generated_identity_drift(
 
     monkeypatch.setattr(module, "_translate_report", translate_report)
     monkeypatch.setattr(module.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "strict")
 
     with pytest.raises(
         module.MlxQuantizedDirectXProofError,
@@ -1048,6 +1053,63 @@ def test_quantized_directx_run_fails_closed_on_generated_identity_drift(
             mlx_root,
             work_dir,
             require_directx_toolchain=False,
+        )
+
+
+def test_quantized_directx_run_reports_generated_identity_drift(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    module = _load_proof()
+    mlx_root = _synthetic_checkout(module, tmp_path, monkeypatch)
+    work_dir = mlx_root / "proof"
+
+    def translate_report(_config, *, report_path):
+        payload, _artifact_path = _translated_payload(module, mlx_root, work_dir)
+        module._write_json(report_path, payload)
+        return payload
+
+    monkeypatch.setattr(module, "_translate_report", translate_report)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "report")
+    generated = _generated_hlsl().encode("utf-8")
+    pinned = module.GENERATED_ARTIFACTS[module.MLX_QUANTIZED_ENTRY_POINT]
+
+    summary = module.run_proof(mlx_root, work_dir, require_directx_toolchain=False)
+
+    assert summary["status"] == "passed"
+    drift = [
+        json.loads(line.removeprefix("MLX-PIN-DRIFT "))
+        for line in capsys.readouterr().err.splitlines()
+        if line.startswith("MLX-PIN-DRIFT ")
+    ]
+    assert drift == [
+        {
+            "subject": f"{module.MLX_QUANTIZED_ENTRY_POINT}.hlsl",
+            "field": "generatedHash",
+            "expected": pinned["sha256"],
+            "actual": hashlib.sha256(generated).hexdigest(),
+        },
+        {
+            "subject": f"{module.MLX_QUANTIZED_ENTRY_POINT}.hlsl",
+            "field": "generatedSizeBytes",
+            "expected": pinned["sizeBytes"],
+            "actual": len(generated),
+        },
+    ]
+
+
+def test_quantized_directx_pin_mode_must_be_known(monkeypatch):
+    module = _load_proof()
+    monkeypatch.setenv("CROSSTL_MLX_PIN_MODE", "lenient")
+    artifact = {
+        "generatedHash": {"algorithm": "sha256", "value": "0" * 64},
+        "generatedSizeBytes": 1,
+    }
+    with pytest.raises(module.MlxQuantizedDirectXProofError, match="strict or report"):
+        module._check_generated_artifact_pin(
+            artifact, entry_point=module.MLX_QUANTIZED_ENTRY_POINT
         )
 
 
