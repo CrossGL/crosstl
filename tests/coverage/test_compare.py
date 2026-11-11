@@ -99,6 +99,23 @@ def test_skipped_leg_is_named_and_not_an_ir_regression():
     assert text.endswith("Not measured in this run: Metal output.\n")
 
 
+def test_ir_scores_over_a_skipped_leg_say_what_they_count():
+    metal = _row("metal", "output", {"simd_sum": "supported"})
+    published = _report(
+        _row("glsl", "output", {"sin": "supported", "cos": "supported"}), metal
+    )
+    current = _report(_row("glsl", "output", {"sin": "supported", "cos": "refused"}))
+    lines = compare(published, current).splitlines()
+    assert "| CrossGL IR expressiveness | 100.0 % | 50.0 % (-50.0) |" in lines
+    assert lines[-2:] == [
+        "Not measured in this run: Metal output.",
+        "Both CrossGL IR expressiveness scores above count only the output features of the languages this run "
+        "measured, so they differ from the published score.",
+    ]
+    full = compare(published, _report(current["backends"][0], metal))
+    assert "Both CrossGL IR" not in full
+
+
 def test_new_rows_and_features_are_marked():
     published = _report(_row("glsl", "output", {"sin": "supported"}))
     current = _report(
