@@ -15,8 +15,8 @@ directly and generate every target from one source file.
 CI measures this chart on every push to `main` and nightly. Every feature in a pinned upstream feature list gets a
 generated probe, CrossTL translates it, and the language's reference compiler or validator checks the result.
 Compute probes also run, on the GPU or on Mesa's software drivers, where the translation must compute what the
-native probe computes: Metal, GLSL and SPIR-V directly, and HLSL, Slang and WGSL as the SPIR-V their reference
-compilers produce. A translation must also keep the built-ins and decorations, such as `flat` or the subgroup
+native probe computes: Metal, GLSL and SPIR-V directly, and HLSL, Slang, WGSL and Rust as the SPIR-V their
+reference compilers produce. A translation must also keep the built-ins and decorations, such as `flat` or the subgroup
 size, that the feature needs in the SPIR-V its compiler produces, or in the AIR for Metal. The score is supported /
 (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
 lists every gap behind each bar.
@@ -97,8 +97,8 @@ native source imports to. CrossGL has its own coverage row, CrossGL IR, which me
 all the measured output languages CrossGL can express.
 
 CrossTL is meant to fail closed: a construct it cannot translate raises a diagnostic that names the construct and
-the target, instead of emitting a placeholder. Output that the reference tool rejects counts as wrong in the coverage
-report, and the Coverage workflow files it as a bug.
+the target, instead of emitting a placeholder. Output that the reference tool rejects, or that has a comment saying
+CrossTL wrote a placeholder, counts as wrong in the coverage report, and the Coverage workflow files it as a bug.
 
 ## How it works
 

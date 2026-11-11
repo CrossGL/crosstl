@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
+from .assembly_validation import check_control_flow_operands
 from .VulkanAst import (
     AssignmentNode,
     BreakNode,
@@ -49,6 +50,7 @@ __all__ = [
 ]
 
 BRANCH_TERMINATORS = frozenset({"OpBranch", "OpBranchConditional", "OpSwitch"})
+CONTROL_FLOW_OPCODES = BRANCH_TERMINATORS | {"OpSelectionMerge", "OpLoopMerge"}
 
 
 class SpirvUnstructuredControlFlowError(TranslationDiagnostic):
@@ -102,6 +104,7 @@ def build_function_cfg(raw_instructions):
     blocks = {}
     order = []
     current = None
+    control = []
     for result_id, opcode, operands, _line in raw_instructions:
         if opcode == "OpLabel" and result_id:
             current = Block(result_id, len(order))
@@ -111,6 +114,8 @@ def build_function_cfg(raw_instructions):
         if current is None or opcode == "OpFunctionEnd":
             continue
         current.instructions.append((result_id, opcode, operands))
+        if opcode in CONTROL_FLOW_OPCODES:
+            control.append((current.label, opcode, list(operands)))
         if opcode == "OpLoopMerge" and len(operands) >= 2:
             current.merge = ("loop", operands[0], operands[1])
         elif opcode == "OpSelectionMerge" and operands:
@@ -124,13 +129,11 @@ def build_function_cfg(raw_instructions):
         if opcode in BRANCH_TERMINATORS:
             current.terminator = (opcode, list(operands))
             current.successors = _terminator_successors(opcode, operands)
+    for label, opcode, operands in control:
+        check_control_flow_operands(label, opcode, operands, blocks)
     predecessors = {label: [] for label in order}
     for label in order:
         for successor in blocks[label].successors:
-            if successor not in blocks:
-                raise SpirvUnstructuredControlFlowError(
-                    f"block {label} branches to {successor}, which is not a block of the function"
-                )
             if label not in predecessors[successor]:
                 predecessors[successor].append(label)
     return FunctionCfg(blocks, order, predecessors)

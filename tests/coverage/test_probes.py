@@ -92,6 +92,27 @@ def test_an_operation_crossgl_writes_as_an_expression_fills_its_holes():
     assert "vec3 r = fmin(fmax(a0, a1), a2);" in probes.build(clamp, "crossgl").source
 
 
+def test_a_builtin_value_is_read_rather_than_called():
+    # Slang's WaveGetNumWaves() is CrossGL's gl_NumSubgroups, and an argument indexes an arrayed value.
+    waves = Feature(
+        "slang",
+        "function",
+        "WaveGetNumWaves",
+        Signature(Type("uint"), ()),
+        crossgl="gl_NumSubgroups",
+    )
+    assert "uint r = gl_NumSubgroups;" in probes.build(waves, "crossgl").source
+    assert "uint r = WaveGetNumWaves();" in probes.build(waves, "slang").source
+    indexed = Feature(
+        "slang",
+        "function",
+        "WaveGetLaneValue",
+        Signature(VEC3, (Param(Type("uint")),)),
+        crossgl="gl_LaneValues[{}]",
+    )
+    assert "vec3 r = gl_LaneValues[a0];" in probes.build(indexed, "crossgl").source
+
+
 def test_an_interpolant_is_read_straight_from_a_shader_input():
     vec2 = Type("float", (2,))
     centroid = feature("interpolateAtCentroid", vec2, vec2, stage="fragment")

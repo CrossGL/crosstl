@@ -2553,8 +2553,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_quantized["native_validation_attempted"] is True
     assert opengl_quantized["native_validation_status"] == "passed"
     assert opengl_quantized["generated_glsl"] == {
-        "sha256": "61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c",
-        "size_bytes": 7949,
+        "sha256": "5a4651bf695dfd37e2c4a15630cb97075b1b50fc599a8d43c13a212079650fbd",
+        "size_bytes": 8501,
     }
     assert opengl_quantized["software_subgroup"] == {
         "configuration": (
@@ -10196,7 +10196,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`MTL::Size group_dims(bk, 2, 1)`" in normalized_readme
     assert "`[numthreads(32, 2, 1)]`" in normalized_readme
     assert "`[WaveSize(32)]`" in normalized_readme
-    assert "17,917 bytes" in normalized_readme
+    assert "18,355 bytes" in normalized_readme
     assert "materializes the overloaded `elem_to_loc` helper" in normalized_readme
     assert "independent shape and stride resource offsets" in normalized_readme
     assert "passes its logical offset as `inout int64_t`" in normalized_readme
@@ -10208,7 +10208,7 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert "`gindex`" in readme
     assert "`out_index / writes_per_reduce`" in readme
     assert "inclusive bounds `[0, 2147483647]`" in normalized_readme
-    assert "7,949 bytes" in normalized_readme
+    assert "8,501 bytes" in normalized_readme
     assert "`CROSSTL_SOFTWARE_SUBGROUP_WIDTH`" in readme
     assert "eight control barriers" in normalized_readme
     assert "no group-nonuniform instruction" in normalized_readme
@@ -10230,8 +10230,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
     assert directx["compiler_target_profiles"] == ["directx-12"]
     assert directx["required_capabilities"] == []
     assert directx["generated_hlsl"] == {
-        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
-        "size_bytes": 5721,
+        "sha256": "b20a8d475b5054089763be475610bd0c4b186131bd03e995b9ed5185cc32da0b",
+        "size_bytes": 6239,
     }
     assert directx["materialization"] == {
         "reachable_specialization_count": 5,
@@ -10334,8 +10334,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         "observed_failure_count": 0,
     }
     assert opengl["generated_glsl"] == {
-        "sha256": "61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c",
-        "size_bytes": 7949,
+        "sha256": "5a4651bf695dfd37e2c4a15630cb97075b1b50fc599a8d43c13a212079650fbd",
+        "size_bytes": 8501,
     }
     assert opengl["midpoint_workload"] == {
         "input_pattern": [0.0, 0.5, 1.5, 3.0],
@@ -10434,8 +10434,8 @@ def test_selected_quantized_frontiers_record_current_target_boundaries():
         },
     }
     assert adjacent["generated_hlsl"] == {
-        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
-        "size_bytes": 17917,
+        "sha256": "0c49438127581efadd22a83acd9ac6afc7fdbb4231d4a1986ecbe96f0b90dc5f",
+        "size_bytes": 18355,
     }
     assert adjacent["compiler_validation"] == {
         "compiler": "dxc",
@@ -11012,8 +11012,8 @@ def test_softmax_native_runtime_evidence_records_bounded_cross_target_proof():
         "subgroup_id_lowering": "fixed-single-wave-group-index-quotient",
     }
     assert status["guarded_artifacts"]["directx"]["block-float32-axis-2049"] == {
-        "sha256": "9ddf84ddc3c09fe75f7749165f5913fb75fb8db871dc52a401450e67204004e7",
-        "size_bytes": 5225,
+        "sha256": "6fca11891594a4c1d3cafa70b3ed45b8043af8e2ccfc7b2009ad83ef70065718",
+        "size_bytes": 5528,
         "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
     }
     directx_artifacts = status["guarded_artifacts"]["directx"]
@@ -11857,8 +11857,8 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     }
     assert status["artifacts"]["directx"] == {
         "target_entry_point": "CSMain",
-        "sha256": "f10d13d3dfbed2c5e59f785ec0e9a61c93026d3bead541738e450fe72ae2113e",
-        "size_bytes": 5422,
+        "sha256": "36a0b18c1c73ccf58c8addc3077551b68e8010fcb74e48268b16ef850309c765",
+        "size_bytes": 5725,
         "subgroup_enforcement": "hlsl-wave-size-attribute",
         "subgroup_id_lowering": "workgroup-synchronized-physical-wave-allocation",
         "native_runtime": {
@@ -12245,7 +12245,7 @@ def test_unary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "e9cc999693b81abc0a9ed6e06e79eb71f1632986889fc7086fc70cd16638042b",
+        "sha256": "351c29d49e5d3738db5273194528c461335a0ab013d7f0bd42ae8bd7670782bc",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12447,8 +12447,8 @@ def test_unary_opengl_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.opengl-translation.json",
         "schema_version": 2,
-        "sha256": "38659e9ada029734ec9498edd24a03e2cbc96f933eedbffafab06669698a6e6e",
-        "size_bytes": 317694,
+        "sha256": "f1316272de8109623d0713b28b81c23d8f1132fbce48f32677b5a24af4176534",
+        "size_bytes": 317697,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12555,7 +12555,7 @@ def test_unary_opengl_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5336679,
+        "generated_size_bytes_total": 5355099,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3615},
             "maximum": {
@@ -12654,8 +12654,8 @@ def test_unary_directx_translation_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/unary.directx-translation.json",
         "schema_version": 2,
-        "sha256": "f68f080af409684d990f52cee8bf448a40535d8e3f844384018fa42eea406ba3",
-        "size_bytes": 322988,
+        "sha256": "3108c872ad4657cfb1385da7d85b26c8ca32a94e0479eb64abb3f837117da3e6",
+        "size_bytes": 322990,
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -12771,7 +12771,7 @@ def test_unary_directx_translation_evidence_records_complete_family():
         "host_dispatch_workgroup_size": [1, 1, 1],
     }
     assert status["artifacts"] == {
-        "generated_size_bytes_total": 5340837,
+        "generated_size_bytes_total": 5377270,
         "generated_size_range": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
@@ -12866,7 +12866,7 @@ def test_binary_scalar_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json",
         "schema_version": 1,
-        "sha256": "7fc0bbdf6a5199e073ce4f653612d5805f01afe6ac79f1cca266a62899cb8b4d",
+        "sha256": "7742a83f7fb5808b2c53f796429cbb3c8b358941c7055bea32df6db85b5563e7",
         "entry_identity_fields": [
             "entryPoint",
             "operator",
@@ -13027,7 +13027,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
     assert status["contract"] == {
         "path": "demos/integrations/mlx/contracts/binary.metal-roundtrip.json",
         "schema_version": 2,
-        "sha256": "0f7b86380245c72005f0f6ab19b1a27db33fe08b482b3af3ca6e60bba0ee9fd6",
+        "sha256": "392013d7f4cc26501d229db086a73b52b1bc74eda03c7d39460961cf5d955c3b",
         "entry_identity_fields": [
             "entryPoint",
             "shape",
@@ -13043,7 +13043,7 @@ def test_binary_metal_roundtrip_evidence_records_complete_family():
             "demos/integrations/mlx/contracts/binary.scalar-metal-roundtrip.json"
         ),
         "scalar_subset_sha256": (
-            "7fc0bbdf6a5199e073ce4f653612d5805f01afe6ac79f1cca266a62899cb8b4d"
+            "7742a83f7fb5808b2c53f796429cbb3c8b358941c7055bea32df6db85b5563e7"
         ),
     }
     contract_path = ROOT / status["contract"]["path"]
@@ -14702,9 +14702,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "directx": {
             "target_entry_point": "CSMain",
             "sha256": (
-                "c05226f8c415d1e7cb6b25e9eccaed3f4c8afda750aac21fed03c82fb6569d33"
+                "f9d0856e49b856d29a56a90d4e6870fb057d6ca414ed09344249724a2b124e94"
             ),
-            "size_bytes": 10476,
+            "size_bytes": 10953,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "hlsl-wave-size-attribute",
             "compiler": "dxc",
@@ -14716,9 +14716,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         "opengl": {
             "target_entry_point": "main",
             "sha256": (
-                "3aae7fd8aede237351ea9eeaff8b22bcecb49f920c91451ab021cf1f1ff52451"
+                "4af3c8e9c6fa41c65cad1563407b2dc046abe47c02ea963da44807f17cf1a5e1"
             ),
-            "size_bytes": 11932,
+            "size_bytes": 12464,
             "workgroup_size": [32, 1, 1],
             "subgroup_enforcement": "explicit-32-lane-software-subgroup",
             "compiler": "glslangValidator",
@@ -14829,9 +14829,9 @@ def test_mxfp4_current_native_runtime_evidence_is_exact_and_bounded():
         },
         "corrected_dxil_contract": {
             "artifact_sha256": (
-                "c05226f8c415d1e7cb6b25e9eccaed3f4c8afda750aac21fed03c82fb6569d33"
+                "f9d0856e49b856d29a56a90d4e6870fb057d6ca414ed09344249724a2b124e94"
             ),
-            "artifact_size_bytes": 10476,
+            "artifact_size_bytes": 10953,
             "source_bitcast": "integer-ieee754-binary16-to-float32",
             "subnormal_decode": "integer-ieee754-binary16-to-float32",
             "arithmetic": "fmul-float",
@@ -17510,7 +17510,7 @@ def test_reduce_opengl_translation_evidence_records_complete_family():
         "expressions": [
             "in_ + LoopedElemToLoc_1_int64_t_false__location(loop)",
             "in_ + LoopedElemToLoc_2_int64_t_false__location(loop)",
-            "in_ + LoopedElemToLoc_5_int64_t_true__location(loop)",
+            "in_ + LoopedElemToLoc_5_int64_t__location(loop)",
             "inputs[i - 1] + reduction_size",
             "gid.z * int64(out_size) + out_idx * int64(reduction_stride) + lid.x",
             "out_idx",

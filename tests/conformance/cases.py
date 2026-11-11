@@ -2147,6 +2147,15 @@ CASES = [
         integer_cases.metal_bit_scan_reference,
     ),
     Case(
+        "m_narrow_bit_functions",
+        "integer",
+        "popcount and reverse_bits of short, ushort, char and uchar scalars and vectors",
+        "MSL 3.2 §6.13: popcount and reverse_bits count and reverse the bits of the argument's own integer type",
+        integer_cases.bit_scan_inputs(),
+        np.uint32,
+        integer_cases.narrow_bit_function_reference,
+    ),
+    Case(
         "g_bit_scans",
         "integer",
         "findMSB and findLSB of uint, int and vector components",

@@ -13,6 +13,7 @@ from ..storage_image_texels import (
     storage_image_element_type,
     texel_attribute_arguments,
 )
+from .float_literals import check_float_literal_range
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_specialization_import import (
     specialization_ids,
@@ -2381,9 +2382,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return value
 
         try:
-            normalized = format(Decimal(body), "f")
+            decimal_value = Decimal(body)
         except InvalidOperation:
             return value
+        check_float_literal_range(value, decimal_value, suffix)
+        normalized = format(decimal_value, "f")
 
         if "." not in normalized:
             normalized = f"{normalized}.0"

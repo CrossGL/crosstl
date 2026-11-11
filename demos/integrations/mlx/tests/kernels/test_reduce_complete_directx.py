@@ -39,7 +39,10 @@ from demos.integrations.mlx.tests.kernels.test_reduce_complete_metal_roundtrip i
     _canonical_json_sha256,
     _normalized_materialization,
 )
-from demos.integrations.mlx.tests.pins import check_generated_artifact
+from demos.integrations.mlx.tests.pins import (
+    check_generated_artifact,
+    check_template_materialization,
+)
 
 REQUIRE_REDUCE_DIRECTX_ENV = "CROSTL_REQUIRE_MLX_REDUCE_DIRECTX_TRANSLATION"
 REDUCE_DIRECTX_SHARD_INDEX_ENV = "CROSTL_MLX_REDUCE_DIRECTX_SHARD_INDEX"
@@ -55,17 +58,17 @@ REDUCE_DIRECTX_CONTRACT_PATH = (
     / "reduce.directx-translation.json"
 )
 REDUCE_DIRECTX_CONTRACT_SHA256 = (
-    "d8d6250f35eb79060dba8af6a9022a7ab87ce23fc32f5ce3acebc518c3d3b6ef"
+    "c2715da544962d24a5e2d7bae809283b6f5dfba6f13c767cc734dc3545f4b6e2"
 )
-REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1798283
+REDUCE_DIRECTX_CONTRACT_SIZE_BYTES = 1798345
 REDUCE_DIRECTX_SPECIALIZATION_COUNT = 9216
 REDUCE_DIRECTX_REFLECTED_RESOURCE_COUNT = 27382
-REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37758556
+REDUCE_DIRECTX_GENERATED_SIZE_BYTES_TOTAL = 37884036
 REDUCE_DIRECTX_DXIL_SIZE_BYTES_TOTAL = 24201972
 REDUCE_DIRECTX_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1976)
 REDUCE_DIRECTX_GENERATED_SIZE_MAXIMUM = (
     "row_reduce_looped_large_5_reduce_mincomplex64",
-    30444,
+    30222,
 )
 REDUCE_DIRECTX_DXIL_SIZE_MINIMUM = ("init_reduce_andbool_", 2852)
 REDUCE_DIRECTX_DXIL_SIZE_MAXIMUM = (
@@ -599,8 +602,13 @@ def _translate_and_validate(
     assert execution[0]["targetEntryPoint"] == "CSMain"
     assert execution[0]["workgroupSize"] == [1, 1, 1]
     materialization = _normalized_materialization(artifact["templateMaterialization"])
-    assert materialization["specializationCount"] == workload.specialization_count
-    assert _canonical_json_sha256(materialization) == workload.materialization_sha256
+    check_template_materialization(
+        artifact["path"],
+        materialization,
+        _canonical_json_sha256(materialization),
+        sha256=workload.materialization_sha256,
+        specialization_count=workload.specialization_count,
+    )
     assert payload["validation"].get("toolchainRuns", []) == []
 
     generated_path = mlx_root / artifact["path"]

@@ -4,7 +4,8 @@ feature.
 Arguments are read from input buffers, so no call folds to a constant, and the result is written to an output
 buffer, so no call is dead code. Output probes are CrossGL (:mod:`.crossgl`); input probes are written in the source
 language. A *baseline* probe reads the same arguments but makes no call; :mod:`.semantic` subtracts it to find the
-instructions the call itself lowers to.
+instructions the call itself lowers to. Where the language's compiler removes values nothing uses, the baseline keeps
+its boolean arguments in use, so the comparisons that make them are subtracted too (:meth:`.Dialect.retain`).
 """
 
 from __future__ import annotations
@@ -117,6 +118,8 @@ class _Builder:
         self.handles: list[str] = []
         # Fragment-shader inputs as ``(type spelling, name)``.
         self.inputs: list[Buffer] = []
+        # Boolean scalar and vector argument locals, which a baseline probe keeps in use (Dialect.retain).
+        self.conditions: list[tuple[Type, str]] = []
 
     def element(self, scalar: str) -> str:
         storage = _storage(scalar)
@@ -293,6 +296,9 @@ class _Builder:
                 value = self.value(param.type)
                 self.lines.append(dialect.declare(param.type, local, value))
                 arguments.append(local)
+                kind = param.type
+                if kind.scalar == "bool" and not (kind.count or kind.opaque):
+                    self.conditions.append((kind, local))
         return arguments, output
 
     def body(
@@ -334,7 +340,12 @@ class _Builder:
         else:
             output, stores = self._stored(result, call)
         if baseline:
-            stores = [line for line in [dialect.keep(atomic)] if line]
+            keep = dialect.keep(atomic)
+            stores = []
+            if keep:
+                for kind, local in self.conditions:
+                    stores += dialect.retain(kind, local, keep)
+                stores.append(keep)
         return self.lines + stores, output
 
     def _stored(self, kind: Type, value: str) -> tuple[Type, list[str]]:

@@ -14,6 +14,9 @@ from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
 from crosstl.translator.codegen.glsl_string_literals import string_literal_reasons
 
 STRING_ARGUMENT = """shader S {
+    void report(str file, int line) {
+    }
+
     compute {
         layout(std430, binding = 0) buffer Out { uint values[]; } out_buf;
         void main() {

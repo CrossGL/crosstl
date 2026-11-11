@@ -5,11 +5,13 @@ from __future__ import annotations
 from .dialect import Buffer, Dialect
 from .model import (
     COOP_COLUMNS,
-    COOP_ENUMERATORS,
+    DESCRIPTOR_HANDLE,
     RAYTRACING_STAGES,
+    SLANG_ENUMERATORS,
     Type,
     coop_element,
-    coop_literal,
+    descriptor_reading,
+    slang_literal,
     tuple_element,
 )
 from .objects import HIT_OBJECT, OBJECTS, RECORD, STREAM, VERTEX
@@ -286,15 +288,17 @@ class Slang(HLSL):
         return f"RWStructuredBuffer<{kind}> {name};"
 
     def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
-        # As for buffers; slangc also rejects a t register for a writable resource such as RWByteAddressBuffer.
-        return f"{spelling} {name};"
+        # As for buffers; slangc also rejects a t register for a writable resource such as RWByteAddressBuffer. A
+        # descriptor handle is ordinary data, which slangc warns about unless it is declared uniform.
+        uniform = "uniform " if spelling == DESCRIPTOR_HANDLE else ""
+        return f"{uniform}{spelling} {name};"
 
     def type(self, kind: Type) -> str:
         if kind == COOP_COLUMNS:
             return super().type(kind.with_scalar("int"))
         if coop_element(kind.opaque):
             return f"CoopVec<{self.scalar(kind.scalar)}, {kind.shape[0]}>"
-        if kind.opaque in COOP_ENUMERATORS:
+        if kind.opaque in SLANG_ENUMERATORS:
             return kind.opaque
         held = tuple_element(kind.opaque)
         if held:
@@ -302,7 +306,7 @@ class Slang(HLSL):
         return super().type(kind)
 
     def literal(self, kind: Type) -> str:
-        return coop_literal(kind) or super().literal(kind)
+        return slang_literal(kind) or super().literal(kind)
 
     def pointer(self, kind: Type, name: str) -> str:
         # A global pointer is a uniform that holds a device address; slangc lowers it to a SPIR-V physical storage
@@ -315,4 +319,6 @@ class Slang(HLSL):
         if element:
             return element, "{}[0]"
         held = tuple_element(opaque)
-        return (held[0], "{}._0") if held else super().reading(opaque)
+        if held:
+            return held[0], "{}._0"
+        return descriptor_reading(opaque) or super().reading(opaque)

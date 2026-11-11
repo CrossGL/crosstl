@@ -671,6 +671,9 @@ class HLSLParser:
             entries.append(record)
 
     def eat(self, expected_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if expected_type == "EOF" and self.current_token[0] == "EOF":
+            raise SyntaxError("Unexpected end of input")
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
@@ -1006,7 +1009,12 @@ class HLSLParser:
             path = text[len("#include") :].strip()
             return IncludeNode(path, False)
 
-        directive = text[1:].split(None, 1)[0] if text.startswith("#") else text
+        name = text[1:].split(None, 1) if text.startswith("#") else [text]
+        if not name:
+            # A null directive on its own line is removed by the preprocessor; a '#' that reaches the parser
+            # follows other tokens on its line, where C and HLSL give it no meaning.
+            raise SyntaxError(f"Stray '#' outside a preprocessor directive: {text!r}")
+        directive = name[0]
         content = text[len(directive) + 1 :].strip() if directive else text
         return PreprocessorNode(directive, content)
 

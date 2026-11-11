@@ -197,6 +197,11 @@ from crosstl.translator.metadata_preconditions import (
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.resource_identity import source_resource_identity
 from crosstl.translator.semantics import apply_rule_carrying
+from crosstl.translator.semantics.declared_identifiers import (
+    deferring_undeclared_identifier_refusals,
+    generate_refusing_undeclared_identifiers,
+    recorded_undeclared_identifier,
+)
 from crosstl.translator.source_registry import (
     SOURCE_REGISTRY,
     SourceSpec,
@@ -28419,16 +28424,23 @@ def _generate_project_target_from_crossgl_ast(
         if provenance is not None:
             provenance["dispatchRegionProgram"] = program
     validate_pointer_reinterpretation_target(selected_ast, target)
-    if remaining_entry_point is None:
-        generated = codegen.generate(selected_ast)
-    else:
+
+    def generate():
+        if remaining_entry_point is None:
+            return codegen.generate(selected_ast)
         generate_entry = getattr(codegen, "generate_entry", None)
         if not callable(generate_entry):
             raise ValueError(
                 "Entry-scoped artifact generation is not supported for the "
                 "requested target backend"
             )
-        generated = generate_entry(selected_ast, remaining_entry_point)
+        return generate_entry(selected_ast, remaining_entry_point)
+
+    # The recorded undeclared name is refused by _finalize_project_generated_artifact, after the scans for
+    # host constructs an importer left in the output, which name the construct.
+    generated = generate_refusing_undeclared_identifiers(
+        ast, generate, refuse_after=False
+    )
     if format_output:
         try:
             from crosstl.formatter import format_shader_code
@@ -28921,6 +28933,7 @@ def _finalize_project_generated_artifact(
     generated_source: str,
     source_entry_point: str | None = None,
     report_output_path: Path | None = None,
+    undeclared_identifier_refusal: Exception | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     report_output_path = report_output_path or output_path
     header = frozen_specialization_header(artifact.get("specializationConstants", []))
@@ -28944,6 +28957,9 @@ def _finalize_project_generated_artifact(
         artifact["error"] = diagnostics[0].message
         _remove_artifact_output_files(output_path)
         return [artifact], diagnostics
+    if undeclared_identifier_refusal is not None:
+        # Generation succeeded on a name the program never declares; no scan above named a construct instead.
+        raise undeclared_identifier_refusal
 
     if source_entry_point is not None:
         reflected = reflect_target_host_interface(output_path, target=target)
@@ -30257,6 +30273,11 @@ def _translate_project_impl(
                                             report_output_path=(
                                                 published_split_output_path
                                             ),
+                                            undeclared_identifier_refusal=(
+                                                recorded_undeclared_identifier(
+                                                    crossgl_ast
+                                                )
+                                            ),
                                         )
                                     )
                                     artifact_records.extend(records)
@@ -30401,10 +30422,17 @@ def _translate_project_impl(
                                 directx_groupshared_bool_storage
                             ),
                         )
-                    if generated_source is None:
-                        generated_source = translate(
-                            str(translation_input_path), **translate_kwargs
+                    undeclared_identifier_refusal = None
+                    if generated_source is not None:
+                        undeclared_identifier_refusal = recorded_undeclared_identifier(
+                            crossgl_ast
                         )
+                    else:
+                        with deferring_undeclared_identifier_refusals() as deferred:
+                            generated_source = translate(
+                                str(translation_input_path), **translate_kwargs
+                            )
+                        undeclared_identifier_refusal = next(iter(deferred), None)
                     if not generated_records_finalized:
                         artifact_records, generated_diagnostics = (
                             _finalize_project_generated_artifact(
@@ -30416,6 +30444,9 @@ def _translate_project_impl(
                                 generated_source=generated_source,
                                 source_entry_point=selected_entry_point,
                                 report_output_path=published_output_path,
+                                undeclared_identifier_refusal=(
+                                    undeclared_identifier_refusal
+                                ),
                             )
                         )
                         staged_artifact_paths.update(

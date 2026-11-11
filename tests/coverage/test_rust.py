@@ -2,9 +2,9 @@
 
 import pytest
 
-from tools.coverage import probes
+from tools.coverage import probes, spellings
 from tools.coverage.features import rust
-from tools.coverage.model import Param, Signature, Type
+from tools.coverage.model import Feature, Param, Signature, Type
 
 from .rust_sources import ARCH, DERIVATIVE, FLOAT, VEC3, VEC3_TYPE
 
@@ -74,6 +74,59 @@ def test_rust_geometry_stream_is_a_crossgl_argument():
     assert "EmitStreamVertex(0);" in probes.build(stream, "crossgl").source
 
 
+def test_rust_subgroup_functions_take_crossgl_wave_names():
+    features = parse()
+    assert features["subgroup_f_add"].crossgl == "WaveActiveSum"
+    assert features["subgroup_inclusive_f_add"].crossgl == "WavePrefixInclusiveSum"
+    # A bool operand makes CrossGL's bitwise wave operation the logical one.
+    assert features["subgroup_logical_and"].crossgl == "WaveActiveBitAnd"
+    assert features["subgroup_ballot"].crossgl == "WaveActiveBallot"
+    assert spellings.WAVES["rust"]["subgroup_exclusive_i_add"] == "WavePrefixSum"
+    assert spellings.WAVES["rust"]["subgroup_exclusive_u_min"] == (
+        "WavePrefixExclusiveMin"
+    )
+    # rust-gpu's constant generic cluster size is an argument in CrossGL; the probe passes 1, a power of two.
+    clustered = rust._feature(
+        "subgroup_clustered_s_max",
+        "arch",
+        Signature(Type("int"), (Param(Type("int")),)),
+        "unsafe subgroup_clustered_s_max::<4, _>",
+        "",
+        "compute",
+        frozenset(),
+    )
+    assert clustered.crossgl == "WaveClusteredMax"
+    assert (
+        "int r = WaveClusteredMax(a0, 1u);" in probes.build(clustered, "crossgl").source
+    )
+
+
+def test_rust_functions_take_the_crossgl_names_of_other_languages():
+    features = parse(frozenset({"max", "min"}))
+    # spirv-std's OpKill is CrossGL's discard, and its unsigned maximum GLSL's max.
+    assert features["kill"].crossgl == "discard"
+    assert "discard();" in probes.build(features["kill"], "crossgl").source
+    assert features["unsigned_max"].crossgl == "max"
+    assert spellings.spelling("rust", "Float::exp_m1", frozenset()) == "expm1"
+    assert spellings.spelling("rust", "Vec3::is_finite_mask", frozenset()) == "isfinite"
+    # glam's Vec3::is_finite answers for the whole vector, where isfinite answers for each element.
+    assert spellings.spelling("rust", "Vec3::is_finite", frozenset()) == (
+        "all(isfinite({0}))"
+    )
+    vec3 = Type("float", (3,))
+    extend = rust._feature(
+        "Vec3::extend",
+        "vec3",
+        Signature(Type("float", (4,)), (Param(vec3), Param(Type("float")))),
+        ".extend",
+        "",
+        "compute",
+        frozenset(),
+    )
+    assert extend.crossgl == "vec4"
+    assert "vec4 r = vec4(a0, a1);" in probes.build(extend, "crossgl").source
+
+
 def test_rust_reads_float_and_vec3_methods():
     features = parse()
     assert "Float::hidden" not in features
@@ -117,7 +170,71 @@ def test_rust_probes_64_bit_integer_results():
         in source
     )
     assert "outp[i] = (r) as u32;" in source
-    assert "uint64_t r = read_clock_khr();" in probes.build(clock, "crossgl").source
+    # At the subgroup scope the probe passes, OpReadClockKHR is GL_ARB_shader_clock's clockARB.
+    assert clock.crossgl == "clockARB"
+    assert "uint64_t r = clockARB();" in probes.build(clock, "crossgl").source
+
+
+def _method(name, result, *params):
+    signature = Signature(result, tuple(Param(p) for p in params))
+    return rust._feature(name, "vec3", signature, "", "", "compute", frozenset())
+
+
+def test_rust_writes_glam_arithmetic_and_float_constants_as_crossgl_expressions():
+    vec3, scalar = Type("float", (3,)), Type("float")
+    # glam's with_x replaces the receiver's x, and element_sum adds its elements.
+    with_x = _method("Vec3::with_x", vec3, vec3, scalar)
+    assert "vec3 r = vec3(a1, a0.y, a0.z);" in probes.build(with_x, "crossgl").source
+    element_sum = _method("Vec3::element_sum", scalar, vec3)
+    assert (
+        "float r = (a0.x + a0.y + a0.z);" in probes.build(element_sum, "crossgl").source
+    )
+    # A constant without arguments is the literal itself, and powi converts its integer exponent for pow.
+    max_value = _method("Float::max_value", scalar)
+    assert "float r = (3.40282347e38);" in probes.build(max_value, "crossgl").source
+    powi = _method("Float::powi", scalar, scalar, Type("int"))
+    assert "float r = pow(a0, float(a1));" in probes.build(powi, "crossgl").source
+    for name in ("Vec3::with_x", "Float::max_value", "Float::powi"):
+        assert spellings.is_expression(spellings.OTHER_NAMES["rust"][name])
+
+
+def test_rust_compare_exchange_passes_the_comparator_first_in_crossgl():
+    word = Type("uint")
+    exchange = rust._feature(
+        "atomic_compare_exchange",
+        "atomics",
+        Signature(word, (Param(word, "inout"), Param(word), Param(word))),
+        "",
+        "",
+        "compute",
+        frozenset(),
+    )
+    # spirv-std takes (pointer, value, comparator); atomicCompSwap takes (pointer, comparator, value).
+    assert (
+        "atomicCompSwap(outp[i], a2, a1);" in probes.build(exchange, "crossgl").source
+    )
+
+
+def test_rust_probes_constant_generic_operations_as_the_crossgl_built_in_they_are():
+    features = parse()
+    # The probe's subgroup scope and acquire-release uniform-memory semantics make memory_barrier the barrier
+    # GL_KHR_shader_subgroup calls subgroupMemoryBarrierBuffer.
+    assert features["memory_barrier"].crossgl == "subgroupMemoryBarrierBuffer"
+    callable_data = Type("", (), "udt")
+    call = rust._feature(
+        "execute_callable",
+        "ray_tracing",
+        Signature(Type("", (), "void"), (Param(callable_data, "inout"),)),
+        "",
+        "",
+        "callable",
+        frozenset(),
+    )
+    assert "CallShader(0u, payload);" in probes.build(call, "crossgl").source
+    # A mesh dispatch that hands over a payload is OpEmitMeshTasksEXT with a payload operand, CrossGL's DispatchMesh.
+    assert spellings.spelling("rust", "emit_mesh_tasks_ext_payload", frozenset()) == (
+        "DispatchMesh"
+    )
 
 
 def test_rust_probes_pointer_sized_integers():
@@ -127,7 +244,12 @@ def test_rust_probes_pointer_sized_integers():
     source = probes.build(position, "rust").source
     assert "let r: usize = a0.max_position();" in source
     assert "outp[i] = (r) as u32;" in source
-    assert position.crossgl == ""
+    # glam keeps the first of equal elements, so CrossGL compares as glam does and writes the index as a uint.
+    crossgl = probes.build(position, "crossgl").source
+    assert (
+        "uint r = (a0.z > (a0.y > a0.x ? a0.y : a0.x) ? 2u : (a0.y > a0.x ? 1u : 0u));"
+        in crossgl
+    )
     extract = features["vector_extract_dynamic"]
     source = probes.build(extract, "rust").source
     assert "let a1: usize = (uin[i + 0]) as usize;" in source
@@ -190,7 +312,6 @@ def test_rust_functions_returning_several_values_have_no_crossgl_spelling():
     features = parse()
     for name in (
         "Float::integer_decode",
-        "Vec3::max_position",
         "Vec3::normalize_and_length",
         "Vec3::try_normalize",
     ):
@@ -276,11 +397,34 @@ def test_rust_probes_pass_arrays_and_slices():
             probes.build(features[name], "crossgl")
 
 
-def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():
+def test_rust_functions_that_compute_something_else_are_written_as_rust_computes_them():
     features = parse()
-    # Rust's fract truncates; CrossGL's floors.
-    assert features["Float::fract"].crossgl == ""
-    assert "trunc" in features["Float::fract"].note
+    # Rust's fract truncates where CrossGL's floors, and Float::log divides by the logarithm of its base.
+    assert features["Float::fract"].crossgl == "({0} - trunc({0}))"
+    vec3 = Type("float", (3,))
+    fract = _method("Vec3::fract", vec3, vec3)
+    assert "vec3 r = (a0 - trunc(a0));" in probes.build(fract, "crossgl").source
+    log = _method("Float::log", Type("float"), Type("float"), Type("float"))
+    assert "float r = (log(a0) / log(a1));" in probes.build(log, "crossgl").source
+    # glam's Euclidean division and remainder correct Rust's truncating ones per element.
+    div_euclid = probes.build(
+        _method("Vec3::div_euclid", vec3, vec3, vec3), "crossgl"
+    ).source
+    assert (
+        "(fmod(a0.y, a1.y) < 0.0 ? trunc(a0.y / a1.y) + (a1.y > 0.0 ? -1.0 : 1.0) : trunc(a0.y / a1.y))"
+        in div_euclid
+    )
+    rem_euclid = probes.build(
+        _method("Vec3::rem_euclid", vec3, vec3, vec3), "crossgl"
+    ).source
+    assert (
+        "(fmod(a0.z, a1.z) < 0.0 ? fmod(a0.z, a1.z) + abs(a1.z) : fmod(a0.z, a1.z)))"
+        in rem_euclid
+    )
+    orthonormal = probes.build(
+        _method("Vec3::any_orthonormal_vector", vec3, vec3), "crossgl"
+    ).source
+    assert ", -a0.y);" in orthonormal
     # A function without a GLSL counterpart is probed under its own name.
     assert features["Float::sin"].crossgl == "sin"
     assert features["unsigned_max"].crossgl == "unsigned_max"
@@ -307,3 +451,21 @@ def test_rust_passes_a_broadcast_lane_id_as_a_literal():
     assert features["subgroup_shuffle"].signature.params[1] == Param(Type("uint"))
     source = probes.build(features["subgroup_broadcast"], "rust").source
     assert "let r: f32 = unsafe { subgroup_broadcast(a0, 1) };" in source
+
+
+def test_rust_baseline_keeps_its_boolean_arguments_in_use():
+    # rust-gpu removes unused values, so a baseline that only declared the argument would lose its comparisons, and
+    # they would join the id of every call that takes a boolean (OpAll+OpFOrdGreaterThan for any's).
+    vector = probes.build(parse()["any"], "rust", baseline=True).source
+    assert "any(" not in vector
+    for component in "xyz":
+        assert f"if a0.{component} {{ outp[i] = outp[i]; }}" in vector
+    scalar = Signature(Type("bool"), (Param(Type("bool")), Param(Type("float"))))
+    flag = Feature("rust", "function", "subgroup_all", scalar, crossgl="allInvocations")
+    source = probes.build(flag, "rust", baseline=True).source
+    assert source.count("if a0 { outp[i] = outp[i]; }") == 1
+    assert "if a1" not in source
+    # The CrossGL probe's translation keeps unused values, so its baseline does not need the guards.
+    crossgl = probes.build(flag, "crossgl", baseline=True).source
+    assert "bool a0 = (fin[i + 0u] > 0.0);" in crossgl
+    assert "if (a0" not in crossgl

@@ -24,6 +24,7 @@ from tests.test_ci_workflows import (
     _workflow_texts,
 )
 from tests.test_translator.test_atomic_store_runtime import REQUIRE_ENV as STORE_ENV
+from tests.test_translator.test_storage_word_views import REQUIRE_ENV as WORD_VIEW_ENV
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_DIR = ROOT / ".github/workflows"
@@ -4357,9 +4358,28 @@ def test_atomic_stores_and_pinned_scatter_are_required_on_each_native_target():
     ):
         step = workflow_text.workflow_step_section(workflow, name)
         assert f'{STORE_ENV}: "1"' in step
+        assert f'{WORD_VIEW_ENV}: "1"' in step
         assert f'{SCATTER_ENV}: "1"' in step
         assert "test_atomic_store_runtime.py" in step
+        assert "test_storage_word_views.py" in step
         assert "test_scatter_axis_runtime.py" in step
         timeout = 1800 if name == "Validate general gather and empty arrays" else 1200
         assert f"--timeout-seconds {timeout}" in step
         assert "if:" not in step and "continue-on-error" not in workflow
+
+
+def test_metal_constant_initializers_execute_on_the_native_metal_leg():
+    from tests import workflow_text
+    from tests.test_translator.test_metal_constant_constructor_initializers import (
+        REQUIRE_ENV,
+    )
+
+    workflow = (
+        Path(__file__).resolve().parents[4]
+        / ".github/workflows/demo-project-testing.yml"
+    ).read_text()
+    step = workflow_text.workflow_step_section(
+        workflow, "Validate general gather and empty arrays"
+    )
+    assert f'{REQUIRE_ENV}: "1"' in step
+    assert "test_metal_constant_constructor_initializers.py" in step
