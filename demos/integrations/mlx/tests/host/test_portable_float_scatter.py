@@ -96,6 +96,9 @@ def test_float_scatter_requires_distinct_native_ci_profiles():
         ("metal", "float32"),
         ("directx", "float32"),
         ("opengl", "float32"),
+        ("metal", "half"),
+        ("directx", "half"),
+        ("opengl", "half"),
     }
     assert (
         next(

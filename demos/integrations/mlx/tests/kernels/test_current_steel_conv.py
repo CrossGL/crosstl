@@ -42,11 +42,9 @@ from demos.integrations.mlx.tests.kernels.test_current_conv import _params_bytes
 from demos.integrations.mlx.tests.kernels.test_current_gemm import (
     GATE_TOOLS,
     GUARDS,
-    HELPER_ELEMENTS,
     MLX_COMMIT,
     ORIGINAL_FLAGS,
     PLATFORM_TARGETS,
-    SIGNED_MAX,
     _exact,
     _storage,
     _write_json,
@@ -98,28 +96,8 @@ SCOPE = (
     "implicit_gemm_conv_3d entry; test_current_steel_conv_general.py gates "
     "steel_conv_general, and the upstream suite is not covered."
 )
-TARGET_OPTIONS = {
-    "directx": {
-        "cooperative_matrix_software_lowering": True,
-        "software_subgroup_width": 32,
-        "relative_wave_shuffle_out_of_range": "self",
-    },
-    "opengl": {
-        "cooperative_matrix_software_lowering": True,
-        "software_subgroup_width": 32,
-    },
-}
-# Records the kernel reads through constant pointers, by GLSL helper name.
-RECORD_HELPERS = {
-    rank: (
-        f"ImplicitGemmConv{rank}DParams",
-        "MLXConvParams",
-        f"MLXConvParams<{rank}>",
-        f"MLXConvParams_{rank}",
-        f"MLXConvParams_int_{rank}",
-    )
-    for rank in model.SOURCES
-}
+TARGET_OPTIONS = model.TARGET_OPTIONS
+RECORD_HELPERS = model.RECORD_HELPERS
 
 
 def _cases(entry):
@@ -216,48 +194,8 @@ def _selected_entries():
 SELECTED_ENTRIES = _selected_entries()
 
 
-def _tile_maxima(entry):
-    a_slots, b_slots = entry.tile_reads()
-    loader_a, loader_b = entry.loaders
-    written_a = {slot for lane in loader_a.slots() for slot in lane}
-    written_b = {slot for lane in loader_b.slots() for slot in lane}
-    return max(a_slots | written_a), max(b_slots | written_b)
-
-
-def _index_assertions(entry):
-    """GLSL index ranges: MLX buffers stay below 2^31 elements.
-
-    The two parameter records are single elements. The threadgroup tiles
-    reach only the slots their loaders write and ``BlockMMA`` reads.
-    """
-    element = HELPER_ELEMENTS[entry.dtype]
-    device = [
-        {
-            "expression": "reference.offset + index",
-            "function": f"crosstl_resource_{access}_{scalar}",
-            "maximum": SIGNED_MAX,
-        }
-        for access in ("load", "store")
-        for scalar in sorted({element, "int", "int64_t", "uint"})
-    ] + [
-        {
-            "expression": "reference.offset + index",
-            "function": f"crosstl_resource_load_{record}",
-            "maximum": 0,
-        }
-        for record in RECORD_HELPERS[entry.rank]
-    ]
-    workgroup = [
-        {
-            "expression": "reference.offset + index",
-            "indexed": f"crosstl_workgroup_{tile}",
-            "maximum": maximum,
-        }
-        for tile, maximum in zip(("As", "Bs"), _tile_maxima(entry))
-    ]
-    return tuple(
-        {"source": entry.source, **item, "minimum": 0} for item in device + workgroup
-    )
+_tile_maxima = model.tile_maxima
+_index_assertions = model.index_assertions
 
 
 def _config(root, output, target, entry):
@@ -272,18 +210,7 @@ def _config(root, output, target, entry):
         entry_points={entry.source: (entry.name,)},
         workgroup_size_rules={entry.source: entry.workgroup_size},
         index_range_assertions=(_index_assertions(entry) if target == "opengl" else ()),
-        source_options={
-            "metal": {
-                "max_template_specializations": 256,
-                "max_template_materialization_work": 8192,
-                "cooperative_matrix_fragment_mapping": "tile_4x4_row_pair",
-                "cooperative_matrix_fragment_mapping_provenance": (
-                    "mlx_steel_BaseMMAFrag_get_coord"
-                ),
-                "preserve_resource_origins": True,
-                "target_options": TARGET_OPTIONS,
-            }
-        },
+        source_options={"metal": model.metal_source_options()},
     )
 
 

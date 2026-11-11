@@ -167,7 +167,9 @@ def test_directx_runtime_comparison_preserves_required_runtime_and_workload():
     required = next(
         step for step in steps if step.get("name") == "Install pinned DirectX tools"
     )
-    assert "microsoft.direct3d.warp/1.0.21/" in required["run"]
+    assert required["run"] == "./demos/integrations/mlx/install_directx_tools.ps1"
+    installer = (ROOT / required["run"]).read_text(encoding="utf-8")
+    assert "microsoft.direct3d.warp/1.0.21/" in installer
     assert "e79c10550449365adf0a9393d97a0df69941e671ab6e952a78d92da066517ca3" in script
 
 

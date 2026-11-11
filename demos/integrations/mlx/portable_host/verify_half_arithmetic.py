@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from demos.integrations.mlx.portable_host import (
+    elementwise_evidence,
     half_arithmetic_workloads,
     random_evidence,
 )
@@ -55,6 +56,9 @@ def worker(args):
         )
         if args.worker == "missing":
             host.descriptors.pop("vv_Addfloat16")
+            # Without the pinned source the addition has no package at all;
+            # the random kernels keep theirs.
+            host.elementwise = None
         host.install()
     if args.worker == "missing":
         try:
@@ -207,6 +211,13 @@ def verify(args):
             "dispatchCount"
         ] != len(trace):
             raise ValueError("Half arithmetic upstream dispatch accounting differs")
+        installed = {entry for _, index in families for entry in index["descriptors"]}
+        # Scalar-operand kernels (sv_, vs_) no family installs run from the
+        # lazy cache, on the native runtime directly; their audit checks the
+        # native modules the parity adapter's identity steps cover otherwise.
+        lazy = elementwise_evidence.audit_lazy_events(
+            trace, args.mlx_root, args.packages, base["target"], installed
+        )
         audit_half_events(
             [event for event in trace if event["entry"] in ALL_HALF_ENTRIES], output
         )
@@ -216,12 +227,12 @@ def verify(args):
         verify_native_identity(
             [
                 event
-                for event in trace
+                for event in elementwise_evidence.remaining(trace, lazy)
                 if event["entry"] not in (*ALL_HALF_ENTRIES, *RANDOM_ENTRIES)
             ],
             base["target"],
         )
-        checked = 0
+        checked = len(lazy)
         for directory, index in families:
             events = [
                 event for event in trace if event["entry"] in index["descriptors"]

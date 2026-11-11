@@ -2,6 +2,7 @@
 
 import copy
 import math
+import random
 import struct
 from collections.abc import Sequence
 
@@ -12,7 +13,10 @@ from crosstl.project.runtime_value_encoding import storage_words
 from crosstl.project.runtime_values import (
     copy_values,
     exact_types_within,
+    flatten_scalars,
     flatten_values,
+    pack_scalars,
+    scalar_types,
     scalars_fit,
 )
 
@@ -234,3 +238,109 @@ def test_unpacking_rejects_noncanonical_bool_bytes_and_keeps_order():
     payload = struct.pack("<3I", *words)
     assert native_runtime_drivers._unpack_values(payload, "uint32") == words
     assert native_runtime_drivers._unpack_values(b"", "float32") == []
+
+
+FIT_CASES = [
+    ("bool", [True, False]),
+    ("bool", [True, 1]),
+    ("int8", [-128, 127]),
+    ("int8", [128]),
+    ("uint8", [0, 255]),
+    ("int16", [-32768, 32767]),
+    ("uint16", [65536]),
+    ("int32", [-(2**31), 2**31 - 1]),
+    ("uint32", [0, 2**32 - 1]),
+    ("int64", [-(2**63), 2**63 - 1]),
+    ("uint64", [2**64 - 1]),
+    ("uint64", [2**64]),
+    ("int32", [True]),
+    ("float32", [0, 1.5, -2.0e38]),
+    ("float32", [1e39]),
+    ("float32", ["nan"]),
+    ("float16", [65504.0, -0.5]),
+    ("float16", [70000.0]),
+    ("bfloat16", [1.0]),
+    ("float32", []),
+    ("int32", [Words([1])]),
+    ("float32", [1e308, 1e308]),
+    ("float32", [3.0e38, 3.0e38, -math.inf]),
+    ("float16", [math.inf, -math.inf]),
+    ("float32", [2**63, 0.5]),
+    ("float32", [10**400, 0.5]),
+]
+
+
+def test_float_fits_decide_as_the_element_checks_on_mixed_lists():
+    rng = random.Random(5)
+    pool = [0, 1, -1, 0.5, 1e38, -3.4e38, 3.5e38, 65504.0, 70000.0, math.inf]
+    pool += [-math.inf, math.nan, 10**308, 10**400, 2**63, 1e-45, 6e-8, -0.0, 1e308]
+    for _ in range(4000):
+        values = [rng.choice(pool) for _ in range(rng.randint(0, 6))]
+        for dtype in ("float16", "float32"):
+            assert scalars_fit(values, dtype) == element_fits(values, dtype), values
+
+
+@pytest.mark.parametrize("dtype, values", FIT_CASES)
+def test_pack_scalars_packs_exactly_what_scalars_fit_accepts(dtype, values):
+    packed = pack_scalars(values, dtype)
+    assert (packed is not None) == scalars_fit(values, dtype)
+    if packed is not None:
+        code = native_runtime_drivers._dtype_format(dtype)
+        assert packed == struct.pack("<" + code * len(values), *values)
+
+
+@pytest.mark.parametrize("dtype, values", FIT_CASES)
+def test_precomputed_types_decide_as_a_fresh_scan(dtype, values):
+    types = scalar_types(values)
+    assert scalars_fit(values, dtype, types=types) == scalars_fit(values, dtype)
+    assert pack_scalars(values, dtype, types=types) == pack_scalars(values, dtype)
+
+
+def test_scalar_types_are_exact_and_drive_flattening_and_copies():
+    assert scalar_types([1, True, 1.0, Number(2.0)]) == {int, bool, float, Number}
+    assert scalar_types([]) == frozenset()
+    nested = [[1, 2], [3.0]]
+    types = scalar_types(nested)
+    assert types == {list}
+    copied = copy_values(nested, types=types)
+    assert copied == nested and copied[0] is not nested[0]
+    assert flatten_values(nested, types=types) == [1, 2, 3.0]
+    flat, flat_types = flatten_scalars(nested, types=types)
+    assert flat == [1, 2, 3.0] and flat_types == {int, float}
+    values = [1, 2.5, "nan"]
+    flat, flat_types = flatten_scalars(values)
+    assert flat == values and flat is not values and flat_types == {int, float, str}
+    flat, flat_types = flatten_scalars((1, (2,)))
+    assert flat == [1, 2] and flat_types == {int}
+    assert flatten_scalars(None) == ([], frozenset())
+
+
+def test_typed_runtime_values_check_their_values_through_one_scan():
+    value = native_loader_dispatch._typed_value(
+        {
+            "name": "x",
+            "kind": "buffer",
+            "dtype": "float32",
+            "shape": [3],
+            "values": [1, 2.5, -3.0],
+        },
+        key="x",
+        role="input",
+        path="$.inputValues.x",
+    )
+    assert value.values == [1, 2.5, -3.0]
+    for values, field in (([1.0, 1e39, 2.0], "[1]"), ([1.0, 2.0], "")):
+        with pytest.raises(native_loader_dispatch.NativeLoaderDispatchError) as error:
+            native_loader_dispatch._typed_value(
+                {
+                    "name": "x",
+                    "kind": "buffer",
+                    "dtype": "float32",
+                    "shape": [3],
+                    "values": values,
+                },
+                key="x",
+                role="input",
+                path="$.inputValues.x",
+            )
+        assert error.value.path == "$.inputValues.x.values" + field
