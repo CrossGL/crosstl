@@ -533,6 +533,14 @@ OTHER_NAMES = {
             "(({0} / {1} + ({0} != {0} / {1} * {1} && ({0} < 0) == ({1} < 0) ? 1 : 0)) * {1})"
         ),
         "ceildiv": "ceil({0} / {1})",
+        # isclose with the defaults the probe keeps (symmetrical, atol 1e-08, rtol 1e-05, equal_nan false): equal
+        # values, or two finite values whose distance is within the larger of atol and rtol times the larger
+        # magnitude. Mojo converts both Float64 tolerances to the Float32 of the arguments, which rounds them to
+        # the float32 literals written here.
+        "isclose": (
+            "(({0} == {1}) || (isfinite({0}) && isfinite({1})"
+            " && abs({0} - {1}) <= max(1e-08, 1e-05 * max(abs({0}), abs({1})))))"
+        ),
     },
     "rust": {
         # The C math functions of CUDA's device library and MSL compute what these methods of a scalar do. glam's

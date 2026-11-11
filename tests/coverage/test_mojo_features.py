@@ -20,6 +20,7 @@ from .math import (
     floor,
     frexp,
     gcd,
+    isclose,
     mulwide,
     rsqrt,
     sqrt,
@@ -72,6 +73,22 @@ def frexp[
 
 def gcd(m: Int, n: Int, /) -> Int:
     return m
+
+
+def isclose[
+    dtype: DType,
+    width: SIMDLength,
+    *,
+    symmetrical: Bool = True,
+](
+    a: SIMD[dtype, width],
+    b: SIMD[dtype, width],
+    *,
+    atol: Float64 = 1e-08,
+    rtol: Float64 = 1e-05,
+    equal_nan: Bool = False,
+) -> SIMD[.bool, width]:
+    return a.eq(b)
 
 
 def mulwide(a: UInt32, b: UInt32) -> UInt64:
@@ -128,6 +145,7 @@ def test_mojo_reads_the_functions_the_packages_export():
         "floor",
         "frexp",
         "gcd",
+        "isclose",
         "isnan",
         "mulwide",
         "nan",
@@ -189,6 +207,16 @@ def test_mojo_writes_bit_and_math_functions_crossgl_lacks_as_expressions():
         "uint64_t r = (uint64(a0) * uint64(a1));" in probes.build(
             features["mulwide"], "crossgl"
         ).source
+    )
+    # isclose keeps its keyword defaults: equal values, or finite ones within max(atol, rtol * max |x|).
+    isclose = features["isclose"]
+    assert isclose.signature == Signature(
+        Type("bool"), (Param(Type("float")), Param(Type("float")))
+    )
+    assert (
+        "bool r = ((a0 == a1) || (isfinite(a0) && isfinite(a1)"
+        " && abs(a0 - a1) <= max(1e-08, 1e-05 * max(abs(a0), abs(a1)))));"
+        in probes.build(isclose, "crossgl").source
     )
     # gcd needs a loop, so its probe still calls Mojo's name.
     assert features["gcd"].crossgl == "gcd"
