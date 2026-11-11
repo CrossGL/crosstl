@@ -198,10 +198,5 @@
   "crosstl/translator/validation.py::_node_builtin_semantic_metadata::identity-fallback": 1,
   "crosstl/translator/validation.py::_stage_interface_type_name::identity-fallback": 1,
   "crosstl/translator/validation.py::validate_node_metadata::identity-fallback": 1
- },
- "totals": {
-  "empty-block-recovery": 1,
-  "fallback-text": 42,
-  "identity-fallback": 170
  }
 }
