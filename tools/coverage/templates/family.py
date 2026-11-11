@@ -360,10 +360,13 @@ C_FAMILY = {
         "            acc *= 2.0;\n            break;\n    }\n    acc += 0.5;\n}\noutp[i] = acc;"
     ),
     # A continue in a do-while loop still tests the condition; the break only bounds a translation that skips it.
+    # The loop adds only integers and halves, which is exact in any order, and the input is added once at the end:
+    # Mesa reassociates additions that SPIR-V does not mark NoContraction, so a running sum that starts from the
+    # input can round differently in the native probe and in a correct translation.
     "do-while-continue": Template(
-        "int m = 5 + (iin[i] & 3);\nint k = 0;\nfloat acc = fin[i];\ndo {\n    k++;\n    if (k > 20) {\n"
+        "int m = 5 + (iin[i] & 3);\nint k = 0;\nfloat acc = 0.0;\ndo {\n    k++;\n    if (k > 20) {\n"
         "        break;\n    }\n    if (k > 4) {\n        acc += 0.5;\n        continue;\n    }\n"
-        "    acc += float(k);\n} while (k < m);\noutp[i] = acc;"
+        "    acc += float(k);\n} while (k < m);\noutp[i] = acc + fin[i];"
     ),
     # ?: groups to the right, and its last operand takes the whole sum. Scaling by a power of two is exact, so
     # contracting a product into a fused multiply-add does not change the result.

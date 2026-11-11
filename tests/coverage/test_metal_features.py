@@ -225,6 +225,8 @@ metal_atomic atomic_store_explicit void(inout int, int, memory_order)
 metal_atomic atomic_max void(inout ulong, ulong)
 metal_atomic atomic_max_explicit void(inout ulong, ulong, memory_order)
 metal_compute threadgroup_barrier void(mem_flags)
+metal_compute simdgroup_barrier void(mem_flags)
+metal_atomic atomic_thread_fence void(mem_flags, memory_order)
 """
 
 
@@ -257,10 +259,25 @@ def test_metal_atomic_functions_call_glsl_atomics_from_crossgl():
     store = features["atomic_store_explicit"]
     assert store.crossgl == "atomicStore"
     assert store.counterpart.params == (Param(Type("int"), "inout"), Param(Type("int")))
-    # An operation CrossGL has only without a memory order is a gap, not an untested probe.
+    # CrossGL has no atomic subtraction, so it adds the negated operand, as the Metal importer writes it.
     sub = features["atomic_fetch_sub_explicit"]
-    assert sub.crossgl == ""
-    assert "memory order" in sub.note
+    assert sub.crossgl == "atomicAdd({0}, -({1}))"
+    assert sub.counterpart.params == (Param(Type("int"), "inout"), Param(Type("int")))
+    # The fence keeps its flags, order and scope as CrossGL constants, and a simdgroup barrier with mem_none is
+    # CrossGL's execution-only subgroup barrier.
+    fence = features["atomic_thread_fence"]
+    assert fence.crossgl == (
+        "atomicThreadFence(mem_none, memory_order_relaxed, thread_scope_device)"
+    )
+    assert fence.counterpart.params == ()
+    assert features["simdgroup_barrier"].crossgl == "subgroupExecutionBarrier"
+    assert features["simdgroup_barrier"].counterpart.params == ()
+    # A function with an enumeration argument and no listed CrossGL operation is a gap, not an untested probe.
+    fetch = metal.parse(
+        "metal_atomic atomic_fetch_nand_explicit int(inout int, int, memory_order)\n"
+    )
+    assert fetch[0].crossgl == ""
+    assert "memory order" in fetch[0].note
 
 
 def test_metal_list_records_its_toolchain():

@@ -7,10 +7,12 @@ from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.metal_stage_refusals import MetalStageUnsupportedError
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.lowering_refusal_helpers import partial_output
 
 GEOMETRY_GLSL = """
 #version 450 core
@@ -145,8 +147,16 @@ def test_codegen_geometry_layout_max_vertices_feeds_directx_attribute():
 
     assert "layout(points, max_vertices = 1) out;" in crossgl
 
-    generated = HLSLCodeGen().generate_stage(parse_crossgl(crossgl), "geometry")
+    # The HLSL generator has no stream-output lowering for GLSL's EmitVertex and EndPrimitive, which it used to
+    # write as calls DXC rejects, so the program is refused; the attribute is still derived from the layout.
+    generated, message = partial_output(
+        DirectXLoweringRefused,
+        HLSLCodeGen().generate_stage,
+        parse_crossgl(crossgl),
+        "geometry",
+    )
 
+    assert "call to 'EmitVertex'" in message and "call to 'EndPrimitive'" in message
     assert "[maxvertexcount(1)]" in generated
     assert "requires HLSL attribute(s): maxvertexcount" not in generated
 

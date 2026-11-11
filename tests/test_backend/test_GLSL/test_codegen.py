@@ -12,6 +12,7 @@ from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
@@ -2883,8 +2884,25 @@ def test_codegen_atomic_counter_memory_barrier_imports_as_crossgl_barrier():
     assert "memoryBarrier();" in crossgl
     assert "memoryBarrierAtomicCounter(" not in crossgl
 
-    shader_ast = parse_crossgl(crossgl)
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    # HLSL has no atomic counter type: the counter must not reach the output as `atomic_uint counter;`.
+    with pytest.raises(LoweringRefused, match="the built-in type 'atomic_uint'"):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    buffer_code = textwrap.dedent("""
+        #version 450 core
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(std430, binding = 0) buffer Counter { uint value; } counter;
+
+        void main() {
+            uint value = atomicAdd(counter.value, 1u);
+            memoryBarrierAtomicCounter();
+            barrier();
+            atomicAdd(counter.value, value);
+        }
+    """).strip()
+    buffer_crossgl = assert_roundtrip(buffer_code, "compute", ShaderStage.COMPUTE)
+    assert "memoryBarrierAtomicCounter(" not in buffer_crossgl
+    hlsl = HLSLCodeGen().generate(parse_crossgl(buffer_crossgl))
     # memoryBarrier(); barrier(); is one HLSL barrier over all memory with group sync.
     assert "AllMemoryBarrierWithGroupSync();" in hlsl
     assert "GroupMemoryBarrierWithGroupSync();" not in hlsl

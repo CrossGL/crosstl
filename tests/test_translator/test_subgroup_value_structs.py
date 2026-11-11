@@ -458,7 +458,7 @@ def test_numeric_trait_fields_in_generic_enum_payloads_compile(
         "uint(value > 0u && checksum(Pair(counter++, counter++)) != 0u)",
     ),
 )
-def test_effectful_constructor_fields_are_not_lifted_out_of_scalar_guards(expression):
+def test_effectful_constructor_fields_stay_inside_scalar_guards(expression):
     source = """shader GuardedFields {
         struct Pair { uint first; uint second; };
         uint checksum(Pair value) { return value.first + value.second; }
@@ -468,8 +468,21 @@ def test_effectful_constructor_fields_are_not_lifted_out_of_scalar_guards(expres
             return EXPR;
         }
     }""".replace("EXPR", expression)
-    with pytest.raises(ValueError, match="ordered statement materialization"):
-        HLSLCodeGen().generate(parse(source))
+    generated = HLSLCodeGen().generate(parse(source))
+    body = generated[generated.index("uint guarded(uint value) {") :]
+    lines = body[: body.index("\n}\n")].splitlines()
+    statement = next(line for line in lines if "return" in line)
+    effects = [
+        effect for effect in ("counter++", "next(counter)") if effect in statement
+    ]
+    # The constructor's fields are evaluated in order inside the guarded operand, where the
+    # source evaluates them, and never ahead of the guard.
+    assert effects
+    assert not any(
+        effect in line for line in lines if line != statement for effect in effects
+    )
+    guard = statement.index("(value > 0u)")
+    assert all(statement.index(effect) > guard for effect in effects)
 
 
 def _constructor_effect_source():

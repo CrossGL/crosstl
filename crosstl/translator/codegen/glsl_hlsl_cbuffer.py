@@ -63,6 +63,7 @@ from .hlsl_buffer_layout import (
     align_to,
     array_type,
     cbuffer_array_stride,
+    cbuffer_held_struct_placements,
     cbuffer_matrix_vector_stride,
     cbuffer_struct_placements,
     contains_row_major_matrix,
@@ -211,7 +212,7 @@ def layout_member_placements(layout_type, layout):
     if layout in BLOCK_LAYOUTS:
         placements, _size = block_struct_placements(layout_type, layout)
     else:
-        placements, _size = cbuffer_struct_placements(layout_type)
+        placements, _size = cbuffer_held_struct_placements(layout_type)
     return placements
 
 
@@ -388,7 +389,7 @@ class GLSLHlslConstantBuffers:
         if name in stack:
             raise HlslLayoutError(f"recursive struct '{name}' in an HLSL buffer")
         member_types = self.glsl_struct_member_types(name)
-        members = []
+        members, offsets, alignments = [], [], []
         for member in getattr(struct, "members", []) or []:
             member_name = getattr(member, "name", None)
             if isinstance(member, FunctionNode) or member_name not in member_types:
@@ -401,7 +402,45 @@ class GLSLHlslConstantBuffers:
             if member_is_packed(member):
                 member_type = packed_layout_type(member_type, member_name)
             members.append((member_name, member_type))
-        return struct_type(name, members)
+            # A member's @ offset(N) and @ align(N) place it within the struct wherever the struct is held.
+            offsets.append(member_explicit_offset(member))
+            alignments.append(member_explicit_alignment(member))
+        return struct_type(name, members, offsets, alignments)
+
+    def glsl_hlsl_cbuffer_holds_struct_placements(self, members, stack=()):
+        """Whether ``members`` hold a struct, at any depth, with an ``@ offset(N)`` or ``@ align(N)`` member.
+
+        GLSL places such a member only through the register loader: ``offset`` and ``align`` qualifiers apply to the
+        members of a block, not of a struct (GLSL 4.60 section 4.4.5).
+        """
+        for member in members:
+            try:
+                raw_type = self.glsl_hlsl_cbuffer_member_raw_type(member)
+            except HlslLayoutError:
+                raw_type = self.type_name_string(
+                    getattr(member, "element_type", getattr(member, "vtype", None))
+                )
+            raw_type = str(raw_type or "").strip()
+            while (parts := split_outer_array_dimension(raw_type)) is not None:
+                raw_type = parts[0]
+            struct = self.glsl_struct_node(raw_type)
+            if struct is None:
+                struct = self.glsl_struct_node(str(self.map_type(raw_type) or ""))
+            name = getattr(struct, "name", None)
+            if struct is None or name in stack:
+                continue
+            inner = [
+                item
+                for item in getattr(struct, "members", []) or []
+                if getattr(item, "name", None) and not isinstance(item, FunctionNode)
+            ]
+            if any(
+                member_explicit_offset(item) is not None
+                or member_explicit_alignment(item) is not None
+                for item in inner
+            ) or self.glsl_hlsl_cbuffer_holds_struct_placements(inner, (*stack, name)):
+                return True
+        return False
 
     # Declarations -----------------------------------------------------------
 
@@ -421,10 +460,12 @@ class GLSLHlslConstantBuffers:
             for member in getattr(node, "members", []) or []
             if getattr(member, "name", None) and not isinstance(member, FunctionNode)
         ]
-        if source_layout is None and any(
-            member_explicit_offset(member) is not None for member in members
+        if source_layout is None and (
+            any(member_explicit_offset(member) is not None for member in members)
+            or self.glsl_hlsl_cbuffer_holds_struct_placements(members)
         ):
-            # A block without a declared layout is declared std140 here; its ``@ offset`` members keep their bytes.
+            # A block without a declared layout is declared std140 here; its ``@ offset`` members, and the members
+            # of the structs it holds, keep their bytes.
             source_layout = "std140"
         if source_layout != HLSL_CBUFFER_LAYOUT and source_layout not in BLOCK_LAYOUTS:
             return None

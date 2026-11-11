@@ -8,10 +8,12 @@ lines of the runtime's message. The harness binds both probes the way it finds t
 translation that turns those buffers into something else, such as pointers in a uniform block, cannot run in the native
 probe's place.
 
-HLSL, Slang and WGSL have no runtime on the coverage hosts, so both probes run as the SPIR-V that the language's
-reference compiler (DXC, slangc or naga) writes for them, on the harness's Vulkan runtime. The two go through the
-same compiler, so a difference between them comes from the translation. A probe the compiler cannot lower keeps its
-validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips rounding through it.
+HLSL, Slang, WGSL and Rust have no runtime on the coverage hosts, so both probes run as the SPIR-V that the
+language's reference compiler (DXC, slangc, naga or rust-gpu) writes for them, on the harness's Vulkan runtime. The
+two go through the same compiler, so a difference between them comes from the translation. A probe the compiler cannot
+lower keeps its validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips
+rounding through it. rust-gpu leaves out a storage buffer the probe never reads, so a Rust probe of a call that takes
+no argument binds only its output and keeps its validation result too.
 DXC declares a counter buffer for each RWStructuredBuffer a function takes as a parameter; the source declares no such
 buffer, so one that nothing uses is left out of the SPIR-V instead of asking the host for a binding.
 The harness assembles and validates that SPIR-V for the oldest Vulkan version whose SPIR-V version is at least the
@@ -22,10 +24,13 @@ probe, or a translation that it compiles at a lower version than the translation
 the SPIR-V glslang writes for them, on the Vulkan runtime, and that run decides the result.
 
 The harness binds input buffers in declaration order at slots 0 through n-1, followed by the output at slot n.
-A probe whose call takes no argument declares one input it never reads. When the native probe also declares one
-uniform or constant buffer, the harness fills it with :data:`CONSTANTS` for both probes, so the translation must
-declare that block too. Probes with different ordered inputs keep their validation result, and so does one that
-reads a clock or queries a ray query, because two runs of it need not agree.
+A SPIR-V module's names are debug information without semantic impact, which a producer may drop (SPIR-V 1.6,
+section 3.42.2, ``OpName``), and CrossTL's generator renames a buffer block's member. So the inputs of a SPIR-V
+probe are its storage buffers in binding order, each known by the scalar type of its runtime array, and the last
+binding is the output. A probe whose call takes no argument declares one input it never reads. When the native probe
+also declares one uniform or constant buffer, the harness fills it with :data:`CONSTANTS` for both probes, so the
+translation must declare that block too. Probes with different ordered inputs keep their validation result, and so does
+one that reads a clock or queries a ray query, because two runs of it need not agree.
 Integer inputs are small and non-negative, so no probe shifts, extracts or inserts bits outside what every language
 defines.
 """
@@ -45,13 +50,21 @@ from .model import Result
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
 SUFFIXES = {"glsl": ".comp", "metal": ".metal", "spirv": ".spvasm"}
 # The languages that run as the SPIR-V their reference compiler lowers them to.
-VIA_SPIRV = frozenset({"hlsl", "slang", "wgsl"})
+VIA_SPIRV = frozenset({"hlsl", "rust", "slang", "wgsl"})
 THREADS = 64
 # Output words one thread may write: a 4x4 float matrix is the largest result a probe stores.
 WORDS = 16
 # Input elements one thread may read past its own: three 4x4 matrix arguments.
 SPAN = 48
 _INPUT = re.compile(r"\b(fin|iin|uin)\b")
+_SPIRV_ENTRY = re.compile(r"^\s*OpEntryPoint\b", re.M)
+_BINDING = re.compile(r"^\s*OpDecorate (%\S+) Binding (\d+)\s*$", re.M)
+# The input each scalar type of a SPIR-V storage buffer gets.
+_SCALAR_INPUTS = {
+    "OpTypeFloat 32": "fin",
+    "OpTypeInt 32 1": "iin",
+    "OpTypeInt 32 0": "uin",
+}
 # The bytes of the constants block a probe declares: sixteen 32-bit floats, four 16-byte std140 rows. A probe reads the
 # first row, the first word of each row, or all four rows as a 4x4 matrix. The words differ so that a translation
 # reading another offset computes something else.
@@ -118,16 +131,48 @@ def _quoted(record: dict) -> str:
 
 
 def input_buffers(source: str) -> tuple[str, ...]:
-    """Probe input names in declaration order, before their uses in the entry point."""
+    """Probe input names in declaration order, before their uses in the entry point, or in binding order for SPIR-V."""
+    if _SPIRV_ENTRY.search(source):
+        return _spirv_inputs(source)
     return tuple(dict.fromkeys(_INPUT.findall(source)))
 
 
+def _spirv_inputs(assembly: str) -> tuple[str, ...]:
+    """The inputs of a SPIR-V module: the variables it binds to a block of one runtime array, in binding order and
+    without the last one, the output. Each is named for the array's scalar type as :func:`inputs` fills it, or for
+    the instruction that declares any other element type."""
+    defined = {}
+    for line in assembly.splitlines():
+        found = _DEFINITION.match(line)
+        if found:
+            defined[found[1]] = (found[2], found[3].split())
+
+    def operand(ident: str, opcode: str, position: int) -> str:
+        op, words = defined.get(ident, ("", []))
+        return words[position] if op == opcode and words else ""
+
+    buffers = []
+    for variable, slot in _BINDING.findall(assembly):
+        block = operand(operand(variable, "OpVariable", 0), "OpTypePointer", -1)
+        op, members = defined.get(block, ("", []))
+        array = members[0] if op == "OpTypeStruct" and len(members) == 1 else ""
+        scalar = operand(array, "OpTypeRuntimeArray", 0)
+        if scalar in defined:
+            kind = " ".join((defined[scalar][0], *defined[scalar][1]))
+            buffers.append((int(slot), _SCALAR_INPUTS.get(kind, kind)))
+    return tuple(name for _, name in sorted(buffers)[:-1])
+
+
 def executable(result: Result) -> bool:
-    """Whether ``result`` is a supported compute probe whose native probe and translation declare the same ordered inputs."""
+    """Whether ``result`` is a supported compute probe whose native probe and translation declare the same ordered
+    inputs, each one :func:`inputs` fills."""
     if result.outcome != "supported" or len(result.sources) != 2:
         return False
     buffers = [input_buffers(source) for source in result.sources]
-    return bool(buffers[0]) and buffers[0] == buffers[1]
+    known = set(_SCALAR_INPUTS.values())
+    return (
+        bool(buffers[0]) and buffers[0] == buffers[1] and known.issuperset(buffers[0])
+    )
 
 
 def runnable(language: str, source: str) -> str:
@@ -149,14 +194,50 @@ def runs(language: str) -> bool:
 def as_spirv(language: str, source: str) -> str:
     """The SPIR-V assembly ``language``'s reference compiler writes for a compute ``source``, or an empty string when
     it rejects the source."""
-    # GLSL's entry point is main and naga takes none; HLSL and Slang name theirs after [numthreads(...)].
+    # GLSL's entry point is main, and naga and rust-gpu take none; HLSL and Slang name theirs after [numthreads(...)].
     entry = (
         "main"
-        if language in ("glsl", "wgsl")
+        if language in ("glsl", "rust", "wgsl")
         else validators.hlsl_entry(source, "compute")
     )
     assembly, _ = lowering.lower(language, source, entry, keep_bindings=True)
-    return without_unused_counters(assembly) if language == "hlsl" else assembly
+    if language == "hlsl":
+        return without_unused_counters(assembly)
+    if language == "rust" and assembly:
+        return without_unused_capabilities(assembly)
+    return assembly
+
+
+_CAPABILITY = re.compile(r"^[ \t]*OpCapability (\w+)[ \t]*\n", re.M)
+
+
+def without_unused_capabilities(assembly: str) -> str:
+    """``assembly`` without each capability that spirv-val accepts it without.
+
+    rust-gpu compiles every probe with all of ``rustgpu.CAPABILITIES`` enabled and removes only the ones it knows how
+    to prove unused. A Vulkan module may only declare capabilities the device enables (Vulkan 1.4,
+    VUID-VkShaderModuleCreateInfo-pCode-08740), and lavapipe will not create a pipeline from one that declares more.
+    spirv-val requires every capability an instruction, type, decoration or built-in of the module needs, so what it
+    accepts is what the module uses.
+    """
+    target = environment([assembly])
+    assemble, validate = validators.command("spirv-as"), validators.command("spirv-val")
+    with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
+
+        def valid(text: str) -> bool:
+            Path(scratch, "probe.spvasm").write_text(text)
+            steps = (
+                [*assemble, "--target-env", target, "probe.spvasm", "-o", "probe.spv"],
+                [*validate, "--target-env", target, "probe.spv"],
+            )
+            return all(validators.run(step, scratch).accepted for step in steps)
+
+        # Removing a later line leaves the offsets of the earlier ones in place.
+        for found in reversed(list(_CAPABILITY.finditer(assembly))):
+            trimmed = assembly[: found.start()] + assembly[found.end() :]
+            if found[1] != "Shader" and valid(trimmed):
+                assembly = trimmed
+    return assembly
 
 
 # DXC declares a counter buffer, of this type, for every RWStructuredBuffer a function takes as a parameter, and

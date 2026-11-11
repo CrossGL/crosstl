@@ -32,6 +32,7 @@ from .feedback_textures import FEEDBACK_TEXTURE_TYPES, is_sampler_feedback_kind
 
 __all__ = [
     "UndeclaredTypeError",
+    "dead_function_ids",
     "declared_type_names",
     "refuse_undeclared_types",
     "undeclared_type_uses",
@@ -188,6 +189,11 @@ def _dead_functions(program):
             live.add(id(function))
             pending.extend(sorted(_referenced_names(function, skip - {id(function)})))
     return every - live
+
+
+def dead_function_ids(program) -> set:
+    """Ids of the functions no stage entry reaches, which the generators drop; none when there is no entry."""
+    return _dead_functions(program)
 
 
 def _type_references(node, skip):

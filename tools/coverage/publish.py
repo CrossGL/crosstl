@@ -136,10 +136,11 @@ def _executed(report: dict) -> list[str]:
         f"{' '.join(label(r))}, {r['executed']} probes on {r['runtime']}" for r in rows
     )
     return [
-        "Where Core's conformance harness has a runtime for the language, a supported compute probe that reads one "
-        "input buffer also runs: the native probe and CrossTL's translation get the same inputs, and a "
-        "translation that binds other resources or writes other results is wrong. HLSL, Slang and WGSL probes run as the SPIR-V their "
-        "reference compiler writes for them, and so do GLSL probes that llvmpipe's OpenGL rejects. "
+        "Where Core's conformance harness has a runtime for the language, a supported compute probe whose "
+        "translation reads the native probe's input buffers also runs: the two get the same inputs, and a "
+        "translation that binds other resources or writes other results is wrong. HLSL, Slang, WGSL and Rust "
+        "probes run as the SPIR-V their reference compiler writes for them, and so do GLSL probes that "
+        "llvmpipe's OpenGL rejects. "
         f"Executed: {ran}.",
         "",
     ]
@@ -282,15 +283,16 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "- **supported**: the reference tool accepts the translation and, where it runs, the translation "
         "computes what the native probe computes;",
         "- **refused**: CrossTL rejects the feature with a diagnostic;",
-        "- **wrong**: CrossTL produces output the reference tool rejects or that computes other results, or fails "
-        "without a diagnostic;",
+        "- **wrong**: CrossTL produces output the reference tool rejects or that computes other results, writes a "
+        "placeholder comment in place of the feature, or fails without a diagnostic;",
         "- **untested**: no probe can be built for the feature yet, or the reference tool rejects the probe "
         "itself.",
         "",
         "Score = supported / (supported + refused + wrong). Untested features are shown separately and do not "
         "count. The CrossGL IR row covers the union of every language's output features, merged into semantic "
         "features through the SPIR-V each native probe lowers to; a semantic feature is expressible when its "
-        "CrossGL probe translates correctly to at least one language that has it.",
+        "CrossGL probe translates correctly to at least one language that has it, or to valid SPIR-V that lowers "
+        "to the same semantic feature.",
         "",
         *_executed(report),
         *_table(report),

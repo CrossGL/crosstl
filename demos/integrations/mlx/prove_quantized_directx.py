@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -77,12 +78,12 @@ ENTRY_CONTRACTS = {
 }
 GENERATED_ARTIFACTS = {
     MLX_QUANTIZED_ENTRY_POINT: {
-        "sha256": "d9e262e4b274066ff3136ee9091d82e70319ebfc5f8fe64313b90b0525fad52e",
-        "sizeBytes": 5721,
+        "sha256": "b20a8d475b5054089763be475610bd0c4b186131bd03e995b9ed5185cc32da0b",
+        "sizeBytes": 6239,
     },
     MLX_QUANTIZED_GATHER_ENTRY_POINT: {
-        "sha256": "4ce3a1b462477d26047500477b7d53c1219a2f57238e1a80199a5c759043914a",
-        "sizeBytes": 17917,
+        "sha256": "0c49438127581efadd22a83acd9ac6afc7fdbb4231d4a1986ecbe96f0b90dc5f",
+        "sizeBytes": 18355,
     },
 }
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/quantized-directx"
@@ -187,6 +188,51 @@ class MlxQuantizedDirectXProofError(RuntimeError):
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise MlxQuantizedDirectXProofError(message)
+
+
+def _check_generated_artifact_pin(
+    artifact: Mapping[str, Any], *, entry_point: str
+) -> None:
+    """Check the reviewed bytes of ``entry_point``'s HLSL under ``CROSSTL_MLX_PIN_MODE``.
+
+    The artifact must always carry a SHA-256 hash and a size. Strict mode, the
+    default, fails when either differs from its pin. Report mode, which merge-queue,
+    push and nightly runs set, prints one ``MLX-PIN-DRIFT`` line per changed value
+    for ``refresh_pins`` and lets compilation and the remaining checks go on.
+    """
+
+    mode = os.environ.get("CROSSTL_MLX_PIN_MODE", "").strip() or "strict"
+    _require(
+        mode in {"strict", "report"},
+        f"CROSSTL_MLX_PIN_MODE must be strict or report, not {mode!r}",
+    )
+    generated_hash = artifact.get("generatedHash")
+    _require(
+        isinstance(generated_hash, Mapping)
+        and generated_hash.get("algorithm") == "sha256"
+        and isinstance(generated_hash.get("value"), str)
+        and isinstance(artifact.get("generatedSizeBytes"), int),
+        f"generated DirectX artifact identity is missing for {entry_point}",
+    )
+    expected = GENERATED_ARTIFACTS[entry_point]
+    for field, actual, pinned in (
+        ("generatedHash", generated_hash["value"], expected["sha256"]),
+        ("generatedSizeBytes", artifact["generatedSizeBytes"], expected["sizeBytes"]),
+    ):
+        if actual == pinned:
+            continue
+        _require(
+            mode == "report",
+            f"generated DirectX artifact identity changed for {entry_point}: "
+            f"pinned {field} changed from {pinned!r} to {actual!r}",
+        )
+        record = {
+            "subject": f"{entry_point}.hlsl",
+            "field": field,
+            "expected": pinned,
+            "actual": actual,
+        }
+        print("MLX-PIN-DRIFT " + json.dumps(record, sort_keys=True), file=sys.stderr)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -674,10 +720,10 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
     )
     byte_read = "w[uint(((w_offset + i)) / 4)]"
     lane_shift = "uint((((w_offset + i)) % 4) * 8)"
-    call_offset = (
-        "int64_t((((w_offset * 4) + "
-        "(ws_offset + (row * in_vec_size_w))) + wl_offset))"
-    )
+    # ``wl = ws + row * in_vec_size_w`` keeps its byte offset from the uint8 view
+    # of ``w`` in ``wl_offset``; the call adds the view's root, ``w_offset`` words.
+    local_offset = "int64_t wl_offset = int64_t((ws_offset + (row * in_vec_size_w)));"
+    call_offset = "int64_t(((w_offset * 4) + wl_offset))"
     _require(
         load_signature in normalized_generated, "the 16-element load helper changed"
     )
@@ -695,7 +741,7 @@ def _validate_gather_generated_hlsl(generated: str) -> dict[str, Any]:
         "the qdot helper must unpack each uint8 weight from its 32-bit backing word",
     )
     _require(
-        call_offset in generated,
+        generated.count(local_offset) == 1 and call_offset in generated,
         "the qdot call must compose root, byte-view, row, and local offsets",
     )
     _require(
@@ -947,15 +993,7 @@ def run_proof(
         work_dir=resolved_work_dir,
         entry_point=entry_point,
     )
-    expected_artifact = GENERATED_ARTIFACTS[entry_point]
-    _require(
-        artifact["generatedHash"] == {
-            "algorithm": "sha256",
-            "value": expected_artifact["sha256"],
-        }
-        and artifact["generatedSizeBytes"] == expected_artifact["sizeBytes"],
-        f"generated DirectX artifact identity changed for {entry_point}",
-    )
+    _check_generated_artifact_pin(artifact, entry_point=entry_point)
     generated_checks, compiler_contract = _validate_generated_hlsl(
         artifact_path, entry_point=entry_point
     )

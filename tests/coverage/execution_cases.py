@@ -112,4 +112,5 @@ CALLS = {
     "hlsl": ("WaveGetLaneIndex", Type("uint")),
     "slang": ("WaveGetLaneIndex", Type("uint")),
     "wgsl": ("workgroupBarrier", VOID),
+    "rust": ("workgroup_memory_barrier_with_group_sync", VOID),
 }
