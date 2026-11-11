@@ -336,6 +336,7 @@ from .hlsl_extension_builtins import (
     hlsl_stage_builtin_read,
     refuse_unmapped_hlsl_builtin,
 )
+from .hlsl_function_body_scans import HlslFunctionBodyScans
 from .hlsl_glsl_block_registers import (
     HlslGlslBlockRegisters,
     HlslRegisterBlockPlan,
@@ -2795,6 +2796,7 @@ class HLSLCodeGen(
         self.generic_function_specialized_names = {}
         self.current_generic_function_substitutions = {}
         self.current_hlsl_available_functions = {}
+        self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_output_element_type = None
         self.current_hlsl_hull_domain = None
@@ -3985,6 +3987,7 @@ class HLSLCodeGen(
                 raise error from None
 
     def _generate_program_attempt(self, ast, target_stage, early_exits):
+        self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
         ast = lower_resource_aggregates(
             ast,
             workgroup_access_assertions=getattr(
@@ -29806,22 +29809,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "uint2"
         return None
 
+    def hlsl_function_body_scan(self, func):
+        """``func``'s body scan for this render (``hlsl_function_body_scans``)."""
+        scans = getattr(self, "hlsl_function_body_scans", None)
+        if scans is None:
+            scans = self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
+        return scans.scan(func)
+
     def collect_hlsl_function_identifier_names(self, func):
-        names = {
-            getattr(param, "name", None)
-            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
-            if getattr(param, "name", None)
-        }
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, VariableNode):
-                name = getattr(node, "name", None)
-            elif isinstance(node, ForInNode):
-                name = getattr(node, "pattern", None)
-            else:
-                name = None
-            if name:
-                names.add(name)
-        return names
+        return set(self.hlsl_function_body_scan(func).identifier_names)
 
     def hlsl_declaration_identifier_name(self, name):
         if not isinstance(name, str):
@@ -38647,33 +38643,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.hlsl_dispatch_mesh_args_in_node(getattr(func, "body", []))
 
     def hlsl_function_call_names(self, func):
-        names = []
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if not isinstance(node, FunctionCallNode):
-                continue
-            name = self.function_call_name(node)
-            if name:
-                names.append(name)
-        return names
+        return list(self.hlsl_function_body_scan(func).call_names)
 
     def hlsl_function_call_summary(self, func):
-        """Call names and ``DispatchMesh`` argument lists of ``func``'s body, from one walk."""
-        names, dispatch_mesh_args = [], []
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, FunctionCallNode):
-                name = self.function_call_name(node)
-                if name:
-                    names.append(name)
-                if name == "DispatchMesh":
-                    dispatch_mesh_args.append(
-                        getattr(node, "arguments", getattr(node, "args", []))
-                    )
-            elif (
-                isinstance(node, MeshOpNode)
-                and getattr(node, "operation", None) == "DispatchMesh"
-            ):
-                dispatch_mesh_args.append(getattr(node, "arguments", []))
-        return names, dispatch_mesh_args
+        """Call names and ``DispatchMesh`` argument lists of ``func``'s body, from its body scan."""
+        scan = self.hlsl_function_body_scan(func)
+        return list(scan.call_names), list(scan.dispatch_mesh_args)
 
     def hlsl_reachable_helper_dispatch_mesh_calls(self, func):
         """``(function, DispatchMesh argument lists)`` for ``func`` and each helper it reaches, in visit order."""
