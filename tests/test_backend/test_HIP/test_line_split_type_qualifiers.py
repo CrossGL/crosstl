@@ -84,6 +84,8 @@ def test_hip_function_parameter_qualifier_split_across_lines():
 
 
 def test_hip_line_split_qualifiers_at_eof_without_crash():
-    tokens = HipLexer("const\n ").tokenize()
-    parser = HipParser(tokens)
-    assert parser.parse_type() == "const int"
+    # The qualifier scan used to read past the last token when blanks followed the line break (#4371).
+    def parse_type(source):
+        return HipParser(HipLexer(source).tokenize()).parse_type()
+
+    assert parse_type("const\n ") == parse_type("const\n")
