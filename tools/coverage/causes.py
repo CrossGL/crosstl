@@ -71,6 +71,13 @@ def cause(feature: dict, language: str = "") -> str:
         | spellings.OTHER_NAMES.get(language, {})
     )
     names |= {renames[name] for name in names if name in renames}
+    # An expression spelling such as ``clockRealtime2x32EXT().x`` is named in a diagnostic by what it calls.
+    names |= {
+        n
+        for name in names
+        if spellings.is_expression(name)
+        for n in spellings.named(name)
+    }
     for name in sorted(names, key=lambda n: (-len(n), n)):
         rest = re.sub(rf"(?<![\w.:]){re.escape(name)}(?!\w|::)", FEATURE, rest)
     return prefix + rest
