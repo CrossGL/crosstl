@@ -233,3 +233,22 @@ def test_semantic_attribute_with_an_unknown_argument_is_refused():
     """
     message = refused(DirectXLoweringRefused, _hlsl, source)
     assert "semantic '@COLOR' takes no argument in HLSL" in message
+
+
+def test_specialization_constant_on_a_resource_parameter_is_not_a_semantic():
+    code = _hlsl("""
+        shader S {
+            constant bool use_left @function_constant(2);
+            compute {
+                void main(StructuredBuffer<uint> left @buffer(3) @function_constant(use_left),
+                          RWStructuredBuffer<uint> results @buffer(7),
+                          uint i @gl_GlobalInvocationID) {
+                    uint value = 0u;
+                    if (use_left) { value = left[i]; }
+                    results[i] = value;
+                }
+            }
+        }
+        """)
+    assert "function_constant" not in code
+    assert "StructuredBuffer<uint> left : register(t3)" in code

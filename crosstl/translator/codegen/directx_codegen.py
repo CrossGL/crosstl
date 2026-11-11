@@ -12379,15 +12379,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return True
         return type_key == "thread_scope" and str(var_name).startswith("thread_scope")
 
+    @staticmethod
+    def directx_is_specialization_constant_attribute(attr):
+        name = str(getattr(attr, "name", "")).lower().replace("-", "_")
+        if name.startswith("metal_") or name.startswith("msl_"):
+            name = name.split("_", 1)[1]
+        return name in {"function_constant", "constant_id"}
+
     def directx_specialization_constant_attributes(self, node):
-        attributes = []
-        for attr in getattr(node, "attributes", []) or []:
-            name = str(getattr(attr, "name", "")).lower().replace("-", "_")
-            if name.startswith("metal_") or name.startswith("msl_"):
-                name = name.split("_", 1)[1]
-            if name in {"function_constant", "constant_id"}:
-                attributes.append(attr)
-        return attributes
+        return [
+            attr
+            for attr in getattr(node, "attributes", []) or []
+            if self.directx_is_specialization_constant_attribute(attr)
+        ]
 
     def directx_specialization_constant_source_location(self, node, attributes=()):
         for candidate in (node, *attributes):
@@ -16139,6 +16143,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "metal_texture_element_half",
         }
         metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
+        # A specialization constant ID (MSL function_constant, GLSL constant_id) is read by
+        # directx_specialization_constant_attributes. On a resource parameter it makes the binding conditional
+        # (MSL specification section 5.8); it never names a semantic.
+        if self.directx_is_specialization_constant_attribute(attr):
+            return True
         return str(getattr(attr, "name", "")).lower() in metadata
 
     def hlsl_canonical_compile_time_type_text(self, type_text):
