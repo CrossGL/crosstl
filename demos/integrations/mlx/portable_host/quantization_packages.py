@@ -190,8 +190,11 @@ class QuantizationPackageCache:
             "max_template_materialization_work": 4096,
         }
         if source == BLOCK_SOURCE:
+            # An all-zero mx block's E8M0 scale converts to the subnormal
+            # 2^-127, which the Metal source compares as zero.
             options.update(
                 binary32_multiplication_profile="rne-flush",
+                binary32_comparison_profile="flush-subnormals",
                 binary32_log2_operand_profile="flush-subnormals",
                 binary32_log2_accuracy_profile="portable-finite",
             )
