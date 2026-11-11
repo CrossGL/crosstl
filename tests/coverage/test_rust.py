@@ -215,6 +215,24 @@ def test_rust_compare_exchange_passes_the_comparator_first_in_crossgl():
     )
 
 
+def test_rust_probes_constant_generic_operations_as_the_crossgl_built_in_they_are():
+    features = parse()
+    # The probe's subgroup scope and acquire-release uniform-memory semantics make memory_barrier the barrier
+    # GL_KHR_shader_subgroup calls subgroupMemoryBarrierBuffer.
+    assert features["memory_barrier"].crossgl == "subgroupMemoryBarrierBuffer"
+    callable_data = Type("", (), "udt")
+    call = rust._feature(
+        "execute_callable",
+        "ray_tracing",
+        Signature(Type("", (), "void"), (Param(callable_data, "inout"),)),
+        "",
+        "",
+        "callable",
+        frozenset(),
+    )
+    assert "CallShader(0u, payload);" in probes.build(call, "crossgl").source
+
+
 def test_rust_probes_pointer_sized_integers():
     features = parse()
     position = features["Vec3::max_position"]
@@ -222,7 +240,12 @@ def test_rust_probes_pointer_sized_integers():
     source = probes.build(position, "rust").source
     assert "let r: usize = a0.max_position();" in source
     assert "outp[i] = (r) as u32;" in source
-    assert position.crossgl == ""
+    # glam keeps the first of equal elements, so CrossGL compares as glam does and writes the index as a uint.
+    crossgl = probes.build(position, "crossgl").source
+    assert (
+        "uint r = (a0.z > (a0.y > a0.x ? a0.y : a0.x) ? 2u : (a0.y > a0.x ? 1u : 0u));"
+        in crossgl
+    )
     extract = features["vector_extract_dynamic"]
     source = probes.build(extract, "rust").source
     assert "let a1: usize = (uin[i + 0]) as usize;" in source
@@ -285,7 +308,6 @@ def test_rust_functions_returning_several_values_have_no_crossgl_spelling():
     features = parse()
     for name in (
         "Float::integer_decode",
-        "Vec3::max_position",
         "Vec3::normalize_and_length",
         "Vec3::try_normalize",
     ):

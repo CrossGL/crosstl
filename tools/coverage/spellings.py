@@ -546,6 +546,9 @@ OTHER_NAMES = {
         # spirv-std documents these as exact implementations of the HLSL barriers.
         "all_memory_barrier_with_group_sync": "AllMemoryBarrierWithGroupSync",
         "device_memory_barrier_with_group_sync": "DeviceMemoryBarrierWithGroupSync",
+        # The probe passes memory_barrier subgroup scope and acquire-release semantics on uniform memory
+        # (features/rust.py), the OpMemoryBarrier that GL_KHR_shader_subgroup's subgroupMemoryBarrierBuffer is.
+        "memory_barrier": "subgroupMemoryBarrierBuffer",
         # OpKill, and the ray tracing and mesh shading instructions GL_EXT_ray_tracing and GL_EXT_mesh_shader name.
         "kill": "discard",
         "report_intersection": "reportIntersectionEXT",
@@ -553,6 +556,9 @@ OTHER_NAMES = {
         "terminate_ray": "terminateRayEXT",
         "emit_mesh_tasks_ext": "EmitMeshTasksEXT",
         "set_mesh_outputs_ext": "SetMeshOutputsEXT",
+        # OpExecuteCallableKHR, which CrossGL calls by DXR's name, CallShader, with the shader index first. The probe
+        # passes execute_callable the index 0 as its constant generic parameter.
+        "execute_callable": "CallShader(0u, {0})",
         # A lane given as a constant broadcasts, as for Slang's WaveBroadcastLaneAt. subgroup_broadcast_const takes
         # the lane as a constant generic parameter, which the probe sets to 0.
         "subgroup_broadcast": "subgroupBroadcast",
@@ -597,6 +603,14 @@ OTHER_NAMES = {
         "Vec3::element_product": "({0}.x * {0}.y * {0}.z)",
         "Vec3::max_element": "max({0}.x, max({0}.y, {0}.z))",
         "Vec3::min_element": "min({0}.x, min({0}.y, {0}.z))",
+        # max_position and min_position keep the first of equal elements: glam replaces its candidate only when a
+        # later element compares greater or less.
+        "Vec3::max_position": (
+            "({0}.z > ({0}.y > {0}.x ? {0}.y : {0}.x) ? 2u : ({0}.y > {0}.x ? 1u : 0u))"
+        ),
+        "Vec3::min_position": (
+            "({0}.z < ({0}.y < {0}.x ? {0}.y : {0}.x) ? 2u : ({0}.y < {0}.x ? 1u : 0u))"
+        ),
         "Vec3::with_x": "vec3({1}, {0}.y, {0}.z)",
         "Vec3::with_y": "vec3({0}.x, {1}, {0}.z)",
         "Vec3::with_z": "vec3({0}.x, {0}.y, {1})",

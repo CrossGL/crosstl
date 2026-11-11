@@ -98,12 +98,6 @@ _UNSPELLED = {
         "no CrossGL function returns a vector's direction and length together"
     ),
     "Vec3::try_normalize": "no CrossGL function returns an optional value",
-    "Vec3::max_position": (
-        "no CrossGL function returns the index of a vector's largest element"
-    ),
-    "Vec3::min_position": (
-        "no CrossGL function returns the index of a vector's smallest element"
-    ),
     "Float::classify": "no CrossGL function returns a float's category",
     "Vec3::to_array": "no CrossGL function converts a vector to an array",
     "Vec3::write_to_slice": (
