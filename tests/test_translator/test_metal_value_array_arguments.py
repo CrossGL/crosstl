@@ -58,6 +58,32 @@ def test_const_local_array_is_passed_as_a_thread_copy(tmp_path):
     assert "dot4(crosstl_array_value<float,4>{{L[0],L[1],L[2],L[3]}}.v,k)" in code
 
 
+IN_PARAMETERS = """
+shader main {
+    float dot4(in float v[4], float k) { v[0] = 100.0; return v[0] + v[1] * k + v[3]; }
+    float read4(in float v[4]) { return v[0] + v[3]; }
+    compute {
+        buffer float* o;
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            const float L[4] = float[4](13.0, 14.0, 15.0, 16.0);
+            o[0] = dot4(L, o[8]) + read4(L);
+        }
+    }
+}
+"""
+
+
+def test_const_local_array_is_copied_for_an_in_parameter(tmp_path):
+    # An ``in`` array parameter is a non-const C array in MSL whether or not the callee writes it.
+    path = tmp_path / "in_parameters.cgl"
+    path.write_text(IN_PARAMETERS, encoding="utf-8")
+    code = _compact(crosstl.translate(str(path), backend="metal"))
+    copy = "crosstl_array_value<float,4>{{L[0],L[1],L[2],L[3]}}.v"
+    assert f"dot4({copy},o[8])" in code
+    assert f"read4({copy})" in code
+
+
 def test_array_call_result_is_passed_through_its_data(tmp_path):
     code = _compact(_translate(tmp_path, SOURCE))
     assert "array<float,4>make(floatk)" in code
