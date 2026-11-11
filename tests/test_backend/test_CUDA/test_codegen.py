@@ -8985,6 +8985,91 @@ class TestCudaCodeGen:
         assert "surf2Dread" not in result
         assert "surf2Dwrite" not in result
 
+    def test_cuda_surface_boundary_mode_conversion(self):
+        code = """
+        __global__ void probe(
+            float* outp,
+            cudaSurfaceObject_t img,
+            cudaSurfaceObject_t line,
+            cudaSurfaceObject_t vol,
+            cudaSurfaceObject_t cube,
+            int x, int y, int z
+        ) {
+            float clamped = surf2Dread<float>(
+                img, x * sizeof(float), y, cudaBoundaryModeClamp
+            );
+            surf2Dwrite(
+                clamped, img, x * sizeof(float), y, cudaBoundaryModeZero
+            );
+            float trapped = surf2Dread<float>(
+                img, x * sizeof(float), y, cudaBoundaryModeTrap
+            );
+            float plain = surf2Dread<float>(img, x * sizeof(float), y);
+            float lineClamped = surf1Dread<float>(
+                line, x * sizeof(float), cudaBoundaryModeClamp
+            );
+            float voxelClamped = surf3Dread<float>(
+                vol, x * sizeof(float), y, z, cudaBoundaryModeClamp
+            );
+            float faceClamped = surfCubemapread<float>(
+                cube, x * sizeof(float), y, z, cudaBoundaryModeClamp
+            );
+            float unknown = surf2Dread<float>(
+                img, x * sizeof(float), y, someMode
+            );
+            outp[0] = clamped + trapped + plain + lineClamped
+                + voxelClamped + faceClamped + unknown;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var clamped: f32 = imageLoad(img, min(vec2<i32>(x, y), "
+            "imageSize(img) - vec2<i32>(1, 1)));" in result
+        )
+        assert (
+            "/* cuda surface.surf2Dwrite boundary mode "
+            "'cudaBoundaryModeZero' not directly supported in CrossGL */"
+            in result
+        )
+        assert "imageStore(img, vec2<i32>(x, y), clamped)" not in result
+        assert (
+            "var trapped: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        )
+        assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert (
+            "var lineClamped: f32 = imageLoad(line, "
+            "min(x, imageSize(line) - 1));" in result
+        )
+        assert (
+            "var voxelClamped: f32 = imageLoad(vol, "
+            "min(vec3<i32>(x, y, z), imageSize(vol) - vec3<i32>(1, 1, 1)));"
+            in result
+        )
+        assert (
+            "var faceClamped: f32 = imageLoad(cube, vec3<i32>("
+            "min(x, imageSize(cube).x - 1), "
+            "min(y, imageSize(cube).y - 1), z));" in result
+        )
+        assert (
+            "/* cuda surface.surf2Dread boundary mode 'someMode' "
+            "not directly supported in CrossGL */" in result
+        )
+        assert "cudaBoundaryModeClamp" not in result
+        assert "cudaBoundaryModeTrap" not in result
+        assert "surf2Dread<float>" not in result
+        assert "surf2Dwrite(" not in result
+        assert "surf1Dread<float>" not in result
+        assert "surf3Dread<float>" not in result
+        assert "surfCubemapread<float>" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_cuda_texture_gather_helpers_convert(self):
         code = """
         void gatherOps(
