@@ -113,10 +113,20 @@ def test_wgsl_texture_functions_take_a_2d_texture_and_call_glsl_from_crossgl():
     compare = features["textureSampleCompareLevel"].counterpart
     # WGSL always samples level 0, so the CrossGL probe passes the level as a constant.
     assert compare.params[-1] == Param(Type("float"), "const")
-    assert features["textureSampleBaseClampToEdge"].counterpart is None
-    # CrossGL has no clamp-to-edge sample, so the operation is a gap rather than an untested probe.
-    assert features["textureSampleBaseClampToEdge"].crossgl == ""
-    assert "half a texel" in features["textureSampleBaseClampToEdge"].note
+    clamped = features["textureSampleBaseClampToEdge"]
+    # CrossGL samples level 0 at coordinates clamped half a texel inside the edge, with a combined sampler.
+    assert [p.type for p in clamped.counterpart.params] == [
+        Type.other("sampler2D"),
+        Type("float", (2,)),
+    ]
+    assert clamped.crossgl.startswith("textureLod({0}, clamp({1}, vec2(0.5) / ")
+    assert clamped.crossgl.endswith(", 0.0)")
+    assert spellings.named(clamped.crossgl) == [
+        "textureLod",
+        "clamp",
+        "textureSize",
+        "textureSize",
+    ]
 
 
 WGSL_WORKGROUP = """

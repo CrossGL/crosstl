@@ -296,6 +296,8 @@ COUNTERPARTS = {
         ),
         "textureSampleGrad": "vec4 textureGrad(sampler2D, vec2, vec2, vec2)",
         "textureSampleLevel": "vec4 textureLod(sampler2D, vec2, float)",
+        # CrossGL writes this one as an expression (:data:`OTHER_NAMES`), which takes these arguments.
+        "textureSampleBaseClampToEdge": "vec4 textureLod(sampler2D, vec2)",
         "textureStore": "void imageStore(image2D, ivec2, vec4)",
         # WGSL returns a result struct where CrossGL, like GLSL, returns one part and writes the other to an output
         # parameter. Its only compare-exchange is the weak one, and CrossGL's is atomicCompSwap.
@@ -494,6 +496,12 @@ OTHER_NAMES = {
         "pack4xI8Clamp": "pack_clamp_s8",
         "unpack4xI8": "unpack_s8s32",
         "unpack4xU8": "unpack_u8u32",
+        # textureSampleBaseClampToEdge samples level 0 with its coordinates clamped to [half_texel, 1 - half_texel],
+        # where half_texel is vec2(0.5) / vec2<f32>(textureDimensions(t, 0)) (WGSL, "textureSampleBaseClampToEdge").
+        "textureSampleBaseClampToEdge": (
+            "textureLod({0}, clamp({1}, vec2(0.5) / vec2(textureSize({0}, 0)), "
+            "vec2(1.0) - vec2(0.5) / vec2(textureSize({0}, 0))), 0.0)"
+        ),
     },
     "mojo": {
         "count_leading_zeros": "clz",
