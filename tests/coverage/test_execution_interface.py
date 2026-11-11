@@ -9,6 +9,7 @@ from tests.conformance import runner as harness
 from tools.coverage import (
     execution,
     issues,
+    lowering,
     probes,
     publish,
     report,
@@ -48,6 +49,51 @@ def test_a_counter_buffer_nothing_uses_is_left_out_of_hlsl_spirv():
     assert "counter_var_outp" not in kept
     assert '"main" %id\n' in kept and "%outp Binding 1" in kept
     assert "%type_ACSBuffer_counter = OpTypeStruct" in kept
+
+
+# A compute module that uses 64-bit floats and declares capabilities it does not use, as rust-gpu writes them.
+OVERDECLARED = """\
+; SPIR-V
+; Version: 1.3
+               OpCapability Shader
+               OpCapability RayTracingKHR
+               OpCapability Float64
+               OpCapability StencilExportEXT
+               OpExtension "SPV_EXT_shader_stencil_export"
+               OpExtension "SPV_KHR_ray_tracing"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+       %void = OpTypeVoid
+     %double = OpTypeFloat 64
+       %func = OpTypeFunction %void
+       %main = OpFunction %void None %func
+      %entry = OpLabel
+               OpReturn
+               OpFunctionEnd
+"""
+
+
+def test_rust_spirv_declares_only_the_capabilities_it_uses():
+    # lavapipe will not create a pipeline from a module that declares a capability the device does not enable.
+    if not (validators.command("spirv-as") and validators.command("spirv-val")):
+        pytest.skip("spirv-as or spirv-val is not installed")
+    kept = execution.without_unused_capabilities(OVERDECLARED)
+    assert execution._CAPABILITY.findall(kept) == ["Shader", "Float64"]
+    assert kept == OVERDECLARED.replace(
+        "               OpCapability RayTracingKHR\n", ""
+    ).replace("               OpCapability StencilExportEXT\n", "")
+
+
+def test_only_rust_spirv_loses_capabilities(monkeypatch):
+    monkeypatch.setattr(lowering, "lower", lambda *args, **kwargs: (OVERDECLARED, ""))
+    monkeypatch.setattr(
+        execution, "without_unused_capabilities", lambda text: "trimmed"
+    )
+    assert execution.as_spirv("rust", "") == "trimmed"
+    assert execution.as_spirv("wgsl", "") == OVERDECLARED
+    monkeypatch.setattr(lowering, "lower", lambda *args, **kwargs: ("", "rejected"))
+    assert execution.as_spirv("rust", "") == ""
     used = COUNTED + "%7 = OpAccessChain %_ptr_Uniform_int %counter_var_outp %uint_0\n"
     assert execution.without_unused_counters(used) == used
     plain = COUNTED.replace("type.ACSBuffer.counter", "type.other")
@@ -68,7 +114,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 
 
 def test_a_buffer_passed_to_a_function_keeps_the_hlsl_interface(tmp_path):
-    if not validators.can_lower("hlsl"):
+    if not lowering.can_lower("hlsl"):
         pytest.skip(f"{validators.TOOLS['hlsl']} or spirv-dis is not installed")
     from tests.conformance import interface
 
@@ -243,7 +289,7 @@ def test_generated_mixed_scalar_probe_is_executable(language):
 
 
 def _mixed_interface(language, input_count, constants):
-    """Discovery fixtures; SPIR-V needs only entry-point, binding and block declarations."""
+    """Discovery fixtures; SPIR-V needs only entry-point, binding, block and storage-buffer type declarations."""
     storage = [("float", "fin"), ("int", "iin"), ("uint", "uin")][:input_count]
     storage.append(("float", "outp"))
     if language == "metal":
@@ -269,6 +315,18 @@ def _mixed_interface(language, input_count, constants):
     source += "".join(
         f"OpDecorate %{name} DescriptorSet 0\nOpDecorate %{name} Binding {slot}\n"
         for slot, (_, name) in enumerate(storage)
+    )
+    scalars = {
+        "float": "OpTypeFloat 32",
+        "int": "OpTypeInt 32 1",
+        "uint": "OpTypeInt 32 0",
+    }
+    source += "".join(
+        f"%{name}_scalar = {scalars[kind]}\n%{name}_array = OpTypeRuntimeArray %{name}_scalar\n"
+        f"%{name}_block = OpTypeStruct %{name}_array\n"
+        f"%{name}_pointer = OpTypePointer StorageBuffer %{name}_block\n"
+        f"%{name} = OpVariable %{name}_pointer StorageBuffer\n"
+        for kind, name in storage
     )
     if constants:
         source += (

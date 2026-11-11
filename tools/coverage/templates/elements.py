@@ -15,7 +15,8 @@ struct is a layout of its own. WebGL 2 has no storage buffers, and CUDA, HIP, Op
 
 from __future__ import annotations
 
-from .base import ABSENT, BINS, NESTED_STRUCTS, Template
+from .base import ABSENT, Template
+from .family import BINS, NESTED_STRUCTS
 from .statements import c_text
 
 NAMES = (

@@ -48,6 +48,7 @@ _DEFINITION = (
 )
 _ARRAY_TYPE = re.compile(r"^(?P<element>.*?)\s*\[\s*(?P<extent>\d+)\s*\](?P<rest>.*)$")
 _WRITING_QUALIFIERS = frozenset({"out", "inout"})
+_CONST_QUALIFIERS = frozenset({"const", "constant", "readonly"})
 # Address spaces of storage that a ``thread`` pointer cannot point into.
 _OTHER_ADDRESS_SPACES = frozenset(
     {
@@ -169,6 +170,11 @@ class MetalArrayArguments:
         ):
             return False
         raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        qualifiers = codegen.parameter_qualifier_names(parameter)
+        if "in" in qualifiers and not qualifiers & _CONST_QUALIFIERS:
+            # An ``in`` array parameter is a plain C array, a non-``const`` pointer, whether or not the callee writes
+            # its copy, so ``is_mutable_metal_parameter`` counting ``in`` as read-only does not decide it.
+            return True
         return bool(codegen.is_mutable_metal_parameter(raw_type, parameter))
 
     def _parameter(self, func_name, index, call_args):

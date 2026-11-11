@@ -1917,12 +1917,22 @@ class HLSLToCrossGLConverter(
         return lines
 
     def matrix_layout_qualifiers(self, node):
+        """The CrossGL orientation of a declaration's ``row_major`` or ``column_major`` qualifier.
+
+        With row-major packing CrossGL holds the transpose of every HLSL matrix
+        (:meth:`hlsl_matrix_rows_are_columns`), so the stored HLSL rows of a
+        ``row_major`` matrix are CrossGL columns, and the reverse.
+        """
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
-        return [
+        found = [
             qualifier
             for qualifier in ("row_major", "column_major")
             if qualifier in qualifiers
         ]
+        if self.hlsl_matrix_rows_are_columns():
+            swapped = {"row_major": "column_major", "column_major": "row_major"}
+            found = [swapped[qualifier] for qualifier in found]
+        return found
 
     def format_matrix_layout_attributes(self, node, indent):
         return "".join(

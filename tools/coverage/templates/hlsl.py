@@ -57,7 +57,8 @@ from . import (
     vertices,
     workgroups,
 )
-from .base import ABSENT, C_FAMILY, Template, scalar
+from .base import ABSENT, Template, scalar
+from .family import C_FAMILY
 
 _HLSL_PATCH = (
     "struct ControlPoint {\n    float4 position : POSITION;\n};\n\nstruct PatchConstants {\n"

@@ -1960,7 +1960,7 @@ def test_codegen_dxc_template_value_path_is_refused():
     # used to emit the undeclared identifier ``Ackermann_3_4__value``.
     with pytest.raises(
         DirectXImportRefused,
-        match=r"HLSL struct template 'Ackermann' declares the value parameter 'unsigned int M'",
+        match=r"HLSL struct 'Ackermann' is a partial specialization",
     ):
         generate_crossgl(TEMPLATE_VALUE_PATH_FIXTURE.code)
 

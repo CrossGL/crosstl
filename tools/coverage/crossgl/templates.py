@@ -13,7 +13,15 @@ from ..templates.abstractions import FAMILY as ABSTRACTIONS
 from ..templates.abstractions import GENERIC, SPAN, TWICE, WEIGH, scoped_enum
 from ..templates.aggregates import ABSORB
 from ..templates.aggregates import FAMILY as AGGREGATES
-from ..templates.base import (
+from ..templates.bindings import CROSSGL as BINDINGS
+from ..templates.blocks import CROSSGL as BLOCKS_CROSSGL
+from ..templates.booleans import CROSSGL as BOOLEANS_CROSSGL
+from ..templates.columns import CROSSGL as COLUMNS_CROSSGL
+from ..templates.draws import CROSSGL as DRAWS
+from ..templates.edges import FAMILY as EDGES
+from ..templates.elements import CROSSGL as ELEMENTS_CROSSGL
+from ..templates.extensions import CROSSGL as EXTENSIONS
+from ..templates.family import (
     BAG,
     BINS,
     GROW,
@@ -23,14 +31,6 @@ from ..templates.base import (
     POSE,
     SPREAD,
 )
-from ..templates.bindings import CROSSGL as BINDINGS
-from ..templates.blocks import CROSSGL as BLOCKS_CROSSGL
-from ..templates.booleans import CROSSGL as BOOLEANS_CROSSGL
-from ..templates.columns import CROSSGL as COLUMNS_CROSSGL
-from ..templates.draws import CROSSGL as DRAWS
-from ..templates.edges import FAMILY as EDGES
-from ..templates.elements import CROSSGL as ELEMENTS_CROSSGL
-from ..templates.extensions import CROSSGL as EXTENSIONS
 from ..templates.formats import CROSSGL as FORMATS
 from ..templates.forms import FAMILY as FORMS
 from ..templates.fragments import CROSSGL as FRAGMENTS

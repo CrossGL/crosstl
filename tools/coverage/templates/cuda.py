@@ -63,7 +63,8 @@ from . import (
     vertices,
     workgroups,
 )
-from .base import ABSENT, C_FAMILY, GRAPHICS_ONLY, Template, scalar
+from .base import ABSENT, GRAPHICS_ONLY, Template, scalar
+from .family import C_FAMILY
 
 _CSTDINT = "#include <cstdint>"
 

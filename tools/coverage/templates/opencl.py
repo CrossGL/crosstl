@@ -63,7 +63,8 @@ from . import (
     vertices,
     workgroups,
 )
-from .base import ABSENT, C_FAMILY, GRAPHICS_ONLY, Template
+from .base import ABSENT, GRAPHICS_ONLY, Template
+from .family import C_FAMILY
 
 
 def _opencl_scalar(spelling: str, source: str = "iin", prelude: str = "") -> Template:

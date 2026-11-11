@@ -9,7 +9,7 @@ such names, as it already does for a name the source calls qualified (``metal::m
 
 from __future__ import annotations
 
-__all__ = ["using_declared_library_names"]
+__all__ = ["using_declared_alias_targets", "using_declared_library_names"]
 
 
 def using_declared_library_names(ast, library_names) -> set[str]:
@@ -23,3 +23,20 @@ def using_declared_library_names(ast, library_names) -> set[str]:
         if scope == "metal" and name in library_names:
             names.add(name)
     return names
+
+
+def using_declared_alias_targets(declarations, scope, name, normalize) -> list[str]:
+    """Qualified names that using-declarations in namespace ``scope`` introduce as ``name``.
+
+    ``using c10::metal::opmath_t;`` in the global namespace makes ``opmath_t`` name ``c10::metal::opmath_t`` there
+    ([namespace.udecl]/1), so unqualified type lookup in that scope finds the alias template or struct it names.
+    """
+    targets = []
+    for declaration in declarations or []:
+        if normalize(declaration.get("namespace") or "") != scope:
+            continue
+        target = normalize(str(declaration.get("target") or "")).lstrip(":")
+        if target.rpartition("::")[2] == name and "::" in target:
+            if target not in targets:
+                targets.append(target)
+    return targets

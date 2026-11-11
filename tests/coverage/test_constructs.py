@@ -9,6 +9,7 @@ from tools.coverage import (
     constructs,
     crossgl,
     execution,
+    lowering,
     probes,
     semantic,
     templates,
@@ -16,7 +17,8 @@ from tools.coverage import (
 )
 from tools.coverage.model import Feature, Result
 from tools.coverage.templates import relations
-from tools.coverage.templates.base import ABSENT, OPERATORS
+from tools.coverage.templates.base import ABSENT
+from tools.coverage.templates.family import OPERATORS
 
 from .construct_grammar import GRAMMAR, construct_feature, grammar
 
@@ -143,7 +145,7 @@ def test_a_metal_probe_needs_an_entry_point_of_its_stage(
         return validators.Verdict(True)
 
     monkeypatch.setattr(validators, "command", lambda name: (name,))
-    monkeypatch.setattr(validators, "_run", run)
+    monkeypatch.setattr(validators, "run", run)
     verdict = validators.validate("metal", "", stage)
     assert verdict.accepted is accepted
     assert accepted or f"no {stage} entry point" in verdict.log
@@ -163,7 +165,7 @@ def test_ray_tracing_and_mesh_stages_are_checked_for_vulkan(monkeypatch):
         return validators.Verdict(True)
 
     monkeypatch.setattr(validators, "command", lambda name: (name,))
-    monkeypatch.setattr(validators, "_run", run)
+    monkeypatch.setattr(validators, "run", run)
     validators.validate("glsl", "", "miss")
     validators.validate("glsl", "", "mesh")
     validators.validate("glsl", "", "fragment")
@@ -202,7 +204,7 @@ def test_a_slang_probe_for_hlsl_is_written_as_hlsl_and_compiled_by_dxc(
         return validators.Verdict(True)
 
     monkeypatch.setattr(validators, "command", lambda name: (name,))
-    monkeypatch.setattr(validators, "_run", run)
+    monkeypatch.setattr(validators, "run", run)
     verdict = validators.validate(
         "slang", '[shader("hull")]', "tessellation-control", "main", "hlsl"
     )
@@ -286,6 +288,9 @@ def test_native_templates_are_valid(language):
         pytest.skip(f"{validators.TOOLS[language]} is not installed")
     rejected = []
     for feature in _templated(language):
+        # A Slang template for the HLSL target also needs DXC; the runner reports such a probe as untested.
+        if validators.missing(language, feature.target):
+            continue
         probe = probes.build(feature, language)
         verdict = validators.validate(
             language, probe.source, feature.stage, probe.entry, feature.target
@@ -467,7 +472,7 @@ def _missing_anchors(language: str, names: set[str] | None = None) -> list[str]:
         if names is not None and construct.name not in names:
             continue
         probe = probes.build(construct_feature(language, construct.name), language)
-        assembly, log = validators.lower(
+        assembly, log = lowering.lower(
             language, probe.source, probe.entry, "compute", raw_ids=False
         )
         assert assembly, log
@@ -481,7 +486,7 @@ def _missing_anchors(language: str, names: set[str] | None = None) -> list[str]:
 
 
 def test_hlsl_anchored_probes_compile_to_their_anchors():
-    if not validators.can_lower("hlsl"):
+    if not lowering.can_lower("hlsl"):
         pytest.skip("dxc or spirv-dis is not installed")
     assert not _missing_anchors("hlsl", _HLSL_ANCHORED)
 
@@ -490,7 +495,7 @@ def test_operator_and_type_probes_compile_to_their_anchors():
     # glslang lowers the GLSL probe of each operator and type to the instructions the construct is anchored to; it
     # writes a signed remainder as OpSMod, which the probes' non-negative operands make equal to OpSRem. Scalar
     # widths are anchored to capabilities, which this leaves out.
-    if not validators.can_lower("glsl"):
+    if not lowering.can_lower("glsl"):
         pytest.skip("glslangValidator or spirv-dis is not installed")
     assert not _missing_anchors("glsl")
 

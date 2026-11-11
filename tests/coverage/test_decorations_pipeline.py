@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from tools.coverage import decorations, validators
+from tools.coverage import decorations, lowering, validators
 from tools.coverage.model import Feature
 
 
@@ -137,7 +137,7 @@ def test_the_metal_compiler_records_barycentrics_views_and_stencil_in_air():
     assert decorations.lost(stencil, "metal", source) == ""
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_extension_built_ins_with_their_capabilities():
     rate = _fragment(
         "shading-rate", "BuiltIn.ShadingRateKHR Capability.FragmentShadingRateKHR"
@@ -189,7 +189,7 @@ def test_the_metal_compiler_records_the_base_vertex_and_instance_in_air():
     ) == ("the translation loses BuiltIn.BaseVertex")
 
 
-@pytest.mark.skipif(not validators.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
 def test_glslang_lowers_a_draw_index_read_with_its_capability():
     source = (
         "#version 460\nvoid main() {\n"

@@ -58,7 +58,8 @@ from . import (
     vertices,
     workgroups,
 )
-from .base import ABSENT, C_FAMILY, Template, scalar
+from .base import ABSENT, Template, scalar
+from .family import C_FAMILY
 
 _METAL_HEADER = "#include <metal_stdlib>\nusing namespace metal;\n\n"
 

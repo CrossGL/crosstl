@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import re
 
-from .base import ABSENT, ADVANCE, BAG_SUM, C_FAMILY, SLOT, Template
+from .base import ABSENT, Template
+from .family import ADVANCE, BAG_SUM, C_FAMILY, SLOT
 
 _LITERAL = re.compile(r"\b(\d+\.\d+)\b")
 

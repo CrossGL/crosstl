@@ -165,8 +165,10 @@ def test_hlsl_output_compiles(tmp_path):
     code = crosstl.translate(
         _write(tmp_path, COMPUTE), backend="directx", format_output=False
     )
-    assert re.search(r"modf\([^;]*, value_20_whole\)", code)
-    assert re.search(r"frexp\([^;]*, value_30_exponent\)", code)
+    # HLSL output computes modf and frexp through exact helpers that keep the
+    # out argument (crosstl_modf_<type>, crosstl_frexp_<type>).
+    assert re.search(r"crosstl_modf_\w+\([^;]*, value_20_whole\)", code)
+    assert re.search(r"crosstl_frexp_\w+\([^;]*, value_30_exponent\)", code)
     dxc = shutil.which("dxc")
     if not dxc:
         pytest.skip("dxc is not on PATH")

@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.coverage import probes, validators
+from tools.coverage import lowering, probes, validators
 from tools.coverage.features.common import prototype
 from tools.coverage.model import (
     STRING,
@@ -325,12 +325,12 @@ def test_hit_object_probe_is_valid_hlsl():
 # A baseline only has to lower to SPIR-V, which is all the semantic layer does with it. The DXIL validator rejects a
 # ray query baseline because it declares the query without using it.
 @pytest.mark.skipif(
-    not validators.can_lower("hlsl"), reason="dxc or spirv-dis is not installed"
+    not lowering.can_lower("hlsl"), reason="dxc or spirv-dis is not installed"
 )
 @pytest.mark.parametrize("probe_feature", HLSL_METHODS, ids=lambda f: f.name)
 def test_hlsl_method_baselines_lower_to_spirv(probe_feature):
     probe = probes.build(probe_feature, "hlsl", baseline=True)
-    assembly, log = validators.lower("hlsl", probe.source, probe.entry)
+    assembly, log = lowering.lower("hlsl", probe.source, probe.entry)
     assert assembly, log
 
 

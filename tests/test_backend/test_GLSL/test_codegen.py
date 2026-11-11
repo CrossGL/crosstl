@@ -12,6 +12,7 @@ from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
@@ -1533,7 +1534,7 @@ def test_codegen_array_of_arrays_return_type_from_glslang_spv_aofa():
 
     crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
 
-    assert "float[4][7] foo(float a[5][7])" in crossgl
+    assert "float[4][7] foo(in float a[5][7])" in crossgl
     assert "return { a[0], a[1], r, a[3] };" in crossgl
     assert "float u[][7];" in crossgl
 
@@ -2096,6 +2097,37 @@ def test_codegen_parenthesized_assignment_array_access_from_glslang_coopmat():
     assert "md1 += (m += m)[2];" in crossgl
     assert "mats[1].length()" not in crossgl
     assert "md1 += m += m[2];" not in crossgl
+
+
+def test_codegen_marks_unqualified_array_parameters_in():
+    # GLSL copies an array parameter without out or inout into the callee (#3162).
+    code = textwrap.dedent("""
+        #version 450
+        layout(local_size_x = 1) in;
+        layout(std430, binding = 0) buffer B { float results[]; };
+
+        float first(float v[2]) { v[0] = 3.0; return v[0] + v[1]; }
+        float grid(float x, const float m[2][3]) { return x + m[1][2]; }
+        float named(in float n[2]) { return n[0]; }
+        void fill(inout float w[2]) { w[1] = 7.0; }
+        void reset(out float o[2]) { o[0] = 0.0; o[1] = 0.0; }
+
+        void main() {
+            float a[2] = float[2](1.0, 2.0);
+            float g[2][3];
+            results[0] = first(a) + grid(1.0, g) + named(a);
+            fill(a);
+            reset(a);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "float first(in float v[2])" in crossgl
+    assert "float grid(float x, in float m[2][3])" in crossgl
+    assert "float named(in float n[2])" in crossgl
+    assert "void fill(inout float w[2])" in crossgl
+    assert "void reset(out float o[2])" in crossgl
 
 
 def test_codegen_unnamed_function_parameters_get_stable_names():
@@ -2883,8 +2915,25 @@ def test_codegen_atomic_counter_memory_barrier_imports_as_crossgl_barrier():
     assert "memoryBarrier();" in crossgl
     assert "memoryBarrierAtomicCounter(" not in crossgl
 
-    shader_ast = parse_crossgl(crossgl)
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    # HLSL has no atomic counter type: the counter must not reach the output as `atomic_uint counter;`.
+    with pytest.raises(LoweringRefused, match="the built-in type 'atomic_uint'"):
+        HLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    buffer_code = textwrap.dedent("""
+        #version 450 core
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(std430, binding = 0) buffer Counter { uint value; } counter;
+
+        void main() {
+            uint value = atomicAdd(counter.value, 1u);
+            memoryBarrierAtomicCounter();
+            barrier();
+            atomicAdd(counter.value, value);
+        }
+    """).strip()
+    buffer_crossgl = assert_roundtrip(buffer_code, "compute", ShaderStage.COMPUTE)
+    assert "memoryBarrierAtomicCounter(" not in buffer_crossgl
+    hlsl = HLSLCodeGen().generate(parse_crossgl(buffer_crossgl))
     # memoryBarrier(); barrier(); is one HLSL barrier over all memory with group sync.
     assert "AllMemoryBarrierWithGroupSync();" in hlsl
     assert "GroupMemoryBarrierWithGroupSync();" not in hlsl

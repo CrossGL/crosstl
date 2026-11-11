@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List
 
-from ..ast import FunctionNode
+from ..ast import ArrayType, FunctionNode, NamedType
 from .glsl_block_layout import block_struct_placements
 from .glsl_hlsl_cbuffer import (
     COMPONENTS,
@@ -32,8 +32,16 @@ from .glsl_hlsl_cbuffer import (
     layout_array_stride,
     layout_matrix_vector_stride,
     layout_member_placements,
+    layout_scalar_offsets,
 )
-from .hlsl_buffer_layout import CBUFFER_REGISTER_SIZE, align_to, vector_type
+from .hlsl_buffer_layout import (
+    CBUFFER_REGISTER_SIZE,
+    HLSL_CBUFFER_LAYOUT,
+    HlslLayoutType,
+    align_to,
+    cbuffer_held_struct_placements,
+    vector_type,
+)
 
 # HLSL spellings of the layout scalars.
 HLSL_SCALAR_TYPES = {
@@ -55,6 +63,96 @@ class HlslRegisterBlockPlan:
 
     layout: str
     layout_type: object
+
+
+def _holds_struct_placements(layout_type):
+    """Whether a value holds a struct, at any depth, whose members carry ``@ offset(N)`` or ``@ align(N)``."""
+    if layout_type.kind == "array":
+        return _holds_struct_placements(layout_type.element)
+    if layout_type.kind != "struct":
+        return False
+    return bool(layout_type.offsets or layout_type.alignments) or any(
+        _holds_struct_placements(member) for _name, member in layout_type.members
+    )
+
+
+def _without_placements(layout_type):
+    """``layout_type`` with the placements of every struct it holds removed."""
+    if layout_type.kind == "array":
+        return HlslLayoutType(
+            "array",
+            element=_without_placements(layout_type.element),
+            count=layout_type.count,
+        )
+    if layout_type.kind != "struct":
+        return layout_type
+    return HlslLayoutType(
+        "struct",
+        struct_name=layout_type.struct_name,
+        members=tuple(
+            (name, _without_placements(member)) for name, member in layout_type.members
+        ),
+    )
+
+
+def _type_struct_name(type_node):
+    """The struct name a member type names, through any array dimensions, or ``None``."""
+    while isinstance(type_node, ArrayType):
+        type_node = type_node.element_type
+    if isinstance(type_node, NamedType):
+        return None if type_node.generic_args else type_node.name
+    if isinstance(type_node, str):
+        return type_node.split("[", 1)[0].strip() or None
+    return None
+
+
+def hlsl_members_hold_struct_placements(structs, members, member_tuple, stack=()):
+    """Whether ``members`` hold a struct of ``structs``, at any depth, with an ``@ offset`` or ``@ align`` member.
+
+    ``member_tuple(member)`` is ``(name, type, row_major, offset, alignment, packed)``.
+    """
+    for member in members:
+        name = _type_struct_name(member_tuple(member)[1])
+        struct = structs.get(name) if name is not None else None
+        if struct is None or name in stack:
+            continue
+        inner = [
+            item
+            for item in getattr(struct, "members", []) or []
+            if getattr(item, "name", None) and not isinstance(item, FunctionNode)
+        ]
+        if any(
+            member_tuple(item)[3] is not None or member_tuple(item)[4] is not None
+            for item in inner
+        ) or hlsl_members_hold_struct_placements(
+            structs, inner, member_tuple, (*stack, name)
+        ):
+            return True
+    return False
+
+
+def hlsl_cbuffer_register_plan(layout_type):
+    """The plan of a constant buffer packed by HLSL rules whose held structs place a scalar elsewhere, else ``None``.
+
+    ``packoffset`` places only the members of a constant buffer, and HLSL declares a struct once, packed by its
+    rules alone, so a struct member's ``@ offset(N)`` or ``@ align(N)`` (DXC's ``[[vk::offset(N)]]`` of a struct
+    member) that moves a scalar from where packing puts it is read from the buffer's registers.
+    """
+    members = layout_type.members
+    if not any(_holds_struct_placements(member) for _name, member in members):
+        return None
+    plain = HlslLayoutType(
+        "struct",
+        struct_name=layout_type.struct_name,
+        members=tuple((name, _without_placements(member)) for name, member in members),
+        offsets=layout_type.offsets,
+        alignments=layout_type.alignments,
+    )
+    if layout_scalar_offsets(layout_type, HLSL_CBUFFER_LAYOUT) == layout_scalar_offsets(
+        plain, HLSL_CBUFFER_LAYOUT
+    ):
+        return None
+    return HlslRegisterBlockPlan(HLSL_CBUFFER_LAYOUT, layout_type)
 
 
 @dataclass(frozen=True)
@@ -133,7 +231,10 @@ class HlslGlslBlockRegisters:
             for member in getattr(node, "members", []) or []
             if getattr(member, "name", None) and not isinstance(member, FunctionNode)
         ]
-        placements, size = block_struct_placements(layout_type, layout, root=True)
+        if layout == HLSL_CBUFFER_LAYOUT:
+            placements, size = cbuffer_held_struct_placements(layout_type)
+        else:
+            placements, size = block_struct_placements(layout_type, layout, root=True)
         prefix = f"__crossgl_{node.name}"
         loader = HlslRegisterLoader(
             block=node.name,
@@ -332,6 +433,8 @@ class HlslGlslBlockRegisters:
 __all__ = [
     "HlslGlslBlockRegisters",
     "HlslRegisterBlockPlan",
+    "hlsl_cbuffer_register_plan",
+    "hlsl_members_hold_struct_placements",
     "hlsl_value_from_words",
     "hlsl_value_from_word_pair",
 ]

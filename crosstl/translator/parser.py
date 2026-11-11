@@ -412,7 +412,12 @@ class Parser:
             self.eat(self.current_token[0])
 
     def eat(self, token_type):
-        """Consume one token of the expected type or raise ``SyntaxError``."""
+        """Consume one token of the expected type or raise ``SyntaxError``.
+
+        The end of input is never consumed: a construct that tries to read past it is unterminated.
+        """
+        if token_type == "EOF" and self.current_token[0] == "EOF":
+            raise SyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -4238,14 +4243,29 @@ class Parser:
             return f"[{elements}]"
         if hasattr(type_node, "value"):
             value = type_node.value
-            return str(value).lower() if isinstance(value, bool) else str(value)
+            if isinstance(value, bool):
+                return str(value).lower()
+            literal_type = getattr(
+                getattr(type_node, "literal_type", None), "name", None
+            )
+            if literal_type == "uint" and isinstance(value, int):
+                # ``5u`` stays unsigned: a value argument binds a parameter of the literal's type.
+                return f"{value}u"
+            return str(value)
         if isinstance(type_node, ArrayAccessNode):
             array = self.format_type_argument(type_node.array)
             index = self.format_type_argument(type_node.index)
             return f"{array}[{index}]"
         if isinstance(type_node, BinaryOpNode):
-            left = self.format_type_argument(type_node.left)
-            right = self.format_type_argument(type_node.right)
+            # A nested operation keeps its grouping: ``(N + 1) * 2`` is not ``N + 1 * 2``.
+            left, right = (
+                (
+                    f"({self.format_type_argument(operand)})"
+                    if isinstance(operand, (BinaryOpNode, TernaryOpNode))
+                    else self.format_type_argument(operand)
+                )
+                for operand in (type_node.left, type_node.right)
+            )
             return f"{left} {type_node.operator} {right}"
         if isinstance(type_node, FunctionCallNode):
             function = self.format_type_argument(type_node.function)

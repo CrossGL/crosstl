@@ -218,7 +218,8 @@ class MetalHlslBufferLayouts:
             _kind, name, members = resolved
             if name in stack:
                 raise HlslLayoutError(f"recursive struct '{name}' in an HLSL buffer")
-            # Members are ``(name, raw_type)`` or ``(name, raw_type, row_major)``.
+            # Members are ``(name, raw_type[, row_major[, offset, alignment]])``; ``offset`` and ``alignment``
+            # come from the member's ``@offset`` and ``@align``.
             return struct_type(
                 name,
                 [
@@ -230,6 +231,8 @@ class MetalHlslBufferLayouts:
                     )
                     for member in members
                 ],
+                [member[3] if len(member) > 3 else None for member in members],
+                [member[4] if len(member) > 4 else None for member in members],
             )
 
         metal_type = str(resolved)
@@ -417,9 +420,11 @@ class MetalHlslBufferLayouts:
         if kind == "matrix":
             if layout in (STD430_LAYOUT, SCALAR_BLOCK_LAYOUT):
                 return self.block_matrix_storage(layout_type, layout)
+            if layout == HLSL_STRUCTURED_LAYOUT:
+                return self.structured_matrix_storage(layout_type)
             if layout not in REGISTER_LAYOUTS:
                 raise HlslLayoutError(
-                    "matrices in HLSL structured buffers have no Metal layout"
+                    f"{LAYOUT_LABELS[layout]} matrices have no Metal layout"
                 )
             # A std140 matrix is an array of its columns (rows): the last one is
             # padded like the others.
@@ -640,6 +645,32 @@ class MetalHlslBufferLayouts:
             (components, registers) if row_major else (registers, components)
         )
         name = f"crosstl_scalar_{scalar}{columns}x{rows}"
+        if row_major:
+            name += "_row_major"
+        words = components * registers
+        if name not in self.matrix_storages:
+            self.matrix_storages[name] = metal_matrix_storage_definition(
+                name, scalar, columns, rows, words, row_major, vector_words=components
+            )
+        return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
+
+    def structured_matrix_storage(self, layout_type):
+        """Storage of a structured-buffer matrix, as returned by :meth:`value_storage`.
+
+        A structured buffer packs a matrix's columns (rows, for ``row_major``)
+        one after another at four-byte alignment, so ``float3x3`` takes 36
+        bytes. Metal's matrices align their columns to 8 or 16 bytes, so the
+        matrix is held as its words and read and written through helpers.
+        """
+        scalar = layout_type.scalar
+        if scalar not in ("float", "int", "uint", "bool"):
+            raise HlslLayoutError(f"Metal has no {scalar} matrices")
+        registers, components = layout_type.registers, layout_type.components
+        row_major = layout_type.row_major
+        columns, rows = (
+            (components, registers) if row_major else (registers, components)
+        )
+        name = f"crosstl_hlsl_structured_{scalar}{columns}x{rows}"
         if row_major:
             name += "_row_major"
         words = components * registers

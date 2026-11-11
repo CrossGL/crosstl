@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import re
 
-from .base import ABSENT, C_FAMILY, LIMIT, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY, LIMIT
 
 _LITERAL = re.compile(r"\b(\d+\.\d+)\b")
 _SWIZZLE_SUM = (

@@ -10,15 +10,8 @@ local that only a loop assigns, so they give it a value first.
 
 from __future__ import annotations
 
-from .base import (
-    ABSENT,
-    C_FAMILY,
-    COUNT_SUM,
-    GROW,
-    LVALUE_SUM,
-    PAIR,
-    Template,
-)
+from .base import ABSENT, Template
+from .family import C_FAMILY, COUNT_SUM, GROW, LVALUE_SUM, PAIR
 from .statements import c_body, c_vector_body
 
 _COMPONENT = "grow(v.y);"

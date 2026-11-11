@@ -309,6 +309,12 @@ from .spirv_uniform_block_arrays import (
     lowered_constant_buffer_nodes,
     require_non_uniform_block_array_indexing,
 )
+from .spirv_value_result_arguments import (
+    VALUE_RESULT_WRITE_BACK,
+    prepare_value_result_binding,
+    value_result_qualifier,
+    write_back_value_result_binding,
+)
 from .spirv_value_subscripts import vector_value_subscript
 from .spirv_wave_extended import SPIRV_SUBGROUP_BUILTINS, lower_spirv_wave_extension
 from .stage_io_semantic_locations import semantic_location
@@ -7722,6 +7728,13 @@ class VulkanSPIRVCodeGen(
             if arg_index not in skipped_arg_indices
             and arg_index not in mesh_output_arg_indices
         ]
+        struct_members = self.current_struct_members.get(function_name)
+        if struct_members is not None and function_name in self.struct_types:
+            contextual_types = {}
+            for parameter_index, (arg_index, _arg) in enumerate(emitted_arguments):
+                if parameter_index < len(struct_members):
+                    contextual_types[arg_index] = struct_members[parameter_index][0]
+            return contextual_types, set(), None, set()
         implicit_parameter_count = len(
             self.required_function_stage_object_argument_names(function_name)
         )
@@ -22593,35 +22606,11 @@ class VulkanSPIRVCodeGen(
             self.current_expression_expected_type = previous_expected_type
 
     def collect_ast_functions(self, root):
-        functions = []
-        visited = set()
-
-        def walk(value):
-            if value is None or isinstance(value, (str, int, float, bool)):
-                return
-            if isinstance(value, dict):
-                for item in value.values():
-                    walk(item)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    walk(item)
-                return
-
-            value_id = id(value)
-            if value_id in visited:
-                return
-            visited.add(value_id)
-
-            if hasattr(value, "body") and hasattr(value, "parameters"):
-                functions.append(value)
-
-            if hasattr(value, "__dict__"):
-                for child in vars(value).values():
-                    walk(child)
-
-        walk(root)
-        return functions
+        return [
+            value
+            for value in walk_ast_values(root)
+            if hasattr(value, "body") and hasattr(value, "parameters")
+        ]
 
     def concrete_function_prepass_list(self, root):
         """Return concrete functions, replacing generic definitions with emissions."""
@@ -24554,6 +24543,9 @@ class VulkanSPIRVCodeGen(
 
             result = self.inline_function_body(function_node)
             write_back_swizzle_reference_bindings(self, prepared_bindings)
+            for binding in prepared_bindings:
+                if VALUE_RESULT_WRITE_BACK in binding:
+                    write_back_value_result_binding(self, binding)
             if result is not None:
                 return result
             return self.default_value_for_function(function_node)
@@ -24585,7 +24577,10 @@ class VulkanSPIRVCodeGen(
             function_node, call_args
         ):
             param_name = getattr(param, "name", f"param{index}")
-            if not self.function_parameter_has_reachable_use(function_node, param_name):
+            if (
+                not self.function_parameter_has_reachable_use(function_node, param_name)
+                and value_result_qualifier(self, param) != "inout"
+            ):
                 if not self.side_effect_free_call_argument(arg):
                     self.process_call_argument(func_name, arg, index)
                 continue
@@ -24689,7 +24684,15 @@ class VulkanSPIRVCodeGen(
                         ),
                     )
                 prepared.append(
-                    {
+                    prepare_value_result_binding(
+                        self,
+                        param,
+                        param_name,
+                        pointer_arg,
+                        source_value_type,
+                        param_value_type,
+                    )
+                    or {
                         "kind": "reference",
                         "name": param_name,
                         "value": pointer_arg,
@@ -31434,6 +31437,17 @@ class VulkanSPIRVCodeGen(
             # SPV_KHR_multiview: core in SPIR-V 1.3, an extension before it.
             self.require_capability("MultiView")
             self.require_extension("SPV_KHR_multiview")
+        elif builtin_name in {
+            "Layer",
+            "ViewportIndex",
+        } and self.current_stage_builtin_execution_model() in {
+            "Vertex",
+            "TessellationEvaluation",
+        }:
+            # SPV_EXT_shader_viewport_index_layer lets these stages write both, as glslang declares them for
+            # GL_ARB_shader_viewport_layer_array (SPIR-V section 3.21, BuiltIn).
+            self.require_capability("ShaderViewportIndexLayerEXT")
+            self.require_extension("SPV_EXT_shader_viewport_index_layer")
         elif builtin_name == "ViewportIndex":
             self.require_capability("MultiViewport")
         elif (
