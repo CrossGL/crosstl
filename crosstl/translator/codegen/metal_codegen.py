@@ -414,6 +414,11 @@ from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
+from .metal_entry_return import (
+    metal_entry_return_attribute,
+    metal_entry_return_semantic_key,
+    refuse_unreturnable_metal_entry_semantic,
+)
 from .metal_exact_lookups import (
     METAL_MATRIX_ORDER_ATTRIBUTES,
     metal_semantic_index,
@@ -6065,6 +6070,22 @@ class MetalCodeGen(
             self.validate_function_return_semantic_type(
                 func, raw_return_type, shader_type
             )
+            if (
+                return_type != "void"
+                and str(raw_return_type) not in self.structs_by_name
+            ):
+                return_semantic = self.function_return_semantic(func)
+                refuse_unreturnable_metal_entry_semantic(
+                    self,
+                    func,
+                    shader_type,
+                    return_semantic,
+                    metal_entry_return_semantic_key(
+                        self, func, return_semantic, shader_type
+                    ),
+                    return_type,
+                    in_structure=bool(stage_output_parameters),
+                )
             if stage_output_parameters and return_type != "void":
                 stage_output_parameters.append(
                     self.metal_stage_return_value_output(
@@ -7787,6 +7808,8 @@ class MetalCodeGen(
             location = frag_data_attachment_index(func)
             if location is not None:
                 attribute = f" [[color({location})]]"
+        if attribute is None and semantic is not None and shader_type == "vertex":
+            attribute = metal_varying_attribute(self, func, semantic)
         if attribute is None and semantic is not None:
             attribute = self.map_semantic(semantic)
         if not attribute:
@@ -7883,7 +7906,9 @@ class MetalCodeGen(
         self, func, raw_return_type, mapped_return_type, stage_name, function_name
     ):
         semantic = self.function_return_semantic(func)
-        metal_semantic = self.canonical_metal_semantic(semantic)
+        metal_semantic = metal_entry_return_semantic_key(
+            self, func, semantic, stage_name
+        )
         # MSL has no attribute on a return value, so an invariant position is returned through a structure.
         invariant_attr = metal_invariant_attribute_suffix(self, func, semantic)
         if not invariant_attr and not self.function_return_semantic_requires_wrapper(
@@ -7903,7 +7928,10 @@ class MetalCodeGen(
             "field_type": mapped_return_type,
             "field_name": self.return_wrapper_field_name(semantic, metal_semantic),
             "source_type": raw_return_type,
-            "semantic_attr": self.map_semantic(semantic) + invariant_attr,
+            "semantic_attr": (
+                metal_entry_return_attribute(self, semantic, metal_semantic)
+                + invariant_attr
+            ),
         }
 
     def function_return_semantic_requires_wrapper(self, semantic, metal_semantic):
@@ -7965,7 +7993,9 @@ class MetalCodeGen(
                 f"return semantic '{semantic}' with void return type"
             )
 
-        metal_semantic = self.canonical_metal_semantic(semantic)
+        metal_semantic = metal_entry_return_semantic_key(
+            self, func, semantic, stage_name
+        )
         self.validate_function_return_semantic_stage(
             stage_name, semantic, metal_semantic
         )

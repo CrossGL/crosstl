@@ -666,25 +666,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             "SV_IsFrontFace": "gl_FrontFacing",
             "SV_SampleIndex": "gl_SampleID",
             "SV_Barycentrics": "gl_BaryCoordEXT",
-            # Fragment outputs
-            "SV_Target": "Out_Color",
-            "SV_Target0": "Out_Color0",
-            "SV_Target1": "Out_Color1",
-            "SV_Target2": "Out_Color2",
-            "SV_Target3": "Out_Color3",
-            "SV_Target4": "Out_Color4",
-            "SV_Target5": "Out_Color5",
-            "SV_Target6": "Out_Color6",
-            "SV_Target7": "Out_Color7",
-            "SV_Depth": "Out_Depth",
-            "SV_Depth0": "Out_Depth0",
-            "SV_Depth1": "Out_Depth1",
-            "SV_Depth2": "Out_Depth2",
-            "SV_Depth3": "Out_Depth3",
-            "SV_Depth4": "Out_Depth4",
-            "SV_Depth5": "Out_Depth5",
-            "SV_Depth6": "Out_Depth6",
-            "SV_Depth7": "Out_Depth7",
+            # Fragment outputs take the CrossGL spellings the HLSL import gives them: SV_Target is gl_FragColor,
+            # SV_Target<N> is gl_FragData[N] (map_semantic) and SV_Depth is gl_FragDepth.
+            "SV_Target": "gl_FragColor",
+            "SV_Depth": "gl_FragDepth",
             # SV_Coverage is also a fragment input, handled contextually
             # for parameters in map_semantic.
             "SV_Coverage": "gl_SampleMask",
@@ -3868,13 +3853,17 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             target_match = re.fullmatch(r"SV_TARGET(\d*)", str(semantic).upper())
             if target_match:
                 target_index = target_match.group(1)
-                mapped_semantic = f"Out_Color{target_index}"
+                mapped_semantic = (
+                    f"gl_FragData[{int(target_index)}]"
+                    if target_index
+                    else "gl_FragColor"
+                )
         if mapped_semantic is None:
             depth_match = re.fullmatch(
                 r"SV_DEPTH(?:GREATEREQUAL|LESSEQUAL)?", str(semantic).upper()
             )
             if depth_match:
-                mapped_semantic = "Out_Depth"
+                mapped_semantic = "gl_FragDepth"
         if mapped_semantic is None:
             for hlsl_prefix, crossgl_semantic in (
                 ("SV_CLIPDISTANCE", "gl_ClipDistance"),

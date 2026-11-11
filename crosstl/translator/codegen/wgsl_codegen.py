@@ -8265,7 +8265,7 @@ class WGSLCodeGen(
         ``direction`` is ``"target"`` for a fragment output, whose ``COLORn`` names colour attachment ``n``.
         """
         key = self.semantic_key(semantic)
-        # The Slang importer spells SV_Target<n> as Out_Color<n>.
+        # Out_Color<n>, an older spelling of SV_Target<n>, names attachment n too.
         target = re.fullmatch(r"(?:sv_target|gl_fragcolor|out_color)(\d*)", key)
         if target is None and direction == "target":
             target = re.fullmatch(r"color(\d*)", key)

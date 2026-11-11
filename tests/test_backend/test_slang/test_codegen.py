@@ -738,7 +738,7 @@ def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
     generated_code = generate_code(ast)
 
     assert "vec4 position @ gl_Position;" in generated_code
-    assert "vec4 fragmentMain(VertexOutput input) @ Out_Color" in generated_code
+    assert "vec4 fragmentMain(VertexOutput input) @ gl_FragColor" in generated_code
     assert "@ SV_POSITION" not in generated_code
     assert "@ SV_TARGET" not in generated_code
     cgl_translator.parse(generated_code)
@@ -1018,10 +1018,10 @@ def test_target_and_depth_system_semantics_codegen_canonicalizes_dynamic_variant
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 colorMain(vec2 uv @ TexCoord0) @ Out_Color8" in generated_code
-    assert "float depthMain() @ Out_Depth" in generated_code
-    assert "out float depth @ Out_Depth" in generated_code
-    assert "out vec4 color @ Out_Color9" in generated_code
+    assert "vec4 colorMain(vec2 uv @ TexCoord0) @ gl_FragData[8]" in generated_code
+    assert "float depthMain() @ gl_FragDepth" in generated_code
+    assert "out float depth @ gl_FragDepth" in generated_code
+    assert "out vec4 color @ gl_FragData[9]" in generated_code
     assert "@ SV_TARGET8" not in generated_code
     assert "@ SV_TARGET9" not in generated_code
     assert "@ SV_DEPTHGREATEREQUAL" not in generated_code
@@ -1091,7 +1091,7 @@ def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ Out_Color" in generated_code
+    assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ gl_FragColor" in generated_code
     assert (
         "vec4 vertexMain(vec3 position @ in_Position) @ gl_Position" in generated_code
     )
@@ -1144,7 +1144,7 @@ def test_entry_parameter_storage_qualifiers_codegen_matches_directx_signature_sh
     generated_code = generate_code(ast)
 
     assert (
-        "void fragmentMain(in vec2 uv @ TexCoord0, out vec4 color @ Out_Color0)"
+        "void fragmentMain(in vec2 uv @ TexCoord0, out vec4 color @ gl_FragData[0])"
         in generated_code
     )
     cgl_translator.parse(generated_code)

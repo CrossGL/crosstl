@@ -2440,7 +2440,7 @@ EXTERNAL_FIXTURES = [
         ),
         "crossgl": True,
         "contains": [
-            "vec4 main(Params p @register(b1)) @ Out_Color",
+            "vec4 main(Params p @register(b1)) @ gl_FragColor",
             "return vec4(g_params.x + p.x, 0, 0, 0);",
         ],
         "not_contains": [

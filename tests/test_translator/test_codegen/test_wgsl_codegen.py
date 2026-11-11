@@ -766,7 +766,7 @@ def test_wgsl_codegen_strips_io_attributes_from_helper_parameters():
 
 
 def test_wgsl_codegen_locates_slang_importer_target_semantics(tmp_path):
-    # The Slang importer spells SV_Target<n> as Out_Color<n>; n is the colour
+    # Out_Color<n> is an older spelling of SV_Target<n>; n is the colour
     # attachment, whatever the declaration order.
     struct_shader = """
     shader WGSLSlangTargetMembers {
