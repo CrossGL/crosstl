@@ -12,7 +12,8 @@ HLSL, Slang, WGSL and Rust have no runtime on the coverage hosts, so both probes
 language's reference compiler (DXC, slangc, naga or rust-gpu) writes for them, on the harness's Vulkan runtime. The
 two go through the same compiler, so a difference between them comes from the translation. A probe the compiler cannot
 lower keeps its validation result, and so does one whose SPIR-V declares a 16-bit float, because lavapipe skips
-rounding through it.
+rounding through it. rust-gpu leaves out a storage buffer the probe never reads, so a Rust probe of a call that takes
+no argument binds only its output and keeps its validation result too.
 DXC declares a counter buffer for each RWStructuredBuffer a function takes as a parameter; the source declares no such
 buffer, so one that nothing uses is left out of the SPIR-V instead of asking the host for a binding.
 The harness assembles and validates that SPIR-V for the oldest Vulkan version whose SPIR-V version is at least the
