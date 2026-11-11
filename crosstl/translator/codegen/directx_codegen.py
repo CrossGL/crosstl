@@ -2821,6 +2821,7 @@ class HLSLCodeGen(
         self.hlsl_hoisted_groupshared_declarations = []
         self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_constants_by_declaration = {}
+        self.hlsl_hoisted_groupshared_scope_names_by_declaration = {}
         self.hlsl_hoisted_groupshared_function_names_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
         self.hlsl_compute_num_workgroups_uniform = None
@@ -4269,6 +4270,7 @@ class HLSLCodeGen(
         self.hlsl_hoisted_groupshared_declarations = []
         self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_constants_by_declaration = {}
+        self.hlsl_hoisted_groupshared_scope_names_by_declaration = {}
         self.hlsl_hoisted_groupshared_function_names_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
         self.hlsl_compute_num_workgroups_uniform = None
@@ -16306,7 +16308,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         name = getattr(root, "name", None)
         if depth < 2 or not isinstance(root, (IdentifierNode, VariableNode)):
             return False
-        alias = self.current_identifier_aliases.get(name, name)
+        # A hoisted groupshared array is read through the alias its activation records; the alias is a fresh
+        # global name, so an identifier without one is not a hoisted array.
+        alias = self.current_identifier_aliases.get(name)
         if alias not in self.hlsl_hoisted_groupshared_aliases_by_declaration.values():
             return False
         element_type, array_suffix = split_array_type_suffix(
@@ -39336,13 +39340,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ast, target_stage
         )
 
+        scope_names_by_declaration = {}
         for func in emitted_functions:
-            constants_by_declaration.update(
-                self.collect_hlsl_groupshared_declaration_constants(func)
+            declaration_constants = self.collect_hlsl_groupshared_declaration_constants(
+                func
             )
+            constants_by_declaration.update(declaration_constants)
+            scope_names = frozenset(self.function_scope_variable_types(func))
+            for declaration_id in declaration_constants:
+                scope_names_by_declaration[declaration_id] = scope_names
 
         self.hlsl_hoisted_groupshared_constants_by_declaration = (
             constants_by_declaration
+        )
+        self.hlsl_hoisted_groupshared_scope_names_by_declaration = (
+            scope_names_by_declaration
         )
         global_aliases = {}
         for node in emitted_stage_groupshared:
@@ -39507,16 +39519,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return declared_type_text
 
         visible_constants = self.hlsl_hoisted_groupshared_constants_by_declaration.get(
-            id(node), {}
+            id(node)
         )
-        if not visible_constants:
+        if visible_constants is None:
+            # A stage-scope declaration is already at global scope, where its extent was written.
             return declared_type_text
-
-        resolved_suffix = re.sub(
-            r"\b[A-Za-z_]\w*\b",
-            lambda match: str(visible_constants.get(match.group(0), match.group(0))),
-            array_suffix,
+        scope_names = self.hlsl_hoisted_groupshared_scope_names_by_declaration.get(
+            id(node), frozenset()
         )
+
+        def resolve(match):
+            name = match.group(0)
+            if name in visible_constants:
+                return str(visible_constants[name])
+            if name in scope_names:
+                # Moved to global scope, the extent would name the global of that name, or nothing.
+                return self.refuse_lowering(
+                    f"groupshared array '{getattr(node, 'name', '')}' moves to global scope, but its "
+                    f"extent names '{name}', a parameter or local whose value is not a known integer constant",
+                    name,
+                )
+            # Any other name is declared at global scope, which the hoisted declaration still sees.
+            return name
+
+        resolved_suffix = re.sub(r"\b[A-Za-z_]\w*\b", resolve, array_suffix)
         return f"{base_type}{resolved_suffix}"
 
     def activate_hlsl_hoisted_groupshared_declaration(self, node):
@@ -41471,7 +41497,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         if target_name is not None:
             return target_name
-        return self.hlsl_function_name_aliases.get(name, name)
+        return self.hlsl_function_spelling(name)
 
     def hlsl_decoded_materialized_name(self, name):
         if not isinstance(name, str) or "_u" not in name:
@@ -41499,7 +41525,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if name in self.HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES:
             return "NonUniformResourceIndex"
         name = self.hlsl_materialized_function_name(name)
-        return self.hlsl_function_name_aliases.get(name, name)
+        return self.hlsl_function_spelling(name)
+
+    def hlsl_function_spelling(self, name):
+        """The HLSL name of function ``name``: the name the generator gave it, or its own.
+
+        ``hlsl_function_name_aliases`` holds only the user functions the generator renamed (an HLSL keyword, a
+        clash with an intrinsic or an overload). Every other callee is written as spelled: it is an HLSL intrinsic
+        or a function the program declares, and ``refuse_undeclared_functions`` and ``written_function_names``
+        refuse any other name before a program is returned.
+        """
+        if name in self.hlsl_function_name_aliases:
+            return self.hlsl_function_name_aliases[name]
+        return name
 
     def hlsl_dependency_function_call_name(self, call):
         return self.hlsl_function_call_name(self.function_call_name(call))
@@ -48143,9 +48181,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             generated_args.append(name)
 
         for builtin_name in self.required_hlsl_fragment_builtin_names(func_name):
-            generated_args.append(
-                self.current_identifier_aliases.get(builtin_name, builtin_name)
-            )
+            argument = self.current_identifier_aliases.get(builtin_name)
+            if argument is None:
+                # The caller has no parameter or local bound to the built-in (a vertex or compute caller, or a
+                # helper whose built-in has no HLSL parameter type), and its CrossGL name is not an HLSL value.
+                argument = self.refuse_lowering(
+                    f"'{func_name}' reads fragment built-in '{builtin_name}', which its caller "
+                    "has no HLSL value for",
+                    builtin_name,
+                )
+            generated_args.append(argument)
 
         return generated_args
 

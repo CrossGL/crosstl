@@ -80,6 +80,15 @@ from .value_shapes import HLSLValueShapeMixin
 _SCOPED_BUILTIN_TYPE_NAMES = frozenset({"dx::HitObject"})
 
 
+def _renamed(renames, name):
+    """``name`` as the program spells it: its new name when ``renames`` (which holds only the declarations this
+    importer renamed, to avoid a CrossGL keyword, a scope separator or a clash) renames it, else unchanged.
+    """
+    if name in renames:
+        return renames[name]
+    return name
+
+
 class HLSLSelectOverloadError(ValueError):
     """Reject select calls whose source overload ownership is unresolved."""
 
@@ -1635,7 +1644,7 @@ class HLSLToCrossGLConverter(
             return name
         if name in self.current_identifier_renames:
             return self.current_identifier_renames[name]
-        rendered = self.global_identifier_renames.get(name, name)
+        rendered = _renamed(self.global_identifier_renames, name)
         if self.is_opaque_template_value_path(rendered):
             return self.sanitize_scoped_identifier_name(rendered)
         return rendered
@@ -1738,7 +1747,7 @@ class HLSLToCrossGLConverter(
             if isinstance(name, str) and name
         }
         used_names = {
-            self.function_identifier_renames.get(name, name) for name in declared_names
+            _renamed(self.function_identifier_renames, name) for name in declared_names
         }
         renames = {}
         for node in getattr(ast, "global_variables", []) or []:
@@ -1757,12 +1766,23 @@ class HLSLToCrossGLConverter(
     def render_function_identifier(self, name):
         if not isinstance(name, str):
             return name
-        return self.function_identifier_renames.get(name, name)
+        return _renamed(self.function_identifier_renames, name)
 
     def render_type_identifier(self, name):
         if not isinstance(name, str):
             return name
-        return self.type_identifier_renames.get(name, name)
+        return _renamed(self.type_identifier_renames, name)
+
+    def crossgl_intrinsic_name(self, name):
+        """The CrossGL name of callee ``name``: the CrossGL spelling of an HLSL intrinsic ``function_map`` renames.
+
+        Any other callee is carried as written: a function or type the program declares, a constructor, or an HLSL
+        built-in CrossGL spells the same way. The IR accepts HLSL built-ins as plain calls for the generators to
+        map or refuse, and ``declared_functions`` refuses any other name (``builtin_function_names``).
+        """
+        if name in self.function_map:
+            return self.function_map[name]
+        return name
 
     def normalize_hlsl_intrinsic_name(self, name):
         """Drop HLSL's intrinsic namespace so builtin lowering still applies."""
@@ -5559,8 +5579,9 @@ class HLSLToCrossGLConverter(
             if func_name != "round" or not self.source_function_accepts_argument_count(
                 func_name, len(expr.args)
             ):
-                func_name = self.function_map.get(func_name, func_name)
-            func_name = self.interlocked_map.get(func_name, func_name)
+                func_name = self.crossgl_intrinsic_name(func_name)
+            if func_name in self.interlocked_map:
+                func_name = self.interlocked_map[func_name]
             integer_shape = source_integer_shape(self.resolve_integer_alias(func_name))
             if (
                 integer_shape is not None

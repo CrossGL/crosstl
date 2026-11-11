@@ -252,3 +252,93 @@ def test_specialization_constant_on_a_resource_parameter_is_not_a_semantic():
         """)
     assert "function_constant" not in code
     assert "StructuredBuffer<uint> left : register(t3)" in code
+
+
+def test_helpers_receive_the_fragment_built_ins_they_read():
+    source = """
+    shader S {
+        float shade() { return gl_FragCoord.x * 0.5; }
+        float twice() { return shade() * 2.0; }
+        fragment {
+            vec4 main() @gl_FragColor { return vec4(twice(), 0.0, 0.0, 1.0); }
+        }
+    }
+    """
+    code = _hlsl(source)
+    assert "return (shade(_crossglFragCoord) * 2.0);" in code
+    assert "float4 PSMain(float4 _crossglFragCoord : SV_Position)" in code
+    assert "twice(_crossglFragCoord)" in code
+
+
+@pytest.mark.parametrize(
+    ("stage", "entry"),
+    [
+        ("compute", "void main() { float v = shade(); }"),
+        ("vertex", "vec4 main() @gl_Position { return vec4(shade()); }"),
+    ],
+)
+def test_fragment_built_in_without_a_value_in_the_caller_is_refused(stage, entry):
+    # The CrossGL name of the built-in used to be passed as the argument: `shade(gl_FragCoord)`.
+    source = f"""
+    shader S {{
+        float shade() {{ return gl_FragCoord.x * 0.5; }}
+        {stage} {{
+            {entry}
+        }}
+    }}
+    """
+    message = refused(DirectXLoweringRefused, _hlsl, source)
+    assert "'shade' reads fragment built-in 'gl_FragCoord'" in message
+
+
+def test_renamed_user_functions_are_declared_and_called_by_one_name():
+    source = """
+    shader S {
+        float line(float x) { return x * 2.0; }
+        float half3(float x) { return x + 1.0; }
+        fragment {
+            vec4 main() @gl_FragColor { return vec4(line(1.0), half3(2.0), 0.0, 1.0); }
+        }
+    }
+    """
+    code = _hlsl(source)
+    assert "float line_(float x) {" in code and "float half3_(float x) {" in code
+    assert "return float4(line_(1.0), half3_(2.0), 0.0, 1.0);" in code
+
+
+_HOISTED_TILE = """
+#include <metal_stdlib>
+using namespace metal;
+constant int N = 2;
+kernel void k(device float* out [[buffer(0)]],
+              uint tid [[thread_position_in_threadgroup]]) {{
+    {local}
+    threadgroup float tile[N];
+    tile[tid] = 1.0;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    out[tid] = tile[0];
+}}
+"""
+
+
+def _hoisted_tile(tmp_path, local):
+    import crosstl
+
+    path = tmp_path / "tile.metal"
+    path.write_text(_HOISTED_TILE.format(local=local))
+    return crosstl.translate(str(path), backend="directx")
+
+
+def test_hoisted_groupshared_extent_keeps_the_global_it_names(tmp_path):
+    assert "groupshared float k_tile[N];" in _hoisted_tile(tmp_path, "")
+
+
+def test_hoisted_groupshared_extent_takes_a_local_constant_value(tmp_path):
+    assert "groupshared float k_tile[4];" in _hoisted_tile(tmp_path, "const int N = 4;")
+
+
+def test_hoisted_groupshared_extent_naming_an_unknown_local_is_refused(tmp_path):
+    # Valid Metal the generator cannot fold. At global scope `N` names the global 2, not the local 4; the
+    # extent used to be written unchanged, so threads 2 and 3 wrote past a two-element array.
+    with pytest.raises(DirectXLoweringRefused, match="its extent names 'N'"):
+        _hoisted_tile(tmp_path, "constexpr int N = int(4.0f);")
