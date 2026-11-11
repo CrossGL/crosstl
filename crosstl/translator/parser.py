@@ -6795,7 +6795,6 @@ class Parser:
 
             self.eat(token_type)
 
-
     def create_empty_shader(self):
         """Create an empty shader used by parser error recovery."""
         return ShaderNode(
