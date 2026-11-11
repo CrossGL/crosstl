@@ -60,6 +60,17 @@ from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
+from .rust_exact_lookups import (
+    RUST_PRIMITIVE_SOURCE_TYPES,
+    RUST_RAY_STAGE_METADATA_NAMES,
+    RUST_RAY_TRACING_INTRINSICS,
+    call_names_resolving_to,
+    rust_foreign_call_reason,
+    rust_generic_template_reason,
+    rust_operator,
+    rust_resource_kind_of_spelling,
+    rust_unmapped_semantic_reason,
+)
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
 from .sampler_pairs import canonicalize_separate_textures
@@ -1035,14 +1046,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         }
 
     def rust_ray_stage_metadata_name(self, shader_type):
-        return {
-            "ray_any_hit": "any_hit",
-            "ray_callable": "callable",
-            "ray_closest_hit": "closest_hit",
-            "ray_generation": "ray_generation",
-            "ray_intersection": "intersection",
-            "ray_miss": "miss",
-        }.get(shader_type, shader_type)
+        name = RUST_RAY_STAGE_METADATA_NAMES.get(shader_type)
+        if name is None:
+            return self.refuse_lowering(
+                f"ray-tracing stage {shader_type}: not a CrossGL ray-tracing stage",
+                str(shader_type),
+            )
+        return name
 
     def rust_mesh_stage_names(self):
         return {"amplification", "mesh", "object", "task"}
@@ -3805,52 +3815,8 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return nodes
 
     def map_type_to_rust(self, type_str):
-        """Enhanced type mapping for Rust."""
-        matrix_alias = self.normalize_hlsl_matrix_type_name(type_str)
-        if matrix_alias != str(type_str):
-            return self.map_type(matrix_alias)
-
-        mapped_type = self.map_type(type_str)
-        if mapped_type != type_str:
-            return mapped_type
-
-        if type_str.startswith("float") and len(type_str) > 5:
-            size = type_str[5:]
-            if size.isdigit():
-                return f"Vec{size}<f32>"
-        elif type_str.startswith("int") and len(type_str) > 3:
-            size = type_str[3:]
-            if size.isdigit():
-                return f"Vec{size}<i32>"
-
-        # Standard type mapping
-        type_map = {
-            "void": "()",
-            "bool": "bool",
-            "int": "i32",
-            "uint": "u32",
-            "float": "f32",
-            "double": "f64",
-            "vec2": "Vec2<f32>",
-            "vec3": "Vec3<f32>",
-            "vec4": "Vec4<f32>",
-            "ivec2": "Vec2<i32>",
-            "ivec3": "Vec3<i32>",
-            "ivec4": "Vec4<i32>",
-            "uvec2": "Vec2<u32>",
-            "uvec3": "Vec3<u32>",
-            "uvec4": "Vec4<u32>",
-            "mat2": "Mat2<f32>",
-            "mat3": "Mat3<f32>",
-            "mat4": "Mat4<f32>",
-            "float2": "Vec2<f32>",
-            "float3": "Vec3<f32>",
-            "float4": "Vec4<f32>",
-        }
-        mapped_type = type_map.get(type_str, type_str)
-        if mapped_type != type_str:
-            return self.qualify_colliding_runtime_type(mapped_type)
-        return mapped_type
+        """The Rust spelling of a constant-buffer member type: the generator's one type mapping."""
+        return self.map_type(type_str)
 
     def generate_cbuffers(self, ast):
         code = ""
@@ -5135,8 +5101,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if self.is_user_defined_function(func_name):
             return
 
-        mapped_name = self.function_map.get(func_name, func_name)
-        if mapped_name != "sqrt":
+        if func_name not in call_names_resolving_to(self.function_map, {"sqrt"}):
             return
 
         arguments = getattr(node, "arguments", []) or []
@@ -5542,7 +5507,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
     def wave_op_result_type(self, operation, arguments):
         """Infer the CrossGL result type for a Rust subgroup helper."""
-        helper_name = self.wave_op_map.get(operation, operation)
+        helper_name = self.wave_op_map.get(operation)
+        if helper_name is None:
+            # generate_wave_op_expression refuses the operation; it has no result type.
+            return None
         arg_types = [self.expression_result_type(arg) for arg in arguments or []]
         return self.wave_helper_result_type(helper_name, arg_types)
 
@@ -9008,9 +8976,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                     self.expression_result_type(operand_expr)
                 )
                 return f"{operand} {assignment_op} {increment}"
-            if raw_op in {"~", "BITWISE_NOT"}:
+            if op == "~":
                 operand = self.generate_expression(operand_expr)
                 return f"(!{operand})"
+            if op == "+":
+                # Rust has no unary plus; +x is x.
+                return f"({self.generate_expression(operand_expr)})"
             bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
             if bool_vector_not is not None:
                 return bool_vector_not
@@ -9194,7 +9165,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
 
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
             callable_name = self.rust_imported_math_callable_name(func_name or callee)
-            return f"{self.rust_callable_name(callable_name)}({args_str})"
+            call = f"{self.rust_callable_name(callable_name)}({args_str})"
+            foreign_call = rust_foreign_call_reason(self, original_func_name, func_name)
+            if foreign_call is not None:
+                return self.refuse_lowering(foreign_call, call)
+            return call
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             return self.generate_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
@@ -9514,6 +9489,16 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             or func_name in self.user_function_names
         )
 
+    def rust_runtime_function_names(self):
+        """Functions of the runtime ``math`` module and the names ``function_map`` renames calls to."""
+        names = self.__dict__.get("_rust_runtime_function_names")
+        if names is None:
+            names = frozenset(self.rust_imported_math_function_names()) | frozenset(
+                name for name in self.function_map.values() if isinstance(name, str)
+            )
+            self.__dict__["_rust_runtime_function_names"] = names
+        return names
+
     def rust_imported_math_function_names(self):
         return {
             "abs",
@@ -9628,16 +9613,18 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         )
 
     def generate_ray_tracing_call_expression(self, operation, arguments):
-        if operation not in {
-            "TraceRay",
-            "CallShader",
-            "ReportHit",
-            "IgnoreHit",
-            "AcceptHitAndEndSearch",
-        }:
+        intrinsic = RUST_RAY_TRACING_INTRINSICS.get(operation)
+        if intrinsic is None:
             return None
 
-        func_name = self.function_map.get(operation, operation)
+        func_name, argument_counts = intrinsic
+        if len(arguments or []) not in argument_counts:
+            counts = " or ".join(str(count) for count in argument_counts)
+            return self.refuse_lowering(
+                f"{operation} with {len(arguments or [])} arguments: the Rust runtime's "
+                f"{func_name} takes {counts}",
+                f"{func_name}()",
+            )
         args = ", ".join(self.generate_expression(arg) for arg in arguments or [])
         if operation == "TraceRay" and len(arguments or []) == 11:
             generated_args = [self.generate_expression(arg) for arg in arguments]
@@ -10358,7 +10345,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             threshold, sampler_name = sampler_mapping
             if has_sampler or (arg_count and arg_count >= threshold):
                 return sampler_name
-        return self.function_map.get(func_name, func_name)
+        mapped_name = self.function_map.get(func_name)
+        if mapped_name is not None:
+            return mapped_name
+        # Not renamed: a constructor, a declared function or a runtime function spelled as in CrossGL. The call
+        # branch refuses a built-in of another language that reaches the output this way.
+        return func_name
 
     def call_has_explicit_sampler_argument(self, arguments):
         if not arguments or len(arguments) < 2:
@@ -10600,18 +10592,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             base_type, sizes = array_parts
             return self.format_c_array_type(base_type, sizes)
 
-        rust_scalar_aliases = {
-            "i16": "short",
-            "u16": "ushort",
-            "i32": "int",
-            "u32": "uint",
-            "i64": "long",
-            "u64": "ulong",
-            "f16": "half",
-            "f32": "float",
-            "f64": "double",
-        }
-        return rust_scalar_aliases.get(type_name, type_name)
+        source_type = RUST_PRIMITIVE_SOURCE_TYPES.get(type_name)
+        if source_type is not None:
+            return source_type
+        # A declared structure, enum or generic type is spelled the same in Rust and CrossGL.
+        return type_name
 
     def rust_array_type_parts(self, type_name):
         type_name = self.type_name_string(type_name)
@@ -12376,7 +12361,14 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return name in self.lazy_static_names and name not in self.local_variable_names
 
     def static_symbol_name(self, name):
-        return self.static_symbol_names.get(name, name)
+        symbol = self.static_symbol_names.get(name)
+        if symbol is None:
+            # collect_static_variable_names names every static before generation; a static it missed would be
+            # declared and referenced under different names.
+            return self.refuse_lowering(
+                f"static {name}: not collected before generation", str(name)
+            )
+        return symbol
 
     def rust_identifier(self, name):
         """Return a Rust-safe value/field identifier for source-level names."""
@@ -13651,17 +13643,12 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         }:
             return "buffer"
 
-        mapped_type = self.type_mapping.get(base_name, base_name)
+        mapped_type = self.type_mapping.get(base_name)
+        if mapped_type is None:
+            # Already a Rust runtime spelling, or a type that is not a resource.
+            return rust_resource_kind_of_spelling(base_name)
         mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
-        if mapped_base == "RayTracingAccelerationStructure":
-            return "acceleration_structure"
-        if mapped_base == "Sampler":
-            return "sampler"
-        if mapped_base.startswith(("Image", "IImage", "UImage")):
-            return "image"
-        if mapped_base.startswith(("Texture", "DepthTexture")):
-            return "texture"
-        return None
+        return rust_resource_kind_of_spelling(mapped_base)
 
     def rust_resource_binding_namespace(self, kind):
         if kind in {"cbuffer", "glsl_buffer_block"}:
@@ -14579,7 +14566,13 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         if not mapped_args:
             return None
 
-        mapped_base = self.type_mapping.get(base_type, base_type)
+        mapped_base = self.type_mapping.get(base_type)
+        if mapped_base is None:
+            reason = rust_generic_template_reason(base_type)
+            if reason is not None:
+                return self.refuse_lowering(reason, type_name)
+            # A user or Rust template (Option, Result, a declared generic structure) is spelled the same.
+            mapped_base = base_type
         if "<" in mapped_base:
             mapped_base = mapped_base.split("<", 1)[0]
         return f"{mapped_base}<{', '.join(mapped_args)}>"
@@ -14615,44 +14608,17 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         return rust_type.replace("<", "::<", 1)
 
     def map_operator(self, op):
-        op_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "BITWISE_OR": "|",
-            "BITWISE_AND": "&",
-            "LESS_THAN": "<",
-            "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_AND": "&=",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "AND": "&&",
-            "OR": "||",
-            "EQUALS": "=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "LOGICAL_AND": "&&",
-            "LOGICAL_OR": "||",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-            "MOD": "%",
-            "NOT": "!",
-        }
-        return op_map.get(op, op)
+        """``op`` spelled for Rust; an operator CrossGL does not define is refused."""
+        return rust_operator(op)
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to the Rust backend attribute name."""
-        if semantic:
-            return self.semantic_map.get(semantic, semantic)
-        return ""
+        if not semantic:
+            return ""
+        mapped = self.semantic_map.get(semantic)
+        if mapped is not None:
+            return mapped
+        reason = rust_unmapped_semantic_reason(semantic)
+        if reason is not None:
+            return self.refuse_lowering(reason, str(semantic))
+        return semantic
