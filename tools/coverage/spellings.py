@@ -482,6 +482,14 @@ OTHER_NAMES = {
         "WaveGetConvergedMulti": "WaveActiveBallot(true)",
         "WaveGetActiveMulti": "WaveActiveBallot(true)",
         "ReorderThread": "MaybeReorderThread",
+        # A rotation reads the value of the lane delta places up, wrapping within the wave or the cluster, as Slang
+        # writes it for CUDA (hlsl.meta.slang, WaveRotate, and slang-cuda-prelude.h, _slang_waveClusteredRotate).
+        "WaveRotate": (
+            "WaveReadLaneAt({0}, (WaveGetLaneIndex() + {1}) % WaveGetLaneCount())"
+        ),
+        "WaveClusteredRotate": (
+            "WaveReadLaneAt({0}, WaveGetLaneIndex() / {2} * {2} + (WaveGetLaneIndex() % {2} + {1}) % {2})"
+        ),
         "getRealtimeClockLow": "clockRealtime2x32EXT().x",
         "WorkgroupSize": "ivec3(gl_WorkGroupSize)",
         "unpackHalf2x16ToHalf": "f16vec2(unpackHalf2x16({}))",
@@ -523,6 +531,11 @@ OTHER_NAMES = {
         ),
         "atomic_fetch_sub_explicit": "atomicAdd({0}, -({1}))",
     },
+    # CUDA's fdivide and, without fast math, fdividef return a / b (__clang_cuda_math.h).
+    "cuda": {"fdivide": "({0} / {1})"},
+    # HIP's wall_clock64 reads the device's constant-rate counter (amd_device_functions.h), which is the device-scope
+    # clock GL_EXT_shader_realtime_clock's clockRealtimeEXT reads.
+    "hip": {"wall_clock64": "int64(clockRealtimeEXT())"},
     "mojo": {
         "count_leading_zeros": "clz",
         "count_trailing_zeros": "ctz",
