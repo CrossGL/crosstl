@@ -670,6 +670,8 @@ class WGSLCodeGen(
         "allmemorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
         "memorybarrier": ("storageBarrier", "textureBarrier", "workgroupBarrier"),
     }
+    WGSL_ACCESS_MODE_IDENTIFIERS = frozenset({"read", "write", "read_write"})
+    _used_access_mode_identifiers = frozenset()
     WGSL_RESERVED_IDENTIFIERS = {
         "NULL",
         "Self",
@@ -882,6 +884,7 @@ class WGSLCodeGen(
         self._uniform_scalar_array_wrappers = {}
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
+        self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
@@ -966,6 +969,7 @@ class WGSLCodeGen(
         self._uniform_scalar_array_wrappers = {}
         self._module_variable_types = {}
         self._module_storage_access_modes = {}
+        self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
@@ -1060,6 +1064,17 @@ class WGSLCodeGen(
             if not generic_functions.is_generic(func)
         ]
 
+        self.collect_struct_type_metadata(structs)
+        self._struct_member_types.update(
+            self.builtin_option_specialization_member_types(
+                self._builtin_option_specializations
+            )
+        )
+        self._used_access_mode_identifiers = self.used_access_mode_identifiers(
+            global_variable_nodes,
+            stage_resource_parameters,
+            all_function_nodes,
+        )
         self.collect_identifier_metadata(
             structs,
             cbuffers,
@@ -1067,12 +1082,6 @@ class WGSLCodeGen(
             global_variable_nodes,
             stage_resource_parameters,
             concrete_helper_function_nodes,
-        )
-        self.collect_struct_type_metadata(structs)
-        self._struct_member_types.update(
-            self.builtin_option_specialization_member_types(
-                self._builtin_option_specializations
-            )
         )
         self.collect_cbuffer_member_identifier_metadata(cbuffers)
         self._cbuffer_member_accesses = self.cbuffer_member_accesses(cbuffers)
@@ -6655,6 +6664,54 @@ class WGSLCodeGen(
                 modes[parameter.name] = access
         return modes
 
+    def used_access_mode_identifiers(
+        self, global_variables, stage_resource_parameters, functions
+    ):
+        modes = set(
+            self.module_storage_access_modes(
+                global_variables, stage_resource_parameters
+            ).values()
+        )
+        for variable in global_variables:
+            qualifier_names = {
+                str(qualifier).lower()
+                for qualifier in getattr(variable, "qualifiers", []) or []
+            }
+            if (
+                not self.structured_buffer_access(getattr(variable, "var_type", None))
+                and not self.is_glsl_buffer_block_variable(variable)
+                and ("buffer" in qualifier_names or "storage" in qualifier_names)
+            ):
+                modes.add("read_write")
+        for function in functions:
+            for parameter in getattr(function, "parameters", []) or []:
+                if self.is_buffer_pointer_type(
+                    getattr(parameter, "param_type", None),
+                    getattr(parameter, "qualifiers", ()),
+                ):
+                    modes.add("read_write")
+        modes.update(
+            self.inferred_storage_texture_access_modes(
+                global_variables, stage_resource_parameters, functions
+            ).values()
+        )
+        for node in list(global_variables) + list(stage_resource_parameters):
+            type_name = self.resource_type_name(self.declared_resource_type(node)) or ""
+            if self.STORAGE_TEXTURE_DIMENSION_MAP.get(type_name) is None:
+                continue
+            explicit_access = explicit_image_access(
+                node, self.generate_attribute_argument
+            )
+            if explicit_access is not None:
+                modes.add(explicit_access)
+                continue
+            names = self.resource_qualifier_attribute_names(node)
+            if "constant" in names:
+                modes.add("read")
+            elif names & {"rw", "coherent"}:
+                modes.add("read_write")
+        return modes & self.WGSL_ACCESS_MODE_IDENTIFIERS
+
     def inferred_storage_texture_access_modes(
         self, global_variables, stage_resource_parameters, functions
     ):
@@ -8172,6 +8229,7 @@ class WGSLCodeGen(
         name = str(name)
         return (
             name in self.WGSL_RESERVED_IDENTIFIERS
+            or name in self._used_access_mode_identifiers
             or name == "_"
             or name.startswith("__")
         )
