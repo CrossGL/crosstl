@@ -9,6 +9,9 @@ import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
+from crosstl.translator.codegen.wgsl_comparison_samplers import (
+    WGSLComparisonSamplerUnsupportedError,
+)
 from crosstl.translator.codegen.wgsl_cube_texture_offsets import (
     WGSLCubeTextureOffsetUnsupportedError,
 )
@@ -3066,6 +3069,219 @@ def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_in_compute():
     assert raised.value.code == (
         "project.translate.wgsl-implicit-lod-stage-unsupported"
     )
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture():
+    shader = """
+    shader WGSLExplicitComparisonSamplerTexture {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(t, s, uv);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"texture\(\) on t: textureSample takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_lod():
+    shader = """
+    shader WGSLExplicitComparisonSamplerLod {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureLod(t, s, uv, 0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureLod\(\) on t: textureSampleLevel takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_offset():
+    shader = """
+    shader WGSLExplicitComparisonSamplerOffset {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureOffset(t, s, uv, ivec2(1, 1));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureOffset\(\) on t: textureSample takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_offset_bias():
+    shader = """
+    shader WGSLExplicitComparisonSamplerOffsetBias {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureOffset(t, s, uv, ivec2(1, 1), 0.5);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLTextureBiasUnsupportedError,
+        match=r"bias on t: textureSampleBias takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-texture-bias-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_in_compute():
+    shader = """
+    shader WGSLExplicitComparisonSamplerCompute {
+        sampler2D t;
+        comparison_sampler s;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer vec4* outp;
+            void main() {
+                outp[0] = texture(t, s, vec2(0.5));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"texture\(\) on t: textureSampleLevel takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_lod_offset():
+    shader = """
+    shader WGSLExplicitComparisonSamplerLodOffset {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureLodOffset(t, s, uv, 0.0, ivec2(1, 1));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureLodOffset\(\) on t: textureSampleLevel takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_grad():
+    shader = """
+    shader WGSLExplicitComparisonSamplerGrad {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGrad(t, s, uv, vec2(0.1, 0.1), vec2(0.2, 0.2));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureGrad\(\) on t: textureSampleGrad takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture_grad_offset():
+    shader = """
+    shader WGSLExplicitComparisonSamplerGradOffset {
+        sampler2D t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureGradOffset(t, s, uv, vec2(0.1, 0.1), vec2(0.2, 0.2), ivec2(1, 1));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        WGSLComparisonSamplerUnsupportedError,
+        match=r"textureGradOffset\(\) on t: textureSampleGrad takes a sampler, but s is a comparison sampler",
+    ) as raised:
+        WGSLCodeGen().generate(parse_shader(shader))
+
+    assert raised.value.code == "project.translate.wgsl-comparison-sampler-unsupported"
+    assert raised.value.target == "wgsl"
+
+
+def test_wgsl_codegen_explicit_non_comparison_sampler_preserves_wgsl_output(tmp_path):
+    shader = """
+    shader WGSLExplicitSamplerRegression {
+        sampler2D t;
+        sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(t, s, uv)
+                    + textureLod(t, s, uv, 0.0)
+                    + textureOffset(t, s, uv, ivec2(1, 1))
+                    + textureOffset(t, s, uv, ivec2(1, 1), 0.5)
+                    + textureLodOffset(t, s, uv, 0.0, ivec2(1, 1))
+                    + textureGrad(t, s, uv, vec2(0.1, 0.1), vec2(0.2, 0.2))
+                    + textureGradOffset(t, s, uv, vec2(0.1, 0.1), vec2(0.2, 0.2), ivec2(1, 1));
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+    assert "textureSample(t, s, uv)" in generated
+    assert "textureSampleLevel(t, s, uv, 0.0)" in generated
+    assert "textureSample(t, s, uv, vec2<i32>(1, 1))" in generated
+    assert "textureSampleBias(t, s, uv, 0.5, vec2<i32>(1, 1))" in generated
+    assert "textureSampleLevel(t, s, uv, 0.0, vec2<i32>(1, 1))" in generated
+    assert (
+        "textureSampleGrad(t, s, uv, vec2<f32>(0.1, 0.1), vec2<f32>(0.2, 0.2))"
+        in generated
+    )
+    assert (
+        "textureSampleGrad(t, s, uv, vec2<f32>(0.1, 0.1), vec2<f32>(0.2, 0.2), vec2<i32>(1, 1))"
+        in generated
+    )
+    validate_wgsl_with_naga(tmp_path, generated)
 
 
 def test_wgsl_codegen_lowers_sampled_texture_arrays_to_element_bindings():

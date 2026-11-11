@@ -94,6 +94,7 @@ from .wgsl_buffer_atomics import (
     WGSLCompareExchangeLoop,
 )
 from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
+from .wgsl_comparison_samplers import WGSLComparisonSamplerUnsupportedError
 from .wgsl_composite_conditionals import WGSLCompositeConditionalMixin
 from .wgsl_conditional_effects import WGSLConditionalEffectsMixin
 from .wgsl_cube_texture_offsets import (
@@ -5035,6 +5036,29 @@ class WGSLCodeGen(
                 function_name, self.generate_expression(texture_expr)
             )
 
+    def refuse_comparison_sampler(
+        self, sampler, function_name, texture, builtin_name, *, bias=False
+    ):
+        if not self.is_comparison_sampler_type(self.expression_type(sampler)):
+            return
+        sampler_name = self.generate_expression(sampler)
+        texture_name = (
+            texture if isinstance(texture, str) else self.generate_expression(texture)
+        )
+        if bias:
+            raise WGSLTextureBiasUnsupportedError(
+                function_name,
+                texture_name,
+                f"textureSampleBias takes a sampler, but {sampler_name} is "
+                "a comparison sampler",
+            )
+        raise WGSLComparisonSamplerUnsupportedError(
+            function_name,
+            texture_name,
+            builtin_name,
+            sampler_name,
+        )
+
     def generate_texture_call_args(self, args, *, function_name, implicit, explicit):
         # The coordinate follows the texture, or the texture and sampler. On
         # an array texture it becomes ``coordinate, layer``.
@@ -5112,6 +5136,9 @@ class WGSLCodeGen(
                     "textureSampleLevel"
                     if self._current_stage_name == "compute"
                     else "textureSample"
+                )
+                self.refuse_comparison_sampler(
+                    second, function_name, texture, sample_function
                 )
                 level_argument = (
                     ", 0.0" if sample_function == "textureSampleLevel" else ""
@@ -5198,13 +5225,9 @@ class WGSLCodeGen(
             sampler_name = self.texture_sampler_expression(texture)
         else:
             sampler_name = self.generate_expression(sampler)
-            if self.is_comparison_sampler_type(self.expression_type(sampler)):
-                raise WGSLTextureBiasUnsupportedError(
-                    function_name,
-                    texture_name,
-                    f"textureSampleBias takes a sampler, but {sampler_name} is "
-                    "a comparison sampler",
-                )
+            self.refuse_comparison_sampler(
+                sampler, function_name, texture_name, "textureSampleBias", bias=True
+            )
         bias_type = self.expression_type(bias)
         if bias_type is not None and self.scalar_type_name(bias_type) not in {
             "f32",
@@ -5252,6 +5275,9 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             texture, sampler, coords, level = args
+            self.refuse_comparison_sampler(
+                sampler, function_name, texture, "textureSampleLevel"
+            )
             return (
                 f"textureSampleLevel({self.generate_expression(texture)}, "
                 f"{self.generate_expression(sampler)}, "
@@ -5265,16 +5291,28 @@ class WGSLCodeGen(
         )
 
     def generate_texture_sample_level_offset_call(self, function_name, args):
+        if len(args) == 5:
+            self.refuse_comparison_sampler(
+                args[1], function_name, args[0], "textureSampleLevel"
+            )
         return self.generate_texture_builtin_call(
             "textureSampleLevel", function_name, args, implicit=4, explicit=5
         )
 
     def generate_texture_sample_grad_call(self, function_name, args):
+        if len(args) == 5:
+            self.refuse_comparison_sampler(
+                args[1], function_name, args[0], "textureSampleGrad"
+            )
         return self.generate_texture_builtin_call(
             "textureSampleGrad", function_name, args, implicit=4, explicit=5
         )
 
     def generate_texture_sample_grad_offset_call(self, function_name, args):
+        if len(args) == 6:
+            self.refuse_comparison_sampler(
+                args[1], function_name, args[0], "textureSampleGrad"
+            )
         return self.generate_texture_builtin_call(
             "textureSampleGrad", function_name, args, implicit=5, explicit=6
         )
@@ -5286,6 +5324,9 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             if self.is_sampler_type(self.expression_type(args[1])):
+                self.refuse_comparison_sampler(
+                    args[1], function_name, args[0], "textureSample"
+                )
                 return self.generate_texture_builtin_call(
                     "textureSample", function_name, args, implicit=3, explicit=4
                 )
@@ -5298,6 +5339,9 @@ class WGSLCodeGen(
                 f"{self.generate_expression(bias)}, {self.generate_expression(offset)})"
             )
         if len(args) == 5:
+            self.refuse_comparison_sampler(
+                args[1], function_name, args[0], "textureSampleBias", bias=True
+            )
             call_args = self.generate_texture_call_args(
                 args, function_name=function_name, implicit=4, explicit=5
             )
