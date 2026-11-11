@@ -23,8 +23,7 @@ native modules. Scans and small row and column
 reductions are also translated on first use; each of their dispatches must
 name the package its cache derives again from the event. Arg reductions are
 translated per threadgroup width on first use and every index is recomputed
-from the retained input; OpenGL does not run the arg reduction tests yet
-(``TARGET_EXCLUSIONS``). Softmax and logsumexp rows are translated per
+from the retained input. Softmax and logsumexp rows are translated per
 threadgroup width on first use; each dispatch must name its cached package,
 upload its retained input and keep its output guard, and the upstream tests
 compare its values. Merge-sort stages are translated per launch width on
@@ -740,15 +739,9 @@ UPSTREAM_TESTS = (
         name for tests in MODULE_GROUPS.values() for name in tests
     )
 )
-# Tests a target cannot run yet, with the issue that tracks each. OpenGL's
-# software subgroups cannot run an arg reduction wider than one simdgroup.
-TARGET_EXCLUSIONS = {
-    "opengl": {
-        # Strided reverse scans read through wrapped unsigned pointer offsets
-        # whose rows are bounded only by an affine relation between locals.
-        "test_ops.TestOps.test_scans": "CrossGL/crosstl#2905",
-    },
-}
+# Tests a target cannot run yet, by target, with the issue that tracks each.
+# Every target runs every upstream test.
+TARGET_EXCLUSIONS = {}
 # Source-specialized indexing kernels by entry prefix, longest prefix first.
 INDEXING_PREFIXES = ("gather", "scatter_axis", "scatter")
 # Entry-keyed package families; reductions are keyed by width and entry.

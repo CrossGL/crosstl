@@ -177,16 +177,13 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
     assert not elsewhere & set(ops.UPSTREAM_TESTS)
 
 
-def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
-    # OpenGL's strided reverse scans cannot prove their wrapped pointer
-    # offsets yet. Its base-two and decimal logarithms run through the
-    # profiled base-two helper, so test_unary_ops_from_non_array runs. Both
-    # targets schedule the sorted gather's row tiles and run the arg
-    # reductions of every width.
-    assert set(ops.TARGET_EXCLUSIONS) == {"opengl"}
-    excluded = ops.TARGET_EXCLUSIONS["opengl"]
-    assert set(excluded) <= set(ops.UPSTREAM_TESTS)
-    assert excluded == {"test_ops.TestOps.test_scans": "CrossGL/crosstl#2905"}
+def test_every_target_runs_every_upstream_op_test_in_order():
+    # The host translates each scan with its launch's exact sizes, which
+    # bound OpenGL's strided reverse rows, and OpenGL's base-two and decimal
+    # logarithms run through the profiled base-two helper, so test_scans and
+    # test_unary_ops_from_non_array run. Both targets schedule the sorted
+    # gather's row tiles and run the arg reductions of every width.
+    assert ops.TARGET_EXCLUSIONS == {}
     sorted_gather = {
         "test_blas.TestBlas.test_gather_mm_sorted",
         "test_blas.TestBlas.test_gather_mm_sorted_vjp",
@@ -202,16 +199,21 @@ def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
     assert ops.upstream_tests("directx") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 604 and not set(opengl) & set(excluded)
-    assert len(ops.UPSTREAM_TESTS) == 605
-    assert "test_ops.TestOps.test_unary_ops_from_non_array" in opengl
+    assert opengl == ops.UPSTREAM_TESTS and len(opengl) == 605
+    assert {
+        "test_ops.TestOps.test_scans",
+        "test_ops.TestOps.test_unary_ops_from_non_array",
+    } <= set(opengl)
     assert (arg_reductions | sorted_gather) <= set(opengl)
-    assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
+    ops.validate_upstream(record, native=True, inventory=opengl)
+    record["tests"] = [
+        item
+        for item in record["tests"]
+        if item["test"] != "test_ops.TestOps.test_scans"
+    ]
     with pytest.raises(ValueError, match="inventory"):
         ops.validate_upstream(record, native=True, inventory=opengl)
-    record["tests"] = [item for item in record["tests"] if item["test"] in opengl]
-    ops.validate_upstream(record, native=True, inventory=opengl)
 
 
 def test_upstream_op_groups_partition_the_inventory():
