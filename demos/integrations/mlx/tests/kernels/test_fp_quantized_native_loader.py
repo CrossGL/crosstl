@@ -63,12 +63,12 @@ MLX_MXFP4_VARIANT_ID = (
 )
 MLX_MXFP4_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "c05226f8c415d1e7cb6b25e9eccaed3f4c8afda750aac21fed03c82fb6569d33",
-        "sizeBytes": 10476,
+        "sha256": "f9d0856e49b856d29a56a90d4e6870fb057d6ca414ed09344249724a2b124e94",
+        "sizeBytes": 10953,
     },
     "opengl": {
-        "sha256": "3aae7fd8aede237351ea9eeaff8b22bcecb49f920c91451ab021cf1f1ff52451",
-        "sizeBytes": 11932,
+        "sha256": "4af3c8e9c6fa41c65cad1563407b2dc046abe47c02ea963da44807f17cf1a5e1",
+        "sizeBytes": 12464,
     },
 }
 REQUIRE_DIRECTX_RUNTIME_ENV = "CROSTL_REQUIRE_MLX_MXFP4_DIRECTX_NATIVE_LOADER"

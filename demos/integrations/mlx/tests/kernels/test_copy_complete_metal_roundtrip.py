@@ -43,7 +43,7 @@ COPY_METAL_CONTRACT_PATH = (
 )
 # Pinned after the exhaustive compiler-gated reference refresh.
 COPY_METAL_CONTRACT_SHA256 = (
-    "b9b96c9188511e070d613257b298c6b0bf5216b2094d21bc8c96abd7ce7d0a6a"
+    "093ddfb508674c5b4d990eccf101e32cfbc616d6efad43631f5a0aef7775c168"
 )
 
 

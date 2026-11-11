@@ -382,23 +382,23 @@ MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
     "layer_norm": {
         "layer_normfloat32": {
             "sha256": (
-                "04e8aef85da4a392ed30161537c231f3023802b94e90dafbc3fa02ca822fd3a0"
+                "0c25f2a8694108ad895f1ff1bd7a059dc3a0341ffae3657a99d72bf213032c4f"
             ),
-            "sizeBytes": 9308,
+            "sizeBytes": 9611,
         },
         "vjp_layer_normfloat32": {
             "sha256": (
-                "4aac072f816ffb0972c380afe429ec4b7c605015e76810665ac2390d1b629c10"
+                "14afd707b57caf53dca89dbdd78ea8143f022765f39a70529d6c85c7fab2ed1f"
             ),
-            "sizeBytes": 11152,
+            "sizeBytes": 11455,
         },
     },
     "logsumexp": {
         "block-float32-axis-1025": {
             "sha256": (
-                "84da4cb73e478fdd54524a5de9d97ac04b42b6115a73550c30404f18f00446d7"
+                "a7d6989cff1485290c2e480458b43545750323204de3b0526366e5c8bc9681cc"
             ),
-            "sizeBytes": 4149,
+            "sizeBytes": 4452,
         },
         "block-float32-axis-32": {
             "sha256": (
@@ -422,9 +422,9 @@ MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
         },
         "forward-float32-axis-256": {
             "sha256": (
-                "9765ef08208d94766fec014503dd61b901a6c4156157e83f206cf783eee52203"
+                "59b11d2676b78b386a0b42643db2ebbe0a80def21a30578b82eac4e506122ef0"
             ),
-            "sizeBytes": 7550,
+            "sizeBytes": 7853,
         },
         "forward-float32-axis-32": {
             "sha256": (
@@ -434,27 +434,27 @@ MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
         },
         "forward-float32-axis-4099": {
             "sha256": (
-                "2b824efdef3a03528fee1ef7b46ebdcd0b9a9e8e3d9dad4849e42bbe84c419fe"
+                "c6f8df9a4ad4fbd6314fb7f5126b4cb37fd43ec8851a2d01497c3eb7b56115aa"
             ),
-            "sizeBytes": 8118,
+            "sizeBytes": 8421,
         },
         "forward-float32-axis-512": {
             "sha256": (
-                "31d7d71280badf7f116cb3aa07717acf167e41b21b00df1261a6b90ee5678f4d"
+                "15ae4253c29c28590e863252ac8af4a5ba9061b3e31f19863b65eb95c9a67d64"
             ),
-            "sizeBytes": 7551,
+            "sizeBytes": 7854,
         },
         "vjp-float32-axis-256-has-w-false": {
             "sha256": (
-                "1bad6529be41960e959314da3e25241991e744b3a653cf8b167f07fec3e35c3d"
+                "0abd267377f8237182d5d0976a59be69bd912163d89939122549d9482c531eb1"
             ),
-            "sizeBytes": 9161,
+            "sizeBytes": 9464,
         },
         "vjp-float32-axis-256-has-w-true": {
             "sha256": (
-                "a82bd81ead0835eb845145762f8b118476af6e837213a9fedffee1b2937977e7"
+                "104001b46251898388c93b7948dc823ca2c1ac77c5e5fe943d4ba48d977ccc29"
             ),
-            "sizeBytes": 9440,
+            "sizeBytes": 9743,
         },
         "vjp-float32-axis-32-has-w-false": {
             "sha256": (
@@ -470,15 +470,15 @@ MLX_DIRECTX_DISPATCH_GENERATED_ARTIFACTS = {
         },
         "vjp-float32-axis-8192-has-w-false": {
             "sha256": (
-                "b69a43015c3c7dc42a7138abf7400d56809e1c17d3de957d2a3e6d4819f8e045"
+                "e741840042fa00b2bd1958fa87e1cb784945db693149ee163b5f8522bba7aab5"
             ),
-            "sizeBytes": 10060,
+            "sizeBytes": 10363,
         },
         "vjp-float32-axis-8192-has-w-true": {
             "sha256": (
-                "9c4f6e423b8e0529ece73a0396c5ebab5b51fd501136ee4c66e15ef06c1e65aa"
+                "ad14d88d0b8d54f5f0e8f47103c99bb98fbc3bced4c905d3c46467dd25d8b5c5"
             ),
-            "sizeBytes": 10339,
+            "sizeBytes": 10642,
         },
     },
 }
@@ -1201,8 +1201,8 @@ MLX_DIRECTX_QUANTIZED_FRONTIER_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "2d697ea546e481dbc20e5a4c13faaa4c8fab2946230be6f265edf6bbd2d79381",
-        "size_bytes": 5862,
+        "sha256": "b20a8d475b5054089763be475610bd0c4b186131bd03e995b9ed5185cc32da0b",
+        "size_bytes": 6239,
     },
     "materialization": {
         "reachable_specialization_count": 5,
@@ -1325,8 +1325,8 @@ MLX_DIRECTX_QUANTIZED_PRIVATE_POINTER_BOUNDARY_EVIDENCE = {
         },
     },
     "generated_hlsl": {
-        "sha256": "b0c3238977654b03d610fae1e543e8be400eeb6589ef1ca522bd651747010542",
-        "size_bytes": 18052,
+        "sha256": "0c49438127581efadd22a83acd9ac6afc7fdbb4231d4a1986ecbe96f0b90dc5f",
+        "size_bytes": 18355,
     },
     "compiler_validation": {
         "compiler": "dxc",
@@ -1413,8 +1413,8 @@ MLX_OPENGL_QUANTIZED_FRONTIER_EVIDENCE = {
         "unsupported_contract_behavior": "reject-before-artifact-emission",
     },
     "generated_glsl": {
-        "sha256": "61cc1cf6f33ecab9919191db3f68bf57267d549fb3d638d595d464e68d2f494c",
-        "size_bytes": 7949,
+        "sha256": "5a4651bf695dfd37e2c4a15630cb97075b1b50fc599a8d43c13a212079650fbd",
+        "size_bytes": 8501,
     },
     "required_capabilities": [],
     "artifact_emitted": True,
@@ -2159,9 +2159,9 @@ MLX_SOFTMAX_NATIVE_RUNTIME_EVIDENCE = {
             },
             "block-float32-axis-2049": {
                 "sha256": (
-                    "9ddf84ddc3c09fe75f7749165f5913fb75fb8db871dc52a401450e67204004e7"
+                    "6fca11891594a4c1d3cafa70b3ed45b8043af8e2ccfc7b2009ad83ef70065718"
                 ),
-                "size_bytes": 5225,
+                "size_bytes": 5528,
                 "subgroup_id_lowering": (
                     "workgroup-synchronized-physical-wave-allocation"
                 ),

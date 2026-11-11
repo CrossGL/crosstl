@@ -48,7 +48,7 @@ REDUCE_METAL_CONTRACT_PATH = (
     / "reduce.metal-roundtrip.json"
 )
 REDUCE_METAL_CONTRACT_SHA256 = (
-    "81beb1c669833ed5b551ac8458638f1f7b09750de954148eccd3c9bd2794d589"
+    "f607173e0ee78be7b00060b610abca9d2b9be30e057f70ea98df0d8ee92a1b73"
 )
 RESOURCE_ABI_FIELDS = ("name", "kind", "set", "binding", "access", "type")
 REDUCE_METAL_TYPE_NAMES = {

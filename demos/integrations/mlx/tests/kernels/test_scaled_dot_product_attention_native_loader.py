@@ -70,8 +70,8 @@ MLX_ATTENTION_DISPATCH_CONTRACT = (
 )
 MLX_ATTENTION_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "20ad440c074a725738a97ca4d22eb01f9ed44df70e258ee7ce32c4dd7afe8096",
-        "sizeBytes": 7781,
+        "sha256": "14b992077d816c4f6deb9e0550679e1ab2d9032ce85e12ee814cc8acd6e0c2e2",
+        "sizeBytes": 8084,
     },
     "opengl": {
         "sha256": "388ebd0f2a92879641c7bfc818822fcf7a513e6d502b01462fa311de1e13956b",

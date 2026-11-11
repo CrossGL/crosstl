@@ -44,8 +44,8 @@ MLX_DOT_SHA256 = "97bcad13d09c3d5fed87482a0bb9719d6eeff9b21d364967cd6aec5b695b34
 MLX_DOT_ENTRY = "dot_product_float32_it32_tg512_sg16"
 MLX_DOT_GENERATED_ARTIFACTS = {
     "directx": {
-        "sha256": "f10d13d3dfbed2c5e59f785ec0e9a61c93026d3bead541738e450fe72ae2113e",
-        "sizeBytes": 5422,
+        "sha256": "36a0b18c1c73ccf58c8addc3077551b68e8010fcb74e48268b16ef850309c765",
+        "sizeBytes": 5725,
     },
     "opengl": {
         "sha256": "ef69a757339fe09897a38804c27be279a19a7db146e2e02f85f0349c59f3168d",

@@ -87,9 +87,9 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
         },
         544: {
             "sha256": (
-                "9ddf84ddc3c09fe75f7749165f5913fb75fb8db871dc52a401450e67204004e7"
+                "6fca11891594a4c1d3cafa70b3ed45b8043af8e2ccfc7b2009ad83ef70065718"
             ),
-            "sizeBytes": 5225,
+            "sizeBytes": 5528,
         },
     },
     "opengl": {

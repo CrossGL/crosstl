@@ -46,9 +46,9 @@ MLX_LOGSUMEXP_GENERATED_ARTIFACTS = {
     "directx": {
         "sha256:ae512c102a88628c05a49f28a872c44ab582bacf74584e8ca7e6ae765263afe0": {
             "sha256": (
-                "35d85dc4013f63de0da6e43f861dea28214964d66980b101d93d14ca6e492e21"
+                "db3282d74269c4ea11536844f165821972a208ef64045fc356d855f38cfa0189"
             ),
-            "sizeBytes": 4221,
+            "sizeBytes": 4524,
         },
         MLX_LOGSUMEXP_AXIS_32_ARTIFACT: {
             "sha256": (
