@@ -111,7 +111,7 @@ def test_rust_functions_take_the_crossgl_names_of_other_languages():
     assert spellings.spelling("rust", "Vec3::is_finite_mask", frozenset()) == "isfinite"
     # glam's Vec3::is_finite answers for the whole vector, where isfinite answers for each element.
     assert spellings.spelling("rust", "Vec3::is_finite", frozenset()) == (
-        "Vec3::is_finite"
+        "all(isfinite({0}))"
     )
     vec3 = Type("float", (3,))
     extend = rust._feature(
@@ -170,7 +170,49 @@ def test_rust_probes_64_bit_integer_results():
         in source
     )
     assert "outp[i] = (r) as u32;" in source
-    assert "uint64_t r = read_clock_khr();" in probes.build(clock, "crossgl").source
+    # At the subgroup scope the probe passes, OpReadClockKHR is GL_ARB_shader_clock's clockARB.
+    assert clock.crossgl == "clockARB"
+    assert "uint64_t r = clockARB();" in probes.build(clock, "crossgl").source
+
+
+def _method(name, result, *params):
+    signature = Signature(result, tuple(Param(p) for p in params))
+    return rust._feature(name, "vec3", signature, "", "", "compute", frozenset())
+
+
+def test_rust_writes_glam_arithmetic_and_float_constants_as_crossgl_expressions():
+    vec3, scalar = Type("float", (3,)), Type("float")
+    # glam's with_x replaces the receiver's x, and element_sum adds its elements.
+    with_x = _method("Vec3::with_x", vec3, vec3, scalar)
+    assert "vec3 r = vec3(a1, a0.y, a0.z);" in probes.build(with_x, "crossgl").source
+    element_sum = _method("Vec3::element_sum", scalar, vec3)
+    assert (
+        "float r = (a0.x + a0.y + a0.z);" in probes.build(element_sum, "crossgl").source
+    )
+    # A constant without arguments is the literal itself, and powi converts its integer exponent for pow.
+    max_value = _method("Float::max_value", scalar)
+    assert "float r = (3.40282347e38);" in probes.build(max_value, "crossgl").source
+    powi = _method("Float::powi", scalar, scalar, Type("int"))
+    assert "float r = pow(a0, float(a1));" in probes.build(powi, "crossgl").source
+    for name in ("Vec3::with_x", "Float::max_value", "Float::powi"):
+        assert spellings.is_expression(spellings.OTHER_NAMES["rust"][name])
+
+
+def test_rust_compare_exchange_passes_the_comparator_first_in_crossgl():
+    word = Type("uint")
+    exchange = rust._feature(
+        "atomic_compare_exchange",
+        "atomics",
+        Signature(word, (Param(word, "inout"), Param(word), Param(word))),
+        "",
+        "",
+        "compute",
+        frozenset(),
+    )
+    # spirv-std takes (pointer, value, comparator); atomicCompSwap takes (pointer, comparator, value).
+    assert (
+        "atomicCompSwap(outp[i], a2, a1);" in probes.build(exchange, "crossgl").source
+    )
 
 
 def test_rust_probes_pointer_sized_integers():

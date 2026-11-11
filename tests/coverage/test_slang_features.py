@@ -213,12 +213,10 @@ def test_slang_functions_crossgl_names_otherwise_take_crossgl_names():
 def test_other_names_are_names_crossgl_defines():
     for language, names in spellings.OTHER_NAMES.items():
         for name, spelled in names.items():
-            used = (
-                spellings.named(spelled)
-                if spellings.is_expression(spelled)
-                else [spelled]
-            )
-            assert used, (language, name)
+            # An expression may be arithmetic on its arguments or a literal, which names no function.
+            expression = spellings.is_expression(spelled)
+            used = spellings.named(spelled) if expression else [spelled]
+            assert used or expression, (language, name)
             for base in used:
                 if base.startswith("gl_"):
                     assert is_crossgl_gl_builtin(base), (language, name)
@@ -236,6 +234,8 @@ def test_expression_spellings_name_what_they_call():
         "WaveMultiPrefixBitXor"
     ]
     assert spellings.named("clockRealtime2x32EXT().x") == ["clockRealtime2x32EXT"]
+    assert spellings.named("pow({0}, float({1}))") == ["pow"]
+    assert spellings.named("(3.40282347e38)") == []
 
 
 def test_slang_stages_targets_and_explicit_generic_arguments():

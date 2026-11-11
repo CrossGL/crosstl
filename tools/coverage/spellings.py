@@ -520,8 +520,106 @@ OTHER_NAMES = {
         "terminate_ray": "terminateRayEXT",
         "emit_mesh_tasks_ext": "EmitMeshTasksEXT",
         "set_mesh_outputs_ext": "SetMeshOutputsEXT",
-        # A lane given as a constant broadcasts, as for Slang's WaveBroadcastLaneAt.
+        # A lane given as a constant broadcasts, as for Slang's WaveBroadcastLaneAt. subgroup_broadcast_const takes
+        # the lane as a constant generic parameter, which the probe sets to 0.
         "subgroup_broadcast": "subgroupBroadcast",
+        "subgroup_broadcast_const": "subgroupBroadcast({0}, 0u)",
+        # The probe swaps in direction 0, OpGroupNonUniformQuadSwap's horizontal swap, which is HLSL's
+        # QuadReadAcrossX.
+        "subgroup_quad_swap": "QuadReadAcrossX",
+        # spirv-std passes the new value before the comparator; CrossGL's atomicCompSwap, like GLSL's, takes the
+        # comparator first. Both return the original value.
+        "atomic_compare_exchange": "atomicCompSwap({0}, {2}, {1})",
+        # OpIsHelperInvocationEXT, and OpReadClockKHR at the subgroup scope the probe passes, as a 64-bit integer or
+        # as two 32-bit halves (GL_ARB_shader_clock).
+        "is_helper_invocation": "IsHelperLane",
+        "read_clock_khr": "clockARB",
+        "read_clock_uvec2_khr": "clock2x32ARB",
+        # num-traits computes recip as 1 / x and glam's Vec3::recip divides each element the same way, as HLSL's
+        # rcp does. rust-gpu lowers powi to GLSL.std.450 Pow, CrossGL's pow, which takes a float exponent.
+        "Float::recip": "rcp",
+        "Vec3::recip": "rcp",
+        "Float::powi": "pow({0}, float({1}))",
+        # core's sign tests and constants for f32, which num-traits' Float returns: is_sign_positive is the
+        # negation of is_sign_negative, a subnormal is a non-zero value smaller in magnitude than MIN_POSITIVE,
+        # and signum is NaN for NaN and otherwise 1.0 with the operand's sign.
+        "Float::is_sign_positive": "!signbit({0})",
+        "Float::is_subnormal": "({0} != 0.0 && abs({0}) < 1.17549435e-38)",
+        "Float::signum": "(isnan({0}) ? {0} : copysign(1.0, {0}))",
+        "Float::max_value": "(3.40282347e38)",
+        "Float::min_value": "(-3.40282347e38)",
+        "Float::min_positive_value": "(1.17549435e-38)",
+        "Float::neg_infinity": "(-infinity())",
+        "Float::neg_zero": "(-0.0)",
+        # glam's Vec3 methods that glam writes in Rust arithmetic (glam 0.34, src/f32/vec3.rs), written with the same
+        # CrossGL operations. glam's length_squared is dot(v, v). Its max_element and min_element compare with > and
+        # <, which pick the same element as max and min unless an element is NaN.
+        "Vec3::element_sum": "({0}.x + {0}.y + {0}.z)",
+        "Vec3::element_product": "({0}.x * {0}.y * {0}.z)",
+        "Vec3::max_element": "max({0}.x, max({0}.y, {0}.z))",
+        "Vec3::min_element": "min({0}.x, min({0}.y, {0}.z))",
+        "Vec3::with_x": "vec3({1}, {0}.y, {0}.z)",
+        "Vec3::with_y": "vec3({0}.x, {1}, {0}.z)",
+        "Vec3::with_z": "vec3({0}.x, {0}.y, {1})",
+        "Vec3::midpoint": "(({0} + {1}) * 0.5)",
+        "Vec3::lerp_monotonic": "({0} + ({1} - {0}) * {2})",
+        "Vec3::length_recip": "(1.0 / length({0}))",
+        "Vec3::dot_into_vec": "vec3(dot({0}, {1}))",
+        "Vec3::to_homogeneous": "vec4({0}, 1.0)",
+        "Vec3::from_homogeneous": "({0}.xyz / {0}.w)",
+        "Vec3::as_ivec3": "ivec3({0})",
+        "Vec3::as_uvec3": "uvec3({0})",
+        "Vec3::is_finite": "all(isfinite({0}))",
+        "Vec3::is_nan": "any(isnan({0}))",
+        "Vec3::is_normalized": "(abs(dot({0}, {0}) - 1.0) <= 0.0002)",
+        "Vec3::is_negative_mask": (
+            "bvec3(signbit({0}.x), signbit({0}.y), signbit({0}.z))"
+        ),
+        "Vec3::is_negative_bitmask": (
+            "(uint(signbit({0}.x)) | (uint(signbit({0}.y)) << 1u) | (uint(signbit({0}.z)) << 2u))"
+        ),
+        "Vec3::signum": (
+            "vec3(isnan({0}.x) ? {0}.x : copysign(1.0, {0}.x), isnan({0}.y) ? {0}.y : copysign(1.0, {0}.y), "
+            "isnan({0}.z) ? {0}.z : copysign(1.0, {0}.z))"
+        ),
+        "Vec3::abs_diff_eq": "all(lessThanEqual(abs({0} - {1}), vec3({2})))",
+        "Vec3::project_onto": "({1} * (dot({0}, {1}) / dot({1}, {1})))",
+        "Vec3::project_onto_normalized": "({1} * dot({0}, {1}))",
+        "Vec3::reject_from": "({0} - {1} * (dot({0}, {1}) / dot({1}, {1})))",
+        "Vec3::reject_from_normalized": "({0} - {1} * dot({0}, {1}))",
+        "Vec3::normalize_or": (
+            "(isfinite(1.0 / length({0})) && 1.0 / length({0}) > 0.0 ? {0} * (1.0 / length({0})) : {1})"
+        ),
+        "Vec3::normalize_or_zero": (
+            "(isfinite(1.0 / length({0})) && 1.0 / length({0}) > 0.0 ? {0} * (1.0 / length({0})) : vec3(0.0))"
+        ),
+        "Vec3::clamp_length_max": (
+            "(dot({0}, {0}) > {1} * {1} ? {1} * ({0} / sqrt(dot({0}, {0}))) : {0})"
+        ),
+        "Vec3::clamp_length_min": (
+            "(dot({0}, {0}) < {1} * {1} ? {1} * ({0} / sqrt(dot({0}, {0}))) : {0})"
+        ),
+        "Vec3::clamp_length": (
+            "(dot({0}, {0}) < {1} * {1} ? {1} * ({0} / sqrt(dot({0}, {0}))) "
+            ": (dot({0}, {0}) > {2} * {2} ? {2} * ({0} / sqrt(dot({0}, {0}))) : {0}))"
+        ),
+        "Vec3::move_towards": (
+            "(length({1} - {0}) <= {2} || length({1} - {0}) <= 0.0001 ? {1} "
+            ": {0} + ({1} - {0}) / length({1} - {0}) * {2})"
+        ),
+        "Vec3::angle_to": "atan(dot(cross({0}, {1}), {2}), dot({0}, {1}))",
+        "Vec3::any_orthogonal_vector": (
+            "(abs({0}.x) > abs({0}.y) ? vec3(-{0}.z, 0.0, {0}.x) : vec3(0.0, {0}.z, -{0}.y))"
+        ),
+        "Vec3::rotate_x": (
+            "vec3({0}.x, {0}.y * cos({1}) - {0}.z * sin({1}), {0}.y * sin({1}) + {0}.z * cos({1}))"
+        ),
+        "Vec3::rotate_y": (
+            "vec3({0}.x * cos({1}) + {0}.z * sin({1}), {0}.y, {0}.x * -sin({1}) + {0}.z * cos({1}))"
+        ),
+        "Vec3::rotate_z": (
+            "vec3({0}.x * cos({1}) - {0}.y * sin({1}), {0}.x * sin({1}) + {0}.y * cos({1}), {0}.z)"
+        ),
     },
 }
 
@@ -536,8 +634,8 @@ def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) ->
     return renamed if renamed in glsl_names else name
 
 
-# A CrossGL vector constructor, which converts rather than names an operation.
-_CONSTRUCTOR = re.compile(r"(?:[biu]|f16)?vec[234]")
+# A CrossGL scalar conversion or vector constructor, which converts rather than names an operation.
+_CONSTRUCTOR = re.compile(r"(?:[biud]|f16)?vec[234]|float|double|int|uint|bool")
 _NAMED = re.compile(r"\bgl_\w+|\b[A-Za-z_]\w*(?=\()")
 
 
