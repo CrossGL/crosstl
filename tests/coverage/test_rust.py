@@ -101,6 +101,32 @@ def test_rust_subgroup_functions_take_crossgl_wave_names():
     )
 
 
+def test_rust_functions_take_the_crossgl_names_of_other_languages():
+    features = parse(frozenset({"max", "min"}))
+    # spirv-std's OpKill is CrossGL's discard, and its unsigned maximum GLSL's max.
+    assert features["kill"].crossgl == "discard"
+    assert "discard();" in probes.build(features["kill"], "crossgl").source
+    assert features["unsigned_max"].crossgl == "max"
+    assert spellings.spelling("rust", "Float::exp_m1", frozenset()) == "expm1"
+    assert spellings.spelling("rust", "Vec3::is_finite_mask", frozenset()) == "isfinite"
+    # glam's Vec3::is_finite answers for the whole vector, where isfinite answers for each element.
+    assert spellings.spelling("rust", "Vec3::is_finite", frozenset()) == (
+        "Vec3::is_finite"
+    )
+    vec3 = Type("float", (3,))
+    extend = rust._feature(
+        "Vec3::extend",
+        "vec3",
+        Signature(Type("float", (4,)), (Param(vec3), Param(Type("float")))),
+        ".extend",
+        "",
+        "compute",
+        frozenset(),
+    )
+    assert extend.crossgl == "vec4"
+    assert "vec4 r = vec4(a0, a1);" in probes.build(extend, "crossgl").source
+
+
 def test_rust_reads_float_and_vec3_methods():
     features = parse()
     assert "Float::hidden" not in features
