@@ -16,6 +16,7 @@ from .block_member_names import (
     instance_block_member_names,
     rename_shadowing_locals,
 )
+from .import_exact_lookups import crossgl_operator, declared_name, folded_operator
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -453,9 +454,16 @@ class GLSLToCrossGLConverter:
         self.texture_function_operations.update(
             {name: operation for name, (_, operation) in legacy_texture_aliases.items()}
         )
-        self.legacy_texture_function_names = {
-            name: canonical for name, (canonical, _) in legacy_texture_aliases.items()
+        # The CrossGL function of every texture function: a legacy GLSL name becomes the core function it aliases,
+        # and CrossGL spells every core texture function the way GLSL does.
+        self.texture_function_names = {
+            name: name
+            for name in self.texture_function_operations
+            if name not in legacy_texture_aliases
         }
+        self.texture_function_names.update(
+            {name: canonical for name, (canonical, _) in legacy_texture_aliases.items()}
+        )
         self.image_function_operations = {
             "imageLoad": "load",
             "imageStore": "store",
@@ -640,38 +648,6 @@ class GLSLToCrossGLConverter:
             "accelerationStructureEXT": "accelerationStructureEXT",
             "rayQueryEXT": "rayQueryEXT",
             "void": "void",
-        }
-
-        # Map of GLSL operators to CrossGL operators
-        self.operator_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "GREATER_THAN": ">",
-            "LESS_THAN": "<",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "LOGICAL_AND": "&&",
-            "LOGICAL_XOR": "!=",
-            "LOGICAL_OR": "||",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "MOD": "%",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-            "BITWISE_XOR": "^",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_AND": "&=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_XOR": "^=",
-            "^^": "!=",
         }
 
         # Shader-specific info
@@ -869,7 +845,7 @@ class GLSLToCrossGLConverter:
         if name in self.texture_function_operations:
             return {
                 "name": name,
-                "function": self.legacy_texture_function_names.get(name, name),
+                "function": self.texture_function_names[name],
                 "resource": "texture",
                 "operation": self.texture_function_operations[name],
             }
@@ -1204,7 +1180,7 @@ class GLSLToCrossGLConverter:
         return renames
 
     def format_function_name(self, name):
-        return self.function_name_renames.get(name, name)
+        return declared_name(self.function_name_renames, name)
 
     def _is_image_resource_type(self, type_name):
         if not type_name:
@@ -1967,7 +1943,7 @@ class GLSLToCrossGLConverter:
             operand = self.evaluate_integer_layout_constant(value.operand)
             if operand is None:
                 return None
-            operator = self.operator_map.get(value.op, value.op)
+            operator = folded_operator(value.op)
             if operator == "+":
                 return operand
             if operator == "-":
@@ -1980,7 +1956,7 @@ class GLSLToCrossGLConverter:
             right = self.evaluate_integer_layout_constant(value.right)
             if left is None or right is None:
                 return None
-            operator = self.operator_map.get(value.op, value.op)
+            operator = folded_operator(value.op)
             if operator == "+":
                 return left + right
             if operator == "-":
@@ -3689,7 +3665,7 @@ class GLSLToCrossGLConverter:
                 return ssbo_member
             return node.name
         elif isinstance(node, BinaryOpNode):
-            operator = self.operator_map.get(node.op, node.op)
+            operator = crossgl_operator(node.op)
             if operator == ",":
                 # Assignment binds tighter than the comma operator.
                 left = self.generate_expression(node.left)
@@ -3705,7 +3681,7 @@ class GLSLToCrossGLConverter:
             if node.op in {"++", "--"}:
                 self.mark_structured_element_reference(node.operand)
             operand = self.generate_operand(node.operand)
-            operator = self.operator_map.get(node.op, node.op)
+            operator = crossgl_operator(node.op)
             return f"({operator}{operand})"
         elif isinstance(node, PostfixOpNode):
             self.mark_structured_element_reference(node.operand)
@@ -3970,7 +3946,7 @@ class GLSLToCrossGLConverter:
         if fields is None or node.member not in fields:
             return None
         renames = self.flattened_uniform_block_member_renames.get(instance_name, {})
-        return renames.get(node.member, node.member)
+        return declared_name(renames, node.member)
 
     def generate_array_access(self, node):
         structured_access = self.structured_buffer_access_parts(node)
