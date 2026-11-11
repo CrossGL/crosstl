@@ -9,6 +9,8 @@ each feature its CrossGL spelling, and issue reconciliation uses them to recogni
 
 from __future__ import annotations
 
+import re
+
 # The CrossGL spelling of a function that reads a vector's element at an index, which CrossGL writes as ``v[i]``.
 SUBSCRIPT = "[]"
 # The CrossGL spelling of a function that returns a vector with the element at an index replaced, which CrossGL writes
@@ -457,6 +459,23 @@ OTHER_NAMES = {
         "WaveMultiPrefixExclusiveBitAnd": "WaveMultiPrefixBitAnd",
         "WaveMultiPrefixExclusiveBitOr": "WaveMultiPrefixBitOr",
         "WaveMultiPrefixExclusiveBitXor": "WaveMultiPrefixBitXor",
+        # The rest are written as Slang writes them for HLSL or GLSL: an inclusive scan as the exclusive one
+        # combined with the lane's own value, and the ballot of every converged lane as WaveActiveBallot(true).
+        "WaveMultiPrefixInclusiveSum": "(WaveMultiPrefixSum({0}, {1}) + {0})",
+        "WaveMultiPrefixInclusiveProduct": "(WaveMultiPrefixProduct({0}, {1}) * {0})",
+        "WaveMultiPrefixInclusiveBitAnd": "(WaveMultiPrefixBitAnd({0}, {1}) & {0})",
+        "WaveMultiPrefixInclusiveBitOr": "(WaveMultiPrefixBitOr({0}, {1}) | {0})",
+        "WaveMultiPrefixInclusiveBitXor": "(WaveMultiPrefixBitXor({0}, {1}) ^ {0})",
+        "WaveGetConvergedMulti": "WaveActiveBallot(true)",
+        "WaveGetActiveMulti": "WaveActiveBallot(true)",
+        "ReorderThread": "MaybeReorderThread",
+        "getRealtimeClockLow": "clockRealtime2x32EXT().x",
+        "WorkgroupSize": "ivec3(gl_WorkGroupSize)",
+        "unpackHalf2x16ToHalf": "f16vec2(unpackHalf2x16({}))",
+        "unpackSnorm2x16ToHalf": "f16vec2(unpackSnorm2x16({}))",
+        "unpackUnorm2x16ToHalf": "f16vec2(unpackUnorm2x16({}))",
+        "unpackSnorm4x8ToHalf": "f16vec4(unpackSnorm4x8({}))",
+        "unpackUnorm4x8ToHalf": "f16vec4(unpackUnorm4x8({}))",
     },
     # WGSL's quad operations are HLSL's. Its leading and trailing zero counts are Metal's clz and ctz, which count
     # every bit of a zero operand, as WGSL's do (MSL 4.1, "Integer Functions"). Mojo's are the same functions.
@@ -515,3 +534,18 @@ def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) ->
         return OTHER_NAMES[language][name]
     renamed = RENAMES.get(language, {}).get(name, name)
     return renamed if renamed in glsl_names else name
+
+
+# A CrossGL vector constructor, which converts rather than names an operation.
+_CONSTRUCTOR = re.compile(r"(?:[biu]|f16)?vec[234]")
+_NAMED = re.compile(r"\bgl_\w+|\b[A-Za-z_]\w*(?=\()")
+
+
+def is_expression(spelled: str) -> bool:
+    """Whether a CrossGL spelling is an expression, such as ``WaveActiveBallot(true)``, rather than one name."""
+    return "(" in spelled or "{" in spelled
+
+
+def named(spelled: str) -> list[str]:
+    """The built-in functions an expression spelling calls and the built-in values it reads, in order."""
+    return [n for n in _NAMED.findall(spelled) if not _CONSTRUCTOR.fullmatch(n)]
