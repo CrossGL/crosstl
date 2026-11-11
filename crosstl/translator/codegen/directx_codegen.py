@@ -3270,8 +3270,7 @@ class HLSLCodeGen(
         """Select explicit binary32 arithmetic for software matrix products."""
         if profile is not None and (
             not isinstance(profile, str)
-            or profile
-            not in {
+            or profile not in {
                 "rne-gradual",
                 "rne-flush",
                 "fma-rne-gradual",
@@ -6411,8 +6410,9 @@ class HLSLCodeGen(
         if (
             not isinstance(condition, BinaryOpNode)
             or self.expression_name(condition.left) != loop_name
-            or loop_name
-            in self.hlsl_software_subgroup_expression_identifier_names(condition.right)
+            or loop_name in self.hlsl_software_subgroup_expression_identifier_names(
+                condition.right
+            )
         ):
             return False
         operator = self.map_operator(
@@ -6745,8 +6745,7 @@ class HLSLCodeGen(
                 parameter.name
                 for parameter in getattr(entry_function, "parameters", []) or []
                 if getattr(parameter, "name", None)
-                and "gl_SubgroupID"
-                in {
+                and "gl_SubgroupID" in {
                     self.semantic_from_node(parameter),
                     self.hlsl_canonical_semantic(self.semantic_from_node(parameter)),
                 }
@@ -7087,8 +7086,9 @@ class HLSLCodeGen(
             )
             != "<"
             or self.expression_name(condition.left) != loop_name
-            or loop_name
-            in self.hlsl_software_subgroup_expression_identifier_names(condition.right)
+            or loop_name in self.hlsl_software_subgroup_expression_identifier_names(
+                condition.right
+            )
             or not self.hlsl_software_subgroup_uniform_expression(
                 condition.right, names, components
             )
@@ -8701,8 +8701,7 @@ class HLSLCodeGen(
         valid_type = (
             mapped_value_type == "bool"
             if is_vote
-            else mapped_value_type
-            in (
+            else mapped_value_type in (
                 shuffle_types
                 if operation == "WaveReadLaneAt"
                 or operation in self.HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES
@@ -16321,8 +16320,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return rendered
         resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
         if (
-            resource_name
-            not in {
+            resource_name not in {
                 "RWBuffer",
                 "RWStructuredBuffer",
                 "RasterizerOrderedBuffer",
@@ -19396,8 +19394,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if matrix_call_type is not None:
                     return matrix_call_type
             if (
-                func_name
-                in {
+                func_name in {
                     "frac",
                     "fract",
                     "inverseSqrt",
@@ -19422,9 +19419,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "ddy_fine",
                     "ddx_coarse",
                     "ddy_coarse",
-                }
-                and args
-                and func_name not in getattr(self, "function_return_types", {})
+                } and args and func_name not in getattr(
+                    self, "function_return_types", {}
+                )
             ):
                 return self.expression_result_type(args[0])
             if func_name in {
@@ -19434,8 +19431,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             } and func_name not in getattr(self, "function_return_types", {}):
                 return "float"
             if (
-                func_name
-                in {
+                func_name in {
                     "clamp",
                     "lerp",
                     "max",
@@ -20722,8 +20718,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 source_location=getattr(argument, "source_location", None),
             )
         binding["scalar"] = (
-            parameter_name
-            in (
+            parameter_name in (
                 self.function_private_pointer_scalar_parameters.get(
                     function_name, set()
                 )
@@ -20956,8 +20951,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         if (
             address_space == "constant"
-            or access_mode
-            in {
+            or access_mode in {
                 "read",
                 "readonly",
             }
@@ -44693,8 +44687,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             function_name = self.function_call_name(expression)
             arguments = list(getattr(expression, "arguments", []) or [])
             if (
-                function_name
-                in {
+                function_name in {
                     "int",
                     "uint",
                     "short",
@@ -45096,8 +45089,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             elif isinstance(node, UnaryOpNode) and (
                 self.map_operator(node.op) in {"++", "--", "&"}
-                or node.op
-                in {
+                or node.op in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
