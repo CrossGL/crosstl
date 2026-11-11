@@ -494,7 +494,7 @@ def test_fixed_input_tests_draw_the_inputs_of_their_recorded_run_seed():
     seeds = upstream_test_seeds
     assert seeds.FIXED_RUN_SEEDS == {
         "test_ops.TestOps.test_softmax": 0,
-        "test_blas.TestBlas.test_segmented_mm": 0,
+        "test_blas.TestBlas.test_segmented_mm": 1,
         "test_blas.TestBlas.test_block_masked_matmul": 2,
         "test_ops.TestOps.test_divmod": 0,
     }
