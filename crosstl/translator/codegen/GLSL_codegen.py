@@ -265,6 +265,16 @@ from .glsl_draw_parameters import (
     vertex_builtin_spelling,
 )
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
+from .glsl_exact_lookups import (
+    GLSL_BITCAST_CANONICAL_NAMES,
+    glsl_call_names_resolving_to,
+    glsl_mesh_intrinsic_call,
+    glsl_note_call_target,
+    glsl_ray_tracing_intrinsic_call,
+    glsl_undeclared_call_reasons,
+    glsl_unmapped_identifier,
+    glsl_unmapped_semantic_name,
+)
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_generic_vectors import glsl_generic_vector_constructor_name
 from .glsl_guarded_offsets import (
@@ -8914,6 +8924,8 @@ class GLSLCodeGen(
             self.refuse_lowering(reason)
         for reason in string_literal_reasons(code):
             self.refuse_lowering(reason)
+        for reason in glsl_undeclared_call_reasons(self, code):
+            self.refuse_lowering(reason)
         return code
 
     GLSL_VERSION_RESOLUTION_PASSES = 3
@@ -9118,6 +9130,7 @@ class GLSLCodeGen(
         self.glsl_active_compile_time_bitcast_substitutions = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
+        self.glsl_unresolved_call_targets = {}
         self.function_sampler_parameter_indices = (
             self.collect_function_sampler_parameter_indices(ast)
         )
@@ -10982,10 +10995,10 @@ class GLSLCodeGen(
             return False
         if func_name == "clip" and func_name not in self.function_return_types:
             return True
-        mapped_name = self.function_map.get(func_name, func_name)
-        return (
-            mapped_name in self.GLSL_DERIVATIVE_FUNCTIONS
-            or mapped_name in self.GLSL_INTERPOLATION_FUNCTIONS
+        return func_name in glsl_call_names_resolving_to(
+            self,
+            "fragment-only",
+            self.GLSL_DERIVATIVE_FUNCTIONS | self.GLSL_INTERPOLATION_FUNCTIONS,
         )
 
     def validate_fragment_only_helper_call(self, func_name):
@@ -14681,10 +14694,14 @@ class GLSLCodeGen(
     def glsl_fixed_array_readonly_intrinsic(self, function_name):
         if not function_name:
             return False
-        mapped_name = self.function_map.get(function_name, function_name)
-        if self.glsl_constructor_type(mapped_name) is not None:
+        if (
+            function_name not in self.function_map
+            and self.glsl_constructor_type(function_name) is not None
+        ):
             return True
-        if mapped_name in self.texture_resource_operation_names():
+        if function_name in glsl_call_names_resolving_to(
+            self, "texture-resource-operations", self.texture_resource_operation_names()
+        ):
             return True
         readonly_names = (
             set(self.GLSL_COMPONENTWISE_UNARY_FUNCTIONS)
@@ -14722,7 +14739,9 @@ class GLSLCodeGen(
                 "step",
             }
         )
-        return function_name in readonly_names or mapped_name in readonly_names
+        return function_name in readonly_names or function_name in (
+            glsl_call_names_resolving_to(self, "fixed-array-readonly", readonly_names)
+        )
 
     def glsl_fixed_array_mutation_callee(
         self,
@@ -20326,12 +20345,8 @@ class GLSLCodeGen(
             raise ValueError(f"GLSL mesh output topology cannot be lowered: {topology}")
         return mapped
 
-    def map_mesh_intrinsic(self, operation):
-        mesh_intrinsics = {
-            "SetMeshOutputCounts": "SetMeshOutputsEXT",
-            "DispatchMesh": "EmitMeshTasksEXT",
-        }
-        return mesh_intrinsics.get(operation, operation)
+    def map_mesh_intrinsic(self, operation, args):
+        return glsl_mesh_intrinsic_call(self, operation, args)
 
     def is_task_payload_shared_variable(self, node):
         return (
@@ -20684,17 +20699,7 @@ class GLSLCodeGen(
         }
 
     def map_ray_tracing_intrinsic(self, operation, args):
-        ray_intrinsics = {
-            "TraceRay": "traceRayEXT",
-            "ReportHit": "reportIntersectionEXT",
-            "CallShader": "executeCallableEXT",
-            "AcceptHitAndEndSearch": "terminateRayEXT",
-            "IgnoreHit": "ignoreIntersectionEXT",
-        }
-        mapped = ray_intrinsics.get(operation, operation)
-        if mapped in {"ignoreIntersectionEXT", "terminateRayEXT"} and not args:
-            return mapped
-        return f"{mapped}({', '.join(args)})"
+        return glsl_ray_tracing_intrinsic_call(self, operation, args)
 
     def map_ray_query_intrinsic(self, operation, query, args):
         mapping = self.RAY_QUERY_METHOD_MAP.get(operation)
@@ -24261,8 +24266,12 @@ class GLSLCodeGen(
         self, member, struct_name=None, reserved_names=None
     ):
         if struct_name in self.fragment_output_member_name_maps:
-            return self.fragment_output_member_name_maps[struct_name].get(
-                member.name, member.name
+            member_map = self.fragment_output_member_name_maps[struct_name]
+            if member.name in member_map:
+                return member_map[member.name]
+            return self.refuse_lowering(
+                f"fragment output '{member.name}' is not declared by structure '{struct_name}'",
+                member.name,
             )
 
         mapped_semantic = self.map_semantic(self.stage_io_semantic_from_node(member))
@@ -32059,18 +32068,9 @@ class GLSLCodeGen(
         if function_name in self.function_return_types:
             return None
 
-        native_aliases = {
-            "floatBitsToInt": "asint",
-            "floatBitsToUint": "asuint",
-            "intBitsToFloat": "asfloat",
-            "uintBitsToFloat": "asfloat",
-        }
-        canonical_name = native_aliases.get(function_name, function_name)
+        canonical_name = GLSL_BITCAST_CANONICAL_NAMES.get(function_name)
         explicit_target = self.metal_as_type_target(function_name)
-        if (
-            canonical_name not in self.GLSL_BITCAST_FUNCTIONS
-            and explicit_target is None
-        ):
+        if canonical_name is None and explicit_target is None:
             return None
 
         arguments = list(
@@ -32854,7 +32854,11 @@ class GLSLCodeGen(
         indent_string = "    " * indent
         for node in self.glsl_stage_runtime_global_initializers.get(id(function), []):
             source_name = self.resource_node_name(node, "")
-            emitted_name = self.current_identifier_aliases.get(source_name, source_name)
+            emitted_name = self.current_identifier_aliases.get(source_name)
+            if emitted_name is None:
+                emitted_name = glsl_unmapped_identifier(
+                    self, source_name, "global variable"
+                )
             expected_type = self.global_variable_types.get(source_name, "float")
             initializer = self.generate_expression_with_expected(
                 getattr(node, "initial_value", None), expected_type
@@ -33448,7 +33452,10 @@ class GLSLCodeGen(
         if root_name is None:
             return None
 
-        emitted_root_name = self.current_identifier_aliases.get(root_name, root_name)
+        # The root's types are recorded under its emitted name, which is its alias if it has one.
+        emitted_root_name = self.current_identifier_aliases.get(root_name)
+        if emitted_root_name is None:
+            emitted_root_name = root_name
         source_type = self.glsl_uniform_block_variable_types.get(emitted_root_name)
         is_storage_block = False
         if source_type is None:
@@ -38231,11 +38238,15 @@ complex64_t crossgl_complex64_mod_assign(
                 and args
             ):
                 return self.texture_sampling_result_type(args[0], func_name)
-            derivative_name = self.GLSL_DERIVATIVE_FUNCTION_ALIASES.get(
-                func_name,
-                func_name,
-            )
-            if derivative_name in self.GLSL_DERIVATIVE_FUNCTIONS and args:
+            if (
+                func_name in glsl_call_names_resolving_to(
+                    self,
+                    "derivative-aliases",
+                    self.GLSL_DERIVATIVE_FUNCTIONS,
+                    self.GLSL_DERIVATIVE_FUNCTION_ALIASES,
+                )
+                and args
+            ):
                 return self.expression_result_type(args[0])
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
@@ -41023,9 +41034,8 @@ complex64_t crossgl_complex64_mod_assign(
                     self.validate_dispatch_mesh_arguments(arguments)
                 if len(arguments) == 4:
                     arguments = arguments[:3]
-            args = ", ".join(self.generate_expression(arg) for arg in arguments)
-            operation = self.map_mesh_intrinsic(expr.operation)
-            return f"{operation}({args})"
+            args = [self.generate_expression(arg) for arg in arguments]
+            return self.map_mesh_intrinsic(expr.operation, args)
         elif isinstance(expr, RayQueryOpNode):
             return self.map_ray_query_intrinsic(
                 expr.operation, expr.query_expr, expr.arguments
@@ -41334,8 +41344,11 @@ complex64_t crossgl_complex64_mod_assign(
             if packed_dot is not None:
                 return packed_dot
 
-            if original_func_name not in self.function_return_types:
-                func_name = self.function_map.get(func_name, func_name)
+            if (
+                original_func_name not in self.function_return_types
+                and func_name in self.function_map
+            ):
+                func_name = self.function_map[func_name]
             self.validate_fragment_only_helper_call(original_func_name)
 
             sizeof_bytes = sizeof_call_bytes(
@@ -41636,6 +41649,8 @@ complex64_t crossgl_complex64_mod_assign(
                 target_function=call_target_function,
                 source_target_name=original_func_name,
             )
+            if call_target_function is None:
+                glsl_note_call_target(self, emitted_call_name, len(call_args))
             generated_call = f"{emitted_call_name}({args})"
             if call_target_function is None and emitted_call_name not in {
                 "abs",
@@ -45242,7 +45257,12 @@ complex64_t crossgl_complex64_mod_assign(
         member_map = self.glsl_struct_member_name_map(struct_name)
         if not member_map:
             return member_name
-        return member_map.get(member_name, member_name)
+        if member_name in member_map:
+            return member_map[member_name]
+        return self.refuse_lowering(
+            f"member '{member_name}' is not declared by structure '{struct_name}'",
+            member_name,
+        )
 
     def expression_name(self, expr):
         if isinstance(expr, str):
@@ -46538,8 +46558,9 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_componentwise_unary_result_type(self, function_name, arguments):
         if len(arguments) != 1:
             return None
-        mapped_name = self.function_map.get(function_name, function_name)
-        if mapped_name not in self.GLSL_COMPONENTWISE_UNARY_FUNCTIONS:
+        if function_name not in glsl_call_names_resolving_to(
+            self, "componentwise-unary", self.GLSL_COMPONENTWISE_UNARY_FUNCTIONS
+        ):
             return None
         return self.glsl_source_expression_type(arguments[0])
 
@@ -46552,8 +46573,9 @@ complex64_t crossgl_complex64_mod_assign(
     ):
         if len(arguments) != 1:
             return None
-        mapped_name = self.function_map.get(function_name, function_name)
-        if mapped_name not in self.GLSL_COMPONENTWISE_BOOLEAN_FUNCTIONS:
+        if function_name not in glsl_call_names_resolving_to(
+            self, "componentwise-boolean", self.GLSL_COMPONENTWISE_BOOLEAN_FUNCTIONS
+        ):
             return None
         argument_type = (
             self.glsl_source_expression_type(arguments[0])
@@ -46570,8 +46592,9 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_boolean_reduction_result_type(self, function_name, arguments):
         if len(arguments) != 1:
             return None
-        mapped_name = self.function_map.get(function_name, function_name)
-        if mapped_name not in self.GLSL_BOOLEAN_REDUCTION_FUNCTIONS:
+        if function_name not in glsl_call_names_resolving_to(
+            self, "boolean-reduction", self.GLSL_BOOLEAN_REDUCTION_FUNCTIONS
+        ):
             return None
         return "bool"
 
@@ -55793,9 +55816,9 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def glsl_private_pointer_display_name(self, function_name):
-        return self.function_private_pointer_source_names.get(
-            function_name, function_name
-        )
+        """The source name a diagnostic shows for ``function_name``: its original's, for a specialized clone."""
+        source_name = self.function_private_pointer_source_names.get(function_name)
+        return function_name if source_name is None else source_name
 
     def glsl_private_pointer_binding_offset_interval(
         self, call, parameter_name, binding, *, require_exact=False
@@ -59463,10 +59486,12 @@ complex64_t crossgl_complex64_mod_assign(
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to the corresponding GLSL builtin or layout."""
-        if semantic is not None:
-            return f"{self.semantic_map.get(semantic, semantic)}"
-        else:
+        if semantic is None:
             return ""
+        mapped = self.semantic_map.get(semantic)
+        if mapped is None:
+            mapped = glsl_unmapped_semantic_name(self, semantic)
+        return f"{mapped}"
 
     def map_stage_input_semantic(self, semantic, stage_name=None):
         if (
@@ -59722,9 +59747,15 @@ complex64_t crossgl_complex64_mod_assign(
         return member_map
 
     def glsl_struct_member_name(self, struct_name, member_name):
-        return self.glsl_struct_member_name_map(struct_name).get(
-            member_name, member_name
-        )
+        member_map = self.glsl_struct_member_name_map(struct_name)
+        if member_name in member_map:
+            return member_map[member_name]
+        if member_map:
+            return self.refuse_lowering(
+                f"member '{member_name}' is not declared by structure '{struct_name}'",
+                member_name,
+            )
+        return glsl_unmapped_identifier(self, member_name, "structure member")
 
     def generate_glsl_interface_block_member_declaration(
         self,
