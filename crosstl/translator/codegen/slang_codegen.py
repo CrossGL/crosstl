@@ -10467,7 +10467,18 @@ class SlangCodeGen(LoweringRefusalMixin):
                     node.operation, target_reason
                 )
 
-        args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
+        if (
+            node.operation in {"WaveReadLaneAt", "QuadReadLaneAt"}
+            and len(node.arguments) > 1
+        ):
+            rendered_args = [
+                self.generate_expression(node.arguments[0]),
+                self.generate_expression_with_expected(node.arguments[1], "uint"),
+                *(self.generate_expression(arg) for arg in node.arguments[2:]),
+            ]
+            args = ", ".join(rendered_args)
+        else:
+            args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         call = f"{node.operation}({args})"
         return f"{conversion}({call})" if conversion else call
 

@@ -31737,7 +31737,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = self.generate_expression(args[0])
             # Inclusive scan = exclusive scan combined with the lane's own value.
             return f"({exclusive_op}({value}) {combine} ({value}))"
-        args_str = ", ".join(self.generate_expression(arg) for arg in args)
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"} and len(args) > 1:
+            rendered_args = [
+                self.generate_expression(args[0]),
+                self.generate_expression_with_expected(args[1], "uint"),
+                *(self.generate_expression(arg) for arg in args[2:]),
+            ]
+            args_str = ", ".join(rendered_args)
+        else:
+            args_str = ", ".join(self.generate_expression(arg) for arg in args)
         result = f"{operation}({args_str})"
         return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
 
