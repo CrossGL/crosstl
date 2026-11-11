@@ -556,6 +556,8 @@ OTHER_NAMES = {
         "terminate_ray": "terminateRayEXT",
         "emit_mesh_tasks_ext": "EmitMeshTasksEXT",
         "set_mesh_outputs_ext": "SetMeshOutputsEXT",
+        # OpEmitMeshTasksEXT with a payload operand, which CrossGL writes as DXR's DispatchMesh with the payload last.
+        "emit_mesh_tasks_ext_payload": "DispatchMesh",
         # OpExecuteCallableKHR, which CrossGL calls by DXR's name, CallShader, with the shader index first. The probe
         # passes execute_callable the index 0 as its constant generic parameter.
         "execute_callable": "CallShader(0u, {0})",
@@ -663,6 +665,34 @@ OTHER_NAMES = {
         "Vec3::angle_to": "atan(dot(cross({0}, {1}), {2}), dot({0}, {1}))",
         "Vec3::any_orthogonal_vector": (
             "(abs({0}.x) > abs({0}.y) ? vec3(-{0}.z, 0.0, {0}.x) : vec3(0.0, {0}.z, -{0}.y))"
+        ),
+        # glam's no_std build, the one rust-gpu compiles, divides and takes the remainder per element with Rust's
+        # truncating %, CrossGL's fmod: div_euclid corrects trunc(a / b) by one away from b when the remainder is
+        # negative, and rem_euclid adds |b| to a negative remainder (glam src/f32/math.rs, libm_math).
+        "Vec3::div_euclid": (
+            "vec3("
+            + ", ".join(
+                f"(fmod({{0}}.{c}, {{1}}.{c}) < 0.0 ? trunc({{0}}.{c} / {{1}}.{c}) + ({{1}}.{c} > 0.0 ? -1.0 : 1.0)"
+                f" : trunc({{0}}.{c} / {{1}}.{c}))"
+                for c in "xyz"
+            )
+            + ")"
+        ),
+        "Vec3::rem_euclid": (
+            "vec3("
+            + ", ".join(
+                f"(fmod({{0}}.{c}, {{1}}.{c}) < 0.0 ? fmod({{0}}.{c}, {{1}}.{c}) + abs({{1}}.{c})"
+                f" : fmod({{0}}.{c}, {{1}}.{c}))"
+                for c in "xyz"
+            )
+            + ")"
+        ),
+        # Pixar's orthonormal basis, as glam writes it: with s = signum(z) and a = -1 / (s + z), the vector is
+        # (x * y * a, s + y * y * a, -y).
+        "Vec3::any_orthonormal_vector": (
+            "vec3({0}.x * {0}.y * (-1.0 / ((isnan({0}.z) ? {0}.z : copysign(1.0, {0}.z)) + {0}.z)), "
+            "(isnan({0}.z) ? {0}.z : copysign(1.0, {0}.z)) + {0}.y * {0}.y "
+            "* (-1.0 / ((isnan({0}.z) ? {0}.z : copysign(1.0, {0}.z)) + {0}.z)), -{0}.y)"
         ),
         "Vec3::rotate_x": (
             "vec3({0}.x, {0}.y * cos({1}) - {0}.z * sin({1}), {0}.y * sin({1}) + {0}.z * cos({1}))"

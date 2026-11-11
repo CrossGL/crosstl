@@ -231,6 +231,10 @@ def test_rust_probes_constant_generic_operations_as_the_crossgl_built_in_they_ar
         frozenset(),
     )
     assert "CallShader(0u, payload);" in probes.build(call, "crossgl").source
+    # A mesh dispatch that hands over a payload is OpEmitMeshTasksEXT with a payload operand, CrossGL's DispatchMesh.
+    assert spellings.spelling("rust", "emit_mesh_tasks_ext_payload", frozenset()) == (
+        "DispatchMesh"
+    )
 
 
 def test_rust_probes_pointer_sized_integers():
@@ -402,6 +406,25 @@ def test_rust_functions_that_compute_something_else_are_written_as_rust_computes
     assert "vec3 r = (a0 - trunc(a0));" in probes.build(fract, "crossgl").source
     log = _method("Float::log", Type("float"), Type("float"), Type("float"))
     assert "float r = (log(a0) / log(a1));" in probes.build(log, "crossgl").source
+    # glam's Euclidean division and remainder correct Rust's truncating ones per element.
+    div_euclid = probes.build(
+        _method("Vec3::div_euclid", vec3, vec3, vec3), "crossgl"
+    ).source
+    assert (
+        "(fmod(a0.y, a1.y) < 0.0 ? trunc(a0.y / a1.y) + (a1.y > 0.0 ? -1.0 : 1.0) : trunc(a0.y / a1.y))"
+        in div_euclid
+    )
+    rem_euclid = probes.build(
+        _method("Vec3::rem_euclid", vec3, vec3, vec3), "crossgl"
+    ).source
+    assert (
+        "(fmod(a0.z, a1.z) < 0.0 ? fmod(a0.z, a1.z) + abs(a1.z) : fmod(a0.z, a1.z)))"
+        in rem_euclid
+    )
+    orthonormal = probes.build(
+        _method("Vec3::any_orthonormal_vector", vec3, vec3), "crossgl"
+    ).source
+    assert ", -a0.y);" in orthonormal
     # A function without a GLSL counterpart is probed under its own name.
     assert features["Float::sin"].crossgl == "sin"
     assert features["unsigned_max"].crossgl == "unsigned_max"
