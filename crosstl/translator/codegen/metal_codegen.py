@@ -531,6 +531,10 @@ from .texture_residency import (
     metal_texture_resident_call,
 )
 from .workgroup_size_extents import fold_workgroup_size_extents
+from .written_function_names import (
+    METAL_CALLABLE_FUNCTION_NAMES,
+    refuse_written_foreign_calls,
+)
 from .written_type_names import (
     METAL_TYPE_NAMES,
     refuse_written_foreign_types,
@@ -2126,6 +2130,7 @@ class MetalCodeGen(
             refuse_written_foreign_types(
                 output, self.written_foreign_type_names, "Metal"
             )
+            refuse_written_foreign_calls(output, METAL_CALLABLE_FUNCTION_NAMES, "Metal")
         finally:
             self.written_foreign_type_names = None
         refuse_metal_double_values(output, self.refuse_lowering)

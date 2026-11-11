@@ -30,7 +30,10 @@ __all__ = [
     "GLSL_EXTENSION_FUNCTION_NAMES",
     "GLSL_FUNCTION_NAMES",
     "HLSL_FUNCTION_NAMES",
+    "HLSL_INTRINSIC_FUNCTION_NAMES",
     "METAL_FUNCTION_NAMES",
+    "METAL_LIBRARY_FUNCTION_NAMES",
+    "METAL_OTHER_FUNCTION_NAMES",
     "TYPE_TEMPLATE_NAMES",
 ]
 
@@ -122,6 +125,38 @@ tex3Dgrad tex3Dlod tex3Dproj texCUBE texCUBEbias texCUBEgrad texCUBElod texCUBEp
 unpack_s8s32 unpack_u8u16 unpack_u8u32
 """)
 
+# The HLSL intrinsics DXC declares as free functions, without the object methods
+# (tests/conformance/inventory/data/hlsl.json, builtin-function items of kind intrinsic).
+HLSL_INTRINSIC_FUNCTION_NAMES = _names("""
+AcceptHitAndEndSearch AddUint64 AllMemoryBarrier AllMemoryBarrierWithGroupSync AllocateRayQuery Barrier CallShader
+CheckAccessFullyMapped ClusterID CreateResourceFromHeap D3DCOLORtoUBYTE4 DeviceMemoryBarrier
+DeviceMemoryBarrierWithGroupSync DispatchMesh DispatchRaysDimensions DispatchRaysIndex EvaluateAttributeAtSample
+EvaluateAttributeCentroid EvaluateAttributeSnapped GeometryIndex GetAttributeAtVertex GetGroupWaveCount
+GetGroupWaveIndex GetRemainingRecursionLevels GetRenderTargetSampleCount GetRenderTargetSamplePosition
+GroupMemoryBarrier GroupMemoryBarrierWithGroupSync HitKind IgnoreHit InstanceID InstanceIndex InterlockedAdd
+InterlockedAnd InterlockedCompareExchange InterlockedCompareExchangeFloatBitwise InterlockedCompareStore
+InterlockedCompareStoreFloatBitwise InterlockedExchange InterlockedMax InterlockedMin InterlockedOr InterlockedXor
+IsHelperLane MaybeReorderThread NonUniformResourceIndex ObjectRayDirection ObjectRayOrigin ObjectToWorld
+ObjectToWorld3x4 ObjectToWorld4x3 PrimitiveIndex Process2DQuadTessFactorsAvg Process2DQuadTessFactorsMax
+Process2DQuadTessFactorsMin ProcessIsolineTessFactors ProcessQuadTessFactorsAvg ProcessQuadTessFactorsMax
+ProcessQuadTessFactorsMin ProcessTriTessFactorsAvg ProcessTriTessFactorsMax ProcessTriTessFactorsMin QuadAll QuadAny
+QuadReadAcrossDiagonal QuadReadAcrossX QuadReadAcrossY QuadReadLaneAt RayFlags RayTCurrent RayTMin ReportHit
+SetMeshOutputCounts TraceRay TriangleObjectPosition WaveActiveAllEqual WaveActiveAllTrue WaveActiveAnyTrue
+WaveActiveBallot WaveActiveBitAnd WaveActiveBitOr WaveActiveBitXor WaveActiveCountBits WaveActiveMax WaveActiveMin
+WaveActiveProduct WaveActiveSum WaveGetLaneCount WaveGetLaneIndex WaveIsFirstLane WaveMatch WaveMultiPrefixBitAnd
+WaveMultiPrefixBitOr WaveMultiPrefixBitXor WaveMultiPrefixCountBits WaveMultiPrefixProduct WaveMultiPrefixSum
+WavePrefixCountBits WavePrefixProduct WavePrefixSum WaveReadLaneAt WaveReadLaneFirst WorldRayDirection
+WorldRayOrigin WorldToObject WorldToObject3x4 WorldToObject4x3 abort abs acos all and any asdouble asfloat asfloat16
+asin asint asint16 asuint asuint16 atan atan2 ceil clamp clip cos cosh countbits cross ddx ddx_coarse ddx_fine ddy
+ddy_coarse ddy_fine degrees determinant distance dot dot2add dot4add_i8packed dot4add_u8packed dst errorf exp exp2
+f16tof32 f32tof16 faceforward firstbithigh firstbitlow floor fma fmod frac frexp fwidth isfinite isinf isnan
+isnormal ldexp length lerp lit log log10 log2 mad max min modf msad4 mul noise normalize or pack_clamp_s8
+pack_clamp_u8 pack_s8 pack_u8 pow printf radians rcp reflect refract reversebits round rsqrt saturate select sign
+sin sincos sinh smoothstep source_mark sqrt step tan tanh tex1D tex1Dbias tex1Dgrad tex1Dlod tex1Dproj tex2D
+tex2Dbias tex2Dgrad tex2Dlod tex2Dproj tex3D tex3Dbias tex3Dgrad tex3Dlod tex3Dproj texCUBE texCUBEbias texCUBEgrad
+texCUBElod texCUBEproj transpose trunc unpack_s8s16 unpack_s8s32 unpack_u8u16 unpack_u8u32
+""")
+
 # Metal Shading Language 4.1 chapter 6 standard library functions, unqualified
 # (tests/conformance/inventory/data/metal.json, category builtin-function).
 METAL_FUNCTION_NAMES = _names("""
@@ -197,6 +232,47 @@ unpack_unorm2x16_to_float unpack_unorm2x16_to_half unpack_unorm4x8_srgb_to_float
 unpack_unorm4x8_to_float unpack_unorm4x8_to_half unpack_unorm565_to_float unpack_unorm565_to_half value write
 """)
 
+# The MSL library functions, called unqualified or through ``metal::``, without the member functions of textures,
+# intersection queries and other objects (tests/conformance/inventory/data/metal.json, builtin-function items of
+# kind library-function).
+METAL_LIBRARY_FUNCTION_NAMES = _names("""
+abs absdiff acos acosh addsat all any as_const asin asinh atan atan2 atanh atomic_compare_exchange_weak
+atomic_compare_exchange_weak_explicit atomic_exchange atomic_exchange_explicit atomic_fetch_add
+atomic_fetch_add_explicit atomic_fetch_and atomic_fetch_and_explicit atomic_fetch_max atomic_fetch_max_explicit
+atomic_fetch_min atomic_fetch_min_explicit atomic_fetch_or atomic_fetch_or_explicit atomic_fetch_sub
+atomic_fetch_sub_explicit atomic_fetch_xor atomic_fetch_xor_explicit atomic_load atomic_load_explicit atomic_max
+atomic_max_explicit atomic_min atomic_min_explicit atomic_store atomic_store_explicit atomic_thread_fence bezier
+bezier_derivative bezier_second_derivative bspline bspline_derivative bspline_second_derivative catmull_rom
+catmull_rom_derivative catmull_rom_second_derivative ceil clamp clz copysign cos cosh cospi cross ctz declval
+deinterleave determinant dfdx dfdy discard_fragment distance distance_squared divide dot exp exp10 exp2 extract_bits
+fabs faceforward fdim floor fma fmax fmax3 fmedian3 fmin fmin3 fmod fract frexp fwidth get_num_samples
+get_sample_position hadd hermite hermite_derivative hermite_second_derivative ilogb insert_bits interleave
+is_null_acceleration_structure is_null_function_handle is_null_instance_acceleration_structure
+is_null_intersection_function_table is_null_primitive_acceleration_structure is_null_tensor is_null_texture
+is_null_visible_function_table isfinite isinf isnan isnormal isordered isunordered ldexp length length_squared log
+log10 log2 mad24 madhi madsat make_array_ref make_filled_matrix make_filled_simdgroup_matrix make_uniform max max3
+median3 min min3 mix modf move mul24 mulhi nextafter normalize pack pack_float_to_snorm10a2 pack_float_to_snorm2x16
+pack_float_to_snorm4x8 pack_float_to_srgb_unorm4x8 pack_float_to_unorm10a2 pack_float_to_unorm2x16
+pack_float_to_unorm4x8 pack_float_to_unorm565 pack_half_to_snorm10a2 pack_half_to_snorm2x16 pack_half_to_snorm4x8
+pack_half_to_srgb_unorm4x8 pack_half_to_unorm10a2 pack_half_to_unorm2x16 pack_half_to_unorm4x8 pack_half_to_unorm565
+popcount pow powr quad_active_threads_mask quad_all quad_and quad_any quad_ballot quad_broadcast
+quad_broadcast_first quad_is_first quad_is_helper_thread quad_max quad_min quad_or quad_prefix_exclusive_product
+quad_prefix_exclusive_sum quad_prefix_inclusive_product quad_prefix_inclusive_sum quad_product quad_shuffle
+quad_shuffle_and_fill_down quad_shuffle_and_fill_up quad_shuffle_down quad_shuffle_rotate_down
+quad_shuffle_rotate_up quad_shuffle_up quad_shuffle_xor quad_sum quad_xor reflect refract reverse_bits rhadd rint
+rotate round rsqrt saturate select sign signbit simd_active_threads_mask simd_all simd_and simd_any simd_ballot
+simd_broadcast simd_broadcast_first simd_is_first simd_is_helper_thread simd_max simd_min simd_or
+simd_prefix_exclusive_product simd_prefix_exclusive_sum simd_prefix_inclusive_product simd_prefix_inclusive_sum
+simd_product simd_shuffle simd_shuffle_and_fill_down simd_shuffle_and_fill_up simd_shuffle_down
+simd_shuffle_rotate_down simd_shuffle_rotate_up simd_shuffle_up simd_shuffle_xor simd_sum simd_xor simdgroup_barrier
+simdgroup_load simdgroup_multiply simdgroup_multiply_accumulate simdgroup_store sin sincos sinh sinpi smoothstep
+sqrt step subsat tan tanh tanpi threadgroup_barrier transpose trunc unpack unpack_snorm10a2_to_float
+unpack_snorm10a2_to_half unpack_snorm2x16_to_float unpack_snorm2x16_to_half unpack_snorm4x8_to_float
+unpack_snorm4x8_to_half unpack_unorm10a2_to_float unpack_unorm10a2_to_half unpack_unorm2x16_to_float
+unpack_unorm2x16_to_half unpack_unorm4x8_srgb_to_float unpack_unorm4x8_srgb_to_half unpack_unorm4x8_to_float
+unpack_unorm4x8_to_half unpack_unorm565_to_float unpack_unorm565_to_half
+""")
+
 # Functions of the GLSL extensions the GLSL and SPIR-V importers read: GL_KHR_shader_subgroup (basic barriers),
 # GL_EXT_nonuniform_qualifier, GL_EXT_debug_printf, GL_EXT_ray_tracing, GL_EXT_ray_query,
 # GL_EXT_ray_tracing_position_fetch, GL_EXT_mesh_shader, GL_ARB_sparse_texture2, GL_ARB_sparse_texture_clamp,
@@ -224,7 +300,7 @@ beginInvocationInterlockARB endInvocationInterlockARB clockARB clock2x32ARB cloc
 # MSL spellings outside the library function tables: ``as_type<T>(x)`` (MSL 4.1 section 2.23, an operator in the
 # MSL inventory), the ``max_anisotropy`` and ``lod_clamp`` arguments of a sampler constructor (section 2.10), and the
 # pi-scaled inverse trigonometric functions of ``metal_math`` that :mod:`.metal_math_spellings` reduces.
-_METAL_OTHER_NAMES = (
+METAL_OTHER_FUNCTION_NAMES = (
     _names("as_type")
     | frozenset(SAMPLER_STATE_CALL_ARGUMENTS)
     | frozenset(PI_FUNCTIONS)
@@ -289,7 +365,7 @@ BUILTIN_FUNCTION_NAMES = (
     | GLSL_EXTENSION_FUNCTION_NAMES
     | HLSL_FUNCTION_NAMES
     | METAL_FUNCTION_NAMES
-    | _METAL_OTHER_NAMES
+    | METAL_OTHER_FUNCTION_NAMES
     | CUDA_FUNCTION_NAMES
     | CROSSGL_FUNCTION_NAMES
 )

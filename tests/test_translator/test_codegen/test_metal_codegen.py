@@ -34249,7 +34249,9 @@ def test_metal_mesh_dispatch_without_grid_context_emits_diagnostic():
     assert "object_data Payload& payload [[payload]]" in generated
 
 
-def test_metal_mesh_set_output_counts_without_output_parameter_passes_through():
+def test_metal_mesh_set_output_counts_without_output_parameter_is_refused():
+    # A function with no mesh object cannot set the output counts; the call used to be written as HLSL's
+    # SetMeshOutputCounts, which Metal does not declare.
     code = """
     shader meshpipe {
         void helper() {
@@ -34268,10 +34270,8 @@ def test_metal_mesh_set_output_counts_without_output_parameter_passes_through():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "set_primitive_count(1)" in generated
-    assert "SetMeshOutputCounts(8, 4)" in generated
+    with pytest.raises(MetalLoweringRefused, match="call to 'SetMeshOutputCounts'"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_metal_cbuffer_lowers_to_constant_address_space_struct_pointer():
