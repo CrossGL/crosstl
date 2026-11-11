@@ -2185,6 +2185,33 @@ def test_wgsl_codegen_converts_mixed_integer_min_max_clamp(tmp_path):
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_converts_signed_argument_beside_mixed_integer_min_max(tmp_path):
+    # A min, max or clamp of a uint and an int is a u32, so an int beside it converts too (#3628).
+    shader = """
+    shader Probe {
+        buffer uint* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int k = 3;
+                uint u = 5u;
+                uint g = max(min(u, k), k);
+                uint h = min(k, max(k, u)) + k;
+                bool b = clamp(k, u, 9u) < k;
+                outp[0] = g + h + uint(b);
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var g: u32 = max(min(u, u32(k)), u32(k));" in generated
+    assert "var h: u32 = (min(u32(k), max(u32(k), u)) + u32(k));" in generated
+    assert "var b: bool = (clamp(u32(k), u, 9u) < u32(k));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_converts_negative_literal_in_unsigned_comparison_and_arithmetic(
     tmp_path,
 ):

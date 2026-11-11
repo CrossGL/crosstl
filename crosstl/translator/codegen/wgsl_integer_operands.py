@@ -20,6 +20,7 @@ __all__ = [
     "MIXED_INTEGER_OPERATORS",
     "SHIFT_OPERATORS",
     "is_abstract_integer_literal",
+    "mixed_integer_call_is_unsigned",
     "wgsl_bitwise_operands",
     "wgsl_mixed_integer_call_arguments",
     "wgsl_mixed_integer_operands",
@@ -89,6 +90,19 @@ def wgsl_mixed_integer_call_arguments(codegen, arguments):
             if arg_scalars[i] == "i32" and not is_abstract_integer_literal(arg):
                 rendered[i] = f"u32({codegen.concrete_negative_integer_literal(arg, rendered[i])})"
     return rendered
+
+
+def mixed_integer_call_is_unsigned(codegen, arguments):
+    """Whether min, max or clamp of ``arguments`` mixes ``uint`` and ``int`` values, so its WGSL call is ``u32``.
+
+    Abstract integer literals take the other arguments' type and do not count.
+    """
+    scalars = {
+        codegen.scalar_type_name(codegen.expression_type(arg))
+        for arg in arguments
+        if not is_abstract_integer_literal(arg)
+    }
+    return scalars == {"i32", "u32"}
 
 
 def wgsl_mixed_integer_operands(codegen, left, right):

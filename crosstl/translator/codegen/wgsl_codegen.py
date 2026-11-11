@@ -124,6 +124,7 @@ from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
     MIXED_INTEGER_OPERATORS,
     SHIFT_OPERATORS,
+    mixed_integer_call_is_unsigned,
     wgsl_bitwise_operands,
     wgsl_mixed_integer_call_arguments,
     wgsl_mixed_integer_operands,
@@ -7607,6 +7608,13 @@ class WGSLCodeGen(
                 if operand is not None:
                     element, columns, rows = operand
                     return f"mat{rows}x{columns}<{element}>"
+            if (
+                function_name in {"min", "max", "clamp"}
+                and not self.is_user_function_name(function_name)
+                and mixed_integer_call_is_unsigned(self, expr.arguments)
+            ):
+                # The signed arguments are written as u32 (wgsl_mixed_integer_call_arguments), so the call is u32.
+                return "u32"
             resolved_function = self.resolve_function_overload(
                 function_name, expr.arguments
             )
