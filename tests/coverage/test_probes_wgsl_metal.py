@@ -259,3 +259,29 @@ def test_metal_wide_atomic_max_probe_calls_crossgl_atomic_max():
     crossgl = probes.build(wide, "crossgl").source
     assert "buffer uint64_t* outp;" in crossgl
     assert "atomicMin(outp[i], a1);" in crossgl
+
+
+def test_metal_memory_flag_probes_call_the_crossgl_operations_the_importer_writes():
+    sub, fence, barrier = metal.parse(
+        "metal_atomic atomic_fetch_sub_explicit int(inout int, int, memory_order)\n"
+        "metal_atomic atomic_thread_fence void(mem_flags, memory_order)\n"
+        "metal_compute simdgroup_barrier void(mem_flags)\n"
+    )
+    assert "atomic_fetch_sub_explicit(&outp[i], a1, memory_order_relaxed);" in (
+        probes.build(sub, "metal").source
+    )
+    crossgl = probes.build(sub, "crossgl").source
+    assert "buffer int* outp;" in crossgl
+    assert "atomicAdd(outp[i], -(a1));" in crossgl
+    assert (
+        "atomic_thread_fence(mem_flags::mem_none, memory_order_relaxed);"
+        in probes.build(fence, "metal").source
+    )
+    assert (
+        "atomicThreadFence(mem_none, memory_order_relaxed, thread_scope_device);"
+        in probes.build(fence, "crossgl").source
+    )
+    assert "simdgroup_barrier(mem_flags::mem_none);" in (
+        probes.build(barrier, "metal").source
+    )
+    assert "subgroupExecutionBarrier();" in probes.build(barrier, "crossgl").source
