@@ -22049,6 +22049,7 @@ class TestVulkanSPIRVCodeGen:
             uimage3D volumeImage @r32ui;
 
             compute {
+                @ numthreads(2, 2, 1)
                 void main() {
                     int layer = 1;
                     vec2 uv = vec2(0.25, 0.75);
@@ -26488,6 +26489,8 @@ class TestVulkanSPIRVCodeGen:
             sampler samplers[2];
 
             compute {
+                // textureQueryLod in compute needs a derivative group (2x2 quads).
+                layout(local_size_x = 2, local_size_y = 2) in;
                 void main() {
                     int layer = 1;
                     vec3 uvLayer = vec3(0.25, 0.75, 1.0);
@@ -26608,6 +26611,7 @@ class TestVulkanSPIRVCodeGen:
             sampler querySampler;
 
             compute {
+                @ numthreads(2, 2, 1)
                 void main() {
                     vec3 uvLayer = vec3(0.25, 0.75, 1.0);
                     vec4 cubeLayer = vec4(1.0, 0.0, 0.0, 2.0);

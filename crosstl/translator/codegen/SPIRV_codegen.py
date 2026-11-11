@@ -141,6 +141,7 @@ from .spirv_byte_address_atomics import (
     process_byte_address_atomic_call,
     process_byte_address_member_min_max,
 )
+from .spirv_compute_derivative_groups import emit_compute_derivative_group
 from .spirv_constant_folding import (
     spirv_evaluated_scalar_initializer,
     spirv_folded_constant,
@@ -160,6 +161,15 @@ from .spirv_entry_workgroup_sizes import (
     emit_entry_local_size_id,
     entry_workgroup_size_value,
     plan_entry_workgroup_sizes,
+)
+from .spirv_exact_lookups import (
+    SPIRV_DERIVATIVE_OPCODES,
+    SPIRV_INTEGER_BIT_BUILTINS,
+    SPIRV_MEMORY_QUALIFIERS,
+    spirv_builtin_call_key,
+    spirv_mesh_output_builtin,
+    spirv_mesh_output_refusal,
+    spirv_scalar_key,
 )
 from .spirv_exponent_builtins import (
     OUTPUT_OPERAND_FUNCTIONS,
@@ -874,7 +884,7 @@ class VulkanSPIRVCodeGen(
     def require_compute_derivatives(self):
         """Enable compute shader derivatives for derivative-dependent image ops."""
         self.requires_compute_derivatives = True
-        self.require_capability("ComputeDerivativeGroupQuadsKHR")
+        # The entry's workgroup size picks the derivative group and its capability (emit_entry_point).
         self.require_extension("SPV_KHR_compute_shader_derivatives")
 
     def register_primitive_type(self, name: str) -> SpirvId:
@@ -9627,6 +9637,9 @@ class VulkanSPIRVCodeGen(
             element_count = max(element_count, literal_index + 1)
 
         builtin = self.mesh_output_member_builtin(role, semantic)
+        refusal = spirv_mesh_output_refusal(role, semantic)
+        if refusal is not None:
+            self.refuse_lowering(f"{refusal} (member '{member_name}')")
         location = (
             None
             if builtin
@@ -9669,33 +9682,7 @@ class VulkanSPIRVCodeGen(
         self, role: str, semantic: Optional[str]
     ) -> Optional[str]:
         """Return a SPIR-V BuiltIn decoration for mesh output member semantics."""
-        if semantic is None:
-            return None
-        semantic_map = {
-            "SV_Position": "gl_Position",
-            "POSITION": "POSITION",
-            "gl_Position": "gl_Position",
-            "gl_PrimitiveID": "gl_PrimitiveID",
-            "SV_PrimitiveID": "gl_PrimitiveID",
-            "SV_CullPrimitive": "gl_CullPrimitiveEXT",
-            "gl_Layer": "gl_Layer",
-            "gl_ViewportIndex": "gl_ViewportIndex",
-            "gl_CullPrimitiveEXT": "gl_CullPrimitiveEXT",
-        }
-        normalized = semantic_map.get(str(semantic), str(semantic))
-        if role == "vertices" and normalized == "gl_Position":
-            return "Position"
-        if role == "vertices" and normalized == "gl_PointSize":
-            return "PointSize"
-        if role == "primitives":
-            return {
-                "gl_PrimitiveID": "PrimitiveId",
-                "gl_Layer": "Layer",
-                "gl_ViewportIndex": "ViewportIndex",
-                "gl_CullPrimitiveEXT": "CullPrimitiveEXT",
-                "gl_PrimitiveShadingRateEXT": "PrimitiveShadingRateKHR",
-            }.get(normalized)
-        return None
+        return spirv_mesh_output_builtin(role, semantic)
 
     def mesh_output_member_location(
         self, semantic: Optional[str], role: str, member_name: str
@@ -12097,13 +12084,9 @@ class VulkanSPIRVCodeGen(
         source_type = self.infer_expression_result_type(args[0])
         return self.bitcast_builtin_result_type(function_name, source_type)
 
-    def normalize_integer_bit_builtin_name(self, function_name: str) -> str:
-        return {
-            "countbits": "bitCount",
-            "reversebits": "bitfieldReverse",
-            "firstbitlow": "findLSB",
-            "firstbithigh": "findMSB",
-        }.get(function_name, function_name)
+    def normalize_integer_bit_builtin_name(self, function_name: str) -> Optional[str]:
+        """The GLSL name of integer bit built-in ``function_name``, or None when it is not one."""
+        return SPIRV_INTEGER_BIT_BUILTINS.get(function_name)
 
     def integer_bit_builtin_result_type(
         self, function_name: str, source_type: Optional[SpirvId]
@@ -12203,12 +12186,7 @@ class VulkanSPIRVCodeGen(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a built-in function."""
-        function_name = {
-            "frac": "fract",
-            "inverseSqrt": "inversesqrt",
-            "lerp": "mix",
-            "rsqrt": "inversesqrt",
-        }.get(function_name, function_name)
+        function_name = spirv_builtin_call_key(function_name)
         if function_name in PACK_FUNCTIONS:
             return spirv_pack_call(self, function_name, args)
         if function_name in BITFIELD_ARITIES:
@@ -12762,29 +12740,7 @@ class VulkanSPIRVCodeGen(
             )
 
     def derivative_function_opcode(self, function_name: str) -> Optional[str]:
-        aliases = {
-            "ddx": "dFdx",
-            "ddx_fine": "dFdxFine",
-            "ddx_coarse": "dFdxCoarse",
-            "ddy": "dFdy",
-            "ddy_fine": "dFdyFine",
-            "ddy_coarse": "dFdyCoarse",
-            "fwidth_fine": "fwidthFine",
-            "fwidth_coarse": "fwidthCoarse",
-        }
-        function_name = aliases.get(function_name, function_name)
-        opcodes = {
-            "dFdx": "OpDPdx",
-            "dFdxFine": "OpDPdxFine",
-            "dFdxCoarse": "OpDPdxCoarse",
-            "dFdy": "OpDPdy",
-            "dFdyFine": "OpDPdyFine",
-            "dFdyCoarse": "OpDPdyCoarse",
-            "fwidth": "OpFwidth",
-            "fwidthFine": "OpFwidthFine",
-            "fwidthCoarse": "OpFwidthCoarse",
-        }
-        return opcodes.get(function_name)
+        return SPIRV_DERIVATIVE_OPCODES.get(function_name)
 
     def derivative_operand_is_valid(self, value: SpirvId) -> bool:
         result_type = self.ensure_registered_type(value.type)
@@ -13638,44 +13594,8 @@ class VulkanSPIRVCodeGen(
         return False
 
     def normalize_primitive_name(self, type_name: str) -> str:
-        aliases = {
-            "f32": "float",
-            "f64": "double",
-            "f16": "float",
-            "float16": "float",
-            "float16_t": "float",
-            "half": "float",
-            "min16float": "float",
-            "bfloat": self.BFLOAT16_TYPE_NAME,
-            "bfloat16_t": self.BFLOAT16_TYPE_NAME,
-            "i8": "int",
-            "int8": "int",
-            "int8_t": "int",
-            "char": "int",
-            "i16": "int",
-            "int16": "int",
-            "int16_t": "int",
-            "short": "int",
-            "i32": "int",
-            "u8": "uint",
-            "uint8": "uint",
-            "uint8_t": "uint",
-            "uchar": "uint",
-            "u16": "uint",
-            "uint16": "uint",
-            "uint16_t": "uint",
-            "ushort": "uint",
-            "u32": "uint",
-            "int64": "i64",
-            "int64_t": "i64",
-            "long": "i64",
-            "ptrdiff_t": "i64",
-            "uint64": "u64",
-            "uint64_t": "u64",
-            "ulong": "u64",
-            "size_t": "u64",
-        }
-        return aliases.get(str(type_name), str(type_name))
+        """The scalar spelling ``type_name`` is classified by; see :func:`.spirv_exact_lookups.spirv_scalar_key`."""
+        return spirv_scalar_key(type_name, self.BFLOAT16_TYPE_NAME)
 
     def normalize_generic_vector_type(self, type_str: str) -> str:
         compact = re.sub(r"\s+", "", str(type_str))
@@ -18638,40 +18558,17 @@ class VulkanSPIRVCodeGen(
         return self.storage_buffer_memory_flags(node).get("writeonly", False)
 
     def resource_memory_qualifier_names(self, node) -> set:
-        supported = {
-            "coherent",
-            "globallycoherent",
-            "volatile",
-            "restrict",
-            "readonly",
-            "read",
-            "writeonly",
-            "write",
-            "readwrite",
-            "read_write",
-            "access::read",
-            "access::write",
-            "access::read_write",
-        }
-        aliases = {
-            "read": "readonly",
-            "write": "writeonly",
-            "read_write": "readwrite",
-            "access::read": "readonly",
-            "access::write": "writeonly",
-            "access::read_write": "readwrite",
-        }
         qualifiers = set()
 
         for qualifier in getattr(node, "qualifiers", []) or []:
-            qualifier = memory_qualifier_name(qualifier)
-            if qualifier in supported:
-                qualifiers.add(aliases.get(qualifier, qualifier))
+            canonical = SPIRV_MEMORY_QUALIFIERS.get(memory_qualifier_name(qualifier))
+            if canonical is not None:
+                qualifiers.add(canonical)
 
         for qualifier in getattr(node, "resource_qualifiers", []) or []:
-            qualifier = memory_qualifier_name(qualifier)
-            if qualifier in supported:
-                qualifiers.add(aliases.get(qualifier, qualifier))
+            canonical = SPIRV_MEMORY_QUALIFIERS.get(memory_qualifier_name(qualifier))
+            if canonical is not None:
+                qualifiers.add(canonical)
 
         if {"coherent(system)", "coherent(host)"} & {
             memory_qualifier_name(qualifier)
@@ -18692,8 +18589,9 @@ class VulkanSPIRVCodeGen(
                 continue
 
             attr_name = str(attr_name).lower()
-            if attr_name in supported:
-                qualifiers.add(aliases.get(attr_name, attr_name))
+            canonical = SPIRV_MEMORY_QUALIFIERS.get(attr_name)
+            if canonical is not None:
+                qualifiers.add(canonical)
 
             if attr_name != "access":
                 continue
@@ -18707,9 +18605,9 @@ class VulkanSPIRVCodeGen(
             access_name = self.attribute_value_to_string(arguments[0])
             if access_name is None:
                 continue
-            access_name = str(access_name).lower()
-            if access_name in supported:
-                qualifiers.add(aliases.get(access_name, access_name))
+            canonical = SPIRV_MEMORY_QUALIFIERS.get(str(access_name).lower())
+            if canonical is not None:
+                qualifiers.add(canonical)
 
         if "globallycoherent" in qualifiers or needs_device_coherence(node):
             # Coherent under the GLSL450 memory model is device-wide, which holds every scope
@@ -32433,12 +32331,9 @@ class VulkanSPIRVCodeGen(
             if not emit_entry_local_size_id(self, function_id, stage):
                 declare_specialized_workgroup_size(self, stage)
                 x, y, z = self.compute_local_size(stage)
-                if self.requires_compute_derivatives:
-                    x = max(2, x + (x % 2))
-                    y = max(2, y + (y % 2))
                 self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
-            if self.requires_compute_derivatives:
-                self.emit(f"OpExecutionMode %{function_id.id} DerivativeGroupQuadsKHR")
+                if self.requires_compute_derivatives:
+                    emit_compute_derivative_group(self, function_id, (x, y, z))
             if execution_model in {"MeshEXT", "TaskEXT"}:
                 self.require_capability("MeshShadingEXT")
                 self.require_extension("SPV_EXT_mesh_shader")

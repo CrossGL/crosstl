@@ -71,12 +71,6 @@
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_mesh_intrinsic::identity-fallback": 1,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_ray_tracing_intrinsic::identity-fallback": 1,
   "crosstl/translator/codegen/GLSL_codegen.py::GLSLCodeGen.map_semantic::identity-fallback": 1,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.call_builtin_function::identity-fallback": 1,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.derivative_function_opcode::identity-fallback": 1,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.mesh_output_member_builtin::identity-fallback": 1,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.normalize_integer_bit_builtin_name::identity-fallback": 1,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.normalize_primitive_name::identity-fallback": 1,
-  "crosstl/translator/codegen/SPIRV_codegen.py::VulkanSPIRVCodeGen.resource_memory_qualifier_names::identity-fallback": 4,
   "crosstl/translator/codegen/ast_utils.py::ASTUtils._map_primitive_type::identity-fallback": 1,
   "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.convert_builtin_function::identity-fallback": 1,
   "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.convert_crossgl_type_to_cuda::identity-fallback": 3,
@@ -202,6 +196,6 @@
  "totals": {
   "empty-block-recovery": 1,
   "fallback-text": 42,
-  "identity-fallback": 170
+  "identity-fallback": 161
  }
 }
