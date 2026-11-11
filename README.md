@@ -97,8 +97,8 @@ native source imports to. CrossGL has its own coverage row, CrossGL IR, which me
 all the measured output languages CrossGL can express.
 
 CrossTL is meant to fail closed: a construct it cannot translate raises a diagnostic that names the construct and
-the target, instead of emitting a placeholder. Output that the reference tool rejects counts as wrong in the coverage
-report, and the Coverage workflow files it as a bug.
+the target, instead of emitting a placeholder. Output that the reference tool rejects, or that has a comment saying
+CrossTL wrote a placeholder, counts as wrong in the coverage report, and the Coverage workflow files it as a bug.
 
 ## How it works
 

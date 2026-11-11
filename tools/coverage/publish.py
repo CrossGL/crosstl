@@ -283,8 +283,8 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "- **supported**: the reference tool accepts the translation and, where it runs, the translation "
         "computes what the native probe computes;",
         "- **refused**: CrossTL rejects the feature with a diagnostic;",
-        "- **wrong**: CrossTL produces output the reference tool rejects or that computes other results, or fails "
-        "without a diagnostic;",
+        "- **wrong**: CrossTL produces output the reference tool rejects or that computes other results, writes a "
+        "placeholder comment in place of the feature, or fails without a diagnostic;",
         "- **untested**: no probe can be built for the feature yet, or the reference tool rejects the probe "
         "itself.",
         "",

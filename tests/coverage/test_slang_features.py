@@ -195,6 +195,16 @@ def test_slang_functions_crossgl_names_otherwise_take_crossgl_names():
     assert spellings.spelling("slang", "unpackHalf2x16ToHalf", glsl_names) == (
         "unpackHalf2x16ToHalf"
     )
+    # Slang's pack_s8 calls packInt4x8, and its WaveMultiPrefixSum is the exclusive scan.
+    assert spellings.spelling("slang", "packInt4x8", set()) == "pack_s8"
+    assert spellings.spelling("slang", "unpackUint4x8ToUint16", set()) == "unpack_u8u16"
+    assert spellings.spelling("slang", "WaveMultiPrefixExclusiveSum", set()) == (
+        "WaveMultiPrefixSum"
+    )
+    # Slang's inclusive multi-prefix scans have no CrossGL name.
+    assert spellings.spelling("slang", "WaveMultiPrefixInclusiveSum", set()) == (
+        "WaveMultiPrefixInclusiveSum"
+    )
 
 
 def test_other_names_are_names_crossgl_defines():

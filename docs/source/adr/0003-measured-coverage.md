@@ -79,7 +79,8 @@ Constants should sum exactly before an input joins the sum, because Mesa reassoc
 mark `NoContraction`.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
-raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score
+raises a typed diagnostic), `wrong` (invalid or divergent output, or output with a comment saying CrossTL wrote a
+placeholder) or `untested` (no validator available). The score
 for a backend and direction is `supported / (supported + refused + wrong)`; `untested` is reported separately.
 
 `python -m tools.coverage run [--backend B] [--direction input|output]` runs the probes locally and writes
@@ -92,7 +93,8 @@ CrossGL has no compatibility guarantee: its goal is to express everything any ba
 reach 100 %. The "CrossGL IR" row measures that goal. Its universe is the union of every backend's features,
 normalized to semantic features: a feature's id is the set of SPIR-V instructions its native probe lowers to when the
 reference compiler builds it (DXC `-spirv`, glslang, naga, slangc, rust-gpu), minus a baseline probe that reads the
-same arguments without the call. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
+same arguments without the call. rust-gpu removes unused values, so a Rust baseline branches on each boolean argument
+to keep the comparison that makes it. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
 Mojo have no SPIR-V compiler here, and glam writes its vector methods in plain Rust arithmetic, so those features take
 the id of the GLSL function CrossGL spells the same way. A function that still has no id takes the id of the other
 functions CrossGL spells the same way when they share one: CUDA `cospi` and Slang `cospi` count once. Functions that

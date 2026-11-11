@@ -87,9 +87,9 @@ MLX_SOFTMAX_GUARDED_ARTIFACTS = {
         },
         544: {
             "sha256": (
-                "9ddf84ddc3c09fe75f7749165f5913fb75fb8db871dc52a401450e67204004e7"
+                "6fca11891594a4c1d3cafa70b3ed45b8043af8e2ccfc7b2009ad83ef70065718"
             ),
-            "sizeBytes": 5225,
+            "sizeBytes": 5528,
         },
     },
     "opengl": {
@@ -342,11 +342,11 @@ def test_pinned_mlx_softmax_translates_to_guarded_dispatch_artifacts(target):
                     assert "__crossgl_physical_subgroup" not in generated
                 else:
                     assert (
-                        "groupshared uint __crossgl_physical_subgroup_counter;"
+                        "groupshared uint __crossgl_physical_subgroup_leaders[32];"
                         in generated
                     )
                     assert (
-                        "InterlockedAdd(__crossgl_physical_subgroup_counter"
+                        "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]"
                         in generated
                     )
                     assert "uint crossglPhysicalSubgroupID = " in generated

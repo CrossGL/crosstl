@@ -441,6 +441,22 @@ OTHER_NAMES = {
         "copysign_float": "copysign",
         "copysign_half": "copysign",
         "copysign_double": "copysign",
+        # Slang's HLSL pack_s8, pack_u8 and unpack_* functions, which CrossGL has, call these
+        # (hlsl.meta.slang, "Pack/Unpack Math Intrinsics").
+        "packInt4x8": "pack_s8",
+        "packUint4x8": "pack_u8",
+        "packInt4x8Clamp": "pack_clamp_s8",
+        "packUint4x8Clamp": "pack_clamp_u8",
+        "unpackInt4x8ToInt16": "unpack_s8s16",
+        "unpackInt4x8ToInt32": "unpack_s8s32",
+        "unpackUint4x8ToUint16": "unpack_u8u16",
+        "unpackUint4x8ToUint32": "unpack_u8u32",
+        # Slang defines HLSL's SM 6.5 multi-prefix scans as these exclusive scans.
+        "WaveMultiPrefixExclusiveSum": "WaveMultiPrefixSum",
+        "WaveMultiPrefixExclusiveProduct": "WaveMultiPrefixProduct",
+        "WaveMultiPrefixExclusiveBitAnd": "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixExclusiveBitOr": "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixExclusiveBitXor": "WaveMultiPrefixBitXor",
     },
     # WGSL's quad operations are HLSL's. Its leading and trailing zero counts are Metal's clz and ctz, which count
     # every bit of a zero operand, as WGSL's do (MSL 4.1, "Integer Functions"). Mojo's are the same functions.
@@ -451,6 +467,14 @@ OTHER_NAMES = {
         "quadSwapDiagonal": "QuadReadAcrossDiagonal",
         "countLeadingZeros": "clz",
         "countTrailingZeros": "ctz",
+        # WGSL's 8-bit integer packing is HLSL's: component i in bits 8i to 8i + 7, unpacked with sign or zero
+        # extension (WGSL, "Data Packing Built-in Functions"). pack4xU8Clamp clamps unsigned components, where
+        # pack_clamp_u8 clamps signed ones, so it keeps its own name.
+        "pack4xI8": "pack_s8",
+        "pack4xU8": "pack_u8",
+        "pack4xI8Clamp": "pack_clamp_s8",
+        "unpack4xI8": "unpack_s8s32",
+        "unpack4xU8": "unpack_u8u32",
     },
     "mojo": {
         "count_leading_zeros": "clz",
