@@ -593,3 +593,51 @@ def test_a_specialization_count_is_located_only_beside_its_digest(tmp_path):
         }
     ]
     assert readme.read_text() == f"A 5-specialization record `{NEW_M}`.\n"
+
+
+def test_range_tuples_are_laid_out_as_black_lays_them_out():
+    long_entry = "row_reduce_looped_large_5_reduce_mincomplex64_with_a_long_tail"
+    text = (
+        'FAMILY_GENERATED_SIZE_MAXIMUM = ("k_small", 1500)\n'
+        "FAMILY_GENERATED_SIZE_MINIMUM = (\n"
+        f'    "{long_entry}",\n'
+        "    200,\n"
+        ")\n"
+        "\n"
+        "\n"
+        "def test_family():\n"
+        '    assert summary["maximum"] == (1500, "k_small")\n'
+    )
+    old = (
+        0,
+        {
+            "minimum": {"entryPoint": long_entry, "sizeBytes": 200},
+            "maximum": {"entryPoint": "k_small", "sizeBytes": 1500},
+        },
+    )
+    new = (
+        0,
+        {
+            "minimum": {"entryPoint": "k_middle", "sizeBytes": 190},
+            "maximum": {"entryPoint": long_entry, "sizeBytes": 30222},
+        },
+    )
+    report = refresh_pins.Report()
+
+    edits = refresh_pins.mirror_edits("t.py", text, old, new, report)
+
+    assert refresh_pins.apply_edits(text, edits) == (
+        "FAMILY_GENERATED_SIZE_MAXIMUM = (\n"
+        f'    "{long_entry}",\n'
+        "    30222,\n"
+        ")\n"
+        'FAMILY_GENERATED_SIZE_MINIMUM = ("k_middle", 190)\n'
+        "\n"
+        "\n"
+        "def test_family():\n"
+        '    assert summary["maximum"] == (\n'
+        "        30222,\n"
+        f'        "{long_entry}",\n'
+        "    )\n"
+    )
+    assert report.applied["mirroredRanges"] == 3
