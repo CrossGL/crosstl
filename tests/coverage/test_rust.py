@@ -4,7 +4,7 @@ import pytest
 
 from tools.coverage import probes, spellings
 from tools.coverage.features import rust
-from tools.coverage.model import Param, Signature, Type
+from tools.coverage.model import Feature, Param, Signature, Type
 
 from .rust_sources import ARCH, DERIVATIVE, FLOAT, VEC3, VEC3_TYPE
 
@@ -360,3 +360,21 @@ def test_rust_passes_a_broadcast_lane_id_as_a_literal():
     assert features["subgroup_shuffle"].signature.params[1] == Param(Type("uint"))
     source = probes.build(features["subgroup_broadcast"], "rust").source
     assert "let r: f32 = unsafe { subgroup_broadcast(a0, 1) };" in source
+
+
+def test_rust_baseline_keeps_its_boolean_arguments_in_use():
+    # rust-gpu removes unused values, so a baseline that only declared the argument would lose its comparisons, and
+    # they would join the id of every call that takes a boolean (OpAll+OpFOrdGreaterThan for any's).
+    vector = probes.build(parse()["any"], "rust", baseline=True).source
+    assert "any(" not in vector
+    for component in "xyz":
+        assert f"if a0.{component} {{ outp[i] = outp[i]; }}" in vector
+    scalar = Signature(Type("bool"), (Param(Type("bool")), Param(Type("float"))))
+    flag = Feature("rust", "function", "subgroup_all", scalar, crossgl="allInvocations")
+    source = probes.build(flag, "rust", baseline=True).source
+    assert source.count("if a0 { outp[i] = outp[i]; }") == 1
+    assert "if a1" not in source
+    # The CrossGL probe's translation keeps unused values, so its baseline does not need the guards.
+    crossgl = probes.build(flag, "crossgl", baseline=True).source
+    assert "bool a0 = (fin[i + 0u] > 0.0);" in crossgl
+    assert "if (a0" not in crossgl

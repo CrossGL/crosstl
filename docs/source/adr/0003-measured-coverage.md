@@ -93,7 +93,8 @@ CrossGL has no compatibility guarantee: its goal is to express everything any ba
 reach 100 %. The "CrossGL IR" row measures that goal. Its universe is the union of every backend's features,
 normalized to semantic features: a feature's id is the set of SPIR-V instructions its native probe lowers to when the
 reference compiler builds it (DXC `-spirv`, glslang, naga, slangc, rust-gpu), minus a baseline probe that reads the
-same arguments without the call. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
+same arguments without the call. rust-gpu removes unused values, so a Rust baseline branches on each boolean argument
+to keep the comparison that makes it. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
 Mojo have no SPIR-V compiler here, and glam writes its vector methods in plain Rust arithmetic, so those features take
 the id of the GLSL function CrossGL spells the same way. A function that still has no id takes the id of the other
 functions CrossGL spells the same way when they share one: CUDA `cospi` and Slang `cospi` count once. Functions that
