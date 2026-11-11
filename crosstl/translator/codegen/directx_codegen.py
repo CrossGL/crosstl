@@ -336,6 +336,7 @@ from .hlsl_extension_builtins import (
     hlsl_stage_builtin_read,
     refuse_unmapped_hlsl_builtin,
 )
+from .hlsl_function_body_scans import HlslFunctionBodyScans
 from .hlsl_glsl_block_registers import (
     HlslGlslBlockRegisters,
     HlslRegisterBlockPlan,
@@ -2795,6 +2796,7 @@ class HLSLCodeGen(
         self.generic_function_specialized_names = {}
         self.current_generic_function_substitutions = {}
         self.current_hlsl_available_functions = {}
+        self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
         self.current_hlsl_hull_output_control_points = None
         self.current_hlsl_hull_output_element_type = None
         self.current_hlsl_hull_domain = None
@@ -3268,7 +3270,8 @@ class HLSLCodeGen(
         """Select explicit binary32 arithmetic for software matrix products."""
         if profile is not None and (
             not isinstance(profile, str)
-            or profile not in {
+            or profile
+            not in {
                 "rne-gradual",
                 "rne-flush",
                 "fma-rne-gradual",
@@ -3985,6 +3988,7 @@ class HLSLCodeGen(
                 raise error from None
 
     def _generate_program_attempt(self, ast, target_stage, early_exits):
+        self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
         ast = lower_resource_aggregates(
             ast,
             workgroup_access_assertions=getattr(
@@ -6407,9 +6411,8 @@ class HLSLCodeGen(
         if (
             not isinstance(condition, BinaryOpNode)
             or self.expression_name(condition.left) != loop_name
-            or loop_name in self.hlsl_software_subgroup_expression_identifier_names(
-                condition.right
-            )
+            or loop_name
+            in self.hlsl_software_subgroup_expression_identifier_names(condition.right)
         ):
             return False
         operator = self.map_operator(
@@ -6742,7 +6745,8 @@ class HLSLCodeGen(
                 parameter.name
                 for parameter in getattr(entry_function, "parameters", []) or []
                 if getattr(parameter, "name", None)
-                and "gl_SubgroupID" in {
+                and "gl_SubgroupID"
+                in {
                     self.semantic_from_node(parameter),
                     self.hlsl_canonical_semantic(self.semantic_from_node(parameter)),
                 }
@@ -7083,9 +7087,8 @@ class HLSLCodeGen(
             )
             != "<"
             or self.expression_name(condition.left) != loop_name
-            or loop_name in self.hlsl_software_subgroup_expression_identifier_names(
-                condition.right
-            )
+            or loop_name
+            in self.hlsl_software_subgroup_expression_identifier_names(condition.right)
             or not self.hlsl_software_subgroup_uniform_expression(
                 condition.right, names, components
             )
@@ -8698,7 +8701,8 @@ class HLSLCodeGen(
         valid_type = (
             mapped_value_type == "bool"
             if is_vote
-            else mapped_value_type in (
+            else mapped_value_type
+            in (
                 shuffle_types
                 if operation == "WaveReadLaneAt"
                 or operation in self.HLSL_SOFTWARE_SUBGROUP_RELATIVE_SHUFFLES
@@ -16317,7 +16321,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return rendered
         resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
         if (
-            resource_name not in {
+            resource_name
+            not in {
                 "RWBuffer",
                 "RWStructuredBuffer",
                 "RasterizerOrderedBuffer",
@@ -19391,7 +19396,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if matrix_call_type is not None:
                     return matrix_call_type
             if (
-                func_name in {
+                func_name
+                in {
                     "frac",
                     "fract",
                     "inverseSqrt",
@@ -19416,9 +19422,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     "ddy_fine",
                     "ddx_coarse",
                     "ddy_coarse",
-                } and args and func_name not in getattr(
-                    self, "function_return_types", {}
-                )
+                }
+                and args
+                and func_name not in getattr(self, "function_return_types", {})
             ):
                 return self.expression_result_type(args[0])
             if func_name in {
@@ -19428,7 +19434,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             } and func_name not in getattr(self, "function_return_types", {}):
                 return "float"
             if (
-                func_name in {
+                func_name
+                in {
                     "clamp",
                     "lerp",
                     "max",
@@ -20715,7 +20722,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 source_location=getattr(argument, "source_location", None),
             )
         binding["scalar"] = (
-            parameter_name in (
+            parameter_name
+            in (
                 self.function_private_pointer_scalar_parameters.get(
                     function_name, set()
                 )
@@ -20948,7 +20956,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         if (
             address_space == "constant"
-            or access_mode in {
+            or access_mode
+            in {
                 "read",
                 "readonly",
             }
@@ -29806,22 +29815,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "uint2"
         return None
 
+    def hlsl_function_body_scan(self, func):
+        """``func``'s body scan for this render (``hlsl_function_body_scans``)."""
+        scans = getattr(self, "hlsl_function_body_scans", None)
+        if scans is None:
+            scans = self.hlsl_function_body_scans = HlslFunctionBodyScans(self)
+        return scans.scan(func)
+
     def collect_hlsl_function_identifier_names(self, func):
-        names = {
-            getattr(param, "name", None)
-            for param in getattr(func, "parameters", getattr(func, "params", [])) or []
-            if getattr(param, "name", None)
-        }
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, VariableNode):
-                name = getattr(node, "name", None)
-            elif isinstance(node, ForInNode):
-                name = getattr(node, "pattern", None)
-            else:
-                name = None
-            if name:
-                names.add(name)
-        return names
+        return set(self.hlsl_function_body_scan(func).identifier_names)
 
     def hlsl_declaration_identifier_name(self, name):
         if not isinstance(name, str):
@@ -38647,33 +38649,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.hlsl_dispatch_mesh_args_in_node(getattr(func, "body", []))
 
     def hlsl_function_call_names(self, func):
-        names = []
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if not isinstance(node, FunctionCallNode):
-                continue
-            name = self.function_call_name(node)
-            if name:
-                names.append(name)
-        return names
+        return list(self.hlsl_function_body_scan(func).call_names)
 
     def hlsl_function_call_summary(self, func):
-        """Call names and ``DispatchMesh`` argument lists of ``func``'s body, from one walk."""
-        names, dispatch_mesh_args = [], []
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, FunctionCallNode):
-                name = self.function_call_name(node)
-                if name:
-                    names.append(name)
-                if name == "DispatchMesh":
-                    dispatch_mesh_args.append(
-                        getattr(node, "arguments", getattr(node, "args", []))
-                    )
-            elif (
-                isinstance(node, MeshOpNode)
-                and getattr(node, "operation", None) == "DispatchMesh"
-            ):
-                dispatch_mesh_args.append(getattr(node, "arguments", []))
-        return names, dispatch_mesh_args
+        """Call names and ``DispatchMesh`` argument lists of ``func``'s body, from its body scan."""
+        scan = self.hlsl_function_body_scan(func)
+        return list(scan.call_names), list(scan.dispatch_mesh_args)
 
     def hlsl_reachable_helper_dispatch_mesh_calls(self, func):
         """``(function, DispatchMesh argument lists)`` for ``func`` and each helper it reaches, in visit order."""
@@ -44712,7 +44693,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             function_name = self.function_call_name(expression)
             arguments = list(getattr(expression, "arguments", []) or [])
             if (
-                function_name in {
+                function_name
+                in {
                     "int",
                     "uint",
                     "short",
@@ -45114,7 +45096,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             elif isinstance(node, UnaryOpNode) and (
                 self.map_operator(node.op) in {"++", "--", "&"}
-                or node.op in {
+                or node.op
+                in {
                     "PRE_INCREMENT",
                     "PRE_DECREMENT",
                     "POST_INCREMENT",
