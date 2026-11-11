@@ -12,11 +12,12 @@ from ..dialect import (
 )
 from ..model import (
     COOP_COLUMNS,
-    COOP_ENUMERATORS,
+    SLANG_ENUMERATORS,
     WIDE_INTEGERS,
     Type,
     coop_element,
-    coop_literal,
+    descriptor_reading,
+    slang_literal,
     tuple_element,
 )
 from ..objects import HIT_OBJECT, OBJECTS, VERTEX
@@ -288,7 +289,7 @@ class CrossGL(Dialect):
             return super().type(kind.with_scalar("int"))
         if coop_element(kind.opaque):
             return f"CoopVec<{kind.scalar}, {kind.shape[0]}>"
-        if kind.opaque in COOP_ENUMERATORS:
+        if kind.opaque in SLANG_ENUMERATORS:
             return kind.opaque
         held = tuple_element(kind.opaque)
         if held:
@@ -296,7 +297,7 @@ class CrossGL(Dialect):
         return super().type(kind)
 
     def literal(self, kind: Type) -> str:
-        return coop_literal(kind) or super().literal(kind)
+        return slang_literal(kind) or super().literal(kind)
 
     def address(self, name: str) -> str:
         return f"&{name}"
@@ -327,7 +328,7 @@ class CrossGL(Dialect):
         if element:
             return element, "{}[0]"
         held = tuple_element(opaque)
-        return (held[0], "{}._0") if held else None
+        return (held[0], "{}._0") if held else descriptor_reading(opaque)
 
     # CrossGL spells Direct3D's hit object as HLSL does.
     def holding(self, opaque: str) -> str:

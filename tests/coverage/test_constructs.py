@@ -288,6 +288,9 @@ def test_native_templates_are_valid(language):
         pytest.skip(f"{validators.TOOLS[language]} is not installed")
     rejected = []
     for feature in _templated(language):
+        # A Slang template for the HLSL target also needs DXC; the runner reports such a probe as untested.
+        if validators.missing(language, feature.target):
+            continue
         probe = probes.build(feature, language)
         verdict = validators.validate(
             language, probe.source, feature.stage, probe.entry, feature.target
