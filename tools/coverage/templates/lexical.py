@@ -14,7 +14,8 @@ HLSL; ``let`` and ``var`` in Slang; ``device``, ``kernel``, ``thread`` and ``hal
 
 from __future__ import annotations
 
-from .base import ABSENT, BINS, MAKE_PAIR, PAIR, Template
+from .base import ABSENT, Template
+from .family import BINS, MAKE_PAIR, PAIR
 from .statements import c_text
 
 _OCTAL = (

@@ -10,8 +10,9 @@ reference compiler and must keep every ``Decoration``, ``BuiltIn``, ``Capability
 feature, the task-payload storage a mesh stage reads, and the storage and calls through which a ray-tracing stage
 hands data to another, as each native probe does, except the anchors in
 :data:`FOLDED`. A resource feature keeps only its image's
-``Dim`` anchor, arrayed when the feature's name ends in ``-array``, the capability that shape needs, its push-constant
-storage and a descriptor set other than the first. GLSL ES 3.00
+``Dim`` anchor, arrayed when the feature's name ends in ``-array`` and the element of an array of textures when it
+begins with ``array-of-`` (:data:`ELEMENTS`), the capability that shape needs, its ``ImageFormat``, a sampler
+declared apart from its textures, its push-constant storage and a descriptor set other than the first. GLSL ES 3.00
 is lowered as GLSL ES 3.10, the first version glslang compiles for Vulkan. Metal compiles to AIR instead, where a
 translation must keep the attribute of each anchor (:data:`AIR`), the call, metadata or qualifier that stands for it
 (:data:`AIR_PATTERNS`), or the texture type of its shape (:data:`AIR_TEXTURES`). An anchor the compiler resolves
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 import re
 
-from . import validators
+from . import lowering, validators
 from .model import Feature
 from .templates import ABSENT, TEMPLATES
 
@@ -34,8 +35,10 @@ _PATTERNS = {
     "ExecutionMode": r"^\s*OpExecutionMode %\w+ {name}\b",
     # An image type's dimension and, after its depth operand, whether it is arrayed.
     "Dim": r"^\s*%\w+ = OpTypeImage %\w+ {name} \d+ {arrayed}\b",
+    # A storage image's texel format, the last operand of its type before the access qualifier.
+    "ImageFormat": r"^\s*%\w+ = OpTypeImage %\w+ \w+ \d+ \d+ \d+ \d+ {name}\b",
 }
-_IMAGE_KINDS = frozenset({"Dim", "Capability"})
+_IMAGE_KINDS = frozenset({"Dim", "Capability", "ImageFormat"})
 # The instructions that stand for an anchor as well: whether an invocation is a helper is the ``HelperInvocation``
 # built-in or, with SPV_EXT_demote_to_helper_invocation, ``OpIsHelperInvocationEXT``, which DXC and slangc emit for
 # ``IsHelperLane()``.
@@ -62,6 +65,8 @@ _OPERANDS = {
         f"StorageClass.{name}KHR": rf"^\s*%\w+ = OpVariable %\w+ {name}(?:KHR|NV)\b"
         for name in ("RayPayload", "CallableData", "ShaderRecordBuffer")
     },
+    # A fragment stage whose accesses are ordered opens its interlocked region.
+    "OpBeginInvocationInterlockEXT": r"^\s*OpBeginInvocationInterlockEXT\b",
     "OpTraceRayKHR": r"^\s*OpTraceRayKHR\b",
     "OpExecuteCallableKHR": r"^\s*OpExecuteCallableKHR\b",
     "OpReportIntersectionKHR": r"^\s*%\w+ = OpReportIntersection(?:KHR|NV)\b",
@@ -75,6 +80,8 @@ _OPERANDS = {
     # decorated with that set.
     "StorageClass.PushConstant": r"^\s*%\w+ = OpVariable %\w+ PushConstant\b",
     "Decoration.DescriptorSet": r"^\s*OpDecorate %\w+ DescriptorSet (?!0\b)\d+\b",
+    # Textures that share a sampler declare it apart from them.
+    "OpTypeSampler": r"^\s*%\w+ = OpTypeSampler\b",
 }
 
 # The enumerants SPIR-V shares with an earlier NV extension under one value, which a disassembler built from an older
@@ -83,7 +90,8 @@ _ALIASES = {"OutputLinesEXT": "OutputLinesNV", "PerPrimitiveEXT": "PerPrimitiveN
 
 # The metadata the Metal compiler writes in AIR for the attribute that carries each anchor: ``[[flat]]`` becomes
 # ``!"air.flat"`` and ``[[vertex_id]]`` ``!"air.vertex_id"``. A fragment function's ``[[position]]`` input is the
-# fragment coordinate, and ``[[color(n)]]`` is a render target at a location. A capability has no attribute, so a
+# fragment coordinate, ``[[color(n)]]`` is a render target at a location, and an argument in a ``raster_order_group``
+# is ordered as the pixel-interlocked accesses of SPIR-V are. A capability has no attribute, so a
 # Metal translation is not checked for one.
 AIR = {
     "BuiltIn.FragCoord": "air.position",
@@ -107,6 +115,7 @@ AIR = {
     "Decoration.Location": "air.render_target",
     "ExecutionMode.EarlyFragmentTests": "early_fragment_tests",
     "ExecutionMode.DepthGreater": "air.greater",
+    "ExecutionMode.PixelInterlockOrderedEXT": "air.raster_order_group",
     "BuiltIn.BaseVertex": "air.base_vertex",
     "BuiltIn.BaseInstance": "air.base_instance",
     "BuiltIn.GlobalInvocationId": "air.thread_position_in_grid",
@@ -135,7 +144,8 @@ AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
 # ``__restrict`` pointer is a ``noalias`` kernel argument, a ``volatile`` one is read and written with volatile loads
 # and stores, a ``coherent(device)`` one through the ``device_coherent`` intrinsics, a quad patch is named in the
 # ``!"air.patch"`` metadata of its post-tessellation vertex function, and a mesh function's topology in its
-# ``!"air.mesh_type_info"``.
+# ``!"air.mesh_type_info"``. An array of textures of unknown length is an argument buffer: a structure type with a
+# ``%"struct.metal::texture2d"`` member.
 AIR_PATTERNS = {
     "BuiltIn.HelperInvocation": r"@air\.simd_is_helper_thread\(",
     "Decoration.SpecId": r"^!air\.function_constants = ",
@@ -145,7 +155,18 @@ AIR_PATTERNS = {
     "ExecutionMode.Quads": r'!"air\.patch", !"quad"',
     "ExecutionMode.OutputPoints": r'!"air\.mesh_type_info",[^\n]*!"air\.point"\}',
     "ExecutionMode.OutputLinesEXT": r'!"air\.mesh_type_info",[^\n]*!"air\.line"\}',
+    "Capability.RuntimeDescriptorArray": (
+        r'^%struct\.\w+ = type \{[^\n]*%"struct\.metal::texture\w*"'
+    ),
 }
+# An array of textures keeps its images as the elements of one array: ``Texture2D tex[2]`` is an ``OpTypeArray`` of
+# images, ``sampler2D tex[2]`` one of sampled images, and Metal's ``array<texture2d<float>, 2>`` an AIR array of
+# texture pointers, ``[2 x %struct._texture_2d_t addrspace(1)*]``.
+ELEMENTS = (
+    r"^\s*(%\w+) = OpTypeImage %\w+ {name} \d+ {arrayed}\b[\s\S]*^\s*(?:%\w+ = OpTypeArray \1\b"
+    r"|(%\w+) = OpTypeSampledImage \1\s*$[\s\S]*^\s*%\w+ = OpTypeArray \2\b)"
+)
+AIR_ELEMENTS = r"\[\d+ x "
 # The AIR type of a texture of each dimension: a ``texturecube`` argument is a ``%struct._texture_cube_t``, and an
 # arrayed one a ``%struct._texture_cube_array_t``.
 AIR_TEXTURES = {
@@ -166,11 +187,16 @@ _PATCH_VALUE = (
 )
 # The anchors a language's compiler resolves before it writes SPIR-V, with the declaration that keeps each one in the
 # translation itself: naga replaces every pipeline-overridable constant with its value, so a WGSL translation keeps a
-# specialization constant when it declares an ``override``.
+# specialization constant when it declares an ``override``. DXC gives a ``RWTexture2D<unorm float4>`` the ``Rgba32f``
+# format unless ``[[vk::image_format("rgba8")]]`` names another, so an HLSL translation keeps an 8-bit normalized
+# image with either.
 _STREAM_ANCHORS = ("Decoration.Stream", "Capability.GeometryStreams")
 SOURCE = {
     "wgsl": {"Decoration.SpecId": r"^\s*override\s+\w+"},
-    "hlsl": dict.fromkeys(_STREAM_ANCHORS, _STREAMS),
+    "hlsl": {
+        **dict.fromkeys(_STREAM_ANCHORS, _STREAMS),
+        "ImageFormat.Rgba8": r'\bunorm\s+float4\b|\[\[vk::image_format\("rgba8"\)\]\]',
+    },
     "slang": {
         **dict.fromkeys(_STREAM_ANCHORS, _STREAMS),
         "Decoration.Patch": _PATCH_VALUE,
@@ -179,6 +205,10 @@ SOURCE = {
 # The built-ins that are constants: GLSL defines ``gl_WorkGroupSize`` as the local size, so a translation may write
 # the value itself, as slangc does for ``WorkgroupSize()``.
 FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
+# The kinds of anchor a language leaves to the host, which a translation imported from it cannot carry: an OpenCL C
+# kernel names no image format, since the host gives each image its ``cl_image_format`` when it creates it, so the
+# HLSL CrossTL writes from an OpenCL C probe is not checked for one.
+HOSTED = {"opencl": frozenset({"ImageFormat"})}
 
 _ESSL_300 = re.compile(r"\A(\s*#version\s+)300(\s+es\b)")
 
@@ -196,6 +226,7 @@ def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
     # needs. Its other anchors are the layouts and access of buffers, which running the probe compares.
     kinds = _IMAGE_KINDS if feature.category == "resource" else _PATTERNS
     arrayed = int(feature.name.endswith("-array"))
+    elements = feature.name.startswith("array-of-")
     wanted = []
     for anchor in feature.group.split():
         kind, _, name = anchor.partition(".")
@@ -210,14 +241,16 @@ def _wanted(feature: Feature, language: str) -> list[tuple[str, str]]:
                 wanted.append((anchor, AIR_PATTERNS[anchor]))
             elif anchor in AIR_TEXTURES:
                 texture = AIR_TEXTURES[anchor] + ("_array" if arrayed else "")
-                wanted.append((anchor, rf"%struct\._{texture}_t\b"))
+                prefix = AIR_ELEMENTS if elements else ""
+                wanted.append((anchor, rf"{prefix}%struct\._{texture}_t\b"))
         else:
             spelled = re.escape(name)
             if name in _ALIASES:
                 spelled = f"(?:{spelled}|{_ALIASES[name]})"
-            pattern = _OPERANDS.get(anchor) or _PATTERNS[kind].format(
-                name=spelled, arrayed=arrayed
-            )
+            pattern = _OPERANDS.get(anchor)
+            if not pattern:
+                shape = ELEMENTS if elements and kind == "Dim" else _PATTERNS[kind]
+                pattern = shape.format(name=spelled, arrayed=arrayed)
             if anchor in _INSTRUCTIONS:
                 pattern = f"{pattern}|{_INSTRUCTIONS[anchor]}"
             wanted.append((anchor, pattern))
@@ -232,25 +265,32 @@ def _compiled(feature: Feature, language: str, source: str) -> str:
         return validators.air(source)
     if language == "webgl":
         language, source = "glsl", _ESSL_300.sub(r"\g<1>310\2", source, count=1)
-    if not validators.can_lower(language):
+    if not lowering.can_lower(language):
         return ""
     entry = (
         validators.hlsl_entry(source, feature.stage)
         if language in ("hlsl", "slang")
         else "main"
     )
-    assembly, _ = validators.lower(
+    assembly, _ = lowering.lower(
         language, source, entry, feature.stage, raw_ids=False, auto_locations=True
     )
     return assembly
 
 
-def lost(feature: Feature, language: str, source: str) -> str:
+def lost(feature: Feature, language: str, source: str, imported: str = "") -> str:
     """The anchors of ``feature`` that ``source``, a validated translation into ``language``, no longer has.
 
-    Empty when it keeps them all, when ``feature`` has none to check or when ``source`` cannot be compiled here.
+    Empty when it keeps them all, when ``feature`` has none to check or when ``source`` cannot be compiled here. A
+    translation ``imported`` from another language is not checked for the anchors that language leaves to the host
+    (:data:`HOSTED`).
     """
-    wanted = _wanted(feature, language)
+    hosted = HOSTED.get(imported, frozenset())
+    wanted = [
+        (anchor, pattern)
+        for anchor, pattern in _wanted(feature, language)
+        if anchor.partition(".")[0] not in hosted
+    ]
     declared = SOURCE.get(language, {})
     missing = [
         anchor

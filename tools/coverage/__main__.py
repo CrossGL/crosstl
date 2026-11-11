@@ -18,7 +18,9 @@ from . import (
     compare,
     execution,
     features,
+    github,
     issues,
+    lowering,
     publish,
     report,
     runner,
@@ -128,7 +130,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _lowering_gaps(language: str) -> list[str]:
     """The tools a language's SPIR-V lowering needs that are not installed."""
-    tools = (validators.SPIRV_COMPILERS[language][0], "spirv-dis")
+    tools = (lowering.SPIRV_COMPILERS[language][0], "spirv-dis")
     return [tool for tool in tools if not validators.command(tool)]
 
 
@@ -142,7 +144,7 @@ def _run(args: argparse.Namespace) -> int:
     ] + [
         f"{language} lowering to SPIR-V ({', '.join(_lowering_gaps(language))})"
         for language in languages
-        if language in validators.SPIRV_COMPILERS and not validators.can_lower(language)
+        if language in lowering.SPIRV_COMPILERS and not lowering.can_lower(language)
     ]
     # SPIR-V input probes are lowered from GLSL, and from HLSL for the constructs GLSL cannot spell.
     gaps = dict.fromkeys(
@@ -220,11 +222,11 @@ def _issues(args: argparse.Namespace) -> int:
     try:
         actions = issues.reconcile(
             data,
-            issues.GitHub(args.repository),
+            github.GitHub(args.repository),
             new_bugs=args.new_bugs,
             dry_run=args.dry_run,
         )
-    except issues.GitHubError as error:
+    except github.GitHubError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     print(f"{len(actions)} issue changes" + (" planned" if args.dry_run else ""))
@@ -264,12 +266,12 @@ def _tools() -> int:
             + "  "
             + row[3]
         )
-    lowering = ", ".join(
-        f"{language} {'yes' if validators.can_lower(language) else 'no'}"
-        for language in sorted(validators.SPIRV_COMPILERS)
+    lowerable = ", ".join(
+        f"{language} {'yes' if lowering.can_lower(language) else 'no'}"
+        for language in sorted(lowering.SPIRV_COMPILERS)
     )
     print(
-        f"\nLowering to SPIR-V for the CrossGL IR row (also needs spirv-dis): {lowering}"
+        f"\nLowering to SPIR-V for the CrossGL IR row (also needs spirv-dis): {lowerable}"
     )
     print("CI uses the versions pinned in .github/workflows/coverage.yml.")
     return 0

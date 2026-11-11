@@ -63,6 +63,7 @@ from ..resource_identity import resource_identity_marker
 from ..semantics.array_layers import metal_sampled_array_layer
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
 from ..semantics.constant_buffers import lower_constant_buffer_resources
+from ..semantics.declared_types import declared_type_names
 from ..semantics.hlsl_ray_payloads import PAYLOAD_ACCESS_ATTRIBUTES
 from ..semantics.narrowing_constructors import select_narrowing_constructor_components
 from ..semantics.sampler_states import is_sampler_constructor
@@ -198,6 +199,7 @@ from .generic_struct_utils import (
     normalize_specialization_type_text,
     render_constructor_arguments,
 )
+from .glsl_buffer_array_values import glsl_buffer_array_value_type
 from .glsl_buffer_block_arrays import (
     glsl_buffer_array_elements,
     glsl_buffer_block_indexed_access,
@@ -409,6 +411,11 @@ from .metal_buffer_resource_types import metal_buffer_resource_scope_type
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_comparison_signs import metal_sign_matched_comparison_operands
+from .metal_constant_initializers import (
+    folded_helper_is_unused,
+    metal_constant_initializer,
+    restore_static_initializer_helpers,
+)
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
@@ -439,6 +446,7 @@ from .metal_reference_argument_conditions import generate_header_writeback_state
 from .metal_reference_argument_order import generate_ordered_writeback_statement
 from .metal_reference_argument_returns import generate_return_writeback_statement
 from .metal_reference_call_results import generate_call_result_statement
+from .metal_reference_sequenced_calls import generate_conditional_call_statement
 from .metal_refusals import metal_refusals
 from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
@@ -516,6 +524,7 @@ from .storage_image_texels import (
     texel_store_value,
     texel_vector_type,
 )
+from .storage_word_views import reinterpret_source_layout
 from .texture_lod_clamp import (
     is_texture_lod_clamp_operation,
     metal_texture_lod_clamp_call,
@@ -528,6 +537,16 @@ from .texture_residency import (
     metal_texture_resident_call,
 )
 from .workgroup_size_extents import fold_workgroup_size_extents
+from .written_function_names import (
+    METAL_CALLABLE_FUNCTION_NAMES,
+    refuse_written_foreign_calls,
+)
+from .written_type_names import (
+    METAL_TYPE_NAMES,
+    refuse_written_foreign_types,
+    sized_float_spelling,
+    written_type_name,
+)
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
     "glsl.extension.GL_EXT_fragment_invocation_density",
@@ -644,6 +663,11 @@ class MetalCodeGen(
     MetalNarrowVectorMixin,
 ):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
+
+    # The type names the program being rendered declares, and the foreign built-in type names its rendering has
+    # written so far (``None`` outside a rendering); see :func:`written_type_name`.
+    program_type_names = frozenset()
+    written_foreign_type_names = None
 
     BINARY_PRECEDENCE = {
         "||": 1,
@@ -1185,6 +1209,7 @@ class MetalCodeGen(
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
+        self.metal_sequenced_call_ids = set()
         self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
@@ -1830,6 +1855,7 @@ class MetalCodeGen(
         scoped_ast.metal_constant_conversion_operators = (
             self.collect_metal_constant_conversion_operators(self.all_functions(ast))
         )
+        restore_static_initializer_helpers(self, ast, scoped_ast)
         return scoped_ast
 
     def entry_scoped_functions(self, ast, entry_function):
@@ -2104,7 +2130,16 @@ class MetalCodeGen(
 
     def render_checked_program(self, ast, target_stage=None):
         """Render the program and refuse the types the Metal language does not have."""
-        output = self.render_program(ast, target_stage)
+        self.program_type_names = declared_type_names(ast)
+        self.written_foreign_type_names = set()
+        try:
+            output = self.render_program(ast, target_stage)
+            refuse_written_foreign_types(
+                output, self.written_foreign_type_names, "Metal"
+            )
+            refuse_written_foreign_calls(output, METAL_CALLABLE_FUNCTION_NAMES, "Metal")
+        finally:
+            self.written_foreign_type_names = None
         refuse_metal_double_values(output, self.refuse_lowering)
         return output
 
@@ -2257,9 +2292,6 @@ class MetalCodeGen(
                 self.expression_name,
             )
         )
-        self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
-            all_functions
-        )
         self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
             self.cbuffer_variables
         )
@@ -2297,6 +2329,7 @@ class MetalCodeGen(
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
+        self.metal_sequenced_call_ids = set()
         self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
@@ -2545,6 +2578,7 @@ class MetalCodeGen(
         self.required_metal_integer_dot_helper = False
         self.metal_argument_substitutions = {}
         self.metal_writeback_statement_ids = set()
+        self.metal_sequenced_call_ids = set()
         self.metal_writeback_temporary_count = 0
         self.required_metal_ray_query_runtime = False
         self.required_metal_ray_desc_runtime = False
@@ -2718,6 +2752,16 @@ class MetalCodeGen(
                     self.generic_struct_specializations,
                 )
             )
+        # Collect cbuffer dependencies after generic specializations exist, so a
+        # specialization that reads a cbuffer member (e.g. `scaled_float` reading
+        # `gain`) gets the cbuffer threaded as a parameter like any other helper.
+        # The unspecialized generic templates are excluded, mirroring the
+        # global-resource collection below: emission and call sites query the
+        # specialization name, not the template name.
+        self.function_cbuffer_dependencies = self.collect_function_cbuffer_dependencies(
+            [f for f in all_functions if not generic_function_parameters(f)]
+            + list(generic_function_specializations.values())
+        )
         wave_dependency_functions = list(all_functions) + list(
             generic_function_specializations.values()
         )
@@ -3365,6 +3409,7 @@ class MetalCodeGen(
         if cbuffers:
             code += "// Constant Buffers\n"
             code += self.generate_cbuffers(ast)
+        code += self.metal_hlsl_structured_element_definitions()
 
         stage_entry_names = self.stage_entry_names(ast, target_stage)
         self.metal_compute_only_program = self.metal_program_is_compute_only(
@@ -3415,7 +3460,7 @@ class MetalCodeGen(
                         func
                     ),
                 )
-            else:
+            elif not folded_helper_is_unused(self, func):
                 functions_code += self.generate_function(func)
 
         if hasattr(ast, "stages") and ast.stages:
@@ -4896,7 +4941,10 @@ class MetalCodeGen(
                 source_location=getattr(member, "source_location", None),
             )
 
-        initializer = self.generate_expression_with_expected(default_value, raw_type)
+        # A member-wise constructor helper is not a constant expression.
+        initializer = metal_constant_initializer(
+            self, default_value, raw_type
+        ) or self.generate_expression_with_expected(default_value, raw_type)
         dependencies = self.metal_struct_type_dependencies(mapped_type)
         return (
             f"    static constant constexpr {mapped_type} {member_name} = "
@@ -8590,7 +8638,14 @@ class MetalCodeGen(
             return_code = generate_return_writeback_statement(self, stmt, indent)
             if return_code is not None:
                 return return_code
-            writebacks = self.metal_reference_argument_writebacks(stmt)
+            conditional_calls = []
+            writebacks = self.metal_reference_argument_writebacks(
+                stmt, conditional_calls
+            )
+            if conditional_calls:
+                return generate_conditional_call_statement(
+                    self, stmt, indent, conditional_calls, writebacks
+                )
             if writebacks:
                 call_code = generate_call_result_statement(
                     self, stmt, indent, writebacks
@@ -8738,9 +8793,19 @@ class MetalCodeGen(
                         f"{indent_str}{address_space_conflict}\n"
                         f"{indent_str}{conflict_declaration};\n"
                     )
-                init_expr = self.generate_expression_with_expected(
-                    initial_value, var_type
-                )
+                # An array initializer renders the value's elements, so the value itself is rendered only when
+                # it is used: a whole buffer block array has no Metal expression.
+                array_initializer = None
+                if value_array_type is None and not is_atomic_local:
+                    array_initializer = generate_metal_array_initializer(
+                        self, initial_value, var_type
+                    )
+                if array_initializer is not None:
+                    init_expr = array_initializer
+                else:
+                    init_expr = self.generate_expression_with_expected(
+                        initial_value, var_type
+                    )
                 if self.local_pointer_initializer_needs_address(stmt, initial_value):
                     init_expr = f"&{init_expr}"
                 address_space_mismatch = (
@@ -8764,11 +8829,6 @@ class MetalCodeGen(
                     if address_space_mismatch is not None
                     else ""
                 )
-                if value_array_type is None:
-                    init_expr = (
-                        generate_metal_array_initializer(self, initial_value, var_type)
-                        or init_expr
-                    )
                 return f"{diagnostic_prefix}{indent_str}{declaration} = {init_expr};\n"
             else:
                 return f"{indent_str}{declaration};\n"
@@ -8845,6 +8905,9 @@ class MetalCodeGen(
                         f"{indent_str}return {return_wrapper['struct_name']}"
                         f"{{{value}}};\n"
                     )
+                array_return = self.metal_glsl_buffer_array_return(stmt.value)
+                if array_return is not None:
+                    return f"{indent_str}return {array_return};\n"
                 value = self.generate_expression_with_expected(
                     stmt.value, self.current_function_return_type
                 )
@@ -10954,6 +11017,8 @@ class MetalCodeGen(
         if isinstance(expr, MemberAccessNode):
             block_access = self.glsl_buffer_block_member_access(expr)
             if block_access is not None:
+                if glsl_buffer_whole_array_reason(block_access, indexed=False):
+                    return glsl_buffer_array_value_type(block_access)
                 return block_access["type"]
             object_type = self.expression_result_type(
                 expr.object
@@ -11616,6 +11681,12 @@ class MetalCodeGen(
         )
         if remainder is not None:
             return self.generate_assignment(remainder)
+        if op == "=":
+            # Copied element by element, so the value itself is never rendered: a whole buffer block array has no
+            # Metal expression.
+            array_copy = generate_metal_array_copy(self, target, value)
+            if array_copy is not None:
+                return array_copy
         rhs = self.generate_expression_with_expected(
             value, self.metal_assignment_value_type(target, value, op)
         )
@@ -11623,9 +11694,6 @@ class MetalCodeGen(
             converted = self.metal_registered_structure_assignment(target, value)
             if converted is not None:
                 rhs = converted
-            array_copy = generate_metal_array_copy(self, target, value)
-            if array_copy is not None:
-                return array_copy
 
         reference_declaration = self.generate_local_reference_assignment_declaration(
             target, value, rhs
@@ -24218,6 +24286,22 @@ class MetalCodeGen(
             f"{access['component_type']} buffer members",
         )
 
+    def metal_glsl_buffer_array_return(self, value):
+        """``{e0, e1, ...}`` returning a whole buffer block array from an array-valued function, or ``None``.
+
+        A Metal function returns ``array<T, N>``, which a brace list of the element loads initializes; the array
+        itself has no Metal expression (glsl_buffer_array_values).
+        """
+        access = self.glsl_buffer_block_array_access(value)
+        indexed = access is not None
+        if access is None:
+            access = self.glsl_buffer_block_member_access(value)
+        if glsl_buffer_whole_array_reason(access, indexed=indexed) is None:
+            return None
+        return generate_metal_array_initializer(
+            self, value, glsl_buffer_array_value_type(access)
+        )
+
     def metal_glsl_buffer_whole_array_check(self, access, *, indexed):
         reason = glsl_buffer_whole_array_reason(access, indexed=indexed)
         if reason is not None:
@@ -28679,7 +28763,19 @@ class MetalCodeGen(
                 component = "float"
             return f"{component}{fixed_float_vector.group('lanes')}"
 
-        return self.type_mapping.get(vtype_str, vtype_str)
+        if vtype_str not in self.type_mapping:
+            if sized_float_spelling(vtype_str) != vtype_str:
+                return self.map_type(sized_float_spelling(vtype_str))
+            if re.fullmatch(r"double(?:[234](?:x[234])?)?", vtype_str):
+                # Refused with the specification's reason by ``refuse_metal_double_values``.
+                return vtype_str
+            return written_type_name(
+                vtype_str,
+                METAL_TYPE_NAMES,
+                self.program_type_names,
+                self.written_foreign_type_names,
+            )
+        return self.type_mapping[vtype_str]
 
     def cooperative_matrix_contract(self, matrix_type):
         if isinstance(matrix_type, CooperativeMatrixType):
@@ -29082,6 +29178,16 @@ class MetalCodeGen(
             ):
                 self.metal_storage_pointer_reinterpret_error(
                     expression, contract, "source-alignment-unproven", source_type
+                )
+
+        if contract.get("scalarWrapperView"):
+            # The source words must be one 32-bit scalar or such a wrapper.
+            source_layout, _ = reinterpret_source_layout(
+                source_pointee, self.structs_by_name
+            )
+            if source_layout is None or source_layout.bit_width != 32:
+                self.metal_storage_pointer_reinterpret_error(
+                    expression, contract, "source-element-layout-mismatch", source_type
                 )
 
         if contract.get("aggregateHomogeneousScalarArrayRead"):

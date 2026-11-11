@@ -393,11 +393,31 @@ void main() {
 """
 
 
-def test_metal_refuses_an_array_copy_whose_subscript_steps(tmp_path):
-    # Metal copies C arrays element by element, which would step 'i' once per element; it used to emit
-    # 'b[cgl_rule_wrap_postinc(i)][k]' inside the copy loop.
+def test_metal_binds_a_stepped_array_row_once(tmp_path):
+    # Metal copies C arrays element by element. The stepped row is bound to a thread reference first, so 'i' steps
+    # once; the copy loop used to repeat 'b[cgl_rule_wrap_postinc(i)][k]' for every element.
     path = tmp_path / "copy.comp"
     path.write_text(ARRAY_COPY_STEP)
+
+    code = "".join(crosstl.translate(str(path), backend="metal").split())
+
+    assert "threadauto&__crossgl_array_source_0=b[cgl_rule_wrap_postinc(i)];" in code
+    assert (
+        "part[__crossgl_array_index_1]=__crossgl_array_source_0[__crossgl_array_index_1];"
+        in code
+    )
+    assert code.count("cgl_rule_wrap_postinc(i)") == 1
+
+
+def test_metal_refuses_a_stepped_copy_from_threadgroup_storage(tmp_path):
+    # Only thread storage is bound by reference; a shared array would need a threadgroup reference.
+    path = tmp_path / "copy.comp"
+    path.write_text(
+        ARRAY_COPY_STEP.replace(
+            "    float b[2][3] = float[2][3](float[3](1.0, 2.0, 3.0), float[3](4.0, 5.0, 6.0));\n",
+            "    b[0][0] = 1.0;\n",
+        ).replace("void main() {", "shared float b[2][3];\nvoid main() {")
+    )
 
     with pytest.raises(Exception, match="operands have effects"):
         crosstl.translate(str(path), backend="metal")

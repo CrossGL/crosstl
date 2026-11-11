@@ -1,12 +1,12 @@
 """Helper-invocation, early-fragment-tests, layer, viewport-index, point-coordinate and conservative-depth probes:
 how a fragment shader meets the fixed-function stages around it.
 
-Each probe is the fragment probe of :mod:`.graphics` with one change. It reads whether the invocation is a helper,
-the layer or viewport it renders to or its position in a point sprite into the colour it writes, asks for the depth
-and stencil tests to run before it, or promises that the depth it writes never lies in front of the rasterised
+Each probe is the fragment probe of the language's module with one change. It reads whether the invocation is a
+helper, the layer or viewport it renders to or its position in a point sprite into the colour it writes, asks for the
+depth and stencil tests to run before it, or promises that the depth it writes never lies in front of the rasterised
 depth. GLSL uses ``gl_HelperInvocation``, ``layout(early_fragment_tests) in``, ``gl_Layer``, ``gl_ViewportIndex``,
-``gl_PointCoord`` and ``layout(depth_greater)``. HLSL and Slang use ``IsHelperLane()``, ``[earlydepthstencil]``
-and the ``SV_RenderTargetArrayIndex``, ``SV_ViewportArrayIndex`` and ``SV_DepthGreaterEqual`` semantics, and Slang
+``gl_PointCoord`` and ``layout(depth_greater)``. HLSL and Slang use ``IsHelperLane()``, ``[earlydepthstencil]`` and
+the ``SV_RenderTargetArrayIndex``, ``SV_ViewportArrayIndex`` and ``SV_DepthGreaterEqual`` semantics, and Slang
 ``SV_PointCoord`` as well. Metal uses ``simd_is_helper_thread()``, ``[[early_fragment_tests]]`` and the
 ``[[render_target_array_index]]``, ``[[viewport_array_index]]``, ``[[point_coord]]`` and ``[[depth(greater)]]``
 attributes. Rust uses the ``helper_invocation``, ``layer``, ``viewport_index``, ``point_coord`` and ``frag_depth``

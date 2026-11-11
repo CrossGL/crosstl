@@ -1,4 +1,4 @@
-"""Operator probes in the languages that do not write them as the C family does (:data:`.base.OPERATORS`).
+"""Operator probes in the languages that do not write them as the C family does (:data:`.family.OPERATORS`).
 
 C converts with casts, HLSL multiplies matrices with ``mul`` and fills them by rows, WGSL shifts by unsigned amounts,
 Mojo divides integers with ``//`` and has no matrices, and Rust converts with ``as`` and complements with ``!``.
@@ -6,7 +6,8 @@ Mojo divides integers with ``//`` and has no matrices, and Rust converts with ``
 
 from __future__ import annotations
 
-from .base import ABSENT, OPERATORS, Template
+from .base import ABSENT, Template
+from .family import OPERATORS
 
 
 def c_casts(unsigned: str) -> dict[str, Template]:

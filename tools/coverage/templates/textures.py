@@ -3,17 +3,17 @@
 
 Each probe is a compute kernel that reads one texel of a texture with that shape at an explicit level of detail and
 stores its first component, as ``sampled-texture`` does for a 2D texture. GLSL and CrossGL use ``sampler1D``,
-``sampler3D``, ``samplerCube``, ``sampler2DArray``, ``samplerCubeArray`` and ``samplerBuffer``, HLSL and Slang the
-matching ``Texture*`` types and ``Buffer``, Metal ``texture1d``, ``texture3d``, ``texturecube``, ``texture2d_array``,
-``texturecube_array`` and ``texture_buffer``, WGSL the ``texture_*`` types, and rust-gpu the ``Image!`` shapes. CUDA
-and HIP read texture objects through ``tex1DLod``, ``tex3DLod``, ``texCubemapLod``, ``tex2DLayeredLod``,
-``texCubemapLayeredLod`` and ``tex1Dfetch``, and OpenCL C reads ``image1d_t``, ``image3d_t``, ``image2d_array_t``
-and ``image1d_buffer_t`` images.
+``sampler3D``, ``samplerCube``, ``sampler2DArray``, ``samplerCubeArray``, ``sampler1DArray`` and ``samplerBuffer``,
+HLSL and Slang the matching ``Texture*`` types and ``Buffer``, Metal ``texture1d``, ``texture3d``, ``texturecube``,
+``texture2d_array``, ``texturecube_array``, ``texture1d_array`` and ``texture_buffer``, WGSL the ``texture_*`` types,
+and rust-gpu the ``Image!`` shapes. CUDA and HIP read texture objects through ``tex1DLod``, ``tex3DLod``,
+``texCubemapLod``, ``tex2DLayeredLod``, ``texCubemapLayeredLod``, ``tex1DLayeredLod`` and ``tex1Dfetch``, and OpenCL
+C reads ``image1d_t``, ``image3d_t``, ``image2d_array_t``, ``image1d_array_t`` and ``image1d_buffer_t`` images.
 
 A buffer texture is read with a texel fetch, since it has no sampler. Metal has no level of detail for a 1D texture,
 and WGSL samples no 1D texture, so those probes read it without one and with ``textureLoad``. WGSL has no buffer
-textures, OpenCL C no cube images, GLSL ES 3.00 none of 1D, cube-array or buffer textures, and Mojo's kernels take
-no textures.
+textures or 1D array textures, OpenCL C no cube images, GLSL ES 3.00 none of 1D, 1D-array, cube-array or buffer
+textures, and Mojo's kernels take no textures.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ NAMES = (
     "texture-cube",
     "texture-2d-array",
     "texture-cube-array",
+    "texture-1d-array",
     "texel-buffer",
 )
 
@@ -36,6 +37,7 @@ _GLSL_SHAPES = {
     "texture-cube": ("samplerCube", "vec3(fin[i], 0.5, 1.0)"),
     "texture-2d-array": ("sampler2DArray", "vec3(fin[i], 0.5, 1.0)"),
     "texture-cube-array": ("samplerCubeArray", "vec4(fin[i], 0.5, 1.0, 1.0)"),
+    "texture-1d-array": ("sampler1DArray", "vec2(fin[i], 1.0)"),
 }
 _FETCH = "outp[i] = texelFetch(tex, int(fin[i])).x;"
 
@@ -74,6 +76,7 @@ _HLSL_SHAPES = {
     "texture-cube": ("TextureCube", "float3(fin[i], 0.5, 1.0)"),
     "texture-2d-array": ("Texture2DArray", "float3(fin[i], 0.5, 1.0)"),
     "texture-cube-array": ("TextureCubeArray", "float4(fin[i], 0.5, 1.0, 1.0)"),
+    "texture-1d-array": ("Texture1DArray", "float2(fin[i], 1.0)"),
 }
 HLSL = {
     **{
@@ -98,6 +101,7 @@ _METAL_SHAPES = {
         "texturecube_array",
         "float3(fin[i], 0.5, 1.0), 1, level(0.0)",
     ),
+    "texture-1d-array": ("texture1d_array", "fin[i], 1"),
 }
 METAL = {
     **{
@@ -126,6 +130,7 @@ WGSL = {
         "outp[i] = textureLoad(tex, i32(fin[i]), 0).x;",
         "@group(0) @binding(4) var tex: texture_1d<f32>;",
     ),
+    "texture-1d-array": ABSENT,
     **{
         name: Template(
             f"outp[i] = textureSampleLevel(tex, smp, {arguments}).x;",
@@ -145,6 +150,7 @@ _CUDA_READS = {
     "texture-cube-array": (
         "texCubemapLayeredLod<float4>(tex, fin[i], 0.5f, 1.0f, 1, 0.0f)"
     ),
+    "texture-1d-array": "tex1DLayeredLod<float4>(tex, fin[i], 1, 0.0f)",
     "texel-buffer": "tex1Dfetch<float4>(tex, int(fin[i]))",
 }
 CUDA = {
@@ -160,12 +166,13 @@ _OPENCL_SAMPLER = (
     "__constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | "
     "CLK_FILTER_LINEAR;"
 )
-# Each OpenCL C probe's image type and the coordinate it reads at; a 2D array image reads its layer as the third
-# coordinate.
+# Each OpenCL C probe's image type and the coordinate it reads at; an array image reads its layer as the coordinate
+# after the last one of its shape.
 _OPENCL_SHAPES = {
     "texture-1d": ("image1d_t", "fin[i]"),
     "texture-3d": ("image3d_t", "(float4)(fin[i], 0.5f, 0.5f, 0.0f)"),
     "texture-2d-array": ("image2d_array_t", "(float4)(fin[i], 0.5f, 1.0f, 0.0f)"),
+    "texture-1d-array": ("image1d_array_t", "(float2)(fin[i], 1.0f)"),
 }
 OPENCL = {
     **{
@@ -216,6 +223,29 @@ unsafe {
     );
 }
 outp[i] = color.x;"""
+# spirv-std samples no 1D array image, since it takes no two-component coordinate for one, so the probe writes the
+# sample in SPIR-V as well.
+_RUST_SAMPLE = """let coordinate = Vec2::new(fin[i], 1.0);
+let lod = 0.0f32;
+let mut color = Vec4::ZERO;
+unsafe {
+    asm!(
+        "%image = OpLoad _ {tex}",
+        "%sampler = OpLoad _ {sampler}",
+        "%coordinate = OpLoad _ {coordinate}",
+        "%lod = OpLoad _ {lod}",
+        "%sampled = OpSampledImage _ %image %sampler",
+        "%color = OpImageSampleExplicitLod typeof*{color} %sampled %coordinate Lod %lod",
+        "OpStore {color} %color",
+        tex = in(reg) tex,
+        sampler = in(reg) sampler,
+        coordinate = in(reg) &coordinate,
+        lod = in(reg) &lod,
+        color = in(reg) &mut color,
+    );
+}
+outp[i] = color.x;"""
+_RUST_ASM = "#![feature(asm_experimental_arch)]\nuse core::arch::asm;\n"
 RUST = {
     **{
         name: Template(
@@ -227,9 +257,15 @@ RUST = {
         )
         for name, (image, coordinate) in _RUST_SHAPES.items()
     },
+    "texture-1d-array": Template(
+        _RUST_SAMPLE,
+        prelude=_RUST_ASM + "use spirv_std::{Image, Sampler};",
+        params="#[spirv(descriptor_set = 0, binding = 3)] tex: &Image!(1D, type=f32, sampled, arrayed)"
+        + _RUST_SAMPLER,
+    ),
     "texel-buffer": Template(
         _RUST_FETCH,
-        prelude="#![feature(asm_experimental_arch)]\nuse core::arch::asm;\nuse spirv_std::Image;",
+        prelude=_RUST_ASM + "use spirv_std::Image;",
         params="#[spirv(descriptor_set = 0, binding = 3)] tex: &Image!(buffer, type=f32, sampled)",
     ),
 }

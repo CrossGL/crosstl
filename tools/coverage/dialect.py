@@ -201,6 +201,12 @@ class Dialect:
         """The baseline probe's store: it keeps the output buffer in use without computing anything."""
         return self.store("outp[i]")
 
+    def retain(self, kind: Type, name: str, statement: str) -> list[str]:
+        """Baseline probe statements that keep ``name``, a boolean argument of type ``kind``, in use around
+        ``statement``, the baseline's store. Empty for a language whose compiler keeps the values nothing uses.
+        """
+        return []
+
     def declare(self, kind: Type, name: str, value: str = "") -> str:
         initial = f" = {value}" if value else ""
         return f"{self.type(kind)} {name}{initial};"
@@ -272,6 +278,10 @@ class Dialect:
 
     def statement(self, expression: str) -> str:
         return f"{expression};"
+
+    def discard(self, expression: str) -> str:
+        """A statement that evaluates ``expression`` and drops the value it returns."""
+        return self.statement(expression)
 
     def flat(self, kind: str) -> str:
         """A shader input of type ``kind`` that is not interpolated."""

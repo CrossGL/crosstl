@@ -353,12 +353,12 @@
         "sizeBytes": 1606
       },
       "searchsorted_complex64_left": {
-        "sha256": "358568869a5189ec0373ad5d7549ed78ff0ff6f42e5b77d3ece0e76e56e007d5",
-        "sizeBytes": 2272
+        "sha256": "62bf24fade10d25ec81db81673a38d41c17dc4f4f361cf9747718fb02b4c8aee",
+        "sizeBytes": 2288
       },
       "searchsorted_complex64_right": {
-        "sha256": "69020d6d86d31743f5bae0818a9dc86debbee5333f8da53ddbe214cad302bec2",
-        "sizeBytes": 2270
+        "sha256": "f731484496be18a2f8e05e1ee51da203086fa9be7b97635a3b64ff6338030543",
+        "sizeBytes": 2286
       }
     }
   },

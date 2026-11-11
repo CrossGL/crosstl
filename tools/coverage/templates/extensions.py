@@ -1,15 +1,15 @@
 """Barycentric-coordinate, shading-rate, view-index and stencil-export probes: fragment built-ins that GLSL takes
 from extensions.
 
-Each probe is the fragment probe of :mod:`.graphics` with one built-in added: it reads the fragment's barycentric
+Each probe is the fragment probe of the language's module with one built-in added: it reads the fragment's barycentric
 coordinates, its shading rate or the index of the view it renders into the colour it writes, or writes a stencil
 reference next to the colour. GLSL uses ``gl_BaryCoordEXT`` (GL_EXT_fragment_shader_barycentric),
-``gl_ShadingRateEXT`` (GL_EXT_fragment_shading_rate), ``gl_ViewIndex`` (GL_EXT_multiview) and
-``gl_FragStencilRefARB`` (GL_ARB_shader_stencil_export). HLSL and Slang use the ``SV_Barycentrics``,
-``SV_ShadingRate``, ``SV_ViewID`` and ``SV_StencilRef`` semantics. Metal uses the ``[[barycentric_coord]]`` and
-``[[stencil]]`` attributes and renders views through vertex amplification, whose ``[[amplification_id]]`` names the
-view. Rust uses the ``bary_coord``, ``view_index`` and ``frag_stencil_ref_ext`` attributes, and GLSL ES 3.00 reads
-``gl_ViewID_OVR`` (OVR_multiview2). CrossGL uses the GLSL names as member semantics.
+``gl_ShadingRateEXT`` (GL_EXT_fragment_shading_rate), ``gl_ViewIndex`` (GL_EXT_multiview) and ``gl_FragStencilRefARB``
+(GL_ARB_shader_stencil_export). HLSL and Slang use the ``SV_Barycentrics``, ``SV_ShadingRate``, ``SV_ViewID`` and
+``SV_StencilRef`` semantics. Metal uses the ``[[barycentric_coord]]`` and ``[[stencil]]`` attributes and renders views
+through vertex amplification, whose ``[[amplification_id]]`` names the view. Rust uses the ``bary_coord``,
+``view_index`` and ``frag_stencil_ref_ext`` attributes, and GLSL ES 3.00 reads ``gl_ViewID_OVR`` (OVR_multiview2).
+CrossGL uses the GLSL names as member semantics.
 
 Metal has no shading-rate input and rust-gpu no shading-rate built-in. WGSL has none of the four built-ins, and GLSL
 ES 3.00 only the view index. The kernel languages have no fragment stage.

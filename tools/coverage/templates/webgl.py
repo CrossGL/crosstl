@@ -11,7 +11,7 @@ from __future__ import annotations
 from .abstractions import FAMILY as _ABSTRACTIONS
 from .abstractions import GLSL as _ABSTRACTIONS_GLSL
 from .aggregates import FAMILY as _AGGREGATES
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
 from .bindings import WEBGL as _BINDINGS
 from .blocks import WEBGL as _BLOCKS
 from .booleans import WEBGL as _BOOLEANS
@@ -24,6 +24,8 @@ from .edges import FAMILY as _EDGES
 from .elements import WEBGL as _ELEMENTS
 from .evaluation import WEBGL as _EVALUATION
 from .extensions import WEBGL as _EXTENSIONS
+from .family import C_FAMILY
+from .formats import WEBGL as _FORMATS
 from .forms import FAMILY as _FORMS
 from .forms import GLSL as _FORMS_GLSL
 from .fragments import WEBGL as _FRAGMENTS
@@ -31,10 +33,12 @@ from .helpers import WEBGL as _HELPERS
 from .identifiers import WEBGL as _IDENTIFIERS
 from .idioms import FAMILY as _IDIOMS
 from .idioms import GLSL as _IDIOMS_GLSL
+from .images import WEBGL as _IMAGES
 from .initializers import FAMILY as _INITIALIZERS
 from .initializers import GLSL as _INITIALIZERS_GLSL
 from .integers import WEBGL as _INTEGERS
 from .interfaces import WEBGL as _INTERFACES
+from .interlocks import WEBGL as _INTERLOCKS
 from .layouts import WEBGL as _LAYOUTS
 from .lexical import FAMILY as _LEXICAL
 from .lexical import WEBGL as _LEXICAL_WEBGL
@@ -52,8 +56,10 @@ from .rays import WEBGL as _RAYS
 from .records import WEBGL as _RECORDS
 from .relations import GLSL as _RELATIONS
 from .rows import WEBGL as _ROWS
+from .samplers import WEBGL as _SAMPLERS
 from .scopes import WEBGL as _SCOPES
 from .specializations import WEBGL as _SPECIALIZATIONS
+from .storage import WEBGL as _STORAGE
 from .subgroups import WEBGL as _SUBGROUPS
 from .tasks import WEBGL as _TASKS
 from .tessellation import WEBGL as _TESSELLATION
@@ -141,10 +147,15 @@ WEBGL = {
     **_TASKS,
     **_RAYS,
     **_BINDINGS,
+    **_INTERLOCKS,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,
     **_TEXTURES,
+    **_IMAGES,
+    **_FORMATS,
+    **_SAMPLERS,
+    **_STORAGE,
     **dict.fromkeys(_ABSENT, ABSENT),
     **_COMPOSITES,
     **_CONSTRUCTORS,

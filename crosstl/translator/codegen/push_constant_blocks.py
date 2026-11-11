@@ -18,7 +18,10 @@ binds for push constants, so the program read constants from an unbound descript
   always declared (with its binding, and with the register loader of :mod:`.glsl_hlsl_cbuffer` when std140 cannot
   place the members) in the ``#else`` branch. A register loader the stage entries call is defined as an empty
   function in the Vulkan branch, where the block's members are read directly. A ``scalar`` block enables
-  ``GL_EXT_scalar_block_layout`` in the Vulkan branch.
+  ``GL_EXT_scalar_block_layout`` in the Vulkan branch. When placements move the members of a push-constant ``T``,
+  the Vulkan branch writes every member's ``layout(offset = N)`` and the std140 uniform block of the ``#else`` branch
+  is padded (floats up to a 16-byte boundary, then an array of ``vec4``) so that it holds each member at the same
+  byte; a member that std140 lays out differently, such as an array with a smaller stride, is refused.
 * Slang declares ``[[vk::push_constant]] cbuffer Name { [[vk::offset(N)]] T member; }`` or
   ``[[vk::push_constant]] ConstantBuffer<T> name``, which ``slangc`` lays out with the std430 rules and places in
   the ``PushConstant`` storage class; the block takes no ``vk::binding``, and ``slangc`` gives it a Direct3D
@@ -37,17 +40,27 @@ from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .array_utils import format_c_style_array_declaration
 from .buffer_member_layout import member_explicit_offset
 from .glsl_block_layout import (
+    STD140_LAYOUT,
     block_alignment,
     block_struct_placements,
     declared_buffer_layout,
+    member_explicit_alignment,
 )
-from .hlsl_buffer_layout import HlslLayoutError, HlslLayoutType
+from .glsl_hlsl_cbuffer import layout_scalar_offsets
+from .hlsl_buffer_layout import (
+    HlslLayoutError,
+    array_type,
+    scalar_type,
+    struct_type,
+    vector_type,
+)
 
 __all__ = [
     "PUSH_CONSTANT_GUARD",
     "PushConstantBlockError",
     "glsl_push_constant_cbuffer",
     "glsl_push_constant_struct_block",
+    "glsl_push_constant_struct_pads",
     "is_push_constant",
     "push_constant_block_layout",
     "slang_push_constant_cbuffer",
@@ -58,6 +71,8 @@ PUSH_CONSTANT_ATTRIBUTE = "push_constant"
 # GL_KHR_vulkan_glsl defines VULKAN when a shader is compiled for Vulkan; GL_ARB_gl_spirv has no push constants.
 PUSH_CONSTANT_GUARD = "#ifdef VULKAN\n"
 PUSH_CONSTANT_LAYOUTS = ("std430", "std140", "scalar")
+# Padding members of the OpenGL uniform block that places the members of a push-constant struct.
+PAD_PREFIX = "crosstl_push_constant_pad"
 SCALAR_BLOCK_LAYOUT_EXTENSION = "#extension GL_EXT_scalar_block_layout : require\n"
 
 
@@ -159,15 +174,19 @@ def _glsl_member_type(codegen, member, target, block, name):
     return mapped, ""
 
 
-def _glsl_members(codegen, members, name_of, block, offsets):
-    """The member declarations of a GLSL block; ``offsets`` writes each ``@ offset(N)`` as ``layout(offset = N)``."""
+def _glsl_members(codegen, members, name_of, block, offsets, placed=None):
+    """The member declarations of a GLSL block; ``offsets`` writes each ``@ offset(N)`` as ``layout(offset = N)``,
+    and ``placed``, one byte offset per member, writes that offset for every member."""
     code = ""
-    for member in members:
+    for index, member in enumerate(members):
         name = name_of(member)
         qualifiers = []
         if codegen.glsl_uniform_member_orientation(member):
             qualifiers.append("row_major")
-        offset = _member_offset(member, "opengl", block) if offsets else None
+        if placed is not None:
+            offset = placed[index]
+        else:
+            offset = _member_offset(member, "opengl", block) if offsets else None
         if offset is not None:
             qualifiers.append(f"offset = {offset}")
         member_type, suffix = _glsl_member_type(codegen, member, "opengl", block, name)
@@ -249,15 +268,26 @@ def glsl_push_constant_cbuffer(codegen, node, layout, block_name):
     return _glsl_guarded(vulkan, opengl, loaders)
 
 
-def _glsl_struct_offsets_agree(codegen, struct, block_layout, var_name):
-    """Refuse a member ``@ offset(N)`` of a push-constant ``T`` that moves the member from where ``block_layout``
-    places it. The uniform block of the OpenGL branch, like the other generators, does not place the members of a
-    struct, so GLSL writes no offsets for ``T``: one that agrees with the layout, such as an imported
-    ``[[vk::offset(N)]]``, needs none, and another one needs a cbuffer."""
+def _member_alignment(member, block):
+    try:
+        return member_explicit_alignment(member)
+    except HlslLayoutError as exc:
+        raise PushConstantBlockError("opengl", block, str(exc)) from exc
+
+
+def _glsl_struct_placements(codegen, struct, block_layout, var_name):
+    """``(member_types, placements)`` of a push-constant ``T`` whose ``@ offset(N)`` or ``@ align(N)`` moves a member
+    from where ``block_layout`` places it, else ``None``. ``member_types`` are the members' layout shapes and
+    ``placements`` their places under ``block_layout``.
+
+    GLSL's ``layout(offset = N)`` must be a multiple of the member's alignment (GLSL 4.60 section 4.4.5), so a vector
+    at a relaxed offset (:mod:`.glsl_block_layout`, as DXC places ``float s; float3 v;``) is refused.
+    """
     members = _members(struct)
     offsets = tuple(_member_offset(member, "opengl", var_name) for member in members)
-    if all(offset is None for offset in offsets):
-        return
+    alignments = tuple(_member_alignment(member, var_name) for member in members)
+    if all(value is None for value in offsets + alignments):
+        return None
     struct_name = str(getattr(struct, "name", ""))
     try:
         member_types = tuple(
@@ -268,27 +298,125 @@ def _glsl_struct_offsets_agree(codegen, struct, block_layout, var_name):
             for member in members
         )
         placed, _size = block_struct_placements(
-            HlslLayoutType(
-                "struct", struct_name=struct_name, members=member_types, offsets=offsets
-            ),
+            struct_type(struct_name, member_types, offsets, alignments),
             block_layout,
             root=True,
         )
-        plain, _size = block_struct_placements(
-            HlslLayoutType("struct", struct_name=struct_name, members=member_types),
-            block_layout,
-            root=True,
+        natural, _size = block_struct_placements(
+            struct_type(struct_name, member_types), block_layout, root=True
         )
     except HlslLayoutError as exc:
         raise PushConstantBlockError("opengl", var_name, str(exc)) from exc
-    for member, explicit, natural in zip(members, placed, plain):
-        if explicit.offset != natural.offset:
+    if all(explicit.offset == plain.offset for explicit, plain in zip(placed, natural)):
+        return None
+    for member, explicit, plain in zip(members, placed, natural):
+        alignment = block_alignment(explicit.layout_type, block_layout)
+        if explicit.offset % alignment:
             raise PushConstantBlockError(
                 "opengl",
                 var_name,
-                f"member '{member.name}' of struct '{struct_name}' is at byte {explicit.offset}, where {block_layout} "
-                f"places it at byte {natural.offset}; declare the block as a cbuffer to place its members",
+                f"member '{member.name}' of struct '{struct_name}' is at byte {explicit.offset}, where "
+                f"{block_layout} places it at byte {plain.offset}, and {explicit.offset} is not a multiple of its "
+                f"{block_layout} alignment {alignment}, so GLSL's layout(offset) cannot place it there "
+                "(GLSL 4.60 section 4.4.5)",
             )
+    return member_types, placed
+
+
+def _std140_offset(layout_members, layout_type):
+    """The std140 offset of ``layout_type`` declared after ``layout_members`` in a uniform block."""
+    placements, _size = block_struct_placements(
+        struct_type("", (*layout_members, ("", layout_type))), STD140_LAYOUT, root=True
+    )
+    return placements[-1].offset
+
+
+def _std140_padding(start, gap, name):
+    """``(declarations, layout members)`` of padding that fills ``gap`` bytes from byte ``start`` of a std140 block:
+    floats up to a 16-byte boundary, an array of ``vec4`` (stride 16), and floats for the rest.
+    """
+    float_type = scalar_type("float")
+    declarations, members = [], []
+    position, end = start, start + gap
+
+    def add(declaration, layout_type, size):
+        nonlocal position
+        declarations.append(f"    {declaration};\n")
+        members.append(("", layout_type))
+        position += size
+
+    while position < end and (position % 16 or end - position < 16):
+        add(f"float {name()}", float_type, 4)
+    if end - position >= 16:
+        count = (end - position) // 16
+        add(
+            f"vec4 {name()}[{count}]",
+            array_type(vector_type("float", 4), count),
+            16 * count,
+        )
+    while position < end:
+        add(f"float {name()}", float_type, 4)
+    return declarations, members
+
+
+def _std140_pads(member_types, placed, block_layout, var_name, names):
+    """The padding declared in front of each member of the std140 uniform block that stands for a push-constant
+    ``T`` when the shader is not compiled for Vulkan, so that std140 places every member where the push-constant
+    block does, by member name. A member that std140 places later, or lays out differently, is refused.
+    """
+    taken = set(names)
+    counter = iter(range(1 << 30))
+
+    def pad_name():
+        while True:
+            candidate = f"{PAD_PREFIX}{next(counter)}"
+            if candidate not in taken:
+                return candidate
+
+    float_type = scalar_type("float")
+    pads, layout_members = {}, []
+    for (name, member_type), placement in zip(member_types, placed):
+        try:
+            if _std140_offset(layout_members, member_type) < placement.offset:
+                start = _std140_offset(layout_members, float_type)
+                declarations, members = _std140_padding(
+                    start, placement.offset - start, pad_name
+                )
+                pads[name] = "".join(declarations)
+                layout_members.extend(members)
+            offset = _std140_offset(layout_members, member_type)
+            moved = offset != placement.offset or layout_scalar_offsets(
+                member_type, STD140_LAYOUT, offset
+            ) != layout_scalar_offsets(member_type, block_layout, placement.offset)
+        except HlslLayoutError as exc:
+            raise PushConstantBlockError("opengl", var_name, str(exc)) from exc
+        if moved:
+            raise PushConstantBlockError(
+                "opengl",
+                var_name,
+                f"member '{name}' is at byte {placement.offset} of the push-constant block, and std140, the layout "
+                "of the uniform block that stands for it outside Vulkan, cannot lay it out there",
+            )
+        layout_members.append((name, member_type))
+    return pads
+
+
+def glsl_push_constant_struct_pads(codegen, node, struct, var_name, array_suffix=""):
+    """Padding for the OpenGL uniform block of a push-constant ``ConstantBuffer<T>`` or ``uniform T``: the
+    declarations to write in front of each member of ``T``, by member name. Empty unless a member's ``@ offset(N)``
+    or ``@ align(N)`` moves it from where the push-constant layout places it."""
+    if node is None or not is_push_constant(node) or array_suffix:
+        return {}
+    block_layout = push_constant_block_layout(node, "opengl", var_name)
+    placements = _glsl_struct_placements(codegen, struct, block_layout, var_name)
+    if placements is None:
+        return {}
+    struct_name = getattr(struct, "name", None)
+    names = [
+        codegen.glsl_struct_member_name(struct_name, member.name)
+        for member in _members(struct)
+    ]
+    return _std140_pads(*placements, block_layout, var_name, names)
 
 
 def glsl_push_constant_struct_block(
@@ -297,6 +425,8 @@ def glsl_push_constant_struct_block(
     """``opengl``, the uniform block of a ``ConstantBuffer<T>`` or ``uniform T`` declaration, guarded by its
     push-constant block when the declaration is marked ``@push_constant``; ``opengl`` itself otherwise.
 
+    When the members of ``T`` carry placements that move them, the push-constant block writes every member's
+    ``layout(offset = N)`` and ``opengl`` is expected to hold the padding of :func:`glsl_push_constant_struct_pads`.
     ``marker`` is the resource identity line that starts ``opengl``; it stays in front of both branches.
     """
     if node is None or not is_push_constant(node):
@@ -310,7 +440,7 @@ def glsl_push_constant_struct_block(
     block_layout = push_constant_block_layout(node, "opengl", var_name)
     _claim(codegen, "opengl", var_name)
     struct_name = getattr(struct, "name", None)
-    _glsl_struct_offsets_agree(codegen, struct, block_layout, var_name)
+    placements = _glsl_struct_placements(codegen, struct, block_layout, var_name)
 
     def name_of(member):
         return codegen.glsl_struct_member_name(struct_name, member.name)
@@ -320,7 +450,18 @@ def glsl_push_constant_struct_block(
         node,
         block_layout,
         block_name,
-        _glsl_members(codegen, _members(struct), name_of, var_name, offsets=False),
+        _glsl_members(
+            codegen,
+            _members(struct),
+            name_of,
+            var_name,
+            offsets=False,
+            placed=(
+                None
+                if placements is None
+                else [placement.offset for placement in placements[1]]
+            ),
+        ),
         f" {var_name}",
     )
     if marker and opengl.startswith(marker):

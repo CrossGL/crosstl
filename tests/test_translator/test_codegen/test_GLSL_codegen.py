@@ -274,12 +274,16 @@ def test_glsl_clang_trailing_zero_builtins_respect_function_and_lexical_shadows(
     }
     """
 
-    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    # Calling the parameter ``__builtin_ctzl`` calls no function: GLSL has no function values, so the call is
+    # refused rather than written against a name the output does not declare. It is not the clang built-in either.
+    generated, message = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
+    assert "call to '__builtin_ctzl'" in message
     assert "int builtin_ctz(uint value)" in generated
     assert "return builtin_ctz(value);" in generated
     assert "int callLexicalShadow(uint builtin_ctzl, uint value)" in generated
-    assert "return __builtin_ctzl(value);" in generated
     assert "crossgl_ctz_" not in generated
     assert "findLSB(" not in generated
 
@@ -41108,6 +41112,57 @@ def test_opengl_multisample_image_samples_queries_use_texture_samples_builtin():
     assert "input." not in generated_code
 
 
+def test_opengl_multisample_storage_image_samples_queries_keep_image_samples_builtin(
+    tmp_path,
+):
+    shader = """
+    shader MultisampleStorageImageSamplesQuery {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer int* outp;
+            layout(rgba32f) uniform image2DMS u0;
+            layout(rgba32f) uniform image2DMSArray u1;
+            layout(r32i) uniform iimage2DMS u2;
+            layout(r32ui) uniform uimage2DMSArray u3;
+
+            void main() {
+                outp[0] = imageSamples(u0)
+                    + imageSamples(u1)
+                    + imageSamples(u2)
+                    + imageSamples(u3);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(rgba32f, binding = 0) uniform image2DMS u0;" in generated_code
+    assert "layout(rgba32f, binding = 1) uniform image2DMSArray u1;" in generated_code
+    assert "layout(r32i, binding = 2) uniform iimage2DMS u2;" in generated_code
+    assert "layout(r32ui, binding = 3) uniform uimage2DMSArray u3;" in generated_code
+    assert "imageSamples(u0)" in generated_code
+    assert "imageSamples(u1)" in generated_code
+    assert "imageSamples(u2)" in generated_code
+    assert "imageSamples(u3)" in generated_code
+    assert "textureSamples(" not in generated_code
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        source_path = tmp_path / "storage_image_samples.comp"
+        source_path.write_text(generated_code, encoding="utf-8")
+        result = subprocess.run(
+            [glslang, "-S", "comp", str(source_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert (
+            result.returncode == 0
+        ), f"glslang failed:\n{result.stdout}\n{result.stderr}\nCode:\n{generated_code}"
+
+
 def test_opengl_integer_multisample_invalid_sampling_and_offsets_emit_typed_diagnostics():
     shader = """
     shader IntegerMultisampleDiagnostics {
@@ -43285,7 +43340,9 @@ def test_opengl_explicit_as_type_result_inference_flows_through_nested_calls():
     assert "return uint64_t(shuffled);" not in nested_body
 
 
-def test_opengl_explicit_as_type_preserves_mangled_metal_subgroup_call_shape():
+def test_opengl_explicit_as_type_refuses_unlowered_mangled_metal_subgroup_call():
+    # ``metal::simd_shuffle_and_fill_up`` has no GLSL lowering, so its call is refused instead of being written
+    # under the importer's mangled name, which no GLSL program declares. The bitcasts around it still lower.
     shader = """
     shader OpenGLMangledMetalSubgroupBitcast {
         uint64 shuffleAndFill(uint64 data, uint64 filling, uint delta) {
@@ -43295,11 +43352,13 @@ def test_opengl_explicit_as_type_preserves_mangled_metal_subgroup_call_shape():
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, message = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
+    assert "call to 'metal_u3a_u3asimd_shuffle_and_fill_up'" in message
     body = _opengl_function_body(generated_code, "shuffleAndFill")
     assert "return packUint2x32(" in body
-    assert "metal_u3a_u3asimd_shuffle_and_fill_up(" in body
     assert "unpackUint2x32(data)" in body
     assert "unpackUint2x32(filling)" in body
     assert "uvec2(0)" not in body

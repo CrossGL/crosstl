@@ -1,7 +1,7 @@
 """Tessellation probes: a patch's domain, spacing, winding and point output, its tessellation levels, its per-patch
 values and its control-point count.
 
-Each probe is a tessellation probe of :mod:`.graphics`, a triangle patch of three control points, with one part
+Each probe is a tessellation probe of the language's module, a triangle patch of three control points, with one part
 changed. An evaluation probe tessellates a quad or an isoline patch, reads the levels or a per-patch input, or spaces,
 winds or emits points other than the defaults. A control probe writes a per-patch output, reads the patch's control
 point count, or spaces, winds or emits points other than the defaults.

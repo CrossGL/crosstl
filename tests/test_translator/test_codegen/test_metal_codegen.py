@@ -18009,6 +18009,85 @@ def test_metal_generic_specialization_threads_global_texture_parameter():
     compile_with_metal_if_available(generated_code)
 
 
+def test_metal_generic_specialization_threads_cbuffer_parameter():
+    code = """
+    shader P {
+        cbuffer Params { float gain; };
+        buffer float* outp;
+        T scaled<T>(T v) { return v * T(gain); }
+        T identity<T>(T x) { return x; }
+        float plainScaled(float v) { return v * gain; }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = scaled<float>(1.0) + plainScaled(2.0) + identity<float>(3.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float scaled_float(float v, constant Params& params) {" in generated_code
+    assert "float plainScaled(float v, constant Params& params) {" in generated_code
+    assert (
+        "outp[0] = scaled_float(1.0, params) + plainScaled(2.0, params) + identity_float(3.0);"
+        in generated_code
+    )
+    # identity never reads the cbuffer, so its specialization takes no parameter.
+    assert "float identity_float(float x) {" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_transitively_threads_cbuffer_to_helper_calling_generic():
+    code = """
+    shader P {
+        cbuffer Params { float gain; };
+        buffer float* outp;
+        T scaled<T>(T v) { return v * T(gain); }
+        float invokeScaled(float v) { return scaled<float>(v); }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = invokeScaled(1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float scaled_float(float v, constant Params& params) {" in generated_code
+    assert "float invokeScaled(float v, constant Params& params) {" in generated_code
+    assert "return scaled_float(v, params);" in generated_code
+    assert "outp[0] = invokeScaled(1.0, params);" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_generic_specialization_threads_cbuffer_parameter_fragment():
+    code = """
+    shader P {
+        cbuffer Params { float gain; };
+        T scaled<T>(T v) { return v * T(gain); }
+        struct FSInput { vec2 uv @ TEXCOORD0; };
+        fragment {
+            vec4 main(FSInput input) {
+                return vec4(scaled<float>(input.uv.x));
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "fragment")
+
+    assert "float scaled_float(float v, constant Params& params) {" in generated_code
+    assert "return float4(scaled_float(input.uv.x, params));" in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
 def test_metal_helper_local_cbuffer_member_name_does_not_thread_parameter():
     code = """
     shader CBufferScope {
@@ -34170,7 +34249,9 @@ def test_metal_mesh_dispatch_without_grid_context_emits_diagnostic():
     assert "object_data Payload& payload [[payload]]" in generated
 
 
-def test_metal_mesh_set_output_counts_without_output_parameter_passes_through():
+def test_metal_mesh_set_output_counts_without_output_parameter_is_refused():
+    # A function with no mesh object cannot set the output counts; the call used to be written as HLSL's
+    # SetMeshOutputCounts, which Metal does not declare.
     code = """
     shader meshpipe {
         void helper() {
@@ -34189,10 +34270,8 @@ def test_metal_mesh_set_output_counts_without_output_parameter_passes_through():
         }
     }
     """
-    generated = generate_code(parse_code(tokenize_code(code)))
-
-    assert "set_primitive_count(1)" in generated
-    assert "SetMeshOutputCounts(8, 4)" in generated
+    with pytest.raises(MetalLoweringRefused, match="call to 'SetMeshOutputCounts'"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_metal_cbuffer_lowers_to_constant_address_space_struct_pointer():

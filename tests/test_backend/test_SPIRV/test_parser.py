@@ -959,12 +959,12 @@ OpDecorate %size BuiltIn WorkgroupSize
 %fn = OpTypeFunction %void
 %uint = OpTypeInt 32 0
 %v3uint = OpTypeVector %uint 3
-%arr = OpTypeArray %uint %total
-%Block = OpTypeStruct %arr
 %width = OpSpecConstant %uint 8
 %height = OpSpecConstant %uint 4
 %one = OpConstant %uint 1
 %total = OpSpecConstantOp %uint IAdd %width %height
+%arr = OpTypeArray %uint %total
+%Block = OpTypeStruct %arr
 %size = OpSpecConstantComposite %v3uint %width %height %one
 %main = OpFunction %void None %fn
 %label = OpLabel

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -39,13 +40,13 @@ UNARY_DIRECTX_CONTRACT_PATH = (
     / "unary.directx-translation.json"
 )
 UNARY_DIRECTX_CONTRACT_SHA256 = (
-    "f68f080af409684d990f52cee8bf448a40535d8e3f844384018fa42eea406ba3"
+    "3108c872ad4657cfb1385da7d85b26c8ca32a94e0479eb64abb3f837117da3e6"
 )
 UNARY_METAL_CONTRACT_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "contracts" / "unary.metal-roundtrip.json"
 )
 UNARY_METAL_CONTRACT_SHA256 = (
-    "e9cc999693b81abc0a9ed6e06e79eb71f1632986889fc7086fc70cd16638042b"
+    "351c29d49e5d3738db5273194528c461335a0ab013d7f0bd42ae8bd7670782bc"
 )
 INDEX_RANGE_ASSERTIONS = (
     ("offset + i", 0, 2147483647),
@@ -260,7 +261,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
             "gn4large": 1098,
         },
         "hostDispatchWorkgroupSize": [1, 1, 1],
-        "generatedSizeBytesTotal": 5340837,
+        "generatedSizeBytesTotal": 5377270,
         "generatedSizeRange": {
             "minimum": {"entryPoint": "v_Absint32int32", "sizeBytes": 3462},
             "maximum": {
@@ -299,7 +300,7 @@ def test_current_mlx_unary_directx_contract_is_complete_and_classified() -> None
         Counter(entry["family"] for entry in entries)
         == contract["classifications"]["families"]
     )
-    assert sum(entry["sizeBytes"] for entry in entries) == 5340837
+    assert sum(entry["sizeBytes"] for entry in entries) == 5377270
     assert min((entry["sizeBytes"], entry["entryPoint"]) for entry in entries) == (
         3462,
         "v_Absint32int32",
@@ -952,17 +953,26 @@ def _translate_and_validate(
     if workload.shape.startswith("gn"):
         assert "StructuredBuffer<int> ndim : register(t4);" in generated
         assert "ndim[0]" in generated
-        if workload.shape == "gn1" and workload.output_type not in {
-            "half",
-            "float16_t",
-        }:
-            assert "out_[out_idx++]" in generated
-        else:
-            assert workload.shape == "gn4large" or workload.output_type in {
-                "half",
-                "float16_t",
-            }
+        if workload.output_type in {"half", "float16_t"}:
+            # A 16-bit float output is stored through its uint16 view by a plain assignment.
             assert "out_[uint(out_idx++)]" in generated
+        else:
+            # Every other output is a buffer store with a side effect among its arguments, so
+            # the HLSL generator evaluates them in order into temporaries, the post-incremented
+            # index first, and the element is still written at the index before the increment.
+            assert workload.shape in {"gn1", "gn4large"}
+            index = (
+                r"__crossgl_argument\1"
+                if workload.shape == "gn1"
+                else r"uint\(__crossgl_argument\1\)"
+            )
+            assert re.search(
+                r"\(__crossgl_argument(\d+) = out_idx\+\+, [^;]*?out_\["
+                + index
+                + r"\] = ",
+                generated,
+            )
+            assert "out_idx++]" not in generated
         assert "++out_idx" not in generated
 
     assert validate_project_report(report_path)["success"] is True

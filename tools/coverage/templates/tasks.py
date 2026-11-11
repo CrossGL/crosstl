@@ -1,15 +1,15 @@
 """Task-stage probes: an array in the payload a task stage hands its mesh workgroups, and the IDs a task invocation reads.
 
-Each probe is the task probe of :mod:`.graphics`, a stage that writes a payload and launches one mesh workgroup, with
-one part changed: its payload holds an array, it writes the ID of its workgroup into the payload, or it runs two
+Each probe is the task probe of the language's module, a stage that writes a payload and launches one mesh workgroup,
+with one part changed: its payload holds an array, it writes the ID of its workgroup into the payload, or it runs two
 invocations, each writing the element of a payload array its local invocation index names. GLSL declares the payload
 ``taskPayloadSharedEXT`` and reads ``gl_WorkGroupID`` and ``gl_LocalInvocationIndex``. HLSL and Slang declare the
 payload ``groupshared``, pass it to ``DispatchMesh`` and read the IDs through ``SV_GroupID`` and ``SV_GroupIndex``.
 Metal's task stage is an object function: it writes the payload through an ``object_data`` reference, reads the IDs as
 ``[[threadgroup_position_in_grid]]`` and ``[[thread_index_in_threadgroup]]`` and sizes the mesh grid through
 ``mesh_grid_properties``, and its threadgroup size is set when the pipeline is dispatched rather than in the source.
-rust-gpu takes the payload and the IDs as attributed parameters. CrossGL writes them as its HLSL importer does, with the
-payload in task-payload storage as in the task stage probe of :mod:`..crossgl`.
+rust-gpu takes the payload and the IDs as attributed parameters. CrossGL writes them as its HLSL importer does, with
+the payload in task-payload storage as in the task stage probe of :mod:`..crossgl`.
 
 WGSL, GLSL ES 3.00 and the kernel languages have no task stage.
 """

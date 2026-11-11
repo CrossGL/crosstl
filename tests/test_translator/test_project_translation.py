@@ -54210,7 +54210,7 @@ def test_translate_project_rejects_unresolved_empty_spirv_initializer(tmp_path):
         textwrap.dedent("""
             shader EmptyInitializer {
                 void exercise() {
-                    unresolved({});
+                    abs({});
                 }
             }
             """).strip(),
@@ -56085,14 +56085,10 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
             comptime float_dtype = DType.float32
             comptime vector_size = 4
 
-            def vector_addition(
-                lhs_tensor: UnsafePointer[Float32],
-                rhs_tensor: UnsafePointer[Float32],
-                out_tensor: UnsafePointer[Float32],
-            ):
+            def vector_addition(scale: Float32):
                 var tid: Int = block_idx.x * block_dim.x + thread_idx.x
                 if tid < vector_size:
-                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+                    var value: Float32 = scale * 2.0
 
             def main() raises:
                 if not has_accelerator():
@@ -56116,12 +56112,10 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 2
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
-    # Metal output is scanned for leaked Mojo host constructs (the comptime
-    # DType alias is not lowered to a CrossGL global, #2808); the SPIR-V
-    # emitter refuses the unresolved host call itself, before any output exists.
+    # The host query is a call to a function the kernel program never declares, so every target refuses it
+    # before any output exists.
     assert payload["summary"]["diagnosticsByCode"] == {
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE: 1,
-        "project.translate.vulkan-builtin-unsupported": 1,
+        "project.translate.undeclared-function": 2,
     }
 
     for artifact in payload["artifacts"]:
@@ -56131,17 +56125,9 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         assert "generatedSizeBytes" not in artifact
         assert "sourceMap" not in artifact
         assert "sourceRemap" not in artifact
-    artifacts_by_target = {
-        artifact["target"]: artifact for artifact in payload["artifacts"]
-    }
-    assert (
-        "unresolved Mojo host/runtime constructs" in artifacts_by_target["metal"][
-            "error"
-        ]
-    )
-    assert artifacts_by_target["vulkan"]["error"].startswith(
-        "Cannot lower call to 'has_accelerator' to SPIR-V"
-    )
+        assert artifact["error"].startswith(
+            "function 'has_accelerator' is not declared"
+        )
 
     diagnostics_by_target = {
         diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
@@ -56150,23 +56136,43 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
     for diagnostic in diagnostics_by_target.values():
         assert diagnostic["severity"] == "error"
         assert diagnostic["sourceBackend"] == "mojo"
+        assert diagnostic["location"]["file"] == "vector_addition.mojo"
 
-    metal = diagnostics_by_target["metal"]
-    assert (
-        metal["code"]
-        == project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_DIAGNOSTIC_CODE
+
+def test_translate_project_mojo_pointer_parameters_are_refused_by_metal(tmp_path):
+    # The Mojo importer keeps `UnsafePointer[Float32]` as a plain type name, which
+    # the Metal emitter used to copy into the output as
+    # `UnsafePointer lhs_tensor[Float32]`. It is refused with the typed refusal.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.gpu import block_dim, block_idx, thread_idx
+
+            comptime vector_size = 4
+
+            def vector_addition(
+                lhs_tensor: UnsafePointer[Float32],
+                rhs_tensor: UnsafePointer[Float32],
+                out_tensor: UnsafePointer[Float32],
+            ):
+                var tid: Int = block_idx.x * block_dim.x + thread_idx.x
+                if tid < vector_size:
+                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+            """).strip(),
+        encoding="utf-8",
     )
-    assert metal["location"]["file"].startswith("out/metal/")
-    assert metal["originalLocation"]["file"] == "vector_addition.mojo"
-    assert metal["checkKind"] == "artifact"
-    assert metal["missingCapabilities"] == [
-        project_pipeline.MOJO_UNRESOLVED_TARGET_CONSTRUCT_CAPABILITY
-    ]
 
-    vulkan = diagnostics_by_target["vulkan"]
-    assert vulkan["code"] == "project.translate.vulkan-builtin-unsupported"
-    assert vulkan["location"]["file"] == "vector_addition.mojo"
-    assert vulkan["missingCapabilities"] == ["spirv.builtin.has_accelerator"]
+    payload = translate_project(repo, targets=["metal"], output_dir="out").to_json()
+
+    (artifact,) = payload["artifacts"]
+    assert artifact["status"] == "failed"
+    assert (
+        "the built-in type 'UnsafePointer' has no Metal spelling" in artifact["error"]
+    )
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-lowering-unsupported": 1
+    }
 
 
 def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
@@ -56178,7 +56184,6 @@ def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
     repo.mkdir()
     (repo / "vector_addition.mojo").write_text(
         textwrap.dedent("""
-            from std.sys import has_accelerator
             from std.gpu import block_dim, block_idx, thread_idx
 
             def vector_addition(
@@ -56187,10 +56192,6 @@ def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
             ):
                 var tid = block_idx.x * block_dim.x + thread_idx.x
                 out_tensor[tid] = lhs_tensor[tid]
-
-            def main() raises:
-                if not has_accelerator():
-                    print("No compatible GPU found")
             """).strip(),
         encoding="utf-8",
     )

@@ -1,10 +1,7 @@
 """Slang built-in functions from the core module sources slangc is built from.
 
-``hlsl.meta.slang`` and ``core.meta.slang`` define Slang's standard library. They are templates: the lines between
-``${`` and ``$}`` are C++ that generates the module, and ``$(expr)`` splices a value into it. The list takes every
-global function in the sections the files mark ``//@public:``, the sections Slang's own reference documents. A name a
-meta loop generates, such as ``Interlocked$(atomicOp.slangCallSuffix)``, is expanded over the loop's table. Member
-functions of resource and object types are left out, and so are functions marked ``internal``.
+``hlsl.meta.slang`` and ``core.meta.slang`` define Slang's standard library. :mod:`.slang_meta` reads the global
+functions they make public, and this module turns each into a feature with a signature to probe.
 
 Generic parameters are made concrete as in the HLSL list: a floating-point or arithmetic ``T`` is ``float``, an
 integer, atomic or unconstrained one ``int``, a logical one ``uint``, and a ``let`` size is 2, or 4 for the length of a
@@ -20,12 +17,13 @@ Direct3D allows it in; any other function stays untested.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 
 from .. import spellings
 from ..model import (
     COOP_COLUMNS,
     COOP_VECTOR_LENGTH,
+    DESCRIPTOR,
+    DESCRIPTOR_HANDLE,
     OTHER_WIDTHS,
     STRING,
     VOID,
@@ -40,8 +38,9 @@ from ..model import (
 )
 from .common import pick, split
 from .hlsl import stage_of as direct3d_stage
+from .slang_meta import HEAD, Declaration, declarations
 
-# The scalar each generic constraint is probed with.
+# The scalar each generic constraint is probed with, and the type for a descriptor.
 CONSTRAINTS = {
     "__BuiltinFloatingPointType": "float",
     "__BuiltinRealType": "float",
@@ -58,6 +57,7 @@ CONSTRAINTS = {
     "IInteger": "int",
     "__BuiltinLogicalType": "uint",
     "ILogical": "uint",
+    "IOpaqueDescriptor": DESCRIPTOR,
 }
 # ``[require(...)]`` capabilities only one kind of stage has, matched as prefixes of the capability atoms.
 STAGE_CAPABILITIES = (
@@ -98,6 +98,7 @@ TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
 # Capability atoms that imply one target without naming it (source/slang/slang-capabilities.capdef).
 _ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
 _GENERIC_TYPE = re.compile(r"(vector|matrix|CoopVec|Tuple)\s*<(.*)>")
+_DESCRIPTOR_HANDLE = re.compile(r"DescriptorHandle\s*<\s*(\w+)\s*>")
 _QUALIFIERS = {
     "in": "in",
     "out": "out",
@@ -110,236 +111,12 @@ _QUALIFIERS = {
     "no_diff": "in",
     "uniform": "in",
 }
-_MODIFIERS = frozenset(
-    "public static inline internal export __extern_cpp __unsafeForceInlineEarly __noinline nodiff".split()
-)
-_LEADING_CALL = re.compile(
-    r"(__generic|__glsl_extension|__glsl_version|__spirv_version|__cuda_sm_version|__wgsl_extension|"
-    r"__target_intrinsic|__intrinsic_op|__specialized_for_target)\s*(?=[(<])"
-)
-_HEAD = re.compile(
-    r"(?P<result>[A-Za-z_][\w:]*(?:\s*<.*>)?(?:\s*\[\s*\d*\s*\])?)\s+(?P<name>[A-Za-z_$][\w$().]*)\s*"
-    r"(?P<generic><[^()]*>)?\s*\((?P<params>.*)\)\s*(?:->\s*(?P<arrow>.+))?$",
-    re.S,
-)
-_LOOP = re.compile(
-    r"for\s*\(\s*(?:const\s+)?(?:auto|[\w:]+)\s*&?\s*(\w+)\s*:\s*(\w+)\s*\)"
-)
-_STRUCT = re.compile(r"struct\s+(\w+)\s*\{([^}]*)\}")
-_TABLE = re.compile(
-    r"(?:(?:static|const)\s+)*(?:struct\s*\{(?P<fields>[^}]*)\}|(?P<type>\w+))\s*(?:const\s*)?\*?\s*"
-    r"(?P<name>\w+)\s*\[[^\]]*\]\s*=\s*\{(?P<body>.*?)\}\s*;",
-    re.S,
-)
-_SPLICE = re.compile(r"\$\(\s*(\w+)(?:\.(\w+))?\s*\)")
 # String parameters take a literal, which slangc folds at compile time (core.meta.slang, getStringHash).
 _STRINGS = frozenset({"String", "NativeString"})
 _VALUE_GENERIC = re.compile(r"(?:int|uint)\s+(\w+)")
 # A value generic parameter no argument fixes, such as loadAligned's alignment: a power of two, and the size in bytes
 # of the 32-bit scalars the probes use.
 _FREE_VALUE = 4
-
-
-@dataclass(frozen=True)
-class Declaration:
-    """One overload: its name, its head (``T sin(T x)``), its generic parameters and its ``require`` attribute."""
-
-    name: str
-    head: str
-    generics: str
-    requires: str = ""
-
-
-def _strip_block_comments(text: str) -> str:
-    return re.sub(
-        r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S
-    )
-
-
-def _code(line: str) -> str:
-    """A code line with strings and character literals emptied and its ``//`` comment removed."""
-    line = re.sub(r'"(?:\\.|[^"\\])*"', '""', line)
-    line = re.sub(r"'(?:\\.|[^'\\])'", "''", line)
-    return line.split("//")[0]
-
-
-def _fields(text: str) -> list[str]:
-    return [m.group(1) for m in re.finditer(r"(\w+)\s*(?:\[[^\]]*\])?\s*;", text)]
-
-
-def _items(text: str) -> list[str]:
-    """Split a C++ initializer list on its top-level commas."""
-    items, depth, current = [], 0, ""
-    for char in text:
-        depth += {"{": 1, "(": 1, "}": -1, ")": -1}.get(char, 0)
-        if char == "," and depth == 0:
-            items.append(current.strip())
-            current = ""
-        else:
-            current += char
-    return [item for item in [*items, current.strip()] if item]
-
-
-class _Meta:
-    """The tables and loop variables of the meta code read so far."""
-
-    def __init__(self):
-        self.structs: dict[str, list[str]] = {}
-        self.tables: dict[str, list[dict[str, str]]] = {}
-        self.loops: dict[str, str] = {}
-
-    def read(self, code: str) -> None:
-        code = re.sub(r"//[^\n]*", "", code)
-        for match in _STRUCT.finditer(code):
-            self.structs[match.group(1)] = _fields(match.group(2))
-        for match in _TABLE.finditer(code):
-            names = (
-                _fields(match.group("fields"))
-                if match.group("fields") is not None
-                else self.structs.get(match.group("type"), [])
-            )
-            self.tables[match.group("name")] = [
-                self._entry(item, names) for item in _items(match.group("body"))
-            ]
-        for variable, table in _LOOP.findall(code):
-            self.loops[variable] = table
-
-    @staticmethod
-    def _entry(item: str, names: list[str]) -> dict[str, str]:
-        values = _items(item[1:-1]) if item.startswith("{") else [item]
-        values = [v.strip().strip('"') for v in values]
-        entry = dict(zip(names, values))
-        entry[""] = values[0] if values else ""
-        return entry
-
-    def expand(self, text: str) -> list[str] | None:
-        """``text`` once per entry of the table its splices loop over; ``None`` when a splice is not a loop value."""
-        variables = {m.group(1) for m in _SPLICE.finditer(text)}
-        if not variables:
-            return [text]
-        if len(variables) > 1 or not variables <= self.loops.keys():
-            return None
-        table = self.tables.get(self.loops[next(iter(variables))])
-        if not table:
-            return None
-        expanded = []
-        for entry in table:
-
-            def value(match: re.Match, entry=entry) -> str:
-                return entry.get(match.group(2) or "", "")
-
-            expanded.append(_SPLICE.sub(value, text))
-        return expanded
-
-
-def _strip_leading(head: str) -> tuple[str, list[str], list[str]]:
-    """The head without leading attributes and modifiers, the attributes, and the ``__generic`` parameter lists."""
-    attributes, generics = [], []
-    head = head.strip()
-    while True:
-        if head.startswith("["):
-            end = _closing(head, 0, "[]")
-            attributes.append(head[1:end])
-            head = head[end + 1 :].lstrip()
-            continue
-        call = _LEADING_CALL.match(head)
-        if call:
-            pair = "<>" if head[call.end()] == "<" else "()"
-            end = _closing(head, call.end(), pair)
-            if call.group(1) == "__generic":
-                generics.append(head[call.end() + 1 : end])
-            head = head[end + 1 :].lstrip()
-            continue
-        word = re.match(r"(\w+)\s+", head)
-        if word and word.group(1) in _MODIFIERS:
-            head = head[word.end() :]
-            continue
-        return head, attributes, generics
-
-
-def declarations(text: str) -> list[Declaration]:
-    """Every global function the public sections of a ``.meta.slang`` file declare, meta-loop names expanded."""
-    meta, found = _Meta(), []
-    depth, public, in_meta = 0, False, False
-    meta_lines: list[str] = []
-    head = ""
-    for line in _strip_block_comments(text).splitlines():
-        stripped = line.strip()
-        if in_meta or stripped.startswith("${"):
-            body = line if in_meta else stripped[2:]
-            in_meta = "$}" not in body
-            meta_lines.append(body.split("$}")[0])
-            if not in_meta:
-                meta.read("\n".join(meta_lines))
-                meta_lines = []
-            continue
-        marker = re.match(r"\s*//\s*@\s*(public|hidden)\s*:", line)
-        if marker and depth == 0:
-            public = marker.group(1) == "public"
-            continue
-        code, index = _code(line), 0
-        while index < len(code):
-            char = code[index]
-            if code.startswith("$(", index):
-                end = _closing(code, index + 1)
-                if depth == 0:
-                    head += code[index : end + 1]
-                index = end + 1
-                continue
-            index += 1
-            if char in "{;" and depth == 0:
-                # A function is defined (``{``) or, for an intrinsic, only declared (``;``).
-                if public:
-                    found += _declarations(meta, head)
-                depth += char == "{"
-                head = ""
-            elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                head = ""
-            elif depth == 0:
-                head += char
-        head += " "
-    return found
-
-
-def _closing(text: str, start: int, pair: str = "()") -> int:
-    """The index of the bracket that closes the one at ``start``, or the last index when it is not closed."""
-    depth = 0
-    for index in range(start, len(text)):
-        depth += {pair[0]: 1, pair[1]: -1}.get(text[index], 0)
-        if depth == 0:
-            return index
-    return len(text) - 1
-
-
-def _declarations(meta: _Meta, raw: str) -> list[Declaration]:
-    raw = " ".join(raw.split())
-    head, attributes, generics = _strip_leading(raw)
-    # An ``internal`` function is not part of the public module, whichever section declares it. A function
-    # extension, such as ``fwd_diff(CoopVec<T, N>::__subscript::get)``, gives an existing function a derivative and
-    # declares no function of its own.
-    if re.search(r"\binternal\b", raw[: len(raw) - len(head)]) or head.startswith(
-        "__func_extension"
-    ):
-        return []
-    requires = " ".join(a for a in attributes if a.startswith("require"))
-    # Splices may appear in the name, the types and the constraints, so the three are expanded together.
-    variants = meta.expand("\0".join([head, requires, ", ".join(generics)]))
-    result = []
-    for variant in variants or []:
-        head, requires, generic = variant.split("\0")
-        match = _HEAD.fullmatch(head)
-        if not match or match.group("result") in ("return", "typedef", "typealias"):
-            continue
-        name = match.group("name")
-        if name.startswith("_") or "$" in name or name.startswith("operator"):
-            continue
-        inline = (match.group("generic") or "").strip("<> ")
-        generic = ", ".join(g for g in (generic, inline) if g)
-        result.append(Declaration(name, head, generic, requires))
-    return result
 
 
 def _generics(text: str) -> dict[str, str]:
@@ -379,6 +156,9 @@ def slang_type(spelling: str, generics: dict[str, str]) -> Type:
         )
     if spelling in _SCALARS:
         return Type(_SCALARS[spelling])
+    handle = _DESCRIPTOR_HANDLE.fullmatch(spelling)
+    if handle and generics.get(handle.group(1)) == DESCRIPTOR:
+        return Type.other(DESCRIPTOR_HANDLE)
     shorthand = _SHORTHAND.fullmatch(spelling)
     if shorthand:
         scalar, rows, columns = shorthand.groups()
@@ -457,7 +237,7 @@ def _parameter(text: str, generics: dict[str, str]) -> Param:
 
 
 def signature(declaration: Declaration) -> Signature | None:
-    match = _HEAD.fullmatch(declaration.head)
+    match = HEAD.fullmatch(declaration.head)
     if match is None:
         return None
     generics = _generics(declaration.generics)
@@ -589,7 +369,7 @@ def explicit(declaration: Declaration, chosen: Signature) -> str:
     ``bit_cast<int2>``, or that has a value generic parameter no argument fixes, as ``loadAligned<4>``; an empty
     string when the arguments fix every generic parameter.
     """
-    match = _HEAD.fullmatch(declaration.head)
+    match = HEAD.fullmatch(declaration.head)
     generics = _generics(declaration.generics)
     if match and coop_element(chosen.result.opaque):
         return _coop_call(declaration)
@@ -597,13 +377,17 @@ def explicit(declaration: Declaration, chosen: Signature) -> str:
         return ""
     params = match.group("params")
     value_call = _value_call(declaration, generics, params)
-    if value_call or chosen.result.opaque:
-        return value_call
     free = [
         name
         for name, bound in generics.items()
         if bound != "size" and not re.search(rf"\b{re.escape(name)}\b", params)
     ]
+    if free and list(generics) == free and set(generics.values()) == {DESCRIPTOR}:
+        # slangc infers no descriptor type from a result or from nothing, as for
+        # getDescriptorFromExplicitHeapIndex<T>(uint2) and usesNativeSpirvDescriptorHandle<T>().
+        return f"{declaration.name}<{DESCRIPTOR}>"
+    if value_call or chosen.result.opaque:
+        return value_call
     result = match.group("arrow") or match.group("result")
     if free and re.search(rf"\b{re.escape(free[0])}\b", result):
         return f"{declaration.name}<{_spell(chosen.result)}>"
@@ -612,11 +396,10 @@ def explicit(declaration: Declaration, chosen: Signature) -> str:
 
 def unprobed_generic(declaration: Declaration) -> str:
     """Why no probe can call a function with a type generic parameter that neither its parameters nor its result
-    mention and whose constraint has no probe type, such as ``usesNativeSpirvDescriptorHandle<T :
-    IOpaqueDescriptor>()``: slangc cannot infer the argument, and the probe has no type to spell for it. An empty
-    string when there is no such parameter.
+    mention and whose constraint has no probe type in :data:`CONSTRAINTS`: slangc cannot infer the argument, and the
+    probe has no type to spell for it. An empty string when there is no such parameter.
     """
-    match = _HEAD.fullmatch(declaration.head)
+    match = HEAD.fullmatch(declaration.head)
     if not match:
         return ""
     mentioned = (

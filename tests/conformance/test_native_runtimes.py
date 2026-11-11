@@ -9,9 +9,11 @@ import json
 import os
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from . import runner
+from .cases import Case
 from .process import run
 from .runtimes import RUNTIMES, provision
 from .test_multiple_inputs import make_case
@@ -119,6 +121,51 @@ def test_d3d12_device_runs_the_harness_shader_model(tmp_path):
     report = "\n".join(f"{model}: {result}" for model, result in models.items())
     print(f"{device}\n{report}")
     assert models[HLSL_PROFILE] == "ok", f"{device}\n{report}"
+
+
+RAW_HLSL = """ByteAddressBuffer inp : register(t0);
+RWByteAddressBuffer outp : register(u1);
+[numthreads(4, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    outp.Store(id.x * 4, inp.Load(id.x * 4) * 3u + 1u);
+}
+"""
+
+
+def test_d3d12_byte_address_buffers_reproduce_the_oracle(tmp_path):
+    """Byte-address buffers need raw views; the HLSL output of GLSL and SPIR-V storage blocks uses them."""
+    runtime = RUNTIMES["d3d12-warp"]
+    provided = provision(runtime)
+    if not provided.available:
+        if "d3d12-warp" in REQUIRED:
+            pytest.fail(f"d3d12-warp is required but unavailable: {provided.reason}")
+        pytest.skip(provided.reason)
+    source = tmp_path / "probe.hlsl"
+    source.write_text(RAW_HLSL)
+    case = Case(
+        id="byte-address-views",
+        cls="harness",
+        title="Read and write byte-address buffers",
+        rule="ByteAddressBuffer Load and Store",
+        inputs=np.arange(8, dtype=np.uint32),
+        out_dtype=np.uint32,
+        oracle=lambda values: values * np.uint32(3) + np.uint32(1),
+        threads=8,
+        group=4,
+        src=source,
+        lang="hlsl",
+    )
+    [record] = runner.run_suite(
+        [case],
+        ["hlsl"],
+        ["strict"],
+        {"hlsl": [(runtime, provided)]},
+        tmp_path / "run",
+        reference=True,
+    )
+    assert record["outcome"] == "preserved", record
+    assert record["inputUnchanged"] and record["outputGuardIntact"]
+    assert runtime.expect in record["execution"]["device"]
 
 
 @pytest.mark.parametrize(

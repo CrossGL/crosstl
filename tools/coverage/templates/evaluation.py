@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import re
 
-from .base import ABSENT, C_FAMILY, PICK, STEPS, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY, PICK, STEPS
 
 _LITERAL = re.compile(r"\b(\d+\.\d+)\b")
 _MATRICES = ("matrix-compound-assignment", "diagonal-matrix")

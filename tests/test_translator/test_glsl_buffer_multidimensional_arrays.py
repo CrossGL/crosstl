@@ -6,8 +6,8 @@ its stride (an array of arrays is an array of its inner array type), and ``grid[
 bytes past ``grid`` in std430.
 
 An expression that still denotes an array, such as ``block.row`` or ``block.grid[1]``, used to be lowered as if it
-were its first element (HLSL and Slang) or printed unchanged (Metal). Byte-offset accesses move one element at a
-time, so such reads and writes are now refused. A component write to a vector element of a block array,
+were its first element (HLSL and Slang) or printed unchanged (Metal); test_glsl_buffer_array_values.py covers
+reading and writing such arrays whole. A component write to a vector element of a block array,
 ``block.vecs[1].y = s``, also used to assign to a load in HLSL and Slang; it now stores the one component.
 """
 
@@ -20,9 +20,6 @@ import subprocess
 import pytest
 
 import crosstl
-from crosstl.translator.codegen.buffer_block_diagnostics import (
-    BufferBlockUnsupportedError,
-)
 from crosstl.translator.codegen.glsl_buffer_block_arrays import (
     glsl_buffer_array_elements,
 )
@@ -81,20 +78,6 @@ void main() {{
     data.head = copy[1] + part[2];
 }}
 """
-
-WHOLE_ARRAY_STATEMENTS = {
-    "member read": (
-        "float copy2[4] = data.row; copy = copy2;",
-        "row is a whole float[4]",
-    ),
-    "sub-array read": ("part = data.grid[1];", "grid is a whole float[3]"),
-    "member write": ("data.row = copy;", "row is a whole float[4]"),
-    "sub-array write": ("data.grid[0] = part;", "grid is a whole float[3]"),
-    "whole 2-D read": (
-        "float g[2][3] = data.grid; part = g[0];",
-        "grid is a whole float[2][3]",
-    ),
-}
 
 COMPONENT_STORE_SOURCE = """#version 450
 layout(local_size_x = 1) in;
@@ -196,25 +179,6 @@ def test_metal_output_indexes_every_dimension(tmp_path):
     assert "result.w[1][2]=" in output
 
 
-@pytest.mark.parametrize(
-    "backend, case",
-    [("directx", case) for case in sorted(WHOLE_ARRAY_STATEMENTS)]
-    + [
-        ("metal", case)
-        for case in sorted(WHOLE_ARRAY_STATEMENTS)
-        if case != "sub-array write"
-    ],
-)
-def test_whole_array_values_are_refused(tmp_path, backend, case):
-    statement, reason = WHOLE_ARRAY_STATEMENTS[case]
-    source = WHOLE_ARRAY_TEMPLATE.format(statement=statement)
-
-    with pytest.raises(BufferBlockUnsupportedError, match="array value") as error:
-        _translate(tmp_path, source, backend)
-
-    assert reason in str(error.value)
-
-
 def test_metal_copies_a_sub_array_write_element_by_element(tmp_path):
     # Metal writes every C-array assignment as a loop over its elements, and a sub-array of a block array now has
     # its array type, so each element is stored at its own offset: grid starts at 20, after head and row[4].
@@ -227,17 +191,6 @@ def test_metal_copies_a_sub_array_write_element_by_element(tmp_path):
         "(*reinterpret_cast<devicefloat*>(data+(20+__crossgl_array_index_0*4)))="
         "part[__crossgl_array_index_0];"
     ) in output
-
-
-@pytest.mark.parametrize("case", sorted(WHOLE_ARRAY_STATEMENTS))
-def test_slang_refuses_whole_array_values(tmp_path, case):
-    statement, reason = WHOLE_ARRAY_STATEMENTS[case]
-    source = WHOLE_ARRAY_TEMPLATE.format(statement=statement)
-
-    with pytest.raises(Exception, match="array value") as error:
-        _translate(tmp_path, source, "slang")
-
-    assert reason in str(error.value)
 
 
 @pytest.mark.parametrize("backend", ["directx", "slang"])

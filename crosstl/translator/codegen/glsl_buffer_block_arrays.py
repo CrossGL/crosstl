@@ -24,6 +24,7 @@ from .glsl_buffer_layout import byte_offset_add, byte_offset_expression
 
 __all__ = [
     "glsl_buffer_array_elements",
+    "glsl_buffer_array_extents",
     "glsl_buffer_block_indexed_access",
     "glsl_buffer_indexed_value_type",
     "glsl_buffer_matrix_column_access",

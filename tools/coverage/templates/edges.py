@@ -11,7 +11,8 @@ HIP, OpenCL C and Mojo have no matrices.
 
 from __future__ import annotations
 
-from .base import ABSENT, PAIR, Template
+from .base import ABSENT, Template
+from .family import PAIR
 from .statements import c_text
 
 # cap has a statement after its return, as the loop in the unreachable-statement probe has after break and continue.

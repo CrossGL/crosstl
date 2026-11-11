@@ -14,17 +14,18 @@ commit or date, so a new measurement edits an issue only when its results change
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import shlex
-import subprocess
-import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
-from . import chart, execution, ir, publish
+from . import chart, execution, ir, placeholders, publish
 from .causes import Causes, causes_of, diagnostic, grouped, headline
 from .model import ROUND_TRIPS, kept_folder
+
+if TYPE_CHECKING:
+    from .github import GitHub
 
 LABEL = "coverage"
 NEW_BUGS = 10
@@ -219,7 +220,8 @@ def _summary(row: dict, repository: str) -> str:
         return (
             f"CrossGL can express {chart.percent(row)} of the semantic features measured across the "
             f"backends: {tally}. A semantic feature is expressible when the CrossGL probe of at least one backend "
-            "feature that lowers to it translates correctly to that backend. A gap here asks for an IR feature "
+            "feature that lowers to it translates correctly to that backend, or to valid SPIR-V that lowers to it. "
+            "A gap here asks for an IR feature "
             f"in `crosstl/translator`. {link} lists every feature."
         )
     tool = TOOLS.get(row["language"], row["language"])
@@ -338,6 +340,12 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
         else:
             failure = f"run, it does not compute what the {native} computes"
         what = f"CrossTL translates the generated {probe} and {tool} accepts the result, but {failure}."
+    elif placeholders.PLACEHOLDER in (first.get("detail") or "").partition("\n")[0]:
+        probe = "CrossGL probe" if direction == "output" else "probe"
+        what = (
+            f"CrossTL translates the generated {probe} and {tool} accepts the result, but CrossTL wrote a "
+            "placeholder for the feature instead of raising a typed diagnostic."
+        )
     count = len(features)
     subject = (
         f"The coverage probe for `{first['name']}` ({_name(row)}, {first.get('group') or first['category']}) "
@@ -534,90 +542,3 @@ def reconcile(
             log(action.describe())
         actions += follow_up
     return actions
-
-
-class GitHubError(RuntimeError):
-    pass
-
-
-class GitHub:
-    """The few REST calls reconciliation needs, through the ``gh`` command line, which reads ``GH_TOKEN``."""
-
-    # GitHub asks clients to wait at least a second between requests that change something; its secondary rate
-    # limit stops a run that closes or comments on many issues at once.
-    PAUSE = 1.0
-
-    def __init__(self, repository: str):
-        self.repository = repository
-        self._changed = -self.PAUSE
-
-    def _api(self, method: str, path: str, payload: dict | None = None):
-        if method != "GET":
-            time.sleep(max(0.0, self._changed + self.PAUSE - time.monotonic()))
-            self._changed = time.monotonic()
-        command = ["gh", "api", "--method", method, f"repos/{self.repository}/{path}"]
-        if payload is not None:
-            command += ["--input", "-"]
-        done = subprocess.run(
-            command,
-            input=None if payload is None else json.dumps(payload),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if done.returncode:
-            raise GitHubError(f"gh api {method} {path}: {done.stderr.strip()}")
-        return json.loads(done.stdout) if done.stdout.strip() else None
-
-    def managed(self) -> list[Issue]:
-        """Every issue, open or closed, that has the ``coverage`` label and a marker."""
-        found: list[Issue] = []
-        page = 1
-        while True:
-            batch = self._api(
-                "GET", f"issues?state=all&labels={LABEL}&per_page=100&page={page}"
-            )
-            for item in batch:
-                issue_key = marker_key(item.get("body"))
-                if issue_key and "pull_request" not in item:
-                    found.append(
-                        Issue(
-                            item["number"],
-                            issue_key,
-                            item["state"],
-                            item["title"],
-                            item.get("body") or "",
-                            tuple(label["name"] for label in item["labels"]),
-                        )
-                    )
-            if len(batch) < 100:
-                return found
-            page += 1
-
-    def apply(self, action: Action) -> int:
-        """Carry out ``action`` and return the issue number."""
-        if action.kind == "create":
-            created = self._api(
-                "POST",
-                "issues",
-                {
-                    "title": action.title,
-                    "body": action.body,
-                    "labels": list(action.labels),
-                },
-            )
-            return created["number"]
-        number = action.number
-        if action.comment:
-            self._api("POST", f"issues/{number}/comments", {"body": action.comment})
-        update: dict = {"title": action.title, "body": action.body}
-        if action.kind == "close":
-            update |= {"state": "closed", "state_reason": action.reason}
-        elif action.kind == "reopen":
-            update |= {"state": "open"}
-        self._api("PATCH", f"issues/{number}", update)
-        if action.labels:
-            self._api(
-                "POST", f"issues/{number}/labels", {"labels": list(action.labels)}
-            )
-        return number

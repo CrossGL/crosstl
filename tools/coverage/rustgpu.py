@@ -74,13 +74,17 @@ CAPABILITIES = (
     "Sampled1D",
     "SampledBuffer",
     "SampledCubeArray",
+    "Image1D",
+    "ImageBuffer",
     "Geometry",
     "GeometryStreams",
     "Tessellation",
     "RayTracingKHR",
+    "RuntimeDescriptorArray",
 )
 EXTENSIONS = (
     "SPV_EXT_demote_to_helper_invocation",
+    "SPV_EXT_descriptor_indexing",
     "SPV_KHR_ray_tracing",
     "SPV_EXT_shader_atomic_float_add",
     "SPV_EXT_shader_atomic_float_min_max",

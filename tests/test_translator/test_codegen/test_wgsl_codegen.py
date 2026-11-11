@@ -24,6 +24,9 @@ from crosstl.translator.codegen.wgsl_texture_bias import (
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.semantics import ImplicitLodStageUnsupportedError
+from crosstl.translator.semantics.structured_layouts import (
+    StructuredLayoutUnsupportedError,
+)
 
 WGSL_SHADER = """
 shader WGSLSmoke {
@@ -5205,3 +5208,153 @@ def test_wgsl_codegen_refuses_crossgl_pointer_local_with_typed_diagnostic():
     with pytest.raises(WGSLPointerTypeUnsupportedError) as raised:
         WGSLCodeGen().generate(parse_shader(shader))
     assert raised.value.code == "project.translate.wgsl-pointer-type-unsupported"
+
+
+@pytest.mark.parametrize(
+    ("cuda_type", "wgsl_type"),
+    [
+        ("float table[4]", "array<f32, 4>"),
+        ("int table[3]", "array<i32, 3>"),
+        ("float table[8]", "array<f32, 8>"),
+    ],
+)
+def test_wgsl_codegen_cuda_constant_scalar_array_lowering(
+    tmp_path, cuda_type, wgsl_type
+):
+    code = f"""
+    __constant__ {cuda_type};
+    __constant__ float gain;
+
+    __global__ void k() {{
+        float value = gain * float(table[0]);
+    }}
+    """
+    source = tmp_path / "kernel.cu"
+    source.write_text(code, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert f"var<storage, read> table: {wgsl_type};" in generated
+    assert "var<uniform> gain: f32;" in generated
+    assert "var<uniform> table" not in generated
+
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_cuda_constant_vec4_array_stays_uniform(tmp_path):
+    code = """
+    __constant__ float4 table[4];
+    __constant__ float gain;
+
+    __global__ void k() {
+        float4 value = table[0] * gain;
+    }
+    """
+    source = tmp_path / "kernel.cu"
+    source.write_text(code, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "var<uniform> table: array<vec4<f32>, 4>;" in generated
+    assert "var<storage, read> table" not in generated
+
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_cuda_constant_struct_array_lowering(tmp_path):
+    code = """
+    struct TwoFloats {
+        float a;
+        float b;
+    };
+
+    __constant__ TwoFloats table[4];
+
+    __global__ void k() {
+        float value = table[0].a + table[0].b;
+    }
+    """
+    source = tmp_path / "kernel.cu"
+    source.write_text(code, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "var<storage, read> table: array<TwoFloats, 4>;" in generated
+    assert "var<uniform> table" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_cuda_constant_struct_with_vec4_array_stays_uniform(tmp_path):
+    code = """
+    struct WithVec4 {
+        float4 v;
+    };
+
+    __constant__ WithVec4 table[4];
+
+    __global__ void k() {
+        float4 value = table[0].v;
+    }
+    """
+    source = tmp_path / "kernel.cu"
+    source.write_text(code, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "var<uniform> table: array<WithVec4, 4>;" in generated
+    assert "var<storage, read> table" not in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_cuda_constant_struct_with_vec4_array_member_stays_uniform(
+    tmp_path,
+):
+    # The structure's array member is sized, so its 32-byte stride keeps it uniform.
+    code = """
+    struct Rows {
+        float4 rows[2];
+    };
+
+    __constant__ Rows table[4];
+
+    __global__ void k() {
+        float4 value = table[1].rows[1];
+    }
+    """
+    source = tmp_path / "kernel.cu"
+    source.write_text(code, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "var<uniform> table: array<Rows, 4>;" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_unresolvable_uniform_array_raises_typed_error():
+    shader = """
+    shader TestUnresolvable {
+        @group(0) @binding(0) var<uniform> unresolvable_table: array<UnresolvableType, 4>;
+        compute {
+            void main(@group(0) @binding(1) var<storage, read_write> out: array<f32>) {
+                out[0] = 0.0;
+            }
+        }
+    }
+    """
+    with pytest.raises(StructuredLayoutUnsupportedError) as exc_info:
+        WGSLCodeGen().generate(parse_shader(shader))
+    assert "unresolvable_table" in str(exc_info.value)
+
+
+def test_wgsl_codegen_sampler2d_array_takes_unmodified_resource_path():
+    shader = """
+    shader WGSLSamplerArray {
+        uniform sampler2D tex[2];
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(tex[0], uv);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+    assert "var tex_0: texture_2d<f32>;" in generated
+    assert "var tex_0_sampler: sampler;" in generated
+    assert "var tex_1: texture_2d<f32>;" in generated
+    assert "var tex_1_sampler: sampler;" in generated
+    assert "var<storage" not in generated

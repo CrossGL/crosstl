@@ -1,13 +1,13 @@
 """Geometry-stage probes: the primitives a geometry stage reads and emits, its instances and its output streams.
 
-Each probe is the geometry probe of :mod:`.graphics`, a stage that emits a point from a point, with one part changed:
-it reads a line, a triangle or either with adjacency, emits a two-vertex line strip or a three-vertex triangle strip,
-runs two instances that scale their point by the instance number, or emits a second vertex on stream 1 that carries
-an extra output. GLSL states the primitives and the instance count in its ``layout`` qualifiers and the stream in the
-output's ``stream`` qualifier. HLSL and Slang state them in the input array's primitive type, the output stream's
-type, the ``[instance(n)]`` attribute with ``SV_GSInstanceID``, and a second ``PointStream`` parameter. rust-gpu
-states them in the ``geometry`` execution modes and the ``invocation_id`` built-in. CrossGL uses GLSL's layouts and
-writes the stream qualifier as an ``@stream`` attribute, as its GLSL importer does.
+Each probe is the geometry probe of the language's module, a stage that emits a point from a point, with one part
+changed: it reads a line, a triangle or either with adjacency, emits a two-vertex line strip or a three-vertex
+triangle strip, runs two instances that scale their point by the instance number, or emits a second vertex on stream 1
+that carries an extra output. GLSL states the primitives and the instance count in its ``layout`` qualifiers and the
+stream in the output's ``stream`` qualifier. HLSL and Slang state them in the input array's primitive type, the output
+stream's type, the ``[instance(n)]`` attribute with ``SV_GSInstanceID``, and a second ``PointStream`` parameter.
+rust-gpu states them in the ``geometry`` execution modes and the ``invocation_id`` built-in. CrossGL uses GLSL's
+layouts and writes the stream qualifier as an ``@stream`` attribute, as its GLSL importer does.
 
 rust-gpu has no ``Stream`` decoration, so every output it writes belongs to stream 0. Metal, WGSL and GLSL ES 3.00
 have no geometry stage, and the kernel languages have no graphics stages.

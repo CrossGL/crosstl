@@ -7,7 +7,9 @@ manual run, only builds and checks them. Pushing a `v*.*.*` tag builds, checks a
 
 1. Open a pull request that sets the new version in `pyproject.toml`, `CITATION.cff` and `docs/source/conf.py`,
    renames `## [Unreleased]` in `CHANGELOG.md` to `## [<version>] - <YYYY-MM-DD>`, and sets `date-released` in
-   `CITATION.cff` to the same date. `tests/test_release.py` fails until these agree.
+   `CITATION.cff` to the same date. `tests/test_release.py` fails until these agree. The section becomes the
+   release notes, so shorten any entry that runs past two sentences, and summarize a long list of fixes by area, as
+   the 3.5.0 and 3.6.0 sections do.
 2. Check the archives locally in a clean checkout:
 
    ```bash

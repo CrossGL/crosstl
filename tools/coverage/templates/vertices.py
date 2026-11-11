@@ -1,9 +1,9 @@
 """Vertex-index, instance-index, point-size, clip-distance and invariant-position probes: the built-in inputs and
 outputs of a vertex shader, in every language with a vertex stage.
 
-Each probe is the vertex probe of :mod:`.graphics` with one built-in added: it adds the index of the vertex or of the
-instance to the position it writes, writes the size of a point or one clip distance next to the position, or declares
-the position invariant. GLSL and WebGL 2 use ``gl_VertexID``, ``gl_InstanceID``, ``gl_PointSize``,
+Each probe is the vertex probe of the language's module with one built-in added: it adds the index of the vertex or of
+the instance to the position it writes, writes the size of a point or one clip distance next to the position, or
+declares the position invariant. GLSL and WebGL 2 use ``gl_VertexID``, ``gl_InstanceID``, ``gl_PointSize``,
 ``gl_ClipDistance`` and ``invariant gl_Position``, HLSL and Slang the ``SV_VertexID``, ``SV_InstanceID`` and
 ``SV_ClipDistance0`` semantics and Slang also ``SV_PointSize``, Metal the ``[[vertex_id]]``, ``[[instance_id]]``,
 ``[[point_size]]``, ``[[clip_distance]]`` and ``[[invariant]]`` attributes, WGSL the ``vertex_index``,
