@@ -384,6 +384,11 @@ from .hlsl_refusals import (
 )
 from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
+from .hlsl_semantic_attributes import (
+    hlsl_argument_semantic_name,
+    hlsl_parameter_location_semantic,
+    hlsl_unmapped_semantic_name,
+)
 from .hlsl_specialization_macros import render_hlsl_required_specialization_constant
 from .hlsl_storage_array_views import (
     storage_array_pointer_type,
@@ -2514,6 +2519,16 @@ class HLSLCodeGen(
         "asuint": "uint",
         "asfloat": "float",
     }
+    # The HLSL intrinsic each bitcast spelling becomes (HLSL reference, asint/asuint/asfloat).
+    HLSL_BITCAST_INTRINSICS = {
+        "floatBitsToInt": "asint",
+        "floatBitsToUint": "asuint",
+        "intBitsToFloat": "asfloat",
+        "uintBitsToFloat": "asfloat",
+        "asint": "asint",
+        "asuint": "asuint",
+        "asfloat": "asfloat",
+    }
     HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES = {
         "NonUniformResourceIndex",
         "nonuniform",
@@ -3129,6 +3144,20 @@ class HLSLCodeGen(
             "roundEven": "round",
             "uintBitsToFloat": "asfloat",
         }
+        # Call names that are component-wise float unary functions in HLSL: the HLSL names, which CrossGL spells
+        # the same way unless function_map renames them, and the CrossGL names function_map renames to one.
+        self.hlsl_componentwise_float_unary_calls = frozenset(
+            {
+                name
+                for name in self.HLSL_COMPONENTWISE_FLOAT_UNARY_FUNCTIONS
+                if name not in self.function_map
+            }
+            | {
+                name
+                for name, intrinsic in self.function_map.items()
+                if intrinsic in self.HLSL_COMPONENTWISE_FLOAT_UNARY_FUNCTIONS
+            }
+        )
 
         self.semantic_map = {
             "gl_VertexID": "SV_VertexID",
@@ -3190,7 +3219,11 @@ class HLSLCodeGen(
             return None
 
         normalized = str(target_profile).strip().lower().replace("_", "-")
+        # Every accepted spelling, including the canonical one, so that an unknown profile is refused.
         aliases = {
+            "dx10": "dx10",
+            "dx11": "dx11",
+            "dx12": "dx12",
             "dx-10": "dx10",
             "d3d-10": "dx10",
             "d3d10": "dx10",
@@ -3207,13 +3240,13 @@ class HLSLCodeGen(
             "direct3d-12": "dx12",
             "directx-12": "dx12",
         }
-        normalized = aliases.get(normalized, normalized)
-        if normalized not in {"dx10", "dx11", "dx12"}:
+        canonical = aliases.get(normalized)
+        if canonical is None:
             raise ValueError(
                 "DirectX target profile must be one of: dx10, dx11, dx12, "
                 "directx-10, directx-11, directx-12"
             )
-        return normalized
+        return canonical
 
     def set_relative_wave_shuffle_out_of_range(self, policy):
         """Configure relative wave-shuffle behavior for invalid source lanes."""
@@ -19514,8 +19547,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.hlsl_boolean_expression_result_type(argument_type)
             if (
                 len(args) == 1
-                and self.function_map.get(func_name, func_name)
-                in self.HLSL_COMPONENTWISE_FLOAT_UNARY_FUNCTIONS
+                and func_name in self.hlsl_componentwise_float_unary_calls
             ):
                 argument_type = self.expression_result_type(args[0])
                 if argument_type is not None:
@@ -31091,7 +31123,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="bitcast-width-mismatch",
                 source_location=getattr(argument, "source_location", None),
             )
-        intrinsic = self.function_map.get(func_name, func_name)
+        intrinsic = self.HLSL_BITCAST_INTRINSICS[func_name]
         return self.hlsl_bitcast_or_cast_expression(
             target_type,
             argument_code,
@@ -37033,7 +37065,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             }.get(stage)
             if stage_semantic is not None:
                 return stage_semantic
-        return self.semantic_map.get(semantic_text, semantic_text)
+        mapped = self.semantic_map.get(semantic_text)
+        if mapped is not None:
+            return mapped
+        return hlsl_unmapped_semantic_name(self, semantic_text)
 
     def validate_hlsl_stage_parameter_requirements(self, func, shader_type):
         parameters = getattr(func, "parameters", getattr(func, "params", [])) or []
@@ -54131,6 +54166,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if hasattr(attr, "name"):
                 if self.is_hlsl_interpolation_metadata_name(attr.name):
                     continue
+                if str(attr.name).lower() == "location":
+                    location_semantic = hlsl_parameter_location_semantic(
+                        self, node, attr
+                    )
+                    if location_semantic is not None:
+                        return location_semantic
                 return self.semantic_attribute_name(attr)
         return None
 
@@ -54205,7 +54246,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     index = self.attribute_value_to_string(index_arg)
                 if index is not None:
                     return f"gl_FragData[{index}]"
-        return name
+        return hlsl_argument_semantic_name(self, attr)
 
     def hlsl_location_return_semantic(self, attr):
         index = self.hlsl_location_attribute_index(attr)

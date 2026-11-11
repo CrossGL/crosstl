@@ -105,15 +105,11 @@
   "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.unsupported_structured_buffer_call::fallback-text": 1,
   "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.visit_IdentifierNode::identity-fallback": 1,
   "crosstl/translator/codegen/cuda_codegen.py::CudaCodeGen.visit_MatchNode::fallback-text": 1,
-  "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.expression_result_type::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.generate_call_arguments_from_rendered::identity-fallback": 1,
-  "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.generate_hlsl_bitcast_call::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.hlsl_function_call_name::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.hlsl_function_declaration_name::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.hlsl_groupshared_bfloat16_array_element::identity-fallback": 1,
   "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.hlsl_groupshared_declaration_type::identity-fallback": 1,
-  "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.hlsl_semantic_name::identity-fallback": 1,
-  "crosstl/translator/codegen/directx_codegen.py::HLSLCodeGen.normalize_directx_target_profile::identity-fallback": 1,
   "crosstl/translator/codegen/enum_utils.py::enum_value_expression::identity-fallback": 1,
   "crosstl/translator/codegen/glsl_buffer_layout.py::std430_layout_type_name::identity-fallback": 1,
   "crosstl/translator/codegen/hip_codegen.py::HipCodeGen.byte_address_buffer_access_diagnostic_call::fallback-text": 1,
@@ -206,6 +202,6 @@
  "totals": {
   "empty-block-recovery": 1,
   "fallback-text": 42,
-  "identity-fallback": 174
+  "identity-fallback": 170
  }
 }
