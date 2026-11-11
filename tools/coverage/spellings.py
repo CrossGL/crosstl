@@ -573,6 +573,12 @@ OTHER_NAMES = {
         "Float::recip": "rcp",
         "Vec3::recip": "rcp",
         "Float::powi": "pow({0}, float({1}))",
+        # Rust's fract truncates, where CrossGL's fract floors, and num-traits' log takes a base: num-traits computes
+        # them as self - trunc(self) and self.ln() / base.ln() (src/float.rs), and glam's Vec3::fract as
+        # self - self.trunc() (src/f32/vec3.rs).
+        "Float::fract": "({0} - trunc({0}))",
+        "Vec3::fract": "({0} - trunc({0}))",
+        "Float::log": "(log({0}) / log({1}))",
         # core's sign tests and constants for f32, which num-traits' Float returns: is_sign_positive is the
         # negation of is_sign_negative, a subnormal is a non-zero value smaller in magnitude than MIN_POSITIVE,
         # and signum is NaN for NaN and otherwise 1.0 with the operand's sign.

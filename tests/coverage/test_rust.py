@@ -371,11 +371,15 @@ def test_rust_probes_pass_arrays_and_slices():
             probes.build(features[name], "crossgl")
 
 
-def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():
+def test_rust_functions_that_compute_something_else_are_written_as_rust_computes_them():
     features = parse()
-    # Rust's fract truncates; CrossGL's floors.
-    assert features["Float::fract"].crossgl == ""
-    assert "trunc" in features["Float::fract"].note
+    # Rust's fract truncates where CrossGL's floors, and Float::log divides by the logarithm of its base.
+    assert features["Float::fract"].crossgl == "({0} - trunc({0}))"
+    vec3 = Type("float", (3,))
+    fract = _method("Vec3::fract", vec3, vec3)
+    assert "vec3 r = (a0 - trunc(a0));" in probes.build(fract, "crossgl").source
+    log = _method("Float::log", Type("float"), Type("float"), Type("float"))
+    assert "float r = (log(a0) / log(a1));" in probes.build(log, "crossgl").source
     # A function without a GLSL counterpart is probed under its own name.
     assert features["Float::sin"].crossgl == "sin"
     assert features["unsigned_max"].crossgl == "unsigned_max"

@@ -86,12 +86,6 @@ _FUNCTION_STAGES = {
     # OpExecuteCallableKHR passes on callable data, which a callable shader receives as a parameter.
     "execute_callable": "callable",
 }
-# Functions whose bare name is a CrossGL function that computes something else, so they have no CrossGL spelling.
-_DIFFERENT = {
-    "Float::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
-    "Vec3::fract": "Rust's fract is x - trunc(x); CrossGL's is x - floor(x)",
-    "Float::log": "Float::log takes a base; CrossGL's log is the natural logarithm",
-}
 # Functions whose result no CrossGL function computes, with the reason.
 _UNSPELLED = {
     "Float::integer_decode": (
@@ -509,8 +503,6 @@ def _feature(
     counterpart = None
     if name in _CONSTRUCTORS:
         spelled = _CONSTRUCTORS[name]
-    elif name in _DIFFERENT:
-        spelled, note = "", note or _DIFFERENT[name]
     elif name in _UNSPELLED:
         spelled, note = "", note or _UNSPELLED[name]
     elif name in spellings.COUNTERPARTS["rust"]:
