@@ -101,6 +101,7 @@ from ..metadata_preconditions import (
 )
 from ..resource_identity import RESOURCE_IDENTITY_ATTRIBUTE, resource_identity_marker
 from ..semantics.byte_address_buffers import lower_byte_address_buffers
+from ..semantics.declared_types import declared_type_names
 from ..semantics.half_helpers import glsl_source as glsl_half_helper_source
 from ..semantics.helpers import float_to_integer_helper_names
 from ..semantics.shader_records import (
@@ -679,6 +680,13 @@ from .texture_residency import (
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .workgroup_access_contracts import parse_workgroup_access_assertions
 from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
+from .written_type_names import (
+    GLSL_TYPE_NAMES,
+    refuse_written_foreign_types,
+    sized_float_spelling,
+    sized_vector_parts,
+    written_type_name,
+)
 
 # Opens the branch a SPIR-V compilation of the emitted GLSL takes (GL_ARB_gl_spirv, GL_KHR_vulkan_glsl).
 GLSL_SPIRV_GUARD = "#if defined(GL_SPIRV) || defined(VULKAN)\n"
@@ -1722,6 +1730,10 @@ class GLSLCodeGen(
     GLSL_UNAVAILABLE_BUILTINS = OPENGL_UNAVAILABLE_BUILTINS
     GLSL_UNAVAILABLE_FUNCTION_PATTERNS = ()
     LOWERING_REFUSAL_TYPE = OpenGLLoweringRefused
+    # The type names the program being rendered declares, and the foreign built-in type names its rendering has
+    # written so far (``None`` outside a rendering); see :func:`written_type_name`.
+    program_type_names = frozenset()
+    written_foreign_type_names = None
     GLSL_ARITHMETIC_CONVERSION_ERROR = OpenGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = OpenGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = OpenGLBooleanOrderedIntrinsicError
@@ -8875,7 +8887,17 @@ class GLSLCodeGen(
         """Render the program and refuse every built-in the target profile does not have."""
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
-        code = self.render_program_at_required_version(ast, target_stage)
+        self.program_type_names = declared_type_names(ast)
+        self.written_foreign_type_names = set()
+        try:
+            code = self.render_program_at_required_version(ast, target_stage)
+            refuse_written_foreign_types(
+                code,
+                self.written_foreign_type_names,
+                self.LOWERING_REFUSAL_TYPE.label,
+            )
+        finally:
+            self.written_foreign_type_names = None
         for reason in unavailable_builtin_reasons(
             code,
             self.GLSL_UNAVAILABLE_BUILTINS,
@@ -57976,9 +57998,24 @@ complex64_t crossgl_complex64_mod_assign(
         if emulated_matrix_type is not None:
             return emulated_matrix_type
 
-        mapped_type = self.type_mapping.get(vtype_str, vtype_str)
-        if mapped_type == vtype_str and vtype_str in self.glsl_type_identifier_names:
+        mapped_type = self.type_mapping.get(vtype_str)
+        if (
+            mapped_type in (None, vtype_str)
+            and vtype_str in self.glsl_type_identifier_names
+        ):
             return self.glsl_type_identifier_name(vtype_str)
+        if mapped_type is None:
+            if sized_float_spelling(vtype_str) != vtype_str:
+                return self.map_type(sized_float_spelling(vtype_str))
+            sized_vector = sized_vector_parts(vtype_str)
+            if sized_vector is not None:
+                return self.map_type(f"vec<{sized_vector[0]}, {sized_vector[1]}>")
+            return written_type_name(
+                vtype_str,
+                GLSL_TYPE_NAMES,
+                self.program_type_names,
+                self.written_foreign_type_names,
+            )
         return mapped_type
 
     def resolve_glsl_type_alias(self, type_name):
