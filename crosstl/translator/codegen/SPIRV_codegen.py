@@ -31443,6 +31443,17 @@ class VulkanSPIRVCodeGen(
             # SPV_KHR_multiview: core in SPIR-V 1.3, an extension before it.
             self.require_capability("MultiView")
             self.require_extension("SPV_KHR_multiview")
+        elif builtin_name in {
+            "Layer",
+            "ViewportIndex",
+        } and self.current_stage_builtin_execution_model() in {
+            "Vertex",
+            "TessellationEvaluation",
+        }:
+            # SPV_EXT_shader_viewport_index_layer lets these stages write both, as glslang declares them for
+            # GL_ARB_shader_viewport_layer_array (SPIR-V section 3.21, BuiltIn).
+            self.require_capability("ShaderViewportIndexLayerEXT")
+            self.require_extension("SPV_EXT_shader_viewport_index_layer")
         elif builtin_name == "ViewportIndex":
             self.require_capability("MultiViewport")
         elif (

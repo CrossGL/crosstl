@@ -370,7 +370,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     attachment ``n`` (``@gl_FragData[n]``, :mod:`.fragment_colour_outputs`). A position built-in on a vertex input
     names the ``Position`` vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
     attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
-    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
+    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). So is an
+    ``SV_`` semantic Direct3D does not define or an index its kind does not take (:mod:`.system_values`). For HLSL, MSL,
     SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
     (:mod:`.compute_entry_values`). For MSL and
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output

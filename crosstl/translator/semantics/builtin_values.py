@@ -22,15 +22,29 @@ and as a stage output are refused with :class:`BuiltinValueUnsupportedError`. HL
 dispatch's workgroup count either; that one keeps its GLSL name, which the HLSL generator reads from a constant
 buffer the host fills. Other targets keep their
 spellings; their generators read the WGSL form or refuse it themselves.
+
+An ``SV_`` semantic outside the spellings above is looked up in :mod:`.system_values`, which lists the semantic
+kinds DXIL defines with their index limits. On every target with an HLSL or GLSL name, an unknown ``SV_`` name and
+an index the kind does not allow are refused, so a misspelt system value never becomes a user varying. For GLSL,
+SPIR-V and Metal a known kind takes its GLSL built-in name (``SV_Target3`` becomes ``gl_FragData[3]`` and
+``SV_ClipDistance1`` CrossGL's indexed member ``gl_ClipDistance1``). The tessellation and geometry values keep their
+``SV_`` spelling, which those generators read, and a shading rate on a structure used as both a stage input and a
+stage output is refused except for SPIR-V, whose generator resolves it per stage.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import iter_functions, iter_structs
+from .system_values import (
+    SystemValueError,
+    glsl_system_value_name,
+    lookup_system_value,
+)
 
 __all__ = [
     "BuiltinValueUnsupportedError",
@@ -42,6 +56,9 @@ _HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
 _GLSL_NAME_TARGETS = frozenset(
     {"opengl", "glsl", "webgl", "gles", "essl", "vulkan", "spirv", "metal"}
 )
+# Targets whose generator resolves ``SV_ShadingRate`` per stage, so a structure used as both a stage's output and the
+# next stage's input keeps it.
+_STAGE_RESOLVED_TARGETS = frozenset({"vulkan", "spirv"})
 
 
 class BuiltinValueUnsupportedError(TranslationDiagnostic):
@@ -140,6 +157,7 @@ _SPELLINGS = {
 }
 
 _INPUT, _OUTPUT, _BOTH = "input", "output", "input and output"
+_INDEXED = re.compile(r"(\w+)\[(\d+)\]")
 
 
 def canonicalize_builtin_values(program, target) -> int:
@@ -192,15 +210,17 @@ class _Rewriter:
         if not attributes:
             return
         for index, attribute in enumerate(list(attributes)):
-            spelling = self._spelling(attribute, context, direction)
+            spelling = self._spelling(attribute, context, direction, node)
             if spelling is not None and spelling != getattr(attribute, "name", None):
-                attributes[index] = A.AttributeNode(spelling, [])
+                attributes[index] = _attribute(spelling)
                 self.rewritten += 1
 
-    def _spelling(self, attribute, context, direction):
+    def _spelling(self, attribute, context, direction, node=None):
         """The attribute name ``attribute`` takes for the target, or ``None`` to keep it."""
         raw = str(getattr(attribute, "name", "") or "")
         lowered = raw.lower()
+        if lowered.startswith("sv_") and lowered not in _SPELLINGS:
+            return self._system_value_spelling(raw, context, direction, node)
         if lowered == "builtin":
             written = _argument_name(attribute)
             canonical = _WGSL_NAMES.get(str(written or "").lower())
@@ -221,6 +241,28 @@ class _Rewriter:
         if not self.hlsl and lowered.startswith("gl_"):
             return None
         return self._target_spelling(canonical, f"@{raw}", context, direction)
+
+    def _system_value_spelling(self, raw, context, direction, node):
+        """The spelling of an HLSL system value outside :data:`_SPELLINGS` (:mod:`.system_values`)."""
+        try:
+            value, index = lookup_system_value(raw)
+            if self.hlsl:
+                return None
+            if not index and value.name.lower() in _SPELLINGS:
+                return self._target_spelling(
+                    _SPELLINGS[value.name.lower()], f"@{raw}", context, direction
+                )
+            return glsl_system_value_name(
+                value,
+                index,
+                direction=direction,
+                noperspective="noperspective" in _qualifiers(node),
+                keep_shared_shading_rate=self.target in _STAGE_RESOLVED_TARGETS,
+            )
+        except SystemValueError as error:
+            raise BuiltinValueUnsupportedError(
+                f"{error} (on {context})", self.target
+            ) from None
 
     def _target_spelling(self, canonical, written, context, direction):
         builtin = _BUILTINS[canonical]
@@ -243,6 +285,16 @@ class _Rewriter:
             f"{direction or 'neither'}",
             self.target,
         )
+
+
+def _attribute(spelling):
+    """The attribute node for ``spelling``; ``gl_FragData[N]`` takes its index as an argument, as the parser gives it."""
+    match = _INDEXED.fullmatch(spelling)
+    if match is None:
+        return A.AttributeNode(spelling, [])
+    return A.AttributeNode(
+        match.group(1), [A.LiteralNode(int(match.group(2)), A.PrimitiveType("int"))]
+    )
 
 
 def glsl_builtin_name(attribute):
