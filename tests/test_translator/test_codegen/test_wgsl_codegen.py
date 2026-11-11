@@ -2044,6 +2044,218 @@ def test_wgsl_codegen_passes_buffer_pointer_parameter_to_array_length():
     assert "outp[0] = f32(count(&outp));" in generated
 
 
+def test_wgsl_codegen_converts_mixed_integer_comparison_and_buffer_length_loop(
+    tmp_path,
+):
+    # Mixing uint and int in comparisons converts the signed operand to u32 (#3628).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = 2u;
+                int k = 3;
+                if (i < k) {
+                    outp[0] = 1.0;
+                }
+                for (uint j = 0u; j < values.length(); j++) {
+                    outp[j] = values[j];
+                }
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((i < u32(k)))" in generated
+    assert "(j < u32(i32(arrayLength(&values))))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_sized_and_structured_buffer_length_comparison(
+    tmp_path,
+):
+    # Buffer length comparison converts for sized arrays and StructuredBuffers (#3628).
+    shader = """
+    shader Probe {
+        buffer float values[4];
+        StructuredBuffer<float> items;
+        buffer float* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                for (uint j = 0u; j < values.length(); j++) {
+                    outp[j] = values[j];
+                }
+                for (uint m = 0u; m < items.length(); m++) {
+                    outp[m] = items[m];
+                }
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "(j < u32(i32(4)))" in generated
+    assert "(m < u32(i32(arrayLength(&items))))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_binary_comparisons_and_arithmetic(
+    tmp_path,
+):
+    # Mixed uint and int operands convert the signed side to u32 (#3628).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer uint* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint u = 5u;
+                int k = 3;
+                if (u < k) { outp[0] = 1u; }
+                if (k < u) { outp[0] = 2u; }
+                if (u == k) { outp[0] = 3u; }
+                if (u != k) { outp[0] = 4u; }
+                uint a = u + k;
+                uint b = u - k;
+                uint c = k * u;
+                uint d = u / k;
+                uint e = u % k;
+                uint last = values.length() - 1u;
+                outp[1] = a + b + c + d + e + last;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((u < u32(k)))" in generated
+    assert "if ((u32(k) < u))" in generated
+    assert "if ((u == u32(k)))" in generated
+    assert "if ((u != u32(k)))" in generated
+    assert "var a: u32 = (u + u32(k));" in generated
+    assert "var b: u32 = (u - u32(k));" in generated
+    assert "var c: u32 = (u32(k) * u);" in generated
+    assert "var d: u32 = (u / u32(k));" in generated
+    assert "var e: u32 = (u % u32(k));" in generated
+    assert "var last: u32 = (u32(i32(arrayLength(&values))) - 1u);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_mixed_integer_min_max_clamp(tmp_path):
+    # Built-ins min, max and clamp convert signed arguments to u32 when combined with uint (#3628).
+    shader = """
+    shader Probe {
+        buffer float* values;
+        buffer uint* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int k = 3;
+                uint u = 5u;
+                uint m1 = min(k, u);
+                uint m2 = min(u, k);
+                uint m3 = min(values.length(), 4u);
+                uint mx1 = max(k, u);
+                uint mx2 = max(u, k);
+                uint c1 = clamp(k, 0u, 10u);
+                uint c2 = clamp(u, k, 10);
+                outp[0] = m1 + m2 + m3 + mx1 + mx2 + c1 + c2;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var m1: u32 = min(u32(k), u);" in generated
+    assert "var m2: u32 = min(u, u32(k));" in generated
+    assert "var m3: u32 = min(u32(i32(arrayLength(&values))), 4u);" in generated
+    assert "var mx1: u32 = max(u32(k), u);" in generated
+    assert "var mx2: u32 = max(u, u32(k));" in generated
+    assert "var c1: u32 = clamp(u32(k), 0u, 10u);" in generated
+    assert "var c2: u32 = clamp(u, u32(k), 10);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_converts_negative_literal_in_unsigned_comparison_and_arithmetic(
+    tmp_path,
+):
+    # A negative literal compared with or added to a uint becomes u32(-Ni) (#3628, #3690).
+    shader = """
+    shader Probe {
+        buffer uint* outp;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint u = 10u;
+                if (u == -1) { outp[0] = 1u; }
+                if (-1 < u) { outp[0] = 2u; }
+                uint a = u + -1;
+                outp[1] = a;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((u == u32(-1i)))" in generated
+    assert "if ((u32(-1i) < u))" in generated
+    assert "var a: u32 = (u + u32(-1i));" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_preserves_abstract_integers_and_pure_signed_unsigned(
+    tmp_path,
+):
+    # Non-negative integer literals stay abstract; pure signed/unsigned stay unchanged (#3628).
+    shader = """
+    shader Probe {
+        buffer int* s_out;
+        buffer uint* u_out;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint u = 5u;
+                int k = 3;
+                if (u < 3) { u_out[0] = u; }
+                if (3 < u) { u_out[0] = u; }
+                if (u < uint(k)) { u_out[0] = u; }
+                uint m = min(u, 4);
+                uint c = clamp(u, 0, 10);
+                int si = 2;
+                int sk = 3;
+                if (si < sk) { s_out[0] = si + sk; }
+                uint ui = 2u;
+                uint uk = 3u;
+                if (ui < uk) { u_out[1] = ui + uk; }
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "if ((u < 3))" in generated
+    assert "if ((3 < u))" in generated
+    assert "if ((u < u32(k)))" in generated
+    assert "u32(u32" not in generated
+    assert "u32(3)" not in generated
+    assert "var m: u32 = min(u, 4);" in generated
+    assert "var c: u32 = clamp(u, 0, 10);" in generated
+    assert "if ((si < sk))" in generated
+    assert "if ((ui < uk))" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 @pytest.mark.parametrize(
     ("statement", "expected"),
     [

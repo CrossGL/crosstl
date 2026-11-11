@@ -122,8 +122,11 @@ from .wgsl_image_atomics import WGSLImageAtomicUnsupportedError, is_image_atomic
 from .wgsl_integer_builtins import lower_integer_builtin_inputs
 from .wgsl_integer_operands import (
     BITWISE_OPERATORS,
+    MIXED_INTEGER_OPERATORS,
     SHIFT_OPERATORS,
     wgsl_bitwise_operands,
+    wgsl_mixed_integer_call_arguments,
+    wgsl_mixed_integer_operands,
     wgsl_shift_amount,
 )
 from .wgsl_integer_textures import (
@@ -3776,6 +3779,9 @@ class WGSLCodeGen(
             if expr.operator in BITWISE_OPERATORS:
                 left, right = wgsl_bitwise_operands(self, expr.left, expr.right)
                 return f"({left} {expr.operator} {right})"
+            if expr.operator in MIXED_INTEGER_OPERATORS:
+                left, right = wgsl_mixed_integer_operands(self, expr.left, expr.right)
+                return f"({left} {expr.operator} {right})"
             return (
                 f"({self.generate_expression(expr.left)} {expr.operator} "
                 f"{self.generate_expression(expr.right)})"
@@ -4034,6 +4040,13 @@ class WGSLCodeGen(
             function_name
         ):
             return self.generate_derivative_call(node, derivative_name, function_name)
+        if (
+            normalized_name in {"min", "max"}
+            and len(node.arguments) == 2
+            and not self.is_user_function_name(function_name)
+        ):
+            args = wgsl_mixed_integer_call_arguments(self, node.arguments)
+            return f"{normalized_name}({args[0]}, {args[1]})"
         if normalized_name == "clamp":
             return self.generate_clamp_call(node)
         packed_8bit = self.PACKED_8BIT_FUNCTIONS.get(normalized_name)
@@ -4626,11 +4639,8 @@ class WGSLCodeGen(
         value_type = self.expression_type(node.arguments[0])
         vector_type_name = self.vector_type_name(value_type)
         if vector_type_name is None:
-            return (
-                "clamp("
-                + ", ".join(self.generate_expression(arg) for arg in node.arguments)
-                + ")"
-            )
+            args = wgsl_mixed_integer_call_arguments(self, node.arguments)
+            return f"clamp({', '.join(args)})"
         lower = self.generate_clamp_bound(node.arguments[1], vector_type_name)
         upper = self.generate_clamp_bound(node.arguments[2], vector_type_name)
         return f"clamp({value_expr}, {lower}, {upper})"
@@ -7707,6 +7717,8 @@ class WGSLCodeGen(
             return right_type
         if left_scalar is not None and left_scalar == right_scalar:
             return left_scalar
+        if {left_scalar, right_scalar} == {"i32", "u32"}:
+            return "u32"
         if left_type == right_type:
             return left_type
         return None
