@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from . import chart, execution, ir, publish
+from . import chart, execution, ir, placeholders, publish
 from .causes import Causes, causes_of, diagnostic, grouped, headline
 from .model import ROUND_TRIPS, kept_folder
 
@@ -340,6 +340,12 @@ def bug_body(row: dict, text: str, features: list[dict], repository: str) -> str
         else:
             failure = f"run, it does not compute what the {native} computes"
         what = f"CrossTL translates the generated {probe} and {tool} accepts the result, but {failure}."
+    elif placeholders.PLACEHOLDER in (first.get("detail") or "").partition("\n")[0]:
+        probe = "CrossGL probe" if direction == "output" else "probe"
+        what = (
+            f"CrossTL translates the generated {probe} and {tool} accepts the result, but CrossTL wrote a "
+            "placeholder for the feature instead of raising a typed diagnostic."
+        )
     count = len(features)
     subject = (
         f"The coverage probe for `{first['name']}` ({_name(row)}, {first.get('group') or first['category']}) "

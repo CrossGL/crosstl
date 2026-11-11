@@ -79,7 +79,8 @@ Constants should sum exactly before an input joins the sum, because Mesa reassoc
 mark `NoContraction`.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
-raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score
+raises a typed diagnostic), `wrong` (invalid or divergent output, or output with a comment saying CrossTL wrote a
+placeholder) or `untested` (no validator available). The score
 for a backend and direction is `supported / (supported + refused + wrong)`; `untested` is reported separately.
 
 `python -m tools.coverage run [--backend B] [--direction input|output]` runs the probes locally and writes
