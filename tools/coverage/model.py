@@ -279,6 +279,9 @@ class Result:
     validator: str = ""
     # The semantic feature id (:mod:`.semantic`), filled in for the output direction; empty when there is none.
     semantic: str = ""
+    # ``"spirv"`` when an output result is not supported but CrossTL translates the CrossGL probe to valid SPIR-V with
+    # the same semantic id, so the CrossGL IR row (:mod:`.ir`) counts the feature as expressible; empty otherwise.
+    expressed: str = ""
     # The native probe and the translation the validator accepted, which :mod:`.execution` runs; empty otherwise.
     sources: tuple[str, str] = field(default=(), compare=False, repr=False)
     # The runtime :mod:`.execution` ran both on, when it did.

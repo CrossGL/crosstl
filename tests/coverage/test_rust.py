@@ -2,7 +2,7 @@
 
 import pytest
 
-from tools.coverage import probes
+from tools.coverage import probes, spellings
 from tools.coverage.features import rust
 from tools.coverage.model import Param, Signature, Type
 
@@ -72,6 +72,33 @@ def test_rust_geometry_stream_is_a_crossgl_argument():
         "unsafe { emit_stream_vertex::<0>() };" in probes.build(stream, "rust").source
     )
     assert "EmitStreamVertex(0);" in probes.build(stream, "crossgl").source
+
+
+def test_rust_subgroup_functions_take_crossgl_wave_names():
+    features = parse()
+    assert features["subgroup_f_add"].crossgl == "WaveActiveSum"
+    assert features["subgroup_inclusive_f_add"].crossgl == "WavePrefixInclusiveSum"
+    # A bool operand makes CrossGL's bitwise wave operation the logical one.
+    assert features["subgroup_logical_and"].crossgl == "WaveActiveBitAnd"
+    assert features["subgroup_ballot"].crossgl == "WaveActiveBallot"
+    assert spellings.WAVES["rust"]["subgroup_exclusive_i_add"] == "WavePrefixSum"
+    assert spellings.WAVES["rust"]["subgroup_exclusive_u_min"] == (
+        "WavePrefixExclusiveMin"
+    )
+    # rust-gpu's constant generic cluster size is an argument in CrossGL; the probe passes 1, a power of two.
+    clustered = rust._feature(
+        "subgroup_clustered_s_max",
+        "arch",
+        Signature(Type("int"), (Param(Type("int")),)),
+        "unsafe subgroup_clustered_s_max::<4, _>",
+        "",
+        "compute",
+        frozenset(),
+    )
+    assert clustered.crossgl == "WaveClusteredMax"
+    assert (
+        "int r = WaveClusteredMax(a0, 1u);" in probes.build(clustered, "crossgl").source
+    )
 
 
 def test_rust_reads_float_and_vec3_methods():
