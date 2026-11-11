@@ -49,6 +49,7 @@ from .constant_reference_layouts import (
 )
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
 from .declaration_scopes import separate_initializer_scopes
+from .declared_functions import UndeclaredFunctionError, refuse_undeclared_functions
 from .declared_identifiers import (
     UndeclaredIdentifierError,
     generate_refusing_undeclared_identifiers,
@@ -292,6 +293,7 @@ __all__ = [
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
     "TypeAliasUnsupportedError",
+    "UndeclaredFunctionError",
     "UndeclaredIdentifierError",
     "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
@@ -469,6 +471,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
     record_undeclared_identifiers(program, report.target)
+    refuse_undeclared_functions(program, report.target)
     lower_void_casts(program, report.target)
     refuse_void_values(program, report.target)
     resolve_builtin_names(program, report.target)

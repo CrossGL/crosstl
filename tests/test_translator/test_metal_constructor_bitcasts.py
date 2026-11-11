@@ -118,14 +118,23 @@ def test_constructor_lookup_does_not_override_source_function_types():
 
 
 @pytest.mark.parametrize(
-    "expression,reason",
+    "expression,code,reason",
     (
-        ("unresolved(float(output[0]))", "statically known numeric"),
-        ("bfloat16(1.0)", "total widths are 32 and 16 bits"),
+        # An operand of no known type comes only from a call to an undeclared function, which is refused first.
+        (
+            "unresolved(float(output[0]))",
+            "project.translate.undeclared-function",
+            "function 'unresolved' is not declared",
+        ),
+        (
+            "bfloat16(1.0)",
+            "project.translate.failed",
+            "total widths are 32 and 16 bits",
+        ),
     ),
 )
 def test_project_retains_bitcast_diagnostics_without_an_artifact(
-    tmp_path, expression, reason
+    tmp_path, expression, code, reason
 ):
     (tmp_path / "invalid.cgl").write_text(
         f"""shader InvalidBitcast {{
@@ -141,7 +150,7 @@ def test_project_retains_bitcast_diagnostics_without_an_artifact(
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 1
     (diagnostic,) = payload["diagnostics"]
-    assert diagnostic["code"] == "project.translate.failed"
+    assert diagnostic["code"] == code
     assert diagnostic["severity"] == "error"
     assert diagnostic["target"] == "metal"
     assert diagnostic["location"]["file"] == "invalid.cgl"
