@@ -390,11 +390,11 @@ CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_COUNT=7 \
 python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_gather.py
 ```
 
-The two `gather_mm_rhs` entries are not covered. They derive each row tile
-from `offsets` with subgroup scans and return early on their reduction.
-Immutable `offsets` storage (#2263) is not enough: DirectX and OpenGL can
-lower the early return only once reductions of values equal in every subgroup
-count as workgroup-uniform (#2546).
+The two `gather_mm_rhs` entries are not covered by this gate. They derive
+each row tile from `offsets` with subgroup scans and return early on their
+reduction. With `offsets` immutable and `num_groups` bounded, DirectX and
+OpenGL treat that reduction as workgroup-uniform, and the MLX host runs both
+entries through `verify_gather_mm.py` and the upstream sorted gather tests.
 
 #### Block-masked GEMM
 

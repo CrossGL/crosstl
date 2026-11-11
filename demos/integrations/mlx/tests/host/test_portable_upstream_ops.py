@@ -180,50 +180,32 @@ def test_upstream_op_inventory_is_unique_and_not_run_elsewhere():
 def test_upstream_op_exclusions_name_their_issue_and_keep_the_order():
     # OpenGL's strided reverse scans cannot prove their wrapped pointer
     # offsets yet. Its base-two and decimal logarithms run through the
-    # profiled base-two helper, so test_unary_ops_from_non_array runs. Neither
-    # target lowers the sorted gather's row-tile scheduling yet. Both run the
-    # arg reductions of every width.
-    assert set(ops.TARGET_EXCLUSIONS) == {"opengl", "directx"}
+    # profiled base-two helper, so test_unary_ops_from_non_array runs. Both
+    # targets schedule the sorted gather's row tiles and run the arg
+    # reductions of every width.
+    assert set(ops.TARGET_EXCLUSIONS) == {"opengl"}
     excluded = ops.TARGET_EXCLUSIONS["opengl"]
-    for target, issues in (
-        ("opengl", {"2905", "2546"}),
-        ("directx", {"2546"}),
-    ):
-        names = ops.TARGET_EXCLUSIONS[target]
-        assert set(names) <= set(ops.UPSTREAM_TESTS)
-        assert {issue.removeprefix("CrossGL/crosstl#") for issue in names.values()} == (
-            issues
-        )
-    assert [name for name, issue in excluded.items() if issue.endswith("2905")] == [
-        "test_ops.TestOps.test_scans",
-    ]
-    sorted_gather = [
+    assert set(excluded) <= set(ops.UPSTREAM_TESTS)
+    assert excluded == {"test_ops.TestOps.test_scans": "CrossGL/crosstl#2905"}
+    sorted_gather = {
         "test_blas.TestBlas.test_gather_mm_sorted",
         "test_blas.TestBlas.test_gather_mm_sorted_vjp",
-    ]
-    assert list(ops.TARGET_EXCLUSIONS["directx"]) == sorted_gather
+    }
     arg_reductions = {
         "test_ops.TestOps.test_argmin_argmax",
         "test_reduce.TestReduce.test_arg_reduce",
         "test_bf16.TestBF16.test_arg_reduction_ops",
     }
-    for target in ("opengl", "directx"):
-        names = ops.TARGET_EXCLUSIONS[target]
-        assert [name for name in names if names[name].endswith("2546")] == (
-            sorted_gather
-        )
-        assert set(sorted_gather) < set(ops.GROUPS["blas-gather"])
-        assert ops.upstream_tests(target, "blas-gather") == tuple(
-            name for name in ops.GROUPS["blas-gather"] if name not in sorted_gather
-        )
+    assert sorted_gather < set(ops.GROUPS["blas-gather"])
+    for target in ("metal", "directx", "opengl"):
+        assert ops.upstream_tests(target, "blas-gather") == ops.GROUPS["blas-gather"]
     assert ops.upstream_tests("metal") == ops.UPSTREAM_TESTS
-    directx = ops.upstream_tests("directx")
-    assert len(directx) == len(ops.UPSTREAM_TESTS) - 2
-    assert arg_reductions <= set(directx)
+    assert ops.upstream_tests("directx") == ops.UPSTREAM_TESTS
     opengl = ops.upstream_tests("opengl")
-    assert len(opengl) == 602 and not set(opengl) & set(excluded)
+    assert len(opengl) == 604 and not set(opengl) & set(excluded)
+    assert len(ops.UPSTREAM_TESTS) == 605
     assert "test_ops.TestOps.test_unary_ops_from_non_array" in opengl
-    assert arg_reductions <= set(opengl)
+    assert (arg_reductions | sorted_gather) <= set(opengl)
     assert list(opengl) == [name for name in ops.UPSTREAM_TESTS if name in opengl]
     record = {"tests": records(native=True)["tests"]}
     with pytest.raises(ValueError, match="inventory"):

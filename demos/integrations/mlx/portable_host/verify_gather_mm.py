@@ -7,9 +7,7 @@ Every case routes one ``mx.gather_mm`` call as ``GatherMM::eval_gpu`` does: to
 zeros for an empty contraction. Inputs lie on dyadic grids, so every product
 is exact in float32 and rounds once to the output type: every output bit is
 checked against the float64 reference, and float32 outputs against MLX's CPU
-as well. The sorted route's software-subgroup tile scheduler does not yet
-translate to DirectX or OpenGL (CrossGL/crosstl#2546); on those targets its
-cases must fail before any kernel runs.
+as well.
 """
 
 import argparse
@@ -23,8 +21,6 @@ from demos.integrations.mlx.portable_host.prepare import verify_prepared
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
 from demos.integrations.mlx.portable_host.verify_quantized_matmul import rounded
 
-# Targets whose translation of the sorted route fails closed, with its issue.
-RHS_UNSUPPORTED = {"directx": "CrossGL/crosstl#2546", "opengl": "CrossGL/crosstl#2546"}
 # (name, dtype, a, b, lhs, rhs, sorted). Operands are (stored shape, view) as in
 # verify_matmul; indices are (shape, values) or None for MLX's default.
 CASES = (
@@ -275,29 +271,6 @@ def run_case(mx, np, host, record, seed):
         for key, value in stored.items()
     }
     start = host.dispatch_count
-    unsupported = record["kind"] == "rhs" and host.target in RHS_UNSUPPORTED
-    if unsupported:
-        # The default indices, copies and group offsets run; the product's
-        # translation then fails before it launches.
-        try:
-            mx.eval(_call(mx, record, views["a"], views["b"]))
-        except RuntimeError as error:
-            count = host.dispatch_count - start
-            if (
-                "software subgroup" not in str(error)
-                or count != record["defaults"] + record["copies"] + 1
-            ):
-                raise
-            return {
-                **record,
-                "seed": seed,
-                "dispatchStart": start,
-                "dispatchCount": count,
-                "unsupported": RHS_UNSUPPORTED[host.target],
-            }
-        raise AssertionError(
-            f"GatherMM sorted route ran untranslated: {record['name']}"
-        )
     y = _call(mx, record, views["a"], views["b"])
     mx.eval(y)
     count = host.dispatch_count - start
@@ -393,7 +366,7 @@ def _launch_matches(events, record):
     )
 
 
-def _covered(records, target):
+def _covered(records):
     entries = [entry for record in records for entry in record["entries"]]
     mm = [
         gather_mm_layout.signature(entry)
@@ -419,10 +392,7 @@ def _covered(records, target):
         and {record["kind"] for record in records} == set(KERNELS)
         and any(record["copies"] for record in records)
         and any(record["lhs"] is None for record in records if record["kind"] == "mm")
-        and (
-            target in RHS_UNSUPPORTED
-            or all("outputHash" in record for record in records)
-        )
+        and all("outputHash" in record for record in records)
     )
 
 
@@ -443,10 +413,7 @@ def validate_trace(trace, records, target):
                 )
             )
         ]
-        expected = (
-            record["entries"][:1] if record.get("unsupported") else record["entries"]
-        )
-        if [event["entry"] for event in products] != expected:
+        if [event["entry"] for event in products] != record["entries"]:
             raise RuntimeError(
                 f"GatherMM trace differs from its route: {record['name']}"
             )
@@ -463,11 +430,9 @@ def validate_trace(trace, records, target):
             or len(others) != len(aranges) + len(copies)
         ):
             raise RuntimeError(f"GatherMM copies differ: {record['name']}")
-        if record.get("unsupported"):
-            continue
         if not _launch_matches(products, record):
             raise RuntimeError(f"GatherMM launch differs: {record['name']}")
-    if not _covered(records, target):
+    if not _covered(records):
         raise RuntimeError("GatherMM cases do not cover every route")
 
 

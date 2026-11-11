@@ -211,16 +211,17 @@ def rhs_binding(record):
 
 
 def test_cases_cover_every_gather_route():
-    for target in ("metal", "directx", "opengl"):
-        assert verify._covered(
-            [{**record, "outputHash": "x"} for record in RECORDS], target
-        )
+    assert verify._covered([{**record, "outputHash": "x"} for record in RECORDS])
     assert {record["kind"] for record in RECORDS} == set(verify.KERNELS)
-    assert verify.RHS_UNSUPPORTED == {
-        "directx": "CrossGL/crosstl#2546",
-        "opengl": "CrossGL/crosstl#2546",
-    }
-    assert not verify._covered(kind("mm") + kind("rhs"), "metal")
+    assert not verify._covered(kind("mm") + kind("rhs"))
+    # Every target runs the sorted route, so a record without its output
+    # hash leaves the cases uncovered.
+    assert not verify._covered(
+        [
+            record if record["kind"] == "rhs" else {**record, "outputHash": "x"}
+            for record in RECORDS
+        ]
+    )
 
 
 def test_routes_mirror_gather_mm_eval_gpu():
@@ -573,6 +574,19 @@ def test_packages_follow_the_kernel_gates():
             )
             assert bool(config.workgroup_access_assertions) == (target != "metal")
             assert bool(config.index_range_assertions) == (target == "opengl")
+        # Only the sorted route's tile scheduler reads offsets and num_groups.
+        point = (gather_mm_layout.SOURCE, gather_mm_layout.signature(rhs)["source"])
+        config = gather_mm_packages.gather_mm_config(root, "out", target, rhs)
+        assert [
+            (item.source, item.entry_point, item.parameter)
+            for item in config.immutable_storage
+        ] == [(*point, "offsets")]
+        assert [
+            (item.source, item.entry_point, item.parameter, item.minimum, item.maximum)
+            for item in config.metadata_preconditions
+        ] == [(*point, "num_groups", 1, gather_mm_layout.MAX_GROUPS)]
+        config = gather_mm_packages.gather_mm_config(root, "out", target, mm)
+        assert not config.immutable_storage and not config.metadata_preconditions
         config = gather_mm_packages.gather_offsets_config(
             root, "out", target, "gather_mm_offsets"
         )
@@ -626,8 +640,6 @@ def trace_events(record, target):
                 "gatherMetadata": {"groups": groups},
             }
         )
-        if target in verify.RHS_UNSUPPORTED:
-            return events
         events.append(
             {
                 "entry": record["entries"][1],
@@ -663,15 +675,10 @@ def traced(records, target):
     events, placed = [], []
     for record in records:
         produced = trace_events(record, target)
-        extra = (
-            {"unsupported": verify.RHS_UNSUPPORTED[target]}
-            if (record["kind"] == "rhs" and target in verify.RHS_UNSUPPORTED)
-            else {"outputHash": record["name"]}
-        )
         placed.append(
             {
                 **record,
-                **extra,
+                "outputHash": record["name"],
                 "dispatchStart": len(events),
                 "dispatchCount": len(produced),
             }

@@ -740,14 +740,6 @@ UPSTREAM_TESTS = (
         name for tests in MODULE_GROUPS.values() for name in tests
     )
 )
-# Sorted right indices route a one-row product through gather_mm_rhs, which
-# finds its row tile with subgroup scans of ``offsets`` and returns early on
-# their reduction. DirectX and OpenGL software subgroups lower that only once
-# reductions of lane-symmetric values count as workgroup-uniform.
-SORTED_GATHER_EXCLUSIONS = {
-    "test_blas.TestBlas.test_gather_mm_sorted": "CrossGL/crosstl#2546",
-    "test_blas.TestBlas.test_gather_mm_sorted_vjp": "CrossGL/crosstl#2546",
-}
 # Tests a target cannot run yet, with the issue that tracks each. OpenGL's
 # software subgroups cannot run an arg reduction wider than one simdgroup.
 TARGET_EXCLUSIONS = {
@@ -755,10 +747,6 @@ TARGET_EXCLUSIONS = {
         # Strided reverse scans read through wrapped unsigned pointer offsets
         # whose rows are bounded only by an affine relation between locals.
         "test_ops.TestOps.test_scans": "CrossGL/crosstl#2905",
-        **SORTED_GATHER_EXCLUSIONS,
-    },
-    "directx": {
-        **SORTED_GATHER_EXCLUSIONS,
     },
 }
 # Source-specialized indexing kernels by entry prefix, longest prefix first.

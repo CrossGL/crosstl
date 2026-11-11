@@ -82,11 +82,34 @@ def gather_mv_config(root, output_dir, target, entry):
     )
 
 
+def _rhs_scheduling(entry, info, source):
+    """gather_mm_rhs finds its row tile with subgroup scans of ``offsets`` and
+    returns early on their reduction. With ``offsets`` immutable and
+    ``num_groups`` bounded as the layout's plan checks, every subgroup of the
+    workgroup computes the same reduction, so the DirectX and OpenGL
+    software-subgroup proofs accept the early return."""
+    if gather_mm_layout.kind(entry) != "rhs":
+        return {}
+    point = {"source": source, "entryPoint": info["source"]}
+    return {
+        "immutable_storage": [{**point, "parameter": "offsets"}],
+        "metadata_preconditions": [
+            {
+                **point,
+                "parameter": "num_groups",
+                "minimum": 1,
+                "maximum": gather_mm_layout.MAX_GROUPS,
+            }
+        ],
+    }
+
+
 def gather_mm_config(root, output_dir, target, entry):
     """One steel gather entry, with the current-tree gather GEMM gate's options."""
     info = gather_mm_layout.signature(entry)
     source = gather_mm_layout.SOURCE
     return ProjectConfig(
+        **_rhs_scheduling(entry, info, source),
         root=root,
         source_roots=("mlx/backend/metal/kernels",),
         include_patterns=(source,),

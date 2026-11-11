@@ -86,39 +86,21 @@ def test_entries_past_the_budget_are_left_to_translate_on_demand(monkeypatch, tm
     assert deferred == [OFFSETS, GEMV]
 
 
-def test_targets_skip_the_entries_only_their_excluded_tests_reach():
-    # gather_mm_offsets and gather_mm_rhs run only for sorted right indices,
-    # whose tests DirectX and OpenGL exclude until #2546.
-    sorted_gather = {
-        name
-        for name, issue in ops.TARGET_EXCLUSIONS["opengl"].items()
-        if issue.endswith("#2546")
-    }
-    assert sorted_gather == {
-        "test_blas.TestBlas.test_gather_mm_sorted",
-        "test_blas.TestBlas.test_gather_mm_sorted_vjp",
-    }
-    assert warm.SORTED_GATHER_ENTRIES == (
+def test_every_target_warms_the_sorted_gather_entries():
+    # gather_mm_offsets and gather_mm_rhs run only for sorted right indices.
+    # Every target runs those tests, so every target warms their entries.
+    sorted_gather = (
         OFFSETS,
         "steel_gather_mm_rhs_nn_float32_float32_bm16_bn64_bk16_wm1_wn2_align_N_n_align_K_n",
         "steel_gather_mm_rhs_nt_float32_float32_bm16_bn64_bk16_wm1_wn2_align_N_n_align_K_n",
     )
-    excluding = {
-        target
-        for target, names in ops.TARGET_EXCLUSIONS.items()
-        if sorted_gather <= set(names)
-    }
-    assert set(warm.TARGET_UNREACHED) == excluding == {"directx", "opengl"}
-    assert warm.target_entries("blas-gather", "metal") == warm.ENTRIES["blas-gather"]
-    for target in excluding:
-        entries = warm.target_entries("blas-gather", target)
-        assert entries == tuple(
-            entry
-            for entry in warm.ENTRIES["blas-gather"]
-            if entry not in warm.SORTED_GATHER_ENTRIES
+    assert set(sorted_gather) <= set(warm.ENTRIES["blas-gather"])
+    assert warm.TARGET_UNREACHED == {}
+    for target in ("metal", "directx", "opengl"):
+        assert "test_blas.TestBlas.test_gather_mm_sorted" in ops.upstream_tests(
+            target, "blas-gather"
         )
-        assert len(entries) == len(warm.ENTRIES["blas-gather"]) - 3
-        for group in set(warm.ENTRIES) - {"blas-gather"}:
+        for group in warm.ENTRIES:
             assert warm.target_entries(group, target) == warm.ENTRIES[group]
 
 

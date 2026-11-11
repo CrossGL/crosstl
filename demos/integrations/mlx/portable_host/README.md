@@ -818,10 +818,11 @@ right indices, transposed and copied operands, MLX's default left indices,
 both sorted-route transpositions with an empty group and a broadcast `A`, and
 an empty contraction. Inputs lie on dyadic grids, so every output must match
 the exact float64 reference bit for bit, and float32 outputs must also match
-MLX's CPU backend. DirectX and OpenGL do not yet translate the sorted route's
-software-subgroup tile scheduler (CrossGL/crosstl#2546); on those targets the
-sorted cases must fail with that diagnostic after the group offsets and before
-the product launches.
+MLX's CPU backend. The sorted route's tile scheduler scans `offsets` with
+subgroup operations and returns early on their reduction. `gather_mm_packages`
+declares `offsets` immutable and bounds `num_groups` as the layout checks it,
+so the DirectX and OpenGL software-subgroup proofs treat that reduction as
+workgroup-uniform and the sorted cases run on every target.
 
 ```sh
 python -m demos.integrations.mlx.portable_host.verify_gather_mm \

@@ -362,17 +362,9 @@ ENTRIES = {
 
 
 # Entries that only the tests a target excludes dispatch
-# (``verify_upstream_ops.TARGET_EXCLUSIONS``): the sorted gather's offsets and
-# its row-tile products (CrossGL/crosstl#2546).
-SORTED_GATHER_ENTRIES = tuple(
-    entry
-    for entry in ENTRIES["blas-gather"]
-    if entry == "gather_mm_offsets" or entry.startswith("steel_gather_mm_rhs_")
-)
-TARGET_UNREACHED = {
-    "directx": frozenset(SORTED_GATHER_ENTRIES),
-    "opengl": frozenset(SORTED_GATHER_ENTRIES),
-}
+# (``verify_upstream_ops.TARGET_EXCLUSIONS``), by target. No excluded test
+# reaches a matrix entry, so every target warms every recorded entry.
+TARGET_UNREACHED = {}
 
 
 def target_entries(group, target):
