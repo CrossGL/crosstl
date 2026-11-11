@@ -4109,6 +4109,22 @@ class WGSLCodeGen(
         if generic_constructor is not None:
             args = self.generate_call_arguments(function_name, node.arguments)
             return f"{generic_constructor}({args})"
+        if function_name in self._structs_by_name and not self.is_user_function_name(
+            function_name
+        ):
+            struct = self._structs_by_name[function_name]
+            member_types = [
+                member.member_type
+                for member in getattr(struct, "members", None) or []
+                if hasattr(member, "member_type")
+            ]
+            # Only a call with one argument per member: zip would drop any argument past the last member.
+            if member_types and len(node.arguments) == len(member_types):
+                args = ", ".join(
+                    self.generate_expression_for_target(arg, member_type)
+                    for arg, member_type in zip(node.arguments, member_types)
+                )
+                return f"{self.type_name_string(function_name)}({args})"
         resolved_function = None
         if isinstance(node.function, IdentifierNode):
             resolved_function = self.resolve_function_overload(
