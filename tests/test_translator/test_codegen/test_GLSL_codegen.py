@@ -274,12 +274,16 @@ def test_glsl_clang_trailing_zero_builtins_respect_function_and_lexical_shadows(
     }
     """
 
-    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    # Calling the parameter ``__builtin_ctzl`` calls no function: GLSL has no function values, so the call is
+    # refused rather than written against a name the output does not declare. It is not the clang built-in either.
+    generated, message = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
+    assert "call to '__builtin_ctzl'" in message
     assert "int builtin_ctz(uint value)" in generated
     assert "return builtin_ctz(value);" in generated
     assert "int callLexicalShadow(uint builtin_ctzl, uint value)" in generated
-    assert "return __builtin_ctzl(value);" in generated
     assert "crossgl_ctz_" not in generated
     assert "findLSB(" not in generated
 
@@ -43336,7 +43340,9 @@ def test_opengl_explicit_as_type_result_inference_flows_through_nested_calls():
     assert "return uint64_t(shuffled);" not in nested_body
 
 
-def test_opengl_explicit_as_type_preserves_mangled_metal_subgroup_call_shape():
+def test_opengl_explicit_as_type_refuses_unlowered_mangled_metal_subgroup_call():
+    # ``metal::simd_shuffle_and_fill_up`` has no GLSL lowering, so its call is refused instead of being written
+    # under the importer's mangled name, which no GLSL program declares. The bitcasts around it still lower.
     shader = """
     shader OpenGLMangledMetalSubgroupBitcast {
         uint64 shuffleAndFill(uint64 data, uint64 filling, uint delta) {
@@ -43346,11 +43352,13 @@ def test_opengl_explicit_as_type_preserves_mangled_metal_subgroup_call_shape():
     }
     """
 
-    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code, message = glsl_partial_output(
+        GLSLCodeGen().generate, crosstl.translator.parse(shader)
+    )
 
+    assert "call to 'metal_u3a_u3asimd_shuffle_and_fill_up'" in message
     body = _opengl_function_body(generated_code, "shuffleAndFill")
     assert "return packUint2x32(" in body
-    assert "metal_u3a_u3asimd_shuffle_and_fill_up(" in body
     assert "unpackUint2x32(data)" in body
     assert "unpackUint2x32(filling)" in body
     assert "uvec2(0)" not in body

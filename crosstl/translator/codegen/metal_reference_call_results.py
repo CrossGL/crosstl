@@ -54,6 +54,10 @@ from .metal_reference_argument_order import (
     _statement_written_names,
     _storage_helpers_can_write,
 )
+from .metal_reference_sequenced_calls import (
+    enclosing_call_reaches_copies,
+    generate_sequenced_call_statement,
+)
 
 __all__ = ["generate_call_result_statement"]
 
@@ -320,7 +324,16 @@ def generate_call_result_statement(codegen, stmt, indent, writebacks):
                     "evaluation order is not modelled; assign the call result to a local first"
                 )
             continue
+        reach = enclosing_call_reaches_copies(codegen, path, roots)
+        if reach == "in place":
+            return generate_sequenced_call_statement(
+                codegen, stmt, indent, call, writebacks
+            )
         before, after = _split_siblings(path)
-        if stores_root or any(_references(codegen, node, roots) for node in after):
+        if (
+            reach is not None
+            or stores_root
+            or any(_references(codegen, node, roots) for node in after)
+        ):
             return _hoist(codegen, stmt, indent, call, before, target)
     return None

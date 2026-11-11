@@ -23,7 +23,8 @@ native probe is bit for bit, and a driver that reassociates float arithmetic wou
 
 from __future__ import annotations
 
-from .base import ABSENT, PAIR, Template
+from .base import ABSENT, Template
+from .family import PAIR
 from .statements import c_text
 
 _ORIGIN_SUM = (

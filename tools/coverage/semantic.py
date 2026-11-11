@@ -13,7 +13,7 @@ import dataclasses
 import re
 from collections import Counter
 
-from . import constructs, probes, validators
+from . import constructs, lowering, probes, validators
 from .features.spirv import is_core
 from .model import Feature
 
@@ -164,10 +164,10 @@ def lower(feature: Feature) -> tuple[str, str]:
         return "", UNIDENTIFIED[feature.language, feature.group]
     if feature.target:
         return "", f"probed for {feature.target}, not SPIR-V"
-    if feature.language not in validators.SPIRV_COMPILERS:
+    if feature.language not in lowering.SPIRV_COMPILERS:
         return "", f"no SPIR-V compiler for {feature.language}"
-    if not validators.can_lower(feature.language):
-        tool = validators.SPIRV_COMPILERS[feature.language][0]
+    if not lowering.can_lower(feature.language):
+        tool = lowering.SPIRV_COMPILERS[feature.language][0]
         return "", f"{tool} or spirv-dis is not installed"
     try:
         probe = probes.build(feature, feature.language)
@@ -175,13 +175,13 @@ def lower(feature: Feature) -> tuple[str, str]:
     except probes.ProbeError as error:
         return "", str(error)
     stage = feature.stage
-    lowered, log = validators.lower(feature.language, probe.source, probe.entry, stage)
+    lowered, log = lowering.lower(feature.language, probe.source, probe.entry, stage)
     if not lowered:
         return (
             "",
             f"does not lower to SPIR-V: {validators.first_error(log, feature.language)}",
         )
-    reference, log = validators.lower(
+    reference, log = lowering.lower(
         feature.language, baseline.source, baseline.entry, stage
     )
     if not reference:

@@ -709,6 +709,12 @@ def o_fmod(inp):
     )
 
 
+def o_hlsl_remainder(inp):
+    x, y = inp[0::2].astype(np.float64), inp[1::2].astype(np.float64)
+    columns = (np.fmod(x, y), np.fmod(np.abs(x), np.abs(y)))
+    return np.stack(columns, axis=1).reshape(-1).astype(np.float32)
+
+
 def o_array_values(inp):
     """sum3(a) = 3x + 3, 2 * sum3(taps) = 12x + 16 (taps = (x, 2(x + 1), 3(x + 2))), corner(g) = x + 2."""
     x = inp.astype(np.int64)
@@ -905,6 +911,39 @@ def o_reference_copy_order(inp):
         tile, value = bump(tile)
         tile = tile + value
         out += [r[0], r[1], s, z, p, c, f, tile + v[0]]
+    return np.array(out, np.int64).astype(np.int32)
+
+
+def o_call_argument_order(inp):
+    """Calls whose arguments have side effects: left to right, inout copied in and out locations fixed in turn."""
+
+    def bump(t):
+        t = t * 3 + 1
+        return t, t - 2
+
+    out = []
+    for x in inp.astype(np.int64):
+        y, value = bump(x)
+        two_after = x * 100 + value
+        y, value = bump(x)
+        built_in = max(value, y)
+        first = x * 2 + 1
+        second = first * 2 + 1
+        three = (first * 100 + second) * 100 + second
+        m, value = bump(x)
+        scaled = x * 10 + value
+        tile, value = bump(x)
+        two_before = value * 100 + tile
+        y, value = bump(x)
+        clamped = min(max(x, value), y + 100)
+        tile, value = bump(x)
+        atomic = tile * 3 + (tile + value)
+        k = x & 1
+        slots = [0] * 8
+        k_after, value = bump(k)
+        slots[k] = value
+        put = slots[x & 1] * 16 + slots[k_after]
+        out += [two_after, built_in, three, scaled, two_before, clamped, atomic, put]
     return np.array(out, np.int64).astype(np.int32)
 
 
@@ -1508,6 +1547,16 @@ CASES = [
         compare="bits",
     ),
     Case(
+        "h_fmod_remainder",
+        "fmod",
+        "fmod(x, y) and the floating-point % of magnitudes",
+        "HLSL fmod: x = i * y + f with f the sign of x and |f| < |y|; % on operands of one sign",
+        _fmod_pairs(),
+        np.float32,
+        o_hlsl_remainder,
+        compare="bits",
+    ),
+    Case(
         "m_half_mul",
         "H15",
         "half(x) * 3.0h",
@@ -1894,6 +1943,16 @@ CASES = [
         threads=128,
     ),
     Case(
+        "g_call_argument_order",
+        "H13",
+        "call arguments with side effects, for shader and built-in functions, with inout and out arguments",
+        "GLSL 4.60 section 6.1.1: arguments are evaluated in order from left to right, exactly once",
+        SMALL,
+        np.int32,
+        o_call_argument_order,
+        threads=128,
+    ),
+    Case(
         "g_buffer_length",
         "H13",
         "length() of a runtime array after a buffer block's header",
@@ -2086,6 +2145,15 @@ CASES = [
         integer_cases.bit_scan_inputs(),
         np.uint32,
         integer_cases.metal_bit_scan_reference,
+    ),
+    Case(
+        "m_narrow_bit_functions",
+        "integer",
+        "popcount and reverse_bits of short, ushort, char and uchar scalars and vectors",
+        "MSL 3.2 §6.13: popcount and reverse_bits count and reverse the bits of the argument's own integer type",
+        integer_cases.bit_scan_inputs(),
+        np.uint32,
+        integer_cases.narrow_bit_function_reference,
     ),
     Case(
         "g_bit_scans",

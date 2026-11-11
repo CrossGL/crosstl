@@ -13,10 +13,19 @@ yet.
 
 from __future__ import annotations
 
-from .base import ABSENT, C_FAMILY, Template
-from .compute import CUDA, HIP, MOJO, OPENCL, RUST
-from .graphics import GLSL, HLSL, METAL, SLANG, WGSL
+from .base import ABSENT, Template
+from .cuda import CUDA
+from .family import C_FAMILY
+from .glsl import GLSL
+from .hip import HIP
+from .hlsl import HLSL
+from .metal import METAL
+from .mojo import MOJO
+from .opencl import OPENCL
+from .rust import RUST
+from .slang import SLANG
 from .webgl import WEBGL
+from .wgsl import WGSL
 
 __all__ = ["ABSENT", "C_FAMILY", "TEMPLATES", "Template"]
 

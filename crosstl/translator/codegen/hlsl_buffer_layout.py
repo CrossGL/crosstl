@@ -216,8 +216,9 @@ def cbuffer_placement(layout_type, offset):
         stride = cbuffer_array_stride(layout_type)
         return start, stride * (layout_type.count - 1) + element_size
     if kind == "struct":
-        start = align_to(offset, CBUFFER_REGISTER_SIZE)
-        _members, size = cbuffer_struct_placements(layout_type)
+        # A member's @ align(N) holds within the buffer, so the struct starts at a multiple of the largest one.
+        start = align_to(offset, cbuffer_held_alignment(layout_type))
+        _members, size = cbuffer_held_struct_placements(layout_type)
         return start, size
     raise HlslLayoutError(f"unsupported HLSL buffer value kind '{kind}'")
 
@@ -232,9 +233,18 @@ def cbuffer_matrix_vector_stride(layout_type):
     return align_to(vector_size, CBUFFER_REGISTER_SIZE)
 
 
+def cbuffer_held_alignment(layout_type):
+    """The register alignment of a constant-buffer value, or the largest ``@ align(N)`` of a struct's members."""
+    if layout_type.kind != "struct":
+        return CBUFFER_REGISTER_SIZE
+    return max(
+        (CBUFFER_REGISTER_SIZE, *(value for value in layout_type.alignments if value))
+    )
+
+
 def cbuffer_array_stride(layout_type):
     _start, element_size = cbuffer_placement(layout_type.element, 0)
-    return align_to(element_size, CBUFFER_REGISTER_SIZE)
+    return align_to(element_size, cbuffer_held_alignment(layout_type.element))
 
 
 def cbuffer_struct_placements(layout_type):
@@ -249,6 +259,51 @@ def cbuffer_struct_placements(layout_type):
     cursor = 0
     for name, member_type in layout_type.members:
         start, size = cbuffer_placement(member_type, cursor)
+        placements.append(HlslMemberPlacement(name, member_type, start, size))
+        cursor = start + size
+    return placements, cursor
+
+
+def cbuffer_held_struct_placements(layout_type):
+    """Member placements of a struct held by a constant buffer, relative to the struct's start.
+
+    The members of such a struct may carry ``@ offset(N)`` and ``@ align(N)``, as DXC's ``[[vk::offset(N)]]`` and
+    GLSL's ``offset`` and ``align`` qualifiers place them: a member with an offset sits at that byte, which must be a
+    legal packing of its type and must not lie before the end of the member above it; a member without one follows
+    the member above it by the packing rules, rounded up to its alignment. ``packoffset`` places only the members of
+    the buffer itself, so this is never a ``packoffset`` layout.
+    """
+    if not layout_type.offsets and not layout_type.alignments:
+        return cbuffer_struct_placements(layout_type)
+    count = len(layout_type.members)
+    offsets = layout_type.offsets or (None,) * count
+    alignments = layout_type.alignments or (None,) * count
+    placements = []
+    cursor = 0
+    for (name, member_type), offset, alignment in zip(
+        layout_type.members, offsets, alignments
+    ):
+        if offset is None:
+            start, size = cbuffer_placement(
+                member_type, align_to(cursor, alignment or 1)
+            )
+        else:
+            if offset < cursor:
+                raise HlslLayoutError(
+                    f"member '{name}' of '{layout_type.struct_name}' at byte {offset} lies within or before the "
+                    "member above it"
+                )
+            if alignment and offset % alignment:
+                raise HlslLayoutError(
+                    f"member '{name}' of '{layout_type.struct_name}' at byte {offset} is not a multiple of its "
+                    f"alignment {alignment}"
+                )
+            start, size = cbuffer_placement(member_type, offset)
+            if start != offset:
+                raise HlslLayoutError(
+                    f"member '{name}' of '{layout_type.struct_name}' at byte {offset} breaks the constant-buffer "
+                    f"packing of its type, which starts at byte {start}"
+                )
         placements.append(HlslMemberPlacement(name, member_type, start, size))
         cursor = start + size
     return placements, cursor

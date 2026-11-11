@@ -10,6 +10,7 @@ emulated integer and boolean matrices, and HLSL logical intrinsics.
 import re
 
 from ..ast import FunctionCallNode, LiteralNode, UnaryOpNode
+from .builtin_result_types import C_FAMILY, builtin_call_result_type
 from .metal_hlsl_matrix import hlsl_emulated_matrix_shape
 from .metal_narrow_builtin_arguments import (
     NARROW_REGISTER_UNIFIED_BUILTINS,
@@ -215,6 +216,21 @@ class MetalHlslValueMixin:
             operator, vector_component, scalar_component
         )
 
+    def metal_remainder_operand_type(self, operand):
+        """The type of a ``%`` operand, typing a built-in call such as ``abs(x)`` from its arguments."""
+        found = self.expression_result_type(operand)
+        if found is not None or not isinstance(operand, FunctionCallNode):
+            return found
+        function = getattr(operand, "function", None)
+        name = getattr(function, "name", function)
+        if not isinstance(name, str) or name in self.user_function_names:
+            return None
+        return builtin_call_result_type(
+            name,
+            [self.expression_result_type(arg) for arg in operand.arguments or ()],
+            C_FAMILY,
+        )
+
     def metal_mixed_vector_binary_operands(self, expr, operator, left, right):
         """Convert vector operands with different component types.
 
@@ -230,7 +246,7 @@ class MetalHlslValueMixin:
             # An operand of unknown type gives no evidence of a floating
             # remainder; map_type(None) would otherwise default it to float.
             operand_types = [
-                self.expression_result_type(operand)
+                self.metal_remainder_operand_type(operand)
                 for operand in (expr.left, expr.right)
             ]
             scalar_components = {

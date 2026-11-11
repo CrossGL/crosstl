@@ -24,6 +24,8 @@ _INTEGER_ARGUMENT = re.compile(r"[0-9]+[uU]?")
 class MetalLocalTypeAliasResolutionError(ValueError):
     """A body-local alias of a dependent type is used but has no CrossGL type."""
 
+    project_diagnostic_code = "project.translate.metal-local-type-alias-unresolved"
+
     def __init__(self, alias_name, alias_type, reason, source_location=None):
         self.alias_name = alias_name
         self.alias_type = alias_type

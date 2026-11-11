@@ -35,15 +35,14 @@ from ..ast import (
 )
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
+from .metal_reference_argument_aliasing import metal_reference_argument_aliases
+from .metal_refusals import MetalLoweringRefused
 from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     should_emit_qualified_function,
     stage_matches,
 )
-
-# Address spaces whose reference parameters bind the caller's lvalue in place (MSL section 4.2).
-METAL_NON_THREAD_REFERENCE_SPACES = frozenset({"device", "threadgroup", "constant"})
 
 
 class MetalHlslFunctionMixin:
@@ -73,21 +72,42 @@ class MetalHlslFunctionMixin:
             return None
         return qualifiers.pop()
 
-    def metal_argument_binds_thread_reference(self, expr):
-        """Whether an lvalue can bind to a ``thread T&`` parameter directly.
+    def metal_argument_binds_parameter_reference(self, expr, parameter):
+        """Whether an lvalue can bind to the reference ``parameter`` lowers to.
 
-        Locals and parameters live in the thread address space, as do their
-        struct fields and array elements. Vector components, buffer elements,
-        threadgroup or constant data and resource texels need a temporary.
+        An ``out``/``inout`` parameter without an address-space qualifier is a
+        ``thread T&``. A qualified one (``inout device int``) is a reference in
+        that address space, which binds a whole lvalue rooted in a variable of
+        the same address space; anything else goes through a temporary.
         """
+        address_space = self.normalized_address_space(
+            self.parameter_address_space(parameter, default="thread")
+        )
+        if address_space in {None, "thread"}:
+            return self.metal_argument_binds_thread_reference(expr)
+        if not self.metal_argument_is_whole_storage_lvalue(expr):
+            return False
+        return (
+            self.normalized_address_space(self.argument_address_space(expr))
+            == address_space
+        )
+
+    def metal_argument_storage_root(self, expr):
         node = expr
-        while True:
+        while isinstance(node, (MemberAccessNode, ArrayAccessNode)):
+            node = node.object if isinstance(node, MemberAccessNode) else node.array
+        return node
+
+    def metal_argument_is_whole_storage_lvalue(self, expr):
+        """Whether ``expr`` names addressable storage: no vector component or converted layout member."""
+        node = expr
+        while isinstance(node, (MemberAccessNode, ArrayAccessNode)):
             if isinstance(node, MemberAccessNode):
-                member = str(node.member)
                 layout_member = self.metal_hlsl_layout_member(node)
                 if layout_member is not None and layout_member.converted:
                     return False
                 object_type = self.map_type(self.expression_result_type(node.object))
+                member = str(node.member)
                 if (
                     member
                     and set(member) <= self.METAL_VECTOR_COMPONENT_NAMES
@@ -96,14 +116,23 @@ class MetalHlslFunctionMixin:
                 ):
                     return False
                 node = node.object
-            elif isinstance(node, ArrayAccessNode):
+            else:
                 array_type = self.map_type(self.expression_result_type(node.array))
                 if self.vector_value_width(array_type) is not None:
                     return False
                 node = node.array
-            else:
-                break
-        name = self.expression_name(node)
+        return True
+
+    def metal_argument_binds_thread_reference(self, expr):
+        """Whether an lvalue can bind to a ``thread T&`` parameter directly.
+
+        Locals and parameters live in the thread address space, as do their
+        struct fields and array elements. Vector components, buffer elements,
+        threadgroup or constant data and resource texels need a temporary.
+        """
+        if not self.metal_argument_is_whole_storage_lvalue(expr):
+            return False
+        name = self.expression_name(self.metal_argument_storage_root(expr))
         if not isinstance(name, str) or name not in self.local_variable_types:
             return False
         if self.current_address_space_variables.get(name, "thread") != "thread":
@@ -119,6 +148,9 @@ class MetalHlslFunctionMixin:
         )
 
     def metal_expression_is_side_effect_free(self, expr):
+        if id(expr) in self.metal_sequenced_call_ids:
+            # A call evaluated in place with its copies (metal_reference_sequenced_calls).
+            return False
         if id(expr) in self.metal_argument_substitutions:
             # Already evaluated into a local.
             return True
@@ -148,8 +180,13 @@ class MetalHlslFunctionMixin:
             return [getattr(stmt, "value", None)]
         return []
 
-    def metal_reference_argument_writebacks(self, stmt):
-        """Find reference arguments that need copy-in/copy-out temporaries."""
+    def metal_reference_argument_writebacks(self, stmt, conditional_calls=None):
+        """Find reference arguments that need copy-in/copy-out temporaries.
+
+        A call that copies arguments in a conditionally evaluated operand (the right operand of ``&&`` or ``||``,
+        an arm of ``?:``) is appended to ``conditional_calls``; it must be evaluated in place
+        (:mod:`.metal_reference_sequenced_calls`). Without that list such a call is refused.
+        """
         if not getattr(self, "function_overloads_by_name", None):
             return []
         writebacks = []
@@ -189,17 +226,52 @@ class MetalHlslFunctionMixin:
                         if qualifier is None
                         else self.metal_reference_argument_parameter(expr, index)
                     )
-                    if parameter is None or self.metal_argument_binds_thread_reference(
-                        argument
-                    ):
+                    binds = parameter is not None and (
+                        self.metal_argument_binds_parameter_reference(
+                            argument, parameter
+                        )
+                    )
+                    # Only a thread T& lowered from copy-in/copy-out can alias; a
+                    # qualified reference (inout device T) aliases as the source intends.
+                    aliased = (
+                        binds
+                        and self.normalized_address_space(
+                            self.parameter_address_space(parameter, default="thread")
+                        )
+                        in {None, "thread"}
+                        and metal_reference_argument_aliases(
+                            self, expr, index, parameter
+                        )
+                    )
+                    if parameter is None or (binds and not aliased):
                         visit(argument, conditional)
                         continue
-                    if conditional:
+                    space = self.normalized_address_space(
+                        self.parameter_address_space(parameter, default="thread")
+                    )
+                    if space not in {None, "thread"}:
+                        # A thread temporary cannot bind a reference in another address space.
                         raise ValueError(
-                            "Metal cannot pass a non-thread lvalue to the "
-                            f"{qualifier} parameter of "
-                            f"'{self.function_call_name(expr)}' in a conditionally "
-                            "evaluated expression"
+                            f"Metal cannot bind this argument to the {space} reference "
+                            f"parameter of '{self.function_call_name(expr)}': it is not "
+                            f"whole {space} storage"
+                        )
+                    if conditional and conditional_calls is not None:
+                        if not any(expr is call for call in conditional_calls):
+                            conditional_calls.append(expr)
+                    elif conditional:
+                        what = (
+                            "an lvalue that other accesses during the call alias"
+                            if binds
+                            else "a non-thread lvalue"
+                        )
+                        raise MetalLoweringRefused(
+                            [
+                                f"{what} passed to the {qualifier} parameter of "
+                                f"'{self.function_call_name(expr)}' in a conditionally "
+                                "evaluated expression: Metal copies it through a thread "
+                                "temporary around the whole statement"
+                            ]
                         )
                     if not self.metal_expression_is_side_effect_free(argument):
                         raise ValueError(
@@ -238,14 +310,9 @@ class MetalHlslFunctionMixin:
         raw_type = self.parameter_raw_type(parameter)
         if isinstance(raw_type, PointerType) or self.is_array_type_node(raw_type):
             return None
-        qualifiers = {
-            str(qualifier).lower()
-            for qualifier in getattr(parameter, "qualifiers", None) or []
-        }
-        if qualifiers & METAL_NON_THREAD_REFERENCE_SPACES:
-            # ``inout device float v`` is a ``device float&``: it binds the device
-            # lvalue itself, and a thread temporary could not bind to it.
-            return None
+        # A qualified parameter (``inout device float v``) is a reference in its
+        # address space; metal_argument_binds_parameter_reference decides whether
+        # the argument binds it in place, and a mismatch is refused.
         return parameter
 
     def generate_statement_with_argument_writebacks(self, stmt, indent, writebacks):

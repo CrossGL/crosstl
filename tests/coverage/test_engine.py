@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from tools.coverage import report, runner, upstream, validators
+from tools.coverage import lowering, report, runner, upstream, validators
 from tools.coverage.model import Feature, Param, Result, Score, Signature, Type
 
 ABS = Feature(
@@ -506,7 +506,7 @@ def test_run_measures_only_the_requested_features(monkeypatch, tmp_path, capsys)
     other = Feature("glsl", "function", "sin", ABS.signature, crossgl="sin")
     monkeypatch.setattr(features, "load", lambda language, offline=False: [ABS, other])
     monkeypatch.setattr(validators, "available", lambda language, target="": True)
-    monkeypatch.setattr(validators, "can_lower", lambda language, target="": True)
+    monkeypatch.setattr(lowering, "can_lower", lambda language, target="": True)
     measured = []
 
     def run(jobs, workers=None, keep=None):
@@ -536,7 +536,7 @@ def test_tools_lists_every_language_and_how_to_provide_a_missing_tool(
     monkeypatch.setattr(
         validators, "available", lambda language, target="": language == "glsl"
     )
-    monkeypatch.setattr(validators, "can_lower", lambda language: language == "glsl")
+    monkeypatch.setattr(lowering, "can_lower", lambda language: language == "glsl")
     monkeypatch.setattr(validators, "version", lambda tool: "Glslang Version: 11")
     assert cli.main(["tools"]) == 0
     lines = capsys.readouterr().out.splitlines()
@@ -554,7 +554,7 @@ def test_strict_run_names_exactly_the_missing_lowering_tool(monkeypatch, capsys)
     from tools.coverage import __main__ as cli
 
     monkeypatch.setattr(validators, "available", lambda language, target="": True)
-    monkeypatch.setattr(validators, "can_lower", lambda language: False)
+    monkeypatch.setattr(lowering, "can_lower", lambda language: False)
     monkeypatch.setattr(
         validators, "command", lambda tool: () if tool == "spirv-dis" else (tool,)
     )

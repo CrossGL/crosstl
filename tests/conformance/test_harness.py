@@ -690,6 +690,19 @@ def test_scoreboard_accepts_a_valid_artifact_only_where_nothing_executes():
     assert check(snapshot([record("invalid")]), [record("compiled-only")])
 
 
+@pytest.mark.parametrize(
+    "failed", ["runtime-error", "driver-rejected", "timeout", "memory-corruption"]
+)
+def test_scoreboard_counts_an_executed_negative_control_as_progress(failed):
+    baseline = snapshot([record(failed)])
+    assert not check(baseline, [record("observed")])
+    assert improvements(baseline, [record("observed")])
+    # Observing a negative control never stands in for a recorded match or a typed refusal.
+    for kept in ("preserved", "refused", "diverged"):
+        assert check(snapshot([record(kept)]), [record("observed")])
+    assert check(snapshot([record("observed")]), [record(failed)])
+
+
 def test_scoreboard_rejects_missing_duplicate_and_changed_cases():
     baseline = snapshot([record()])
     assert check(baseline, [])

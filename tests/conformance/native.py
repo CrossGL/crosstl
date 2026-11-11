@@ -10,6 +10,7 @@ the job; the runner rejects a result from an unexpected driver.
 
 import os
 import re
+import struct
 from pathlib import Path
 
 from .process import run
@@ -201,27 +202,11 @@ def execute_vulkan(job):
     return {"runtime": job["runtime"], "device": identity, "api": fields.get("api")}
 
 
-def loaded_module_version(name):
-    """Path and fixed file version of a DLL loaded into this Windows process, or ``(None, None)``."""
+def file_version(path):
+    """Fixed file version of a Windows DLL on disk, or ``None``."""
     import ctypes
     from ctypes import wintypes
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-    kernel32.GetModuleFileNameW.argtypes = [
-        wintypes.HMODULE,
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-    ]
-    kernel32.GetModuleFileNameW.restype = wintypes.DWORD
-    handle = kernel32.GetModuleHandleW(name)
-    if not handle:
-        return None, None
-    buffer = ctypes.create_unicode_buffer(32768)
-    if not kernel32.GetModuleFileNameW(handle, buffer, len(buffer)):
-        return None, None
-    path = buffer.value
     version = ctypes.WinDLL("version", use_last_error=True)
     version.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, wintypes.LPDWORD]
     version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
@@ -251,18 +236,18 @@ def loaded_module_version(name):
         )
         or length.value < 16
     ):
-        return path, None
+        return None
     # VS_FIXEDFILEINFO starts with dwSignature, dwStrucVersion, dwFileVersionMS, dwFileVersionLS.
     words = ctypes.cast(fixed, ctypes.POINTER(wintypes.DWORD * 4)).contents
     if words[0] != 0xFEEF04BD:
-        return path, None
+        return None
     high, low = words[2], words[3]
-    return path, f"{high >> 16}.{high & 0xFFFF}.{low >> 16}.{low & 0xFFFF}"
+    return f"{high >> 16}.{high & 0xFFFF}.{low >> 16}.{low & 0xFFFF}"
 
 
-def _warp_identity(job, name):
-    """The adapter name plus the d3d10warp.dll actually loaded; CROSSTL_CONFORMANCE_WARP_VERSION pins it."""
-    path, version = loaded_module_version("d3d10warp.dll")
+def _warp_identity(job, name, path):
+    """The adapter name plus the d3d10warp.dll the worker loaded; CROSSTL_CONFORMANCE_WARP_VERSION pins it."""
+    version = file_version(path) if path else None
     wanted = os.environ.get("CROSSTL_CONFORMANCE_WARP_VERSION")
     if wanted and version != wanted:
         raise RuntimeError(
@@ -318,49 +303,136 @@ def d3d12_pipeline_models(dxc, directory, models):
     return device.name, results
 
 
-def execute_d3d12(job):
-    compushady, device = _d3d12_software_device()
-    _expect(job, device.name)
-    views = []
+# The request, readback and runtime-identity formats of crosstl/project/directx_runtime_worker.cpp.
+D3D12_REQUEST, D3D12_READBACKS, D3D12_IDENTITY = 0x31565844, 0x31525844, 0x314C5844
+D3D12_CBV, D3D12_SRV, D3D12_UAV, D3D12_RAW = 0, 1, 2, 4
+D3D12_LIBRARIES = ("d3d12.dll", "D3D12Core.dll", "d3d10warp.dll")
+# Below the 60 s limit of the job process, so a dispatch that never finishes is reported as a timeout.
+D3D12_TIMEOUT = 45
+
+
+def d3d12_request(job, shader):
+    """Encode one dispatch for the buffer-view worker: an allocation per buffer, each view at its own register.
+
+    A ``ByteAddressBuffer`` gets a raw view (``R32_TYPELESS`` with the raw flag) and a ``StructuredBuffer`` a
+    structured view of its reflected stride, as HLSL requires; the constants block becomes a constant-buffer view
+    padded to 256 bytes. Returns the request bytes and the buffer files in allocation order.
+    """
+    directory = Path(job["directory"])
+    allocations, views, files = [], [], []
     for resource, filename in zip(job["resources"], FILES):
-        data = (Path(job["directory"]) / filename).read_bytes()
-        upload = compushady.Buffer(len(data), compushady.HEAP_UPLOAD, device=device)
-        upload.upload(data)
-        stride = resource["stride"] if resource["kind"] == "structured" else 0
-        buffer = compushady.Buffer(len(data), stride=stride, device=device)
-        upload.copy_to(buffer)
-        views.append((resource["register"], buffer, filename))
-    cbv = []
+        data = (directory / filename).read_bytes()
+        register = resource["register"]
+        kind = {"t": D3D12_SRV, "u": D3D12_UAV}[register[0]]
+        raw = resource["kind"] == "raw"
+        stride = 0 if raw else resource["stride"]
+        length = len(data) if raw else len(data) - len(data) % stride
+        views.append(
+            (
+                kind | (D3D12_RAW if raw else 0),
+                int(register[1:]),
+                len(allocations),
+                stride,
+                0,
+                length,
+            )
+        )
+        allocations.append(data)
+        files.append(filename)
     block, data = _constants(job, "uniform")
     if block is not None:
-        upload = compushady.Buffer(len(data), compushady.HEAP_UPLOAD, device=device)
-        upload.upload(data)
-        constants = compushady.Buffer(len(data), device=device)
-        upload.copy_to(constants)
-        # Constant-buffer views are positional too; lower b registers get placeholders.
-        cbv = [compushady.Buffer(256, device=device) for _ in range(block["slot"])]
-        cbv.append(constants)
-    srv = [buffer for register, buffer, _ in views if register.startswith("t")]
-    uav = {
-        int(register[1:]): buffer
-        for register, buffer, _ in views
-        if register.startswith("u")
-    }
-    # UAV slots are positional; an unused u0 slot (input bound as t0) gets a placeholder.
-    placeholder = compushady.Buffer(16, stride=4, device=device)
-    shader = compushady.Compute(
-        Path(job["binary"]).read_bytes(),
-        cbv=cbv,
-        srv=srv,
-        uav=[uav.get(slot, placeholder) for slot in range(max(uav) + 1)],
-        device=device,
+        padded = data.ljust(max(256, -(-len(data) // 256) * 256), b"\0")
+        views.append((D3D12_CBV, block["slot"], len(allocations), 0, 0, len(padded)))
+        allocations.append(padded)
+    parts = [struct.pack("<II", D3D12_REQUEST, len(allocations))]
+    for allocation in allocations:
+        parts += [struct.pack("<Q", len(allocation)), allocation]
+    parts += [
+        struct.pack("<IQ", 1, len(shader)),
+        shader,
+        struct.pack("<4I", _groups(job), 1, 1, len(views)),
+        *(struct.pack("<4I2Q", *view) for view in views),
+    ]
+    return b"".join(parts), files, [len(allocation) for allocation in allocations]
+
+
+def d3d12_readbacks(payload, sizes):
+    """Decode the worker's readbacks: every allocation's final contents, in request order."""
+    version, count = struct.unpack_from("<II", payload)
+    if version != D3D12_READBACKS or count != len(sizes):
+        raise RuntimeError("The D3D12 worker returned an incompatible readback")
+    offset, results = 8, []
+    for expected in sizes:
+        _, size = struct.unpack_from("<QQ", payload, offset)
+        offset += 16
+        if size != expected or offset + size > len(payload):
+            raise RuntimeError("The D3D12 worker returned a truncated readback")
+        results.append(payload[offset : offset + size])
+        offset += size
+    if offset != len(payload):
+        raise RuntimeError("The D3D12 worker returned trailing readback data")
+    return results
+
+
+def d3d12_loaded_libraries(payload):
+    """Map each library the worker observed after creating its device to the path it was loaded from."""
+    version, _, count = struct.unpack_from("<III", payload)
+    if version != D3D12_IDENTITY or count != len(D3D12_LIBRARIES):
+        raise RuntimeError("The D3D12 worker reported an incompatible runtime identity")
+    offset, paths = 12, {}
+    for name in D3D12_LIBRARIES:
+        loaded, _, length = struct.unpack_from("<III", payload, offset)
+        offset += 12
+        path = payload[offset : offset + 2 * length].decode("utf-16-le")
+        offset += 2 * length
+        paths[name] = path if loaded and path else None
+    return paths
+
+
+def execute_d3d12(job):
+    """Run the DXIL through CrossTL's Direct3D 12 buffer-view worker on the software adapter.
+
+    The worker builds a root signature with one descriptor table per view at the register the artifact declares,
+    so raw, structured and constant-buffer views each get the descriptor HLSL requires. The runtime provisions the
+    worker once per run and names it in ``CROSSTL_CONFORMANCE_D3D12_WORKER``.
+    """
+    _, device = _d3d12_software_device()
+    _expect(job, device.name)
+    worker = os.environ.get("CROSSTL_CONFORMANCE_D3D12_WORKER")
+    if not worker:
+        raise RuntimeError("CROSSTL_CONFORMANCE_D3D12_WORKER names no D3D12 worker")
+    directory = Path(job["directory"])
+    payload, files, sizes = d3d12_request(job, Path(job["binary"]).read_bytes())
+    request, output = directory / "d3d12-request.bin", directory / "d3d12-readbacks.bin"
+    request.write_bytes(payload)
+    identity = (
+        device.name,
+        int(device.is_hardware),
+        device.vendor_id,
+        device.dedicated_video_memory,
+        device.dedicated_system_memory,
+        device.shared_system_memory,
     )
-    shader.dispatch(_groups(job), 1, 1)
-    for _, buffer, filename in views:
-        readback = compushady.Buffer(
-            buffer.size, compushady.HEAP_READBACK, device=device
-        )
-        buffer.copy_to(readback)
-        (Path(job["directory"]) / filename).write_bytes(readback.readback())
-    # d3d10warp.dll is loaded once the device exists, so its version is read after the dispatch.
-    return {"runtime": job["runtime"], "device": _warp_identity(job, device.name)}
+    timeout = job.get("timeout", D3D12_TIMEOUT)
+    result = run([worker, request, output, *identity], timeout=timeout)
+    log = "\n".join(
+        line
+        for line in result.log.splitlines()
+        if not line.startswith("CROSSTL_DIRECTX_PROGRESS")
+    )
+    if result.status == "timeout" or "GPU fence timeout" in log:
+        raise ExecutionTimeout(f"The D3D12 dispatch exceeded {timeout} s")
+    if "CreateComputePipelineState failed" in log:
+        raise DriverRejected(log[-1500:])
+    if result.status != "accepted" or not output.is_file():
+        raise RuntimeError(f"D3D12 execution {result.status}: {log[-1500:]}")
+    for filename, data in zip(files, d3d12_readbacks(output.read_bytes(), sizes)):
+        (directory / filename).write_bytes(data)
+    runtime = Path(f"{output}.runtime")
+    libraries = (
+        d3d12_loaded_libraries(runtime.read_bytes()) if runtime.is_file() else {}
+    )
+    return {
+        "runtime": job["runtime"],
+        "device": _warp_identity(job, device.name, libraries.get("d3d10warp.dll")),
+    }

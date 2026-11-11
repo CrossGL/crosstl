@@ -1,166 +1,12 @@
+"""The Rust feature list read from spirv-std: functions, methods, generics and their CrossGL spellings."""
+
 import pytest
 
-from tools.coverage import probes, rustgpu, semantic, validators
+from tools.coverage import probes, spellings
 from tools.coverage.features import rust
-from tools.coverage.model import VOID, Feature, Param, Signature, Type
+from tools.coverage.model import Feature, Param, Signature, Type
 
-ARCH = r"""
-pub type SubgroupMask = crate::glam::UVec4;
-
-/// Returns the larger of `a` and `b` (see [`signed_max`).
-#[inline]
-pub fn unsigned_max<T: UnsignedInteger>(a: T, b: T) -> T {
-    if a > b { a } else { b }
-}
-
-pub unsafe fn atomic_i_add<I: Integer, const SCOPE: u32, const SEMANTICS: u32>(
-    ptr: &mut I,
-    value: I,
-) -> I {
-    let mut old = I::default();
-    unsafe { asm!("%result = OpAtomicIAdd _ {ptr}", ptr = in(reg) ptr) };
-    old
-}
-
-pub fn memory_barrier<const MEMORY: u32, const SEMANTICS: u32>() {}
-
-pub fn subgroup_ballot(predicate: bool) -> SubgroupMask {
-    SubgroupMask::default()
-}
-
-pub fn any<V: Vector<bool, N>, const N: usize>(vector: V) -> bool {
-    false
-}
-
-pub unsafe fn emit_stream_vertex<const STREAM: i64>() {}
-
-pub unsafe fn vector_extract_dynamic<T: Scalar, const N: usize>(
-    vector: impl Vector<T, N>,
-    index: usize,
-) -> T {
-    T::default()
-}
-
-pub unsafe fn vector_insert_dynamic<T: Scalar, V: Vector<T, N>, const N: usize>(
-    vector: V,
-    index: usize,
-    element: T,
-) -> V {
-    vector
-}
-
-pub unsafe fn read_clock_khr<const SCOPE: u32>() -> u64 {
-    0
-}
-
-pub fn kill() -> ! {
-    loop {}
-}
-
-macro_rules! macro_subgroup_op {
-    ($scalar:ty, $asm_op:literal, $($name:ident, $group_op:expr),+; $docs:literal) => { $(
-        #[doc = $docs]
-        pub fn $name<I: ScalarOrVector<Scalar = $scalar>>(
-            value: I,
-        ) -> I {
-            value
-        }
-    )+ };
-}
-
-macro_subgroup_op!(impl Float, "OpGroupNonUniformFAdd", subgroup_f_add, GroupOperation::Reduce, subgroup_inclusive_f_add, GroupOperation::InclusiveScan; r"
-A floating point add group operation (of all `value` operands, contributed by active invocations.
-");
-macro_subgroup_op!(bool, "OpGroupNonUniformLogicalAnd", subgroup_logical_and, GroupOperation::Reduce; r"Logical and.");
-"""
-
-DERIVATIVE = """
-pub unsafe trait Derivative: Sealed + Default {
-    fn dfdx(self) -> Self {
-        deriv_fn!(OpDPdx, self)
-    }
-}
-"""
-
-FLOAT = """
-pub trait FloatCore: Num {
-    fn hidden(self) -> Self;
-}
-
-pub trait Float: Num + Copy + NumCast + PartialOrd + Neg<Output = Self> {
-    /// Returns the `NaN` value.
-    fn nan() -> Self;
-    fn sin(self) -> Self;
-    fn ln(self) -> Self;
-    fn fract(self) -> Self;
-    fn powi(self, n: i32) -> Self;
-    fn sin_cos(self) -> (Self, Self);
-    fn integer_decode(self) -> (u64, i16, i8);
-    fn to_degrees(self) -> Self {
-        unimplemented!()
-    }
-}
-"""
-
-VEC3 = """
-impl Vec3 {
-    #[inline(always)]
-    #[must_use]
-    pub const fn new(x: f32, y: f32, z: f32) -> Self {
-        Self { x, y, z }
-    }
-
-    pub fn select(mask: BVec3, if_true: Self, if_false: Self) -> Self {
-        if_true
-    }
-
-    pub const fn to_array(&self) -> [f32; 3] {
-        [self.x, self.y, self.z]
-    }
-
-    pub fn dot(self, rhs: Self) -> f32 {
-        0.0
-    }
-
-    pub fn lerp(self, rhs: Self, s: f32) -> Self {
-        self
-    }
-
-    pub fn sin_cos(self) -> (Self, Self) {
-        (self, self)
-    }
-
-    pub fn max_position(self) -> usize {
-        0
-    }
-
-    pub fn normalize_and_length(self) -> (Self, f32) {
-        (self, 1.0)
-    }
-
-    pub fn try_normalize(self) -> Option<Self> {
-        None
-    }
-
-    fn private_helper(self) -> Self {
-        self
-    }
-
-    #[cfg(feature = "i32")]
-    #[inline]
-    #[must_use]
-    pub fn as_ivec3(self) -> crate::IVec3 {
-        crate::IVec3::new(self.x as i32, self.y as i32, self.z as i32)
-    }
-
-    #[cfg(feature = "i16")]
-    #[inline]
-    #[must_use]
-    pub fn as_i16vec3(self) -> crate::I16Vec3 {
-        crate::I16Vec3::new(self.x as i16, self.y as i16, self.z as i16)
-    }
-}
-"""
+from .rust_sources import ARCH, DERIVATIVE, FLOAT, VEC3, VEC3_TYPE
 
 
 def parse(glsl_names=frozenset({"dFdx", "log", "fract", "mix", "dot"})):
@@ -228,6 +74,59 @@ def test_rust_geometry_stream_is_a_crossgl_argument():
     assert "EmitStreamVertex(0);" in probes.build(stream, "crossgl").source
 
 
+def test_rust_subgroup_functions_take_crossgl_wave_names():
+    features = parse()
+    assert features["subgroup_f_add"].crossgl == "WaveActiveSum"
+    assert features["subgroup_inclusive_f_add"].crossgl == "WavePrefixInclusiveSum"
+    # A bool operand makes CrossGL's bitwise wave operation the logical one.
+    assert features["subgroup_logical_and"].crossgl == "WaveActiveBitAnd"
+    assert features["subgroup_ballot"].crossgl == "WaveActiveBallot"
+    assert spellings.WAVES["rust"]["subgroup_exclusive_i_add"] == "WavePrefixSum"
+    assert spellings.WAVES["rust"]["subgroup_exclusive_u_min"] == (
+        "WavePrefixExclusiveMin"
+    )
+    # rust-gpu's constant generic cluster size is an argument in CrossGL; the probe passes 1, a power of two.
+    clustered = rust._feature(
+        "subgroup_clustered_s_max",
+        "arch",
+        Signature(Type("int"), (Param(Type("int")),)),
+        "unsafe subgroup_clustered_s_max::<4, _>",
+        "",
+        "compute",
+        frozenset(),
+    )
+    assert clustered.crossgl == "WaveClusteredMax"
+    assert (
+        "int r = WaveClusteredMax(a0, 1u);" in probes.build(clustered, "crossgl").source
+    )
+
+
+def test_rust_functions_take_the_crossgl_names_of_other_languages():
+    features = parse(frozenset({"max", "min"}))
+    # spirv-std's OpKill is CrossGL's discard, and its unsigned maximum GLSL's max.
+    assert features["kill"].crossgl == "discard"
+    assert "discard();" in probes.build(features["kill"], "crossgl").source
+    assert features["unsigned_max"].crossgl == "max"
+    assert spellings.spelling("rust", "Float::exp_m1", frozenset()) == "expm1"
+    assert spellings.spelling("rust", "Vec3::is_finite_mask", frozenset()) == "isfinite"
+    # glam's Vec3::is_finite answers for the whole vector, where isfinite answers for each element.
+    assert spellings.spelling("rust", "Vec3::is_finite", frozenset()) == (
+        "all(isfinite({0}))"
+    )
+    vec3 = Type("float", (3,))
+    extend = rust._feature(
+        "Vec3::extend",
+        "vec3",
+        Signature(Type("float", (4,)), (Param(vec3), Param(Type("float")))),
+        ".extend",
+        "",
+        "compute",
+        frozenset(),
+    )
+    assert extend.crossgl == "vec4"
+    assert "vec4 r = vec4(a0, a1);" in probes.build(extend, "crossgl").source
+
+
 def test_rust_reads_float_and_vec3_methods():
     features = parse()
     assert "Float::hidden" not in features
@@ -271,7 +170,71 @@ def test_rust_probes_64_bit_integer_results():
         in source
     )
     assert "outp[i] = (r) as u32;" in source
-    assert "uint64_t r = read_clock_khr();" in probes.build(clock, "crossgl").source
+    # At the subgroup scope the probe passes, OpReadClockKHR is GL_ARB_shader_clock's clockARB.
+    assert clock.crossgl == "clockARB"
+    assert "uint64_t r = clockARB();" in probes.build(clock, "crossgl").source
+
+
+def _method(name, result, *params):
+    signature = Signature(result, tuple(Param(p) for p in params))
+    return rust._feature(name, "vec3", signature, "", "", "compute", frozenset())
+
+
+def test_rust_writes_glam_arithmetic_and_float_constants_as_crossgl_expressions():
+    vec3, scalar = Type("float", (3,)), Type("float")
+    # glam's with_x replaces the receiver's x, and element_sum adds its elements.
+    with_x = _method("Vec3::with_x", vec3, vec3, scalar)
+    assert "vec3 r = vec3(a1, a0.y, a0.z);" in probes.build(with_x, "crossgl").source
+    element_sum = _method("Vec3::element_sum", scalar, vec3)
+    assert (
+        "float r = (a0.x + a0.y + a0.z);" in probes.build(element_sum, "crossgl").source
+    )
+    # A constant without arguments is the literal itself, and powi converts its integer exponent for pow.
+    max_value = _method("Float::max_value", scalar)
+    assert "float r = (3.40282347e38);" in probes.build(max_value, "crossgl").source
+    powi = _method("Float::powi", scalar, scalar, Type("int"))
+    assert "float r = pow(a0, float(a1));" in probes.build(powi, "crossgl").source
+    for name in ("Vec3::with_x", "Float::max_value", "Float::powi"):
+        assert spellings.is_expression(spellings.OTHER_NAMES["rust"][name])
+
+
+def test_rust_compare_exchange_passes_the_comparator_first_in_crossgl():
+    word = Type("uint")
+    exchange = rust._feature(
+        "atomic_compare_exchange",
+        "atomics",
+        Signature(word, (Param(word, "inout"), Param(word), Param(word))),
+        "",
+        "",
+        "compute",
+        frozenset(),
+    )
+    # spirv-std takes (pointer, value, comparator); atomicCompSwap takes (pointer, comparator, value).
+    assert (
+        "atomicCompSwap(outp[i], a2, a1);" in probes.build(exchange, "crossgl").source
+    )
+
+
+def test_rust_probes_constant_generic_operations_as_the_crossgl_built_in_they_are():
+    features = parse()
+    # The probe's subgroup scope and acquire-release uniform-memory semantics make memory_barrier the barrier
+    # GL_KHR_shader_subgroup calls subgroupMemoryBarrierBuffer.
+    assert features["memory_barrier"].crossgl == "subgroupMemoryBarrierBuffer"
+    callable_data = Type("", (), "udt")
+    call = rust._feature(
+        "execute_callable",
+        "ray_tracing",
+        Signature(Type("", (), "void"), (Param(callable_data, "inout"),)),
+        "",
+        "",
+        "callable",
+        frozenset(),
+    )
+    assert "CallShader(0u, payload);" in probes.build(call, "crossgl").source
+    # A mesh dispatch that hands over a payload is OpEmitMeshTasksEXT with a payload operand, CrossGL's DispatchMesh.
+    assert spellings.spelling("rust", "emit_mesh_tasks_ext_payload", frozenset()) == (
+        "DispatchMesh"
+    )
 
 
 def test_rust_probes_pointer_sized_integers():
@@ -281,7 +244,12 @@ def test_rust_probes_pointer_sized_integers():
     source = probes.build(position, "rust").source
     assert "let r: usize = a0.max_position();" in source
     assert "outp[i] = (r) as u32;" in source
-    assert position.crossgl == ""
+    # glam keeps the first of equal elements, so CrossGL compares as glam does and writes the index as a uint.
+    crossgl = probes.build(position, "crossgl").source
+    assert (
+        "uint r = (a0.z > (a0.y > a0.x ? a0.y : a0.x) ? 2u : (a0.y > a0.x ? 1u : 0u));"
+        in crossgl
+    )
     extract = features["vector_extract_dynamic"]
     source = probes.build(extract, "rust").source
     assert "let a1: usize = (uin[i + 0]) as usize;" in source
@@ -344,7 +312,6 @@ def test_rust_functions_returning_several_values_have_no_crossgl_spelling():
     features = parse()
     for name in (
         "Float::integer_decode",
-        "Vec3::max_position",
         "Vec3::normalize_and_length",
         "Vec3::try_normalize",
     ):
@@ -430,11 +397,34 @@ def test_rust_probes_pass_arrays_and_slices():
             probes.build(features[name], "crossgl")
 
 
-def test_rust_functions_that_compute_something_else_have_no_crossgl_spelling():
+def test_rust_functions_that_compute_something_else_are_written_as_rust_computes_them():
     features = parse()
-    # Rust's fract truncates; CrossGL's floors.
-    assert features["Float::fract"].crossgl == ""
-    assert "trunc" in features["Float::fract"].note
+    # Rust's fract truncates where CrossGL's floors, and Float::log divides by the logarithm of its base.
+    assert features["Float::fract"].crossgl == "({0} - trunc({0}))"
+    vec3 = Type("float", (3,))
+    fract = _method("Vec3::fract", vec3, vec3)
+    assert "vec3 r = (a0 - trunc(a0));" in probes.build(fract, "crossgl").source
+    log = _method("Float::log", Type("float"), Type("float"), Type("float"))
+    assert "float r = (log(a0) / log(a1));" in probes.build(log, "crossgl").source
+    # glam's Euclidean division and remainder correct Rust's truncating ones per element.
+    div_euclid = probes.build(
+        _method("Vec3::div_euclid", vec3, vec3, vec3), "crossgl"
+    ).source
+    assert (
+        "(fmod(a0.y, a1.y) < 0.0 ? trunc(a0.y / a1.y) + (a1.y > 0.0 ? -1.0 : 1.0) : trunc(a0.y / a1.y))"
+        in div_euclid
+    )
+    rem_euclid = probes.build(
+        _method("Vec3::rem_euclid", vec3, vec3, vec3), "crossgl"
+    ).source
+    assert (
+        "(fmod(a0.z, a1.z) < 0.0 ? fmod(a0.z, a1.z) + abs(a1.z) : fmod(a0.z, a1.z)))"
+        in rem_euclid
+    )
+    orthonormal = probes.build(
+        _method("Vec3::any_orthonormal_vector", vec3, vec3), "crossgl"
+    ).source
+    assert ", -a0.y);" in orthonormal
     # A function without a GLSL counterpart is probed under its own name.
     assert features["Float::sin"].crossgl == "sin"
     assert features["unsigned_max"].crossgl == "unsigned_max"
@@ -463,405 +453,19 @@ def test_rust_passes_a_broadcast_lane_id_as_a_literal():
     assert "let r: f32 = unsafe { subgroup_broadcast(a0, 1) };" in source
 
 
-def feature(name, result, *params, spelling=""):
-    signature = Signature(
-        result, tuple(p if isinstance(p, Param) else Param(p) for p in params)
-    )
-    return Feature("rust", "function", name, signature, spelling=spelling)
-
-
-VEC3_TYPE = Type("float", (3,))
-SAMPLES = [
-    feature("Float::sin", Type("float"), Type("float"), spelling=".sin"),
-    feature("Vec3::dot", Type("float"), VEC3_TYPE, VEC3_TYPE, spelling=".dot"),
-    feature("Vec3::cross", VEC3_TYPE, VEC3_TYPE, VEC3_TYPE, spelling=".cross"),
-    feature("Vec3::cmpeq", Type("bool", (3,)), VEC3_TYPE, VEC3_TYPE, spelling=".cmpeq"),
-    feature(
-        "atomic_i_add",
-        Type("uint"),
-        Param(Type("uint"), "inout"),
-        Type("uint"),
-        spelling="unsafe atomic_i_add::<_, { Scope::Subgroup as u32 }, { Semantics::NONE.bits() }>",
-    ),
-    feature("workgroup_memory_barrier_with_group_sync", VOID),
-    feature("Float::nan", Type("float"), spelling="f32::nan"),
-    feature(
-        "read_clock_khr",
-        Type("uint64"),
-        spelling="unsafe read_clock_khr::<{ Scope::Subgroup as u32 }>",
-    ),
-]
-
-
-def test_rust_probe_is_a_rust_gpu_compute_entry_point():
-    source = probes.build(SAMPLES[1], "rust").source
-    assert source.startswith("#![no_std]\nuse spirv_std::arch::*;\n")
-    assert "#[spirv(compute(threads(1)))]\npub fn probe(\n" in source
-    assert (
-        "    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] fin: &[f32],\n"
-        in source
-    )
-    assert "outp: &mut [f32],\n" in source
-    assert "let a1: Vec3 = Vec3::new(fin[i + 3], fin[i + 4], fin[i + 5]);" in source
-    assert "let r: f32 = a0.dot(a1);" in source
-    assert probes.build(SAMPLES[0], "rust").suffix == ".rs"
-
-
-def test_rust_probe_widens_3_vectors_for_the_output_buffer():
-    source = probes.build(SAMPLES[2], "rust").source
-    assert "outp: &mut [Vec4]," in source
-    assert "outp[i] = r.extend(0.0);" in source
-
-
-def test_rust_probe_wraps_unsafe_calls_and_passes_inout_by_reference():
-    source = probes.build(SAMPLES[4], "rust").source
-    assert "unsafe { atomic_i_add::<_, " in source
-    assert ">(&mut outp[i], a1) };" in source
-    barrier = probes.build(SAMPLES[5], "rust").source
-    assert "workgroup_memory_barrier_with_group_sync();\n    outp[i] = 0;" in barrier
-    baseline = probes.build(SAMPLES[1], "rust", baseline=True).source
-    assert "dot" not in baseline
-    assert "outp[i] = outp[i];" in baseline
-
-
-RAY_TRACING = """
-pub unsafe fn report_intersection(hit: f32, hit_kind: u32) -> bool {
-    false
-}
-
-pub unsafe fn terminate_ray() -> ! {
-    loop {}
-}
-
-pub unsafe fn execute_callable<T, const ID: usize>(data: &T) {}
-"""
-PRIMITIVE = "pub unsafe fn emit_vertex() {}\n"
-
-
-def test_rust_ray_tracing_functions_are_probed_in_a_stage_that_has_them():
-    found = rust.parse(
-        {"ray_tracing": RAY_TRACING, "primitive": PRIMITIVE, "arch": ARCH}, FLOAT, VEC3
-    )
-    features = {f.name: f for f in found}
-    assert features["report_intersection"].stage == "intersection"
-    assert features["terminate_ray"].stage == "any-hit"
-    assert features["execute_callable"].stage == "callable"
-    assert features["emit_vertex"].stage == "geometry"
-    # A function that never returns is called as a statement.
-    assert features["terminate_ray"].signature == Signature(VOID, ())
-    assert features["kill"].signature == Signature(VOID, ())
-
-
-STAGE_SAMPLES = [
-    Feature(
-        "rust",
-        "function",
-        "report_intersection",
-        Signature(Type("bool"), (Param(Type("float")), Param(Type("uint")))),
-        spelling="unsafe report_intersection",
-        stage="intersection",
-    ),
-    Feature(
-        "rust",
-        "function",
-        "terminate_ray",
-        Signature(VOID, ()),
-        spelling="unsafe terminate_ray",
-        stage="any-hit",
-    ),
-    Feature(
-        "rust",
-        "function",
-        "emit_vertex",
-        Signature(VOID, ()),
-        spelling="unsafe emit_vertex",
-        stage="geometry",
-    ),
-    Feature("rust", "function", "kill", Signature(VOID, ()), stage="fragment"),
-    Feature(
-        "rust",
-        "function",
-        "set_mesh_outputs_ext",
-        Signature(VOID, (Param(Type("uint")), Param(Type("uint")))),
-        spelling="unsafe set_mesh_outputs_ext",
-        stage="mesh",
-    ),
-    Feature(
-        "rust",
-        "function",
-        "emit_mesh_tasks_ext_payload",
-        Signature(
-            VOID, (*[Param(Type("uint"))] * 3, Param(Type.other("udt"), "inout"))
-        ),
-        spelling="unsafe emit_mesh_tasks_ext_payload",
-        stage="task",
-    ),
-    Feature(
-        "rust",
-        "function",
-        "execute_callable",
-        Signature(VOID, (Param(Type.other("udt"), "inout"),)),
-        spelling="unsafe execute_callable::<_, 0>",
-        stage="callable",
-    ),
-]
-
-
-def test_rust_stage_probes_name_their_execution_model():
-    intersection, hit, geometry = (
-        probes.build(f, "rust").source for f in STAGE_SAMPLES[:3]
-    )
-    assert (
-        "#[spirv(intersection)]\npub fn probe(\n    #[spirv(storage_buffer"
-        in intersection
-    )
-    assert "Payload" not in intersection
-    assert "let r: bool = unsafe { report_intersection(a0, a1) };" in intersection
-    assert "pub struct Payload {\n    pub color: Vec4,\n}\n\n#[spirv(any_hit)]" in hit
-    assert "    #[spirv(incoming_ray_payload)] payload: &mut Payload,\n" in hit
-    assert "    #[spirv(hit_attribute)] attributes: &mut Vec2,\n" in hit
-    assert "unsafe { terminate_ray() };" in hit
-    assert (
-        "#[spirv(geometry(input_points = 1, output_points = 1, output_vertices = 1))]"
-        in geometry
-    )
-
-
-MESH_SHADING = """
-pub unsafe fn set_mesh_outputs_ext(vertex_count: u32, primitive_count: u32) {}
-
-pub unsafe fn emit_mesh_tasks_ext_payload<T>(
-    group_count_x: u32,
-    group_count_y: u32,
-    group_count_z: u32,
-    payload: &mut T,
-) -> ! {
-    loop {}
-}
-"""
-
-
-WHERE_VEC3 = """
-impl Vec3 {
-    pub fn map<F>(self, f: F) -> Self
-    where
-        F: Fn(f32) -> f32,
-    {
-        self
-    }
-
-    pub fn scaled<T>(self, s: T) -> Self
-    where
-        T: Into<f32>,
-    {
-        self
-    }
-
-    pub fn all_by<F>(self, f: F) -> bool
-    where
-        F: Fn(f32) -> bool,
-    {
-        true
-    }
-}
-"""
-
-
-def test_rust_where_clauses_bound_type_parameters():
-    found = rust.parse({}, FLOAT, WHERE_VEC3, frozenset())
-    features = {f.name: f for f in found}
-    # A closure parameter keeps its bound, and the probe passes a closure that doubles its argument.
-    mapped = features["Vec3::map"]
-    assert mapped.signature.params[1] == Param(Type.other("Fn(f32) -> f32"))
-    assert "a0.map(|x: f32| x + x)" in probes.build(mapped, "rust").source
-    with pytest.raises(probes.NoSpelling, match="no closures"):
-        probes.build(mapped, "crossgl")
-    # A closure whose result differs from its argument has no probe.
-    with pytest.raises(
-        probes.ProbeError, match=r"parameters of type Fn\(f32\) -> bool"
-    ):
-        probes.build(features["Vec3::all_by"], "rust")
-    # A bound in the where clause types its parameter as a bound in the generics would.
-    assert features["Vec3::scaled"].signature.params[1] == Param(Type("float"))
-
-
-def test_rust_payload_functions_take_the_probe_payload():
-    found = rust.parse(
-        {"mesh_shading": MESH_SHADING, "ray_tracing": RAY_TRACING}, FLOAT, VEC3
-    )
-    features = {f.name: f for f in found}
-    task = features["emit_mesh_tasks_ext_payload"]
-    assert task.stage == "task"
-    assert task.signature.params[3] == Param(Type.other("udt"), "inout")
-    source = probes.build(task, "rust").source
-    assert "#[spirv(task_ext(threads(1)))]" in source
-    assert "    #[spirv(task_payload_workgroup_ext)] payload: &mut Payload,\n" in source
-    assert "emit_mesh_tasks_ext_payload(a0, a1, a2, payload)" in source
-    callable_ = probes.build(features["execute_callable"], "rust").source
-    assert "#[spirv(callable)]" in callable_
-    assert "    #[spirv(incoming_callable_data)] payload: &mut Payload,\n" in callable_
-    assert "execute_callable::<_, 0>(payload)" in callable_
-    crossgl = probes.build(features["execute_callable"], "crossgl").source
-    assert "struct Payload {" in crossgl
-    assert "void main(Payload payload @ callable_data) {" in crossgl
-
-
-def test_rust_mesh_probe_writes_a_triangle_after_the_call():
-    found = rust.parse({"mesh_shading": MESH_SHADING}, FLOAT, VEC3)
-    mesh = next(f for f in found if f.name == "set_mesh_outputs_ext")
-    assert mesh.stage == "mesh"
-    source = probes.build(mesh, "rust").source
-    assert (
-        "#[spirv(mesh_ext(threads(1), output_vertices = 3, output_primitives_ext = 1, output_triangles_ext))]"
-        in source
-    )
-    assert (
-        "    #[spirv(primitive_triangle_indices_ext)] indices: &mut [UVec3; 1],\n"
-        in source
-    )
-    call = source.index("set_mesh_outputs_ext(a0, a1)")
-    assert call < source.index("indices[0] = UVec3::new(0, 1, 2);")
-
-
-def test_rust_mesh_and_task_probes_compile_for_vulkan_1_2(monkeypatch):
-    commands = []
-
-    def run(arguments, cwd):
-        commands.append(arguments)
-        return validators.Verdict(True)
-
-    monkeypatch.setattr(rustgpu, "command", lambda target=rustgpu.TARGET: (target,))
-    monkeypatch.setattr(validators, "_run", run)
-    for stage in ("compute", "closest-hit", "mesh", "task"):
-        validators.validate("rust", "", stage)
-    assert [arguments[0] for arguments in commands] == [
-        "spirv-unknown-vulkan1.1",
-        "spirv-unknown-vulkan1.1",
-        "spirv-unknown-vulkan1.2",
-        "spirv-unknown-vulkan1.2",
-    ]
-
-
-def test_rust_gpu_is_unavailable_without_a_build(monkeypatch, tmp_path):
-    monkeypatch.setenv("CROSSTL_COVERAGE_RUST_GPU", str(tmp_path))
-    rustgpu.command.cache_clear()
-    rustgpu.version.cache_clear()
-    try:
-        assert rustgpu.command() == ()
-        assert rustgpu.version() == ""
-    finally:
-        rustgpu.command.cache_clear()
-        rustgpu.version.cache_clear()
-
-
-def test_rust_gpu_needs_libraries_for_every_target(monkeypatch, tmp_path):
-    built = tmp_path / "target"
-    (built / "release").mkdir(parents=True)
-    (built / "release" / "librustc_codegen_spirv.so").touch()
-    (built / "compiletest-target-spec").mkdir()
-    deps = built / "compiletest-deps"
-    macros = deps / "debug" / "build" / "spirv-std-macros" / "h" / "out"
-    macros.mkdir(parents=True)
-    (macros / "libspirv_std_macros-h.so").touch()
-
-    def build(target):
-        (built / "compiletest-target-spec" / f"{target}.json").touch()
-        for crate in ("compiler_builtins", "core", "spirv-std"):
-            out = deps / target / "debug" / "build" / crate / "h" / "out"
-            out.mkdir(parents=True)
-            (out / f"lib{crate.replace('-', '_')}-h.rlib").touch()
-
-    monkeypatch.setenv("CROSSTL_COVERAGE_RUST_GPU", str(tmp_path))
-    monkeypatch.setenv("CROSSTL_COVERAGE_RUSTC", "rustc")
-    rustgpu.command.cache_clear()
-    try:
-        build(rustgpu.TARGET)
-        assert rustgpu.command() == ()
-        rustgpu.command.cache_clear()
-        build(rustgpu.MESH_TARGET)
-        compute, mesh = rustgpu.command(), rustgpu.command(rustgpu.MESH_TARGET)
-        assert compute[-1].endswith("spirv-unknown-vulkan1.1.json")
-        assert mesh[-1].endswith("spirv-unknown-vulkan1.2.json")
-        features = [
-            next(a for a in flags if a.startswith("-Ctarget-feature="))
-            for flags in (compute, mesh)
-        ]
-        assert "+MeshShadingEXT" not in features[0]
-        assert "+MeshShadingEXT," in features[1]
-        assert features[1].endswith(",+ext:SPV_EXT_mesh_shader")
-    finally:
-        rustgpu.command.cache_clear()
-
-
-needs_rust_gpu = pytest.mark.skipif(
-    not validators.available("rust"), reason="rust-gpu is not installed"
-)
-
-# Fine and coarse derivatives and helper invocations need capabilities beyond Vulkan 1.1's defaults.
-FRAGMENT_SAMPLES = [
-    Feature(
-        "rust",
-        "function",
-        "Derivative::dfdx_fine",
-        Signature(Type("float"), (Param(Type("float")),)),
-        spelling=".dfdx_fine",
-        stage="fragment",
-    ),
-    Feature(
-        "rust",
-        "function",
-        "demote_to_helper_invocation",
-        Signature(VOID, ()),
-        stage="fragment",
-    ),
-    Feature(
-        "rust",
-        "function",
-        "is_helper_invocation",
-        Signature(Type("bool"), ()),
-        stage="fragment",
-    ),
-]
-
-
-@needs_rust_gpu
-@pytest.mark.parametrize("probe_feature", SAMPLES, ids=lambda f: f.name)
-@pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
-def test_rust_probes_compile_with_rust_gpu(probe_feature, baseline):
-    probe = probes.build(probe_feature, "rust", baseline=baseline)
-    verdict = validators.validate("rust", probe.source, entry=probe.entry)
-    assert verdict.accepted, verdict.log
-
-
-@needs_rust_gpu
-@pytest.mark.parametrize("probe_feature", FRAGMENT_SAMPLES, ids=lambda f: f.name)
-def test_rust_fragment_probes_compile_with_rust_gpu(probe_feature):
-    probe = probes.build(probe_feature, "rust")
-    verdict = validators.validate("rust", probe.source, entry=probe.entry)
-    assert verdict.accepted, verdict.log
-
-
-@needs_rust_gpu
-@pytest.mark.parametrize("probe_feature", STAGE_SAMPLES, ids=lambda f: f.name)
-def test_rust_stage_probes_compile_with_rust_gpu(probe_feature):
-    probe = probes.build(probe_feature, "rust")
-    verdict = validators.validate(
-        "rust", probe.source, probe_feature.stage, entry=probe.entry
-    )
-    assert verdict.accepted, verdict.log
-
-
-@needs_rust_gpu
-def test_rust_gpu_rejects_code_that_is_not_a_shader_crate():
-    verdict = validators.validate("rust", "pub fn f() -> String { String::new() }\n")
-    assert not verdict.accepted
-    assert "can't find crate for `std`" in verdict.log
-
-
-@needs_rust_gpu
-def test_rust_features_lower_to_spir_v_through_rust_gpu():
-    assert validators.can_lower("rust")
-    assert semantic.lower(SAMPLES[0]) == ("GLSL.std.450:Sin", "")
-    # glam's methods are Rust arithmetic, so they borrow GLSL's ids through their CrossGL spelling instead.
-    dot = Feature("rust", "function", "Vec3::dot", SAMPLES[1].signature, group="vec3")
-    assert semantic.lower(dot) == ("", "glam computes it with Rust arithmetic")
+def test_rust_baseline_keeps_its_boolean_arguments_in_use():
+    # rust-gpu removes unused values, so a baseline that only declared the argument would lose its comparisons, and
+    # they would join the id of every call that takes a boolean (OpAll+OpFOrdGreaterThan for any's).
+    vector = probes.build(parse()["any"], "rust", baseline=True).source
+    assert "any(" not in vector
+    for component in "xyz":
+        assert f"if a0.{component} {{ outp[i] = outp[i]; }}" in vector
+    scalar = Signature(Type("bool"), (Param(Type("bool")), Param(Type("float"))))
+    flag = Feature("rust", "function", "subgroup_all", scalar, crossgl="allInvocations")
+    source = probes.build(flag, "rust", baseline=True).source
+    assert source.count("if a0 { outp[i] = outp[i]; }") == 1
+    assert "if a1" not in source
+    # The CrossGL probe's translation keeps unused values, so its baseline does not need the guards.
+    crossgl = probes.build(flag, "crossgl", baseline=True).source
+    assert "bool a0 = (fin[i + 0u] > 0.0);" in crossgl
+    assert "if (a0" not in crossgl

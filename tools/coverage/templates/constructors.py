@@ -8,7 +8,8 @@ OpenCL C and Mojo have no matrices. OpenCL C builds vectors with vector literals
 
 from __future__ import annotations
 
-from .base import ABSENT, C_FAMILY, Template
+from .base import ABSENT, Template
+from .family import C_FAMILY
 
 _C_PAIR = "struct Pair {\n    float a;\n    float b;\n};"
 _C_STRUCT_CONSTRUCTOR = "Pair p = {fin[i], 2.0f};\nPair q = {p.b, p.a * 3.0f};\noutp[i] = p.a + q.a * 10.0f + q.b * 100.0f;"

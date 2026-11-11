@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .dialect import Dialect, ProbeError
-from .model import Type
+from .model import DESCRIPTOR_HANDLE, Type
 
 
 @dataclass(frozen=True)
@@ -176,18 +176,20 @@ def _acceleration_structure(spelling: str) -> dict[str, Uniform]:
 UNIFORMS: dict[str, dict[str, Uniform]] = {
     "glsl": _GLSL_UNIFORMS,
     # The CrossGL counterpart of WGSL's array textures (:data:`.spellings.COUNTERPARTS`) takes one more. CrossGL
-    # spells an acceleration structure as every generator reads it, and byte-address buffers as Slang does.
+    # spells an acceleration structure as every generator reads it, and byte-address buffers and descriptor handles as
+    # Slang does.
     "crossgl": {
         **_GLSL_UNIFORMS,
         **_same("sampler2DArray"),
         **_acceleration_structure("accelerationStructureEXT"),
-        **_same("ByteAddressBuffer", "RWByteAddressBuffer"),
+        **_same("ByteAddressBuffer", "RWByteAddressBuffer", DESCRIPTOR_HANDLE),
     },
     "hlsl": _acceleration_structure("RaytracingAccelerationStructure"),
-    # Slang's cooperative-vector functions load and accumulate through byte-address buffers.
+    # Slang's cooperative-vector functions load and accumulate through byte-address buffers, and its bindless
+    # functions take a handle to the probe descriptor.
     "slang": {
         **_acceleration_structure("RaytracingAccelerationStructure"),
-        **_same("ByteAddressBuffer", "RWByteAddressBuffer"),
+        **_same("ByteAddressBuffer", "RWByteAddressBuffer", DESCRIPTOR_HANDLE),
     },
     "wgsl": _WGSL_UNIFORMS,
     # OpenCL C passes an image as a kernel argument and declares a sampler as a program-scope constant.

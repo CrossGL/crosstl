@@ -238,13 +238,28 @@ def _workflow(name):
 
 def test_the_pull_request_job_runs_only_main_code_with_a_narrow_token():
     workflow = _workflow("pull-request-labels.yml")
-    # Scheduled runs start hours late here, so pushes to main do most of the work.
-    # Only events whose code is main's may hold the write token.
-    assert set(workflow[True]) == {"push", "schedule", "workflow_dispatch"}
+    # Scheduled runs start hours late here, so a pull request's Coverage run and
+    # pushes to main do most of the work. Only events whose code is main's may hold
+    # the write token: a workflow_run workflow runs main's version of itself.
+    assert set(workflow[True]) == {
+        "workflow_run",
+        "push",
+        "schedule",
+        "workflow_dispatch",
+    }
+    assert workflow[True]["workflow_run"] == {
+        "workflows": ["Coverage"],
+        "types": ["requested"],
+    }
     assert workflow[True]["push"] == {"branches": ["main"]}
     assert workflow[True]["schedule"]
     (job,) = workflow["jobs"].values()
-    assert "if" not in job
+    # Coverage also runs on pushes to main and in the merge queue; only a pull
+    # request's run can bring a new pull request.
+    assert job["if"] == (
+        "github.event_name != 'workflow_run'"
+        " || github.event.workflow_run.event == 'pull_request'"
+    )
     assert job["permissions"] == {"contents": "read", "pull-requests": "write"}
     checkout = job["steps"][0]
     assert checkout["uses"].startswith("actions/checkout@")

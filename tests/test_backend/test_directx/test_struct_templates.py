@@ -159,14 +159,6 @@ def test_struct_templates_translate_to_valid_targets(tmp_path, backend):
     [
         (
             """
-            template <typename T, uint N> struct Ring { T items[N]; };
-            RWStructuredBuffer<float> f : register(u0);
-            [numthreads(1, 1, 1)] void main() { Ring<float, 4> r; r.items[0] = 1.0; f[0] = r.items[0]; }
-            """,
-            "declares the value parameter 'uint N'",
-        ),
-        (
-            """
             template <typename T, typename U> struct Pair { T a; U b; };
             template <typename T> struct Pair<T, int> { T a; };
             RWStructuredBuffer<float> f : register(u0);

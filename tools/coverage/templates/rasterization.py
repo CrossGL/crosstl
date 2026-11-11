@@ -2,13 +2,13 @@
 tells a fragment shader which primitive and which sample it shades and which samples it covers, and through which
 the shader writes its own coverage.
 
-Each probe is the fragment probe of :mod:`.graphics` with one built-in added: it reads the index of the primitive or
-of the sample, or the lowest bit of the input coverage mask, into the colour it writes, or writes a coverage mask
-next to the colour. GLSL uses ``gl_PrimitiveID``, ``gl_SampleID``, ``gl_SampleMaskIn`` and ``gl_SampleMask``, HLSL
-and Slang the ``SV_PrimitiveID``, ``SV_SampleIndex`` and ``SV_Coverage`` semantics, Metal the ``[[primitive_id]]``,
-``[[sample_id]]`` and ``[[sample_mask]]`` attributes, WGSL the ``primitive_index`` built-in, which needs
-``enable primitive_index;``, and the ``sample_index`` and ``sample_mask`` built-ins, Rust the ``primitive_id``,
-``sample_id`` and ``sample_mask`` attributes and CrossGL the GLSL names as member semantics.
+Each probe is the fragment probe of the language's module with one built-in added: it reads the index of the primitive
+or of the sample, or the lowest bit of the input coverage mask, into the colour it writes, or writes a coverage mask
+next to the colour. GLSL uses ``gl_PrimitiveID``, ``gl_SampleID``, ``gl_SampleMaskIn`` and ``gl_SampleMask``, HLSL and
+Slang the ``SV_PrimitiveID``, ``SV_SampleIndex`` and ``SV_Coverage`` semantics, Metal the ``[[primitive_id]]``,
+``[[sample_id]]`` and ``[[sample_mask]]`` attributes, WGSL the ``primitive_index`` built-in, which needs ``enable
+primitive_index;``, and the ``sample_index`` and ``sample_mask`` built-ins, Rust the ``primitive_id``, ``sample_id``
+and ``sample_mask`` attributes and CrossGL the GLSL names as member semantics.
 
 GLSL ES 3.00 has none of these built-ins (GLSL ES 3.20 adds them), so WebGL 2 has no probe. The kernel languages
 have no fragment stage.

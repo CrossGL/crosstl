@@ -154,7 +154,14 @@ class MojoParser:
             node.attributes = attributes + existing_attributes
         return node
 
+    def expect_end_of_input(self):
+        if self.current_token[0] != "EOF":
+            raise SyntaxError(f"Expected EOF, got {self.current_token[0]}")
+
     def eat(self, token_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if token_type == "EOF" and self.current_token[0] == "EOF":
+            raise SyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -181,7 +188,7 @@ class MojoParser:
 
     def parse(self):
         module = self.parse_module()
-        self.eat("EOF")
+        self.expect_end_of_input()
         return module
 
     def parse_module(self):
@@ -2686,6 +2693,12 @@ class MojoParser:
                 if not self.is_postfix_transfer_marker():
                     return node
                 self.eat("BITWISE_XOR")
+                if isinstance(node, str):
+                    # Literals are kept as their source text; mojo rejects them with "expression does not
+                    # designate a value with a lifetime".
+                    raise SyntaxError(
+                        f"The transfer operator '^' needs a value with a lifetime, got the literal {node}"
+                    )
                 node.is_transfer = True
                 continue
 
@@ -2733,7 +2746,7 @@ class MojoParser:
         parser = MojoParser(MojoLexer(f"[{content}]").tokenize())
         index = parser.parse_array_access(VariableNode("", "__attribute__")).index
         parser.skip_layout_tokens()
-        parser.eat("EOF")
+        parser.expect_end_of_input()
         return index
 
     def is_postfix_transfer_marker(self):
