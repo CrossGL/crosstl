@@ -7,13 +7,17 @@ plans. Two generators wrote other declarations silently:
 
 * Metal declares a constant block, or the ``T`` of a ``ConstantBuffer<T>``, as a plain MSL struct in its natural
   layout (MSL 3.2 section 2.2) unless the block declares a layout it plans (``hlsl_cbuffer``, ``std140``, ``std430``
-  or ``scalar``). ``float scale; vec3 v @offset(32);`` then read ``v`` at byte 16.
+  or ``scalar``) or is a push-constant block, which it plans with the push-constant layout.
+  ``float scale; vec3 v @offset(32);`` then read ``v`` at byte 16.
 * Slang declares the ``T`` of a push-constant ``ConstantBuffer<T>`` with no offsets, so slangc lays it out by std430;
   and it writes the ``[[vk::offset(N)]]`` of a push-constant ``cbuffer`` member, which slangc moves to the member's
   std430 alignment when ``N`` is not a multiple of it.
 
-HLSL and GLSL output place the members of a constant block only, not those of a struct the block holds, and every
-target but SPIR-V declared the ``T`` of an array of ``ConstantBuffer<T>`` without its placements. For those targets
+HLSL and GLSL output declare a struct once, by their own rules, so they read a constant block whose structs carry
+placements that move a scalar from its 16-byte registers (:mod:`..codegen.glsl_hlsl_cbuffer`,
+:mod:`..codegen.hlsl_glsl_block_registers`); they place a push-constant block's own members only, not those of a
+struct it holds. Every target but SPIR-V declared the ``T`` of an array of ``ConstantBuffer<T>`` without its
+placements. For those targets
 :func:`refuse_unplaced_member_offsets` raises :class:`MemberPlacementError` when the declared placements put any
 scalar somewhere other than the target's own rules would. Placements that agree with them, such as the offsets an
 importer writes for every member, are accepted.
@@ -159,15 +163,21 @@ class _Structs:
         return placed != plain
 
 
-def _check_nested_placements(structs, program, target, native):
+def _check_nested_placements(
+    structs, program, target, native, push_constants_only=False
+):
     """Refuse a constant block whose members' structs carry placements that move a scalar under the block's layout.
 
     HLSL and GLSL output place a block's own members (``packoffset`` and ``layout(offset)``), but declare the
     structs it holds once, by the layout's rules alone: GLSL ``layout(offset)`` and HLSL ``packoffset`` apply to
-    block members only (GLSL 4.60 section 4.4.5).
+    block members only (GLSL 4.60 section 4.4.5). Both read any other constant block whose structs move a scalar
+    from its registers (:mod:`..codegen.glsl_hlsl_cbuffer`, :mod:`..codegen.hlsl_glsl_block_registers`), so with
+    ``push_constants_only`` only a push-constant block is checked.
     """
     for block in iter_structs(program):
         if not getattr(block, "is_cbuffer", False):
+            continue
+        if push_constants_only and not is_push_constant(block):
             continue
         nested = [
             member
@@ -389,9 +399,16 @@ def refuse_unplaced_member_offsets(program, target) -> None:
     structs = _Structs(program)
     if target in METAL_TARGETS:
         native = (METAL_LAYOUT,)
-        _check_blocks(structs, program, target, native, METAL_PLANNED_LAYOUTS, True)
+        # Metal output plans push-constant blocks and buffers with their push-constant layout, and the structs a
+        # planned block holds with their members' placements (metal_hlsl_resources).
+        _check_blocks(structs, program, target, native, METAL_PLANNED_LAYOUTS, False)
         _check_elements(
-            structs, program, target, native, lambda _variable, _declared: False
+            structs,
+            program,
+            target,
+            native,
+            lambda variable, declared: is_push_constant(variable)
+            or declared in METAL_PLANNED_LAYOUTS,
         )
     elif target in SLANG_TARGETS:
         _check_slang(structs, program, target)
@@ -404,7 +421,9 @@ def refuse_unplaced_member_offsets(program, target) -> None:
         # (hlsl_glsl_block_registers).
         hlsl = TARGET_LAYOUTS[target] == HLSL_CBUFFER_LAYOUT
         _check_constant_buffer_arrays(structs, program, target, TARGET_LAYOUTS[target])
-        _check_nested_placements(structs, program, target, TARGET_LAYOUTS[target])
+        _check_nested_placements(
+            structs, program, target, TARGET_LAYOUTS[target], push_constants_only=True
+        )
         _check_elements(
             structs,
             program,

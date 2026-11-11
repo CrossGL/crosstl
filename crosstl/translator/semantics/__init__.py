@@ -21,6 +21,7 @@ from .array_parameters import copy_written_array_parameters
 from .array_values import ArrayConstructorUnsupportedError, hoist_array_constructors
 from .atomic_forms import canonicalize_atomic_calls, hlsl_out_argument_atomics
 from .binding_constants import BindingIndexUnresolvedError, fold_binding_constants
+from .bit_functions import legalize_bit_functions
 from .block_matrix_orders import BlockMatrixOrderError, distribute_block_matrix_orders
 from .boolean_reductions import lower_boolean_reductions
 from .buffer_strides import materialize_buffer_strides
@@ -48,6 +49,12 @@ from .constant_reference_layouts import (
 )
 from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
 from .declaration_scopes import separate_initializer_scopes
+from .declared_functions import UndeclaredFunctionError, refuse_undeclared_functions
+from .declared_identifiers import (
+    UndeclaredIdentifierError,
+    generate_refusing_undeclared_identifiers,
+    record_undeclared_identifiers,
+)
 from .declared_types import UndeclaredTypeError, refuse_undeclared_types
 from .default_buffer_layouts import mark_default_buffer_layouts
 from .descriptor_arrays import (
@@ -286,11 +293,14 @@ __all__ = [
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
     "TypeAliasUnsupportedError",
+    "UndeclaredFunctionError",
+    "UndeclaredIdentifierError",
     "UndeclaredTypeError",
     "UnsizedArrayUnsupportedError",
     "VoidCastError",
     "VoidValueError",
     "apply_rule_carrying",
+    "generate_refusing_undeclared_identifiers",
 ]
 
 
@@ -362,7 +372,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     attachment ``n`` (``@gl_FragData[n]``, :mod:`.fragment_colour_outputs`). A position built-in on a vertex input
     names the ``Position`` vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
     attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
-    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). For HLSL, MSL,
+    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). So is an
+    ``SV_`` semantic Direct3D does not define or an index its kind does not take (:mod:`.system_values`). For HLSL, MSL,
     SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
     (:mod:`.compute_entry_values`). For MSL and
     HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
@@ -433,7 +444,11 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     textures or images are flattened into separate resources for SPIR-V, or refused with
     :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
     one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
-    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). Binary16 values
+    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). HLSL's
+    ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
+    ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
+    integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width
+    (:mod:`.bit_functions`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
     non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
@@ -455,6 +470,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     distribute_block_matrix_orders(program, report.target)
     resolve_template_assertions(program, report.target)
     refuse_undeclared_types(program, report.target)
+    record_undeclared_identifiers(program, report.target)
+    refuse_undeclared_functions(program, report.target)
     lower_void_casts(program, report.target)
     refuse_void_values(program, report.target)
     resolve_builtin_names(program, report.target)
@@ -555,6 +572,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
     legalize_half_floats(program, report.source, report.target)
+    legalize_bit_functions(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
     wrap_narrow_arithmetic(program, report.source, report.target)
     refuse_spirv_instructions(program, report.target)

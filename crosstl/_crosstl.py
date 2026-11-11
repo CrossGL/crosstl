@@ -29,7 +29,10 @@ from .translator.codegen.pointer_reinterpret import (
 )
 from .translator.default_arguments import lower_default_arguments
 from .translator.plugin_loader import discover_backend_plugins
-from .translator.semantics import apply_rule_carrying
+from .translator.semantics import (
+    apply_rule_carrying,
+    generate_refusing_undeclared_identifiers,
+)
 from .translator.semantics.rule_pragmas import rule_pragma
 from .translator.source_licenses import source_license_comments
 from .translator.source_registry import (
@@ -347,7 +350,11 @@ def _translate_with_codegen(
             )
             validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
             generated_code = _generate_target_code(
-                codegen, selected_ast, remaining_entry_point, normalized_backend
+                codegen,
+                selected_ast,
+                remaining_entry_point,
+                normalized_backend,
+                program=ast,
             )
             target_codegen = codegen
     else:
@@ -416,7 +423,11 @@ def _translate_with_codegen(
             )
             validate_pointer_reinterpretation_target(selected_ast, normalized_backend)
             generated_code = _generate_target_code(
-                codegen, selected_ast, remaining_entry_point, normalized_backend
+                codegen,
+                selected_ast,
+                remaining_entry_point,
+                normalized_backend,
+                program=cgl_ast,
             )
             target_codegen = codegen
 
@@ -436,20 +447,33 @@ def _translate_with_codegen(
     return generated_code, target_codegen
 
 
-def _generate_target_code(codegen, ast, entry_point, backend=None):
-    if entry_point is None:
-        code = codegen.generate(ast)
-    else:
+def _generate_target_code(codegen, ast, entry_point, backend=None, program=None):
+    """Generate ``ast`` for ``backend``.
+
+    ``program`` is the rule-carried program ``ast`` was selected from; the undeclared name recorded on it is refused
+    unless the generator refuses the program with a typed diagnostic of its own.
+    """
+
+    def generate():
+        if entry_point is None:
+            code = codegen.generate(ast)
+        else:
+            generate_entry = getattr(codegen, "generate_entry", None)
+            if not callable(generate_entry):
+                raise EntryPointSelectionUnsupportedError(
+                    "Entry-scoped artifact generation is not supported for the requested "
+                    "target backend",
+                    entry_point=entry_point,
+                )
+            code = generate_entry(ast, entry_point)
+        refuse_ast_text(code, backend)
+        return code
+
+    if entry_point is not None:
         entry_point = _validated_entry_point(entry_point)
-        generate_entry = getattr(codegen, "generate_entry", None)
-        if not callable(generate_entry):
-            raise EntryPointSelectionUnsupportedError(
-                "Entry-scoped artifact generation is not supported for the requested "
-                "target backend",
-                entry_point=entry_point,
-            )
-        code = generate_entry(ast, entry_point)
-    refuse_ast_text(code, backend)
+    code = generate_refusing_undeclared_identifiers(
+        ast if program is None else program, generate
+    )
     notices = source_license_comments(ast, backend)
     return code if not notices or notices in code else notices + code
 

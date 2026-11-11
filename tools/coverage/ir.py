@@ -1,20 +1,34 @@
 """The CrossGL IR row: which semantic features of any backend CrossGL can express.
 
 Its feature universe is the union of every backend's output features, grouped by semantic id (:mod:`.semantic`); a
-feature with no id is a semantic feature of its own. A semantic feature is expressible, and counts as ``supported``,
-when the CrossGL probe of at least one member parses, type-checks and translates correctly to that member's backend.
-Otherwise the row reports a ``wrong`` result before a ``refused`` one, and ``untested`` only when no member was
-measured. The row is computed from the report alone, so reports from several runners can be merged first.
+function with no id takes the id of the functions that CrossGL spells the same way, and functions that still have
+none are one semantic feature per CrossGL spelling, named ``crossgl/<function>`` when several languages have it and
+``<language>/<function>`` otherwise. Any other feature without an id is a semantic feature of its own. A semantic
+feature is expressible, and counts as ``supported``, when the CrossGL probe of at least one member parses,
+type-checks and translates correctly to that member's backend, or translates to valid SPIR-V whose call has the
+member's semantic id (``expressed``, :func:`.runner.expressed`). Otherwise the row reports a ``wrong`` result before
+a ``refused`` one, and ``untested`` only when no member was measured. The row is computed from the report alone, so
+reports from several runners can be merged first.
 """
 
 from __future__ import annotations
 
+from . import spellings
 from .model import Score
 from .semantic import BORROWED
 
 LANGUAGE = "crossgl"
 DIRECTION = "ir"
 _PRECEDENCE = ("supported", "wrong", "refused", "untested")
+
+
+def _spelled(feature: dict) -> str:
+    # A call that spells its generic arguments, as Slang's ``bit_cast<int>``, is keyed by the function's name, and so
+    # is an operation CrossGL writes as an expression, as Slang's ``WorkgroupSize`` (``ivec3(gl_WorkGroupSize)``).
+    spelled = feature.get("crossgl") or feature["name"]
+    if spellings.is_expression(spelled):
+        return feature["name"]
+    return spelled.split("<", 1)[0]
 
 
 def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
@@ -25,25 +39,54 @@ def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
         for f in b["features"]
         if f.get("semantic")
     }
-    groups: dict[str, list[tuple[str, dict]]] = {}
+    # The ids of the functions of every language that CrossGL spells alike. A function without an id of its own or
+    # its lender's takes the id when there is only one: CUDA ``cospi``, which no compiler here lowers, and Slang
+    # ``cospi`` are one feature. A method's name says nothing without its object's type, so methods take none.
+    shared: dict[str, set[str]] = {}
+    for backend in outputs:
+        for feature in backend["features"]:
+            if feature.get("semantic") and feature["category"] == "function":
+                shared.setdefault(_spelled(feature), set()).add(feature["semantic"])
+    alike = {
+        spelled: found.pop() for spelled, found in shared.items() if len(found) == 1
+    }
+    keyed: list[tuple[str, dict, str]] = []
     for backend in outputs:
         language = backend["language"]
         lender = BORROWED.get(language, "")
         for feature in backend["features"]:
-            # A call that spells its generic arguments, as Slang's ``bit_cast<int>``, is keyed by the function's name.
-            spelled = (feature.get("crossgl") or feature["name"]).split("<", 1)[0]
-            # Without an id, features one language spells alike in CrossGL are one: CUDA ``erff`` and ``erf``.
+            function = feature["category"] == "function"
+            spelled = _spelled(feature)
             key = (
                 feature.get("semantic")
                 or ids.get((lender, spelled))
-                or f"{language}/{spelled}"
+                or (alike.get(spelled, "") if function else "")
             )
-            groups.setdefault(key, []).append((language, feature))
+            keyed.append((language, feature, key))
+    # Without an id, functions CrossGL spells alike are one feature, because their CrossGL probes call one CrossGL
+    # function. Within a language that is CUDA ``erff`` and ``erf``. Across languages, as CUDA and HIP ``__clz`` or
+    # CUDA and Mojo ``erf``, the feature is named after the CrossGL function rather than after one of the languages.
+    spread: dict[str, set[str]] = {}
+    for language, feature, key in keyed:
+        if not key and feature["category"] == "function":
+            spread.setdefault(_spelled(feature), set()).add(language)
+    groups: dict[str, list[tuple[str, dict]]] = {}
+    for language, feature, key in keyed:
+        if not key:
+            spelled = _spelled(feature)
+            alone = feature["category"] != "function" or len(spread[spelled]) == 1
+            key = f"{language if alone else LANGUAGE}/{spelled}"
+        groups.setdefault(key, []).append((language, feature))
     return groups
 
 
+def _outcome(feature: dict) -> str:
+    # A member its own generator fails still counts when CrossTL's SPIR-V translation of its probe expresses it.
+    return "supported" if feature.get("expressed") else feature["outcome"]
+
+
 def _entry(key: str, members: list[tuple[str, dict]]) -> dict:
-    outcome = min((feature["outcome"] for _, feature in members), key=_PRECEDENCE.index)
+    outcome = min((_outcome(feature) for _, feature in members), key=_PRECEDENCE.index)
     languages = sorted({language for language, _ in members})
     entry = {
         "name": key,
@@ -54,7 +97,11 @@ def _entry(key: str, members: list[tuple[str, dict]]) -> dict:
     }
     if outcome == "supported":
         entry["via"] = sorted(
-            {language for language, f in members if f["outcome"] == "supported"}
+            {
+                f.get("expressed") or language
+                for language, f in members
+                if _outcome(f) == "supported"
+            }
         )
         return entry
     for language, feature in sorted(members, key=lambda m: m[0]):

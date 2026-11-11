@@ -99,6 +99,83 @@ def test_report_mode_still_requires_a_well_formed_artifact_identity(
         pins.check_generated_artifact(artifact, sha256=DIGEST, size_bytes=128)
 
 
+def _materialization(count=2):
+    return {
+        "specializationCount": count,
+        "specializations": [{"name": f"helper<{index}>"} for index in range(count)],
+    }
+
+
+def test_template_materialization_pins_are_strict_by_default():
+    assert pins.check_template_materialization(
+        "out/k.metal", _materialization(), DIGEST, sha256=DIGEST, specialization_count=2
+    )
+    with pytest.raises(AssertionError, match="pinned materializationSha256 changed"):
+        pins.check_template_materialization(
+            "out/k.metal",
+            _materialization(),
+            DIGEST,
+            sha256=OTHER_DIGEST,
+            specialization_count=2,
+        )
+    with pytest.raises(AssertionError, match="pinned specializationCount changed"):
+        pins.check_template_materialization(
+            "out/k.metal",
+            _materialization(),
+            DIGEST,
+            sha256=DIGEST,
+            specialization_count=3,
+        )
+
+
+def test_report_mode_records_template_materialization_drift(monkeypatch, tmp_path):
+    monkeypatch.setenv(pins.PIN_MODE_ENV, pins.REPORT_PIN_MODE)
+    monkeypatch.setenv(pins.PIN_DRIFT_DIR_ENV, str(tmp_path))
+
+    with pytest.warns(pins.PinDriftWarning) as recorded:
+        matches = pins.check_template_materialization(
+            "out/k.metal",
+            _materialization(3),
+            OTHER_DIGEST,
+            sha256=DIGEST,
+            specialization_count=2,
+        )
+
+    assert matches is False
+    assert len(recorded) == 2
+    assert [
+        (record["subject"], record["field"], record["expected"], record["actual"])
+        for record in pins.drift_records(tmp_path)
+    ] == [
+        ("out/k.metal", "materializationSha256", DIGEST, OTHER_DIGEST),
+        ("out/k.metal", "specializationCount", 2, 3),
+    ]
+
+
+@pytest.mark.parametrize(
+    "materialization, digest",
+    [
+        ({"specializationCount": 0, "specializations": []}, DIGEST),
+        ({"specializationCount": 2, "specializations": [{}]}, DIGEST),
+        ({"specializationCount": 1}, DIGEST),
+        (_materialization(), "abc"),
+        (_materialization(), "g" * 64),
+    ],
+)
+def test_report_mode_still_requires_a_consistent_materialization_record(
+    monkeypatch, materialization, digest
+):
+    monkeypatch.setenv(pins.PIN_MODE_ENV, pins.REPORT_PIN_MODE)
+    with pytest.raises((AssertionError, ValueError)):
+        pins.check_template_materialization(
+            "out/k.metal",
+            materialization,
+            digest,
+            sha256=DIGEST,
+            specialization_count=2,
+        )
+
+
 def test_drift_records_merge_worker_files_once_in_a_stable_order(tmp_path):
     first = {"subject": "b", "field": "generatedHash", "expected": "1", "actual": "2"}
     second = {"subject": "a", "field": "generatedHash", "expected": "3", "actual": "4"}

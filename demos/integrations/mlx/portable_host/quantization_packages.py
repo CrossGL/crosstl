@@ -202,6 +202,12 @@ class QuantizationPackageCache:
             }
             if self.target == "directx":
                 settings["relative_wave_shuffle_out_of_range"] = "self"
+            if source == SOURCE:
+                # Metal fuses affine_dequantize's `scale * d + bias` into one
+                # rounding even under -fno-fast-math, as the qmm loaders'
+                # binary32 dequantization rounds once; per-operation bfloat16
+                # rounding differs from both in about 30% of weights.
+                settings["floating_contraction_profile"] = "rne-flush"
             options["target_options"] = {self.target: settings}
         with tempfile.TemporaryDirectory(
             prefix=".quantization-translate-", dir=self.root

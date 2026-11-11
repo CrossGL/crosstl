@@ -471,6 +471,9 @@ class GLSLParser:
             self.current_token = ("EOF", "")
 
     def eat(self, token_type):
+        # The end of input is never consumed: a construct that reads past it is unterminated.
+        if token_type == "EOF" and self.current_token[0] == "EOF":
+            raise SyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.advance()
         else:

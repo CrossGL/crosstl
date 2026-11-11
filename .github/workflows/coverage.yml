@@ -5,14 +5,14 @@ name: Coverage
 # job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc,
 # and OpenCL C input with the runner image's clang-18 and DXC, and runs the GLSL and SPIR-V compute probes on Mesa's
 # llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe as the SPIR-V DXC, slangc and naga write for
-# them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one measures Rust
-# with rust-gpu, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on the GPU. Both
-# runs go through Core's conformance harness (tools/coverage/execution.py). The report job merges the reports and adds
-# the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
-# coverage.json, coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart
-# drawn from it; main itself never receives generated files. The issues job then reconciles the tracking and bug
-# issues (tools/coverage/issues.py); pull requests only print its plan, and coverage-comment.yml posts their change
-# against main on the pull request.
+# them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc and the Mojo compiler, one measures Rust with
+# rust-gpu and runs the Rust compute probes on lavapipe as the SPIR-V rust-gpu writes, and the macOS job measures Metal
+# with xcrun metal and runs the Metal compute probes on the GPU. Every run goes through Core's conformance harness
+# (tools/coverage/execution.py). The report job merges the reports and adds the CrossGL IR row. On pushes to main and
+# nightly, the publish job replaces the orphan `coverage` branch with coverage.json, coverage.svg (the README chart),
+# COVERAGE.md, a bounded history.csv and trend.svg, the trend chart drawn from it; main itself never receives generated
+# files. The issues job then reconciles the tracking and bug issues (tools/coverage/issues.py); pull requests only print
+# its plan, and coverage-comment.yml posts their change against main on the pull request.
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
@@ -83,7 +83,7 @@ jobs:
           declare -A paths=(
             [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$|tests/conformance/(runner|runtimes|native|interface|worker)\.py$'
             [compute]='crosstl/translator/codegen/(cuda|hip|mojo)_|crosstl/backend/(CUDA|HIP|Mojo)/'
-            [rust]='crosstl/translator/codegen/rust_|crosstl/backend/Rust/'
+            [rust]='crosstl/translator/codegen/rust_|crosstl/backend/Rust/|tests/conformance/(runner\.py|runtimes\.py|interface\.py|vkrun\.c)$'
           )
           for leg in "${legs[@]}"; do
             if grep -Eq "^($engine|${paths[$leg]})" <<<"$changed"; then
@@ -324,15 +324,23 @@ jobs:
           python-version: "3.13"
           cache: pip
 
+      # numpy runs supported compute probes through Core's conformance harness, and pytest the check that it can.
       - name: Install CrossTL
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e . numpy==2.5.4 pytest
 
       # spirv-dis disassembles the module rust-gpu emits, which places each Rust feature in the SPIR-V semantic
       # universe the CrossGL IR row is measured against.
       - name: Install pinned glslang and SPIRV-Tools
         uses: ./.github/actions/install-shader-validators
+
+      # Mesa's lavapipe (Vulkan), with the headers the harness's vkrun needs, runs the compute probes.
+      - name: Install Mesa lavapipe
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libvulkan-dev mesa-vulkan-drivers
+          recommends: "false"
 
       # rust-gpu is a rustc backend built from source. The cache keeps the backend and the core and spirv-std
       # libraries rust-gpu's compile tests build for the SPIR-V target; tools/coverage/rustgpu.py compiles each probe
@@ -371,11 +379,24 @@ jobs:
           path: ${{ runner.temp }}/coverage-cache
           key: coverage-upstream-rust-${{ hashFiles('tools/coverage/upstream.py') }}
 
+      # A native sine probe has to run and match itself, and a translation that computes the cosine has to come out
+      # wrong, so the leg shows it can execute Rust probes even when no Rust translation is executable yet.
+      - name: Check Rust execution on lavapipe
+        env:
+          CROSSTL_COVERAGE_RUST_GPU: ${{ runner.temp }}/rust-gpu
+          CROSSTL_CONFORMANCE_MESA: host
+        run: |
+          set -euo pipefail
+          python -m pytest -q --no-header -p no:cacheprovider -rs tests/coverage/test_execution_runtimes.py \
+            -k "native_probe_runs_as_the_spirv and rust" | tee rust-execution.log
+          grep -q "1 passed" rust-execution.log
+
       - name: Measure coverage
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           CROSSTL_COVERAGE_RUST_GPU: ${{ runner.temp }}/rust-gpu
-        run: python -m tools.coverage run --strict --jobs 4 --backend rust --output coverage-rust.json
+          CROSSTL_CONFORMANCE_MESA: host
+        run: python -m tools.coverage run --strict --execute --jobs 4 --backend rust --output coverage-rust.json
 
       - uses: actions/upload-artifact@v7
         with:

@@ -8551,10 +8551,13 @@ def test_hlsl_compute_subgroup_id_body_reference_allocates_physical_wave_id(
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert ": SV_GroupIndex" in generated_code
-    assert "groupshared uint __crossgl_physical_subgroup_counter;" in generated_code
+    assert "groupshared uint __crossgl_physical_subgroup_leaders[32];" in generated_code
     assert "uint __crossgl_physical_subgroup_id(uint groupIndex)" in generated_code
-    assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated_code
-    assert "subgroupIndex = WaveReadLaneFirst(subgroupIndex);" in generated_code
+    assert (
+        "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]"
+        in generated_code
+    )
+    assert "uint leader = WaveActiveMin(groupIndex);" in generated_code
     assert (
         "uint crossglPhysicalSubgroupID = "
         "__crossgl_physical_subgroup_id(groupIndex);" in generated_code
@@ -8701,12 +8704,12 @@ def test_hlsl_compute_subgroup_id_helper_names_are_collision_safe_and_reused():
             layout(local_size_x = 32, local_size_y = 2) in;
             layout(set = 0, binding = 0) buffer uint* output;
             void main() {
-                uint __crossgl_physical_subgroup_counter = 0u;
+                uint __crossgl_physical_subgroup_leaders = 0u;
                 uint __crossgl_physical_subgroup_id = 0u;
                 uint first = gl_SubgroupID;
                 uint second = gl_SubgroupID;
                 output[gl_LocalInvocationIndex] = first + second
-                    + __crossgl_physical_subgroup_counter
+                    + __crossgl_physical_subgroup_leaders
                     + __crossgl_physical_subgroup_id;
             }
         }
@@ -8715,7 +8718,9 @@ def test_hlsl_compute_subgroup_id_helper_names_are_collision_safe_and_reused():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "groupshared uint __crossgl_physical_subgroup_counter_;" in generated_code
+    assert (
+        "groupshared uint __crossgl_physical_subgroup_leaders_[32];" in generated_code
+    )
     assert "uint __crossgl_physical_subgroup_id_(uint groupIndex)" in generated_code
     assert generated_code.count("__crossgl_physical_subgroup_id_(groupIndex)") == 1
     assert "uint first = crossglPhysicalSubgroupID;" in generated_code
@@ -8958,7 +8963,10 @@ def test_hlsl_compute_unused_value_builtin_parameters_are_dropped(tmp_path):
     # gl_SubgroupID lowers to one workgroup-synchronized ID per physical wave;
     # no lane-varying SV_GroupIndex division may survive.
     assert "uint simd_group_id = crossglPhysicalSubgroupID;" in generated_code
-    assert "InterlockedAdd(__crossgl_physical_subgroup_counter" in generated_code
+    assert (
+        "InterlockedOr(__crossgl_physical_subgroup_leaders[leaderWord]"
+        in generated_code
+    )
     assert "/ WaveGetLaneCount()" not in generated_code
     assert ": SV_GroupIndex" in generated_code
     assert "__CROSSGL" not in generated_code
@@ -51556,15 +51564,24 @@ def test_hlsl_software_subgroup_requires_workgroup_uniform_returns(tmp_path, gro
         relative_wave_shuffle_out_of_range="self", software_subgroup_width=32
     )
     ast = parse_code(tokenize_code(code))
-    if groups > 1:
-        with pytest.raises(DirectXSoftwareSubgroupError) as excinfo:
-            codegen.generate(ast)
-        assert excinfo.value.reason == "early-return-unproven"
-        return
     generated = codegen.generate(ast)
+    assert "for (uint offset = (width / 2u);" in generated
+    if groups > 1:
+        # The return is uniform only within each subgroup, so it is
+        # predicated: every invocation halves the counter and shuffles, and
+        # only the first subgroup stores (see test_subgroup_exit_value_shuffles).
+        active = re.search(r"bool (__crossgl_subgroup_active\w*) = ", generated)
+        assert active is not None
+        assert "return;" not in generated
+        loop = generated.index("for (uint offset = (width / 2u);")
+        assert generated.index(f"if ({active.group(1)})", loop) > loop
+        assert "WaveReadLaneAt" not in generated
+        assert_directx_warnings_clean_if_available(
+            generated, tmp_path, profile="cs_6_6"
+        )
+        return
     assert "if (subgroup != 0u)" in generated
     assert "return;" in generated
-    assert "for (uint offset = (width / 2u);" in generated
     assert "WaveReadLaneAt" not in generated
     assert_directx_warnings_clean_if_available(generated, tmp_path, profile="cs_6_6")
 

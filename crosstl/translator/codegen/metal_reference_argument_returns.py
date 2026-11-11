@@ -65,13 +65,13 @@ def generate_return_writeback_statement(codegen, stmt, indent):
     if return_type == "void":
         if not isinstance(value, FunctionCallNode):
             return None
-        if not codegen.metal_reference_argument_writebacks(value):
+        if not codegen.metal_reference_argument_writebacks(value, []):
             return None
         return codegen.generate_statement(value, indent) + codegen.generate_statement(
             ReturnNode(None), indent
         )
     probe = VariableNode("__crossgl_return", return_type or "void", initial_value=value)
-    if not codegen.metal_reference_argument_writebacks(probe):
+    if not codegen.metal_reference_argument_writebacks(probe, []):
         return None
     if return_type is None:
         raise ValueError(

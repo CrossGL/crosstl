@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from tools.coverage import probes, validators
+from tools.coverage import lowering, probes, semantic, validators
 from tools.coverage.features import metal
 from tools.coverage.model import (
     STRING,
@@ -30,6 +30,10 @@ WGSL_SIGNATURES = [
         Type("uint"),
         Type("uint"),
     ),
+    feature("atomicLoad", Type("int"), Param(Type("int"), "inout")),
+    feature(
+        "atomicStore", Type.other("void"), Param(Type("int"), "inout"), Type("int")
+    ),
 ]
 
 
@@ -50,6 +54,26 @@ def test_wgsl_probe_binds_atomics_through_a_pointer():
     assert (
         "outp[i]" not in probes.build(WGSL_SIGNATURES[3], "wgsl", baseline=True).source
     )
+
+
+def test_wgsl_atomic_probes_drop_a_returned_value_through_a_phony_assignment():
+    add, load, store = (
+        next(f for f in WGSL_SIGNATURES if f.name == name)
+        for name in ("atomicAdd", "atomicLoad", "atomicStore")
+    )
+    assert "_ = atomicAdd(&outp[i], a1);" in probes.build(add, "wgsl").source
+    assert "_ = atomicLoad(&outp[i]);" in probes.build(load, "wgsl").source
+    # atomicStore returns nothing, and CrossGL drops a value with a call statement.
+    assert "    atomicStore(&outp[i], a1);" in probes.build(store, "wgsl").source
+    assert "_ =" not in probes.build(load, "crossgl").source
+
+
+@pytest.mark.skipif(
+    not lowering.can_lower("wgsl"), reason="naga or spirv-dis is missing"
+)
+def test_wgsl_atomic_load_lowers_to_its_instruction():
+    (load,) = (f for f in WGSL_SIGNATURES if f.name == "atomicLoad")
+    assert semantic.lower(replace(load, language="wgsl")) == ("OpAtomicLoad", "")
 
 
 def test_wgsl_has_no_output_parameters():
@@ -235,3 +259,29 @@ def test_metal_wide_atomic_max_probe_calls_crossgl_atomic_max():
     crossgl = probes.build(wide, "crossgl").source
     assert "buffer uint64_t* outp;" in crossgl
     assert "atomicMin(outp[i], a1);" in crossgl
+
+
+def test_metal_memory_flag_probes_call_the_crossgl_operations_the_importer_writes():
+    sub, fence, barrier = metal.parse(
+        "metal_atomic atomic_fetch_sub_explicit int(inout int, int, memory_order)\n"
+        "metal_atomic atomic_thread_fence void(mem_flags, memory_order)\n"
+        "metal_compute simdgroup_barrier void(mem_flags)\n"
+    )
+    assert "atomic_fetch_sub_explicit(&outp[i], a1, memory_order_relaxed);" in (
+        probes.build(sub, "metal").source
+    )
+    crossgl = probes.build(sub, "crossgl").source
+    assert "buffer int* outp;" in crossgl
+    assert "atomicAdd(outp[i], -(a1));" in crossgl
+    assert (
+        "atomic_thread_fence(mem_flags::mem_none, memory_order_relaxed);"
+        in probes.build(fence, "metal").source
+    )
+    assert (
+        "atomicThreadFence(mem_none, memory_order_relaxed, thread_scope_device);"
+        in probes.build(fence, "crossgl").source
+    )
+    assert "simdgroup_barrier(mem_flags::mem_none);" in (
+        probes.build(barrier, "metal").source
+    )
+    assert "subgroupExecutionBarrier();" in probes.build(barrier, "crossgl").source

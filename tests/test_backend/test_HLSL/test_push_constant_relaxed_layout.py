@@ -4,7 +4,7 @@ DXC lays a push-constant struct out by its relaxed std430 rule: a vector of 32-b
 component size unless it would cross a 16-byte boundary there (Vulkan 1.3 section 15.6.4). ``float scale; float3 v;``
 puts ``v`` at byte 4, where std430 puts it at 16. The importer declared the struct with no offsets, so every output
 read ``v`` from byte 16, and it dropped ``[[vk::offset(N)]]``. It now writes the offsets, which SPIR-V and HLSL output
-reproduce, and GLSL, Metal and Slang output refuse when they cannot.
+reproduce, Metal output places, and GLSL and Slang output refuse when they cannot.
 """
 
 import re
@@ -205,18 +205,43 @@ def test_glsl_output_refuses_a_relaxed_offset_and_keeps_an_agreeing_one(tmp_path
     assert "layout(push_constant) uniform Constants {" in glsl
 
 
-@pytest.mark.parametrize(
-    "backend, reason",
-    [
-        ("metal", "metal output declares 'Constants' without them"),
-        (
-            "slang",
-            "Slang declares a push-constant ConstantBuffer<T> with std430 offsets",
-        ),
-    ],
-)
-def test_metal_and_slang_refuse_a_relaxed_offset(tmp_path, backend, reason):
+def test_slang_refuses_a_relaxed_offset(tmp_path):
+    reason = "Slang declares a push-constant ConstantBuffer<T> with std430 offsets"
     with pytest.raises(MemberPlacementError, match=re.escape(reason)):
-        _translate(tmp_path, RELAXED, backend)
-    # An offset std430 and the natural Metal layout agree with needs no placement.
-    assert _translate(tmp_path, EXPLICIT, backend, name="explicit.hlsl")
+        _translate(tmp_path, RELAXED, "slang")
+    # An offset std430 agrees with needs no placement.
+    assert _translate(tmp_path, EXPLICIT, "slang", name="explicit.hlsl")
+
+
+@pytest.mark.parametrize("source", [RELAXED, EXPLICIT], ids=["relaxed", "explicit"])
+def test_metal_output_keeps_the_offsets_dxc_gives_the_source(tmp_path, source):
+    """Metal output plans the push-constant struct with its push-constant layout: ``v`` is a ``packed_float3`` at
+    the byte DXC gives it."""
+    metal = _translate(tmp_path, source, "metal")
+    expected = 4 if source is RELAXED else 16
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return
+    path = tmp_path / "placed.metal"
+    path.write_text(
+        metal
+        + f'\nstatic_assert(__builtin_offsetof(Constants, v) == {expected}, "v");\n'
+        + 'static_assert(__builtin_offsetof(Constants, scale) == 0, "scale");\n'
+    )
+    result = subprocess.run(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(path),
+            "-o",
+            str(tmp_path / "p.air"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if "unable to find utility" in result.stderr:
+        return
+    assert result.returncode == 0, result.stderr

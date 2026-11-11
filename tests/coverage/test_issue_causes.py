@@ -52,6 +52,20 @@ def test_causes_keep_an_operator_spelling():
     assert causes.cause(feature) == detail
 
 
+def test_causes_name_what_an_expression_spelling_calls():
+    # Slang's getRealtimeClockLow is CrossGL's clockRealtime2x32EXT().x, which fails as getRealtimeClock does.
+    detail = (
+        "probe.slang:9:14: error[E30015]: undefined identifier 'clockRealtime2x32EXT'"
+    )
+    low = {"name": "getRealtimeClockLow", "detail": detail}
+    full = {"name": "getRealtimeClock", "detail": detail}
+    assert (
+        causes.cause(low, "slang")
+        == causes.cause(full, "slang")
+        == ("probe.slang:N:N: error[E30015]: undefined identifier '<feature>'")
+    )
+
+
 def test_features_whose_diagnostics_name_them_share_a_cause():
     row = backend_row(
         "wgsl",
@@ -196,8 +210,17 @@ def test_a_method_shares_a_cause_under_the_name_crossgl_gives_it():
             "after the round trip: error[E30015]: undefined identifier '{}'",
             {"fwidth_coarse": "fwidthCoarse", "fwidth_fine": "fwidthFine"},
         ),
+        # Names CrossGL has for a function that are no GLSL function: a wave operation and a built-in value.
+        (
+            "slang",
+            "error[E30015]: undefined identifier '{}'",
+            {
+                "WavePrefixMax": "WavePrefixExclusiveMax",
+                "WaveGetNumWaves": "gl_NumSubgroups",
+            },
+        ),
     ],
-    ids=["opencl", "slang"],
+    ids=["opencl", "slang", "slang-other-names"],
 )
 def test_a_function_shares_a_cause_under_the_crossgl_name_of_its_language(
     language, detail, spelled

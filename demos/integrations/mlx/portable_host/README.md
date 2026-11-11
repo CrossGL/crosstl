@@ -1701,7 +1701,12 @@ family's artifact and native-identity checks, or be a gather, scatter or
 DivMod kernel specialized from the pinned sources, whose result is recomputed
 from its retained inputs and whose native modules are checked. A test that
 reaches scans or the 64-bit and 16-bit package families therefore fails
-instead of running an unchecked package. A separate process
+instead of running an unchecked package. Both runs seed NumPy's global
+generator with 0 before each test, so they draw the same operands:
+`test_divmod` compares float16 floor quotients with NumPy, which floors the
+exact quotient, while MLX floors the quotient rounded to float16, and about 2%
+of unseeded runs disagree on any backend that follows MLX, the MLX CPU
+included. A separate process
 checks that a missing comparison package is refused before dispatch. On Metal
 the native run dispatches 1,818 translated kernels, 12 of them indexing
 kernels and 37 DivMod kernels (25 kernel and dtype pairs, translated on first

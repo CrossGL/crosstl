@@ -204,18 +204,32 @@ def test_slang_probes_run_in_the_environment_of_the_spirv_slangc_writes(
     assert result.runtime == hlsl.runtime == "vulkan-lavapipe"
 
 
+def _sine(language: str) -> Feature:
+    # Rust's sine is a method of the Float trait; the other languages call a function.
+    name, spelling = ("Float::sin", ".sin") if language == "rust" else ("sin", "")
+    return Feature(
+        language, "function", name, SIN.signature, crossgl="sin", spelling=spelling
+    )
+
+
 @pytest.mark.parametrize("language", sorted(execution.VIA_SPIRV))
 def test_the_native_probe_runs_as_the_spirv_its_compiler_writes(language):
-    """A native compute probe, lowered by its reference compiler, runs on a Vulkan runtime and computes."""
+    """A native compute probe, lowered by its reference compiler, runs on a Vulkan runtime and computes, and a
+    translation that computes the cosine instead is wrong."""
     if not lowering.can_lower(language):
         pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
-    feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
+    feature = _sine(language)
     native = probes.build(feature, language).source
+    cosine = native.replace("sin(", "cos(")
+    assert cosine != native
     probe = Result(feature, "output", "supported", sources=(native, native))
-    [result], used = execution.run([probe], workers=1)
+    other = Result(feature, "output", "supported", sources=(native, cosine))
+    [result, wrong], used = execution.run([probe, other], workers=1)
     if not used:
         pytest.skip("no Vulkan runtime")
     assert (result.outcome, result.runtime) == ("supported", used[0])
+    assert (wrong.outcome, wrong.runtime) == ("wrong", used[0])
+    assert execution.found(wrong.detail)
 
 
 def test_a_probe_its_compiler_cannot_lower_keeps_its_validation_result(monkeypatch):
@@ -270,13 +284,19 @@ def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
         pytest.skip(f"{validators.TOOLS[language]} or spirv-dis is not installed")
     from tests.conformance import interface
 
-    feature = Feature(language, "function", "sin", SIN.signature, crossgl="sin")
+    feature = _sine(language)
     name, result = CALLS[language]
     call = Feature(language, "function", name, Signature(result, ()))
     path = tmp_path / "probe.spvasm"
     for probe in (feature, call):
         source = probes.build(probe, language).source
         path.write_text(execution.as_spirv(language, source))
+        if probe is call and language == "rust":
+            # rust-gpu leaves out the input the call's probe never reads and has no option to keep it, so the
+            # harness cannot bind that probe, which keeps its validation result.
+            with pytest.raises(interface.InterfaceChanged, match=r"found \[1\]"):
+                interface.interface(path, "spirv", 1)
+            continue
         found = interface.interface(path, "spirv", 1)
         assert found["bindings"] == (0, 1) and found["group"] == (1, 1, 1)
     source = probes.build(feature, language).source

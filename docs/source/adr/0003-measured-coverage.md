@@ -63,17 +63,24 @@ OpenCL C probe is emitted as HLSL, the target whose output row covers the most b
 Where Core's conformance harness has a runtime for the language, a supported compute probe whose native probe and
 translation declare the same input buffers in the same order also runs, with the inputs at slots 0 to n-1 and the output
 at slot n: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs through the
-harness's `run_suite`, and a translation that binds other resources or writes other results is `wrong`. The runtime
-harness is not duplicated. HLSL, Slang and WGSL have no runtime on the Linux job, so both probes are compiled to SPIR-V
-by the language's reference compiler (DXC, slangc or naga) and run on lavapipe; a probe that compiler cannot lower, or
-whose SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps its validation result. llvmpipe's
-OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a native GLSL probe, or a 4.60
-translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for them on lavapipe. CI executes the
-Metal rows on the macOS job and the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's llvmpipe and lavapipe in the Linux
-job.
+harness's `run_suite`, and a translation that binds other resources or writes other results is `wrong`. SPIR-V names are
+debug information that a producer may drop, so a SPIR-V probe's inputs are its storage buffers in binding order, known
+by the scalar type of each runtime array. The runtime harness is not duplicated. HLSL, Slang, WGSL and Rust have no
+runtime on the coverage hosts, so both probes are compiled to SPIR-V by the language's reference compiler (DXC, slangc,
+naga or rust-gpu) and run on lavapipe; a probe that compiler cannot lower, whose SPIR-V declares a 16-bit float
+(lavapipe skips rounding through it), or whose SPIR-V leaves out an input the probe never reads (rust-gpu does), keeps
+its validation result. llvmpipe's OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a
+native GLSL probe, or a 4.60 translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for
+them on lavapipe. CI executes the Metal rows on the macOS job, the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's
+llvmpipe and lavapipe in the Linux job, and the Rust rows on lavapipe in the Rust job. The two outputs must match bit
+for bit, so a probe must compute a result that the compiler's permitted rewrites cannot change. A product that feeds a
+sum should scale by a power of two, which is exact, so contracting it into a fused multiply-add gives the same value.
+Constants should sum exactly before an input joins the sum, because Mesa reassociates additions that the SPIR-V does not
+mark `NoContraction`.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
-raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score
+raises a typed diagnostic), `wrong` (invalid or divergent output, or output with a comment saying CrossTL wrote a
+placeholder) or `untested` (no validator available). The score
 for a backend and direction is `supported / (supported + refused + wrong)`; `untested` is reported separately.
 
 `python -m tools.coverage run [--backend B] [--direction input|output]` runs the probes locally and writes
@@ -86,13 +93,23 @@ CrossGL has no compatibility guarantee: its goal is to express everything any ba
 reach 100 %. The "CrossGL IR" row measures that goal. Its universe is the union of every backend's features,
 normalized to semantic features: a feature's id is the set of SPIR-V instructions its native probe lowers to when the
 reference compiler builds it (DXC `-spirv`, glslang, naga, slangc, rust-gpu), minus a baseline probe that reads the
-same arguments without the call. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
+same arguments without the call. rust-gpu removes unused values, so a Rust baseline branches on each boolean argument
+to keep the comparison that makes it. HLSL `mad`, GLSL `fma` and SPIR-V `Fma` therefore count once. Metal, CUDA, HIP and
 Mojo have no SPIR-V compiler here, and glam writes its vector methods in plain Rust arithmetic, so those features take
-the id of the GLSL function CrossGL spells the same way. A feature SPIR-V cannot express is listed by hand in
+the id of the GLSL function CrossGL spells the same way. A function that still has no id takes the id of the other
+functions CrossGL spells the same way when they share one: CUDA `cospi` and Slang `cospi` count once. Functions that
+have no id at all count once per CrossGL spelling, because their CrossGL probes call the same CrossGL function: CUDA and
+HIP `__clz` are the one feature `crossgl/__clz`. A feature SPIR-V cannot express is listed by hand in
 `tools/coverage/semantic.py` only when it is known to equal another; otherwise it stays a semantic feature of its own.
 
 A semantic feature is expressible when a CrossGL probe for it parses, type-checks and translates correctly to at least
-one backend that has it. CrossGL probes come from a small template layer, `tools/coverage/crossgl/`, and the
+one backend that has it. It is also expressible when CrossTL translates the CrossGL probe of a member whose own
+generator fails to SPIR-V that spirv-val accepts, that keeps the member's anchors, and whose call lowers to the
+member's semantic id, computed against the translation of a CrossGL baseline probe as for native probes. A bug in one
+generator, such as Rust output's missing `#![no_std]`, then stays a gap of that backend's row instead of also counting
+as an IR gap. The route compares instructions, not results, so it applies only to features with an id, and a
+translation that computes the operation with other instructions does not count. CrossGL probes come from a small
+template layer, `tools/coverage/crossgl/`, and the
 spelling tables in `tools/coverage/spellings.py`, which Core updates in the same pull request as any IR change; no
 CrossGL probe text is pinned. The row's gaps go to one tracking issue labelled `backend:crossgl` and `area:frontend`,
 which Core owns.

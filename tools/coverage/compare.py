@@ -4,7 +4,8 @@
 the rows whose score changed, then the backend features whose outcome changed, regressions first. A pull request may
 skip a leg, such as Metal when it touches no Metal code; rows the new report lacks are named and left out, and the
 CrossGL IR row of the published report is rebuilt from the rows both reports share, so a skipped leg does not read as
-an IR regression.
+an IR regression. When the IR row then appears in the table, the comment says that both of its scores cover only the
+measured languages, because they differ from the score on the README chart.
 
 The new report may come from a fork, whose run uses the fork's own workflow, and the comment workflow posts the result
 with a token that can write comments. So only the fields this module reads are kept, each checked, and the report's
@@ -316,4 +317,9 @@ def compare(
             "",
             "Not measured in this run: " + ", ".join(map(_name, skipped)) + ".",
         ]
+        if any(key[0] == ir.LANGUAGE for key, _ in changed):
+            lines.append(
+                f"Both {_name((ir.LANGUAGE, ir.DIRECTION))} scores above count only the output features of the "
+                "languages this run measured, so they differ from the published score."
+            )
     return "\n".join(lines) + "\n"
