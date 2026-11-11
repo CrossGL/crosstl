@@ -1536,6 +1536,9 @@ class CudaCodeGen(
                 if stage_name is None and is_output_parameter(param):
                     # out and inout copy back to the caller; a C++ reference binds it.
                     declarator = reference_declarator(declarator, param_name)
+                declarator = self.apply_restrict_qualifier_to_declaration(
+                    declarator, param_name, param
+                )
                 params.append(declarator)
             metadata_param = self.query_metadata_parameter(param_name, declaration_type)
             if metadata_param:
