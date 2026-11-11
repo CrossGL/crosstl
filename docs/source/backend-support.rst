@@ -14,8 +14,8 @@ pinned upstream feature list gets a generated probe, CrossTL translates it, and
 the language's reference compiler or validator checks the result. Compute
 probes also run, on the GPU or on Mesa's software drivers, where the
 translation must compute what the native probe computes: Metal, GLSL and
-SPIR-V directly, and HLSL, Slang and WGSL as the SPIR-V their reference
-compilers produce. A translation must also keep the built-ins and
+SPIR-V directly, and HLSL, Slang, WGSL and Rust as the SPIR-V their
+reference compilers produce. A translation must also keep the built-ins and
 decorations, such as ``flat`` or the subgroup size, that the feature needs
 in the SPIR-V its compiler produces, or in the AIR for Metal.
 `COVERAGE.md <https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md>`_
