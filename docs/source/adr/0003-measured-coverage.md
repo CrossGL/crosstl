@@ -72,7 +72,10 @@ whose SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps
 OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a native GLSL probe, or a 4.60
 translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for them on lavapipe. CI executes the
 Metal rows on the macOS job and the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's llvmpipe and lavapipe in the Linux
-job.
+job. The two outputs must match bit for bit, so a probe must compute a result that the compiler's permitted rewrites
+cannot change. A product that feeds a sum should scale by a power of two, which is exact, so contracting it into a
+fused multiply-add gives the same value. Constants should sum exactly before an input joins the sum, because Mesa
+reassociates additions that the SPIR-V does not mark `NoContraction`.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score
