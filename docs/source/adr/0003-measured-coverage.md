@@ -63,19 +63,20 @@ OpenCL C probe is emitted as HLSL, the target whose output row covers the most b
 Where Core's conformance harness has a runtime for the language, a supported compute probe whose native probe and
 translation declare the same input buffers in the same order also runs, with the inputs at slots 0 to n-1 and the output
 at slot n: `tools/coverage/execution.py` gives the native probe and CrossTL's translation the same inputs through the
-harness's `run_suite`, and a translation that binds other resources or writes other results is `wrong`. SPIR-V names
-are debug information that a producer may drop, so a SPIR-V probe's inputs are its storage buffers in binding order,
-known by the scalar type of each runtime array. The runtime
-harness is not duplicated. HLSL, Slang and WGSL have no runtime on the Linux job, so both probes are compiled to SPIR-V
-by the language's reference compiler (DXC, slangc or naga) and run on lavapipe; a probe that compiler cannot lower, or
-whose SPIR-V declares a 16-bit float (lavapipe skips rounding through it), keeps its validation result. llvmpipe's
-OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a native GLSL probe, or a 4.60
-translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for them on lavapipe. CI executes the
-Metal rows on the macOS job and the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's llvmpipe and lavapipe in the Linux
-job. The two outputs must match bit for bit, so a probe must compute a result that the compiler's permitted rewrites
-cannot change. A product that feeds a sum should scale by a power of two, which is exact, so contracting it into a
-fused multiply-add gives the same value. Constants should sum exactly before an input joins the sum, because Mesa
-reassociates additions that the SPIR-V does not mark `NoContraction`.
+harness's `run_suite`, and a translation that binds other resources or writes other results is `wrong`. SPIR-V names are
+debug information that a producer may drop, so a SPIR-V probe's inputs are its storage buffers in binding order, known
+by the scalar type of each runtime array. The runtime harness is not duplicated. HLSL, Slang, WGSL and Rust have no
+runtime on the coverage hosts, so both probes are compiled to SPIR-V by the language's reference compiler (DXC, slangc,
+naga or rust-gpu) and run on lavapipe; a probe that compiler cannot lower, whose SPIR-V declares a 16-bit float
+(lavapipe skips rounding through it), or whose SPIR-V leaves out an input the probe never reads (rust-gpu does), keeps
+its validation result. llvmpipe's OpenGL lacks extensions such as the explicit arithmetic types, so when it rejects a
+native GLSL probe, or a 4.60 translation it can only compile as 4.50, both run again as the SPIR-V glslang writes for
+them on lavapipe. CI executes the Metal rows on the macOS job, the GLSL, SPIR-V, HLSL, Slang and WGSL rows on Mesa's
+llvmpipe and lavapipe in the Linux job, and the Rust rows on lavapipe in the Rust job. The two outputs must match bit
+for bit, so a probe must compute a result that the compiler's permitted rewrites cannot change. A product that feeds a
+sum should scale by a power of two, which is exact, so contracting it into a fused multiply-add gives the same value.
+Constants should sum exactly before an input joins the sum, because Mesa reassociates additions that the SPIR-V does not
+mark `NoContraction`.
 
 Each probe ends in one outcome: `supported` (translates, validates and, when executed, matches), `refused` (CrossTL
 raises a typed diagnostic), `wrong` (invalid or divergent output) or `untested` (no validator available). The score
