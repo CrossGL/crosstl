@@ -78,6 +78,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .gpu_device_globals import (
     at_file_scope,
     constant_in_device_memory,
@@ -454,6 +455,8 @@ class CudaCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(ast_node)),
+            collect_constant_and_cbuffer_member_types(self, ast_node),
+            ast=ast_node,
         )
         self.function_return_types.update(
             {

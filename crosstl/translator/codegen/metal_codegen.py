@@ -2640,7 +2640,12 @@ class MetalCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
-            metal_generic_global_types(self, global_vars),
+            {
+                **getattr(self, "metal_program_scope_constant_types", {}),
+                **getattr(self, "metal_cbuffer_member_types", {}),
+                **metal_generic_global_types(self, global_vars),
+            },
+            ast=ast,
         )
         self.function_return_types.update(
             {

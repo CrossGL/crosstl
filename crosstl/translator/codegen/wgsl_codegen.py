@@ -1087,6 +1087,17 @@ class WGSLCodeGen(
             self.function_resource_member_parameters(ast, target_stage)
         )
         self._module_variable_types = {}
+        for constant in constants:
+            name = getattr(constant, "name", "")
+            if not name:
+                continue
+            const_type = getattr(
+                constant, "const_type", getattr(constant, "vtype", None)
+            )
+            if const_type is None and getattr(constant, "value", None) is not None:
+                const_type = self.expression_type(constant.value)
+            if const_type is not None:
+                self._module_variable_types[name] = const_type
         for node in global_variable_nodes:
             name = getattr(node, "name", "")
             if not name:
