@@ -116,6 +116,7 @@ def build(results: list[Result], languages: list[str], directions: list[str]) ->
                             "outcome": r.outcome,
                             **({"detail": r.detail} if r.detail else {}),
                             **({"semantic": r.semantic} if r.semantic else {}),
+                            **({"expressed": r.expressed} if r.expressed else {}),
                             **(
                                 {"crossgl": r.feature.crossgl}
                                 if r.feature.crossgl not in ("", r.feature.name)

@@ -96,7 +96,13 @@ cannot express is listed by hand in `tools/coverage/semantic.py` only when it is
 stays a semantic feature of its own.
 
 A semantic feature is expressible when a CrossGL probe for it parses, type-checks and translates correctly to at least
-one backend that has it. CrossGL probes come from a small template layer, `tools/coverage/crossgl/`, and the
+one backend that has it. It is also expressible when CrossTL translates the CrossGL probe of a member whose own
+generator fails to SPIR-V that spirv-val accepts, that keeps the member's anchors, and whose call lowers to the
+member's semantic id, computed against the translation of a CrossGL baseline probe as for native probes. A bug in one
+generator, such as Rust output's missing `#![no_std]`, then stays a gap of that backend's row instead of also counting
+as an IR gap. The route compares instructions, not results, so it applies only to features with an id, and a
+translation that computes the operation with other instructions does not count. CrossGL probes come from a small
+template layer, `tools/coverage/crossgl/`, and the
 spelling tables in `tools/coverage/spellings.py`, which Core updates in the same pull request as any IR change; no
 CrossGL probe text is pinned. The row's gaps go to one tracking issue labelled `backend:crossgl` and `area:frontend`,
 which Core owns.

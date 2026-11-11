@@ -198,6 +198,68 @@ RENAMES["slang"] = RENAMES["hlsl"] | {
     "fwidth_fine": "fwidthFine",
 }
 
+# Subgroup functions, which CrossGL spells with the HLSL wave names (``crosstl/translator/wave_operations.py``) and
+# the GLSL feature list, built from the core GLSL specification, lacks. rust-gpu names one function for each operation
+# and operand kind, as ``subgroup_i_add`` and ``subgroup_f_add``; in CrossGL the operand's type selects the
+# instruction, and ``bool`` operands make the bitwise operations logical. Each operator maps to its wave name and the
+# operand kinds rust-gpu spells it for, with their types.
+_INTEGER = {"i_": "uint", "f_": "float"}
+_ORDERED = {"s_": "int", "u_": "uint", "f_": "float"}
+_BITWISE = {"": "uint", "logical_": "bool"}
+_RUST_SUBGROUP_OPERATORS = {
+    "add": ("Sum", _INTEGER),
+    "mul": ("Product", _INTEGER),
+    "min": ("Min", _ORDERED),
+    "max": ("Max", _ORDERED),
+    "and": ("BitAnd", _BITWISE),
+    "or": ("BitOr", _BITWISE),
+    "xor": ("BitXor", _BITWISE),
+}
+WAVES = {
+    "rust": (
+        {
+            f"subgroup_{scan}{kind}{operator}": prefix + wave
+            for operator, (wave, kinds) in _RUST_SUBGROUP_OPERATORS.items()
+            for kind in kinds
+            for scan, prefix in (
+                ("", "WaveActive"),
+                ("inclusive_", "WavePrefixInclusive"),
+                (
+                    "exclusive_",
+                    (
+                        "WavePrefix"
+                        if operator in ("add", "mul")
+                        else "WavePrefixExclusive"
+                    ),
+                ),
+            )
+        }
+        | {
+            "subgroup_elect": "WaveIsFirstLane",
+            "subgroup_broadcast_first": "WaveReadLaneFirst",
+            "subgroup_shuffle": "WaveReadLaneAt",
+            "subgroup_shuffle_xor": "WaveShuffleXor",
+            "subgroup_shuffle_up": "WaveShuffleUp",
+            "subgroup_shuffle_down": "WaveShuffleDown",
+            "subgroup_quad_broadcast": "QuadReadLaneAt",
+            "subgroup_ballot": "WaveActiveBallot",
+            "subgroup_inverse_ballot": "WaveInverseBallot",
+            "subgroup_ballot_bit_extract": "WaveBallotBitExtract",
+            "subgroup_ballot_bit_count": "WaveBallotBitCount",
+            "subgroup_ballot_inclusive_bit_count": "WaveBallotInclusiveBitCount",
+            "subgroup_ballot_exclusive_bit_count": "WaveBallotExclusiveBitCount",
+            "subgroup_ballot_find_lsb": "WaveBallotFindLSB",
+            "subgroup_ballot_find_msb": "WaveBallotFindMSB",
+            # HLSL has no subgroup barriers, so CrossGL spells them as GL_KHR_shader_subgroup does.
+            "subgroup_barrier": "subgroupBarrier",
+            "subgroup_memory_barrier": "subgroupMemoryBarrier",
+            "subgroup_memory_barrier_buffer": "subgroupMemoryBarrierBuffer",
+            "subgroup_memory_barrier_image": "subgroupMemoryBarrierImage",
+            "subgroup_memory_barrier_shared": "subgroupMemoryBarrierShared",
+        }
+    )
+}
+
 
 # Functions CrossGL writes with other arguments than the backend, as GLSL prototypes. WGSL's texture functions take a
 # texture and a sampler, where CrossGL, like GLSL, takes one combined sampler; ``const`` marks an argument the probe
@@ -250,6 +312,17 @@ COUNTERPARTS = {
         "end_stream_primitive": "void EndStreamPrimitive(const int)",
     },
 }
+# rust-gpu takes a clustered reduction's cluster size as a constant generic parameter, where CrossGL takes it as a
+# constant argument.
+COUNTERPARTS["rust"].update(
+    {
+        f"subgroup_clustered_{kind}{operator}": (
+            f"{scalar} WaveClustered{wave}({scalar}, const uint)"
+        )
+        for operator, (wave, kinds) in _RUST_SUBGROUP_OPERATORS.items()
+        for kind, scalar in kinds.items()
+    }
+)
 # Metal functions whose CrossGL operation takes other arguments. Compare-exchange takes the expected value through a
 # pointer and returns whether it swapped, where CrossGL's atomicCompSwap, like GLSL's, takes it by value and returns
 # the old value; a ballot returns a simd_vote mask, where CrossGL's returns a uvec4.
@@ -321,5 +394,7 @@ COUNTERPARTS["metal"].update(
 
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:
     """The CrossGL name of ``language``'s built-in ``name``."""
+    if name in WAVES.get(language, {}):
+        return WAVES[language][name]
     renamed = RENAMES.get(language, {}).get(name, name)
     return renamed if renamed in glsl_names else name

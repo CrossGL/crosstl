@@ -290,7 +290,8 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         "Score = supported / (supported + refused + wrong). Untested features are shown separately and do not "
         "count. The CrossGL IR row covers the union of every language's output features, merged into semantic "
         "features through the SPIR-V each native probe lowers to; a semantic feature is expressible when its "
-        "CrossGL probe translates correctly to at least one language that has it.",
+        "CrossGL probe translates correctly to at least one language that has it, or to valid SPIR-V that lowers "
+        "to the same semantic feature.",
         "",
         *_executed(report),
         *_table(report),

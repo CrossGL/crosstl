@@ -305,6 +305,7 @@ from .glsl_narrow_integer_literals import (
 )
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
 from .glsl_nested_stage_io import refuse_nested_stage_builtins
+from .glsl_precise_odd import glsl_precise_odd_helper
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
@@ -35371,19 +35372,8 @@ float {name}(int64_t value) {{
             return self.generate_glsl_ieee_operator_helper(name, operation)
         if operation == "atan2":
             return self.generate_glsl_atan2_helper(name, value_type, width)
-        builtin = operation.removeprefix("precise-")
-        unsigned = "uint" if width == 1 else f"uvec{width}"
-        nan = (
-            "isnan(value) ? value : result"
-            if width == 1
-            else "mix(result, value, isnan(value))"
-        )
-        return (
-            f"{value_type} {name}({value_type} value) {{\n"
-            f"    {unsigned} magnitude = floatBitsToUint({builtin}(value)) & 0x7fffffffu;\n"
-            f"    {value_type} result = uintBitsToFloat("
-            "magnitude | (floatBitsToUint(value) & 0x80000000u));\n"
-            f"    return {nan};\n}}\n"
+        return glsl_precise_odd_helper(
+            name, operation.removeprefix("precise-"), value_type, width
         )
 
     def generate_glsl_ieee_operator_helper(self, name, operation):
@@ -42522,9 +42512,9 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{helper_name}({', '.join(rendered)})"
 
     # GLSL's sinh, tanh, asinh and atanh are defined through exp and log, and
-    # Mesa evaluates them that way: the sign of zero is lost and tanh clamps a
-    # NaN operand to -1.  Metal's precise:: implementations keep both.  Each
-    # is odd, so the result takes the operand's sign bit, and NaN passes through.
+    # Mesa evaluates them that way: the sign of zero is lost, tanh clamps a
+    # NaN operand to -1 and the formulas cancel near zero.  Metal's precise::
+    # implementations keep all three; glsl_precise_odd describes the helpers.
     GLSL_PRECISE_ODD_FUNCTIONS = frozenset({"asinh", "atanh", "sinh", "tanh"})
 
     def glsl_ieee_helper_name(self, operation, value_type):
