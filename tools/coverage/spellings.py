@@ -2,7 +2,8 @@
 
 A coverage probe calls a backend built-in through CrossGL. Most have the same name and arguments in both, so the
 probe uses the backend's spelling. The tables here list the exceptions: the functions CrossGL spells as GLSL does
-(:data:`RENAMES`) and those it writes with other arguments (:data:`COUNTERPARTS`). The feature lists use them to give
+(:data:`RENAMES`), those it has under a name GLSL lacks (:data:`WAVES`, :data:`OTHER_NAMES`) and those it writes with
+other arguments (:data:`COUNTERPARTS`). The feature lists use them to give
 each feature its CrossGL spelling, and issue reconciliation uses them to recognise that spelling in a diagnostic.
 """
 
@@ -191,11 +192,18 @@ RENAMES = {
     },
 }
 # HIP spells its device functions the way CUDA does. Slang spells its built-in functions the way HLSL does, and adds
-# the coarse and fine fwidth that HLSL lacks.
+# the coarse and fine fwidth that HLSL lacks, centroid interpolation under its own name, and unpacking functions that
+# name the result's type, of which the ones that return float vectors are GLSL's.
 RENAMES["hip"] = RENAMES["cuda"]
 RENAMES["slang"] = RENAMES["hlsl"] | {
     "fwidth_coarse": "fwidthCoarse",
     "fwidth_fine": "fwidthFine",
+    "EvaluateAttributeAtCentroid": "interpolateAtCentroid",
+    "unpackHalf2x16ToFloat": "unpackHalf2x16",
+    "unpackSnorm2x16ToFloat": "unpackSnorm2x16",
+    "unpackSnorm4x8ToFloat": "unpackSnorm4x8",
+    "unpackUnorm2x16ToFloat": "unpackUnorm2x16",
+    "unpackUnorm4x8ToFloat": "unpackUnorm4x8",
 }
 
 # Subgroup functions, which CrossGL spells with the HLSL wave names (``crosstl/translator/wave_operations.py``) and
@@ -392,9 +400,53 @@ COUNTERPARTS["metal"].update(
 )
 
 
+# Built-in functions CrossGL has under a name the GLSL feature list lacks, with the same arguments and result: a
+# CrossGL wave operation, a GLSL extension function, a function of another language that CrossGL defines, or a
+# built-in value. A ``gl_`` name is a built-in value (GLSL 4.60 section 3.7 reserves the prefix), which the probe reads
+# instead of calling, with a ``{}`` for each argument that indexes it.
+OTHER_NAMES = {
+    "slang": {
+        # Slang's WavePrefixMax, WavePrefixMin and bitwise prefix operations are exclusive scans, as its
+        # WavePrefixSum and HLSL's are; CrossGL names those that HLSL lacks after the GLSL scan.
+        "WavePrefixMax": "WavePrefixExclusiveMax",
+        "WavePrefixMin": "WavePrefixExclusiveMin",
+        "WavePrefixBitAnd": "WavePrefixExclusiveBitAnd",
+        "WavePrefixBitOr": "WavePrefixExclusiveBitOr",
+        "WavePrefixBitXor": "WavePrefixExclusiveBitXor",
+        "WaveShuffle": "WaveReadLaneAt",
+        # A lane given as a constant broadcasts, as GL_KHR_shader_subgroup_ballot's subgroupBroadcast does.
+        "WaveBroadcastLaneAt": "subgroupBroadcast",
+        "WaveGetLaneEqMask": "gl_SubgroupEqMask",
+        "WaveGetLaneGeMask": "gl_SubgroupGeMask",
+        "WaveGetLaneGtMask": "gl_SubgroupGtMask",
+        "WaveGetLaneLeMask": "gl_SubgroupLeMask",
+        "WaveGetLaneLtMask": "gl_SubgroupLtMask",
+        "WaveGetNumWaves": "gl_NumSubgroups",
+        "WaveGetWaveIndex": "gl_SubgroupID",
+        "WorkgroupCount": "gl_NumWorkGroups",
+        "HitTriangleVertexPosition": "gl_HitTriangleVertexPositionsEXT[{}]",
+        # GL_EXT_shader_realtime_clock's device-scope clock, as two 32-bit halves.
+        "getRealtimeClock": "clockRealtime2x32EXT",
+        # Slang's copysign calls these for each element type.
+        "copysign_float": "copysign",
+        "copysign_half": "copysign",
+        "copysign_double": "copysign",
+    },
+    # WGSL's quad operations are HLSL's.
+    "wgsl": {
+        "quadBroadcast": "QuadReadLaneAt",
+        "quadSwapX": "QuadReadAcrossX",
+        "quadSwapY": "QuadReadAcrossY",
+        "quadSwapDiagonal": "QuadReadAcrossDiagonal",
+    },
+}
+
+
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:
     """The CrossGL name of ``language``'s built-in ``name``."""
     if name in WAVES.get(language, {}):
         return WAVES[language][name]
+    if name in OTHER_NAMES.get(language, {}):
+        return OTHER_NAMES[language][name]
     renamed = RENAMES.get(language, {}).get(name, name)
     return renamed if renamed in glsl_names else name

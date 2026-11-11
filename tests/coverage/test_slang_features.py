@@ -2,6 +2,8 @@
 
 import pytest
 
+from crosstl.translator.semantics.builtin_function_names import BUILTIN_FUNCTION_NAMES
+from crosstl.translator.semantics.builtin_names import is_crossgl_gl_builtin
 from tools.coverage import probes, spellings
 from tools.coverage.features import slang
 from tools.coverage.model import (
@@ -171,6 +173,38 @@ def test_slang_spells_its_coarse_and_fine_fwidth_as_crossgl_does():
     # HLSL has no coarse or fine fwidth, and Slang's additions leave its table alone.
     assert "fwidth_coarse" not in spellings.RENAMES["hlsl"]
     assert spellings.RENAMES["slang"]["lerp"] == "mix"
+
+
+def test_slang_functions_crossgl_names_otherwise_take_crossgl_names():
+    glsl_names = {"unpackHalf2x16", "interpolateAtCentroid"}
+    assert spellings.spelling("slang", "unpackHalf2x16ToFloat", glsl_names) == (
+        "unpackHalf2x16"
+    )
+    assert spellings.spelling("slang", "EvaluateAttributeAtCentroid", glsl_names) == (
+        "interpolateAtCentroid"
+    )
+    # A name GLSL lacks applies without the GLSL feature list.
+    assert (
+        spellings.spelling("slang", "WavePrefixMax", set()) == "WavePrefixExclusiveMax"
+    )
+    assert (
+        spellings.spelling("slang", "WaveGetLaneEqMask", set()) == "gl_SubgroupEqMask"
+    )
+    assert spellings.spelling("wgsl", "quadSwapX", set()) == "QuadReadAcrossX"
+    # A half-precision unpack returns half vectors, which GLSL's do not.
+    assert spellings.spelling("slang", "unpackHalf2x16ToHalf", glsl_names) == (
+        "unpackHalf2x16ToHalf"
+    )
+
+
+def test_other_names_are_names_crossgl_defines():
+    for language, names in spellings.OTHER_NAMES.items():
+        for name, spelled in names.items():
+            base = spelled.split("[", 1)[0]
+            if base.startswith("gl_"):
+                assert is_crossgl_gl_builtin(base), (language, name)
+            else:
+                assert base in BUILTIN_FUNCTION_NAMES, (language, name)
 
 
 def test_slang_stages_targets_and_explicit_generic_arguments():
