@@ -47,3 +47,10 @@ def test_spirv_builds_member_with_struct_type(tmp_path, initializer):
     assert re.search(
         rf"OpCompositeConstruct %{member.group(1)} %\w+ %\w+", output
     ), output
+
+
+def test_wgsl_keeps_an_argument_past_the_last_member(tmp_path):
+    # Each argument is matched to its member's type only when the counts agree; an extra argument stays in the
+    # call, where naga reports it, instead of being dropped.
+    output = translate(tmp_path, "wgsl", "N(1u, {3u, 4u}, 5u)")
+    assert re.search(r"N\(1u, [^;]*, 5u\)", output), output

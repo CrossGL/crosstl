@@ -4109,7 +4109,8 @@ class WGSLCodeGen(
                 for member in getattr(struct, "members", None) or []
                 if hasattr(member, "member_type")
             ]
-            if member_types:
+            # Only a call with one argument per member: zip would drop any argument past the last member.
+            if member_types and len(node.arguments) == len(member_types):
                 args = ", ".join(
                     self.generate_expression_for_target(arg, member_type)
                     for arg, member_type in zip(node.arguments, member_types)
