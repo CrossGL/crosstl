@@ -71,6 +71,11 @@ from .rust_exact_lookups import (
     rust_resource_kind_of_spelling,
     rust_unmapped_semantic_reason,
 )
+from .rust_memory_atomics import (
+    generate_rust_memory_atomic_call,
+    rust_memory_atomic_location_roots,
+    rust_memory_atomic_result_type,
+)
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
 from .sampler_pairs import canonicalize_separate_textures
@@ -4768,6 +4773,7 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                         continue
                     names.update(self.mutable_reference_borrow_root_names(argument))
                 names.update(self.rust_output_argument_roots(func_name, args))
+                names.update(rust_memory_atomic_location_roots(self, func_name, args))
                 collect(current.function)
                 collect(args)
                 return
@@ -9088,6 +9094,10 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             if bitcast_intrinsic is not None:
                 return bitcast_intrinsic
 
+            memory_atomic = generate_rust_memory_atomic_call(self, func_name, args)
+            if memory_atomic is not None:
+                return memory_atomic
+
             original_func_name = func_name
             func_name = self.mapped_function_name(func_name, len(args), args)
             cuda_shuffle_call = self.generate_cuda_shuffle_intrinsic_call(
@@ -12776,6 +12786,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
         """Infer result types for shader intrinsics emitted as Rust prelude calls."""
         if not isinstance(func_name, str):
             return None
+
+        if not self.is_user_defined_function(func_name):
+            atomic_type = rust_memory_atomic_result_type(self, func_name, arguments)
+            if atomic_type is not None:
+                return atomic_type
 
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
