@@ -163,13 +163,19 @@ COOP_VECTOR_LENGTH = 4
 # The column count ``k`` that Slang's packed cooperative-vector multiplies take as a constant. For the unpacked 32-bit
 # floats every probe passes, it must equal the input vector's length (hlsl.meta.slang, coopVecMatMulPacked).
 COOP_COLUMNS = Type("int", opaque="CoopVecColumns")
-# The constant a probe passes for each enumeration parameter of Slang's cooperative-vector functions: a vector's and a
-# matrix's elements are the 32-bit floats every probe fills them with, in row-major order, and a coherent load is
-# coherent across the device, the scope coopVecLoadCoherent defaults to.
-COOP_ENUMERATORS = {
+# Slang's bindless functions take a handle to, or return, any descriptor type (``T : IOpaqueDescriptor``); probes use
+# a read-only float buffer.
+DESCRIPTOR = "StructuredBuffer<float>"
+DESCRIPTOR_HANDLE = f"DescriptorHandle<{DESCRIPTOR}>"
+# The constant a probe passes for each enumeration parameter of Slang's cooperative-vector and bindless functions: a
+# vector's and a matrix's elements are the 32-bit floats every probe fills them with, in row-major order, a coherent
+# load is coherent across the device, the scope coopVecLoadCoherent defaults to, and a descriptor binds by the regular
+# binding model rather than through VK_EXT_mutable_descriptor_type (hlsl.meta.slang, BindlessDescriptorOptions).
+SLANG_ENUMERATORS = {
     "CoopVecComponentType": "CoopVecComponentType.Float32",
     "CoopVecMatrixLayout": "CoopVecMatrixLayout.RowMajor",
     "MemoryScope": "MemoryScope.Device",
+    "BindlessDescriptorOptions": "BindlessDescriptorOptions.None",
 }
 
 
@@ -180,18 +186,25 @@ def coop_vector(scalar: str, length: int) -> Type:
     return Type(scalar, (length,), f"CoopVec<{scalar}, {length}>")
 
 
-def coop_literal(kind: Type) -> str:
-    """The constant a probe passes for a cooperative-vector enumeration or column count ``kind``, or an empty
+def slang_literal(kind: Type) -> str:
+    """The constant a probe passes for a Slang enumeration or cooperative-vector column count ``kind``, or an empty
     string."""
     if kind == COOP_COLUMNS:
         return str(COOP_VECTOR_LENGTH)
-    return COOP_ENUMERATORS.get(kind.opaque, "")
+    return SLANG_ENUMERATORS.get(kind.opaque, "")
 
 
 def coop_element(opaque: str) -> Type | None:
     """The element type of the cooperative vector the opaque spelling ``opaque`` names, or ``None``."""
     match = _COOP_VECTOR.fullmatch(opaque)
     return Type(match.group(1)) if match else None
+
+
+def descriptor_reading(opaque: str) -> tuple[Type, str] | None:
+    """How a probe reads the probe descriptor, or a handle to it, that a call returns: through its first element."""
+    return (
+        (Type("float"), "{}[0]") if opaque in (DESCRIPTOR, DESCRIPTOR_HANDLE) else None
+    )
 
 
 _TUPLE = re.compile(r"Tuple<(\w+)((?:, \1)*)>")

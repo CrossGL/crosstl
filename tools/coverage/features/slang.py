@@ -22,6 +22,8 @@ from .. import spellings
 from ..model import (
     COOP_COLUMNS,
     COOP_VECTOR_LENGTH,
+    DESCRIPTOR,
+    DESCRIPTOR_HANDLE,
     OTHER_WIDTHS,
     STRING,
     VOID,
@@ -38,7 +40,7 @@ from .common import pick, split
 from .hlsl import stage_of as direct3d_stage
 from .slang_meta import HEAD, Declaration, declarations
 
-# The scalar each generic constraint is probed with.
+# The scalar each generic constraint is probed with, and the type for a descriptor.
 CONSTRAINTS = {
     "__BuiltinFloatingPointType": "float",
     "__BuiltinRealType": "float",
@@ -55,6 +57,7 @@ CONSTRAINTS = {
     "IInteger": "int",
     "__BuiltinLogicalType": "uint",
     "ILogical": "uint",
+    "IOpaqueDescriptor": DESCRIPTOR,
 }
 # ``[require(...)]`` capabilities only one kind of stage has, matched as prefixes of the capability atoms.
 STAGE_CAPABILITIES = (
@@ -95,6 +98,7 @@ TARGETS = frozenset("cpp cuda glsl hlsl metal spirv wgsl llvm".split())
 # Capability atoms that imply one target without naming it (source/slang/slang-capabilities.capdef).
 _ATOM_TARGETS = {"optix_coopvec": "cuda", "optix_multilevel_traversal": "cuda"}
 _GENERIC_TYPE = re.compile(r"(vector|matrix|CoopVec|Tuple)\s*<(.*)>")
+_DESCRIPTOR_HANDLE = re.compile(r"DescriptorHandle\s*<\s*(\w+)\s*>")
 _QUALIFIERS = {
     "in": "in",
     "out": "out",
@@ -152,6 +156,9 @@ def slang_type(spelling: str, generics: dict[str, str]) -> Type:
         )
     if spelling in _SCALARS:
         return Type(_SCALARS[spelling])
+    handle = _DESCRIPTOR_HANDLE.fullmatch(spelling)
+    if handle and generics.get(handle.group(1)) == DESCRIPTOR:
+        return Type.other(DESCRIPTOR_HANDLE)
     shorthand = _SHORTHAND.fullmatch(spelling)
     if shorthand:
         scalar, rows, columns = shorthand.groups()
@@ -370,13 +377,17 @@ def explicit(declaration: Declaration, chosen: Signature) -> str:
         return ""
     params = match.group("params")
     value_call = _value_call(declaration, generics, params)
-    if value_call or chosen.result.opaque:
-        return value_call
     free = [
         name
         for name, bound in generics.items()
         if bound != "size" and not re.search(rf"\b{re.escape(name)}\b", params)
     ]
+    if free and list(generics) == free and set(generics.values()) == {DESCRIPTOR}:
+        # slangc infers no descriptor type from a result or from nothing, as for
+        # getDescriptorFromExplicitHeapIndex<T>(uint2) and usesNativeSpirvDescriptorHandle<T>().
+        return f"{declaration.name}<{DESCRIPTOR}>"
+    if value_call or chosen.result.opaque:
+        return value_call
     result = match.group("arrow") or match.group("result")
     if free and re.search(rf"\b{re.escape(free[0])}\b", result):
         return f"{declaration.name}<{_spell(chosen.result)}>"
@@ -385,9 +396,8 @@ def explicit(declaration: Declaration, chosen: Signature) -> str:
 
 def unprobed_generic(declaration: Declaration) -> str:
     """Why no probe can call a function with a type generic parameter that neither its parameters nor its result
-    mention and whose constraint has no probe type, such as ``usesNativeSpirvDescriptorHandle<T :
-    IOpaqueDescriptor>()``: slangc cannot infer the argument, and the probe has no type to spell for it. An empty
-    string when there is no such parameter.
+    mention and whose constraint has no probe type in :data:`CONSTRAINTS`: slangc cannot infer the argument, and the
+    probe has no type to spell for it. An empty string when there is no such parameter.
     """
     match = HEAD.fullmatch(declaration.head)
     if not match:
