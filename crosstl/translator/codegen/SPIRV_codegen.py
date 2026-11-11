@@ -22588,35 +22588,11 @@ class VulkanSPIRVCodeGen(
             self.current_expression_expected_type = previous_expected_type
 
     def collect_ast_functions(self, root):
-        functions = []
-        visited = set()
-
-        def walk(value):
-            if value is None or isinstance(value, (str, int, float, bool)):
-                return
-            if isinstance(value, dict):
-                for item in value.values():
-                    walk(item)
-                return
-            if isinstance(value, (list, tuple, set)):
-                for item in value:
-                    walk(item)
-                return
-
-            value_id = id(value)
-            if value_id in visited:
-                return
-            visited.add(value_id)
-
-            if hasattr(value, "body") and hasattr(value, "parameters"):
-                functions.append(value)
-
-            if hasattr(value, "__dict__"):
-                for child in vars(value).values():
-                    walk(child)
-
-        walk(root)
-        return functions
+        return [
+            value
+            for value in walk_ast_values(root)
+            if hasattr(value, "body") and hasattr(value, "parameters")
+        ]
 
     def concrete_function_prepass_list(self, root):
         """Return concrete functions, replacing generic definitions with emissions."""

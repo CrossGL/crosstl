@@ -38632,7 +38632,27 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 names.append(name)
         return names
 
-    def hlsl_function_and_reachable_helpers(self, func):
+    def hlsl_function_call_summary(self, func):
+        """Call names and ``DispatchMesh`` argument lists of ``func``'s body, from one walk."""
+        names, dispatch_mesh_args = [], []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, FunctionCallNode):
+                name = self.function_call_name(node)
+                if name:
+                    names.append(name)
+                if name == "DispatchMesh":
+                    dispatch_mesh_args.append(
+                        getattr(node, "arguments", getattr(node, "args", []))
+                    )
+            elif (
+                isinstance(node, MeshOpNode)
+                and getattr(node, "operation", None) == "DispatchMesh"
+            ):
+                dispatch_mesh_args.append(getattr(node, "arguments", []))
+        return names, dispatch_mesh_args
+
+    def hlsl_reachable_helper_dispatch_mesh_calls(self, func):
+        """``(function, DispatchMesh argument lists)`` for ``func`` and each helper it reaches, in visit order."""
         available_functions = self.current_hlsl_available_functions or {}
         reachable = []
         visited = set()
@@ -38644,9 +38664,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if current_id in visited:
                 return
             visited.add(current_id)
-            reachable.append(current)
+            names, dispatch_mesh_args = self.hlsl_function_call_summary(current)
+            reachable.append((current, dispatch_mesh_args))
 
-            for name in self.hlsl_function_call_names(current):
+            for name in names:
                 helper = available_functions.get(name)
                 if helper is None or helper is current:
                     continue
@@ -38654,6 +38675,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         visit(func)
         return reachable
+
+    def hlsl_function_and_reachable_helpers(self, func):
+        return [
+            current
+            for current, _ in self.hlsl_reachable_helper_dispatch_mesh_calls(func)
+        ]
 
     def validate_hlsl_dispatch_mesh_group_count_arguments(
         self, args, shader_type, visible_int_constants=None
@@ -39039,11 +39066,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def validate_hlsl_dispatch_mesh_calls(self, func, shader_type):
-        reachable_functions = self.hlsl_function_and_reachable_helpers(func)
+        reachable = self.hlsl_reachable_helper_dispatch_mesh_calls(func)
+        reachable_functions = [current for current, _ in reachable]
         calls = [
-            args
-            for reachable_func in reachable_functions
-            for args in self.hlsl_dispatch_mesh_calls(reachable_func)
+            args for _, dispatch_mesh_args in reachable for args in dispatch_mesh_args
         ]
         if not calls:
             return
