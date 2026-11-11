@@ -90,6 +90,13 @@ from .image_access_contracts import (
     image_format_channel_count,
     image_format_component_kind,
 )
+from .lowering_refusals import refuse_unsupported
+from .mojo_exact_lookups import (
+    MOJO_RAY_TRACING_INTRINSICS,
+    mojo_generic_template_reason,
+    mojo_operator,
+    mojo_resource_kind_of_spelling,
+)
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
@@ -3729,7 +3736,10 @@ class MojoCodeGen:
             ]
             return f"{base_name}<{', '.join(mapped_args)}>"
 
-        return substitutions.get(type_text, type_text)
+        if type_text in substitutions:
+            return substitutions[type_text]
+        # Not one of the structure's type parameters: a concrete type, which the substitution leaves as it is.
+        return type_text
 
     def generic_struct_fields_for_type(self, type_value):
         specialization = self.generic_struct_specialization(type_value)
@@ -3995,7 +4005,10 @@ class MojoCodeGen:
 
     def canonical_buffer_resource_type(self, base_type):
         base_name = self.type_name(base_type)
-        return MOJO_HLSL_BUFFER_TYPE_ALIASES.get(base_name, base_name)
+        if base_name in MOJO_HLSL_BUFFER_TYPE_ALIASES:
+            return MOJO_HLSL_BUFFER_TYPE_ALIASES[base_name]
+        # Already canonical, or not a buffer; callers check membership in MOJO_TYPED_BUFFER_RESOURCE_TYPES.
+        return base_name
 
     def resource_type_alias(self, type_name):
         type_name = self.type_name(type_name)
@@ -4018,10 +4031,12 @@ class MojoCodeGen:
         if rw_alias is not None:
             return rw_alias
 
-        mapped_base_type = MOJO_RESOURCE_TYPE_MAPPING.get(base_type, base_type)
-        if self.is_mojo_resource_type(
+        mapped_base_type = MOJO_RESOURCE_TYPE_MAPPING.get(base_type)
+        if mapped_base_type is None and self.is_mojo_resource_type(base_type):
+            mapped_base_type = base_type
+        if mapped_base_type is not None and self.is_texture_resource_type(
             mapped_base_type
-        ) and self.is_texture_resource_type(mapped_base_type):
+        ):
             if generic_args:
                 element_info = self.resource_element_value_info(generic_args[0])
                 if element_info is not None:
@@ -4158,9 +4173,11 @@ class MojoCodeGen:
             return self.array_type_name(formatted_element_type, size)
 
         mapped_type = self.resource_type_alias(type_name) or self.type_mapping.get(
-            type_name, type_name
+            type_name
         )
-        if not self.is_image_resource_type(mapped_type):
+        if mapped_type is None and self.is_mojo_resource_type(type_name):
+            mapped_type = type_name
+        if mapped_type is None or not self.is_image_resource_type(mapped_type):
             return type_name
 
         component_kind = image_format_component_kind(image_format)
@@ -4424,15 +4441,17 @@ class MojoCodeGen:
         if self.buffer_resource_info(base_type) is not None:
             return "buffer"
         mapped_type = self.resource_type_alias(base_type) or self.type_mapping.get(
-            str(base_type), str(base_type)
+            str(base_type)
         )
-        if mapped_type == "RayTracingAccelerationStructure":
-            return "acceleration_structure"
-        if mapped_type == "Sampler":
-            return "sampler"
-        if mapped_type.startswith(("Image", "IImage", "UImage")):
+        if mapped_type is None:
+            # Not mapped: a Mojo resource spelling already, or not a resource at all.
+            mapped_type = str(base_type)
+        kind = mojo_resource_kind_of_spelling(mapped_type)
+        if kind is not None:
+            return kind
+        if self.typed_image_resource_info(mapped_type) is not None:
             return "image"
-        if mapped_type.startswith("Texture"):
+        if self.typed_texture_resource_info(mapped_type) is not None:
             return "texture"
         return None
 
@@ -5868,7 +5887,10 @@ class MojoCodeGen:
             return f"{generic_constructor}()"
         if name in self.current_enum_value_aliases:
             return self.current_enum_value_aliases[name]
-        return self.enum_variant_aliases.get(name, name)
+        if name in self.enum_variant_aliases:
+            return self.enum_variant_aliases[name]
+        # Not an enum variant of the program: an identifier, written as declared.
+        return name
 
     def generic_enum_unit_variant_constructor(self, name, target_type):
         variant_fields = self.generic_enum_variant_fields_for_type(name, target_type)
@@ -10111,16 +10133,19 @@ class MojoCodeGen:
         )
 
     def generate_ray_tracing_call_expression(self, operation, args):
-        if operation not in {
-            "TraceRay",
-            "CallShader",
-            "ReportHit",
-            "IgnoreHit",
-            "AcceptHitAndEndSearch",
-        }:
+        intrinsic = MOJO_RAY_TRACING_INTRINSICS.get(operation)
+        if intrinsic is None:
             return None
 
-        helper_name = self.function_map.get(operation, operation)
+        helper_name, argument_counts = intrinsic
+        if len(args or []) not in argument_counts:
+            counts = " or ".join(str(count) for count in argument_counts)
+            return refuse_unsupported(
+                "Mojo",
+                f"{operation} with {len(args or [])} arguments",
+                f"the Mojo runtime helper {helper_name} takes {counts}",
+                f"{helper_name}()",
+            )
         self.required_ray_helpers.add(helper_name)
         generated_args = [self.generate_expression(arg) for arg in args or []]
         if operation == "TraceRay" and len(generated_args) == 11:
@@ -12566,7 +12591,10 @@ class MojoCodeGen:
             return True
         if MOJO_SCALAR_DTYPES.get(type_name) in MOJO_INTEGER_DTYPES:
             return True
-        return self.type_mapping.get(type_name, type_name) in MOJO_MAPPED_INTEGER_TYPES
+        return (
+            type_name in MOJO_MAPPED_INTEGER_TYPES
+            or self.type_mapping.get(type_name) in MOJO_MAPPED_INTEGER_TYPES
+        )
 
     def generate_matrix_constructor_helper_call(self, dtype, columns, rows, args):
         component_count = columns * rows
@@ -16139,14 +16167,25 @@ class MojoCodeGen:
         mapped_args = ", ".join(
             self.mojo_native_generic_argument(arg) for arg in generic_args
         )
-        return f"{self.type_mapping.get(base_type, base_type)}[{mapped_args}]"
+        mapped_base = self.type_mapping.get(base_type)
+        if mapped_base is None:
+            reason = mojo_generic_template_reason(base_type)
+            if reason is not None:
+                return refuse_unsupported("Mojo", "type", reason, type_name)
+            # A Mojo parameterised type (UnsafePointer, SIMD, Scalar) is spelled as written.
+            mapped_base = base_type
+        return f"{mapped_base}[{mapped_args}]"
 
     def mojo_native_generic_argument(self, arg):
         arg = str(arg).strip()
         nested_generic = self.mojo_native_generic_mapped_type(arg)
         if nested_generic is not None:
             return nested_generic
-        return self.type_mapping.get(arg, arg)
+        mapped = self.type_mapping.get(arg)
+        if mapped is not None:
+            return mapped
+        # A Mojo parameter value (Int64, MutAnyOrigin, a DType, a literal width) is spelled as written.
+        return arg
 
     def is_resource_type_name(self, type_name):
         if self.is_array_type_name(type_name):
@@ -16168,44 +16207,8 @@ class MojoCodeGen:
         )
 
     def map_operator(self, op):
-        op_map = {
-            "PLUS": "+",
-            "MINUS": "-",
-            "MULTIPLY": "*",
-            "DIVIDE": "/",
-            "BITWISE_XOR": "^",
-            "BITWISE_OR": "|",
-            "BITWISE_AND": "&",
-            "LESS_THAN": "<",
-            "GREATER_THAN": ">",
-            "ASSIGN_ADD": "+=",
-            "ASSIGN_SUB": "-=",
-            "ASSIGN_MUL": "*=",
-            "ASSIGN_DIV": "/=",
-            "ASSIGN_MOD": "%=",
-            "ASSIGN_XOR": "^=",
-            "ASSIGN_OR": "|=",
-            "ASSIGN_AND": "&=",
-            "LESS_EQUAL": "<=",
-            "GREATER_EQUAL": ">=",
-            "EQUAL": "==",
-            "NOT_EQUAL": "!=",
-            "AND": "and",
-            "OR": "or",
-            "&&": "and",
-            "||": "or",
-            "EQUALS": "=",
-            "ASSIGN_SHIFT_LEFT": "<<=",
-            "ASSIGN_SHIFT_RIGHT": ">>=",
-            "LOGICAL_AND": "and",
-            "LOGICAL_OR": "or",
-            "BITWISE_SHIFT_RIGHT": ">>",
-            "BITWISE_SHIFT_LEFT": "<<",
-            "MOD": "%",
-            "NOT": "not",
-            "!": "not",
-        }
-        return op_map.get(op, op)
+        """``op`` spelled for Mojo; an operator CrossGL does not define is refused."""
+        return mojo_operator(op)
 
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to the Mojo backend attribute name."""
