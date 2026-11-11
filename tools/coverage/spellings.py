@@ -412,6 +412,17 @@ COUNTERPARTS["metal"].update(
         for suffix in ("", "_explicit")
     }
 )
+# Metal functions that take memory flags, which CrossGL writes as the operations the Metal importer makes of them. The
+# probe passes mem_none and memory_order_relaxed. A simdgroup barrier with mem_none is CrossGL's execution-only
+# subgroupExecutionBarrier, and a fence keeps its flags, order and scope as CrossGL constants (:data:`OTHER_NAMES`).
+# CrossGL has no atomic subtraction, so it adds the negated operand, which gives the same wrapped result.
+COUNTERPARTS["metal"].update(
+    {
+        "simdgroup_barrier": "void subgroupExecutionBarrier()",
+        "atomic_thread_fence": "void atomicThreadFence()",
+        "atomic_fetch_sub_explicit": "int atomicAdd(inout int, int)",
+    }
+)
 
 
 # Built-in functions CrossGL has under a name the GLSL feature list lacks, with the same arguments and result: a
@@ -502,6 +513,15 @@ OTHER_NAMES = {
             "textureLod({0}, clamp({1}, vec2(0.5) / vec2(textureSize({0}, 0)), "
             "vec2(1.0) - vec2(0.5) / vec2(textureSize({0}, 0))), 0.0)"
         ),
+    },
+    # Metal's fence takes its scope as a third argument that defaults to thread_scope_device (MSL 4.1, "Fence
+    # Functions"). Its atomic_fetch_sub_explicit is an atomicAdd of the negated operand, as the Metal importer
+    # writes it.
+    "metal": {
+        "atomic_thread_fence": (
+            "atomicThreadFence(mem_none, memory_order_relaxed, thread_scope_device)"
+        ),
+        "atomic_fetch_sub_explicit": "atomicAdd({0}, -({1}))",
     },
     "mojo": {
         "count_leading_zeros": "clz",
