@@ -66,7 +66,10 @@ REDUCE_OPENGL_SPECIALIZATION_COUNT = 9216
 REDUCE_OPENGL_REFLECTED_RESOURCE_COUNT = 25088
 REDUCE_OPENGL_GENERATED_SIZE_BYTES_TOTAL = 44853060
 REDUCE_OPENGL_GENERATED_SIZE_MINIMUM = ("init_reduce_minbool_", 1331)
-REDUCE_OPENGL_GENERATED_SIZE_MAXIMUM = ("col_reduce_2pass_large_5_32_32_reduce_prodcomplex64", 44794)
+REDUCE_OPENGL_GENERATED_SIZE_MAXIMUM = (
+    "col_reduce_2pass_large_5_32_32_reduce_prodcomplex64",
+    44794,
+)
 INDEX_RANGE_ASSERTIONS = (
     ("in_ + LoopedElemToLoc_1_int64_t_false__location(loop)", 0, 2**31 - 1),
     ("in_ + LoopedElemToLoc_2_int64_t_false__location(loop)", 0, 2**31 - 1),
