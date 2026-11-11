@@ -1705,7 +1705,12 @@ class SlangCodeGen(LoweringRefusalMixin):
 
         type_name = str(type_name)
         layout_type_name = std430_layout_type_name(type_name)
-        type_info = self.scalar_glsl_buffer_type_info(layout_type_name, type_stack)
+        if layout_type_name is None:
+            # Not a value type: a structure is laid out, and named, as declared.
+            layout_type_name = type_name
+            type_info = self.scalar_glsl_buffer_struct_type_info(type_name, type_stack)
+        else:
+            type_info = self.scalar_glsl_buffer_type_info(layout_type_name, type_stack)
         if type_info is None:
             return None
         return {
@@ -9956,7 +9961,7 @@ class SlangCodeGen(LoweringRefusalMixin):
                 return self.slang_helper_invocation_expression()
             if isinstance(node.name, str) and "::" in node.name:
                 enum_value = enum_value_expression(self, node.name)
-                if enum_value != node.name:
+                if enum_value is not None:
                     return enum_value
             return self.identifier_aliases.get(node.name, node.name)
         elif isinstance(node, LiteralNode):

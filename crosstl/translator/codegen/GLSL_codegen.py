@@ -637,6 +637,7 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
+    requested_stage_name,
     should_emit_qualified_function,
     stage_matches,
 )
@@ -9043,7 +9044,7 @@ class GLSLCodeGen(
                 self.walk_ast,
                 self.map_operator,
             )
-        target_stage = normalize_stage_name(target_stage)
+        target_stage = requested_stage_name(target_stage)
         self.glsl_stage_reachable_function_names = self.stage_reachable_function_names(
             ast, target_stage
         )

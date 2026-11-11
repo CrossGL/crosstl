@@ -77,7 +77,11 @@ from .image_access_contracts import (
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
-from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .stage_utils import (
+    STAGE_QUALIFIER_NAMES,
+    normalize_stage_name,
+    requested_stage_name,
+)
 from .wgsl_array_constructors import (
     wgsl_array_constructor,
     wgsl_array_constructor_type,
@@ -920,7 +924,7 @@ class WGSLCodeGen(
 
     def generate_program(self, ast, target_stage=None):
         refuse_cooperative_matrices(ast, label="WGSL", target="wgsl")
-        target_stage = normalize_stage_name(target_stage)
+        target_stage = requested_stage_name(target_stage)
         # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
         ast = canonicalize_separate_textures(ast)

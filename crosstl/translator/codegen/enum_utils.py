@@ -309,6 +309,7 @@ def enum_variant_constructor_name(enum_name, variant_name):
 
 
 def enum_value_expression(generator, path):
+    """The target expression for the enum value ``path`` (``Enum::Variant``), or ``None`` when it names none."""
     constructor = getattr(generator, "enum_variant_constructors", {}).get(path)
     fields = getattr(generator, "enum_variant_constructor_fields", {}).get(path)
     expected_type = getattr(generator, "current_expression_expected_type", None)
@@ -320,7 +321,7 @@ def enum_value_expression(generator, path):
     if generic_value is not None:
         return generic_value
 
-    return getattr(generator, "enum_variant_constants", {}).get(path, path)
+    return getattr(generator, "enum_variant_constants", {}).get(path)
 
 
 def generate_enum_constructor_call(generator, path, args):

@@ -658,6 +658,7 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
+    requested_stage_name,
     requests_early_fragment_tests,
     should_emit_qualified_function,
     stage_layout_entry_value,
@@ -4043,7 +4044,7 @@ class HLSLCodeGen(
         # Typed binary16 loads, stores and selections may change NaN payloads.
         ast = lower_half_private_storage(ast, self.map_type)
         self.hlsl_groupshared_variable_names = hlsl_groupshared_variable_names(ast)
-        target_stage = normalize_stage_name(target_stage)
+        target_stage = requested_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
         self.required_hlsl_cooperative_matrix_mma = False
         self.required_hlsl_cooperative_matrix_fragment_offset = False
@@ -28171,7 +28172,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return unsupported_value
             name = getattr(expr, "name", str(expr))
             enum_value = enum_value_expression(self, name)
-            if enum_value != name:
+            if enum_value is not None:
                 return enum_value
             standard_constant = self.hlsl_standard_math_constant_expression(name)
             if standard_constant is not None:
@@ -28191,7 +28192,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if unsupported_value is not None:
                 return unsupported_value
             enum_value = enum_value_expression(self, expr.name)
-            if enum_value != expr.name:
+            if enum_value is not None:
                 return enum_value
             standard_constant = self.hlsl_standard_math_constant_expression(expr.name)
             if standard_constant is not None:

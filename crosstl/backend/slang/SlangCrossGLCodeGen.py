@@ -4,7 +4,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from crosstl.translator.integer_literals import crossgl_legacy_octal
-from crosstl.translator.stage_utils import normalize_stage_name
+from crosstl.translator.stage_utils import requested_stage_name
 
 from ..import_refusals import SlangImportRefused
 from ..storage_image_texels import (
@@ -963,7 +963,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         )
 
     def effective_function_qualifier(self, func):
-        qualifier = normalize_stage_name(getattr(func, "qualifier", None))
+        # ``qualifier`` holds the stage a ``[shader("...")]`` attribute names; one that names no stage is refused.
+        qualifier = getattr(func, "qualifier", None)
+        qualifier = requested_stage_name(qualifier) if qualifier else None
         if qualifier:
             return qualifier
         if getattr(func, "numthreads", None):

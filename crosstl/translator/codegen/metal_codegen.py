@@ -507,6 +507,7 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
+    requested_stage_name,
     requests_early_fragment_tests,
     should_emit_qualified_function,
     stage_matches,
@@ -2141,7 +2142,7 @@ class MetalCodeGen(
         return fallback
 
     def render_program(self, ast, target_stage=None):
-        target_stage = normalize_stage_name(target_stage)
+        target_stage = requested_stage_name(target_stage)
         ast = fold_workgroup_size_extents(ast, "Metal", self.refuse_lowering)
         ast = lower_constant_buffer_resources(
             ast,
@@ -12520,7 +12521,11 @@ class MetalCodeGen(
                     return f"{self.METAL_RAY_FLAG_VALUES[expr.name]}u"
                 if expr.name in self.local_variable_types:
                     return self.metal_local_identifier_name(expr.name)
-                return enum_value_expression(self, expr.name)
+                enum_value = enum_value_expression(self, expr.name)
+                if enum_value is not None:
+                    return enum_value
+                # Not an enum value: a variable this program declares keeps its declared spelling.
+                return expr.name
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
