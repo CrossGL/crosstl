@@ -344,7 +344,8 @@ def test_spirv_generic_calls_on_buffer_pointer(tmp_path):
 
 
 ISSUE_3762_SHADERS = {
-    "1_pick_float": """
+    "1_pick_float": (
+        """
     shader P {
         T pick<T>(T x) { return x; }
         buffer float* outp;
@@ -357,8 +358,10 @@ ISSUE_3762_SHADERS = {
             }
         }
     }
-    """,
-    "2_sel2_float": """
+    """
+    ),
+    "2_sel2_float": (
+        """
     shader P {
         T sel2<T>(T a, T b) { return a; }
         buffer float* outp;
@@ -371,8 +374,10 @@ ISSUE_3762_SHADERS = {
             }
         }
     }
-    """,
-    "3_sel2_vec2": """
+    """
+    ),
+    "3_sel2_vec2": (
+        """
     shader P {
         T sel2<T>(T a, T b) { return a; }
         buffer float* outp;
@@ -385,8 +390,10 @@ ISSUE_3762_SHADERS = {
             }
         }
     }
-    """,
-    "4_sel_overload": """
+    """
+    ),
+    "4_sel_overload": (
+        """
     shader P {
         T sel<T>(T a) { return a; }
         T sel<T>(T a, T b) { return b; }
@@ -400,8 +407,10 @@ ISSUE_3762_SHADERS = {
             }
         }
     }
-    """,
-    "5_pick_vec3": """
+    """
+    ),
+    "5_pick_vec3": (
+        """
     shader P {
         T pick<T>(T x) { return x; }
         buffer float* outp;
@@ -414,7 +423,8 @@ ISSUE_3762_SHADERS = {
             }
         }
     }
-    """,
+    """
+    ),
 }
 
 ISSUE_3762_EXPECTED = {
