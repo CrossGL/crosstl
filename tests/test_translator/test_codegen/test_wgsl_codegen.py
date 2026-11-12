@@ -5973,3 +5973,94 @@ def test_wgsl_codegen_half_conversion_user_function_shadowing(tmp_path):
     assert "f32tof16(3.0)" in generated
     assert "unpack2x16float(f32tof16(3.0)).x" in generated
     validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_half_conversion_evaluates_operand_once(tmp_path):
+    shader = """
+    shader TestSideEffects {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* counter;
+            buffer uvec2* u2_out;
+            buffer uvec3* u3_out;
+            buffer uvec4* u4_out;
+            buffer vec2* f2_out;
+            buffer vec3* f3_out;
+            buffer vec4* f4_out;
+
+            struct S {
+                vec3 v;
+            };
+
+            vec2 get_vec2_effect() {
+                counter[0] += 1u;
+                return vec2(1.0, 2.0);
+            }
+
+            vec3 get_vec3_effect() {
+                counter[0] += 1u;
+                return vec3(1.0, 2.0, 3.0);
+            }
+
+            vec4 get_vec4_effect() {
+                counter[0] += 1u;
+                return vec4(1.0, 2.0, 3.0, 4.0);
+            }
+
+            uvec2 get_uvec2_effect() {
+                counter[0] += 1u;
+                return uvec2(1u, 2u);
+            }
+
+            uvec3 get_uvec3_effect() {
+                counter[0] += 1u;
+                return uvec3(1u, 2u, 3u);
+            }
+
+            uvec4 get_uvec4_effect() {
+                counter[0] += 1u;
+                return uvec4(1u, 2u, 3u, 4u);
+            }
+
+            S get_struct_effect() {
+                counter[0] += 1u;
+                S s;
+                s.v = vec3(1.0, 2.0, 3.0);
+                return s;
+            }
+
+            void main() {
+                // Path A: standalone f32tof16(vector_expression)
+                u2_out[0] = f32tof16(get_vec2_effect());
+                u3_out[0] = f32tof16(get_vec3_effect());
+                u4_out[0] = f32tof16(get_vec4_effect());
+
+                // Path B: standalone f16tof32(vector_expression)
+                f2_out[0] = f16tof32(get_uvec2_effect());
+                f3_out[0] = f16tof32(get_uvec3_effect());
+                f4_out[0] = f16tof32(get_uvec4_effect());
+
+                // Path C: composite f16tof32(f32tof16(vector_expression))
+                f3_out[1] = f16tof32(f32tof16(get_vec3_effect()));
+                f4_out[1] = f16tof32(f32tof16(get_vec4_effect()));
+
+                // Nested member access with side-effecting call
+                u3_out[1] = f32tof16(get_struct_effect().v);
+            }
+        }
+    }
+    """
+    source = tmp_path / "eval_once.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    compute_main = generated.split("fn compute_main()")[1]
+    assert compute_main.count("get_vec2_effect()") == 1
+    assert compute_main.count("get_vec3_effect()") == 2
+    assert compute_main.count("get_vec4_effect()") == 2
+    assert compute_main.count("get_uvec2_effect()") == 1
+    assert compute_main.count("get_uvec3_effect()") == 1
+    assert compute_main.count("get_uvec4_effect()") == 1
+    assert compute_main.count("get_struct_effect()") == 1
+
+    validate_wgsl_with_naga(tmp_path, generated)

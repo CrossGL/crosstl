@@ -897,6 +897,7 @@ class WGSLCodeGen(
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
+        self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
         self._specialization_default_values = {}
@@ -982,6 +983,7 @@ class WGSLCodeGen(
         self._sampled_texture_array_bindings = {}
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
+        self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
         self._specialization_default_values = {}
@@ -1249,6 +1251,10 @@ class WGSLCodeGen(
         frexp_modf_helpers = wgsl_frexp_modf_helpers(self)
         if frexp_modf_helpers:
             emitted_sections.append(frexp_modf_helpers)
+
+        half_conversion_helpers = self.generate_half_conversion_helpers()
+        if half_conversion_helpers:
+            emitted_sections.append(half_conversion_helpers)
 
         if emitted_sections:
             lines.append("")
@@ -4322,6 +4328,12 @@ class WGSLCodeGen(
         target = scalar if lanes is None else f"vec{lanes}<{scalar}>"
         return f"bitcast<{target}>({self.generate_expression(argument)})"
 
+    def generate_half_conversion_helpers(self):
+        """The helper functions used for half float vector packing/unpacking."""
+        if not getattr(self, "_half_conversion_helpers", None):
+            return None
+        return "\n\n".join(self._half_conversion_helpers.values())
+
     def generate_f32tof16_call(self, node):
         """HLSL ``f32tof16`` as WGSL ``pack2x16float``."""
         if len(node.arguments) != 1:
@@ -4337,16 +4349,16 @@ class WGSLCodeGen(
             return f"pack2x16float(vec2<f32>({arg_expr}, 0.0))"
         _elem_type, width = vector
         components = ["x", "y", "z", "w"][:width]
+        helper_name = f"crosstl_pack2x16float_vec{width}"
+        if helper_name not in self._half_conversion_helpers:
+            elements = [f"pack2x16float(vec2<f32>(v.{c}, 0.0))" for c in components]
+            self._half_conversion_helpers[helper_name] = (
+                f"fn {helper_name}(v: vec{width}<f32>) -> vec{width}<u32> {{\n"
+                f"    return vec{width}<u32>({', '.join(elements)});\n"
+                f"}}"
+            )
         arg_expr = self.generate_expression(argument)
-        base = (
-            arg_expr
-            if isinstance(argument, (IdentifierNode, MemberAccessNode, ArrayAccessNode))
-            else f"({arg_expr})"
-        )
-        packed_elements = [
-            f"pack2x16float(vec2<f32>({base}.{c}, 0.0))" for c in components
-        ]
-        return f"vec{width}<u32>({', '.join(packed_elements)})"
+        return f"{helper_name}({arg_expr})"
 
     def generate_f16tof32_call(self, node):
         """HLSL ``f16tof32`` as WGSL ``unpack2x16float``."""
@@ -4373,19 +4385,19 @@ class WGSLCodeGen(
                 inner_expr = self.generate_expression(inner)
                 return f"unpack2x16float(pack2x16float({inner_expr}))"
             components = ["x", "y", "z", "w"][:width]
-            inner_expr = self.generate_expression(inner)
-            base = (
-                inner_expr
-                if isinstance(
-                    inner, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+            helper_name = f"crosstl_unpack_pack2x16float_vec{width}"
+            if helper_name not in self._half_conversion_helpers:
+                elements = [
+                    f"unpack2x16float(pack2x16float(vec2<f32>(v.{c}, 0.0))).x"
+                    for c in components
+                ]
+                self._half_conversion_helpers[helper_name] = (
+                    f"fn {helper_name}(v: vec{width}<f32>) -> vec{width}<f32> {{\n"
+                    f"    return vec{width}<f32>({', '.join(elements)});\n"
+                    f"}}"
                 )
-                else f"({inner_expr})"
-            )
-            unpacked_elements = [
-                f"unpack2x16float(pack2x16float(vec2<f32>({base}.{c}, 0.0))).x"
-                for c in components
-            ]
-            return f"vec{width}<f32>({', '.join(unpacked_elements)})"
+            inner_expr = self.generate_expression(inner)
+            return f"{helper_name}({inner_expr})"
 
         arg_type = self.expression_type(argument)
         vector = self.vector_shape(arg_type)
@@ -4396,19 +4408,23 @@ class WGSLCodeGen(
             return f"unpack2x16float({arg_expr}).x"
         elem_type, width = vector
         components = ["x", "y", "z", "w"][:width]
+        arg_type_name = "i32" if elem_type == "i32" else "u32"
+        prefix = "i" if elem_type == "i32" else ""
+        helper_name = f"crosstl_unpack2x16float_{prefix}vec{width}"
+        if helper_name not in self._half_conversion_helpers:
+            elements = []
+            for c in components:
+                comp = f"v.{c}"
+                if elem_type == "i32":
+                    comp = f"u32({comp})"
+                elements.append(f"unpack2x16float({comp}).x")
+            self._half_conversion_helpers[helper_name] = (
+                f"fn {helper_name}(v: vec{width}<{arg_type_name}>) -> vec{width}<f32> {{\n"
+                f"    return vec{width}<f32>({', '.join(elements)});\n"
+                f"}}"
+            )
         arg_expr = self.generate_expression(argument)
-        base = (
-            arg_expr
-            if isinstance(argument, (IdentifierNode, MemberAccessNode, ArrayAccessNode))
-            else f"({arg_expr})"
-        )
-        unpacked_elements = []
-        for c in components:
-            comp = f"{base}.{c}"
-            if elem_type == "i32":
-                comp = f"u32({comp})"
-            unpacked_elements.append(f"unpack2x16float({comp}).x")
-        return f"vec{width}<f32>({', '.join(unpacked_elements)})"
+        return f"{helper_name}({arg_expr})"
 
     def generate_derivative_call(self, node, mapped_name, function_name):
         if len(node.arguments) != 1:
