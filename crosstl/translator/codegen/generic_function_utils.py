@@ -9,15 +9,12 @@ from ..ast import (
     BlockNode,
     BufferNode,
     ConstructorNode,
-    EnumNode,
     ExpressionNode,
     ExpressionStatementNode,
-    ForInNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
-    IdentifierPatternNode,
     IfNode,
     LiteralNode,
     MatchNode,
@@ -30,12 +27,10 @@ from ..explicit_specializations import (
     explicit_specialization_for,
     explicit_specialization_index,
 )
-from ..semantics.builtin_names import is_crossgl_gl_builtin
 from ..semantics.builtin_type_names import BUILTIN_TYPE_NAMES
 from ..semantics.declared_types import declared_type_names
 from .builtin_result_types import swizzle_access_type
 from .enum_utils import (
-    enum_constant_name,
     generic_type_parts,
     sanitize_type_name,
     substitute_generic_type_name,
@@ -252,9 +247,6 @@ def prepare_generic_function_specializations(
     parameter here as it does during emission.
     """
     generator.generic_collection_global_types = dict(global_types or {})
-    generator.generic_program_declared_names = (
-        collect_program_declared_identifier_names(ast)
-    )
     generator.generic_program_block_names = collect_program_block_names(ast)
     if declared_types is not None:
         generator.declared_type_names = frozenset(declared_types)
@@ -769,10 +761,6 @@ def _generic_function_candidate_call_match(
         )
         actual_type = _safe_call_argument_type_name(generator, arg)
         if not actual_type:
-            if getattr(
-                generator, "collecting_generic_function_specializations", False
-            ) and not is_declared_generic_argument_identifier(generator, arg):
-                return None
             actual_type = getattr(
                 generator,
                 "current_generic_function_substitutions",
@@ -978,9 +966,6 @@ def generate_static_generic_numeric_call(generator, func_name):
 
 def _collect_from_function(generator, func, substitutions):
     previous_local_variable_types = getattr(generator, "local_variable_types", {})
-    previous_local_declared_names = getattr(
-        generator, "generic_local_declared_names", frozenset()
-    )
     previous_expected_type = getattr(
         generator, "current_expression_expected_type", None
     )
@@ -992,16 +977,15 @@ def _collect_from_function(generator, func, substitutions):
     generator.local_variable_types = dict(
         getattr(generator, "generic_collection_global_types", None) or {}
     )
-    local_declared_names = set(previous_local_declared_names or ())
-    generator.generic_local_declared_names = local_declared_names
     generator.current_expression_expected_type = None
     generator.current_generic_function_substitutions = substitutions
     try:
-        _record_parameters(
-            generator,
-            getattr(func, "parameters", getattr(func, "params", [])),
-            substitutions,
-        )
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            generator.local_variable_types[param.name] = substituted_generic_type_name(
+                generator,
+                getattr(param, "param_type", getattr(param, "vtype", None)),
+                substitutions,
+            )
         before = set(getattr(generator, "generic_function_specializations", {}) or {})
         recording = begin_generic_callee_recording(generator)
         try:
@@ -1013,58 +997,10 @@ def _collect_from_function(generator, func, substitutions):
         return [key for key in after if key not in before]
     finally:
         generator.local_variable_types = previous_local_variable_types
-        generator.generic_local_declared_names = previous_local_declared_names
         generator.current_expression_expected_type = previous_expected_type
         generator.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
-
-
-def _record_pattern_declared_names(pattern, declared_names):
-    if pattern is None:
-        return
-    if isinstance(pattern, str):
-        if pattern:
-            declared_names.add(pattern)
-        return
-    if isinstance(pattern, IdentifierPatternNode):
-        name = getattr(pattern, "name", None)
-        if isinstance(name, str) and name:
-            declared_names.add(name)
-        return
-    if isinstance(pattern, (list, tuple)):
-        for item in pattern:
-            _record_pattern_declared_names(item, declared_names)
-        return
-    for attr in ("subpatterns", "patterns", "fields", "arguments", "field_patterns"):
-        nested = getattr(pattern, attr, None)
-        if nested:
-            if isinstance(nested, dict):
-                nested = nested.values()
-            _record_pattern_declared_names(list(nested), declared_names)
-
-
-def _record_parameters(generator, params, substitutions):
-    local_names = getattr(generator, "generic_local_declared_names", None)
-    for param in params or []:
-        param_name = getattr(param, "name", None)
-        if param_name and isinstance(local_names, set):
-            local_names.add(param_name)
-        generator.local_variable_types[param_name] = substituted_generic_type_name(
-            generator,
-            getattr(param, "param_type", getattr(param, "vtype", None)),
-            substitutions,
-        )
-
-
-def _analyze_match(generator, node, substitutions):
-    _analyze_expression(generator, getattr(node, "expression", None), substitutions)
-    local_names = getattr(generator, "generic_local_declared_names", None)
-    for arm in getattr(node, "arms", []) or []:
-        if isinstance(local_names, set):
-            _record_pattern_declared_names(getattr(arm, "pattern", None), local_names)
-        _analyze_expression(generator, getattr(arm, "guard", None), substitutions)
-        _analyze_statement(generator, getattr(arm, "body", None), substitutions)
 
 
 def _analyze_statement(generator, stmt, substitutions):
@@ -1083,10 +1019,6 @@ def _analyze_statement(generator, stmt, substitutions):
             _analyze_statement(generator, child, substitutions)
         return
     if isinstance(stmt, VariableNode):
-        if getattr(stmt, "name", None):
-            local_names = getattr(generator, "generic_local_declared_names", None)
-            if isinstance(local_names, set):
-                local_names.add(stmt.name)
         initial_value = getattr(stmt, "initial_value", None)
         _analyze_expression(generator, initial_value, substitutions)
         declared_value = getattr(stmt, "var_type", None)
@@ -1120,35 +1052,11 @@ def _analyze_statement(generator, stmt, substitutions):
         _analyze_expression(generator, getattr(stmt, "update", None), substitutions)
         _analyze_statement(generator, getattr(stmt, "body", None), substitutions)
         return
-    if isinstance(stmt, ForInNode):
-        _analyze_expression(generator, getattr(stmt, "iterable", None), substitutions)
-        pattern = getattr(stmt, "pattern", None)
-        local_names = getattr(generator, "generic_local_declared_names", None)
-        if isinstance(local_names, set):
-            _record_pattern_declared_names(pattern, local_names)
-        binding_type = getattr(stmt, "binding_type", None)
-        if generator.type_name_string(binding_type):
-            binding_name = (
-                pattern
-                if isinstance(pattern, str)
-                else (
-                    getattr(pattern, "name", None)
-                    if isinstance(pattern, IdentifierPatternNode)
-                    else None
-                )
-            )
-            if binding_name:
-                generator.local_variable_types[binding_name] = (
-                    substituted_generic_type_name(
-                        generator,
-                        binding_type,
-                        substitutions,
-                    )
-                )
-        _analyze_statement(generator, getattr(stmt, "body", None), substitutions)
-        return
     if isinstance(stmt, MatchNode):
-        _analyze_match(generator, stmt, substitutions)
+        _analyze_expression(generator, getattr(stmt, "expression", None), substitutions)
+        for arm in getattr(stmt, "arms", []) or []:
+            _analyze_expression(generator, getattr(arm, "guard", None), substitutions)
+            _analyze_statement(generator, getattr(arm, "body", None), substitutions)
         return
 
     _analyze_expression(generator, stmt, substitutions)
@@ -1167,29 +1075,6 @@ def _analyze_expression(generator, expr, substitutions):
             if func_name is not None
             else None
         )
-        if func_name is not None and getattr(
-            generator, "collecting_generic_function_specializations", False
-        ):
-            definitions = getattr(generator, "generic_function_definitions", {}) or {}
-            explicit_call = explicit_generic_call_target(generator, func_name)
-            definition_name = func_name if explicit_call is None else explicit_call[0]
-            if (
-                definition_name in definitions
-                and not is_reserved_generic_function_builtin_name(func_name)
-            ):
-                concrete_names = (
-                    getattr(generator, "concrete_function_names", None) or ()
-                )
-                if (
-                    explicit_call is not None
-                    or key is not None
-                    or definition_name not in concrete_names
-                ):
-                    reject_undeclared_generic_argument_identifiers(
-                        generator,
-                        definition_name,
-                        args,
-                    )
         if key is not None:
             # Remember the call: later passes walk it without its function's local types.
             generator.generic_function_resolved_call_ids.add(id(expr))
@@ -1203,7 +1088,10 @@ def _analyze_expression(generator, expr, substitutions):
             _analyze_expression(generator, arg, substitutions)
         return
     if isinstance(expr, MatchNode):
-        _analyze_match(generator, expr, substitutions)
+        _analyze_expression(generator, getattr(expr, "expression", None), substitutions)
+        for arm in getattr(expr, "arms", []) or []:
+            _analyze_expression(generator, getattr(arm, "guard", None), substitutions)
+            _analyze_statement(generator, getattr(arm, "body", None), substitutions)
         return
     if hasattr(expr, "__dict__"):
         for child in vars(expr).values():
@@ -1723,11 +1611,6 @@ def _base_type_name(name):
     return text
 
 
-_BUILTIN_VALUE_IDENTIFIERS = frozenset(
-    {"true", "false", "threadIdx", "blockIdx", "blockDim", "gridDim", "warpSize"}
-)
-
-
 def collect_program_block_names(ast):
     """Constant-buffer and buffer block names declared in ``ast``."""
     if ast is None:
@@ -1753,143 +1636,6 @@ def collect_program_block_names(ast):
         if isinstance(node, BufferNode):
             add_name(getattr(node, "name", None))
     return frozenset(names)
-
-
-def collect_program_declared_identifier_names(ast):
-    """Module/stage-level value, function and enum variant names declared in ``ast``."""
-    if ast is None:
-        return frozenset()
-    names = set()
-
-    def add_name(name):
-        if isinstance(name, str) and name:
-            names.add(name)
-
-    for node in getattr(ast, "constants", None) or []:
-        add_name(getattr(node, "name", None))
-    for node in getattr(ast, "global_variables", None) or []:
-        if not getattr(node, "is_type_alias", False):
-            add_name(getattr(node, "name", None))
-    for resource_field in ("buffers", "textures", "samplers"):
-        for node in getattr(ast, resource_field, None) or []:
-            add_name(getattr(node, "name", None))
-
-    cbuffers = list(getattr(ast, "cbuffers", None) or [])
-    structs = list(getattr(ast, "structs", None) or [])
-    functions = list(getattr(ast, "functions", None) or [])
-    for stage in (getattr(ast, "stages", None) or {}).values():
-        for node in getattr(stage, "local_variables", None) or []:
-            if not getattr(node, "is_type_alias", False):
-                add_name(getattr(node, "name", None))
-        cbuffers.extend(getattr(stage, "local_cbuffers", None) or [])
-        structs.extend(getattr(stage, "local_structs", None) or [])
-        functions.extend(getattr(stage, "local_functions", None) or [])
-
-    for cbuffer in cbuffers:
-        add_name(getattr(cbuffer, "name", None))
-        for member in getattr(cbuffer, "members", None) or []:
-            add_name(getattr(member, "name", None))
-    for func in functions:
-        func_name = getattr(func, "name", None)
-        if isinstance(func_name, str) and func_name:
-            add_name(func_name.split("<", 1)[0].strip())
-    for enum in structs:
-        if not isinstance(enum, EnumNode):
-            continue
-        enum_name = getattr(enum, "name", None)
-        for variant in getattr(enum, "variants", None) or []:
-            variant_name = getattr(variant, "name", None)
-            if not isinstance(variant_name, str) or not variant_name:
-                continue
-            add_name(variant_name)
-            if isinstance(enum_name, str) and enum_name:
-                add_name(f"{enum_name}::{variant_name}")
-                add_name(enum_constant_name(enum_name, variant_name))
-    return frozenset(names)
-
-
-def is_declared_generic_argument_identifier(
-    generator,
-    expr,
-    *,
-    extra_declared_names=(),
-):
-    """Whether ``expr`` is not an undeclared ``IdentifierNode`` argument to a generic call."""
-    if not isinstance(expr, IdentifierNode):
-        return True
-    name = getattr(expr, "name", None)
-    if not isinstance(name, str) or not name:
-        return True
-    if is_crossgl_gl_builtin(name) or name in _BUILTIN_VALUE_IDENTIFIERS:
-        return True
-    if name in (extra_declared_names or ()):
-        return True
-    if _is_known_type_name(generator, name):
-        return True
-    for attr in (
-        "local_variable_types",
-        "variable_types",
-        "global_variable_types",
-        "generic_collection_global_types",
-        "generic_program_declared_names",
-        "generic_local_declared_names",
-        "generic_function_definitions",
-        "concrete_function_names",
-        "_function_overloads_by_name",
-        "enum_variant_constants",
-        "_enum_variant_constants",
-        "_module_variable_types",
-        "_cbuffer_member_types",
-        "BUILTIN_IDENTIFIER_ALIASES",
-        "WORKGROUP_SIZE_IDENTIFIER_ALIASES",
-    ):
-        mapping = getattr(generator, attr, None)
-        if mapping and name in mapping:
-            return True
-    if hasattr(generator, "value_type"):
-        try:
-            if generator.value_type(name) is not None:
-                return True
-        except (AttributeError, TypeError, ValueError):
-            pass
-    if hasattr(generator, "is_local_identifier"):
-        try:
-            if generator.is_local_identifier(name):
-                return True
-        except (AttributeError, TypeError, ValueError):
-            pass
-    if not hasattr(generator, "_module_variable_types"):
-        if _safe_call_argument_type_name(generator, expr) is not None:
-            return True
-    elif hasattr(generator, "expression_type"):
-        try:
-            if generator.expression_type(expr) is not None:
-                return True
-        except (AttributeError, TypeError, ValueError):
-            pass
-    return False
-
-
-def reject_undeclared_generic_argument_identifiers(
-    generator,
-    func_name,
-    args,
-    *,
-    target_name=None,
-    extra_declared_names=(),
-):
-    """Raise ``ValueError`` if any generic call argument is an undeclared identifier."""
-    prefix = f"{target_name} codegen " if target_name else ""
-    for arg in args or ():
-        if not is_declared_generic_argument_identifier(
-            generator,
-            arg,
-            extra_declared_names=extra_declared_names,
-        ):
-            raise ValueError(
-                f"{prefix}cannot resolve generic function call '{func_name}': "
-                f"identifier '{arg.name}' is undeclared"
-            )
 
 
 def _is_known_type_name(generator, name):

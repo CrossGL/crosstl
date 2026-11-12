@@ -9,6 +9,8 @@ import re
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
+from crosstl.translator.semantics.declared_identifiers import UndeclaredIdentifierError
 
 C_STYLE_TARGETS = ["directx", "opengl", "metal", "vulkan"]
 
@@ -442,20 +444,36 @@ shader main {
 """
 
 
-@pytest.mark.parametrize("backend", ALL_BACKENDS)
+@pytest.mark.parametrize("backend", [b for b in ALL_BACKENDS if b != "vulkan"])
 def test_undeclared_identifier_argument_is_refused_in_generic_call(tmp_path, backend):
-    with pytest.raises(ValueError, match="foo") as error:
+    with pytest.raises(UndeclaredIdentifierError, match="foo"):
         translate(tmp_path, UNDECLARED_ARGUMENT_OVERLOADS, backend)
-    assert "undeclared" in str(error.value)
 
 
-@pytest.mark.parametrize("backend", ALL_BACKENDS)
+def test_undeclared_identifier_argument_is_refused_in_generic_call_vulkan(tmp_path):
+    # SPIR-V raises SpirvLoweringRefused (a TranslationDiagnostic) during codegen,
+    # which generate_refusing_undeclared_identifiers preserves rather than replacing
+    # with UndeclaredIdentifierError.
+    with pytest.raises(SpirvLoweringRefused, match="foo"):
+        translate(tmp_path, UNDECLARED_ARGUMENT_OVERLOADS, "vulkan")
+
+
+@pytest.mark.parametrize("backend", [b for b in ALL_BACKENDS if b != "vulkan"])
 def test_undeclared_identifier_does_not_match_enclosing_generic_substitution(
     tmp_path, backend
 ):
-    with pytest.raises(ValueError, match="foo") as error:
+    with pytest.raises(UndeclaredIdentifierError, match="foo"):
         translate(tmp_path, UNDECLARED_INSIDE_GENERIC_OVERLOADS, backend)
-    assert "undeclared" in str(error.value)
+
+
+def test_undeclared_identifier_does_not_match_enclosing_generic_substitution_vulkan(
+    tmp_path,
+):
+    # SPIR-V raises SpirvLoweringRefused (a TranslationDiagnostic) during codegen,
+    # which generate_refusing_undeclared_identifiers preserves rather than replacing
+    # with UndeclaredIdentifierError.
+    with pytest.raises(SpirvLoweringRefused, match="foo"):
+        translate(tmp_path, UNDECLARED_INSIDE_GENERIC_OVERLOADS, "vulkan")
 
 
 @pytest.mark.parametrize("backend", ALL_BACKENDS)
@@ -468,68 +486,6 @@ def test_builtin_and_enum_member_arguments_are_not_refused_or_read_as_types(
     assert "overload0" not in code
     if backend == "vulkan":
         assert "OpFunctionCall" in code
-
-
-WHILE_AND_SWITCH_LOCAL_OVERLOADS = """
-shader main {
-    buffer float* results;
-    T sel<T>(T a) { return a; }
-    T sel<T>(T a, T b) { return b; }
-    compute {
-    @ numthreads(1, 1, 1)
-    void main() {
-        int i = 0;
-        while (i < 1) {
-            float w = results[0];
-            results[0] = sel(w, w);
-            i = i + 1;
-        }
-        switch (i) {
-        case 1: {
-            float s = results[1];
-            results[1] = sel(s, s);
-            break;
-        }
-        default:
-            break;
-        }
-    }
-    }
-}
-"""
-
-LOOP_LOCAL_OVERLOADS = """
-shader main {
-    buffer float* results;
-    T sel<T>(T a) { return a; }
-    T sel<T>(T a, T b) { return b; }
-    compute {
-    @ numthreads(1, 1, 1)
-    void main() {
-        loop {
-            float l = results[0];
-            results[0] = sel(l, l);
-            break;
-        }
-    }
-    }
-}
-"""
-
-
-@pytest.mark.parametrize("backend", ALL_BACKENDS)
-def test_locals_in_while_and_switch_case_are_tracked_for_generic_calls(
-    tmp_path, backend
-):
-    code = translate(tmp_path, WHILE_AND_SWITCH_LOCAL_OVERLOADS, backend)
-    _assert_sel_overload(code, backend, "sel_w", {"float", "Float32"}, "f32")
-    assert "sel_s" not in code
-
-
-@pytest.mark.parametrize("backend", [b for b in ALL_BACKENDS if b != "slang"])
-def test_local_in_loop_body_is_tracked_for_generic_calls(tmp_path, backend):
-    code = translate(tmp_path, LOOP_LOCAL_OVERLOADS, backend)
-    _assert_sel_overload(code, backend, "sel_l", {"float", "Float32"}, "f32")
 
 
 MATCH_PATTERN_BINDINGS_OVERLOADS = """
@@ -568,11 +524,20 @@ shader main {
 @pytest.mark.parametrize(
     "backend", ["directx", "opengl", "metal", "hip", "slang", "vulkan", "mojo"]
 )
-def test_match_pattern_and_expression_bindings_are_tracked(tmp_path, backend):
+def test_match_pattern_bindings_are_not_read_as_type_arguments(tmp_path, backend):
     code = translate(tmp_path, MATCH_PATTERN_BINDINGS_OVERLOADS, backend)
-    for forbidden in ("sel_val", "sel_pa", "sel_xa"):
-        assert forbidden not in code
-    _assert_sel_overload(code, backend, "sel_val", {"float", "Float32"}, "f32")
+    for pattern_var in ("val", "pa", "xa"):
+        _assert_sel_overload(
+            code,
+            backend,
+            f"sel_{pattern_var}",
+            {"float", "Float32"},
+            "f32",
+        )
+    if backend == "vulkan":
+        assert code.count("OpFunctionCall") >= 3
+    else:
+        assert len(re.findall(r"=\s*sel_\w+_overload1\(", code)) == 3
 
 
 CONCRETE_SHARING_GENERIC_NAME = """

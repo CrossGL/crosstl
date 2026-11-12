@@ -24,15 +24,10 @@ from ..ast import (
     VectorType,
 )
 from ..explicit_specializations import explicit_specializations
-from ..semantics.declared_types import declared_type_names
 from .enum_utils import (
     generic_type_parts,
     sanitize_type_name,
     substitute_generic_value_names,
-)
-from .generic_function_utils import (
-    collect_program_declared_identifier_names,
-    reject_undeclared_generic_argument_identifiers,
 )
 from .generic_prototypes import (
     declaration_only_generic_primaries,
@@ -115,9 +110,6 @@ class WGSLGenericFunctionSpecializer:
         self.explicit = explicit_specializations(functions)
         # The generic parameters of the definition being matched, spelled as themselves by ``_spelling``.
         self._open_parameters = set()
-        self.declared_value_names = collect_program_declared_identifier_names(ast)
-        if ast is not None and getattr(generator, "declared_type_names", None) is None:
-            generator.declared_type_names = declared_type_names(ast)
 
     def is_generic(self, func):
         return bool(generic_parameter_names(func))
@@ -152,14 +144,6 @@ class WGSLGenericFunctionSpecializer:
         arguments = list(getattr(node, "arguments", None) or [])
         if not explicit_args and self._concrete_overload_matches(base_name, arguments):
             return node
-        if explicit_args or not self._concrete_overloads(base_name, arguments):
-            reject_undeclared_generic_argument_identifiers(
-                self.generator,
-                base_name,
-                arguments,
-                target_name="WGSL",
-                extra_declared_names=self.declared_value_names,
-            )
 
         explicit = [self._render(arg) for arg in explicit_args]
         argument_types = [self._argument_type(arg) for arg in arguments]
