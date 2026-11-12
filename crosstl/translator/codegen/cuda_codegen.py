@@ -84,6 +84,10 @@ from .gpu_device_globals import (
     file_scope_placement,
     is_constant_value_declaration,
 )
+from .image_access_contracts import (
+    image_resource_metadata,
+    record_explicit_image_metadata,
+)
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -297,6 +301,8 @@ class CudaCodeGen(
         self.match_temp_variable_index = 0
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.image_variable_formats = {}
+        self.image_load_expected_types = []
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -429,6 +435,8 @@ class CudaCodeGen(
         self.current_function_return_type = None
         self.match_temp_variable_index = 0
         self.image_resource_accesses = {}
+        self.image_variable_formats = {}
+        self.image_load_expected_types = []
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -1377,6 +1385,7 @@ class CudaCodeGen(
         """Render a CrossGL function or compute entry point as CUDA code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_image_variable_formats = self.image_variable_formats.copy()
         saved_buffer_resource_accesses = self.buffer_resource_accesses.copy()
         saved_glsl_buffer_block_accesses = self.glsl_buffer_block_accesses.copy()
         saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
@@ -1600,6 +1609,7 @@ class CudaCodeGen(
             self.emit(f"{signature_prefix} {return_type} {function_name}({param_str});")
             self.variable_types = saved_variable_types
             self.image_resource_accesses = saved_image_resource_accesses
+            self.image_variable_formats = saved_image_variable_formats
             self.buffer_resource_accesses = saved_buffer_resource_accesses
             self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
             self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
@@ -1658,6 +1668,7 @@ class CudaCodeGen(
         self.emit("}")
         self.variable_types = saved_variable_types
         self.image_resource_accesses = saved_image_resource_accesses
+        self.image_variable_formats = saved_image_variable_formats
         self.buffer_resource_accesses = saved_buffer_resource_accesses
         self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
         self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
@@ -1835,7 +1846,14 @@ class CudaCodeGen(
                 declaration, node.name, node
             )
             if initial_value is not None:
-                declaration += f" = {self.visit(initial_value)}"
+                expected_value_type = self.image_load_expected_type_for(var_type)
+                if expected_value_type is not None:
+                    self.image_load_expected_types.append(expected_value_type)
+                try:
+                    declaration += f" = {self.visit(initial_value)}"
+                finally:
+                    if expected_value_type is not None:
+                        self.image_load_expected_types.pop()
             return declaration
 
         return node.name
@@ -3105,7 +3123,14 @@ class CudaCodeGen(
             target = self.visit(node.target)
         finally:
             self.assignment_lhs_depth -= 1
-        value = self.visit(node.value)
+        expected_value_type = self.image_value_type_from_expression(node.target)
+        if expected_value_type is not None:
+            self.image_load_expected_types.append(expected_value_type)
+        try:
+            value = self.visit(node.value)
+        finally:
+            if expected_value_type is not None:
+                self.image_load_expected_types.pop()
         compound_binary_ops = {
             "+=": "+",
             "-=": "-",
@@ -7870,6 +7895,17 @@ class CudaCodeGen(
 
     def resource_call_result_type(self, func_name, raw_args):
         """Infer CUDA-specific resource diagnostic result types."""
+        if func_name == "imageLoad" and raw_args:
+            resource_type = self.resource_base_type(
+                self.resource_expression_type(raw_args[0])
+            )
+            if resource_type is not None:
+                return self.image_access_value_type(
+                    resource_type,
+                    raw_args[0],
+                    expected_type=self.current_image_load_expected_type(),
+                )
+
         if func_name in self.cuda_sampled_vector_result_calls() and raw_args:
             resource_type = self.resource_base_type(
                 self.resource_expression_type(raw_args[0])
@@ -11169,6 +11205,13 @@ class CudaCodeGen(
         else:
             self.image_resource_accesses[name] = access
 
+        record_explicit_image_metadata(
+            name,
+            node,
+            self.attribute_value_to_string,
+            image_formats=self.image_variable_formats,
+        )
+
     @property
     def local_variable_types(self):
         return self.variable_types
@@ -11207,6 +11250,52 @@ class CudaCodeGen(
         if type_name is not None and not isinstance(type_name, str):
             return self.convert_type_node_to_string(type_name)
         return type_name
+
+    def image_resource_format(self, texture_arg):
+        """Return the declared storage image format for an image argument."""
+        return image_resource_metadata(
+            texture_arg,
+            self.get_expression_name,
+            {},
+            self.image_variable_formats,
+        )
+
+    def image_generic_element_value_type(self, raw_image_arg):
+        """Return the element type from an HLSL-style image generic.
+
+        ``RWTexture2D<float>`` stores ``float`` texels, so surface access
+        uses ``float`` rather than the ``float4`` default.
+        """
+        raw_type = self.resource_expression_type(raw_image_arg)
+        if not isinstance(raw_type, str) or "<" not in raw_type:
+            return None
+        generic = raw_type.split("<", 1)[1].rsplit(">", 1)[0].strip()
+        generic = generic.split(",", 1)[0].strip()
+        if not generic:
+            return None
+        value_type = self.convert_crossgl_type_to_cuda(generic)
+        if value_type in self.image_surface_value_types:
+            return value_type
+        return None
+
+    def image_value_type_from_expression(self, node):
+        """Return the CUDA value type inferred for a stored/loaded value."""
+        return self.image_load_expected_type_for(self.expression_result_type(node))
+
+    def image_load_expected_type_for(self, crossgl_type):
+        """Return the validated CUDA value type for a CrossGL type spelling."""
+        if crossgl_type is None:
+            return None
+        value_type = self.convert_crossgl_type_to_cuda(crossgl_type)
+        if value_type in self.image_surface_value_types:
+            return value_type
+        return None
+
+    def current_image_load_expected_type(self):
+        """Return the value type an enclosing assignment expects a load to have."""
+        if not self.image_load_expected_types:
+            return None
+        return self.image_load_expected_types[-1]
 
     def resource_query_metadata_unavailable_call(
         self, func_name, resource_type, fallback
@@ -13105,7 +13194,11 @@ class CudaCodeGen(
             )
             if coordinate_diagnostic is not None:
                 return coordinate_diagnostic
-            value_type = self.image_value_type(image_type)
+            value_type = self.image_access_value_type(
+                image_type,
+                raw_args[0],
+                expected_type=self.current_image_load_expected_type(),
+            )
             x = self.surface_x_offset(coord, value_type)
             y = self.coord_component(coord, "y")
 
@@ -13160,7 +13253,11 @@ class CudaCodeGen(
             )
             if coordinate_diagnostic is not None:
                 return coordinate_diagnostic
-            value_type = self.image_value_type(image_type)
+            value_type = self.image_access_value_type(
+                image_type,
+                raw_args[0],
+                value_node=raw_args[2],
+            )
             x = self.surface_x_offset(coord, value_type)
             y = self.coord_component(coord, "y")
 

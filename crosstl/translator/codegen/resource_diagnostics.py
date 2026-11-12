@@ -1,5 +1,10 @@
 """Shared diagnostics mixin for reporting resource translation issues."""
 
+from .image_access_contracts import (
+    image_format_channel_count,
+    image_format_component_kind,
+)
+
 
 class ResourceDiagnosticMixin:
     """Fallback helpers for unsupported resource operations in backends."""
@@ -7,6 +12,49 @@ class ResourceDiagnosticMixin:
     resource_diagnostic_backend = None
     zero_float2 = "make_float2(0.0f, 0.0f)"
     zero_float4 = "make_float4(0.0f, 0.0f, 0.0f, 0.0f)"
+
+    # C-family scalar/vector spellings a surface read/write template argument
+    # may take. Anything outside this set falls back to the float4 default.
+    image_surface_value_types = frozenset(
+        {
+            "float",
+            "float2",
+            "float3",
+            "float4",
+            "double",
+            "double2",
+            "double3",
+            "double4",
+            "half",
+            "half2",
+            "cgl_half3",
+            "cgl_half4",
+            "int",
+            "int2",
+            "int3",
+            "int4",
+            "uint",
+            "uint2",
+            "uint3",
+            "uint4",
+            "char",
+            "char2",
+            "char3",
+            "char4",
+            "uchar",
+            "uchar2",
+            "uchar3",
+            "uchar4",
+            "short",
+            "short2",
+            "short3",
+            "short4",
+            "ushort",
+            "ushort2",
+            "ushort3",
+            "ushort4",
+        }
+    )
 
     def resource_backend_name(self):
         """Return the backend name used in generated diagnostic comments."""
@@ -36,6 +84,71 @@ class ResourceDiagnosticMixin:
         if isinstance(base_type, str) and base_type.startswith("uimage"):
             return "uint"
         return "float4"
+
+    def image_format_value_type(self, image_format):
+        """Return the C-family element type for a storage image format.
+
+        ``r32f`` reads/writes a ``float``, ``rgba32f`` a ``float4``,
+        ``r32i`` an ``int`` and ``rg32ui`` a ``uint2``. Unknown formats
+        return ``None`` so callers fall back to the declared element type.
+        """
+        component_kind = image_format_component_kind(image_format)
+        channel_count = image_format_channel_count(image_format)
+        if component_kind is None or channel_count is None:
+            return None
+        if channel_count == 1:
+            return component_kind
+        return f"{component_kind}{channel_count}"
+
+    def image_resource_format(self, _texture_arg):
+        """Return the declared format of an image resource, if known.
+
+        Backends override this to consult their image format metadata.
+        """
+        return None
+
+    def image_generic_element_value_type(self, _raw_image_arg):
+        """Return the element type from an image type's generic argument.
+
+        Backends override this to handle HLSL-style ``RWTexture2D<float>``
+        spellings, where the generic names the element type.
+        """
+        return None
+
+    def image_value_type_from_expression(self, _node):
+        """Return the C-family value type inferred for an expression."""
+        return None
+
+    def image_access_value_type(
+        self, image_type, raw_image_arg=None, value_node=None, expected_type=None
+    ):
+        """Return the element type used to access an image resource.
+
+        The declared image format wins; otherwise the element type of an
+        HLSL-style generic, the signedness of ``iimage``/``uimage`` types,
+        the expected type of a value being read, or the inferred type of a
+        value being written. Unresolved images keep the historical
+        ``float4`` default.
+        """
+        if raw_image_arg is not None:
+            format_value_type = self.image_format_value_type(
+                self.image_resource_format(raw_image_arg)
+            )
+            if format_value_type is not None:
+                return format_value_type
+            generic_value_type = self.image_generic_element_value_type(raw_image_arg)
+            if generic_value_type is not None:
+                return generic_value_type
+        base_value_type = self.image_value_type(image_type)
+        if base_value_type != "float4":
+            return base_value_type
+        if expected_type in self.image_surface_value_types:
+            return expected_type
+        if value_node is not None:
+            value_type = self.image_value_type_from_expression(value_node)
+            if value_type in self.image_surface_value_types:
+                return value_type
+        return base_value_type
 
     def coord_component(self, coord, component):
         """Format one component access on a coordinate expression."""

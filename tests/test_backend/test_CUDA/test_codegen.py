@@ -9074,6 +9074,49 @@ class TestCudaCodeGen:
         )
         assert "tex1Dfetch<float4>(" not in result
 
+    def test_cuda_surface_pointer_read_converts_to_image_load(self):
+        # Regression test for CrossGL/crosstl#3920: surf2Dread(&v, ...)
+        # misread the destination pointer as the surface and the surface
+        # as a coordinate. The pointer form is a load into v, and byte
+        # strides are stripped using the destination's element type.
+        code = """
+        extern "C" __global__ void probe(
+            float* fin,
+            float* outp,
+            cudaSurfaceObject_t img,
+            int x,
+            int y
+        ) {
+            unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+            float v;
+            surf2Dread(&v, img, 0, 0);
+            surf2Dwrite(v + fin[i], img, 0, 0);
+            float strided;
+            surf2Dread(&strided, img, x * sizeof(float), y);
+            float4 wide;
+            surf2Dread(&wide, img, x * 16, y);
+            outp[i] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "image2D img" in result
+        assert "v = imageLoad(img, vec2<i32>(0, 0));" in result
+        assert "imageStore(img, vec2<i32>(0, 0), (v + fin[i]));" in result
+        assert "strided = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "wide = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "x * sizeof(float)" not in result
+        assert "x * 16" not in result
+        assert "imageLoad((&v)" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_cuda_sparse_texture_fetch_helpers_emit_diagnostics(self):
         code = """
         void sparseFetchOps(

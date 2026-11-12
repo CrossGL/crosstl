@@ -721,7 +721,7 @@ class CudaToCrossGLConverter:
                 return
 
             if isinstance(current, FunctionCallNode):
-                hint = self.get_resource_object_call_hint(current.name)
+                hint = self.get_resource_object_call_hint(current.name, current.args)
                 if hint is not None:
                     arg_index, resource_type = hint
                     if len(current.args) > arg_index:
@@ -776,7 +776,7 @@ class CudaToCrossGLConverter:
                 return
 
             if isinstance(current, FunctionCallNode):
-                hint = self.get_resource_object_call_hint(current.name)
+                hint = self.get_resource_object_call_hint(current.name, current.args)
                 if hint is not None:
                     arg_index, resource_type = hint
                     if len(current.args) > arg_index:
@@ -909,7 +909,9 @@ class CudaToCrossGLConverter:
             for current in self.walk_ast_values(getattr(function, "body", [])):
                 if not isinstance(current, FunctionCallNode):
                     continue
-                call_hint = self.get_resource_object_call_hint(current.name)
+                call_hint = self.get_resource_object_call_hint(
+                    current.name, current.args
+                )
                 if call_hint is None:
                     continue
                 arg_index, resource_type = call_hint
@@ -1002,7 +1004,7 @@ class CudaToCrossGLConverter:
         type_name = type_name.split("[", 1)[0].replace("*", "").strip()
         return type_name if type_name in struct_names else None
 
-    def get_resource_object_call_hint(self, function_name):
+    def get_resource_object_call_hint(self, function_name, args=None):
         base_name, _ = self.parse_cpp_template(function_name)
         if self.is_user_defined_function(base_name):
             return None
@@ -1011,8 +1013,20 @@ class CudaToCrossGLConverter:
         if base_name in self.CUDA_SURFACE_CALL_TYPE_HINTS:
             if base_name.endswith("write"):
                 return 1, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
+            if args and self.is_surface_pointer_output_argument(args[0]):
+                return 1, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
             return 0, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
         return None
+
+    def is_surface_pointer_output_argument(self, expression):
+        """Return whether a surface call argument is a ``&target`` pointer."""
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            return True
+        if isinstance(expression, CastNode):
+            return self.is_surface_pointer_output_argument(expression.expression)
+        if isinstance(expression, str):
+            return self.is_cuda_surface_output_target(expression)
+        return False
 
     def get_resource_object_expression_name(self, expression):
         if isinstance(expression, str):
@@ -6081,12 +6095,43 @@ class CudaToCrossGLConverter:
         )
 
     def format_cuda_surface_read(self, args, dimensions, value_type):
+        if not args:
+            return None
+        if self.is_cuda_surface_output_target(args[0]):
+            if len(args) < dimensions + 2:
+                return None
+            output_target = self.strip_cuda_surface_output_target(args[0])
+            if value_type is None:
+                value_type = self.infer_cuda_surface_value_type(output_target)
+            surface_name = args[1]
+            coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
+            coord_args.extend(args[3 : dimensions + 2])
+            coord = self.format_vector_constructor(
+                f"vec{dimensions}", coord_args, "i32"
+            )
+            return f"{output_target} = imageLoad({surface_name}, {coord})"
         if len(args) < dimensions + 1:
             return None
         surface_name = args[0]
         coord_args = [self.strip_surface_byte_offset(args[1], value_type)]
         coord_args.extend(args[2 : dimensions + 1])
         return f"imageLoad({surface_name}, {self.format_vector_constructor(f'vec{dimensions}', coord_args, 'i32')})"
+
+    def is_cuda_surface_output_target(self, expression):
+        """Return whether a surface read argument is a ``&target`` pointer."""
+        text = str(expression).strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+        return text.startswith("&")
+
+    def strip_cuda_surface_output_target(self, expression):
+        """Return the destination variable of a ``&target`` surface read."""
+        text = str(expression).strip()
+        if text.startswith("(") and text.endswith(")"):
+            text = text[1:-1].strip()
+        if text.startswith("&"):
+            return text[1:].strip()
+        return text
 
     def format_cuda_surface_write(self, args, dimensions, value_type, raw_args=None):
         if len(args) < dimensions + 2:
