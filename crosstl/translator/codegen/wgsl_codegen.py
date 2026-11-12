@@ -4359,6 +4359,7 @@ class WGSLCodeGen(
         if (
             isinstance(argument, FunctionCallNode)
             and self.expression_name(argument.function) == "f32tof16"
+            and not self.is_user_function_name("f32tof16")
             and len(argument.arguments) == 1
         ):
             inner = argument.arguments[0]

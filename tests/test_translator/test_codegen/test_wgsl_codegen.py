@@ -5946,3 +5946,30 @@ def test_wgsl_codegen_half_conversion_argument_count_errors(func_name):
         match=rf"WGSL target supports {func_name}\(\) with exactly 1 argument; got 2",
     ):
         WGSLCodeGen().generate(parse_shader(shader_two))
+
+
+def test_wgsl_codegen_half_conversion_user_function_shadowing(tmp_path):
+    shader = """
+    shader TestUserShadow {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* out_buf;
+
+            uint f32tof16(float x) {
+                return uint(x * 2.0);
+            }
+
+            void main() {
+                out_buf[0] = f16tof32(f32tof16(3.0));
+            }
+        }
+    }
+    """
+    source = tmp_path / "user_shadow.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    # The user-defined function call must be preserved and called as argument to f16tof32
+    assert "f32tof16(3.0)" in generated
+    assert "unpack2x16float(f32tof16(3.0)).x" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
