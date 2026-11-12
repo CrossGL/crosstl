@@ -7472,13 +7472,11 @@ def test_glsl_buffer_view_helper_parameter_length_counts_from_its_offset(tmp_pat
             "((words.length() * 2) - int(v_offset))",
         ),
         (
-            "const device float* v = (float*)words;\n"
-            "outp[0] = float(v.length());",
+            "const device float* v = (float*)words;\n" "outp[0] = float(v.length());",
             "(words.length() - int(v_offset))",
         ),
         (
-            "const device float2* v = (float2*)words;\n"
-            "outp[0] = float(v.length());",
+            "const device float2* v = (float2*)words;\n" "outp[0] = float(v.length());",
             "((words.length() / 2) - int(v_offset))",
         ),
         (
@@ -7510,7 +7508,9 @@ def test_glsl_buffer_view_helper_parameter_length_counts_from_its_offset(tmp_pat
         "inline-uint16",
     ],
 )
-def test_glsl_reinterpreted_view_length_computes_element_count(body, expected, tmp_path):
+def test_glsl_reinterpreted_view_length_computes_element_count(
+    body, expected, tmp_path
+):
     code = f"""
     shader Probe {{
         buffer uint* words;
@@ -7557,7 +7557,9 @@ def test_glsl_reinterpreted_helper_parameter_length_counts_from_offsets(tmp_path
         "return ((((words.length() * 4) - int(v_byte_offset)) / 2) - int(v_offset));"
         in generated
     )
-    assert "count_glsl_v_words_uint_view_uint_to_uint16(int(0), int((2 * 4)))" in generated
+    assert (
+        "count_glsl_v_words_uint_view_uint_to_uint16(int(0), int((2 * 4)))" in generated
+    )
     assert "(int(1), int(0))" in generated
     assert "bitfieldExtract(" not in generated
     assert_glsl_compute_validates_if_available(
@@ -7624,7 +7626,10 @@ def test_glsl_lane_gather_helper_parameter_length_computes_element_count(tmp_pat
         "return ((((values.length() * 2) - int(v_byte_offset)) / 8) - int(v_offset));"
         in generated
     )
-    assert "count_glsl_v_values_uvec4_view_uint16_to_uint16(int(0), int((1 * 2)))" in generated
+    assert (
+        "count_glsl_v_values_uvec4_view_uint16_to_uint16(int(0), int((1 * 2)))"
+        in generated
+    )
     assert "uvec4(" not in generated
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "lane_gather_helper_parameter_length"
