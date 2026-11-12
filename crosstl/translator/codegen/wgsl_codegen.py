@@ -4088,6 +4088,14 @@ class WGSLCodeGen(
         bit_cast = self.BIT_CAST_FUNCTIONS.get(function_name)
         if bit_cast is not None and not self.is_user_function_name(function_name):
             return self.generate_bit_cast_call(node, function_name, bit_cast)
+        if function_name == "f32tof16" and not self.is_user_function_name(
+            function_name
+        ):
+            return self.generate_f32tof16_call(node)
+        if function_name == "f16tof32" and not self.is_user_function_name(
+            function_name
+        ):
+            return self.generate_f16tof32_call(node)
         if function_name == "mod":
             return self.generate_mod_call(node)
         if function_name == "fmod" and not self.is_user_function_name(function_name):
@@ -4313,6 +4321,93 @@ class WGSLCodeGen(
         lanes = self.vector_component_count(self.expression_type(argument))
         target = scalar if lanes is None else f"vec{lanes}<{scalar}>"
         return f"bitcast<{target}>({self.generate_expression(argument)})"
+
+    def generate_f32tof16_call(self, node):
+        """HLSL ``f32tof16`` as WGSL ``pack2x16float``."""
+        if len(node.arguments) != 1:
+            raise ValueError(
+                f"WGSL target supports f32tof16() with exactly 1 argument; "
+                f"got {len(node.arguments)}"
+            )
+        argument = node.arguments[0]
+        arg_type = self.expression_type(argument)
+        vector = self.vector_shape(arg_type)
+        if vector is None:
+            arg_expr = self.generate_expression(argument)
+            return f"pack2x16float(vec2<f32>({arg_expr}, 0.0))"
+        _elem_type, width = vector
+        components = ["x", "y", "z", "w"][:width]
+        arg_expr = self.generate_expression(argument)
+        base = (
+            arg_expr
+            if isinstance(argument, (IdentifierNode, MemberAccessNode, ArrayAccessNode))
+            else f"({arg_expr})"
+        )
+        packed_elements = [
+            f"pack2x16float(vec2<f32>({base}.{c}, 0.0))" for c in components
+        ]
+        return f"vec{width}<u32>({', '.join(packed_elements)})"
+
+    def generate_f16tof32_call(self, node):
+        """HLSL ``f16tof32`` as WGSL ``unpack2x16float``."""
+        if len(node.arguments) != 1:
+            raise ValueError(
+                f"WGSL target supports f16tof32() with exactly 1 argument; "
+                f"got {len(node.arguments)}"
+            )
+        argument = node.arguments[0]
+        if (
+            isinstance(argument, FunctionCallNode)
+            and self.expression_name(argument.function) == "f32tof16"
+            and len(argument.arguments) == 1
+        ):
+            inner = argument.arguments[0]
+            inner_type = self.expression_type(inner)
+            vector = self.vector_shape(inner_type)
+            if vector is None:
+                inner_expr = self.generate_expression(inner)
+                return f"unpack2x16float(pack2x16float(vec2<f32>({inner_expr}, 0.0))).x"
+            _elem_type, width = vector
+            if width == 2:
+                inner_expr = self.generate_expression(inner)
+                return f"unpack2x16float(pack2x16float({inner_expr}))"
+            components = ["x", "y", "z", "w"][:width]
+            inner_expr = self.generate_expression(inner)
+            base = (
+                inner_expr
+                if isinstance(
+                    inner, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+                )
+                else f"({inner_expr})"
+            )
+            unpacked_elements = [
+                f"unpack2x16float(pack2x16float(vec2<f32>({base}.{c}, 0.0))).x"
+                for c in components
+            ]
+            return f"vec{width}<f32>({', '.join(unpacked_elements)})"
+
+        arg_type = self.expression_type(argument)
+        vector = self.vector_shape(arg_type)
+        if vector is None:
+            arg_expr = self.generate_expression(argument)
+            if self.integer_scalar_type(arg_type) == "i32":
+                arg_expr = f"u32({arg_expr})"
+            return f"unpack2x16float({arg_expr}).x"
+        elem_type, width = vector
+        components = ["x", "y", "z", "w"][:width]
+        arg_expr = self.generate_expression(argument)
+        base = (
+            arg_expr
+            if isinstance(argument, (IdentifierNode, MemberAccessNode, ArrayAccessNode))
+            else f"({arg_expr})"
+        )
+        unpacked_elements = []
+        for c in components:
+            comp = f"{base}.{c}"
+            if elem_type == "i32":
+                comp = f"u32({comp})"
+            unpacked_elements.append(f"unpack2x16float({comp}).x")
+        return f"vec{width}<f32>({', '.join(unpacked_elements)})"
 
     def generate_derivative_call(self, node, mapped_name, function_name):
         if len(node.arguments) != 1:
@@ -7697,6 +7792,20 @@ class WGSLCodeGen(
             ):
                 vector = self.vector_shape(self.expression_type(expr.arguments[0]))
                 return "int" if vector is None else f"vec{vector[1]}<i32>"
+            if (
+                function_name == "f32tof16"
+                and len(expr.arguments) == 1
+                and not self.is_user_function_name(function_name)
+            ):
+                vector = self.vector_shape(self.expression_type(expr.arguments[0]))
+                return "u32" if vector is None else f"vec{vector[1]}<u32>"
+            if (
+                function_name == "f16tof32"
+                and len(expr.arguments) == 1
+                and not self.is_user_function_name(function_name)
+            ):
+                vector = self.vector_shape(self.expression_type(expr.arguments[0]))
+                return "f32" if vector is None else f"vec{vector[1]}<f32>"
             if (
                 isinstance(expr.function, MemberAccessNode)
                 and expr.function.member == "length"

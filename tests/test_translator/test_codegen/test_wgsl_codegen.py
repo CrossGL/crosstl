@@ -5864,3 +5864,85 @@ def test_wgsl_codegen_sampler2d_array_takes_unmodified_resource_path():
     assert "var tex_1: texture_2d<f32>;" in generated
     assert "var tex_1_sampler: sampler;" in generated
     assert "var<storage" not in generated
+
+
+def test_wgsl_codegen_lowers_f32tof16_and_f16tof32(tmp_path):
+    shader = """
+    shader TestHalfConversions {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* s_in;
+            buffer vec2* v2_in;
+            buffer vec3* v3_in;
+            buffer vec4* v4_in;
+            buffer uint* u_out;
+            buffer uvec2* u2_out;
+            buffer uvec3* u3_out;
+            buffer uvec4* u4_out;
+            buffer float* f_out;
+            buffer vec2* f2_out;
+            buffer vec3* f3_out;
+            buffer vec4* f4_out;
+            void main() {
+                u_out[0] = f32tof16(s_in[0]);
+                u2_out[0] = f32tof16(v2_in[0]);
+                u3_out[0] = f32tof16(v3_in[0]);
+                u4_out[0] = f32tof16(v4_in[0]);
+
+                f_out[0] = f16tof32(u_out[0]);
+                f2_out[0] = f16tof32(u2_out[0]);
+                f3_out[0] = f16tof32(u3_out[0]);
+                f4_out[0] = f16tof32(u4_out[0]);
+
+                f_out[1] = f16tof32(f32tof16(s_in[0]));
+                f2_out[1] = f16tof32(f32tof16(v2_in[0]));
+                f3_out[1] = f16tof32(f32tof16(v3_in[0]));
+                f4_out[1] = f16tof32(f32tof16(v4_in[0]));
+            }
+        }
+    }
+    """
+    source = tmp_path / "half_conv.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "f32tof16" not in generated
+    assert "f16tof32" not in generated
+    assert "pack2x16float" in generated
+    assert "unpack2x16float" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize("func_name", ["f32tof16", "f16tof32"])
+def test_wgsl_codegen_half_conversion_argument_count_errors(func_name):
+    shader_zero = f"""
+    shader TestArgCount {{
+        compute {{
+            buffer float* out;
+            void main() {{
+                out[0] = float({func_name}());
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target supports {func_name}\(\) with exactly 1 argument; got 0",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader_zero))
+
+    shader_two = f"""
+    shader TestArgCount {{
+        compute {{
+            buffer float* out;
+            void main() {{
+                out[0] = float({func_name}(1.0, 2.0));
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target supports {func_name}\(\) with exactly 1 argument; got 2",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader_two))
