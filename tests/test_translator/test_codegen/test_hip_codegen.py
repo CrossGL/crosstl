@@ -339,6 +339,29 @@ class TestHipCodeGen:
 
         assert "__global__ void compute_main()" in hip_code
 
+    def test_realtime_clock_builtin_lowers_to_wall_clock64(self):
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                void main() {
+                    uint64_t t = clockRealtimeEXT();
+                    out_buf[0] = t;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "uint64_t t = wall_clock64();" in hip_code
+        assert "clockRealtimeEXT" not in hip_code
+
     def test_non_void_compute_entry_point_lowers_to_void_kernel(self, tmp_path):
         ast = ShaderNode(
             name="NonVoidHipKernel",

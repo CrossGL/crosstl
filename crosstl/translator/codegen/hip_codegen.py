@@ -746,6 +746,8 @@ class HipCodeGen(
             "atomicCompSwap": "atomicCAS",
             # Synchronization
             "barrier": "__syncthreads",
+            # GL_EXT_shader_realtime_clock's device-scope counter is HIP's constant-rate wall clock.
+            "clockRealtimeEXT": "wall_clock64",
             "groupMemoryBarrier": "__threadfence_block",
             "memoryBarrier": "__threadfence",
             "memoryBarrierShared": "__threadfence_block",
