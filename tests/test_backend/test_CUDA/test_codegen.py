@@ -1,5 +1,10 @@
+import pytest
+
 from crosstl import translate
-from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
+from crosstl.backend.CUDA.CudaCrossGLCodeGen import (
+    CudaSurfaceByteOffsetError,
+    CudaToCrossGLConverter,
+)
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.local_memory_spaces import crossgl_zero_value
@@ -9736,6 +9741,132 @@ class TestCudaCodeGen:
         assert "var table: Table;" in result
         assert "consume(h, owned);" in result
         assert "using namespace" not in result
+
+    def test_cuda_surface_byte_offset_scaled_and_folded(self):
+        # #4005: CUDA surface x is a byte offset; CrossGL takes a texel coordinate.
+        code = """
+        struct P { float4 c; };
+        extern "C" __global__ void probe(float* outp, cudaSurfaceObject_t img, int x, int y) {
+            P p;
+            p.c = surf2Dread<float4>(img, x * 16, y);
+            surf2Dwrite(p.c, img, x * 16, y);
+            float a = surf2Dread<float>(img, x * 4 + 4, y);
+            outp[0] = p.c.x + a;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "p.c = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "imageStore(img, vec2<i32>(x, y), p.c);" in result
+        assert "var a: f32 = imageLoad(img, vec2<i32>(x + 1, y));" in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+
+    def test_cuda_surface_byte_offset_folding_variants(self):
+        code = """
+        extern "C" __global__ void probe(cudaSurfaceObject_t img, int x, int y, int2 pixel) {
+            float a = surf2Dread<float>(img, x * sizeof(float), y);
+            float b = surf2Dread<float>(img, 4 * x + 8, y);
+            float c = surf2Dread<float>(img, (x + 1) * 4, y);
+            float d = surf2Dread<float>(img, 8, y);
+            float e = surf2Dread<float>(img, x * 8 - 4, y);
+            float4 f = surf2Dread<float4>(img, pixel.x * sizeof(float4), y);
+            float g = surf2Dread<float>(img, x * 0x4, y);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "var a: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "var b: f32 = imageLoad(img, vec2<i32>(x + 2, y));" in result
+        assert "var c: f32 = imageLoad(img, vec2<i32>(x + 1, y));" in result
+        assert "var d: f32 = imageLoad(img, vec2<i32>(2, y));" in result
+        assert "var e: f32 = imageLoad(img, vec2<i32>(x * 2 - 1, y));" in result
+        assert "var f: vec4<f32> = imageLoad(img, vec2<i32>(pixel.x, y));" in result
+        assert "var g: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+
+    def test_cuda_surface_write_value_type_from_member_and_array(self):
+        # #4005: the write element type comes from the value, including member
+        # and array accesses.
+        code = """
+        struct P { float4 c; float v; };
+        struct Box { P p; };
+        extern "C" __global__ void probe(float* arr, cudaSurfaceObject_t img, int x, int y, P p, Box box, float4 v) {
+            surf2Dwrite(arr[3], img, x * 4, y);
+            surf2Dwrite(p.v, img, x * 4, y);
+            surf2Dwrite(box.p.c, img, x * 16, y);
+            surf2Dwrite(v.x, img, x * 4, y);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "imageStore(img, vec2<i32>(x, y), arr[3]);" in result
+        assert "imageStore(img, vec2<i32>(x, y), p.v);" in result
+        assert "imageStore(img, vec2<i32>(x, y), box.p.c);" in result
+        assert "imageStore(img, vec2<i32>(x, y), v.x);" in result
+        assert "surf2Dwrite" not in result
+
+    def test_cuda_surface_byte_offset_unproven_is_refused(self):
+        # #4005: an offset that cannot be shown to be a multiple of the element
+        # size is refused instead of being passed through as a texel coordinate.
+        cases = [
+            # Coefficient is not a multiple of the 4-byte element size.
+            (
+                "float a = surf2Dread<float>(img, x * 3, y);",
+                "not provably a multiple",
+            ),
+            # A bare variable cannot be shown to be a multiple.
+            (
+                "float a = surf2Dread<float>(img, x, y);",
+                "not provably a multiple",
+            ),
+            # The constant term is not a multiple of the element size.
+            (
+                "float a = surf2Dread<float>(img, x * 4 + 2, y);",
+                "not provably a multiple",
+            ),
+            # sizeof(float) is not a multiple of the 16-byte float4 element.
+            (
+                "float4 a = surf2Dread<float4>(img, x * sizeof(float), y);",
+                "not provably a multiple",
+            ),
+            # The write value type cannot be inferred, so no element size is known.
+            (
+                "surf2Dwrite(make_float4(1.0f, 2.0f, 3.0f, 4.0f), img, x * 16, y);",
+                "the element type is unknown",
+            ),
+        ]
+        for statement, pattern in cases:
+            code = f"""
+            extern "C" __global__ void probe(cudaSurfaceObject_t img, int x, int y) {{
+                {statement}
+            }}
+            """
+            lexer = CudaLexer(code)
+            tokens = lexer.tokenize()
+            parser = CudaParser(tokens)
+            ast = parser.parse()
+
+            with pytest.raises(CudaSurfaceByteOffsetError, match=pattern) as error:
+                CudaToCrossGLConverter().generate(ast)
+            assert (
+                error.value.code
+                == "project.translate.cuda-surface-byte-offset-unproven"
+            )
 
     def test_cub_dependent_shared_temp_storage_conversion(self):
         code = """
