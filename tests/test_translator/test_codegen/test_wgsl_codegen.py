@@ -6041,6 +6041,7 @@ def test_wgsl_codegen_half_conversion_evaluates_operand_once(tmp_path):
                 f4_out[0] = f16tof32(get_uvec4_effect());
 
                 // Path C: composite f16tof32(f32tof16(vector_expression))
+                f2_out[1] = f16tof32(f32tof16(get_vec2_effect()));
                 f3_out[1] = f16tof32(f32tof16(get_vec3_effect()));
                 f4_out[1] = f16tof32(f32tof16(get_vec4_effect()));
 
@@ -6055,12 +6056,78 @@ def test_wgsl_codegen_half_conversion_evaluates_operand_once(tmp_path):
     generated = crosstl.translate(str(source), backend="wgsl")
 
     compute_main = generated.split("fn compute_main()")[1]
-    assert compute_main.count("get_vec2_effect()") == 1
+    assert compute_main.count("get_vec2_effect()") == 2
     assert compute_main.count("get_vec3_effect()") == 2
     assert compute_main.count("get_vec4_effect()") == 2
     assert compute_main.count("get_uvec2_effect()") == 1
     assert compute_main.count("get_uvec3_effect()") == 1
     assert compute_main.count("get_uvec4_effect()") == 1
     assert compute_main.count("get_struct_effect()") == 1
+
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_half_conversion_array_indexing_side_effects(tmp_path):
+    shader = """
+    shader TestArrayIndexingSideEffects {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* counter;
+            buffer vec2* v2_arr;
+            buffer vec3* v3_arr;
+            buffer vec4* v4_arr;
+            buffer uvec2* u2_arr;
+            buffer uvec3* u3_arr;
+            buffer uvec4* u4_arr;
+
+            buffer uvec2* u2_out;
+            buffer uvec3* u3_out;
+            buffer uvec4* u4_out;
+            buffer vec2* f2_out;
+            buffer vec3* f3_out;
+            buffer vec4* f4_out;
+
+            int next_index() {
+                counter[0] += 1u;
+                return 0;
+            }
+
+            void main() {
+                int i = 0;
+
+                // Standalone f32tof16 with arr[i++]
+                u2_out[0] = f32tof16(v2_arr[i++]);
+                u3_out[0] = f32tof16(v3_arr[i++]);
+                u4_out[0] = f32tof16(v4_arr[i++]);
+
+                // Standalone f16tof32 with arr[i++]
+                f2_out[0] = f16tof32(u2_arr[i++]);
+                f3_out[0] = f16tof32(u3_arr[i++]);
+                f4_out[0] = f16tof32(u4_arr[i++]);
+
+                // Composite f16tof32(f32tof16) with arr[i++]
+                f2_out[1] = f16tof32(f32tof16(v2_arr[i++]));
+                f3_out[1] = f16tof32(f32tof16(v3_arr[i++]));
+                f4_out[1] = f16tof32(f32tof16(v4_arr[i++]));
+
+                // Indexed expression with effectful call
+                u3_out[1] = f32tof16(v3_arr[next_index()]);
+            }
+        }
+    }
+    """
+    source = tmp_path / "array_side_effects.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    compute_main = generated.split("fn compute_main()")[1]
+
+    # Verify each i++ advances exactly once per statement in source order
+    assert compute_main.count("i += 1;") == 9
+    for idx in range(9):
+        assert f"_crosstl_prior_{idx}" in compute_main
+
+    # Verify next_index() call in array index is evaluated exactly once
+    assert compute_main.count("next_index()") == 1
 
     validate_wgsl_with_naga(tmp_path, generated)
