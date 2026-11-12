@@ -7464,6 +7464,174 @@ def test_glsl_buffer_view_helper_parameter_length_counts_from_its_offset(tmp_pat
 
 
 @pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            "const device uint16_t* v = (uint16_t*)words;\n"
+            "outp[0] = float(v.length());",
+            "((words.length() * 2) - int(v_offset))",
+        ),
+        (
+            "const device float* v = (float*)words;\n"
+            "outp[0] = float(v.length());",
+            "(words.length() - int(v_offset))",
+        ),
+        (
+            "const device float2* v = (float2*)words;\n"
+            "outp[0] = float(v.length());",
+            "((words.length() / 2) - int(v_offset))",
+        ),
+        (
+            "const device float* v = (float*)(words + 2);\n"
+            "outp[0] = float(v.length());",
+            "((((words.length() * 4) - int((2 * 4))) / 4) - int(v_offset))",
+        ),
+        (
+            "const device uint16_t* v = (uint16_t*)words + 1;\n"
+            "outp[0] = float(v.length());",
+            "((words.length() * 2) - int(v_offset))",
+        ),
+        (
+            "outp[0] = float(((float*)words).length());",
+            "float(words.length());",
+        ),
+        (
+            "outp[0] = float(((uint16_t*)words).length());",
+            "float((words.length() * 2));",
+        ),
+    ],
+    ids=[
+        "local-uint16",
+        "local-float",
+        "local-float2",
+        "offset-source",
+        "offset-view",
+        "inline-float",
+        "inline-uint16",
+    ],
+)
+def test_glsl_reinterpreted_view_length_computes_element_count(body, expected, tmp_path):
+    code = f"""
+    shader Probe {{
+        buffer uint* words;
+        RWStructuredBuffer<float> outp;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert expected in generated
+    assert "uintBitsToFloat(" not in generated
+    assert "bitfieldExtract(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "reinterpreted_view_length"
+    )
+
+
+def test_glsl_reinterpreted_helper_parameter_length_counts_from_offsets(tmp_path):
+    code = """
+    shader Probe {
+        buffer uint* words;
+        RWStructuredBuffer<float> outp;
+        int count(const device uint16_t* v) {
+            return v.length();
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                outp[0] = float(count((uint16_t*)(words + 2))) + float(count((uint16_t*)words + 1));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "return ((((words.length() * 4) - int(v_byte_offset)) / 2) - int(v_offset));"
+        in generated
+    )
+    assert "count_glsl_v_words_uint_view_uint_to_uint16(int(0), int((2 * 4)))" in generated
+    assert "(int(1), int(0))" in generated
+    assert "bitfieldExtract(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "reinterpreted_helper_parameter_length"
+    )
+
+
+def test_glsl_reinterpreted_view_length_refuses_unknown_byte_offset_layout():
+    codegen = GLSLCodeGen()
+    with pytest.raises(
+        OpenGLStoragePointerError,
+        match="byte-offset view without element layout",
+    ):
+        codegen.glsl_reinterpreted_storage_length_expression(
+            "words",
+            {"root": "words", "byte_offset": "8"},
+        )
+
+
+def test_glsl_lane_gather_local_view_length_computes_element_count(tmp_path):
+    code = """
+    shader LaneGatherLocal {
+        buffer uint16_t* values;
+        RWStructuredBuffer<float> results;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                const device vec<uint16_t, 4>* v = (vec<uint16_t, 4>*)(values + 1);
+                results[0] = float(v.length());
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "((((values.length() * 2) - int((1 * 2))) / 8) - int(v_offset))" in generated
+    assert "uvec4(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "lane_gather_local_view_length"
+    )
+
+
+def test_glsl_lane_gather_helper_parameter_length_computes_element_count(tmp_path):
+    code = """
+    shader LaneGatherHelper {
+        buffer uint16_t* values;
+        RWStructuredBuffer<float> results;
+        int count(const device vec<uint16_t, 4>* v) {
+            return v.length();
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                results[0] = float(count((vec<uint16_t, 4>*)(values + 1)));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "return ((((values.length() * 2) - int(v_byte_offset)) / 8) - int(v_offset));"
+        in generated
+    )
+    assert "count_glsl_v_values_uvec4_view_uint16_to_uint16(int(0), int((1 * 2)))" in generated
+    assert "uvec4(" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "lane_gather_helper_parameter_length"
+    )
+
+
+@pytest.mark.parametrize(
     ("element", "stride"),
     # An unmarked buffer is laid out by std430, so a vec3 element takes 16 bytes,
     # not the 12 of an HLSL structured buffer.
