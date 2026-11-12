@@ -179,6 +179,133 @@ def test_spirv_reads_the_runtime_array_length(tmp_path):
         _check(["spirv-val", "--target-env", "vulkan1.1", "v.spv"], tmp_path)
 
 
+STRUCTURED_HELPER_VIEW = """shader StructuredHelperView {
+    StructuredBuffer<float> values;
+    RWStructuredBuffer<float> outp;
+    int count(StructuredBuffer<float> v) {
+        return v.length();
+    }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            outp[0] = float(count(values + 2));
+        }
+    }
+}"""
+
+CHAINED_LOCAL_VIEW = """shader ChainedLocalView {
+    buffer float* data;
+    RWStructuredBuffer<float> outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            buffer float* p = data + 2;
+            buffer float* q = p + 3;
+            outp[0] = float(q.length());
+        }
+    }
+}"""
+
+
+@pytest.mark.parametrize(
+    ("source", "expect_sub"),
+    [
+        (HELPER_VIEW, False),
+        (HELPER_VIEW.replace("count(data)", "count(data + 2)"), True),
+        (STRUCTURED_HELPER_VIEW, True),
+        (LOCAL_VIEW, True),
+        (CHAINED_LOCAL_VIEW, True),
+    ],
+    ids=[
+        "helper-no-offset",
+        "helper-offset",
+        "structured-helper-offset",
+        "local-view",
+        "chained-local-view",
+    ],
+)
+def test_spirv_counts_offset_views_from_their_offset(source, expect_sub, tmp_path):
+    spirv = VulkanSPIRVCodeGen().generate(parse(source))
+
+    array_len_match = re.search(r"OpArrayLength %\d+ (%\d+) 0\b", spirv)
+    assert array_len_match is not None
+    block_ptr = array_len_match.group(1)
+    assert re.search(rf"^{re.escape(block_ptr)} = OpVariable\b", spirv, re.M)
+    if expect_sub:
+        assert " = OpISub " in spirv
+    else:
+        assert " = OpISub " not in spirv
+    if shutil.which("spirv-as") and shutil.which("spirv-val"):
+        (tmp_path / "view.spvasm").write_text(spirv, encoding="utf-8")
+        _check(
+            ["spirv-as", "--target-env", "vulkan1.1", "view.spvasm", "-o", "v.spv"],
+            tmp_path,
+        )
+        _check(["spirv-val", "--target-env", "vulkan1.1", "v.spv"], tmp_path)
+
+
+def test_spirv_refuses_reinterpreted_view_length():
+    source = """shader ReinterpretedView {
+    buffer float* data;
+    RWStructuredBuffer<float> outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            const device int* p = (int*)(data + 2);
+            outp[0] = float(p.length());
+        }
+    }
+}"""
+    with pytest.raises(BufferLengthUnsupportedError):
+        VulkanSPIRVCodeGen().generate(parse(source))
+
+
+def test_spirv_refuses_struct_member_array_view_length():
+    source = """struct S { float a[4]; };
+shader MemberArrayView {
+    StructuredBuffer<S> data;
+    RWStructuredBuffer<float> outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            buffer float* p = data[0].a;
+            outp[0] = float(p.length());
+        }
+    }
+}"""
+    with pytest.raises(BufferLengthUnsupportedError):
+        VulkanSPIRVCodeGen().generate(parse(source))
+
+
+def test_spirv_offset_exceeding_length_uses_signed_isub(tmp_path):
+    source = LOCAL_VIEW.replace("data + 2", "data + 1000000")
+    spirv = VulkanSPIRVCodeGen().generate(parse(source))
+
+    array_len_match = re.search(r"OpArrayLength %\d+ (%\d+) 0\b", spirv)
+    assert array_len_match is not None
+    assert re.search(
+        rf"^{re.escape(array_len_match.group(1))} = OpVariable\b", spirv, re.M
+    )
+    isub_match = re.search(r"%\d+ = OpISub (%\d+) %\d+ %\d+\b", spirv)
+    assert isub_match is not None
+    int_type_id = isub_match.group(1)
+    assert re.search(rf"^{re.escape(int_type_id)} = OpTypeInt 32 1\b", spirv, re.M)
+    if shutil.which("spirv-as") and shutil.which("spirv-val"):
+        (tmp_path / "underflow.spvasm").write_text(spirv, encoding="utf-8")
+        _check(
+            [
+                "spirv-as",
+                "--target-env",
+                "vulkan1.1",
+                "underflow.spvasm",
+                "-o",
+                "u.spv",
+            ],
+            tmp_path,
+        )
+        _check(["spirv-val", "--target-env", "vulkan1.1", "u.spv"], tmp_path)
+
+
 @pytest.mark.parametrize(
     "expression, name",
     [("float(outp.length())", "'outp'"), ("float(data.length())", "'data'")],
