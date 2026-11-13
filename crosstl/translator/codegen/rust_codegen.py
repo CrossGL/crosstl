@@ -60,6 +60,7 @@ from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
 from .sampler_pairs import canonicalize_separate_textures
@@ -9057,6 +9058,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+            if (
+                func_name in SHADER_CLOCK_BUILTINS
+                and not self.is_user_defined_function(func_name)
+            ):
+                return refuse_shader_clock_call("Rust", func_name)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
             if isinstance(func_expr, MemberAccessNode):

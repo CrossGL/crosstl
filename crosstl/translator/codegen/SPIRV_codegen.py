@@ -288,6 +288,7 @@ from .spirv_struct_varyings import (
     load_flattened_struct_varying,
     store_flattened_struct_varying,
 )
+from .spirv_shader_clock import SPIRV_SHADER_CLOCKS, spirv_shader_clock_call
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_swizzle_reference_arguments import (
     prepare_swizzle_reference_binding,
@@ -30605,6 +30606,13 @@ class VulkanSPIRVCodeGen(
                 and not self.has_function_reference(callee_name)
             ):
                 return spirv_debug_printf_call(self, callee_name, expr.args, SpirvId)
+
+            if callee_name in SPIRV_SHADER_CLOCKS and not self.has_function_reference(
+                callee_name
+            ):
+                return spirv_shader_clock_call(
+                    self, callee_name, list(expr.args), SpirvId
+                )
 
             if callee_name == TEXTURE_RESIDENCY_OPERATION and not (
                 self.has_function_reference(callee_name)

@@ -158,6 +158,7 @@ from .hlsl_image_formats import (
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .image_access_contracts import numeric_expression_component_count
 from .lowering_refusals import LoweringRefusalMixin
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -10040,6 +10041,12 @@ class SlangCodeGen(LoweringRefusalMixin):
             func_expr = getattr(node, "function", None)
             if func_expr is None:
                 func_expr = node.name
+            clock_name = getattr(func_expr, "name", func_expr)
+            if (
+                clock_name in SHADER_CLOCK_BUILTINS
+                and clock_name not in self.user_function_names
+            ):
+                return refuse_shader_clock_call("Slang", clock_name)
             ray_query_call = self.slang_ray_query_call_parts(node)
             if ray_query_call is not None:
                 operation, query_expr, args = ray_query_call
