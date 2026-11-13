@@ -1745,3 +1745,35 @@ def test_opencl_cast_type_qualifier_split_across_lines():
     one_line_source = split_source.replace("const\n", "const ")
 
     assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+def test_opencl_struct_keyword_member_names_the_earlier_record():
+    crossgl = generate_crossgl("""
+struct Inner { float x; float y; };
+struct Outer { struct Inner inner; int k; };
+__kernel void probe(__global float* outp) {
+    struct Outer o;
+    o.inner.x = 1.0f; o.inner.y = 2.0f; o.k = 3;
+    outp[get_global_id(0)] = o.inner.y + (float)o.k;
+}
+""")
+
+    assert crossgl.count("struct Inner {") == 1
+    assert "    Inner inner;" in crossgl
+    assert "    i32 k;" in crossgl
+
+
+def test_opencl_struct_keyword_member_matches_the_typedef_spelling():
+    keyword = generate_crossgl("""
+struct Inner { float x; };
+struct Outer { struct Inner inner; };
+__kernel void probe(__global float* outp) { struct Outer o; o.inner.x = 1.0f; outp[0] = o.inner.x; }
+""")
+    typedef = generate_crossgl("""
+typedef struct Inner { float x; } Inner;
+struct Outer { Inner inner; };
+__kernel void probe(__global float* outp) { struct Outer o; o.inner.x = 1.0f; outp[0] = o.inner.x; }
+""")
+
+    assert "    Inner inner;" in keyword
+    assert "    Inner inner;" in typedef

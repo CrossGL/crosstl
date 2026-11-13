@@ -2201,7 +2201,8 @@ class HipParser:
         base_classes = self.parse_class_inheritance_clause()
         self.skip_newlines()
         members = []
-        if self.match("LBRACE"):
+        has_body = self.match("LBRACE")
+        if has_body:
             self.consume("LBRACE")
             members = self.parse_struct_members(name)
             self.consume("RBRACE")
@@ -2216,7 +2217,10 @@ class HipParser:
         self.skip_newlines()
         declarations = self.parse_record_trailing_declarators("struct", name)
         if declarations:
-            return [struct_node, *declarations]
+            # ``struct Inner inner;`` names an existing record; only a body declares one.
+            return (
+                [struct_node, *declarations] if has_body or not name else declarations
+            )
 
         if self.match("SEMICOLON"):
             self.advance()
@@ -2242,7 +2246,8 @@ class HipParser:
         attributes.extend(self.parse_type_attribute_prefixes())
         self.skip_newlines()
         members = []
-        if self.match("LBRACE"):
+        has_body = self.match("LBRACE")
+        if has_body:
             self.consume("LBRACE")
             members = self.parse_struct_members(name)
             self.consume("RBRACE")
@@ -2257,7 +2262,7 @@ class HipParser:
         self.skip_newlines()
         declarations = self.parse_record_trailing_declarators("union", name)
         if declarations:
-            return [union_node, *declarations]
+            return [union_node, *declarations] if has_body or not name else declarations
 
         if self.match("SEMICOLON"):
             self.advance()
@@ -2513,7 +2518,8 @@ class HipParser:
         is_final = self.consume_record_final_specifier()
         base_classes = self.parse_class_inheritance_clause()
         self.skip_newlines()
-        if self.match("LBRACE"):
+        has_body = self.match("LBRACE")
+        if has_body:
             self.consume("LBRACE")
             members = self.parse_struct_members(name)
             self.consume("RBRACE")
@@ -2529,7 +2535,7 @@ class HipParser:
         self.skip_newlines()
         declarations = self.parse_record_trailing_declarators("class", name)
         if declarations:
-            return [class_node, *declarations]
+            return [class_node, *declarations] if has_body else declarations
 
         if self.match("SEMICOLON"):
             self.advance()

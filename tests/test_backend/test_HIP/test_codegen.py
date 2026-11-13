@@ -19861,3 +19861,69 @@ class TestHipCodeGen:
         )
         assert validation.returncode == 0, validation.stdout + validation.stderr
         assert spirv_path.stat().st_size > 0
+
+
+STRUCT_KEYWORD_MEMBER_HIP = """
+struct Inner { float x; float y; };
+struct Outer { struct Inner inner; int k; };
+__global__ void probe(float* outp) {
+    Outer o;
+    o.inner.x = 1.0f; o.inner.y = 2.0f; o.k = 3;
+    outp[threadIdx.x] = o.inner.y + (float)o.k;
+}
+"""
+
+
+def test_hip_struct_keyword_member_names_the_earlier_record(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(STRUCT_KEYWORD_MEMBER_HIP, encoding="utf-8")
+
+    crossgl = translate(str(source), backend="cgl", save_shader=None)
+
+    assert crossgl.count("struct Inner {") == 1
+    assert "    Inner inner;" in crossgl
+
+
+def test_hip_struct_keyword_member_declarators_share_the_earlier_record(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(
+        """
+struct Inner { float x; };
+struct Outer { struct Inner a; struct Inner b, c; struct Inner* p; };
+__global__ void probe(float* outp) {
+    Outer o; o.a.x = 1.0f; o.b.x = 2.0f; o.c.x = 3.0f;
+    outp[threadIdx.x] = o.a.x + o.b.x + o.c.x;
+}
+""",
+        encoding="utf-8",
+    )
+
+    crossgl = translate(str(source), backend="cgl", save_shader=None)
+
+    assert crossgl.count("struct Inner {") == 1
+    for member in ("Inner a;", "Inner b;", "Inner c;", "ptr<Inner> p;"):
+        assert member in crossgl
+
+
+def test_hip_struct_keyword_member_reaches_every_target(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(STRUCT_KEYWORD_MEMBER_HIP, encoding="utf-8")
+
+    for backend in ("metal", "directx", "vulkan"):
+        assert translate(str(source), backend=backend, save_shader=None)
+
+
+def test_hip_record_with_a_body_and_declarators_is_still_declared(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(
+        """
+struct Both { float a; } both;
+__global__ void probe(float* outp) { both.a = 4.0f; outp[threadIdx.x] = both.a; }
+""",
+        encoding="utf-8",
+    )
+
+    crossgl = translate(str(source), backend="cgl", save_shader=None)
+
+    assert "struct Both {" in crossgl
+    assert "var both: Both;" in crossgl
