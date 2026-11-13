@@ -8142,6 +8142,39 @@ jobs:
               demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmv_wide.py \
               demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qvm_split_k.py
 
+      # fp_quantized.metal's 38 fp_qmm_t entries, aligned and unaligned N,
+      # with and without batching, and the two with a global scale, in two
+      # shards.
+      - name: Prove current MLX fp quantized matrix-matrix native parity
+        if: matrix.family == 'fp-quantized-qmm'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_FP_QUANTIZED_QMM: "1"
+          CROSTL_MLX_CURRENT_FP_QUANTIZED_QMM_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_FP_QUANTIZED_QMM_SHARD_COUNT: "2"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX fp quantized matrix-matrix native parity (shard ${{ matrix.shard }} of 2)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmm_t.py
+
       # quantized.metal's 54 affine_qmv_fast entries with batching, 54 without
       # and 54 affine_gather_qmv_fast entries, in two shards.
       - name: Prove current MLX quantized matrix-vector native parity
@@ -8714,12 +8747,12 @@ jobs:
       fail-fast: false
       # GitHub expands at most 256 legs from one matrix, so the current-tree
       # families are split over three jobs that share one list of steps.
-      # 159 legs here, a third of them on macOS; the three jobs
+      # 165 legs here, a third of them on macOS; the three jobs
       # together run at most 28 legs at once, each group's platform legs
       # together.
       max-parallel: 8
       matrix:
-        group: [quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-unaligned-0, quantized-qmv-unaligned-1, quantized-qmv-unaligned-2, quantized-qmv-unaligned-3, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, quantized-qvm-0, quantized-qvm-1, quantized-qvm-2, quantized-qvm-3, quantized-qvm-split-k-0, quantized-qvm-split-k-1, quantized-qvm-split-k-2, quantized-qvm-split-k-3, quantized-qmm-t-0, quantized-qmm-t-1, quantized-qmm-t-2, quantized-qmm-t-3, quantized-qmm-t-4, quantized-qmm-t-5, quantized-qmm-t-6, quantized-qmm-n-0, quantized-qmm-n-1, quantized-qmm-n-2, quantized-qmm-n-3, quantized-qmm-n-4, quantized-qmm-t-splitk-0, quantized-qmm-t-splitk-1, quantized-qmm-t-splitk-2, quantized-qmm-t-splitk-3, quantized-qmm-t-splitk-4, quantized-gather-qmm-0, quantized-gather-qmm-1, quantized-gather-qmm-2, quantized-gather-qmm-3, quantized-gather-qmm-4, quantized-gather-qmm-5, quantized-gather-qmm-6, quantized-qmv-quad-0, quantized-qmv-quad-1, quantized-qmv-quad-2, fp-quantized-qmv-0, fp-quantized-qmv-1]
+        group: [quantized, quantized-qmv-0, quantized-qmv-1, quantized-qmv-unaligned-0, quantized-qmv-unaligned-1, quantized-qmv-unaligned-2, quantized-qmv-unaligned-3, quantized-qmv-wide-0, quantized-qmv-wide-1, quantized-qmv-wide-2, quantized-qmv-wide-3, quantized-qmv-wide-4, quantized-qmv-wide-5, quantized-qmv-wide-6, quantized-qmv-wide-7, quantized-qmv-wide-8, quantized-qvm-0, quantized-qvm-1, quantized-qvm-2, quantized-qvm-3, quantized-qvm-split-k-0, quantized-qvm-split-k-1, quantized-qvm-split-k-2, quantized-qvm-split-k-3, quantized-qmm-t-0, quantized-qmm-t-1, quantized-qmm-t-2, quantized-qmm-t-3, quantized-qmm-t-4, quantized-qmm-t-5, quantized-qmm-t-6, quantized-qmm-n-0, quantized-qmm-n-1, quantized-qmm-n-2, quantized-qmm-n-3, quantized-qmm-n-4, quantized-qmm-t-splitk-0, quantized-qmm-t-splitk-1, quantized-qmm-t-splitk-2, quantized-qmm-t-splitk-3, quantized-qmm-t-splitk-4, quantized-gather-qmm-0, quantized-gather-qmm-1, quantized-gather-qmm-2, quantized-gather-qmm-3, quantized-gather-qmm-4, quantized-gather-qmm-5, quantized-gather-qmm-6, quantized-qmv-quad-0, quantized-qmv-quad-1, quantized-qmv-quad-2, fp-quantized-qmv-0, fp-quantized-qmv-1, fp-quantized-qmm-0, fp-quantized-qmm-1]
         os: [ubuntu-latest, windows-latest, macOS-latest]
         include:
           - {group: quantized-qmv-0, family: quantized-qmv, shard: 0}
@@ -8774,6 +8807,8 @@ jobs:
           - {group: quantized-qmv-quad-2, family: quantized-qmv-quad, shard: 2}
           - {group: fp-quantized-qmv-0, family: fp-quantized-qmv, shard: 0}
           - {group: fp-quantized-qmv-1, family: fp-quantized-qmv, shard: 1}
+          - {group: fp-quantized-qmm-0, family: fp-quantized-qmm, shard: 0}
+          - {group: fp-quantized-qmm-1, family: fp-quantized-qmm, shard: 1}
 
     # The steps of mlx-current-native-parity. Each runs only in its own groups.
     steps: *mlx-current-parity-steps
