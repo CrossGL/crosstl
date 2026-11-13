@@ -98,6 +98,8 @@ MIN_MAX_INTEGER_SCALAR_TYPES = {
 FLOAT_SCALARS = {"float", "double", "half"}
 INTEGER_SCALARS = {"int", "uint", "unsigned int"}
 NUMERIC_SCALARS = FLOAT_SCALARS | INTEGER_SCALARS
+# GLSL geometric built-ins that neither CUDA nor HIP declares, with their arity.
+REFLECTION_BUILTIN_ARITIES = {"reflect": 2, "refract": 3, "faceforward": 3}
 
 
 class VectorArithmeticMixin:
@@ -1783,6 +1785,9 @@ class VectorArithmeticMixin:
 
     def generate_vector_geometric_call(self, func_name, raw_args, args):
         """Lower vector geometric builtins to generated component-wise helpers."""
+        if func_name in REFLECTION_BUILTIN_ARITIES:
+            return self.generate_reflection_call(func_name, raw_args, args)
+
         if func_name in {"length", "normalize"}:
             if len(raw_args) != 1:
                 return None
@@ -1868,6 +1873,143 @@ class VectorArithmeticMixin:
             return f"{helper_name}({args[0]}, {args[1]})"
 
         return None
+
+    def generate_reflection_call(self, func_name, raw_args, args):
+        """Lower ``reflect``, ``refract`` and ``faceforward`` to generated helpers.
+
+        CUDA and HIP declare none of the three, for any scalar or vector type.
+        Every operand except ``refract``'s scalar ``eta`` has the result type.
+        Returns None when the operands do not resolve to one float type.
+        """
+        if len(raw_args) != REFLECTION_BUILTIN_ARITIES[func_name]:
+            return None
+        value_operands = raw_args[:2] if func_name == "refract" else raw_args
+        operand_types = [
+            self.expression_result_type(raw_arg)
+            or self.scalar_cast_result_type(raw_arg)
+            for raw_arg in value_operands
+        ]
+        if any(operand_type is None for operand_type in operand_types):
+            return None
+
+        vector_infos = [
+            self.vector_type_info(operand_type) for operand_type in operand_types
+        ]
+        if vector_infos[0] is not None:
+            vector_info = vector_infos[0]
+            if any(
+                info is None or info["type"] != vector_info["type"]
+                for info in vector_infos
+            ):
+                return None
+            helper_name = self.require_reflection_helper(
+                func_name,
+                vector_info["type"],
+                vector_info["component_type"],
+                [f".{component}" for component in vector_info["components"]],
+                vector_info["constructor"],
+            )
+        else:
+            if any(info is not None for info in vector_infos):
+                return None
+            scalar_types = [
+                self.map_vector_arithmetic_type(operand_type)
+                for operand_type in operand_types
+            ]
+            if any(scalar_type not in NUMERIC_SCALARS for scalar_type in scalar_types):
+                return None
+            if all(scalar_type in INTEGER_SCALARS for scalar_type in scalar_types):
+                return None
+            if "double" in scalar_types:
+                scalar_type = "double"
+            elif all(scalar_type == "half" for scalar_type in scalar_types):
+                scalar_type = "half"
+            else:
+                scalar_type = "float"
+            helper_name = self.require_reflection_helper(
+                func_name, scalar_type, scalar_type, [""], None
+            )
+        if helper_name is None:
+            return None
+        return f"{helper_name}({', '.join(args)})"
+
+    def require_reflection_helper(
+        self, func_name, value_type, component_type, accessors, constructor
+    ):
+        """Register a ``reflect``/``refract``/``faceforward`` helper, per GLSL 4.60 8.5.
+
+        ``accessors`` are the member suffixes of a vector value (``[".x", ...]``)
+        or ``[""]`` for a scalar, which has no ``constructor``.
+        """
+        compute_type = self.geometric_component_float_type(component_type)
+        if compute_type is None:
+            return None
+
+        if constructor is None:
+            helper_name = f"cgl_{func_name}_{value_type}"
+        else:
+            helper_name = f"cgl_{value_type}_{func_name}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        suffix = "" if compute_type == "double" else "f"
+        one, two, zero = (f"{value}{suffix}" for value in ("1.0", "2.0", "0.0"))
+
+        def read(name, accessor):
+            return self.geometric_component_read(component_type, f"{name}{accessor}")
+
+        def dot(left, right):
+            return " + ".join(
+                f"({read(left, accessor)} * {read(right, accessor)})"
+                for accessor in accessors
+            )
+
+        def build(component_expression):
+            values = [component_expression(accessor) for accessor in accessors]
+            if constructor is None:
+                return self.geometric_scalar_result(component_type, values[0])
+            return f"{constructor}({', '.join(values)})"
+
+        if func_name == "reflect":
+            parameters = f"{value_type} i, {value_type} n"
+            body = (
+                f"    {compute_type} d = {two} * ({dot('n', 'i')});\n"
+                "    return "
+                + build(lambda a: f"{read('i', a)} - d * {read('n', a)}")
+                + ";\n"
+            )
+        elif func_name == "refract":
+            parameters = f"{value_type} i, {value_type} n, {compute_type} eta"
+            body = (
+                f"    {compute_type} d = {dot('n', 'i')};\n"
+                f"    {compute_type} k = {one} - eta * eta * ({one} - d * d);\n"
+                f"    if (k < {zero})\n"
+                "    {\n"
+                f"        return {build(lambda a: zero)};\n"
+                "    }\n"
+                f"    {compute_type} s = eta * d + "
+                f"{self.geometric_sqrt_name(component_type)}(k);\n"
+                "    return "
+                + build(lambda a: f"eta * {read('i', a)} - s * {read('n', a)}")
+                + ";\n"
+            )
+        else:
+            parameters = f"{value_type} n, {value_type} i, {value_type} nref"
+            body = (
+                f"    if (({dot('nref', 'i')}) < {zero})\n"
+                "    {\n"
+                "        return n;\n"
+                "    }\n"
+                "    return " + build(lambda a: "-" + read("n", a)) + ";\n"
+            )
+        helper = (
+            f"__device__ inline {value_type} {helper_name}({parameters})\n"
+            "{\n"
+            f"{body}"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
 
     def scalar_distance_operand_types(self, raw_args):
         """Return the mapped scalar types of ``distance(a, b)``, or None.

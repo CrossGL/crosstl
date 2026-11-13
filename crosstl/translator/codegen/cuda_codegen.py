@@ -3679,7 +3679,16 @@ class CudaCodeGen(
         if pointer_math_call is not None:
             return pointer_math_call
 
-        if func_name in {"dot", "cross", "distance", "length", "normalize"}:
+        if func_name in {
+            "dot",
+            "cross",
+            "distance",
+            "length",
+            "normalize",
+            "reflect",
+            "refract",
+            "faceforward",
+        }:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,

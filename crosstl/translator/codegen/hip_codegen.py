@@ -4508,7 +4508,16 @@ class HipCodeGen(
                     if result_type is not None:
                         node.expression_type = result_type
                     return fma_call
-        elif func_name in {"dot", "cross", "distance", "length", "normalize"}:
+        elif func_name in {
+            "dot",
+            "cross",
+            "distance",
+            "length",
+            "normalize",
+            "reflect",
+            "refract",
+            "faceforward",
+        }:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
                 raw_args,
