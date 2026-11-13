@@ -2682,10 +2682,11 @@ class WGSLCodeGen(
     def generate_module_scope_value(self, value, target_type):
         # A brace list takes the declared type, as in a local declaration: a
         # short array list is zero-filled and a structure's, vector's or
-        # matrix's list becomes its constructor.
-        if isinstance(value, ArrayLiteralNode):
-            return self.generate_expression_for_target(value, target_type)
-        return self.generate_expression(value)
+        # matrix's list becomes its constructor. For all other initializers,
+        # apply the same type conversion that a local declaration's initializer
+        # gets, so e.g. ``const uint B = A;`` writes ``u32(A)`` rather than
+        # just ``A`` (which naga rejects when A is i32).
+        return self.generate_expression_for_target(value, target_type)
 
     def generate_constant(self, node):
         value = (
