@@ -10174,8 +10174,11 @@ class MojoCodeGen:
             self.required_mesh_helpers.add("set_mesh_output_counts")
             return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
         if operation == "DispatchMesh":
-            self.required_mesh_helpers.add("dispatch_mesh")
-            return f"_crossgl_dispatch_mesh({', '.join(args)})"
+            raise ValueError(
+                "Unsupported DispatchMesh for Mojo codegen; Mojo's GPU modules "
+                "have no mesh-task launch intrinsic. Use the SPIR-V, HLSL, or "
+                "Slang backends to target mesh/task shaders."
+            )
 
         raise ValueError(f"Unsupported Mojo mesh intrinsic {operation}")
 
@@ -13113,8 +13116,6 @@ class MojoCodeGen:
             code += "# CrossGL mesh/task placeholders\n"
             if "set_mesh_output_counts" in self.required_mesh_helpers:
                 code += self.generate_set_mesh_output_counts_helper()
-            if "dispatch_mesh" in self.required_mesh_helpers:
-                code += self.generate_dispatch_mesh_helper()
             code += "\n"
 
         if self.required_reinterpret_helpers:
@@ -13562,16 +13563,6 @@ class MojoCodeGen:
         return (
             "fn _crossgl_set_mesh_output_counts[Vertices: AnyType, "
             "Primitives: AnyType](vertices: Vertices, primitives: Primitives):\n"
-            "    pass\n\n"
-        )
-
-    def generate_dispatch_mesh_helper(self):
-        return (
-            "fn _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType]("
-            "x: X, y: Y, z: Z):\n"
-            "    pass\n\n"
-            "fn _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType, "
-            "Payload: AnyType](x: X, y: Y, z: Z, payload: Payload):\n"
             "    pass\n\n"
         )
 
