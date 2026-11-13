@@ -2041,10 +2041,41 @@ batch offsets, give every lane its row's first scale, keep a lane's first
 scale for its second step, store lane 0's partial sum instead of the
 `quad_sum`, or drop the code sign are rejected. Every target must match the
 model word for word and leave the guards untouched; on Metal the translation
-must also match the unchanged upstream kernel. The wide matrix-vector, the
-split-K vector-matrix and the matrix-matrix kernels are not gated yet. This
-covers 36/17,832 entries; it does not run the upstream MLX test suite or
-redirect the MLX host runtime.
+must also match the unchanged upstream kernel. This covers 36/17,832 entries;
+it does not run the upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/fp_quantized_qmv_wide.current-tree.translation.json` pins a further
+72 entries of `fp_quantized.metal` and their 216 artifacts: `fp_qmv_wide` with
+tiles of 2, 3, 4 and 5 input vectors and sixteen lanes per output row, with
+and without batching, for the three element types in `nvfp4`, `mxfp8` and
+`mxfp4`. Without a global scale, `dispatch_qmv` sends two to
+`vector_limit - 1` vectors whose `K` is not 64 or 128 to `qmv_wide`, on every
+device for the fp modes, and `qmv_wide` picks the tile from `M`. The entries
+share the `fp_qmv` gate's target options, index-range preconditions, inputs
+and exactness argument, and run in the same `fp-quantized-qmv-0` and
+`fp-quantized-qmv-1` legs: 180 dispatches and 14,040 checked elements per
+target, over `(32, 2, 1)` threadgroups and a
+`(ceil(M / vecs_per_tg), ceil(N / 4), B)` grid. Each of a row's sixteen lanes
+dequantizes every sixteenth quant group once to float4 lanes and dots it
+against every vector of the tile; a `simd_shuffle_down` ladder over 8, 4, 2
+and 1 lanes reduces the row, which DirectX and OpenGL lower to 32-lane
+software subgroups. Rows past `N` and vectors past `M` read row `N - 1` and
+vector `M - 1` and are never stored, so nothing reads past the used rows.
+Unbatched cases run one tile against seventeen groups per row, so lane 0 of
+each row takes two, and the most rows `qmv_wide` gives the tile below the
+vector limit, with a partial last row tile, a simdgroup wholly past `N`,
+idle lanes and, for tiles of 4 and 5, a partial last vector tile; batched
+cases reach both branches of `adjust_matrix_offsets`. A lane-level model
+must reach direct dequantized dot products and store every output once, and
+mutated models that reverse each float4's codes, drop the code sign, give
+every group its row's first scale, give each lane only its first group,
+stream the tile's first vector for every vector, ignore each lane's row,
+sum all 32 lanes, store the clamped rows or vectors, or ignore the batch
+offsets are rejected. Every target must match the model word for word and
+leave the guards untouched; on Metal the translation must also match the
+unchanged upstream kernel. The split-K vector-matrix and the matrix-matrix
+kernels are not gated yet. This covers 72/17,832 entries; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with
