@@ -42,11 +42,11 @@ struct VertexOutput {
     float4 color: TEXCOORD0;
     int size: TEXCOORD1;
 };
-void foo(float4 p[arraySize], VertexInput input, inout VertexOutput output);
+void foo(in float4 p[arraySize], VertexInput input, inout VertexOutput output);
 
 int builtin_spec_constant();
 
-void foo(float4 p[arraySize], VertexInput input, inout VertexOutput output) {
+void foo(in float4 p[arraySize], VertexInput input, inout VertexOutput output) {
     output.color += input.dupUcol[2];
     output.size += dupArraySize;
     if (spDupBool) {
