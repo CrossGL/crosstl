@@ -192,9 +192,14 @@ def worker(args):
         try:
             if args.worker == "unsupported":
                 # qqmm quantizes both operands inside QQMatmul, which the
-                # host does not port.
+                # host does not port. The operands come from host memory:
+                # mx.ones would be a Full that the host fills on the GPU, and
+                # that fill is not the refused work.
                 value = mx.qqmm(
-                    mx.ones((1, 32)), mx.ones((32, 32)), mode="mxfp8", stream=mx.gpu
+                    mx.array(np.ones((1, 32), dtype=np.float32)),
+                    mx.array(np.ones((32, 32), dtype=np.float32)),
+                    mode="mxfp8",
+                    stream=mx.gpu,
                 )
             elif args.worker == "over-limit":
                 # Integer aranges split into exact launches; a floating-point
