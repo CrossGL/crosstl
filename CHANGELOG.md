@@ -6,7 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
-- GLSL output for `length()` on reinterpreted buffer views (e.g. `(float*)words`) now returns the view's element count instead of emitting invalid GLSL (#3758).
+- GLSL output counts the `length()` of a reinterpreted buffer view, such as `(uint16_t*)words` or `(float*)(words + 2)` held in a local, written inline or passed to a helper, in the view's elements: `words.length() * 2` for a `uint16_t` view of `uint` words, less the view's byte and element offsets. It used to call `.length()` on one element read from the buffer, which glslang rejects (`'length' : does not operate on this type`). A view whose element layout is unknown is refused with `OpenGLStoragePointerError` (#3758).
 
 ---
 
