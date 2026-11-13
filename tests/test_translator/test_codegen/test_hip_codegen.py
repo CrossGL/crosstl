@@ -362,6 +362,42 @@ class TestHipCodeGen:
         assert "uint64_t t = wall_clock64();" in hip_code
         assert "clockRealtimeEXT" not in hip_code
 
+    def test_shader_clock_builtins_lower_to_hip_clocks(self):
+        source_code = """
+        shader Probe {
+            uint64_t stamp() { return clockRealtimeEXT(); }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                buffer uvec2* pair_buf;
+                void main() {
+                    uint64_t t = clockRealtimeEXT();
+                    uint64_t u = clockARB();
+                    uvec2 r = clockRealtime2x32EXT();
+                    uvec2 s = clock2x32ARB();
+                    out_buf[0] = t + stamp() + u;
+                    pair_buf[0] = r + s;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint64_t t = wall_clock64();" in hip_code
+        assert "uint64_t u = clock64();" in hip_code
+        assert "uint2 r = cgl_hip_realtime_clock2x32();" in hip_code
+        assert "uint2 s = cgl_hip_clock2x32();" in hip_code
+        assert "unsigned long long ticks = wall_clock64();" in hip_code
+        assert "unsigned long long ticks = clock64();" in hip_code
+        for name in (
+            "clockRealtimeEXT",
+            "clockARB",
+            "clockRealtime2x32EXT",
+            "clock2x32ARB",
+        ):
+            assert name not in hip_code
+
     def test_non_void_compute_entry_point_lowers_to_void_kernel(self, tmp_path):
         ast = ShaderNode(
             name="NonVoidHipKernel",

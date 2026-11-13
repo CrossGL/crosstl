@@ -4427,6 +4427,10 @@ class HipCodeGen(
             if integer_bit_call is not None:
                 return integer_bit_call
 
+            shader_clock_call = self.generate_hip_shader_clock_call(func_name, raw_args)
+            if shader_clock_call is not None:
+                return shader_clock_call
+
         if is_user_function:
             args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
@@ -4756,6 +4760,43 @@ class HipCodeGen(
         if self.scalar_component_type(type_name) in {"int", "uint"}:
             return type_name
         return None
+
+    HIP_SHADER_CLOCK_SOURCES = {
+        # GL_ARB_shader_clock reads a per-multiprocessor counter that does not run at a constant rate.
+        "clockARB": "clock64()",
+        "clock2x32ARB": "clock64()",
+        # GL_EXT_shader_realtime_clock reads the device-wide, constant-rate counter.
+        "clockRealtimeEXT": "wall_clock64()",
+        "clockRealtime2x32EXT": "wall_clock64()",
+    }
+
+    def generate_hip_shader_clock_call(self, func_name, raw_args):
+        """The shader clock built-ins; the 2x32 forms return the 64-bit counter as a uint2 (low, high)."""
+        source = self.HIP_SHADER_CLOCK_SOURCES.get(func_name)
+        if source is None:
+            return None
+        if raw_args:
+            raise ValueError(
+                f"HIP shader clock builtin {func_name} requires 0 arguments; "
+                f"got {len(raw_args)}"
+            )
+        if not func_name.endswith("2x32ARB") and not func_name.endswith("2x32EXT"):
+            return source
+        helper_name = (
+            "cgl_hip_clock2x32"
+            if func_name == "clock2x32ARB"
+            else "cgl_hip_realtime_clock2x32"
+        )
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline uint2 {helper_name}()\n"
+                "{\n"
+                f"    unsigned long long ticks = {source};\n"
+                "    return make_uint2((unsigned int)ticks, "
+                "(unsigned int)(ticks >> 32));\n"
+                "}"
+            )
+        return f"{helper_name}()"
 
     def require_hip_integer_bit_vector_helper(
         self,

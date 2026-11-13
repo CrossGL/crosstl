@@ -3586,6 +3586,12 @@ class CudaCodeGen(
             if warp_sync_call is not None:
                 return warp_sync_call
 
+            shader_clock_call = self.generate_cuda_shader_clock_call(
+                func_name, raw_args
+            )
+            if shader_clock_call is not None:
+                return shader_clock_call
+
         args = self.cuda_user_function_call_arguments(func_name, raw_args, args)
         if is_user_function:
             return f"{func_name}({', '.join(args)})"
@@ -4356,6 +4362,65 @@ class CudaCodeGen(
         suffix = suffix.replace(" ", "_").replace("*", "_ptr")
         suffix = suffix.replace("&", "_ref").replace("::", "_")
         return "".join(char if char.isalnum() else "_" for char in suffix).strip("_")
+
+    CUDA_SHADER_CLOCK_BUILTINS = {
+        "clockARB",
+        "clock2x32ARB",
+        "clockRealtimeEXT",
+        "clockRealtime2x32EXT",
+    }
+
+    def generate_cuda_shader_clock_call(self, func_name, raw_args):
+        """GL_ARB_shader_clock and GL_EXT_shader_realtime_clock built-ins.
+
+        clockARB reads the per-multiprocessor counter, which is CUDA's clock64().
+        clockRealtimeEXT reads the device-wide nanosecond timer, the PTX %globaltimer
+        register. The 2x32 forms return the same counter as a uint2 (low, high).
+        """
+        if func_name not in self.CUDA_SHADER_CLOCK_BUILTINS:
+            return None
+        if raw_args:
+            raise ValueError(
+                f"CUDA shader clock builtin {func_name} requires 0 arguments; "
+                f"got {len(raw_args)}"
+            )
+        if func_name == "clockARB":
+            return "clock64()"
+        if func_name == "clockRealtimeEXT":
+            return self.require_cuda_realtime_clock_helper()
+        if func_name == "clock2x32ARB":
+            return self.require_cuda_clock_pair_helper(
+                "cgl_cuda_clock2x32", "(unsigned long long)clock64()"
+            )
+        realtime = self.require_cuda_realtime_clock_helper()
+        return self.require_cuda_clock_pair_helper(
+            "cgl_cuda_realtime_clock2x32", realtime
+        )
+
+    def require_cuda_realtime_clock_helper(self):
+        helper_name = "cgl_cuda_realtime_clock"
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline unsigned long long {helper_name}()\n"
+                "{\n"
+                "    unsigned long long timer;\n"
+                '    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(timer));\n'
+                "    return timer;\n"
+                "}"
+            )
+        return f"{helper_name}()"
+
+    def require_cuda_clock_pair_helper(self, helper_name, source):
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline uint2 {helper_name}()\n"
+                "{\n"
+                f"    unsigned long long ticks = {source};\n"
+                "    return make_uint2((unsigned int)ticks, "
+                "(unsigned int)(ticks >> 32));\n"
+                "}"
+            )
+        return f"{helper_name}()"
 
     def generate_warp_sync_builtin_call(self, func_name, raw_args, args):
         expected_counts = CUDA_WARP_SYNC_BUILTIN_ARITIES.get(func_name)

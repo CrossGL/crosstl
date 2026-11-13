@@ -20722,6 +20722,54 @@ class TestCudaCodeGen:
         assert ".Store(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_shader_clock_builtins_lower_to_cuda_clocks(self):
+        source_code = """
+        shader Probe {
+            uint64_t stamp() { return clockRealtimeEXT(); }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                buffer uvec2* pair_buf;
+                void main() {
+                    uint64_t t = clockRealtimeEXT();
+                    uint64_t u = clockARB();
+                    uvec2 r = clockRealtime2x32EXT();
+                    uvec2 s = clock2x32ARB();
+                    out_buf[0] = t + stamp() + u;
+                    pair_buf[0] = r + s;
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint64_t t = cgl_cuda_realtime_clock();" in cuda_code
+        assert "uint64_t u = clock64();" in cuda_code
+        assert "uint2 r = cgl_cuda_realtime_clock2x32();" in cuda_code
+        assert "uint2 s = cgl_cuda_clock2x32();" in cuda_code
+        assert 'asm volatile("mov.u64 %0, %%globaltimer;"' in cuda_code
+        assert "clockRealtimeEXT" not in cuda_code
+        assert "clockARB" not in cuda_code
+        assert "clockRealtime2x32EXT" not in cuda_code
+        assert "clock2x32ARB" not in cuda_code
+
+    def test_shader_clock_builtin_with_arguments_is_refused_for_cuda(self):
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                void main() {
+                    out_buf[0] = clockARB(1);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match=r"clockARB requires 0 arguments"):
+            CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
 
 def test_scalar_f64_constructor_emits_double_cast():
     source_code = """
