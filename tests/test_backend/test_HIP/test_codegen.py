@@ -19914,7 +19914,7 @@ def test_hip_struct_keyword_member_reaches_every_target(tmp_path):
     vulkan = translate(str(source), backend="vulkan", save_shader=None)
 
     for text in (metal, directx):
-        assert text.count("struct Inner {") == 1
+        assert len(re.findall(r"struct Inner\s*\{", text)) == 1
         assert "Inner inner;" in text
     assert vulkan.count('OpName %Inner "Inner"') == 1
     assert 'OpMemberName %Outer 0 "inner"' in vulkan
