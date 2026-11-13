@@ -164,6 +164,8 @@ _FIXED_SCALAR = {
     "bitCount": "int",
     "findLSB": "int",
     "findMSB": "int",
+    "f32tof16": "uint",
+    "f16tof32": "float",
 }
 # Packing functions (section 8.4).
 _PACKING = {

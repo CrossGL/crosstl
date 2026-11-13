@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -5864,3 +5865,343 @@ def test_wgsl_codegen_sampler2d_array_takes_unmodified_resource_path():
     assert "var tex_1: texture_2d<f32>;" in generated
     assert "var tex_1_sampler: sampler;" in generated
     assert "var<storage" not in generated
+
+
+def test_wgsl_codegen_lowers_f32tof16_and_f16tof32(tmp_path):
+    shader = """
+    shader TestHalfConversions {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* s_in;
+            buffer vec2* v2_in;
+            buffer vec3* v3_in;
+            buffer vec4* v4_in;
+            buffer uint* u_out;
+            buffer uvec2* u2_out;
+            buffer uvec3* u3_out;
+            buffer uvec4* u4_out;
+            buffer float* f_out;
+            buffer vec2* f2_out;
+            buffer vec3* f3_out;
+            buffer vec4* f4_out;
+            void main() {
+                u_out[0] = f32tof16(s_in[0]);
+                u2_out[0] = f32tof16(v2_in[0]);
+                u3_out[0] = f32tof16(v3_in[0]);
+                u4_out[0] = f32tof16(v4_in[0]);
+
+                f_out[0] = f16tof32(u_out[0]);
+                f2_out[0] = f16tof32(u2_out[0]);
+                f3_out[0] = f16tof32(u3_out[0]);
+                f4_out[0] = f16tof32(u4_out[0]);
+
+                f_out[1] = f16tof32(f32tof16(s_in[0]));
+                f2_out[1] = f16tof32(f32tof16(v2_in[0]));
+                f3_out[1] = f16tof32(f32tof16(v3_in[0]));
+                f4_out[1] = f16tof32(f32tof16(v4_in[0]));
+            }
+        }
+    }
+    """
+    source = tmp_path / "half_conv.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "f32tof16" not in generated
+    assert "f16tof32" not in generated
+    assert "pack2x16float" in generated
+    assert "unpack2x16float" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_half_conversion_converts_integer_operands(tmp_path):
+    # f32tof16 takes a float, so HLSL converts an integer operand first; WGSL needs the conversion written out.
+    shader = """
+    shader TestHalfConversionIntegers {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer int* iin;
+            buffer ivec3* i3in;
+            buffer uint* u_out;
+            buffer uvec3* u3_out;
+            buffer float* f_out;
+            void main() {
+                int k = iin[0];
+                u_out[0] = f32tof16(k) + f32tof16(2);
+                u3_out[0] = f32tof16(i3in[0]);
+                f_out[0] = f16tof32(f32tof16(k)) + f16tof32(k);
+            }
+        }
+    }
+    """
+    source = tmp_path / "half_conv_int.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    assert "pack2x16float(vec2<f32>(f32(k), 0.0))" in generated
+    assert "pack2x16float(vec2<f32>(f32(2), 0.0))" in generated
+    assert "crosstl_pack2x16float_vec3(vec3<f32>(i3in[0]))" in generated
+    assert "unpack2x16float(pack2x16float(vec2<f32>(f32(k), 0.0))).x" in generated
+    assert "unpack2x16float(u32(k)).x" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+@pytest.mark.parametrize("func_name", ["f32tof16", "f16tof32"])
+def test_wgsl_codegen_half_conversion_argument_count_errors(func_name):
+    shader_zero = f"""
+    shader TestArgCount {{
+        compute {{
+            buffer float* out;
+            void main() {{
+                out[0] = float({func_name}());
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target supports {func_name}\(\) with exactly 1 argument; got 0",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader_zero))
+
+    shader_two = f"""
+    shader TestArgCount {{
+        compute {{
+            buffer float* out;
+            void main() {{
+                out[0] = float({func_name}(1.0, 2.0));
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(
+        ValueError,
+        match=rf"WGSL target supports {func_name}\(\) with exactly 1 argument; got 2",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader_two))
+
+
+def test_wgsl_codegen_half_conversion_user_function_shadowing(tmp_path):
+    shader = """
+    shader TestUserShadow {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* out_buf;
+
+            uint f32tof16(float x) {
+                return uint(x * 2.0);
+            }
+
+            void main() {
+                out_buf[0] = f16tof32(f32tof16(3.0));
+            }
+        }
+    }
+    """
+    source = tmp_path / "user_shadow.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    # The user-defined function call must be preserved and called as argument to f16tof32
+    assert "f32tof16(3.0)" in generated
+    assert "unpack2x16float(f32tof16(3.0)).x" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_half_conversion_evaluates_operand_once(tmp_path):
+    shader = """
+    shader TestSideEffects {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* counter;
+            buffer uvec2* u2_out;
+            buffer uvec3* u3_out;
+            buffer uvec4* u4_out;
+            buffer vec2* f2_out;
+            buffer vec3* f3_out;
+            buffer vec4* f4_out;
+
+            struct S {
+                vec3 v;
+            };
+
+            vec2 get_vec2_effect() {
+                counter[0] += 1u;
+                return vec2(1.0, 2.0);
+            }
+
+            vec3 get_vec3_effect() {
+                counter[0] += 1u;
+                return vec3(1.0, 2.0, 3.0);
+            }
+
+            vec4 get_vec4_effect() {
+                counter[0] += 1u;
+                return vec4(1.0, 2.0, 3.0, 4.0);
+            }
+
+            uvec2 get_uvec2_effect() {
+                counter[0] += 1u;
+                return uvec2(1u, 2u);
+            }
+
+            uvec3 get_uvec3_effect() {
+                counter[0] += 1u;
+                return uvec3(1u, 2u, 3u);
+            }
+
+            uvec4 get_uvec4_effect() {
+                counter[0] += 1u;
+                return uvec4(1u, 2u, 3u, 4u);
+            }
+
+            S get_struct_effect() {
+                counter[0] += 1u;
+                S s;
+                s.v = vec3(1.0, 2.0, 3.0);
+                return s;
+            }
+
+            void main() {
+                // Path A: standalone f32tof16(vector_expression)
+                u2_out[0] = f32tof16(get_vec2_effect());
+                u3_out[0] = f32tof16(get_vec3_effect());
+                u4_out[0] = f32tof16(get_vec4_effect());
+
+                // Path B: standalone f16tof32(vector_expression)
+                f2_out[0] = f16tof32(get_uvec2_effect());
+                f3_out[0] = f16tof32(get_uvec3_effect());
+                f4_out[0] = f16tof32(get_uvec4_effect());
+
+                // Path C: composite f16tof32(f32tof16(vector_expression))
+                f2_out[1] = f16tof32(f32tof16(get_vec2_effect()));
+                f3_out[1] = f16tof32(f32tof16(get_vec3_effect()));
+                f4_out[1] = f16tof32(f32tof16(get_vec4_effect()));
+
+                // Nested member access with side-effecting call
+                u3_out[1] = f32tof16(get_struct_effect().v);
+            }
+        }
+    }
+    """
+    source = tmp_path / "eval_once.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    compute_main = generated.split("fn compute_main()")[1]
+    assert compute_main.count("get_vec2_effect()") == 2
+    assert compute_main.count("get_vec3_effect()") == 2
+    assert compute_main.count("get_vec4_effect()") == 2
+    assert compute_main.count("get_uvec2_effect()") == 1
+    assert compute_main.count("get_uvec3_effect()") == 1
+    assert compute_main.count("get_uvec4_effect()") == 1
+    assert compute_main.count("get_struct_effect()") == 1
+
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
+def test_wgsl_codegen_half_conversion_array_indexing_side_effects(tmp_path):
+    shader = """
+    shader TestArrayIndexingSideEffects {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* counter;
+            buffer vec2* v2_arr;
+            buffer vec3* v3_arr;
+            buffer vec4* v4_arr;
+            buffer uvec2* u2_arr;
+            buffer uvec3* u3_arr;
+            buffer uvec4* u4_arr;
+
+            buffer uvec2* u2_out;
+            buffer uvec3* u3_out;
+            buffer uvec4* u4_out;
+            buffer vec2* f2_out;
+            buffer vec3* f3_out;
+            buffer vec4* f4_out;
+
+            int next_index() {
+                counter[0] += 1u;
+                return 0;
+            }
+
+            void main() {
+                int i = 0;
+
+                // Standalone f32tof16 with arr[i++]
+                u2_out[0] = f32tof16(v2_arr[i++]);
+                u3_out[0] = f32tof16(v3_arr[i++]);
+                u4_out[0] = f32tof16(v4_arr[i++]);
+
+                // Standalone f16tof32 with arr[i++]
+                f2_out[0] = f16tof32(u2_arr[i++]);
+                f3_out[0] = f16tof32(u3_arr[i++]);
+                f4_out[0] = f16tof32(u4_arr[i++]);
+
+                // Composite f16tof32(f32tof16) with arr[i++]
+                f2_out[1] = f16tof32(f32tof16(v2_arr[i++]));
+                f3_out[1] = f16tof32(f32tof16(v3_arr[i++]));
+                f4_out[1] = f16tof32(f32tof16(v4_arr[i++]));
+
+                // Indexed expression with effectful call
+                u3_out[1] = f32tof16(v3_arr[next_index()]);
+            }
+        }
+    }
+    """
+    source = tmp_path / "array_side_effects.cgl"
+    source.write_text(shader, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="wgsl")
+
+    compute_main = generated.split("fn compute_main()")[1].split("fn crosstl_")[0]
+    lines = [
+        line.strip()
+        for line in compute_main.splitlines()
+        if line.strip() and line.strip() not in ("{", "}")
+    ]
+
+    assert lines[0] == "var i: i32 = 0;"
+
+    expected_ops = [
+        ("u2_out[0]", "crosstl_pack2x16float_vec2", "v2_arr"),
+        ("u3_out[0]", "crosstl_pack2x16float_vec3", "v3_arr"),
+        ("u4_out[0]", "crosstl_pack2x16float_vec4", "v4_arr"),
+        ("f2_out[0]", "crosstl_unpack2x16float_vec2", "u2_arr"),
+        ("f3_out[0]", "crosstl_unpack2x16float_vec3", "u3_arr"),
+        ("f4_out[0]", "crosstl_unpack2x16float_vec4", "u4_arr"),
+        ("f2_out[1]", "unpack2x16float(pack2x16float", "v2_arr"),
+        ("f3_out[1]", "crosstl_unpack_pack2x16float_vec3", "v3_arr"),
+        ("f4_out[1]", "crosstl_unpack_pack2x16float_vec4", "v4_arr"),
+    ]
+
+    # Verify each i++ statement follows the exact sequence:
+    # 1. Capture the prior index into a temporary variable before increment.
+    # 2. Advance the loop variable (i += 1).
+    # 3. Use the exact captured temporary variable in the conversion assignment.
+    # 4. Statements execute strictly in source order.
+    curr_line = 1
+    for target, helper, arr in expected_ops:
+        capture_line = lines[curr_line]
+        m = re.match(r"^let (\w+): i32 = i;$", capture_line)
+        assert m is not None, f"Expected capture of i, got: {capture_line}"
+        saved_index_var = m.group(1)
+
+        incr_line = lines[curr_line + 1]
+        assert incr_line == "i += 1;", f"Expected increment of i, got: {incr_line}"
+
+        use_line = lines[curr_line + 2]
+        assert target in use_line, f"Expected target {target} in: {use_line}"
+        assert helper in use_line, f"Expected helper {helper} in: {use_line}"
+        assert (
+            f"{arr}[{saved_index_var}]" in use_line
+        ), f"Expected {arr}[{saved_index_var}] in: {use_line}"
+
+        curr_line += 3
+
+    # Verify the effectful call index expression is evaluated once and passed directly
+    final_line = lines[curr_line]
+    assert final_line == "u3_out[1] = crosstl_pack2x16float_vec3(v3_arr[next_index()]);"
+    assert compute_main.count("next_index()") == 1
+    assert compute_main.count("i += 1;") == 9
+
+    validate_wgsl_with_naga(tmp_path, generated)
