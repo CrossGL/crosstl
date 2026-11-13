@@ -956,7 +956,9 @@ def test_current_mlx_fp_quantized_qmv_quad_native_parity(
         work = Path(path)
         try:
             config = _config(work, target, entry)
-            descriptor, package = translate_entry(root, work, target, config, record)
+            descriptor, package = translate_entry(
+                root, work, target, config, record, workgroup=WORKGROUP
+            )
             executor = _executor(target)
             evidence = []
             try:

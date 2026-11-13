@@ -430,7 +430,7 @@ def _adjust(info, storage, z, mutation, records):
     return (x_base, *bases, expert, z * scalar("out_vec_size") * rows)
 
 
-def translate_entry(root, work, target, config, record):
+def translate_entry(root, work, target, config, record, workgroup=WORKGROUP):
     """Translate one entry and check it against its pinned artifact."""
     translation = translate_project(
         config,
@@ -451,7 +451,7 @@ def translate_entry(root, work, target, config, record):
         artifact, sha256=record["sha256"], size_bytes=record["sizeBytes"]
     )
     (execution,) = artifact["execution"]["entryPoints"]
-    assert execution["workgroupSize"] == list(WORKGROUP)
+    assert execution["workgroupSize"] == list(workgroup)
     generated = root / artifact["path"]
     text = generated.read_text(encoding="utf-8")
     assert "unsupported" not in text
