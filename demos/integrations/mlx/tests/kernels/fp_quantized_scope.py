@@ -19,13 +19,14 @@ GATE_ENTRY_COUNTS = {
     "qmvFast": 66,
     # test_current_fp_quantized_qvm.py: fp_qvm and fp_gather_qvm.
     "qvm": 54,
+    # test_current_fp_quantized_qmv_quad.py: fp_qmv_quad.
+    "qmvQuad": 36,
 }
 
 # Kernels of fp_quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
     "fp_qmm_n",
     "fp_gather_qmm_n",
-    "fp_qmv_quad",
     "fp_qmv_wide",
     "fp_qvm_split_k",
     "fp_qmm_t_splitk",
@@ -34,8 +35,8 @@ EXCLUDED_KERNELS = (
     "fp_gather_qmm_rhs",
 )
 EXCLUDED_REASON = (
-    "the quad, wide and split-K matrix-vector, the split-K vector-matrix "
-    "and the matrix-matrix kernels are not gated yet"
+    "the wide matrix-vector, the split-K vector-matrix and the "
+    "matrix-matrix kernels are not gated yet"
 )
 
 

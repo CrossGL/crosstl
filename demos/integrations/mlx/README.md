@@ -2012,10 +2012,39 @@ every column the first group's scale, keep the first block's scales, drop the
 last pass, or drop the code sign or the global scale are rejected. Every
 target must match the model word for word and leave the guards untouched; on
 Metal the translation must also match the unchanged upstream kernel.
-`fp_quantized_scope.py` records which gate covers which kernels; the quad,
-wide and split-K matrix-vector, the split-K vector-matrix and the
-matrix-matrix kernels are not gated yet. This covers 54/17,832 entries; it
-does not run the upstream MLX test suite or redirect the MLX host runtime.
+`fp_quantized_scope.py` records which gate covers which kernels. This
+covers 54/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/fp_quantized_qmv_quad.current-tree.translation.json` pins a further
+36 entries of `fp_quantized.metal` and their 108 artifacts: `fp_qmv_quad` with
+`D` of 64 and 128, with and without batching, for the three element types in
+`nvfp4`, `mxfp8` and `mxfp4`. `dispatch_qmv` sends a product whose `K` is 64
+or 128 and whose width is a power of two, without a global scale, to
+`qmv_quad`; 4 and 8 bits are both powers of two and every group size divides
+both widths, so the host can dispatch all 36. They share the `fp_qmv` gate's
+target options, index-range preconditions, inputs and exactness argument, and
+run in the same `fp-quantized-qmv-0` and `fp-quantized-qmv-1` legs: 108
+dispatches and 10,782 checked elements per target, over `(32, 1, 1)`
+threadgroups and an `(M, ceil(N / 64), B)` grid. `fp_qmv_quad_impl` gives each
+of a simdgroup's eight quads eight output rows, eight apart, and each lane a
+quarter of `K`, in two steps for `nvfp4` at `D` 128 and one otherwise; DirectX
+and OpenGL lower `quad_sum` to a software reduction over four consecutive
+invocations. Cases reach whole tiles, partial last tiles and quads with no row
+at all, and both branches of the batched `adjust_matrix_offsets` overload. A
+row past `N` skips its `qdot` and store but still loads its scales, so the
+cases pad the scales through the last tile, before the guards, and the model
+shows those bytes never reach an output. A lane-level model must reach direct
+dequantized dot products and store every row once, and mutated models that
+reverse each pack's codes, ignore the quad's row offset, the row step or the
+batch offsets, give every lane its row's first scale, keep a lane's first
+scale for its second step, store lane 0's partial sum instead of the
+`quad_sum`, or drop the code sign are rejected. Every target must match the
+model word for word and leave the guards untouched; on Metal the translation
+must also match the unchanged upstream kernel. The wide matrix-vector, the
+split-K vector-matrix and the matrix-matrix kernels are not gated yet. This
+covers 36/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with
