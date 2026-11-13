@@ -62,6 +62,7 @@ from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
+from ..semantics.shader_records import is_shader_record_buffer as _is_srb
 from .sampler_pairs import canonicalize_separate_textures
 from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import (
@@ -832,6 +833,8 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 saved_variable_types = self.variable_types.copy()
                 for variable in getattr(stage, "local_variables", []) or []:
                     if self.is_rust_shared_variable(variable):
+                        continue
+                    if _is_srb(variable):
                         continue
                     self.register_variable_type(
                         variable.name,
@@ -4394,6 +4397,19 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
             self.generate_rust_resource_parameter(info)
             for info in promoted_resource_params
         )
+        if shader_type and stage_node is not None:
+            for _srb_var in getattr(stage_node, "local_variables", []) or []:
+                if not _is_srb(_srb_var):
+                    continue
+                _srb_name = getattr(_srb_var, "name", None)
+                if not _srb_name:
+                    continue
+                _srb_vtype = self.get_variable_type(_srb_var) or "float"
+                _srb_rtype = self.map_type(_srb_vtype)
+                _srb_pname = self.rust_identifier(_srb_name)
+                self.register_variable_type(_srb_name, _srb_vtype, scope="local")
+                _attr = '#[cfg_attr(feature = "crossgl_gpu", spirv(shader_record_buffer))] '
+                params.append(f"{_attr}{_srb_pname}: &{_srb_rtype}")
 
         params_str = ", ".join(params) if params else ""
 
