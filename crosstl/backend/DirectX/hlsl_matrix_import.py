@@ -85,6 +85,12 @@ _ELEMENTWISE_INTRINSICS = frozenset(
         "trunc",
     }
 )
+# Always a scalar, whatever the operands.
+_SCALAR_RESULT_INTRINSICS = frozenset({"determinant", "distance", "dot", "length"})
+# Vector or matrix results; these are never splatted.
+_AGGREGATE_RESULT_INTRINSICS = frozenset({"and", "or", "select", "mul", "transpose"})
+# Keep the shape of the operand, only changing the element type.
+_REINTERPRET_INTRINSICS = frozenset({"asfloat", "asint", "asuint"})
 _ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/", "%"})
 # Componentwise on integer matrices, keeping the shape.
 _BITWISE_OPERATORS = frozenset({"<<", ">>", "&", "|", "^"})
@@ -499,7 +505,7 @@ class HLSLMatrixImportMixin:
         all-ones matrix. CrossGL reads ``mat3 m = 1.0;`` as a type error and ``mat3(1.0)`` as the identity, so the
         importer writes the same splat the cast ``(float3x3)v`` gets.
         """
-        if shape is None or isinstance(value, (bool, InitializerListNode)):
+        if shape is None or isinstance(value, InitializerListNode):
             return None
         if self.matrix_expression_shape(value) is not None:
             return None
@@ -514,9 +520,7 @@ class HLSLMatrixImportMixin:
         ``expression_value_raw_type`` only types integer arithmetic, so float expressions such as ``x * 2.0 + 1.0``,
         ``c ? x : 1.0`` and ``sin(x)`` are typed here from their operands.
         """
-        if isinstance(expr, bool):
-            return "other"
-        if isinstance(expr, (int, float)):
+        if isinstance(expr, (bool, int, float)):
             return "scalar"
         if isinstance(expr, CastNode):
             target = self.resolve_integer_alias(str(expr.target_type).strip())
@@ -542,13 +546,18 @@ class HLSLMatrixImportMixin:
             if name not in self.source_function_names:
                 if name in _SCALAR_TYPES:
                     return "scalar"
-                if name in _ELEMENTWISE_INTRINSICS:
+                if name in _SCALAR_RESULT_INTRINSICS:
+                    return "scalar"
+                if name in _AGGREGATE_RESULT_INTRINSICS:
+                    return "other"
+                if name in _ELEMENTWISE_INTRINSICS | _REINTERPRET_INTRINSICS:
                     return self._combined_value_kind(list(expr.args or []))
         try:
-            raw_type = self.resolve_integer_alias(self.expression_value_raw_type(expr))
+            raw_type = self.expression_value_raw_type(expr)
+            raw_type = self.resolve_integer_alias(raw_type) if raw_type else None
         except ValueError:
             return None
-        if raw_type is None:
+        if not raw_type:
             return None
         return "scalar" if raw_type in _SCALAR_TYPES else "other"
 
@@ -834,7 +843,10 @@ class HLSLMatrixImportMixin:
         if isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
             name = self.normalize_hlsl_intrinsic_name(expr.name)
             return (
-                name in _ELEMENTWISE_INTRINSICS
+                name
+                in _ELEMENTWISE_INTRINSICS
+                | _SCALAR_RESULT_INTRINSICS
+                | _REINTERPRET_INTRINSICS
                 and name not in self.source_function_names
                 and all(self.matrix_operand_is_pure(arg) for arg in expr.args or [])
             )

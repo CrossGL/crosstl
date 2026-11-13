@@ -127,6 +127,28 @@ def test_scalar_expressions_are_splatted_like_single_operands():
     assert "mat3 s = mat3(vec3(sin(x)), vec3(sin(x)), vec3(sin(x)));" in output
 
 
+def test_scalar_results_of_known_intrinsics_are_splatted():
+    output = to_crossgl("""
+        float3 v = float3(o[0], 1.0, 2.0);
+        float3x3 a = length(v);
+        float3x3 b = dot(v, v);
+        float3x3 c = distance(v, v);
+        float3x3 d = asfloat(id.x) * 1.0;
+        float3x3 e = true;
+        o[1] = a[0][0] + b[0][0] + c[0][0] + d[0][0] + e[0][0];
+    """)
+    assert "mat3 a = mat3(vec3(length(v)), vec3(length(v)), vec3(length(v)));" in output
+    assert "mat3 b = mat3(vec3(dot(v, v)), vec3(dot(v, v)), vec3(dot(v, v)));" in output
+    assert "mat3 c = mat3(vec3(distance(v, v))," in output
+    assert "mat3 d = mat3(vec3(uintBitsToFloat(id.x) * 1.0)," in output
+    assert "mat3 e = mat3(vec3(true), vec3(true), vec3(true));" in output
+
+
+def test_values_of_unknown_type_are_not_written_unchanged():
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl("float3x3 m = mystery;\no[1] = m[0][0];")
+
+
 @pytest.mark.parametrize(
     "statement",
     ["float3x3 m = x++;", "float3x3 m = f(x);", "float3x3 m = (float)(x++);"],
