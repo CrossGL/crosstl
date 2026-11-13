@@ -6,7 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
-- SPIR-V output unwraps offset buffer views (`data + N`, helper `buffer T*` and `StructuredBuffer<T>` parameters, and local or chained view variables) to their base storage-block pointer before emitting `OpArrayLength`, and subtracts the signed element offset (`OpISub`) to match GLSL semantics (#3757).
+- SPIR-V output counts the `length()` of a buffer view with an offset from the offset on, as GLSL output does: `data + 2` passed to a `buffer float*` or `StructuredBuffer<float>` parameter, or held in a local or a chain of locals, gives the buffer's `OpArrayLength` less the offset, as a signed `int`. It used to apply `OpArrayLength` to the element pointer, which spirv-val rejects (`The Structure's type in OpArrayLength must be a pointer to an OpTypeStruct`). The `length()` of a reinterpreted view, or of an array member of a buffer element, is refused with `BufferLengthUnsupportedError` (`project.translate.spirv-buffer-length-unsupported`) (#3757).
 
 ---
 
