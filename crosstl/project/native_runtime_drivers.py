@@ -2503,6 +2503,57 @@ class _VulkanDispatchContext:
 
 def _vk_destroy(vk: Any, name: str, owner: Any, handle: Any) -> None:
     if handle is None:
+# SPIR-V module version helpers (used by _create_shader_module to enforce
+# the SPIR-V version accepted by the active Vulkan device before submitting).
+_SPIRV_MAGIC_LE = b"\x03\x02\x23\x07"
+
+
+def _spirv_module_version(code: bytes) -> "tuple[int, int] | None":
+    if len(code) < 8 or len(code) % 4:
+        return None
+    if code[:4] == _SPIRV_MAGIC_LE:
+        word = struct.unpack_from("<I", code, 4)[0]
+    elif code[:4] == _SPIRV_MAGIC_LE[::-1]:
+        word = struct.unpack_from(">I", code, 4)[0]
+    else:
+        return None
+    return (word >> 16) & 0xFF, (word >> 8) & 0xFF
+
+
+def _vulkan_spirv_ceiling(api_version: int) -> "tuple[int, int]":
+    maj = (api_version >> 22) & 0x7F
+    min_ = (api_version >> 12) & 0x3FF
+    if maj > 1 or min_ >= 3:
+        return 1, 6
+    if min_ >= 2:
+        return 1, 5
+    if min_ >= 1:
+        return 1, 3
+    return 1, 0
+
+
+def _validate_vulkan_spirv_module_version(code: bytes, api_version: int) -> None:
+    ver = _spirv_module_version(code)
+    if ver is None:
+        return
+    ceil = _vulkan_spirv_ceiling(api_version)
+    if ver <= ceil:
+        return
+    vk_maj = (api_version >> 22) & 0x7F
+    vk_min = (api_version >> 12) & 0x3FF
+    raise RuntimeAdapterSetupError(
+        f"SPIR-V module {ver[0]}.{ver[1]} rejected: "
+        f"Vulkan {vk_maj}.{vk_min} accepts up to SPIR-V {ceil[0]}.{ceil[1]}.",
+        details={
+            "target": "vulkan",
+            "runtime": VulkanComputeRuntime.name,
+            "reasonKind": "spirv-version-incompatible",
+            "spirvModuleVersion": f"{ver[0]}.{ver[1]}",
+            "maxAcceptedSpirvVersion": f"{ceil[0]}.{ceil[1]}",
+            "vulkanApiVersion": f"{vk_maj}.{vk_min}",
+        },
+    )
+
         return
     destroy = getattr(vk, name, None)
     if not callable(destroy):
