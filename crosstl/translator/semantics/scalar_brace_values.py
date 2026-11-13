@@ -8,6 +8,13 @@ in variable and constant declarations whose type is ``float``, ``double``, ``hal
 8-, 16- or 64-bit integer (``i16 s = {};`` becomes ``i16 s = 0;``, as written by hand), or an alias of one
 (``typedef float real_t; real_t one = {};``).
 
+An empty brace list whose destination is a scalar is that scalar's zero outside a scalar declaration as well:
+assigned (``x = {};``), returned (``return {};`` from a function returning ``float``), or a member or element of a
+brace list (``S s = {{}, 1.0};``, ``float a[2] = {{}, 1.0};``). The destination is the declared type of the variable,
+member or element assigned to, the function's return type, or the structure member or array element the list
+initializes. A destination whose type the program does not determine, such as a name declared with different types,
+keeps its braces.
+
 A singleton scalar list becomes its sole value, converted to the destination type.
 Nested singleton lists are unwrapped too; an empty inner list is zero. More than one
 value is refused with :class:`ScalarBraceInitializerError` before code generation.
@@ -152,7 +159,187 @@ def zero_empty_scalar_initializers(program, target) -> int:
                 value = A.FunctionCallNode(A.IdentifierNode(scalar_type.name), [value])
         setattr(node, value_field, value)
         count += 1
+    return count + _zero_empty_scalar_slots(nodes, aliases, empty_aliases)
+
+
+def _zero_empty_scalar_slots(nodes, aliases, empty_aliases):
+    """Zero the empty brace lists assigned, returned, or nested in a brace list whose destination is a scalar."""
+    found = {}
+    for node in nodes:
+        if (
+            isinstance(node, A.StructNode)
+            and isinstance(node.name, str)
+            and not node.generic_params
+        ):
+            found.setdefault(node.name, []).append(node)
+    structs = {name: same[0] for name, same in found.items() if len(same) == 1}
+    context = (structs, aliases, empty_aliases)
+
+    functions = []
+    local_declarations = set()
+    for function in nodes:
+        if not isinstance(function, A.FunctionNode) or function.body is None:
+            continue
+        declared = {}
+        for parameter in function.parameters or []:
+            if isinstance(parameter, A.ParameterNode):
+                declared.setdefault(parameter.name, []).append(parameter.param_type)
+        body = list(_nodes(function.body))
+        for node in body:
+            declaration = _declaration(node)
+            if declaration is not None:
+                declared.setdefault(node.name, []).append(declaration[0])
+                local_declarations.add(id(node))
+        functions.append((function, declared, body))
+    module = {}
+    for node in nodes:
+        declaration = _declaration(node)
+        if declaration is not None and id(node) not in local_declarations:
+            module.setdefault(node.name, []).append(declaration[0])
+
+    count = 0
+    for node in nodes:
+        declaration = _declaration(node)
+        if declaration is not None:
+            declared_type, value_field = declaration
+            value = getattr(node, value_field, None)
+            if isinstance(value, A.ArrayLiteralNode) and value.elements:
+                count += _zero_elements(value, declared_type, context)
+    for function, declared, body in functions:
+
+        def declared_type(name, declared=declared):
+            types = declared.get(name) or module.get(name) or []
+            return types[0] if len(types) == 1 else None
+
+        for node in body:
+            if isinstance(node, A.AssignmentNode) and node.operator == "=":
+                destination = _expression_type(node.target, declared_type, context)
+            elif isinstance(node, A.ReturnNode):
+                destination = function.return_type
+            else:
+                continue
+            value, zeroed = _zero_value(node.value, destination, context)
+            if value is not node.value:
+                node.value = value
+                if isinstance(node, A.AssignmentNode):
+                    node.right = value
+            count += zeroed
     return count
+
+
+def _declaration(node):
+    """The declared type and the initializer field of a variable or constant declaration, else ``None``."""
+    if isinstance(node, A.VariableNode) and not getattr(node, "is_type_alias", False):
+        return node.var_type, "initial_value"
+    if isinstance(node, A.ConstantNode):
+        return node.const_type, "value"
+    return None
+
+
+def _zero_value(value, destination, context):
+    """``value`` with its empty brace lists whose destination is a scalar made zero, and how many were."""
+    if not isinstance(value, A.ArrayLiteralNode):
+        return value, 0
+    if value.elements:
+        return value, _zero_elements(value, destination, context)
+    scalar_type = _scalar_type(destination, context[2])
+    if scalar_type is None:
+        return value, 0
+    scalar = _SCALAR_NAMES[scalar_type.name]
+    return A.LiteralNode(_ZERO_LITERALS[scalar], A.PrimitiveType(scalar)), 1
+
+
+def _zero_elements(value, destination, context):
+    """Zero the empty lists among ``value``'s elements whose structure member or array element is a scalar."""
+    destinations = _element_types(destination, len(value.elements), context)
+    if destinations is None or any(
+        not isinstance(element, A.ArrayLiteralNode)
+        and _is_aggregate(element_type, context)
+        for element, element_type in zip(value.elements, destinations)
+    ):
+        # A value for an array or structure starts brace elision, which moves the later elements' destinations.
+        return 0
+    count = 0
+    for index, element_type in enumerate(destinations):
+        value.elements[index], zeroed = _zero_value(
+            value.elements[index], element_type, context
+        )
+        count += zeroed
+    return count
+
+
+def _element_types(type_node, count, context):
+    """The destinations of the ``count`` elements of a brace list initializing ``type_node``, else ``None``."""
+    structs, aliases, _ = context
+    type_node = _resolved_type(type_node, aliases)
+    if isinstance(type_node, A.ArrayType):
+        return [type_node.element_type] * count
+    struct = structs.get(_type_name(type_node))
+    if struct is None or count > len(struct.members):
+        return None
+    members = struct.members[:count]
+    if not all(isinstance(member, A.StructMemberNode) for member in members):
+        return None
+    return [member.member_type for member in members]
+
+
+def _is_aggregate(type_node, context):
+    """Whether ``type_node`` is an array or a structure of the program."""
+    structs, aliases, _ = context
+    type_node = _resolved_type(type_node, aliases)
+    return isinstance(type_node, A.ArrayType) or _type_name(type_node) in structs
+
+
+def _expression_type(expression, declared_type, context):
+    """The declared type of the variable, structure member or element ``expression`` names, else ``None``."""
+    structs, aliases, _ = context
+    if isinstance(expression, A.IdentifierNode):
+        return declared_type(expression.name)
+    if isinstance(expression, A.MemberAccessNode):
+        owner = _resolved_type(
+            _expression_type(expression.object_expr, declared_type, context), aliases
+        )
+        struct = structs.get(_type_name(owner))
+        if struct is None:
+            return None
+        members = [
+            member.member_type
+            for member in struct.members
+            if isinstance(member, A.StructMemberNode)
+            and member.name == expression.member
+        ]
+        return members[0] if len(members) == 1 else None
+    if isinstance(expression, A.ArrayAccessNode):
+        owner = _resolved_type(
+            _expression_type(expression.array_expr, declared_type, context), aliases
+        )
+        if isinstance(owner, A.ArrayType):
+            return owner.element_type
+        if isinstance(owner, A.PointerType):
+            return owner.pointee_type
+    return None
+
+
+def _resolved_type(type_node, aliases):
+    """``type_node`` with type aliases followed to the type they name."""
+    seen = set()
+    while True:
+        name = _type_name(type_node)
+        if name is None or name in seen or name not in aliases:
+            return type_node
+        seen.add(name)
+        type_node = aliases[name]
+
+
+def _type_name(type_node):
+    """The name of a type written as a plain name, else ``None``."""
+    if isinstance(type_node, str):
+        return type_node
+    if isinstance(type_node, (A.PrimitiveType, A.NamedType)) and not getattr(
+        type_node, "generic_args", None
+    ):
+        return type_node.name if isinstance(type_node.name, str) else None
+    return None
 
 
 def _enum_value(target, node, value, enums):
