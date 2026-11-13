@@ -594,7 +594,6 @@ def test_provider_has_body_in_translated_metal(tmp_path):
 
 
 def test_consumer_translation_succeeds_without_error(tmp_path):
-    from crosstl.backend.Metal.external_functions import MetalExternalFunctionError
     generated = _xlat(_CONSUMER, tmp_path)
     assert generated
 
