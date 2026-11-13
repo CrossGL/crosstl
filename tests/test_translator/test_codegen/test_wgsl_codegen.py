@@ -2244,6 +2244,36 @@ def test_wgsl_codegen_converts_negative_literal_in_unsigned_comparison_and_arith
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_casts_module_scope_const_and_private_initializers(tmp_path):
+    # Module-scope const and var<private> initializers must be type-cast when
+    # the declared type differs from the initializer type (issue #3711).
+    shader = """
+    shader Probe {
+        const int A = 1;
+        const uint B = A;
+        const float F = A;
+        const uint C = -1;
+        uint g = A;
+        buffer uint outs[];
+        compute {
+            layout(local_size_x = 1) in;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outs[i] = B + uint(F) + C + g;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "const B: u32 = u32(A);" in generated
+    assert "const F: f32 = f32(A);" in generated
+    assert "const C: u32 = u32(-1i);" in generated
+    assert "var<private> g: u32 = u32(A);" in generated
+    validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_preserves_abstract_integers_and_pure_signed_unsigned(
     tmp_path,
 ):
