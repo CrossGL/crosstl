@@ -3,6 +3,8 @@
 import hashlib
 import re
 
+from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.integer_literals import (
     IntegerLiteralError,
@@ -356,7 +358,7 @@ class HipToCrossGLConverter:
     }
     # ``let``, ``match`` and ``var`` are CrossGL lexer keywords.
     CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "let", "match", "precision", "var"}
-    CPP_OPERATOR_FUNCTION_NAME_PARTS = {
+    CROSSGL_RESERVED_IDENTIFIERS = frozenset(CROSSGL_KEYWORDS)
         "+": "plus",
         "-": "minus",
         "*": "mul",

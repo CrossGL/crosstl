@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
+
 from ...translator.integer_literals import crossgl_legacy_octal
 from ..assignment_operands import grouped_operand
 from ..namespace_constants import is_c_family_namespace_constant
@@ -256,15 +258,7 @@ class CudaToCrossGLConverter:
     }
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
     # ``let`` and ``match`` are CrossGL lexer keywords like ``kernel`` and ``var``.
-    CROSSGL_RESERVED_IDENTIFIERS = {
-        "buffer",
-        "in",
-        "kernel",
-        "let",
-        "match",
-        "precision",
-        "var",
-    }
+    CROSSGL_RESERVED_IDENTIFIERS = frozenset(CROSSGL_KEYWORDS)
 
     def __init__(self, threadgroup_size=None):
         # The host picks a CUDA kernel's block size at launch time; this option names it.
