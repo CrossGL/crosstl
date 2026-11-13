@@ -5,7 +5,10 @@
 # Every hour it also labels each open pull request that has no labels yet with
 # the labels whose `paths` match a file the pull request changes. Patterns are
 # fnmatch globs, lower case, matched against lower-cased paths; `*` also
-# matches `/`. A pull request is labelled only once, so labels set by hand stay.
+# matches `/`. A backend label matches its names as whole words of a path under
+# crosstl/ or tests/: `tests*[/_-]hip[/_.-]*` matches tests/test_cuda_hip_x.py
+# but not tests/test_ownership.py. A pull request is labelled only once, so
+# labels set by hand stay.
 
 - name: bug
   color: d73a4a
@@ -31,99 +34,85 @@
   description: OpenGL GLSL
   renamed-from: [opengl backend]
   paths:
-    - crosstl/backend/glsl/*
-    - crosstl/translator/codegen/glsl_*
-    - tests/test_backend/test_glsl/*
-    - tests/test_translator/*test_glsl_*
-    - tests/test_translator/*test_opengl_*
+    - crosstl*[/_-]glsl[/_.-]*
+    - tests*[/_-]glsl[/_.-]*
+    - crosstl*[/_-]opengl[/_.-]*
+    - tests*[/_-]opengl[/_.-]*
 - name: backend:hlsl
   color: c5def5
   description: DirectX HLSL
   renamed-from: [Directx backend]
   paths:
-    - crosstl/backend/directx/*
-    - crosstl/translator/codegen/directx_*
-    - crosstl/translator/codegen/hlsl_*
-    - tests/test_backend/test_directx/*
-    - tests/test_backend/test_hlsl/*
-    - tests/test_translator/*test_directx_*
-    - tests/test_translator/*test_hlsl_*
+    - crosstl*[/_-]hlsl[/_.-]*
+    - tests*[/_-]hlsl[/_.-]*
+    - crosstl*[/_-]directx[/_.-]*
+    - tests*[/_-]directx[/_.-]*
 - name: backend:metal
   color: c5def5
   description: Metal Shading Language
   renamed-from: [Metal backend]
   paths:
-    - crosstl/backend/metal/*
-    - crosstl/translator/codegen/metal_*
-    - tests/test_backend/test_metal/*
-    - tests/test_translator/*test_metal_*
+    - crosstl*[/_-]metal[/_.-]*
+    - tests*[/_-]metal[/_.-]*
+    - crosstl*[/_-]msl[/_.-]*
+    - tests*[/_-]msl[/_.-]*
 - name: backend:spirv
   color: c5def5
   description: Vulkan SPIR-V
   renamed-from: [vulkan backend]
   paths:
-    - crosstl/backend/spirv/*
-    - crosstl/translator/codegen/spirv_*
-    - tests/test_backend/test_spirv/*
-    - tests/test_translator/*test_spirv_*
+    - crosstl*[/_-]spirv[/_.-]*
+    - tests*[/_-]spirv[/_.-]*
+    - crosstl*[/_-]vulkan[/_.-]*
+    - tests*[/_-]vulkan[/_.-]*
 - name: backend:wgsl
   color: c5def5
   description: WebGPU WGSL
   paths:
-    - crosstl/translator/codegen/wgsl_*
-    - tests/test_translator/*test_wgsl_*
+    - crosstl*[/_-]wgsl[/_.-]*
+    - tests*[/_-]wgsl[/_.-]*
 - name: backend:webgl
   color: c5def5
   description: GLSL ES 3.00 for WebGL 2
   paths:
-    - crosstl/translator/codegen/webgl_*
-    - tests/test_translator/*test_webgl_*
+    - crosstl*[/_-]webgl[/_.-]*
+    - tests*[/_-]webgl[/_.-]*
 - name: backend:cuda
   color: c5def5
   description: CUDA
   paths:
-    - crosstl/backend/cuda/*
-    - crosstl/translator/codegen/cuda_*
-    - tests/test_backend/test_cuda/*
-    - tests/test_translator/*test_cuda_*
+    - crosstl*[/_-]cuda[/_.-]*
+    - tests*[/_-]cuda[/_.-]*
 - name: backend:hip
   color: c5def5
   description: HIP
   paths:
-    - crosstl/backend/hip/*
-    - crosstl/translator/codegen/hip_*
-    - tests/test_backend/test_hip/*
-    - tests/test_translator/*test_hip_*
+    - crosstl*[/_-]hip[/_.-]*
+    - tests*[/_-]hip[/_.-]*
 - name: backend:slang
   color: c5def5
   description: Slang
   paths:
-    - crosstl/backend/slang/*
-    - crosstl/translator/codegen/slang_*
-    - tests/test_backend/test_slang/*
-    - tests/test_translator/*test_slang_*
+    - crosstl*[/_-]slang[/_.-]*
+    - tests*[/_-]slang[/_.-]*
 - name: backend:rust
   color: c5def5
   description: Rust GPU
   paths:
-    - crosstl/backend/rust/*
-    - crosstl/translator/codegen/rust_*
-    - tests/test_backend/test_rust/*
-    - tests/test_translator/*test_rust_*
+    - crosstl*[/_-]rust[/_.-]*
+    - tests*[/_-]rust[/_.-]*
 - name: backend:mojo
   color: c5def5
   description: Mojo
   paths:
-    - crosstl/backend/mojo/*
-    - crosstl/translator/codegen/mojo_*
-    - tests/test_backend/test_mojo/*
-    - tests/test_translator/*test_mojo_*
+    - crosstl*[/_-]mojo[/_.-]*
+    - tests*[/_-]mojo[/_.-]*
 - name: backend:opencl
   color: c5def5
   description: OpenCL C
   paths:
-    - crosstl/backend/opencl/*
-    - tests/test_backend/test_opencl/*
+    - crosstl*[/_-]opencl[/_.-]*
+    - tests*[/_-]opencl[/_.-]*
 - name: backend:crossgl
   color: 5319e7
   description: The CrossGL IR itself
