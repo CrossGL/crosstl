@@ -28,8 +28,8 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
-from ..diagnostics import TranslationDiagnostic
 from ..matrix_shape import matrix_type_spelling
+from ..refusals import CudaRefusal, supersedes_pending_refusals
 from ..semantics.declared_types import declared_type_names
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
@@ -253,7 +253,7 @@ CUDA_FP16_VECTOR_TYPES = {
 
 
 def _refuse_buffer_counter(reason):
-    raise ValueError(f"CUDA buffer counter: {reason}")
+    raise CudaRefusal(f"CUDA buffer counter: {reason}")
 
 
 class CudaCodeGen(
@@ -578,7 +578,7 @@ class CudaCodeGen(
         }
         for name in sorted(generic_names):
             if re.search(rf"\b{re.escape(name)}\b", result):
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA codegen cannot emit unresolved generic parameter "
                     f"'{name}'; specialize generic declarations before CUDA "
                     "generation"
@@ -1041,7 +1041,7 @@ class CudaCodeGen(
 
         if unsupported_stages:
             stage_list = ", ".join(sorted(unsupported_stages))
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA output does not support stage type(s): {stage_list}"
             )
 
@@ -1251,7 +1251,7 @@ class CudaCodeGen(
                 previous_type = emitted_stage_local_variables.get(var_name)
                 if previous_type is not None:
                     if previous_type != var_type:
-                        raise ValueError(
+                        raise CudaRefusal(
                             "Conflicting CUDA stage-local declaration for "
                             f"'{var_name}': {previous_type} differs from {var_type}"
                         )
@@ -2106,12 +2106,12 @@ class CudaCodeGen(
         if kind in {"position", "color"}:
             if self.is_cuda_float4_type(type_name):
                 return
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} {context} for CUDA codegen; "
                 "expected vec4-compatible type"
             )
         if kind == "depth" and not self.is_cuda_float_scalar_type(type_name):
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} {context} for CUDA codegen; "
                 "expected float type"
             )
@@ -2121,7 +2121,7 @@ class CudaCodeGen(
         if kind is None:
             return
         if kind == "input_only":
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} {context} for CUDA codegen; "
                 "input-only builtin semantics cannot be used as outputs"
             )
@@ -2134,7 +2134,7 @@ class CudaCodeGen(
         }[kind]
         if stage_name not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} {context} for CUDA {stage_name} stage; "
                 f"valid stage is {allowed}"
             )
@@ -2188,15 +2188,15 @@ class CudaCodeGen(
     def cuda_geometry_maxvertexcount(self, func):
         arguments = self.cuda_stage_attribute_arguments(func, "maxvertexcount")
         if not arguments:
-            raise ValueError("CUDA geometry stage requires maxvertexcount attribute")
+            raise CudaRefusal("CUDA geometry stage requires maxvertexcount attribute")
         if len(arguments) != 1:
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA geometry stage maxvertexcount requires exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA geometry stage maxvertexcount ({value}) must be positive"
             )
         return value_text
@@ -2206,7 +2206,7 @@ class CudaCodeGen(
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage {attribute_name} requires exactly one "
                 "argument"
             )
@@ -2215,19 +2215,19 @@ class CudaCodeGen(
     def cuda_tessellation_output_control_points(self, func):
         arguments = self.cuda_stage_attribute_arguments(func, "outputcontrolpoints")
         if not arguments:
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA tessellation_control stage requires outputcontrolpoints "
                 "attribute"
             )
         if len(arguments) != 1:
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA tessellation_control stage outputcontrolpoints requires "
                 "exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA tessellation_control stage outputcontrolpoints "
                 f"({value}) must be positive"
             )
@@ -2251,11 +2251,11 @@ class CudaCodeGen(
         value = self.cuda_stage_attribute_value(func, "domain", stage_name)
         if value is None:
             if required:
-                raise ValueError(f"CUDA {stage_name} stage requires domain attribute")
+                raise CudaRefusal(f"CUDA {stage_name} stage requires domain attribute")
             return None
         canonical = self.canonical_cuda_tessellation_domain(value)
         if canonical is None:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage domain '{value}' must be tri, quad, "
                 "or isoline"
             )
@@ -2274,7 +2274,7 @@ class CudaCodeGen(
         }
         if normalized not in valid_partitioning:
             valid = ", ".join(sorted(valid_partitioning))
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage partitioning '{value}' must be one of: "
                 f"{valid}"
             )
@@ -2349,7 +2349,7 @@ class CudaCodeGen(
             self.cuda_stage_attribute_arguments(func, attribute_name)[0]
         )
         if value_int is not None and value_int <= 0:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage {attribute_name} ({value_int}) "
                 "must be positive"
             )
@@ -2361,7 +2361,7 @@ class CudaCodeGen(
             if not arguments:
                 continue
             if len(arguments) != 3:
-                raise ValueError(
+                raise CudaRefusal(
                     f"CUDA {stage_name} stage {attribute_name} requires exactly "
                     "three arguments"
                 )
@@ -2369,7 +2369,7 @@ class CudaCodeGen(
             for axis, argument in zip("xyz", arguments):
                 value = self.literal_int_value(argument)
                 if value is not None and value <= 0:
-                    raise ValueError(
+                    raise CudaRefusal(
                         f"CUDA {stage_name} stage {attribute_name} {axis} "
                         f"dimension ({value}) must be positive"
                     )
@@ -2392,7 +2392,7 @@ class CudaCodeGen(
         }
         topology = topology_aliases.get(normalized)
         if topology is None:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA {stage_name} stage outputtopology '{value}' must be "
                 "point, line, or triangle"
             )
@@ -2521,7 +2521,7 @@ class CudaCodeGen(
 
             expected_count = expected_counts[primitive]
             if not self.cuda_parameter_is_array(parameter):
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must be an array with {expected_count} element(s)"
@@ -2531,7 +2531,7 @@ class CudaCodeGen(
             if array_count is None:
                 continue
             if array_count != expected_count:
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must have {expected_count} element(s), got {array_count}"
@@ -2544,7 +2544,7 @@ class CudaCodeGen(
             self.cuda_geometry_stream_info(self.parameter_raw_type(param))
             for param in parameters
         ):
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA geometry stage parameters must include a PointStream, "
                 "LineStream, or TriangleStream output parameter"
             )
@@ -2552,7 +2552,7 @@ class CudaCodeGen(
         if not any(
             self.cuda_geometry_input_primitive_qualifier(param) for param in parameters
         ):
-            raise ValueError(
+            raise CudaRefusal(
                 "CUDA geometry stage parameters must include an input primitive "
                 "parameter qualified as point, line, triangle, lineadj, or triangleadj"
             )
@@ -2595,7 +2595,7 @@ class CudaCodeGen(
         if semantic is None:
             return
         if self.map_type(return_type) == "void":
-            raise ValueError(
+            raise CudaRefusal(
                 f"Unsupported {semantic} return semantic for CUDA codegen; "
                 "void return type"
             )
@@ -2903,7 +2903,7 @@ class CudaCodeGen(
             and actual_type in {"uint", "unsigned int", "uint2"}
         ):
             return
-        raise ValueError(
+        raise CudaRefusal(
             f"Unsupported {semantic} stage parameter semantic for CUDA codegen; "
             f"expected {expected_type} type"
         )
@@ -2925,14 +2925,14 @@ class CudaCodeGen(
                 mapped_semantic, expected_type, allowed_stages = rule
                 if stage_name not in allowed_stages:
                     allowed = ", ".join(sorted(allowed_stages))
-                    raise ValueError(
+                    raise CudaRefusal(
                         f"Unsupported {semantic} stage parameter semantic for CUDA "
                         f"{stage_name} stage; valid stage is {allowed}"
                     )
                 param_name = getattr(param, "name", getattr(param, "param_name", None))
                 previous_name = seen_system_semantics.get(mapped_semantic)
                 if previous_name is not None:
-                    raise ValueError(
+                    raise CudaRefusal(
                         f"Duplicate CUDA stage parameter semantic {mapped_semantic} "
                         f"on '{previous_name}' and '{param_name}'"
                     )
@@ -2944,7 +2944,7 @@ class CudaCodeGen(
 
             kind = self.cuda_semantic_output_kind(semantic)
             if kind in {"color", "depth"}:
-                raise ValueError(
+                raise CudaRefusal(
                     f"Unsupported {semantic} stage parameter semantic for CUDA "
                     f"{stage_name} stage; output-only builtin semantics cannot "
                     "be used as inputs"
@@ -3017,9 +3017,9 @@ class CudaCodeGen(
                 self.indent_level,
                 "CUDA",
             )
-        except TranslationDiagnostic:
-            raise
         except ValueError as error:
+            if supersedes_pending_refusals(error):
+                raise
             assignment = self.generate_match_expression_diagnostic_assignment(
                 node.name,
                 var_type,
@@ -3504,14 +3504,14 @@ class CudaCodeGen(
         field_names = [field_name for field_name, _field_type in fields]
 
         if len(positional_args) > len(fields):
-            raise ValueError(
+            raise CudaRefusal(
                 f"Struct constructor {struct_name} expects at most {len(fields)} "
                 f"arguments, got {len(positional_args)}"
             )
 
         unknown_names = sorted(set(named_args) - set(field_names))
         if unknown_names:
-            raise ValueError(
+            raise CudaRefusal(
                 f"Struct constructor {struct_name} has no field "
                 f"{', '.join(unknown_names)}"
             )
@@ -3657,7 +3657,7 @@ class CudaCodeGen(
             return f"{func_name}({', '.join(args)})"
 
         if func_name in self.synchronization_builtins and raw_args:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA synchronization builtin '{func_name}' requires 0 "
                 f"arguments; got {len(raw_args)}"
             )
@@ -4130,23 +4130,23 @@ class CudaCodeGen(
         stage_name = getattr(self, "current_stage_name", None)
         if operation == "SetMeshOutputCounts":
             if stage_name != "mesh":
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA SetMeshOutputCounts is only valid in mesh stages"
                 )
             if len(raw_args) != 2:
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA SetMeshOutputCounts requires exactly two arguments"
                 )
             return f"cgl_cuda_set_mesh_output_counts({', '.join(args)})"
 
         if operation == "DispatchMesh":
             if stage_name not in {"task", "object", "amplification"}:
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA DispatchMesh is only valid in task, object, or "
                     "amplification stages"
                 )
             if len(raw_args) not in {3, 4}:
-                raise ValueError(
+                raise CudaRefusal(
                     "CUDA DispatchMesh requires exactly three arguments, or four "
                     "with a task payload"
                 )
@@ -4209,9 +4209,9 @@ class CudaCodeGen(
     def generate_wave_operation(self, operation, raw_args, args):
         expected_count = CUDA_WAVE_OP_ARITIES.get(operation)
         if expected_count is None:
-            raise ValueError(f"Unsupported CUDA wave intrinsic {operation}")
+            raise CudaRefusal(f"Unsupported CUDA wave intrinsic {operation}")
         if len(raw_args) != expected_count:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA wave intrinsic {operation} requires {expected_count} "
                 f"argument{'s' if expected_count != 1 else ''}, got {len(raw_args)}"
             )
@@ -4468,7 +4468,7 @@ class CudaCodeGen(
         if func_name not in self.CUDA_SHADER_CLOCK_BUILTINS:
             return None
         if raw_args:
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA shader clock builtin {func_name} requires 0 arguments; "
                 f"got {len(raw_args)}"
             )
@@ -4516,7 +4516,7 @@ class CudaCodeGen(
             return None
         if len(raw_args) not in expected_counts:
             expected_list = " or ".join(str(count) for count in expected_counts)
-            raise ValueError(
+            raise CudaRefusal(
                 f"CUDA warp sync builtin {func_name} requires {expected_list} "
                 f"arguments, got {len(raw_args)}"
             )
@@ -6876,9 +6876,9 @@ class CudaCodeGen(
                 code = generate_ordered_conditional_match(
                     self, node, self.indent_level, "CUDA"
                 )
-        except TranslationDiagnostic:
-            raise
         except ValueError as error:
+            if supersedes_pending_refusals(error):
+                raise
             reason = self.cuda_match_error_reason(error)
             code = self.refuse_lowering(f"CUDA match statement: {reason}")
         self.emit_generated_code(code)
@@ -7037,7 +7037,7 @@ class CudaCodeGen(
     def emit_match_expression_return(self, match_node):
         return_type = self.type_name_string(self.current_function_return_type)
         if not return_type or return_type == "void":
-            raise ValueError(
+            raise CudaRefusal(
                 "Unsupported match expression for CUDA codegen; return context "
                 "requires a concrete non-void result type"
             )
@@ -7053,9 +7053,9 @@ class CudaCodeGen(
                 self.indent_level,
                 "CUDA",
             )
-        except TranslationDiagnostic:
-            raise
         except ValueError as error:
+            if supersedes_pending_refusals(error):
+                raise
             assignment = self.generate_match_expression_diagnostic_assignment(
                 result_name,
                 return_type,
@@ -10839,7 +10839,7 @@ class CudaCodeGen(
             if binding <= used_end and used_start <= end:
                 if used_start == binding and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise CudaRefusal(
                     "Conflicting CUDA resource binding for "
                     f"'{name}': {namespace} set {set_index} binding "
                     f"{binding}-{end} overlaps '{used_name}' binding "

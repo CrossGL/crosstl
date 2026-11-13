@@ -34929,7 +34929,7 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     translate_diagnostic = next(
         diagnostic
         for diagnostic in payload["diagnostics"]
-        if diagnostic["code"] == "project.translate.failed"
+        if diagnostic["code"] == "project.translate.registry-refused"
     )
     assert translate_diagnostic["severity"] == "error"
     assert translate_diagnostic["target"] == "not-a-backend"

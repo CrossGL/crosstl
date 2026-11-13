@@ -6,15 +6,21 @@ import itertools
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from .refusals import MetadataContractError
+
 
 def _dimensions(
     value: Sequence[int], name: str, *, zero: bool = False
 ) -> tuple[int, int, int]:
     if not isinstance(value, (tuple, list)) or not 1 <= len(value) <= 3:
-        raise ValueError(f"{name} must contain one to three integer dimensions")
+        raise MetadataContractError(
+            f"{name} must contain one to three integer dimensions"
+        )
     minimum = 0 if zero else 1
     if any(type(n) is not int or not minimum <= n <= 0xFFFFFFFF for n in value):
-        raise ValueError(f"{name} dimensions must be uint32 values >= {minimum}")
+        raise MetadataContractError(
+            f"{name} dimensions must be uint32 values >= {minimum}"
+        )
     return tuple(value) + (minimum,) * (3 - len(value))
 
 
@@ -48,11 +54,13 @@ class DispatchRegion:
         ):
             groups = (grid + nominal - 1) // nominal
             if offset + count > groups:
-                raise ValueError("Dispatch region exceeds the source workgroup grid")
+                raise MetadataContractError(
+                    "Dispatch region exceeds the source workgroup grid"
+                )
             first = min(nominal, grid - offset * nominal)
             last = min(nominal, grid - (offset + count - 1) * nominal)
             if first != active or last != active:
-                raise ValueError(
+                raise MetadataContractError(
                     "Dispatch region must have a uniform active workgroup shape"
                 )
 
@@ -88,7 +96,7 @@ class DispatchRegion:
             "workgroupSize": "workgroup_size",
         }
         if not isinstance(value, Mapping) or set(value) != set(fields):
-            raise ValueError(
+            raise MetadataContractError(
                 "Dispatch region must contain exactly " + ", ".join(sorted(fields))
             )
         return cls(**{name: value[key] for key, name in fields.items()})

@@ -24,6 +24,7 @@ from ..ast import (
     FunctionCallNode,
     UnaryOpNode,
 )
+from ..refusals import TargetRefusal
 from .lowering_refusals import refuse_unsupported
 
 __all__ = [
@@ -50,7 +51,7 @@ def is_comma_expression(expr) -> bool:
 def _operands(expr):
     operands = list(expr.expressions or ())
     if len(operands) < 2:
-        raise ValueError(
+        raise TargetRefusal(
             "CrossGL comma expression needs at least two operands, got "
             f"{len(operands)}"
         )

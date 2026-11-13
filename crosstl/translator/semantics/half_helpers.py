@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import functools
 
+from ..refusals import CrossGLRefusal
 from .rewrite import clone
 
 HALF_HELPER_MARK = "cgl_rule_helper"
@@ -351,7 +352,7 @@ def helper_source(base: str, lanes) -> str:
     """The CrossGL definition of ``base`` for ``lanes`` lanes (a ``(columns, rows)`` shape for a matrix)."""
     if isinstance(lanes, tuple):
         if base not in MATRIX_HELPERS:
-            raise ValueError(f"{base} has no matrix form")
+            raise CrossGLRefusal(f"{base} has no matrix form")
         return _matrix_source(base, lanes)
     if lanes == 1:
         return SCALAR_HELPERS[base][0]
@@ -385,7 +386,7 @@ def glsl_source(base: str, name: str) -> str:
     """The scalar helper ``base`` in GLSL 4.00 spelling, named ``name``; only self-contained helpers qualify."""
     source, _, dependencies = SCALAR_HELPERS[base]
     if dependencies:
-        raise ValueError(f"{base} calls other helpers")
+        raise CrossGLRefusal(f"{base} calls other helpers")
     return (
         source.strip()
         .replace(f"float {base}(", f"float {name}(", 1)

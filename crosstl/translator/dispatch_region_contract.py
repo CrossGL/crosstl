@@ -11,6 +11,7 @@ from .artifact_contracts import (
 )
 from .codegen.stage_utils import compute_local_size
 from .dispatch_regions import DispatchRegion
+from .refusals import MetadataContractError, TranslatorArgumentError
 
 
 def codegen_dispatch_region(ast, entries):
@@ -20,12 +21,16 @@ def codegen_dispatch_region(ast, entries):
         return None
     region = DispatchRegion.from_json(record)
     if len(entries) != 1 or entries[0][0] != "compute":
-        raise ValueError("A dispatch region requires one selected compute entry.")
+        raise MetadataContractError(
+            "A dispatch region requires one selected compute entry."
+        )
     size = compute_local_size(entries[0][2])
     if size is None or tuple(str(n) for n in size) != tuple(
         str(n) for n in region.workgroup_size
     ):
-        raise ValueError("Dispatch region differs from the compute workgroup size.")
+        raise MetadataContractError(
+            "Dispatch region differs from the compute workgroup size."
+        )
     return region
 
 
@@ -33,7 +38,7 @@ def with_dispatch_region_header(source, region):
     if region is None:
         return source
     if not isinstance(region, DispatchRegion):
-        raise TypeError("region must be a DispatchRegion")
+        raise TranslatorArgumentError("region must be a DispatchRegion")
     payload = {"schemaVersion": 1, "region": region.to_json()}
     header = DISPATCH_REGION_PREFIX + json.dumps(
         payload, sort_keys=True, separators=(",", ":")
@@ -51,7 +56,7 @@ def parse_dispatch_region_header(source):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise ValueError("Duplicate dispatch region key.")
+                raise MetadataContractError("Duplicate dispatch region key.")
             result[key] = value
         return result
 
@@ -60,14 +65,14 @@ def parse_dispatch_region_header(source):
             line[len(DISPATCH_REGION_PREFIX) :], object_pairs_hook=unique
         )
     except (ValueError, RecursionError) as exc:
-        raise ValueError("Invalid dispatch region JSON.") from exc
+        raise MetadataContractError("Invalid dispatch region JSON.") from exc
     if (
         not isinstance(record, dict)
         or set(record) != {"schemaVersion", "region"}
         or type(record["schemaVersion"]) is not int
         or record["schemaVersion"] != 1
     ):
-        raise ValueError("Unsupported dispatch region header schema.")
+        raise MetadataContractError("Unsupported dispatch region header schema.")
     return DispatchRegion.from_json(record["region"])
 
 
@@ -76,7 +81,9 @@ def check_dispatch_region_geometry(region, dispatch):
     if region is None:
         return
     if dispatch is None:
-        raise ValueError("A dispatch region requires explicit physical geometry.")
+        raise MetadataContractError(
+            "A dispatch region requires explicit physical geometry."
+        )
 
     def dimensions(values):
         if not isinstance(values, (tuple, list)) or not 1 <= len(values) <= 3:
@@ -97,6 +104,6 @@ def check_dispatch_region_geometry(region, dispatch):
             for values in (dispatch.global_size, dispatch.grid_size)
         )
     ):
-        raise ValueError(
+        raise MetadataContractError(
             "Dispatch geometry differs from the artifact's specialized physical region."
         )

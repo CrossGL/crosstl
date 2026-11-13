@@ -1,5 +1,7 @@
 """Parser for Rust source AST construction."""
 
+from crosstl.translator.refusals import RustSyntaxError
+
 from .RustAst import (
     ArrayAccessNode,
     ArrayNode,
@@ -409,7 +411,7 @@ class RustParser:
     def eat(self, expected_type):
         # The end of input is never consumed: a construct that reads past it is unterminated.
         if expected_type == "EOF" and self.current_token[0] == "EOF":
-            raise SyntaxError("Unexpected end of input")
+            raise RustSyntaxError("Unexpected end of input")
         if self.current_token[0] == expected_type:
             token = self.current_token
             self.current_index += 1
@@ -419,7 +421,9 @@ class RustParser:
                 self.current_token = ("EOF", "")
             return token
         else:
-            raise SyntaxError(f"Expected {expected_type}, got {self.current_token[0]}")
+            raise RustSyntaxError(
+                f"Expected {expected_type}, got {self.current_token[0]}"
+            )
 
     def is_macro_rules_definition(self):
         return (
@@ -499,7 +503,7 @@ class RustParser:
 
     def parse_name_token(self, context="name"):
         if self.current_token[0] not in self.NAME_TOKENS:
-            raise SyntaxError(f"Expected {context}, got {self.current_token[0]}")
+            raise RustSyntaxError(f"Expected {context}, got {self.current_token[0]}")
 
         name = self.current_token[1]
         self.eat(self.current_token[0])
@@ -741,7 +745,9 @@ class RustParser:
         if self.current_token[0] == "LBRACE":
             return self.parse_labeled_block_expression(label)
 
-        raise SyntaxError(f"Expected labeled expression, got {self.current_token[0]}")
+        raise RustSyntaxError(
+            f"Expected labeled expression, got {self.current_token[0]}"
+        )
 
     def parse_loop_expression(self):
         label = None
@@ -753,7 +759,9 @@ class RustParser:
             return self.parse_labeled_block_expression(label)
 
         if self.current_token[0] != "LOOP":
-            raise SyntaxError(f"Expected loop expression, got {self.current_token[0]}")
+            raise RustSyntaxError(
+                f"Expected loop expression, got {self.current_token[0]}"
+            )
 
         return self.parse_loop(label)
 
@@ -866,7 +874,9 @@ class RustParser:
 
     def parse_use_path_segment(self):
         if self.current_token[0] not in self.PATH_SEGMENT_TOKENS:
-            raise SyntaxError(f"Expected use path segment, got {self.current_token[0]}")
+            raise RustSyntaxError(
+                f"Expected use path segment, got {self.current_token[0]}"
+            )
 
         segment = self.current_token[1]
         self.eat(self.current_token[0])
@@ -899,7 +909,9 @@ class RustParser:
 
     def parse_attribute_path(self):
         if self.current_token[0] not in self.ATTRIBUTE_PATH_SEGMENT_TOKENS:
-            raise SyntaxError(f"Expected attribute path, got {self.current_token[0]}")
+            raise RustSyntaxError(
+                f"Expected attribute path, got {self.current_token[0]}"
+            )
 
         path = [self.current_token[1]]
         self.eat(self.current_token[0])
@@ -907,7 +919,7 @@ class RustParser:
         while self.current_token[0] == "DOUBLE_COLON":
             self.eat("DOUBLE_COLON")
             if self.current_token[0] not in self.ATTRIBUTE_PATH_SEGMENT_TOKENS:
-                raise SyntaxError(
+                raise RustSyntaxError(
                     f"Expected attribute path segment, got {self.current_token[0]}"
                 )
             path.append(self.current_token[1])
@@ -920,7 +932,7 @@ class RustParser:
         depth = 1
         while depth > 0:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated attribute")
+                raise RustSyntaxError("Unterminated attribute")
             if self.current_token[0] == "LBRACKET":
                 depth += 1
             elif self.current_token[0] == "RBRACKET":
@@ -934,7 +946,7 @@ class RustParser:
 
         while depth > 0:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated attribute arguments")
+                raise RustSyntaxError("Unterminated attribute arguments")
 
             token_type, token_value = self.current_token
             if token_type == "LPAREN":
@@ -960,7 +972,7 @@ class RustParser:
 
         while not (depth == 0 and self.current_token[0] == "RBRACKET"):
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated attribute value")
+                raise RustSyntaxError("Unterminated attribute value")
 
             token_type, token_value = self.current_token
             if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
@@ -1615,7 +1627,7 @@ class RustParser:
     def parse_raw_pointer_type(self):
         self.eat("MULTIPLY")
         if self.current_token[0] not in {"CONST", "MUT"}:
-            raise SyntaxError(
+            raise RustSyntaxError(
                 f"Expected raw pointer qualifier, got {self.current_token[0]}"
             )
 
@@ -2265,7 +2277,7 @@ class RustParser:
             self.eat("IDENTIFIER")
             return name
 
-        raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+        raise RustSyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
 
     def parameter_name_from_pattern(self, pattern):
         if isinstance(pattern, str):
@@ -2460,7 +2472,7 @@ class RustParser:
             self.eat("RPAREN")
             return TupleNode(elements)
 
-        raise SyntaxError(f"Expected let pattern, got {self.current_token[0]}")
+        raise RustSyntaxError(f"Expected let pattern, got {self.current_token[0]}")
 
     def parse_if_statement(self, keep_branch_trailing_expressions=True):
         self.eat("IF")
@@ -2681,7 +2693,7 @@ class RustParser:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             if op == "..=" and self.is_range_expression_boundary():
-                raise SyntaxError("Expected range end after ..=")
+                raise RustSyntaxError("Expected range end after ..=")
             end = (
                 None
                 if self.is_range_expression_boundary()
@@ -2700,7 +2712,7 @@ class RustParser:
             self.eat("MUT")
 
         if self.current_token[0] not in {"IDENTIFIER", "UNDERSCORE"}:
-            raise SyntaxError(
+            raise RustSyntaxError(
                 f"Expected binding after pattern modifier, got {self.current_token[0]}"
             )
 
@@ -2866,7 +2878,7 @@ class RustParser:
             self.eat("MUT")
 
         if self.current_token[0] != "IDENTIFIER":
-            raise SyntaxError(
+            raise RustSyntaxError(
                 f"Expected field binding after pattern modifier, got {self.current_token[0]}"
             )
 
@@ -2911,7 +2923,7 @@ class RustParser:
     def parse_absolute_match_path_or_call(self):
         self.eat("DOUBLE_COLON")
         if self.current_token[0] not in self.match_pattern_path_tokens():
-            raise SyntaxError(
+            raise RustSyntaxError(
                 f"Expected absolute pattern path segment, got {self.current_token[0]}"
             )
 
@@ -2943,7 +2955,7 @@ class RustParser:
             node.macro_delimiter = delimiter
             return node
 
-        raise SyntaxError(
+        raise RustSyntaxError(
             f"Expected macro pattern delimiter, got {self.current_token[0]}"
         )
 
@@ -3162,7 +3174,7 @@ class RustParser:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             if op == "..=" and self.is_range_expression_boundary():
-                raise SyntaxError("Expected range end after ..=")
+                raise RustSyntaxError("Expected range end after ..=")
             end = (
                 None
                 if self.is_range_expression_boundary()
@@ -3176,7 +3188,7 @@ class RustParser:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             if op == "..=" and self.is_range_expression_boundary():
-                raise SyntaxError("Expected range end after ..=")
+                raise RustSyntaxError("Expected range end after ..=")
             right = (
                 None
                 if self.is_range_expression_boundary()
@@ -3308,7 +3320,7 @@ class RustParser:
                         break
                     continue
                 if self.current_index < end_index:
-                    raise SyntaxError(
+                    raise RustSyntaxError(
                         f"Expected comma or closure delimiter, got {self.current_token[0]}"
                     )
                 break
@@ -3355,7 +3367,7 @@ class RustParser:
             elif token_type == "RBRACE":
                 brace_depth -= 1
 
-        raise SyntaxError("Unterminated closure parameter list")
+        raise RustSyntaxError("Unterminated closure parameter list")
 
     def parse_closure_parameter(self):
         pattern = self.parse_single_match_pattern()
@@ -3379,7 +3391,7 @@ class RustParser:
                     continue
 
                 if self.current_token[0] not in self.MEMBER_ACCESS_TOKENS:
-                    raise SyntaxError(
+                    raise RustSyntaxError(
                         f"Expected member access name, got {self.current_token[0]}"
                     )
                 member = self.current_token[1]
@@ -3407,7 +3419,7 @@ class RustParser:
                 elif isinstance(left, str):
                     left += generic_suffix
                 else:
-                    raise SyntaxError(
+                    raise RustSyntaxError(
                         f"Expected path before turbofish, got {type(left).__name__}"
                     )
             elif self.current_token[0] == "LPAREN":
@@ -3443,7 +3455,7 @@ class RustParser:
             node.macro_delimiter = delimiter
             return node
 
-        raise SyntaxError(f"Expected macro delimiter, got {self.current_token[0]}")
+        raise RustSyntaxError(f"Expected macro delimiter, got {self.current_token[0]}")
 
     def collect_delimited_macro_body(self):
         opening_token = self.current_token[0]
@@ -3688,7 +3700,7 @@ class RustParser:
         elif self.current_token[0] == "LBRACE":
             return self.parse_block_expression()
         else:
-            raise SyntaxError(
+            raise RustSyntaxError(
                 f"Unexpected token in primary expression: {self.current_token}"
             )
 
@@ -3858,7 +3870,7 @@ class RustParser:
             self.eat("UNSAFE")
             self.skip_extern_block()
         else:
-            raise SyntaxError(f"Expected local item, got {self.current_token[0]}")
+            raise RustSyntaxError(f"Expected local item, got {self.current_token[0]}")
 
     def try_parse_block_final_expression(self):
         start_index = self.current_index
@@ -3893,7 +3905,7 @@ class RustParser:
     def parse_absolute_path_expression(self):
         self.eat("DOUBLE_COLON")
         if self.current_token[0] not in self.PATH_SEGMENT_TOKENS:
-            raise SyntaxError(
+            raise RustSyntaxError(
                 f"Expected absolute path segment, got {self.current_token[0]}"
             )
 

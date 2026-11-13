@@ -35,6 +35,7 @@ from ..ast import (
     ShaderNode,
     VariableNode,
 )
+from ..refusals import MetalRefusal
 from ..semantics.rewrite import child_slots, get_child
 
 __all__ = ["bind_combined_samplers"]
@@ -328,7 +329,7 @@ def _thread_helper_samplers(program):
             for index in reversed(indices):
                 sampler = _sampler_argument(arguments[index])
                 if sampler is None:
-                    raise ValueError(
+                    raise MetalRefusal(
                         f"Metal call to '{_callee(node)}' passes a combined sampler that names no texture, so "
                         "no sampler can be passed with it"
                     )

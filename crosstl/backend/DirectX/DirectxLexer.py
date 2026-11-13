@@ -5,6 +5,8 @@ import re
 from enum import Enum, auto
 from typing import Iterator, List, Optional, Tuple
 
+from crosstl.translator.refusals import DirectXSyntaxError
+
 from ...translator.token_dispatch import ordered_pattern_dispatch
 from .preprocessor import HLSLPreprocessor, Macro
 
@@ -687,7 +689,7 @@ class HLSLLexer:
             if self.code.startswith("/*", pos) and "*/" not in self.code[pos + 2 :]:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Unterminated comment starting at line {line_num}, column {col_num}"
                 )
             token = self._next_token(pos)
@@ -696,7 +698,7 @@ class HLSLLexer:
                 line_num = self.code[:pos].count("\n") + 1
                 col_num = pos - self.code.rfind("\n", 0, pos)
                 context = self.code[max(0, pos - 20) : min(self._length, pos + 20)]
-                raise SyntaxError(
+                raise DirectXSyntaxError(
                     f"Illegal character '{self.code[pos]}' at line {line_num}, column {col_num}\n"
                     f"Context: ...{context}..."
                 )

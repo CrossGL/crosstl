@@ -38,6 +38,7 @@ from ..ast import (
     WaveOpNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..refusals import HipRefusal
 from ..semantics.declared_types import declared_type_names
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
@@ -297,7 +298,7 @@ HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES = {
 
 
 def _refuse_buffer_counter(reason):
-    raise ValueError(f"HIP buffer counter: {reason}")
+    raise HipRefusal(f"HIP buffer counter: {reason}")
 
 
 class UnsupportedHIPAstNodeError(ValueError):
@@ -1530,7 +1531,7 @@ class HipCodeGen(
 
         if unsupported_stages:
             stage_list = ", ".join(sorted(unsupported_stages))
-            raise ValueError(f"HIP output does not support stage type(s): {stage_list}")
+            raise HipRefusal(f"HIP output does not support stage type(s): {stage_list}")
 
     def add_includes(self):
         """Emit the standard HIP runtime include block."""
@@ -1884,7 +1885,7 @@ class HipCodeGen(
                 previous_type = emitted_stage_local_variables.get(var_name)
                 if previous_type is not None:
                     if previous_type != var_type:
-                        raise ValueError(
+                        raise HipRefusal(
                             "Conflicting HIP stage-local declaration for "
                             f"'{var_name}': {previous_type} differs from {var_type}"
                         )
@@ -2589,12 +2590,12 @@ class HipCodeGen(
         if kind in {"position", "color"}:
             if self.is_hip_float4_type(type_name):
                 return
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} {context} for HIP codegen; "
                 "expected vec4-compatible type"
             )
         if kind == "depth" and not self.is_hip_float_scalar_type(type_name):
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} {context} for HIP codegen; "
                 "expected float type"
             )
@@ -2604,7 +2605,7 @@ class HipCodeGen(
         if kind is None:
             return
         if kind == "input_only":
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} {context} for HIP codegen; "
                 "input-only builtin semantics cannot be used as outputs"
             )
@@ -2617,7 +2618,7 @@ class HipCodeGen(
         }[kind]
         if stage_name not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} {context} for HIP {stage_name} stage; "
                 f"valid stage is {allowed}"
             )
@@ -2704,7 +2705,7 @@ class HipCodeGen(
             if not arguments:
                 continue
             if len(arguments) != 3:
-                raise ValueError(
+                raise HipRefusal(
                     f"HIP compute stage {attribute_name} requires exactly "
                     "three arguments"
                 )
@@ -2716,7 +2717,7 @@ class HipCodeGen(
                 literal_value = self.literal_int_value(argument)
                 if literal_value is not None:
                     if literal_value <= 0:
-                        raise ValueError(
+                        raise HipRefusal(
                             f"HIP compute stage {attribute_name} {axis} "
                             f"dimension ({literal_value}) must be positive"
                         )
@@ -2740,15 +2741,15 @@ class HipCodeGen(
     def hip_geometry_maxvertexcount(self, func):
         arguments = self.hip_stage_attribute_arguments(func, "maxvertexcount")
         if not arguments:
-            raise ValueError("HIP geometry stage requires maxvertexcount attribute")
+            raise HipRefusal("HIP geometry stage requires maxvertexcount attribute")
         if len(arguments) != 1:
-            raise ValueError(
+            raise HipRefusal(
                 "HIP geometry stage maxvertexcount requires exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP geometry stage maxvertexcount ({value}) must be positive"
             )
         return value_text
@@ -2758,7 +2759,7 @@ class HipCodeGen(
         if not arguments:
             return None
         if len(arguments) != 1:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage {attribute_name} requires exactly one "
                 "argument"
             )
@@ -2767,19 +2768,19 @@ class HipCodeGen(
     def hip_tessellation_output_control_points(self, func):
         arguments = self.hip_stage_attribute_arguments(func, "outputcontrolpoints")
         if not arguments:
-            raise ValueError(
+            raise HipRefusal(
                 "HIP tessellation_control stage requires outputcontrolpoints "
                 "attribute"
             )
         if len(arguments) != 1:
-            raise ValueError(
+            raise HipRefusal(
                 "HIP tessellation_control stage outputcontrolpoints requires "
                 "exactly one argument"
             )
         value_text = self.attribute_value_to_string(arguments[0])
         value = self.literal_int_value(arguments[0])
         if value is not None and value <= 0:
-            raise ValueError(
+            raise HipRefusal(
                 "HIP tessellation_control stage outputcontrolpoints "
                 f"({value}) must be positive"
             )
@@ -2803,11 +2804,11 @@ class HipCodeGen(
         value = self.hip_stage_attribute_value(func, "domain", stage_name)
         if value is None:
             if required:
-                raise ValueError(f"HIP {stage_name} stage requires domain attribute")
+                raise HipRefusal(f"HIP {stage_name} stage requires domain attribute")
             return None
         canonical = self.canonical_hip_tessellation_domain(value)
         if canonical is None:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage domain '{value}' must be tri, quad, "
                 "or isoline"
             )
@@ -2826,7 +2827,7 @@ class HipCodeGen(
         }
         if normalized not in valid_partitioning:
             valid = ", ".join(sorted(valid_partitioning))
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage partitioning '{value}' must be one of: "
                 f"{valid}"
             )
@@ -2901,7 +2902,7 @@ class HipCodeGen(
             self.hip_stage_attribute_arguments(func, attribute_name)[0]
         )
         if value_int is not None and value_int <= 0:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage {attribute_name} ({value_int}) "
                 "must be positive"
             )
@@ -2913,7 +2914,7 @@ class HipCodeGen(
             if not arguments:
                 continue
             if len(arguments) != 3:
-                raise ValueError(
+                raise HipRefusal(
                     f"HIP {stage_name} stage {attribute_name} requires exactly "
                     "three arguments"
                 )
@@ -2921,7 +2922,7 @@ class HipCodeGen(
             for axis, argument in zip("xyz", arguments):
                 value = self.literal_int_value(argument)
                 if value is not None and value <= 0:
-                    raise ValueError(
+                    raise HipRefusal(
                         f"HIP {stage_name} stage {attribute_name} {axis} "
                         f"dimension ({value}) must be positive"
                     )
@@ -2944,7 +2945,7 @@ class HipCodeGen(
         }
         topology = topology_aliases.get(normalized)
         if topology is None:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP {stage_name} stage outputtopology '{value}' must be "
                 "point, line, or triangle"
             )
@@ -3073,7 +3074,7 @@ class HipCodeGen(
 
             expected_count = expected_counts[primitive]
             if not self.hip_parameter_is_array(parameter):
-                raise ValueError(
+                raise HipRefusal(
                     "HIP geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must be an array with {expected_count} element(s)"
@@ -3083,7 +3084,7 @@ class HipCodeGen(
             if array_count is None:
                 continue
             if array_count != expected_count:
-                raise ValueError(
+                raise HipRefusal(
                     "HIP geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must have {expected_count} element(s), got {array_count}"
@@ -3096,7 +3097,7 @@ class HipCodeGen(
             self.hip_geometry_stream_info(self.parameter_raw_type(param))
             for param in parameters
         ):
-            raise ValueError(
+            raise HipRefusal(
                 "HIP geometry stage parameters must include a PointStream, "
                 "LineStream, or TriangleStream output parameter"
             )
@@ -3104,7 +3105,7 @@ class HipCodeGen(
         if not any(
             self.hip_geometry_input_primitive_qualifier(param) for param in parameters
         ):
-            raise ValueError(
+            raise HipRefusal(
                 "HIP geometry stage parameters must include an input primitive "
                 "parameter qualified as point, line, triangle, lineadj, or triangleadj"
             )
@@ -3147,7 +3148,7 @@ class HipCodeGen(
         if semantic is None:
             return
         if self.map_type(return_type) == "void":
-            raise ValueError(
+            raise HipRefusal(
                 f"Unsupported {semantic} return semantic for HIP codegen; "
                 "void return type"
             )
@@ -3449,7 +3450,7 @@ class HipCodeGen(
             and actual_type in {"uint", "unsigned int", "uint2"}
         ):
             return
-        raise ValueError(
+        raise HipRefusal(
             f"Unsupported {semantic} stage parameter semantic for HIP codegen; "
             f"expected {expected_type} type"
         )
@@ -3471,14 +3472,14 @@ class HipCodeGen(
                 mapped_semantic, expected_type, allowed_stages = rule
                 if stage_name not in allowed_stages:
                     allowed = ", ".join(sorted(allowed_stages))
-                    raise ValueError(
+                    raise HipRefusal(
                         f"Unsupported {semantic} stage parameter semantic for HIP "
                         f"{stage_name} stage; valid stage is {allowed}"
                     )
                 param_name = getattr(param, "name", getattr(param, "param_name", None))
                 previous_name = seen_system_semantics.get(mapped_semantic)
                 if previous_name is not None:
-                    raise ValueError(
+                    raise HipRefusal(
                         f"Duplicate HIP stage parameter semantic {mapped_semantic} "
                         f"on '{previous_name}' and '{param_name}'"
                     )
@@ -3490,7 +3491,7 @@ class HipCodeGen(
 
             kind = self.hip_semantic_output_kind(semantic)
             if kind in {"color", "depth"}:
-                raise ValueError(
+                raise HipRefusal(
                     f"Unsupported {semantic} stage parameter semantic for HIP "
                     f"{stage_name} stage; output-only builtin semantics cannot "
                     "be used as inputs"
@@ -3988,7 +3989,7 @@ class HipCodeGen(
     def emit_match_expression_return(self, match_node) -> str:
         return_type = self.type_name_string(self.current_function_return_type)
         if not return_type or return_type == "void":
-            raise ValueError(
+            raise HipRefusal(
                 "Unsupported match expression for HIP codegen; return context "
                 "requires a concrete non-void result type"
             )
@@ -4500,7 +4501,7 @@ class HipCodeGen(
             return library_call
 
         if func_name in self.synchronization_builtins and raw_args:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP synchronization builtin '{func_name}' requires 0 "
                 f"arguments; got {len(raw_args)}"
             )
@@ -4863,7 +4864,7 @@ class HipCodeGen(
         if source is None:
             return None
         if raw_args:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP shader clock builtin {func_name} requires 0 arguments; "
                 f"got {len(raw_args)}"
             )
@@ -5040,7 +5041,7 @@ class HipCodeGen(
             return None
         if len(raw_args) not in expected_counts:
             expected_list = " or ".join(str(count) for count in expected_counts)
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP warp sync builtin {func_name} requires {expected_list} "
                 f"arguments, got {len(raw_args)}"
             )
@@ -5092,21 +5093,21 @@ class HipCodeGen(
         stage_name = getattr(self, "current_stage_name", None)
         if operation == "SetMeshOutputCounts":
             if stage_name != "mesh":
-                raise ValueError("HIP SetMeshOutputCounts is only valid in mesh stages")
+                raise HipRefusal("HIP SetMeshOutputCounts is only valid in mesh stages")
             if len(raw_args) != 2:
-                raise ValueError(
+                raise HipRefusal(
                     "HIP SetMeshOutputCounts requires exactly two arguments"
                 )
             return f"cgl_hip_set_mesh_output_counts({', '.join(args)})"
 
         if operation == "DispatchMesh":
             if stage_name not in {"task", "object", "amplification"}:
-                raise ValueError(
+                raise HipRefusal(
                     "HIP DispatchMesh is only valid in task, object, or "
                     "amplification stages"
                 )
             if len(raw_args) not in {3, 4}:
-                raise ValueError(
+                raise HipRefusal(
                     "HIP DispatchMesh requires exactly three arguments, or four "
                     "with a task payload"
                 )
@@ -5170,9 +5171,9 @@ class HipCodeGen(
     def generate_wave_operation(self, operation, raw_args, args):
         expected_count = HIP_WAVE_OP_ARITIES.get(operation)
         if expected_count is None:
-            raise ValueError(f"Unsupported HIP wave intrinsic {operation}")
+            raise HipRefusal(f"Unsupported HIP wave intrinsic {operation}")
         if len(raw_args) != expected_count:
-            raise ValueError(
+            raise HipRefusal(
                 f"HIP wave intrinsic {operation} requires {expected_count} "
                 f"argument{'s' if expected_count != 1 else ''}, got {len(raw_args)}"
             )
@@ -10150,7 +10151,7 @@ class HipCodeGen(
             if binding <= used_end and used_start <= end:
                 if used_start == binding and used_end == end and used_name == name:
                     return
-                raise ValueError(
+                raise HipRefusal(
                     "Conflicting HIP resource binding for "
                     f"'{name}': {namespace} set {set_index} binding "
                     f"{binding}-{end} overlaps '{used_name}' binding "

@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Mapping
 
+from ..refusals import TranslatorKeyError
 from .lexer import CPP_MODE, GLSL_MODE, LexMode
 
 
@@ -130,7 +131,7 @@ def dialect(name_or_dialect, predefined: Mapping[str, str] | None = None) -> Dia
 
         chosen = msl_dialect() if name_or_dialect == "msl" else hlsl_dialect()
     else:
-        raise KeyError(
+        raise TranslatorKeyError(
             f"unknown preprocessor dialect {name_or_dialect!r}; known: {', '.join(DIALECTS)}"
         )
     return chosen.with_predefined(predefined) if predefined else chosen

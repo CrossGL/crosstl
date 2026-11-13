@@ -19,6 +19,8 @@ print them unchanged, and slangc refused the undefined names.
 
 from __future__ import annotations
 
+from ..refusals import SlangRefusal
+
 __all__ = ["SlangThreeComponentAccess", "slang_byte_address_vector_call"]
 
 _VECTOR_LOADS = {"buffer_load2": 2, "buffer_load3": 3, "buffer_load4": 4}
@@ -59,7 +61,7 @@ class SlangThreeComponentAccess:
 
     def _helper(self, kind, storage, buffer_types):
         if storage not in _COMPONENT_SIZES:
-            raise ValueError(f"no three-component byte-address helper for {storage}")
+            raise SlangRefusal(f"no three-component byte-address helper for {storage}")
         name = f"__crossgl_{kind}3_{storage}"
         for buffer_type in buffer_types:
             self.helpers[(kind, storage, buffer_type)] = name

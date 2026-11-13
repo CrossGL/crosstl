@@ -1,5 +1,7 @@
 """Parser for Slang source AST construction."""
 
+from crosstl.translator.refusals import SlangSyntaxError
+
 from .SlangAst import *
 from .SlangLexer import *
 
@@ -173,12 +175,12 @@ class SlangParser:
 
     def expect_end_of_input(self):
         if self.current_token[0] != "EOF":
-            raise SyntaxError(f"Expected EOF, got {self.current_token[0]}")
+            raise SlangSyntaxError(f"Expected EOF, got {self.current_token[0]}")
 
     def eat(self, token_type):
         # The end of input is never consumed: a construct that reads past it is unterminated.
         if token_type == "EOF" and self.current_token[0] == "EOF":
-            raise SyntaxError("Unexpected end of input")
+            raise SlangSyntaxError("Unexpected end of input")
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -186,11 +188,13 @@ class SlangParser:
             )
             self.skip_comments()
         else:
-            raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
+            raise SlangSyntaxError(
+                f"Expected {token_type}, got {self.current_token[0]}"
+            )
 
     def parse_contextual_identifier(self):
         if self.current_token[0] not in self.CONTEXTUAL_IDENTIFIER_TOKENS:
-            raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+            raise SlangSyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
         value = self.current_token[1]
         self.eat(self.current_token[0])
         return value
@@ -460,7 +464,7 @@ class SlangParser:
         global_variables = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated namespace block")
+                raise SlangSyntaxError("Unterminated namespace block")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
@@ -615,7 +619,7 @@ class SlangParser:
         depth = 1
         while depth:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated namespace block")
+                raise SlangSyntaxError("Unterminated namespace block")
             if self.current_token[0] == "LBRACE":
                 depth += 1
             elif self.current_token[0] == "RBRACE":
@@ -690,7 +694,9 @@ class SlangParser:
         while current_pos < len(self.tokens):
             token_type = self.tokens[current_pos][0]
             if token_type == "EOF":
-                raise SyntaxError("Unterminated parenthesized declaration annotation")
+                raise SlangSyntaxError(
+                    "Unterminated parenthesized declaration annotation"
+                )
             if token_type == "LPAREN":
                 depth += 1
             elif token_type == "RPAREN":
@@ -698,14 +704,14 @@ class SlangParser:
                 if depth == 0:
                     return current_pos + 1
             current_pos += 1
-        raise SyntaxError("Unterminated parenthesized declaration annotation")
+        raise SlangSyntaxError("Unterminated parenthesized declaration annotation")
 
     def skip_attribute_list_tokens(self, current_pos):
         depth = 0
         while current_pos < len(self.tokens):
             token_type = self.tokens[current_pos][0]
             if token_type == "EOF":
-                raise SyntaxError("Unterminated attribute list")
+                raise SlangSyntaxError("Unterminated attribute list")
             if token_type == "LBRACKET":
                 depth += 1
             elif token_type == "RBRACKET":
@@ -713,7 +719,7 @@ class SlangParser:
                 if depth == 0:
                     return current_pos + 1
             current_pos += 1
-        raise SyntaxError("Unterminated attribute list")
+        raise SlangSyntaxError("Unterminated attribute list")
 
     def skip_layout_qualifier_tokens(self, current_pos):
         current_pos += 1
@@ -724,7 +730,7 @@ class SlangParser:
         while current_pos < len(self.tokens):
             token_type = self.tokens[current_pos][0]
             if token_type == "EOF":
-                raise SyntaxError("Unterminated layout qualifier")
+                raise SlangSyntaxError("Unterminated layout qualifier")
             if token_type == "LPAREN":
                 depth += 1
             elif token_type == "RPAREN":
@@ -733,7 +739,7 @@ class SlangParser:
                     return current_pos + 1
             current_pos += 1
 
-        raise SyntaxError("Unterminated layout qualifier")
+        raise SlangSyntaxError("Unterminated layout qualifier")
 
     def peek_declaration_token_type(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)
@@ -812,7 +818,7 @@ class SlangParser:
         while depth:
             token_type, token_value = self.current_token
             if token_type == "EOF":
-                raise SyntaxError(f"Unterminated {context}")
+                raise SlangSyntaxError(f"Unterminated {context}")
             if token_type == "LPAREN":
                 depth += 1
                 parts.append("(")
@@ -935,9 +941,9 @@ class SlangParser:
                 if depth == 0:
                     return current_pos + 1
                 if depth < 0:
-                    raise SyntaxError("Unterminated generic type suffix")
+                    raise SlangSyntaxError("Unterminated generic type suffix")
             current_pos += 1
-        raise SyntaxError("Unterminated generic type suffix")
+        raise SlangSyntaxError("Unterminated generic type suffix")
 
     def skip_type_array_suffix_tokens(self, current_pos):
         while (
@@ -957,7 +963,7 @@ class SlangParser:
                         break
                 current_pos += 1
             else:
-                raise SyntaxError("Unterminated array type suffix")
+                raise SlangSyntaxError("Unterminated array type suffix")
         return current_pos
 
     def skip_qualified_type_suffix_tokens(self, current_pos):
@@ -1002,7 +1008,7 @@ class SlangParser:
 
         while self.current_token[0] != "RBRACKET":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated attribute list")
+                raise SlangSyntaxError("Unterminated attribute list")
 
             if self.current_token[0] not in {"IDENTIFIER", "SHADER"}:
                 self.eat(self.current_token[0])
@@ -1020,7 +1026,7 @@ class SlangParser:
 
             while self.current_token[0] not in {"COMMA", "RBRACKET"}:
                 if self.current_token[0] == "EOF":
-                    raise SyntaxError("Unterminated attribute list")
+                    raise SlangSyntaxError("Unterminated attribute list")
                 self.eat(self.current_token[0])
 
         self.eat("RBRACKET")
@@ -1029,7 +1035,9 @@ class SlangParser:
     def parse_attribute_name(self):
         name_tokens = {"IDENTIFIER", "SHADER"}
         if self.current_token[0] not in name_tokens:
-            raise SyntaxError(f"Expected attribute name, got {self.current_token[0]}")
+            raise SlangSyntaxError(
+                f"Expected attribute name, got {self.current_token[0]}"
+            )
 
         parts = [self.current_token[1]]
         self.eat(self.current_token[0])
@@ -1054,7 +1062,7 @@ class SlangParser:
         self.eat("LPAREN")
         while not (self.current_token[0] == "RPAREN" and depth == 0):
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated attribute argument list")
+                raise SlangSyntaxError("Unterminated attribute argument list")
 
             token_type, token_value = self.current_token
             if token_type == "COMMA" and depth == 0:
@@ -1133,7 +1141,7 @@ class SlangParser:
                 break
 
             if self.current_token[0] not in self.TYPE_NAME_TOKENS:
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Expected qualified type segment, got {self.current_token[0]}"
                 )
             suffix += f"{delimiter}{self.current_token[1]}"
@@ -1152,7 +1160,7 @@ class SlangParser:
             while depth > 0:
                 token_type, token_value = self.current_token
                 if token_type == "EOF":
-                    raise SyntaxError("Unterminated array type suffix")
+                    raise SlangSyntaxError("Unterminated array type suffix")
                 if token_type == "LBRACKET":
                     depth += 1
                     suffix += "["
@@ -1181,7 +1189,7 @@ class SlangParser:
         while depth > 0:
             token_type, token_value = self.current_token
             if token_type == "EOF":
-                raise SyntaxError("Unterminated generic type suffix")
+                raise SlangSyntaxError("Unterminated generic type suffix")
             if token_type == "LESS_THAN":
                 depth += 1
                 parts.append("<")
@@ -1190,7 +1198,7 @@ class SlangParser:
                 parts.append(">")
             elif token_type == "BITWISE_SHIFT_RIGHT":
                 if depth < 2:
-                    raise SyntaxError("Unterminated generic type suffix")
+                    raise SlangSyntaxError("Unterminated generic type suffix")
                 depth -= 2
                 parts.append(">>")
             elif token_type == "COMMA":
@@ -1215,7 +1223,7 @@ class SlangParser:
         register_parts = []
         while self.current_token[0] != "RPAREN":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated register annotation")
+                raise SlangSyntaxError("Unterminated register annotation")
             register_parts.append(str(self.current_token[1]))
             self.eat(self.current_token[0])
         self.eat("RPAREN")
@@ -1241,7 +1249,9 @@ class SlangParser:
 
     def parse_semantic_annotation(self):
         if self.current_token[0] not in {"IDENTIFIER", "SHADER"}:
-            raise SyntaxError(f"Expected semantic name, got {self.current_token[0]}")
+            raise SlangSyntaxError(
+                f"Expected semantic name, got {self.current_token[0]}"
+            )
 
         annotation = [str(self.current_token[1])]
         self.eat(self.current_token[0])
@@ -1260,7 +1270,7 @@ class SlangParser:
                 if depth == 0:
                     return "".join(annotation)
 
-        raise SyntaxError("Unterminated semantic argument list")
+        raise SlangSyntaxError("Unterminated semantic argument list")
 
     def parse_array_suffixes(self):
         sizes = []
@@ -1278,7 +1288,7 @@ class SlangParser:
         qualifiers = self.parse_qualifiers()
         buffer_token = self.current_token[0]
         if buffer_token not in {"CBUFFER", "TBUFFER"}:
-            raise SyntaxError(f"Expected buffer declaration, got {buffer_token}")
+            raise SlangSyntaxError(f"Expected buffer declaration, got {buffer_token}")
         buffer_kind = self.current_token[1]
         self.eat(buffer_token)
         name = self.current_token[1]
@@ -1546,7 +1556,7 @@ class SlangParser:
         elif self.is_variable_declaration_start():
             exported_item = self.parse_global_variable(attributes=attributes)
         else:
-            raise SyntaxError(
+            raise SlangSyntaxError(
                 f"Expected export declaration, got {self.current_token[0]}"
             )
         return ExportNode(exported_item)
@@ -1569,7 +1579,7 @@ class SlangParser:
         value_requirements = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated interface declaration")
+                raise SlangSyntaxError("Unterminated interface declaration")
             pending_attributes = []
             while self.current_token[0] == "LBRACKET":
                 pending_attributes.extend(self.parse_attribute_list())
@@ -1623,7 +1633,9 @@ class SlangParser:
                     self.parse_struct_field_members(attributes=pending_attributes)
                 )
                 continue
-            raise SyntaxError(f"Unsupported interface member: {self.current_token[0]}")
+            raise SlangSyntaxError(
+                f"Unsupported interface member: {self.current_token[0]}"
+            )
         self.eat("RBRACE")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -1687,7 +1699,7 @@ class SlangParser:
         structs = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated struct declaration")
+                raise SlangSyntaxError("Unterminated struct declaration")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
@@ -1985,7 +1997,7 @@ class SlangParser:
             and self.pos + 1 < len(self.tokens)
             and self.tokens[self.pos + 1][0] == "GREATER_THAN"
         ):
-            raise SyntaxError("Expected __subscript result type")
+            raise SlangSyntaxError("Expected __subscript result type")
         self.eat("MINUS")
         self.eat("GREATER_THAN")
         return_type = self.parse_type_name(allow_array_suffix=True)
@@ -2020,7 +2032,7 @@ class SlangParser:
         self.eat("LBRACE")
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError(f"Unterminated {context}")
+                raise SlangSyntaxError(f"Unterminated {context}")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
@@ -2038,7 +2050,7 @@ class SlangParser:
                 self.eat("SEMICOLON")
                 accessors[accessor_name] = []
             else:
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Expected {context} body, got {self.current_token[0]}"
                 )
         self.eat("RBRACE")
@@ -2073,7 +2085,7 @@ class SlangParser:
 
         if self.current_token[0] == "SEMICOLON":
             if not allow_signature:
-                raise SyntaxError("Expected constructor body, got SEMICOLON")
+                raise SlangSyntaxError("Expected constructor body, got SEMICOLON")
             self.eat("SEMICOLON")
             body = []
             is_declaration = True
@@ -2132,7 +2144,7 @@ class SlangParser:
 
         if self.current_token[0] == "SEMICOLON":
             if not allow_signature:
-                raise SyntaxError("Expected function body, got SEMICOLON")
+                raise SlangSyntaxError("Expected function body, got SEMICOLON")
             self.eat("SEMICOLON")
             body = []
             is_declaration = True
@@ -2248,7 +2260,7 @@ class SlangParser:
         typedefs = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated extension declaration")
+                raise SlangSyntaxError("Unterminated extension declaration")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
@@ -2270,7 +2282,7 @@ class SlangParser:
                 )
                 continue
             if not self.is_function():
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Unsupported extension member: {self.current_token[0]}"
                 )
             if self.is_func_keyword_declaration_start():
@@ -2329,7 +2341,7 @@ class SlangParser:
         members = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated enum declaration")
+                raise SlangSyntaxError("Unterminated enum declaration")
             member_name = self.current_token[1]
             self.eat("IDENTIFIER")
             member_value = None
@@ -2340,7 +2352,7 @@ class SlangParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             elif self.current_token[0] != "RBRACE":
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Expected comma or closing brace in enum, got {self.current_token[0]}"
                 )
         self.eat("RBRACE")
@@ -2414,7 +2426,7 @@ class SlangParser:
         while depth > 0:
             token_type, token_value = self.current_token
             if token_type == "EOF":
-                raise SyntaxError("Unterminated generic parameter prefix")
+                raise SlangSyntaxError("Unterminated generic parameter prefix")
             if token_type == "LESS_THAN":
                 depth += 1
                 current_parameter.append((token_type, token_value))
@@ -2536,7 +2548,7 @@ class SlangParser:
         generic_constraints.extend(self.parse_generic_constraint_clauses())
         if self.current_token[0] == "SEMICOLON":
             if not allow_signature:
-                raise SyntaxError("Expected function body, got SEMICOLON")
+                raise SlangSyntaxError("Expected function body, got SEMICOLON")
             self.eat("SEMICOLON")
             body = []
             is_declaration = True
@@ -2579,7 +2591,7 @@ class SlangParser:
         generic_constraints = self.parse_generic_constraint_clauses()
         if self.current_token[0] == "SEMICOLON":
             if not allow_signature:
-                raise SyntaxError("Expected function body, got SEMICOLON")
+                raise SlangSyntaxError("Expected function body, got SEMICOLON")
             self.eat("SEMICOLON")
             body = []
             is_declaration = True
@@ -2648,7 +2660,7 @@ class SlangParser:
             self.eat(token_type)
 
         if not tokens:
-            raise SyntaxError("Expected function extension target")
+            raise SlangSyntaxError("Expected function extension target")
         return "".join(tokens)
 
     def parse_function_name(self):
@@ -2696,7 +2708,7 @@ class SlangParser:
         previous_relation = None
         while True:
             if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Expected generic parameter name, got {self.current_token[0]}"
                 )
             parameter = self.parse_type_name()
@@ -2722,7 +2734,7 @@ class SlangParser:
                 parameter = previous_parameter
                 relation = previous_relation
             else:
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     "Only simple generic conformance and equality constraints are supported"
                 )
             constraint = GenericConstraintNode(parameter, constraint_type)
@@ -2915,7 +2927,7 @@ class SlangParser:
 
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated __target_switch statement")
+                raise SlangSyntaxError("Unterminated __target_switch statement")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
@@ -2932,14 +2944,16 @@ class SlangParser:
                 self.eat("COLON")
                 while self.current_token[0] not in {"CASE", "RBRACE"}:
                     if self.current_token[0] == "EOF":
-                        raise SyntaxError("Unterminated __target_switch default arm")
+                        raise SlangSyntaxError(
+                            "Unterminated __target_switch default arm"
+                        )
                     if self.current_token[0] == "SEMICOLON":
                         self.eat("SEMICOLON")
                         continue
                     self.append_parsed_statement(default_body, self.parse_statement())
                 continue
 
-            raise SyntaxError(
+            raise SlangSyntaxError(
                 f"Expected __target_switch arm, got {self.current_token[0]}"
             )
 
@@ -2950,7 +2964,7 @@ class SlangParser:
         while self.current_token[0] not in {"COLON", "EOF"}:
             self.eat(self.current_token[0])
         if self.current_token[0] == "EOF":
-            raise SyntaxError("Unterminated __target_switch case label")
+            raise SlangSyntaxError("Unterminated __target_switch case label")
 
     def skip_target_switch_arm_body(self):
         brace_depth = 0
@@ -2982,7 +2996,7 @@ class SlangParser:
                 bracket_depth -= 1
             self.eat(token_type)
 
-        raise SyntaxError("Unterminated __target_switch arm")
+        raise SlangSyntaxError("Unterminated __target_switch arm")
 
     def is_variable_declaration_start(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)
@@ -3040,7 +3054,7 @@ class SlangParser:
         members = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated anonymous struct declaration")
+                raise SlangSyntaxError("Unterminated anonymous struct declaration")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
@@ -3127,7 +3141,9 @@ class SlangParser:
                 return declarations[0]
             return declarations
 
-        raise SyntaxError(f"Unexpected token in declaration: {self.current_token[0]}")
+        raise SlangSyntaxError(
+            f"Unexpected token in declaration: {self.current_token[0]}"
+        )
 
     def is_current_modern_variable_declaration(self):
         return (
@@ -3349,7 +3365,7 @@ class SlangParser:
 
             if self.current_token[0] == "DEFAULT":
                 if seen_default:
-                    raise SyntaxError("duplicate default label in switch")
+                    raise SlangSyntaxError("duplicate default label in switch")
                 seen_default = True
                 self.eat("DEFAULT")
                 self.eat("COLON")
@@ -3732,7 +3748,7 @@ class SlangParser:
             self.eat("RPAREN")
             return self.parse_postfix_suffixes(expr)
         else:
-            raise SyntaxError(
+            raise SlangSyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
 
@@ -3741,12 +3757,12 @@ class SlangParser:
         self.eat(open_token)
         while self.current_token[0] != close_token:
             if self.current_token[0] == "EOF":
-                raise SyntaxError("Unterminated initializer list")
+                raise SlangSyntaxError("Unterminated initializer list")
             elements.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             elif self.current_token[0] != close_token:
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Expected COMMA or {close_token} in initializer list, got {self.current_token[0]}"
                 )
         self.eat(close_token)
@@ -3765,7 +3781,7 @@ class SlangParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             elif self.current_token[0] != close_token:
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Expected COMMA or {close_token}, got {self.current_token[0]}"
                 )
         self.eat(close_token)
@@ -3803,7 +3819,7 @@ class SlangParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             elif self.current_token[0] != "RPAREN":
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Expected COMMA or RPAREN in lambda parameters, got {self.current_token[0]}"
                 )
         self.eat("RPAREN")
@@ -3849,7 +3865,7 @@ class SlangParser:
 
         raw = self.format_lambda_raw_tokens(tokens).strip()
         if not raw:
-            raise SyntaxError("Expected lambda parameter")
+            raise SlangSyntaxError("Expected lambda parameter")
 
         parts = raw.rsplit(None, 1)
         if len(parts) == 1:
@@ -3871,7 +3887,7 @@ class SlangParser:
                 if depth == 0:
                     return self.format_lambda_raw_tokens(tokens)
 
-        raise SyntaxError("Unterminated lambda block body")
+        raise SlangSyntaxError("Unterminated lambda block body")
 
     def format_lambda_raw_tokens(self, tokens):
         text = ""
@@ -3995,7 +4011,7 @@ class SlangParser:
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
             elif self.current_token[0] != "RPAREN":
-                raise SyntaxError(
+                raise SlangSyntaxError(
                     f"Expected COMMA or RPAREN, got {self.current_token[0]}"
                 )
         self.eat("RPAREN")
@@ -4018,7 +4034,7 @@ class SlangParser:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
                 if self.current_token[0] != "IDENTIFIER":
-                    raise SyntaxError(
+                    raise SlangSyntaxError(
                         f"Expected identifier after dot, got {self.current_token[0]}"
                     )
                 member = self.current_token[1]
@@ -4035,7 +4051,7 @@ class SlangParser:
                 self.eat("MINUS")
                 self.eat("GREATER_THAN")
                 if self.current_token[0] != "IDENTIFIER":
-                    raise SyntaxError(
+                    raise SlangSyntaxError(
                         "Expected identifier after pointer member access, "
                         f"got {self.current_token[0]}"
                     )
@@ -4089,7 +4105,7 @@ class SlangParser:
     def valid_postfix_update(self, node):
         if isinstance(node, (VariableNode, MemberAccessNode, ArrayAccessNode)):
             return node
-        raise SyntaxError(f"Invalid postfix update target: {type(node).__name__}")
+        raise SlangSyntaxError(f"Invalid postfix update target: {type(node).__name__}")
 
     def parse_function_call(self, name):
         return FunctionCallNode(name, self.parse_call_arguments())
@@ -4097,7 +4113,7 @@ class SlangParser:
     def parse_member_access(self, object):
         self.eat("DOT")
         if self.current_token[0] != "IDENTIFIER":
-            raise SyntaxError(
+            raise SlangSyntaxError(
                 f"Expected identifier after dot, got {self.current_token[0]}"
             )
         member = self.current_token[1]

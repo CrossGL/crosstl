@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from .refusals import MetadataContractError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 __all__ = [
@@ -135,13 +136,13 @@ def normalize_threadgroup_size_option(value: Any) -> tuple[int, int, int] | None
     try:
         dimensions = tuple(dimensions)
     except TypeError:
-        raise ValueError(
+        raise MetadataContractError(
             "threadgroup_size must be a positive integer or a sequence of one to three positive integers"
         ) from None
     if not 1 <= len(dimensions) <= 3 or any(
         type(item) is not int or item <= 0 for item in dimensions
     ):
-        raise ValueError(
+        raise MetadataContractError(
             "threadgroup_size must be a positive integer or a sequence of one to three positive integers, "
             f"got {value!r}"
         )
@@ -375,7 +376,7 @@ def host_workgroup_size_mark(attributes: Iterable[Any], render) -> dict | None:
     if not arguments:
         return {"size": None}
     if len(arguments) != 3:
-        raise ValueError(
+        raise MetadataContractError(
             f"@ {HOST_WORKGROUP_SIZE_ATTRIBUTE} takes no arguments or three dimensions, got {len(arguments)}"
         )
     return {"size": tuple(render(argument) for argument in arguments)}

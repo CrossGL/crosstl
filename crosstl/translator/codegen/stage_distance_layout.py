@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
+from ..refusals import TargetRefusal
+
 __all__ = [
     "DISTANCE_BUILTINS",
     "DistanceLayout",
@@ -124,14 +126,14 @@ def distance_layout(
         builtin, index = parsed
         shape_count = distance_component_count(type_text, array_size)
         if shape_count is None:
-            raise ValueError(
+            raise TargetRefusal(
                 f"{builtin} value '{name}' of type '{type_text}': a clip or cull distance is a float, "
                 "a float vector or a float array"
             )
         values = by_builtin.setdefault(builtin, [])
         for other_name, other_index, _shape, _count in values:
             if other_index == index:
-                raise ValueError(
+                raise TargetRefusal(
                     f"{builtin} values '{other_name}' and '{name}' share semantic index {index}"
                 )
         values.append((name, index, *shape_count))

@@ -22,6 +22,7 @@ from ..ast import (
     ReturnNode,
     VariableNode,
 )
+from ..refusals import MetalRefusal
 
 __all__ = ["generate_return_writeback_statement"]
 
@@ -74,7 +75,7 @@ def generate_return_writeback_statement(codegen, stmt, indent):
     if not codegen.metal_reference_argument_writebacks(probe, []):
         return None
     if return_type is None:
-        raise ValueError(
+        raise MetalRefusal(
             "Metal cannot copy a reference argument back before returning a value "
             f"of type '{codegen.type_name_string(codegen.current_function_return_type)}'; "
             "assign the call result to a local first"

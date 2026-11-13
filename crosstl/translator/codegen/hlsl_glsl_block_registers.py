@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from ..ast import ArrayType, FunctionNode, NamedType
+from ..refusals import DirectXRefusal
 from .glsl_block_layout import block_struct_placements
 from .glsl_hlsl_cbuffer import (
     COMPONENTS,
@@ -199,7 +200,7 @@ def hlsl_value_from_words(scalar, width, words):
         return f"asfloat({words})"
     if scalar == "bool":
         return f"({words} != 0u)"
-    raise ValueError(f"no 32-bit HLSL reinterpretation for '{scalar}'")
+    raise DirectXRefusal(f"no 32-bit HLSL reinterpretation for '{scalar}'")
 
 
 def hlsl_value_from_word_pair(scalar, low, high):
@@ -211,7 +212,7 @@ def hlsl_value_from_word_pair(scalar, low, high):
         return bits
     if scalar == "long":
         return f"int64_t({bits})"
-    raise ValueError(f"no 64-bit HLSL reinterpretation for '{scalar}'")
+    raise DirectXRefusal(f"no 64-bit HLSL reinterpretation for '{scalar}'")
 
 
 class HlslGlslBlockRegisters:

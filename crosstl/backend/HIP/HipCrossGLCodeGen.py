@@ -3,6 +3,8 @@
 import hashlib
 import re
 
+from crosstl.translator.refusals import HipSourceRefusal
+
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.integer_literals import (
     IntegerLiteralError,
@@ -5459,7 +5461,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             and output_name in self.record_definitions
             and self.record_definitions[output_name] is None
         ):
-            raise ValueError(
+            raise HipSourceRefusal(
                 f"Conflicting HIP nested record output name '{output_name}'"
             )
         self.record_name_stack.append(qualified_name or "anonymous")
@@ -5488,7 +5490,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             and "static" not in set(getattr(member, "qualifiers", []) or [])
         ]
         if len(storage_names) != len(set(storage_names)):
-            raise ValueError(
+            raise HipSourceRefusal(
                 f"HIP inherited record '{qualified_name or output_name}' has "
                 "colliding storage member names"
             )
@@ -5580,7 +5582,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         visiting = set(visiting or ())
         marker = id(node)
         if marker in visiting:
-            raise ValueError("HIP record inheritance cycle is unsupported")
+            raise HipSourceRefusal("HIP record inheritance cycle is unsupported")
         visiting.add(marker)
         aliases = []
         members = []
@@ -5595,12 +5597,12 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 base_name = str(base)
                 is_virtual = False
             if is_virtual:
-                raise ValueError(
+                raise HipSourceRefusal(
                     f"HIP virtual record inheritance is unsupported: {base_name}"
                 )
             base_node = self.resolve_record_base_definition(node, base_name)
             if base_node is None:
-                raise ValueError(
+                raise HipSourceRefusal(
                     f"HIP record '{getattr(node, 'name', '')}' has unresolved "
                     f"base '{base_name}'"
                 )
@@ -5796,7 +5798,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 member_value = getattr(member, "value", None)
             if member_value is None:
                 if next_value is None:
-                    raise ValueError(
+                    raise HipSourceRefusal(
                         f"HIP enum '{owner_name}' has an implicit value after an "
                         "unsupported initializer"
                     )
@@ -5806,7 +5808,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                     member_value, local_values
                 )
                 if value is None:
-                    raise ValueError(
+                    raise HipSourceRefusal(
                         f"HIP enum '{owner_name}' initializer for '{member_name}' "
                         "cannot be represented exactly"
                     )
@@ -5908,7 +5910,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                     ),
                     "qualified member access",
                 )
-            raise ValueError(
+            raise HipSourceRefusal(
                 f"HIP static record constant '{name}' cannot be represented exactly"
             )
         if (
@@ -5918,7 +5920,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             return None
         resolving = set(resolving or ())
         if lookup_name in resolving:
-            raise ValueError(f"recursive HIP enum value alias: {lookup_name}")
+            raise HipSourceRefusal(f"recursive HIP enum value alias: {lookup_name}")
         resolving.add(lookup_name)
         value = self.enum_value_aliases[lookup_name]
         nested = self.resolve_enum_value_alias(value, resolving)
@@ -5956,7 +5958,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
     ):
         normalized = " ".join(str(raw_type).split())
         if not self.nested_record_type_matches(normalized, prefix):
-            raise ValueError(
+            raise HipSourceRefusal(
                 f"nested record declarator '{normalized}' does not match '{prefix}'"
             )
         return nested_name + normalized[len(prefix) :]
@@ -6368,7 +6370,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             if self.is_concrete_crossgl_alias_type(resolved):
                 return resolved
             current = resolved
-        raise ValueError(f"recursive HIP type alias: {type_name}")
+        raise HipSourceRefusal(f"recursive HIP type alias: {type_name}")
 
     def resolve_record_member_type_alias(self, type_name):
         if not isinstance(type_name, str):
@@ -6784,7 +6786,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                     changed = True
             if not changed:
                 return text
-        raise ValueError(f"recursive HIP record type alias: {type_name}")
+        raise HipSourceRefusal(f"recursive HIP record type alias: {type_name}")
 
     def record_member_layout_issue(self, owner, member):
         if not isinstance(member, VariableNode) or "static" in set(

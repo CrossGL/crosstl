@@ -82,6 +82,7 @@ from ..metadata_preconditions import (
     validate_codegen_metadata_preconditions,
     with_metadata_precondition_header,
 )
+from ..refusals import DirectXRefusal, TranslatorArgumentError
 from ..resource_identity import resource_identity_marker
 from ..semantics.constant_buffers import constant_buffer_element
 from ..semantics.declared_types import declared_type_names
@@ -3267,7 +3268,7 @@ class HLSLCodeGen(
         }
         canonical = aliases.get(normalized)
         if canonical is None:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX target profile must be one of: dx10, dx11, dx12, "
                 "directx-10, directx-11, directx-12"
             )
@@ -3276,20 +3277,22 @@ class HLSLCodeGen(
     def set_relative_wave_shuffle_out_of_range(self, policy):
         """Configure relative wave-shuffle behavior for invalid source lanes."""
         if not isinstance(policy, str):
-            raise TypeError("relative_wave_shuffle_out_of_range must be a string")
+            raise TranslatorArgumentError(
+                "relative_wave_shuffle_out_of_range must be a string"
+            )
         normalized = policy.strip().lower()
         if normalized not in self.HLSL_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_POLICIES:
             choices = ", ".join(
                 sorted(self.HLSL_RELATIVE_WAVE_SHUFFLE_OUT_OF_RANGE_POLICIES)
             )
-            raise ValueError(
+            raise DirectXRefusal(
                 "relative_wave_shuffle_out_of_range must be one of: " f"{choices}"
             )
         self.relative_wave_shuffle_out_of_range = normalized
 
     def set_widen_native_float16(self, enabled):
         if not isinstance(enabled, bool):
-            raise TypeError("widen_native_float16 must be a boolean")
+            raise TranslatorArgumentError("widen_native_float16 must be a boolean")
         self.widen_native_float16 = enabled
 
     HLSL_GROUPSHARED_BOOL_STORAGES = frozenset({"bool", "uint"})
@@ -3308,17 +3311,19 @@ class HLSLCodeGen(
         value. ``"bool"`` keeps the declared type.
         """
         if not isinstance(storage, str):
-            raise TypeError("groupshared_bool_storage must be a string")
+            raise TranslatorArgumentError("groupshared_bool_storage must be a string")
         normalized = storage.strip().lower()
         if normalized not in self.HLSL_GROUPSHARED_BOOL_STORAGES:
             choices = ", ".join(sorted(self.HLSL_GROUPSHARED_BOOL_STORAGES))
-            raise ValueError(f"groupshared_bool_storage must be one of: {choices}")
+            raise DirectXRefusal(f"groupshared_bool_storage must be one of: {choices}")
         self.groupshared_bool_storage = normalized
 
     def set_cooperative_matrix_software_lowering(self, enabled):
         """Configure checked lane-local cooperative-matrix operations."""
         if not isinstance(enabled, bool):
-            raise TypeError("cooperative_matrix_software_lowering must be a boolean")
+            raise TranslatorArgumentError(
+                "cooperative_matrix_software_lowering must be a boolean"
+            )
         self.cooperative_matrix_software_lowering = enabled
         return self
 
@@ -3333,7 +3338,7 @@ class HLSLCodeGen(
                 "fma-rne-flush",
             }
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "cooperative_matrix_mma_profile must be 'rne-gradual', 'rne-flush', "
                 "'fma-rne-gradual', 'fma-rne-flush', or None"
             )
@@ -3349,9 +3354,11 @@ class HLSLCodeGen(
         if width is not None and (
             isinstance(width, bool) or not isinstance(width, int)
         ):
-            raise TypeError("software_subgroup_width must be an integer or None")
+            raise TranslatorArgumentError(
+                "software_subgroup_width must be an integer or None"
+            )
         if width not in {None, self.HLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH}:
-            raise ValueError(
+            raise DirectXRefusal(
                 "software_subgroup_width currently supports only an exact width "
                 f"of {self.HLSL_SOFTWARE_SUBGROUP_SUPPORTED_WIDTH}"
             )
@@ -10076,14 +10083,14 @@ uint {helper_name}(uint groupIndex) {{
     );
 }}
 """
-        raise ValueError(f"Unsupported inverse-hyperbolic operation: {operation}")
+        raise DirectXRefusal(f"Unsupported inverse-hyperbolic operation: {operation}")
 
     def hlsl_inverse_hyperbolic_wrapper_helper(self, operation, value_type):
         helper_name = self.hlsl_inverse_hyperbolic_helper_name(operation, value_type)
         scalar_helper = self.hlsl_inverse_hyperbolic_helper_name(operation, "float")
         match = re.fullmatch(r"(float16_t|float|half|min16float)([234]?)", value_type)
         if match is None or value_type == "float":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"Unsupported inverse-hyperbolic helper type: {value_type}"
             )
         scalar_type, lane_text = match.groups()
@@ -10407,7 +10414,7 @@ uint {helper_name}(uint groupIndex) {{
                 valid_expression = "(lane ^ delta) < laneCount"
                 source_expression = "lane ^ delta"
             else:  # pragma: no cover - registration is closed over known operators.
-                raise ValueError(
+                raise DirectXRefusal(
                     f"Unsupported relative wave shuffle operation: {operation}"
                 )
 
@@ -13636,7 +13643,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         duplicate_names = collect_duplicate_cbuffer_names(cbuffers)
         if duplicate_names:
             names = ", ".join(sorted(duplicate_names))
-            raise ValueError(f"Duplicate cbuffer name(s) in DirectX output: {names}")
+            raise DirectXRefusal(
+                f"Duplicate cbuffer name(s) in DirectX output: {names}"
+            )
 
         validation_view = self.cbuffer_validation_shader_view(
             ast, cbuffers, target_stage
@@ -13646,7 +13655,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if declaration_conflicts:
             names = ", ".join(sorted(declaration_conflicts))
-            raise ValueError(
+            raise DirectXRefusal(
                 "Cbuffer name(s) conflict with existing DirectX declaration(s): "
                 f"{names}"
             )
@@ -13654,7 +13663,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         duplicate_members = collect_duplicate_cbuffer_member_names(cbuffers)
         if duplicate_members:
             names = ", ".join(sorted(duplicate_members))
-            raise ValueError(
+            raise DirectXRefusal(
                 f"Ambiguous cbuffer member name(s) in DirectX output: {names}"
             )
 
@@ -13663,7 +13672,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if global_member_conflicts:
             names = ", ".join(sorted(global_member_conflicts))
-            raise ValueError(
+            raise DirectXRefusal(
                 "Cbuffer member name(s) conflict with DirectX global declaration(s): "
                 f"{names}"
             )
@@ -13996,7 +14005,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         arguments = self.hlsl_stage_attribute_arguments(func, "numthreads")
         if arguments:
             if len(arguments) != 3:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage numthreads requires exactly "
                     "three arguments"
                 )
@@ -14916,7 +14925,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     raw_return_type
                 )
                 if fixed_array_return_type is None:
-                    raise ValueError(
+                    raise DirectXRefusal(
                         "DirectX output does not support array return types; "
                         "wrap the array in a struct or use an output parameter"
                     )
@@ -16419,7 +16428,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 declarations.append(node)
                 continue
             if existing != signature:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"Conflicting groupshared variable declaration for '{name}'"
                 )
         return declarations
@@ -20098,7 +20107,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         literal_index = self.literal_int_value(index_expr, self.literal_int_constants)
         if literal_index is not None:
             if not 0 <= literal_index < metadata["size"]:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX fixed-array return index {literal_index} is out of "
                     f"range for {metadata['type_text']}"
                 )
@@ -29567,7 +29576,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if intrinsic is None:
             return None
         if args:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX synchronization builtin '{func_name}' requires 0 "
                 f"argument(s), got {len(args)}"
             )
@@ -31150,7 +31159,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if target_info is None or source_info is None:
             return None
         if target_info["width"] != source_info["width"]:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX cannot bitcast {source_info['type']} "
                 f"({source_info['width']} bits) to {target_info['type']} "
                 f"({target_info['width']} bits); total bit widths must match"
@@ -31167,7 +31176,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             helper = "uint_to_uint16x2" if unpack else "uint16x2_to_uint"
             name = f"__crossgl_bitcast_{helper}"
             if name in self.function_return_types or name in self.global_variable_types:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX packed 16-bit bitcasts require unshadowed {name}"
                 )
             if (
@@ -31175,7 +31184,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and narrow["component"] == "float16_t"
                 and not unpack
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX cannot repack widened float16 values without binary16 rounding"
                 )
             self.require_hlsl_explicit_bitcast_helper(helper)
@@ -31224,7 +31233,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and source_info["component"] == "float16_t"
                 and target_info["component"] != "float16_t"
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX widen_native_float16 cannot bitcast a widened "
                     "float32 value back to a native 16-bit payload without "
                     "reintroducing binary16 rounding"
@@ -31256,7 +31265,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             }[target_info["component"]]
             return f"{intrinsic}({argument_code})"
 
-        raise ValueError(
+        raise DirectXRefusal(
             "DirectX explicit bitcast lowering does not support "
             f"{source_info['type']} to {target_info['type']}; use a matching "
             "32-bit scalar/vector shape or a 64-bit scalar and 2-lane payload"
@@ -31537,7 +31546,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         expected_args = 1 if func_name == "interpolateAtCentroid" else 2
         if len(args) != expected_args:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX interpolation builtin '{func_name}' requires "
                 f"{expected_args} argument(s), got {len(args)}"
             )
@@ -31563,7 +31572,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if self.target_profile not in {"dx10", "dx11"}:
             return
 
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX profile {self.target_profile} does not support wave intrinsic "
             f"'{operation}'; "
             "wave intrinsics require DirectX 12 / Shader Model 6.0"
@@ -31605,7 +31614,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value_type or self.current_expression_expected_type
         )
         if not mapped_value_type:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' requires a statically "
                 "known value type"
             )
@@ -31650,7 +31659,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return extension
         expected_args = self.HLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_args is None:
-            raise ValueError(f"DirectX wave intrinsic '{operation}' is not recognized")
+            raise DirectXRefusal(
+                f"DirectX wave intrinsic '{operation}' is not recognized"
+            )
         self.validate_directx_wave_intrinsic_profile(operation)
 
         actual_args = len(args)
@@ -31659,7 +31670,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if actual_args not in accepted_arities:
             expected = " or ".join(str(arity) for arity in accepted_arities)
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' requires "
                 f"{expected} argument(s), got {actual_args}"
             )
@@ -31686,7 +31697,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             # Native HLSL quads follow lane or thread-ID layouts that differ
             # from four consecutive linear invocations.
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' requires software subgroup "
                 "lowering, which defines quads as four consecutive invocations"
             )
@@ -31883,7 +31894,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if self.hlsl_wave_shuffle_bool_conversion(operation, args):
             return
 
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX wave intrinsic '{operation}' requires "
             f"{self.hlsl_value_type_display(actual_type)} result context, got "
             f"{self.hlsl_value_type_display(expected_type)}"
@@ -31896,7 +31907,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if mapped_type is None:
             return
         if array_suffix or base_type != "bool":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' {role} argument must be "
                 f"scalar bool, got {mapped_type}"
             )
@@ -31912,7 +31923,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         # HLSL implicitly widens to the uint laneIndex of WaveReadLaneAt; only
         # non-integer or vector lane arguments are rejected.
         if array_suffix or base_type not in self.HLSL_WAVE_INTEGER_COMPONENT_TYPES:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' {role} argument must be "
                 f"scalar int or uint, got {mapped_type}"
             )
@@ -31924,7 +31935,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if lane_index is None:
             return
         if not 0 <= lane_index <= 3:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' quad lane index must be "
                 f"in the range 0 to 3, got {lane_index}"
             )
@@ -31936,7 +31947,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if mapped_type is None:
             return
         if array_suffix or base_type != "uint4":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' {role} argument must be "
                 f"uint4, got {mapped_type}"
             )
@@ -31959,7 +31970,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if mapped_type is None:
             return
         if component_type not in allowed_components:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' {role} argument must be "
                 f"{description}, got {mapped_type}"
             )
@@ -31981,7 +31992,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and fill_type
             and self.map_type(value_type) != self.map_type(fill_type)
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX wave intrinsic '{operation}' value and fill arguments "
                 "must have matching types, got "
                 f"{self.map_type(value_type)} and {self.map_type(fill_type)}"
@@ -32243,7 +32254,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         if self.hlsl_value_shape_matches(element_type, expected_type):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             "DirectX buffer helper 'buffer_consume' result requires target matching "
             "ConsumeStructuredBuffer element type "
             f"{self.hlsl_value_type_display(element_type)}, got "
@@ -32262,7 +32273,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         expected_args = helper_arg_counts.get(func_name)
         if expected_args is not None and len(args) != expected_args:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX buffer helper '{func_name}' requires "
                 f"{expected_args} argument(s), got {len(args)}"
             )
@@ -32311,18 +32322,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_name in indexed_read_helpers
             and resource_name not in indexed_read_resources
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX buffer helper '{func_name}' requires a resource with "
                 f"indexed read support, got {resource_type}"
             )
         if func_name in indexed_write_helpers:
             if resource_name in {"Buffer", "StructuredBuffer", "ByteAddressBuffer"}:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX buffer helper '{func_name}' cannot write readonly "
                     f"{resource_type}"
                 )
             if resource_name not in indexed_write_resources:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX buffer helper '{func_name}' requires a resource with "
                     f"indexed write support, got {resource_type}"
                 )
@@ -32334,7 +32345,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "RasterizerOrderedByteAddressBuffer",
             }
             if resource_name not in byte_address_resources:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX buffer helper '{func_name}' requires "
                     "ByteAddressBuffer, RWByteAddressBuffer, or "
                     "RasterizerOrderedByteAddressBuffer resource, got "
@@ -32346,12 +32357,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 mapped_value_type = self.map_type(value_type) if value_type else None
                 if mapped_value_type != expected_value_type:
                     actual_value_type = mapped_value_type or value_type or "unknown"
-                    raise ValueError(
+                    raise DirectXRefusal(
                         f"DirectX buffer helper '{func_name}' requires "
                         f"{expected_value_type} value, got {actual_value_type}"
                     )
         if func_name == "buffer_append" and resource_name != "AppendStructuredBuffer":
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX buffer helper 'buffer_append' requires "
                 f"AppendStructuredBuffer, got {resource_type}"
             )
@@ -32365,14 +32376,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and value_type is not None
                 and not self.hlsl_value_shape_matches(element_type, value_type)
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX buffer helper 'buffer_append' requires value matching "
                     "AppendStructuredBuffer element type "
                     f"{self.hlsl_value_type_display(element_type)}, got "
                     f"{self.hlsl_value_type_display(value_type)}"
                 )
         if func_name == "buffer_consume" and resource_name != "ConsumeStructuredBuffer":
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX buffer helper 'buffer_consume' requires "
                 f"ConsumeStructuredBuffer, got {resource_type}"
             )
@@ -32382,7 +32393,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_name in {"buffer_increment_counter", "buffer_decrement_counter"}
             and resource_name != "RWStructuredBuffer"
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX buffer helper '{func_name}' requires "
                 f"RWStructuredBuffer, got {resource_type}"
             )
@@ -32867,7 +32878,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or self.type_name_string(self.expression_result_type(args[index]))
             or "unknown"
         )
-        raise ValueError(
+        raise DirectXRefusal(
             f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
             f"{role} argument must be scalar uint, got {kind}"
         )
@@ -32883,12 +32894,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or original_kind
                 or expression_debug_name(original_arg)
             )
-            raise ValueError(
+            raise DirectXRefusal(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
                 f"original argument must be scalar {expected}, got {original_type}"
             )
         if not self.hlsl_typed_buffer_atomic_original_is_lvalue(original_arg):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
                 f"original argument must be an assignable scalar {expected} target"
             )
@@ -32916,26 +32927,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "RasterizerOrderedByteAddressBuffer",
         }
         if resource_name not in byteaddress_resources:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
                 "requires ByteAddressBuffer, RWByteAddressBuffer, or "
                 "RasterizerOrderedByteAddressBuffer resource, got "
                 f"{resource_type}"
             )
         if resource_name == "ByteAddressBuffer":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
                 "cannot write readonly ByteAddressBuffer"
             )
         if not self.allow_hlsl_byteaddress_interlocked_member_expression:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
                 "requires standalone statement context"
             )
 
         arities, value_roles, original_index = operation_info
         if len(args) not in arities:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"{self.hlsl_byteaddress_interlocked_error_prefix(method_name)} "
                 f"requires {self.hlsl_byteaddress_interlocked_arity_label(arities)} "
                 f"argument(s), got {len(args)}"
@@ -34134,7 +34145,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
 
         names = ", ".join(conflicts)
-        raise ValueError(
+        raise DirectXRefusal(
             "DirectX sampler(s) used for both regular sampling and shadow "
             f"comparison: {names}"
         )
@@ -35153,12 +35164,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_wave_size_lane_value(self, argument, label):
         lane_count = self.hlsl_int_literal_value(argument)
         if lane_count is None:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX WaveSize attribute {label} requires an immediate "
                 "integer argument"
             )
         if lane_count not in self.HLSL_WAVE_SIZE_LANE_COUNTS:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX WaveSize attribute {label} lane count must be one of "
                 "4, 8, 16, 32, 64, or 128"
             )
@@ -35172,7 +35183,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             found = True
             arguments = getattr(attr, "arguments", []) or []
             if arguments:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX WaveOpsIncludeHelperLanes attribute does not "
                     "accept argument(s)"
                 )
@@ -35180,7 +35191,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not found:
             return ""
         if shader_type != "fragment":
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX WaveOpsIncludeHelperLanes attribute is only valid on "
                 "fragment/pixel shader entry points"
             )
@@ -35195,7 +35206,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             found = True
             arguments = getattr(attr, "arguments", []) or []
             if len(arguments) not in {1, 2, 3}:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX WaveSize attribute requires 1, 2, or 3 arguments"
                 )
 
@@ -35209,14 +35220,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 for index, argument in enumerate(arguments)
             ]
             if len(wave_size_values) >= 2 and wave_size_values[0] > wave_size_values[1]:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX WaveSize attribute minimum lane count must be "
                     "less than or equal to maximum lane count"
                 )
             if len(wave_size_values) == 3 and not (
                 wave_size_values[0] <= wave_size_values[2] <= wave_size_values[1]
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX WaveSize attribute preferred lane count must be "
                     "between minimum and maximum lane counts"
                 )
@@ -35224,7 +35235,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not found:
             return ""
         if shader_type != "compute":
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX WaveSize attribute is only valid on compute shader "
                 "entry points"
             )
@@ -35465,14 +35476,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
         if len(generic_args) != 2:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {context} {patch_type}{name_clause} must use "
                 f"{patch_type}<T, N>; found '{type_name}'"
             )
 
         element_type = self.type_name_string(generic_args[0])
         if not element_type:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {context} {patch_type}{name_clause} must include "
                 "an element type"
             )
@@ -35480,17 +35491,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         control_point_count = self.hlsl_int_literal_value(generic_args[1])
         control_point_text = self.type_name_string(generic_args[1])
         if control_point_count is None:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {context} {patch_type}{name_clause} control point "
                 f"count '{control_point_text}' must be an integer literal"
             )
         if control_point_count <= 0:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {context} {patch_type}{name_clause} control point "
                 f"count ({control_point_count}) must be positive"
             )
         if control_point_count > self.HLSL_PATCH_CONTROL_POINT_LIMIT:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {context} {patch_type}{name_clause} control point "
                 f"count ({control_point_count}) must be at most "
                 f"{self.HLSL_PATCH_CONTROL_POINT_LIMIT}"
@@ -35518,7 +35529,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if output_control_points is None or input_patch_control_points is None:
             return
         if output_control_points != input_patch_control_points:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage outputcontrolpoints "
                 f"({output_control_points}) must match the InputPatch control "
                 f"point count ({input_patch_control_points})"
@@ -35534,12 +35545,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if output_control_points is None:
             return
         if output_control_points <= 0:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage outputcontrolpoints "
                 f"({output_control_points}) must be positive"
             )
         if output_control_points > self.HLSL_PATCH_CONTROL_POINT_LIMIT:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage outputcontrolpoints "
                 f"({output_control_points}) must be at most "
                 f"{self.HLSL_PATCH_CONTROL_POINT_LIMIT}"
@@ -35550,7 +35561,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
 
         if shader_type != "tessellation_control":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type or 'helper'} stage maxtessfactor "
                 "attribute is only valid on tessellation_control stages"
             )
@@ -35560,12 +35571,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         max_tess_factor_text = self.hlsl_stage_attribute_argument(func, "maxtessfactor")
         if max_tess_factor is None:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage maxtessfactor "
                 f"'{max_tess_factor_text}' must be a numeric literal"
             )
         if not (1.0 <= max_tess_factor <= 64.0):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage maxtessfactor "
                 f"({max_tess_factor_text}) must be in the range 1.0..64.0"
             )
@@ -35581,7 +35592,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if max_vertex_count is None:
             return
         if max_vertex_count <= 0:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX geometry stage maxvertexcount "
                 f"({max_vertex_count}) must be positive"
             )
@@ -35594,7 +35605,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if hull_output_control_points is None or output_patch_control_points is None:
             return
         if output_patch_control_points != hull_output_control_points:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_evaluation stage OutputPatch control "
                 f"point count ({output_patch_control_points}) must match the "
                 "tessellation_control outputcontrolpoints "
@@ -35607,7 +35618,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if hull_output_type is None or output_patch_type is None:
             return
         if output_patch_type != hull_output_type:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_evaluation stage OutputPatch element type "
                 f"'{output_patch_type}' must match tessellation_control output "
                 f"type '{hull_output_type}'"
@@ -35624,7 +35635,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if hull_domain is None or domain is None:
             return
         if domain != hull_domain:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_evaluation stage domain "
                 f"'{domain}' must match tessellation_control domain "
                 f"'{hull_domain}'"
@@ -35847,7 +35858,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             expected_count = expected_counts[primitive]
             if not self.hlsl_parameter_is_array(parameter):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must be an array with {expected_count} element(s)"
@@ -35857,7 +35868,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if array_count is None:
                 continue
             if array_count != expected_count:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX geometry stage "
                     f"{primitive} input primitive parameter '{parameter.name}' "
                     f"must have {expected_count} element(s), got {array_count}"
@@ -35884,7 +35895,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if component_count is None:
                 continue
             if component_count != expected_count:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX tessellation_evaluation stage SV_DomainLocation "
                     f"parameter '{parameter.name}' must have {expected_count} "
                     f"component(s) for {domain} domains, got {component_count}"
@@ -35918,7 +35929,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 break
 
             if array_suffix or not is_floating_type:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX tessellation_evaluation stage SV_DomainLocation "
                     f"parameter '{parameter.name}' must be a floating-point "
                     "scalar or vector"
@@ -35937,7 +35948,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if base_type is None:
                 continue
             if array_suffix or base_type not in {"int", "uint"}:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage {semantic} "
                     f"parameter '{parameter.name}' "
                     "must be scalar int or uint"
@@ -35964,7 +35975,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if base_type is None:
                 continue
             if array_suffix or base_type != expected_type:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage {semantic} "
                     f"parameter '{parameter.name}' "
                     f"must be {expected_description}"
@@ -35983,7 +35994,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if base_type is None:
                 continue
             if array_suffix or base_type not in expected_types:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage {semantic} "
                     f"parameter '{parameter.name}' "
                     f"must be {expected_description}"
@@ -36011,7 +36022,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
 
         if shader_type in {"task", "amplification", "object"}:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} stage cannot use SV_ViewID; "
                 "SV_ViewID is only valid as a mesh stage input"
             )
@@ -36026,7 +36037,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if semantic is None:
                 continue
             if str(semantic).lower() == "gl_samplemask":
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX fragment stage gl_SampleMask parameter "
                     f"'{parameter.name}' cannot use output-only sample mask "
                     "semantic"
@@ -36128,7 +36139,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             base_type not in self.structs_by_name
             and base_type not in allowed_builtin_types
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX ray {role} parameter '{parameter.name}' must use a "
                 f"{expected_type_description}"
             )
@@ -36157,12 +36168,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         for role, role_params in role_parameters.items():
             if len(role_params) > 1:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage must declare at most one "
                     f"{role} parameter"
                 )
             if shader_type not in allowed_stages.get(role, set()):
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage cannot use {role} parameter "
                     f"'{role_params[0].name}'"
                 )
@@ -36216,11 +36227,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if extra_parameters:
             if expected_roles:
                 expected = ", ".join(expected_roles)
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage parameter "
                     f"'{extra_parameters[0].name}' must be one of: {expected}"
                 )
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} stage must not declare entry parameters"
             )
 
@@ -36230,7 +36241,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if role_sequence != expected_roles:
             expected = ", ".join(expected_roles) if expected_roles else "no parameters"
             actual = ", ".join(role_sequence) if role_sequence else "no parameters"
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} stage parameters must be declared as "
                 f"{expected}, got {actual}"
             )
@@ -36390,7 +36401,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             base_type not in self.structs_by_name
             and base_type not in allowed_builtin_types
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} {operation} {role} argument must use "
                 f"a {expected_type_description}, got {mapped_type}"
             )
@@ -36413,7 +36424,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         if array_suffix or base_type != expected_type:
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} {operation} {role} argument must be "
                 f"{expected_type}, got {actual_type}"
             )
@@ -36436,7 +36447,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and (base_type == "RayQuery" or base_type.startswith("RayQuery<"))
         ):
             actual_type = f"{base_type}{array_suffix}"
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} RayQuery.{operation} receiver must be "
                 f"RayQuery, got {actual_type}"
             )
@@ -36448,7 +36459,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if argument_type is None:
             return
         if not self.is_scalar_floating_type(argument_type):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} {operation} {role} argument must be "
                 f"scalar floating, got {self.map_type(argument_type)}"
             )
@@ -36465,7 +36476,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if mask_value is None or 0 <= mask_value <= 0xFF:
             return
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX {shader_type} {operation} instance inclusion mask argument "
             f"must be in the range 0 to 255, got {mask_value}"
         )
@@ -36522,7 +36533,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if flags is None:
             return
         if flags < 0 or flags & ~self.HLSL_RAY_FLAG_KNOWN_MASK:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"{diagnostic} may only use known RAY_FLAG bits "
                 f"0x0 to 0x{self.HLSL_RAY_FLAG_KNOWN_MASK:X}, got {flags}"
             )
@@ -36530,7 +36541,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for group in self.HLSL_RAY_FLAG_MUTUALLY_EXCLUSIVE_GROUPS:
             active = [name for name in group if flags & self.HLSL_RAY_FLAG_VALUES[name]]
             if len(active) > 1:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"{diagnostic} combines mutually exclusive ray flags: "
                     f"{', '.join(active)}"
                 )
@@ -36610,7 +36621,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         expected_counts = expected_arg_counts.get(operation, default_expected_counts)
         if len(args) not in expected_counts:
             expected = " or ".join(str(count) for count in sorted(expected_counts))
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} RayQuery.{operation} requires {expected} "
                 f"argument(s), got {len(args)}"
             )
@@ -36696,14 +36707,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         if shader_type is not None and shader_type not in allowed_stages[operation]:
             valid_stages = ", ".join(sorted(allowed_stages[operation]))
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} stage cannot call {operation}; "
                 f"{operation} is only valid in: {valid_stages}"
             )
         expected_counts = expected_arg_counts[operation]
         if len(args) not in expected_counts:
             expected = " or ".join(str(count) for count in sorted(expected_counts))
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} {operation} requires {expected} "
                 f"argument(s), got {len(args)}"
             )
@@ -36937,7 +36948,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         try:
             for args in calls:
                 if len(args) != 1:
-                    raise ValueError(
+                    raise DirectXRefusal(
                         "DirectX NonUniformResourceIndex requires exactly "
                         f"1 argument, got {len(args)}"
                     )
@@ -36976,7 +36987,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         actual_base_type, array_suffix = split_array_type_suffix(actual_type)
         if not array_suffix and actual_base_type == "void":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} function '{function_name}' cannot use "
                 f"return semantic '{semantic}' with void return type"
             )
@@ -37011,14 +37022,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             str(semantic) in invalid_return_semantics
             or mapped_semantic in invalid_return_semantics
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} semantic '{semantic}' cannot be used "
                 "as a function return semantic"
             )
 
         if self.hlsl_flexible_render_target_semantic(semantic, mapped_semantic):
             if array_suffix or not self.hlsl_render_target_type(actual_base_type):
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} return semantic '{semantic}' maps to "
                     f"'{mapped_semantic}' and requires function '{function_name}' "
                     "to return a scalar or vector numeric render target type, "
@@ -37033,7 +37044,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if array_suffix or not self.hlsl_builtin_semantic_type_matches(
             mapped_semantic, actual_base_type, expected_type
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} return semantic '{semantic}' maps to "
                 f"'{mapped_semantic}' and requires function '{function_name}' "
                 f"to return {expected_type}, got {actual_type}"
@@ -37057,7 +37068,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         actual_base_type, array_suffix = split_array_type_suffix(actual_type)
         if self.hlsl_flexible_render_target_semantic(semantic, mapped_semantic):
             if array_suffix or not self.hlsl_render_target_type(actual_base_type):
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
                     f"'{mapped_semantic}' and requires member '{member_name}' to "
                     "have a scalar or vector numeric render target type, "
@@ -37068,7 +37079,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if array_suffix or not self.hlsl_builtin_semantic_type_matches(
             mapped_semantic, actual_base_type, expected_type
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
                 f"'{mapped_semantic}' and requires member '{member_name}' to "
                 f"have type {expected_type}, got {actual_type}"
@@ -37116,7 +37127,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 break
 
         if not valid_type:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX struct '{struct_name}' semantic '{semantic}' maps to "
                 f"'{mapped_semantic}' and requires member '{member_name}' to "
                 "have a floating-point scalar, vector, or scalar array type, "
@@ -37246,7 +37257,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         mapped_semantic = self.hlsl_canonical_semantic(semantic)
         semantic_key = str(mapped_semantic).upper()
         if str(semantic).lower() == "gl_samplemaskin":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} stage {context} '{name}' cannot use "
                 f"input-only semantic '{mapped_semantic}'"
             )
@@ -37278,7 +37289,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if forbidden_description is None:
             return
 
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX {shader_type} stage {context} '{name}' cannot use "
             f"{forbidden_description} semantic '{mapped_semantic}'"
         )
@@ -37339,7 +37350,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if shader_type == "geometry" and not (
             parameter_type_bases & {"PointStream", "LineStream", "TriangleStream"}
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX geometry stage parameters must include an HLSL stream "
                 "output parameter: PointStream<T>, LineStream<T>, or "
                 "TriangleStream<T>"
@@ -37349,7 +37360,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             & {"point", "line", "triangle", "lineadj", "triangleadj"}
             for parameter in parameters
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX geometry stage parameters must include an HLSL input "
                 "primitive qualifier: point, line, triangle, lineadj, or "
                 "triangleadj"
@@ -37368,7 +37379,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if shader_type == "tessellation_control":
             if "InputPatch" not in parameter_type_bases:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX tessellation_control stage parameters must include "
                     "an InputPatch<T, N> parameter"
                 )
@@ -37380,7 +37391,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_parameter_has_semantic(parameter, "SV_OutputControlPointID")
                 for parameter in parameters
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX tessellation_control stage parameters must include "
                     "an SV_OutputControlPointID parameter"
                 )
@@ -37392,7 +37403,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if shader_type == "tessellation_evaluation":
             if "OutputPatch" not in parameter_type_bases:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX tessellation_evaluation stage parameters must include "
                     "an OutputPatch<T, N> parameter"
                 )
@@ -37405,7 +37416,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_parameter_has_semantic(parameter, "SV_DomainLocation")
                 for parameter in parameters
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX tessellation_evaluation stage parameters must include "
                     "an SV_DomainLocation parameter"
                 )
@@ -37477,26 +37488,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def validate_hlsl_mesh_output_array_parameter(self, parameter, role):
         if "out" not in self.hlsl_parameter_direction_qualifiers(parameter):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage {role} parameter '{parameter.name}' "
                 "must use the out qualifier"
             )
 
         if not self.hlsl_parameter_is_array(parameter):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage {role} parameter '{parameter.name}' "
                 "must be a statically sized array"
             )
 
         if self.hlsl_parameter_array_size_expression(parameter) is None:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage {role} parameter '{parameter.name}' "
                 "must declare a static array size"
             )
 
         array_count = self.hlsl_parameter_array_count(parameter)
         if array_count is not None and not 1 <= array_count <= 256:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage {role} parameter '{parameter.name}' "
                 "array size must be in the range 1..256"
             )
@@ -37511,7 +37522,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         struct_name = base_type.split("<", 1)[0].strip()
         struct_node = self.structs_by_name.get(struct_name)
         if struct_node is None:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage {role} parameter '{parameter.name}' "
                 "must use a user-defined struct type"
             )
@@ -37553,7 +37564,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 member_name
             )
             if semantic is None:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX mesh stage {role} output struct "
                     f"'{struct_node.name}' member '{member_name}' "
                     "must declare a semantic"
@@ -37569,7 +37580,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
             if role == "vertices" and semantic_key in primitive_only_semantics:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX mesh stage vertices output struct "
                     f"'{struct_node.name}' member '{member_name}' cannot use "
                     f"per-primitive semantic '{mapped_semantic}'"
@@ -37580,7 +37591,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 actual_type = self.map_type(self.hlsl_struct_member_type_name(member))
                 actual_base_type, array_suffix = split_array_type_suffix(actual_type)
                 if array_suffix or actual_base_type != expected_type:
-                    raise ValueError(
+                    raise DirectXRefusal(
                         f"DirectX mesh stage primitives output struct "
                         f"'{struct_node.name}' semantic '{mapped_semantic}' "
                         f"requires member '{member_name}' to have type "
@@ -37591,7 +37602,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 has_position = True
 
         if role == "vertices" and not has_position:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage vertices output struct '{struct_node.name}' "
                 "must declare an SV_Position member"
             )
@@ -37813,14 +37824,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         mapped_type = self.map_type(argument_type)
         base_type, array_suffix = split_array_type_suffix(mapped_type)
         if array_suffix or base_type not in {"int", "uint"}:
-            raise ValueError(f"{context} must be scalar int or uint, got {mapped_type}")
+            raise DirectXRefusal(
+                f"{context} must be scalar int or uint, got {mapped_type}"
+            )
 
     def validate_hlsl_set_mesh_output_count_stage_use(self, func, shader_type):
         if shader_type in {"mesh", None}:
             return
         if not self.hlsl_set_mesh_output_count_calls(func):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX {shader_type} stage cannot call SetMeshOutputCounts; "
             "SetMeshOutputCounts is only valid in mesh stages"
         )
@@ -37836,14 +37849,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
 
             if literal_count < 0:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX mesh SetMeshOutputCounts {label} argument "
                     "must be non-negative"
                 )
             if max_count is not None and literal_count > max_count:
                 role = "vertices" if index == 0 else "indices"
                 parameter_name = role_parameters[role][0].name
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX mesh SetMeshOutputCounts {label} argument "
                     f"({literal_count}) cannot exceed {role} output array "
                     f"'{parameter_name}' size ({max_count})"
@@ -38076,7 +38089,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         try:
             for args in calls:
                 if len(args) != 2:
-                    raise ValueError(
+                    raise DirectXRefusal(
                         "DirectX mesh SetMeshOutputCounts requires exactly "
                         "two arguments: numVertices and numPrimitives"
                     )
@@ -38407,13 +38420,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         role = target_info["role"]
         parameter_name = target_info["name"]
         if not set_mesh_output_counts_seen:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh output array '{parameter_name}' must be written "
                 "only after SetMeshOutputCounts"
             )
 
         if role == "indices" and target_info["member_path"]:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh indices output array '{parameter_name}' must be "
                 "written as a whole uint2/uint3 element"
             )
@@ -38425,14 +38438,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
 
         if index_value < 0:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh {role} output array '{parameter_name}' index "
                 "must be non-negative"
             )
 
         declared_count = declared_counts.get(role)
         if declared_count is not None and index_value >= declared_count:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh {role} output array '{parameter_name}' index "
                 f"({index_value}) must be less than declared array size "
                 f"({declared_count})"
@@ -38441,7 +38454,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         count_label = "numVertices" if role == "vertices" else "numPrimitives"
         set_count = set_count_literals.get(role)
         if set_count is not None and index_value >= set_count:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh {role} output array '{parameter_name}' index "
                 f"({index_value}) must be less than SetMeshOutputCounts "
                 f"{count_label} ({set_count})"
@@ -38751,7 +38764,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for parameter in parameters:
             roles = self.hlsl_mesh_parameter_roles(parameter)
             if len(roles) > 1:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX mesh stage parameter '{parameter.name}' "
                     "can use only one mesh role qualifier"
                 )
@@ -38761,7 +38774,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         mesh_output_roles = {"vertices", "indices", "primitives"}
         if not (set(role_parameters) & mesh_output_roles):
             if self.hlsl_set_mesh_output_count_calls(func):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX mesh SetMeshOutputCounts requires mesh output "
                     "vertices and indices parameters"
                 )
@@ -38771,18 +38784,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if role not in mesh_output_roles:
                 continue
             if len(role_params) > 1:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX mesh stage must declare at most one {role} "
                     "output parameter"
                 )
             self.validate_hlsl_mesh_output_array_parameter(role_params[0], role)
 
         if "vertices" not in role_parameters:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX mesh stage output signature must declare an out vertices array"
             )
         if "indices" not in role_parameters:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX mesh stage output signature must declare an out indices array"
             )
 
@@ -38798,7 +38811,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_parameter_mapped_base_and_array_suffix(index_param)
             )
             if index_base_type != expected_index_type:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX mesh stage outputtopology '{topology}' requires "
                     f"indices parameter '{index_param.name}' to use "
                     f"{expected_index_type}, got {index_base_type}"
@@ -38823,7 +38836,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and primitive_count is not None
                 and index_count != primitive_count
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX mesh stage primitives output array size must match "
                     "the indices output array size"
                 )
@@ -38855,26 +38868,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not payload_parameters:
             return
         if len(payload_parameters) > 1:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX mesh stage must declare at most one mesh payload parameter"
             )
 
         parameter = payload_parameters[0]
         directions = self.hlsl_parameter_direction_qualifiers(parameter)
         if "out" in directions or "inout" in directions:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage payload parameter '{parameter.name}' "
                 "must be an input parameter"
             )
         if "in" not in directions:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage payload parameter '{parameter.name}' "
                 "must use the in qualifier"
             )
 
         payload_type = self.hlsl_parameter_user_struct_type(parameter)
         if payload_type is None:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX mesh stage payload parameter '{parameter.name}' "
                 "must use a user-defined struct type"
             )
@@ -38886,7 +38899,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         if dispatch_payload_types and payload_type not in dispatch_payload_types:
             expected = ", ".join(sorted(dispatch_payload_types))
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX mesh stage payload parameter type "
                 f"'{payload_type}' must match DispatchMesh payload type(s): "
                 f"{expected}"
@@ -38895,7 +38908,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_hlsl_has_amplification_stage
             and None in self.current_hlsl_dispatch_mesh_payload_types
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX mesh stage payload parameter requires amplification "
                 "DispatchMesh calls to pass a payload argument"
             )
@@ -38986,12 +38999,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if literal_count is None:
                 continue
             if literal_count < 0:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} DispatchMesh {label} argument "
                     "must be non-negative"
                 )
             if literal_count >= 65536:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} DispatchMesh {label} argument "
                     "must be less than 65536"
                 )
@@ -39001,7 +39014,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and all(count is not None for count in literal_counts)
             and literal_counts[0] * literal_counts[1] * literal_counts[2] > (1 << 22)
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} DispatchMesh thread group count product "
                 "must not exceed 4194304"
             )
@@ -39274,12 +39287,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             contains_dispatch_mesh = self.hlsl_statement_contains_dispatch_mesh(stmt)
             if contains_dispatch_mesh and in_loop:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} DispatchMesh must not be called from "
                     "loop control flow"
                 )
             if contains_dispatch_mesh and in_thread_varying_branch:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} DispatchMesh must not be called from "
                     "thread-varying control flow"
                 )
@@ -39364,7 +39377,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         allowed_stages = {"task", "amplification", "object"}
         if shader_type not in allowed_stages:
             if shader_type is not None:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage cannot call DispatchMesh; "
                     "DispatchMesh is only valid in amplification/task/object stages"
                 )
@@ -39372,13 +39385,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         for reachable_func in reachable_functions:
             if self.hlsl_dispatch_mesh_invocation_site_count(reachable_func) > 1:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} stage must call DispatchMesh at most once"
                 )
 
         for args in calls:
             if len(args) not in {3, 4}:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX {shader_type} DispatchMesh requires exactly "
                     "three thread group count arguments and an optional "
                     "mesh payload argument"
@@ -39853,7 +39866,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
             if id(node) in self.hlsl_hoisted_groupshared_declaration_ids:
                 continue
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX groupshared variables must be declared at shader/global scope"
             )
 
@@ -39871,7 +39884,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 or declaration is None
                 or not self.hlsl_declaration_has_groupshared_qualifier(declaration)
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX amplification DispatchMesh payload argument must be "
                     "a groupshared user-defined struct variable"
                 )
@@ -39890,7 +39903,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for payload_type in payload_types:
             if payload_type is None:
                 if mesh_payload_types:
-                    raise ValueError(
+                    raise DirectXRefusal(
                         "DirectX amplification DispatchMesh call must pass a "
                         "payload argument when the mesh stage declares a "
                         "payload parameter"
@@ -39898,14 +39911,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
 
             if payload_type not in self.structs_by_name:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX amplification DispatchMesh payload argument must "
                     "be a user-defined struct value"
                 )
 
             if mesh_payload_types and payload_type not in mesh_payload_types:
                 expected = ", ".join(sorted(mesh_payload_types))
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX amplification DispatchMesh payload type "
                     f"'{payload_type}' must match mesh payload type(s): "
                     f"{expected}"
@@ -39927,7 +39940,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if patch_function is None or patch_function is func:
             if not parameters:
                 return
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' must reference an emitted helper "
                 "function in the global or tessellation_control stage scope"
@@ -39939,7 +39952,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         )
         if return_type is None or self.map_type(return_type) == "void":
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' must return patch-constant data"
             )
@@ -39951,7 +39964,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if patch_parameters and "InputPatch" not in {
             self.hlsl_parameter_type_base(parameter) for parameter in patch_parameters
         }:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' parameters must include "
                 "InputPatch<T, N>"
@@ -39988,7 +40001,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and patch_element_type is not None
             and patch_element_type != hull_element_type
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' InputPatch element type "
                 f"'{patch_element_type}' must match tessellation_control "
@@ -40004,7 +40017,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and patch_control_points is not None
             and patch_control_points != hull_control_points
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' InputPatch control point count "
                 f"({patch_control_points}) must match tessellation_control "
@@ -40672,7 +40685,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     getattr(patch_function, "vtype", None),
                 )
             )
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' must return a struct containing "
                 "SV_TessFactor member data; direct returns such as "
@@ -40682,7 +40695,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         semantics = self.hlsl_struct_semantics(return_struct)
         if "sv_tessfactor" not in semantics:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' must return a struct containing "
                 "SV_TessFactor"
@@ -40694,7 +40707,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if normalized_domain in {"tri", "triangle", "quad"} and (
             "sv_insidetessfactor" not in semantics
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' must return a struct containing "
                 f"SV_InsideTessFactor for {normalized_domain} domains"
@@ -40721,7 +40734,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and outer_count is not None
             and outer_count != expected_outer_count
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' must return {expected_outer_count} "
                 f"SV_TessFactor value(s) for {normalized_domain} domains"
@@ -40731,13 +40744,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and inner_count is not None
             and inner_count != expected_inner_count
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' must return {expected_inner_count} "
                 f"SV_InsideTessFactor value(s) for {normalized_domain} domains"
             )
         if expected_inner_count is None and inner_count is not None:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage patchconstantfunc "
                 f"'{patch_function_name}' must not return SV_InsideTessFactor "
                 f"for {normalized_domain} domains"
@@ -40753,13 +40766,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
 
         if domain in {"tri", "triangle", "quad"} and topology == "line":
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage domain "
                 f"'{domain}' requires outputtopology triangle_cw or "
                 "triangle_ccw"
             )
         if domain == "isoline" and topology in {"triangle_cw", "triangle_ccw"}:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage domain 'isoline' "
                 "requires outputtopology line"
             )
@@ -40776,7 +40789,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         valid_domains = {"tri", "quad", "isoline"}
         if canonical_domain not in valid_domains:
             valid_values = ", ".join(sorted(valid_domains))
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} stage domain '{domain}' must be "
                 f"one of: {valid_values}"
             )
@@ -40797,7 +40810,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         if topology not in valid_topologies:
             valid_values = ", ".join(sorted(valid_topologies))
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage outputtopology "
                 f"'{topology}' must be one of: {valid_values}"
             )
@@ -40808,14 +40821,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         topology = self.normalized_hlsl_stage_attribute_argument(func, "outputtopology")
         if not topology:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX mesh stage requires HLSL attribute(s): outputtopology"
             )
 
         valid_topologies = {"line", "triangle"}
         if topology not in valid_topologies:
             valid_values = ", ".join(sorted(valid_topologies))
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX mesh stage outputtopology "
                 f"'{topology}' must be one of: {valid_values}"
             )
@@ -40829,7 +40842,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         values = [int(value) for value in values]
         product = values[0] * values[1] * values[2]
         if product > 128:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} stage numthreads product must not exceed 128"
             )
 
@@ -40851,7 +40864,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         if partitioning not in valid_partitioning:
             valid_values = ", ".join(sorted(valid_partitioning))
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX tessellation_control stage partitioning "
                 f"'{partitioning}' must be one of: {valid_values}"
             )
@@ -47054,7 +47067,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             used_provenance,
         )
         provenance_suffix = f" ({provenance_details})" if provenance_details else ""
-        raise ValueError(
+        raise DirectXRefusal(
             f"Conflicting DirectX resource binding for '{name}': "
             f"{self.resource_register_range_label(register_prefix, start, end, space)} "
             f"overlaps '{used_name}' "
@@ -48562,7 +48575,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
 
         texture_name = self.expression_name(args[0]) or str(args[0])
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX texture operation '{func_name}' requires a declared "
             f"texture or image resource argument: {texture_name}"
         )
@@ -48591,7 +48604,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 func_name, args[0], "storage image resource"
             )
         texture_name = self.expression_name(args[0]) or str(args[0])
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX image operation '{func_name}' requires a storage "
             f"image resource argument: {texture_name}"
         )
@@ -48606,18 +48619,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         texture_name = expression_debug_name(args[0])
         if func_name == "imageLoad" and access == "write":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX image operation '{func_name}' requires read-capable "
                 f"storage image access for {texture_name}: got writeonly"
             )
         if func_name == "imageStore" and access == "read":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX image operation '{func_name}' requires write-capable "
                 f"storage image access for {texture_name}: got readonly"
             )
         if self.image_atomic_intrinsic(func_name):
             access_name = "readonly" if access == "read" else "writeonly"
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX image operation '{func_name}' requires read-write "
                 f"storage image access for {texture_name}: got {access_name}"
             )
@@ -48661,7 +48674,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         value_arg, value_kind = mismatch
         format_label = image_format or self.resource_base_type(image_type)
-        raise ValueError(
+        raise DirectXRefusal(
             image_atomic_value_kind_error(
                 "DirectX",
                 func_name,
@@ -48706,7 +48719,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expected_kind is None and expected_label == component_kind:
             return
         format_label = image_format or self.resource_base_type(image_type)
-        raise ValueError(
+        raise DirectXRefusal(
             image_atomic_result_kind_error(
                 "DirectX",
                 func_name,
@@ -48757,7 +48770,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             actual_name = expression_debug_name(args[index])
             required_label = image_access_requirement_label(required_access)
             actual_label = image_access_diagnostic_name(actual_access)
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX function call '{func_name}' requires {required_label} "
                 f"storage image access for argument {actual_name} passed to "
                 f"parameter {param_name}: got {actual_label}"
@@ -48774,7 +48787,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         coord_type = self.expression_result_type(args[1])
         if coord_type is None or self.is_integer_coordinate_type(coord_type):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             operation_argument_type_error(
                 "DirectX",
                 "resource",
@@ -48804,7 +48817,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if coord_dimension is None or coord_dimension == expected_dimension:
             return
-        raise ValueError(
+        raise DirectXRefusal(
             operation_dimension_argument_error(
                 "DirectX",
                 "resource",
@@ -48835,7 +48848,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if offset_type is None:
                 continue
             if not self.is_integer_coordinate_type(offset_type):
-                raise ValueError(
+                raise DirectXRefusal(
                     operation_argument_type_error(
                         "DirectX",
                         "resource",
@@ -48851,7 +48864,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if offset_dimension is None or offset_dimension == expected_dimension:
                 continue
-            raise ValueError(
+            raise DirectXRefusal(
                 operation_dimension_argument_error(
                     "DirectX",
                     "resource",
@@ -48890,7 +48903,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         coord_dimension = self.query_lod_coordinate_dimension(coord_type)
         if coord_dimension is None:
-            raise ValueError(
+            raise DirectXRefusal(
                 texture_query_lod_coordinate_type_error(
                     "DirectX",
                     func_name,
@@ -48900,7 +48913,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         if coord_dimension == expected_dimension:
             return
-        raise ValueError(
+        raise DirectXRefusal(
             texture_query_lod_coordinate_dimension_error(
                 "DirectX",
                 func_name,
@@ -48929,7 +48942,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
             gradient_dimension = self.gradient_argument_dimension(gradient_type)
             if gradient_dimension is None:
-                raise ValueError(
+                raise DirectXRefusal(
                     operation_argument_type_error(
                         "DirectX",
                         "resource",
@@ -48942,7 +48955,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             if gradient_dimension == expected_dimension:
                 continue
-            raise ValueError(
+            raise DirectXRefusal(
                 operation_dimension_argument_error(
                     "DirectX",
                     "resource",
@@ -48985,7 +48998,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         compare_type = self.expression_result_type(args[compare_index])
         if compare_type is None or self.is_scalar_floating_type(compare_type):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             operation_argument_type_error(
                 "DirectX",
                 "texture compare",
@@ -49008,7 +49021,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         lod_type = self.texture_argument_diagnostic_type(args[lod_index])
         if lod_type is None or self.is_scalar_numeric_type(lod_type):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             operation_argument_type_error(
                 "DirectX",
                 "texture LOD",
@@ -49031,7 +49044,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         bias_type = self.texture_argument_diagnostic_type(args[bias_index])
         if bias_type is None or self.is_scalar_numeric_type(bias_type):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             operation_argument_type_error(
                 "DirectX",
                 "texture bias",
@@ -49050,7 +49063,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         level_type = self.texture_argument_diagnostic_type(args[level_index])
         if level_type is None or self.is_scalar_integer_type(level_type):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             operation_argument_type_error(
                 "DirectX",
                 "resource",
@@ -49077,7 +49090,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if sample_type is None or self.is_scalar_integer_type(sample_type):
             return
         if func_name == "textureSamplePosition":
-            raise ValueError(
+            raise DirectXRefusal(
                 operation_argument_type_error(
                     "DirectX",
                     "texture sample-position query",
@@ -49088,7 +49101,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     self.type_name_string(sample_type),
                 )
             )
-        raise ValueError(
+        raise DirectXRefusal(
             texture_multisample_sample_type_error(
                 "DirectX",
                 func_name,
@@ -49115,7 +49128,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if sample_type is None:
             return
-        raise ValueError(
+        raise DirectXRefusal(
             image_multisample_sample_type_error(
                 "DirectX",
                 func_name,
@@ -49135,7 +49148,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         component_type = self.texture_argument_diagnostic_type(args[component_index])
         if component_type is None or self.is_scalar_integer_type(component_type):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             operation_argument_type_error(
                 "DirectX",
                 "texture gather",
@@ -49578,7 +49591,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if store_value_allowed(expected_channels, value_channels):
             return
         format_label = image_format or self.resource_base_type(image_type)
-        raise ValueError(
+        raise DirectXRefusal(
             image_store_value_shape_error(
                 "DirectX",
                 format_label,
@@ -49604,7 +49617,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if value_kind is None:
             return
         format_label = image_format or self.resource_base_type(image_type)
-        raise ValueError(
+        raise DirectXRefusal(
             image_store_value_kind_error(
                 "DirectX",
                 format_label,
@@ -49622,7 +49635,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
         expected_kind = image_load_result_kind_mismatch(expected_kind, component_kind)
         if expected_kind is not None:
-            raise ValueError(
+            raise DirectXRefusal(
                 image_load_result_kind_error(
                     "DirectX", format_label, component_kind, expected_kind
                 )
@@ -49631,7 +49644,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         loaded_channels = self.image_load_channel_count(image_type, image_format)
         if load_context_allowed(loaded_channels, expected_channels):
             return
-        raise ValueError(
+        raise DirectXRefusal(
             image_load_result_shape_error(
                 "DirectX", format_label, loaded_channels, expected_channels
             )
@@ -51120,7 +51133,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     binding.get("pointer_reinterpretation")
                     or str(binding.get("byte_offset", "0")) != "0"
                 ):
-                    raise ValueError(
+                    raise DirectXRefusal(
                         "DirectX buffer atomic requires an unambiguous typed storage view"
                     )
                 resource = (
@@ -51154,7 +51167,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if storage is not None:
                 index_type = self.map_type(self.expression_result_type(index))
                 if index_type not in {"int", "uint", "int64_t", "uint64_t"}:
-                    raise ValueError(
+                    raise DirectXRefusal(
                         "DirectX buffer atomic requires scalar integer member indices"
                     )
                 storage["suffix"] += f"[index{len(storage['index_types'])}]"
@@ -51174,7 +51187,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def generate_hlsl_expected_compare_call(self, args):
         if len(args) != 3:
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX atomicCompareExchangeWeak requires target, expected and desired"
             )
         kind = self.scalar_expression_kind(args[0])
@@ -51182,14 +51195,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             kind not in {"int", "uint", "float"}
             or self.scalar_expression_kind(args[1]) != kind
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX atomicCompareExchangeWeak requires matching int, uint or float target and expected"
             )
         storage = self.hlsl_buffer_atomic_storage(args[0], allow_workgroup=True)
         if storage is None or (
             storage["resource_type"] and not storage["resource_type"].startswith("RW")
         ):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX atomicCompareExchangeWeak requires writable buffer or groupshared storage"
             )
         key = (
@@ -51396,7 +51409,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 target, {"Buffer", "StructuredBuffer"}
             )
             if readonly_resource_type is not None:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX typed buffer atomic '{func_name}' cannot write "
                     f"readonly {self.resource_base_type(readonly_resource_type)}"
                 )
@@ -51404,7 +51417,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 func_name == "atomicLoad"
                 and self.glsl_buffer_block_atomic_access(target)[0] is None
             ):
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX atomicLoad requires writable buffer or groupshared storage"
                 )
             return None
@@ -51415,7 +51428,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name in {"atomicLoad", "atomicStore"}:
             max_args = min_args
         if not min_args <= len(args) <= max_args:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX typed buffer atomic '{func_name}' requires "
                 f"{min_args} or {max_args} argument(s), got {len(args)}"
             )
@@ -51430,7 +51443,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         if target_kind not in {"int", "uint"} and not float_atomic:
             target_label = self.type_name_string(target_type) or str(resource_type)
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX typed buffer atomic '{func_name}' requires a scalar "
                 f"int or uint target, got {target_label}"
             )
@@ -51448,7 +51461,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             role = "compare value" if value_arg_count == 2 and index == 1 else "value"
             if value_arg_count == 2 and index == 2:
                 role = "replacement"
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX typed buffer atomic '{func_name}' {role} argument "
                 f"must be scalar {target_kind}, got {value_kind}"
             )
@@ -51462,13 +51475,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     or original_kind
                     or expression_debug_name(original_arg)
                 )
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX typed buffer atomic '{func_name}' original "
                     f"argument must be scalar {target_kind}, got "
                     f"{original_type}"
                 )
             if not self.hlsl_typed_buffer_atomic_original_is_lvalue(original_arg):
-                raise ValueError(
+                raise DirectXRefusal(
                     f"DirectX typed buffer atomic '{func_name}' original "
                     f"argument must be an assignable scalar {target_kind} target"
                 )
@@ -51497,7 +51510,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 target, allow_workgroup=func_name in {"atomicLoad", "atomicStore"}
             )
             if storage is None:
-                raise ValueError(
+                raise DirectXRefusal(
                     "DirectX float atomic requires a writable typed buffer element"
                 )
             parts["intrinsic"] = self.hlsl_float_atomic_helper(func_name, storage)
@@ -51526,7 +51539,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def validate_hlsl_typed_buffer_atomic_result_context(self, parts, expected_type):
         if parts["func_name"] == "atomicStore":
-            raise ValueError("DirectX atomicStore does not return a value")
+            raise DirectXRefusal("DirectX atomicStore does not return a value")
         expected_label = self.hlsl_atomic_result_expected_label(expected_type)
         if expected_label is None:
             return
@@ -51540,7 +51553,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         target_type = (
             self.type_name_string(parts["target_type"]) or parts["target_kind"]
         )
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX typed buffer atomic '{parts['func_name']}' requires "
             f"{parts['target_kind']} result context for {target_type} target: "
             f"expected {expected_kind or expected_label}"
@@ -51654,7 +51667,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if func_name == "atomicStore":
             if self.map_type(self.current_function_return_type) != "void":
-                raise ValueError("DirectX atomicStore does not return a value")
+                raise DirectXRefusal("DirectX atomicStore does not return a value")
             call_args = [*parts["target_args"], *parts["values"]]
             indent_str = "    " * indent
             original = self.next_hlsl_temp_variable("atomic_discarded")
@@ -52643,7 +52656,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def format_struct_constructor_expression(self, type_name, rendered_args):
         fields = self.hlsl_struct_constructor_fields(type_name)
         if fields is None or len(fields) != len(rendered_args):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"Struct constructor {type_name} has an unproven field layout"
             )
         if not fields:
@@ -52687,13 +52700,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         named_args = dict(named_args or {})
         field_names = [field_name for field_name, _field_type in fields]
         if len(positional_args) > len(fields):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"Struct constructor {type_name} expects at most {len(fields)} "
                 f"arguments, got {len(positional_args)}"
             )
         unknown_names = sorted(set(named_args) - set(field_names))
         if unknown_names:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"Struct constructor {type_name} has no field "
                 f"{', '.join(unknown_names)}"
             )
@@ -52756,13 +52769,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         named_args = dict(named_args or {})
         field_names = [field_name for field_name, _field_type in fields]
         if len(positional_args) > len(fields):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"Struct constructor {type_name} expects at most {len(fields)} "
                 f"arguments, got {len(positional_args)}"
             )
         unknown_names = sorted(set(named_args) - set(field_names))
         if unknown_names:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"Struct constructor {type_name} has no field "
                 f"{', '.join(unknown_names)}"
             )
@@ -53650,7 +53663,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return code, rendered_expr
 
         if self.hlsl_expression_contains_typed_buffer_atomic(expr):
-            raise ValueError(
+            raise DirectXRefusal(
                 "DirectX typed buffer atomic expression requires statement "
                 "lowering in this expression context"
             )
@@ -53952,7 +53965,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if parts is None:
             return None
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX typed buffer atomic '{func_name}' requires statement "
             "lowering in this expression context"
         )
@@ -54456,7 +54469,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if prefix is None or prefix == "t":
             return
         name = getattr(node, "name", getattr(node, "variable_name", "<anonymous>"))
-        raise ValueError(
+        raise DirectXRefusal(
             "DirectX RaytracingAccelerationStructure resource "
             f"'{name}' must use an SRV t-register, got {prefix}"
         )
@@ -56002,7 +56015,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     ):
         if len(args) == expected_args:
             return
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX GLSL buffer block atomic '{func_name}' requires "
             f"{expected_args} argument(s), got {len(args)}"
         )
@@ -56026,7 +56039,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 # GLSL converts an int argument to a uint parameter implicitly (GLSL 4.60 section 4.1.10); the
                 # value is passed through an explicit uint conversion.
                 continue
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX GLSL buffer block atomic '{func_name}' {role} "
                 f"argument must be scalar {expected_kind}, got {value_kind}"
             )
@@ -56040,7 +56053,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return
 
         member_type = self.type_name_string(access.get("type")) or component_type
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX GLSL buffer block atomic '{func_name}' requires "
             f"{component_type} result context for {member_type} buffer member: "
             f"expected {expected_kind}"
@@ -56392,7 +56405,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"'{callee}' reaches '{builtin_name}', which lowers to "
                 f"{intrinsic} and is only valid in fragment/pixel stages"
             )
-        raise ValueError(f"DirectX {shader_type} stage cannot call {callee}; {detail}")
+        raise DirectXRefusal(
+            f"DirectX {shader_type} stage cannot call {callee}; {detail}"
+        )
 
     def is_hlsl_derivative_builtin_call_name(self, callee, shadowed_names=None):
         if callee not in self.HLSL_DERIVATIVE_INTRINSICS:
@@ -56470,7 +56485,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"'{callee}' reaches '{builtin_name}', which emits {intrinsic} "
                 "and is only valid in fragment/pixel stages"
             )
-        raise ValueError(f"DirectX {shader_type} stage cannot call {callee}; {detail}")
+        raise DirectXRefusal(
+            f"DirectX {shader_type} stage cannot call {callee}; {detail}"
+        )
 
     def is_hlsl_synchronization_builtin_call_name(self, callee, shadowed_names=None):
         if callee not in self.HLSL_SYNCHRONIZATION_INTRINSICS:
@@ -56577,7 +56594,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"'{callee}' reaches '{builtin_name}', which lowers to "
                     f"{intrinsic} and is only valid in {stage_description}"
                 )
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX {shader_type} stage cannot call {callee}; {detail}"
             )
 
@@ -56653,7 +56670,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 f"'{callee}' reaches {method_name} via {helper_name}, which is "
                 "only valid in fragment/pixel stages"
             )
-        raise ValueError(f"DirectX {shader_type} stage cannot call {callee}; {detail}")
+        raise DirectXRefusal(
+            f"DirectX {shader_type} stage cannot call {callee}; {detail}"
+        )
 
     def generate_hlsl_feedback_write_call(self, func_name, args):
         descriptor = self.HLSL_FEEDBACK_WRITE_HELPERS.get(func_name)
@@ -56663,7 +56682,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         method_name, allowed_arities = descriptor
         if len(args) not in allowed_arities:
             expected = " or ".join(str(count) for count in sorted(allowed_arities))
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX feedback helper '{func_name}' requires {expected} "
                 f"argument(s), got {len(args)}"
             )
@@ -56677,7 +56696,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         feedback_type = self.texture_resource_type(args[0])
         feedback_base = self.hlsl_resource_type_name(feedback_type)
         if not feedback_base.startswith("FeedbackTexture"):
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX feedback helper '{func_name}' requires "
                 f"FeedbackTexture2D or FeedbackTexture2DArray receiver, got "
                 f"{feedback_type or self.type_name_string(self.expression_result_type(args[0]))}"
@@ -56686,7 +56705,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         sampled_type = self.texture_resource_type(args[1])
         sampled_base = self.hlsl_resource_type_name(sampled_type)
         if sampled_base not in {"Texture2D", "Texture2DArray"}:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX feedback helper '{func_name}' sampled texture argument "
                 f"must be Texture2D or Texture2DArray, got "
                 f"{sampled_type or self.type_name_string(self.expression_result_type(args[1]))}"
@@ -56698,7 +56717,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             else "Texture2D"
         )
         if sampled_base != expected_sampled_base:
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX feedback helper '{func_name}' receiver "
                 f"{feedback_base} requires paired {expected_sampled_base}, got "
                 f"{sampled_base}"
@@ -56707,7 +56726,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         sampler_type = self.expression_result_type(args[2])
         mapped_sampler_type = self.map_type(self.resource_base_type(sampler_type))
         if sampler_type is not None and mapped_sampler_type != "SamplerState":
-            raise ValueError(
+            raise DirectXRefusal(
                 f"DirectX feedback helper '{func_name}' sampler argument must be "
                 f"SamplerState, got {mapped_sampler_type}"
             )
@@ -56736,7 +56755,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if dimension is None or dimension == expected_dimension:
             return
-        raise ValueError(
+        raise DirectXRefusal(
             f"DirectX feedback helper '{func_name}' {role} argument must be "
             f"float{expected_dimension}, got {self.type_name_string(arg_type)}"
         )
@@ -57425,7 +57444,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if vtype_str in aliases:
             seen = getattr(self, "hlsl_type_alias_resolution_stack", [])
             if vtype_str in seen:
-                raise ValueError(
+                raise DirectXRefusal(
                     f"Cyclic HLSL type alias: {' -> '.join([*seen, vtype_str])}"
                 )
             self.hlsl_type_alias_resolution_stack = [*seen, vtype_str]

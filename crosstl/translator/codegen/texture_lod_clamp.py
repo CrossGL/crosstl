@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 from ..ast import FunctionCallNode, IdentifierNode
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..refusals import TargetRefusal
 
 __all__ = [
     "GLSL_LOD_CLAMP_EXTENSION",
@@ -192,7 +193,7 @@ def split_texture_lod_clamp_call(backend_name, operation, args, explicit_sampler
     expected = [form.operands + 1] + ([form.operands + 2] if form.accepts_bias else [])
     if len(args) <= coordinate_index or len(trailing) not in expected:
         counts = " or ".join(str(coordinate_index + 1 + count) for count in expected)
-        raise ValueError(
+        raise TargetRefusal(
             f"{backend_name} texture operation '{operation}' accepts {counts} argument(s), got {len(args)}"
         )
     has_bias = len(trailing) == form.operands + 2

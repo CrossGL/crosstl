@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 
 from crosstl.backend.DirectX.macro_expansion import GLSL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
+from crosstl.translator.refusals import OpenGLSyntaxError
 
 HASH_BRACKETED_MARKER_RE = re.compile(r"#\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]")
 EXTENSION_DIRECTIVE_RE = re.compile(r"^\s*#\s*extension\s+([A-Za-z_][A-Za-z0-9_]*)\s*:")
@@ -96,7 +97,7 @@ class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     def _skip_block_comment_text(self, code: str, start: int) -> Tuple[int, int]:
         end = code.find("*/", start + 2)
         if end == -1:
-            raise SyntaxError("Unterminated block comment")
+            raise OpenGLSyntaxError("Unterminated block comment")
         comment = code[start : end + 2]
         return len(comment), comment.count("\n")
 
@@ -202,7 +203,7 @@ class GLSLPreprocessor:
             return
         if self._has_tokens_before(code, version_index):
             if self.strict:
-                raise SyntaxError("#version must appear before any other tokens")
+                raise OpenGLSyntaxError("#version must appear before any other tokens")
 
     def _find_version_index(self, code: str) -> Optional[int]:
         i = 0
