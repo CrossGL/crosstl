@@ -4998,6 +4998,116 @@ class TestHipCodeGen:
         assert "unsigned int groupY = blockIdx.y;" not in hip_code
         assert "cgl_ray_launch_id().z" not in hip_code
 
+    def test_stage_input_global_invocation_id_reads_as_hip_builtin(self):
+        # CrossGL #4193: the SPIR-V importer writes a compute shader's
+        # gl_GlobalInvocationID as a stage-scope @input variable. HIP has no
+        # such global, so the variable must not be declared as a host global
+        # and its reads must lower to the built-in expression.
+        source_code = """
+        shader main {
+            struct B0 {
+                float fin[];
+            };
+            RWStructuredBuffer<B0> b0 @set(0) @binding(0);
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;
+                void main() {
+                    uint i;
+                    i = gl_GlobalInvocationID[0];
+                    b0[0].fin[i] = b0[0].fin[i] * 2.0;
+                    return;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint3 gl_GlobalInvocationID;" not in hip_code
+        assert "gl_GlobalInvocationID" not in hip_code
+        assert "i = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+        assert "make_uint3(" not in hip_code.split("compute_main()")[1]
+        assert "b0[0].fin[i] = (b0[0].fin[i] * 2.0f);" in hip_code
+
+    def test_compute_builtin_constant_subscripts_read_components(self):
+        # A uint3 built-in has no subscript operator, so a constant subscript
+        # reads the matching component instead of emitting make_uint3(...)[0].
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    uint a = gl_GlobalInvocationID[0];
+                    uint b = gl_GlobalInvocationID[1];
+                    uint c = gl_GlobalInvocationID[2];
+                    uint d = gl_LocalInvocationID[2];
+                    uint3 g = gl_GlobalInvocationID;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "a = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+        assert "b = (blockIdx.y * blockDim.y + threadIdx.y);" in hip_code
+        assert "c = (blockIdx.z * blockDim.z + threadIdx.z);" in hip_code
+        assert "d = threadIdx.z;" in hip_code
+        assert (
+            "g = make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z));"
+        ) in hip_code
+        assert ")[0]" not in hip_code
+        assert ")[1]" not in hip_code
+        assert ")[2]" not in hip_code
+
+    def test_compute_builtin_subscripts_refuse_non_constant_index_and_writes(self):
+        non_constant_source = """
+        shader TestShader {
+            compute {
+                void main(uint i) {
+                    uint a = gl_GlobalInvocationID[i];
+                }
+            }
+        }
+        """
+        with pytest.raises(HipLoweringRefused, match="non-constant index"):
+            HipCodeGen().generate(Parser(Lexer(non_constant_source).tokens).parse())
+
+        write_source = """
+        shader TestShader {
+            compute {
+                void main() {
+                    gl_GlobalInvocationID[0] = 1u;
+                }
+            }
+        }
+        """
+        with pytest.raises(HipLoweringRefused, match="cannot assign to a component"):
+            HipCodeGen().generate(Parser(Lexer(write_source).tokens).parse())
+
+    def test_compute_builtin_subscript_in_an_assigned_index_is_read(self):
+        # The built-in subscript is the index of the assigned element, a read, not the assignment's target.
+        source_code = """
+        shader TestShader {
+            buffer float* outp;
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    outp[gl_GlobalInvocationID[0]] = 1.0;
+                    outp[outp_index(gl_LocalInvocationID[1])] += 2.0;
+                }
+            }
+            uint outp_index(uint i) { return i; }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "outp[(blockIdx.x * blockDim.x + threadIdx.x)] = 1.0f;" in hip_code
+        assert "outp[outp_index(threadIdx.y)] += 2.0f;" in hip_code
+
     def test_hlsl_compute_builtin_parameters_lower_to_hip_expressions(self):
         source_code = """
         shader TestShader {
