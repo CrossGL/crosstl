@@ -182,14 +182,17 @@ void main() { uv = pos.xy; gl_Position = vec4(pos, 1.0); gl_PointSize = 2.0; }
 
 
 def test_unnumbered_user_semantic_takes_a_free_location(tmp_path):
-    # gl_PointSize becomes the user semantic PSIZE; left implicit, slangc refuses the mix with uv's location.
+    # gl_PointSize maps to SV_PointSize (a system value with BuiltIn PointSize in SPIR-V),
+    # so it correctly gets no vk::location. uv keeps its explicit location 0.
     code = _flat(_slang(tmp_path, GLSL_POINT_SIZE, ".vert"))
     assert "[[vk::location(0)]] float2 uv : TEXCOORD0;" in code, code
-    assert "[[vk::location(1)]] float gl_PointSize : PSIZE;" in code, code
+    assert "float gl_PointSize : SV_PointSize;" in code, code
+    assert not re.search(r"\[\[vk::location\([^)]+\)\]\] float gl_PointSize", code), code
     spirv = _slangc(
         tmp_path, _slang(tmp_path, GLSL_POINT_SIZE, ".vert"), "vertex", "spirv-asm"
     )
     assert _spirv_locations(spirv)["uv"] == 0
+    assert "BuiltIn PointSize" in spirv, spirv
 
 
 GLSL_INTEGER_OUTPUT = """#version 450

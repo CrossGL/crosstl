@@ -108,7 +108,7 @@ def _struct_member_locations(codegen, struct_node, default_semantics):
     """Member name to location for the user varyings of a placed stage structure, or {} when it is not placed.
 
     A structure is placed when a member has ``@location`` or when a fragment entry point returns it. A member without
-    ``@location`` takes the index of its ``TEXCOORD<N>`` or ``SV_Target<N>`` semantic; one with another user
+    semantic, such as ``SV_RenderTargetArrayIndex``, takes the lowest location left free. System values take none.
     semantic, such as ``PSIZE``, takes the lowest location left free. System values take none.
     """
     members = getattr(struct_node, "members", None) or []
