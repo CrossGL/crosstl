@@ -10388,12 +10388,29 @@ class MetalToCrossGLConverter(
                 )
             )
             if function_body is None and getattr(func, "is_template_prototype", False):
-                # A declaration-only primary that explicit specializations
-                # complete; generators select them per deduced argument tuple.
                 params = ", ".join(
                     declaration for declaration in parameter_declarations if declaration
                 )
                 return (
+                    code
+                    + f"{generic_prefix}{return_type} {function_name}({params});\n\n"
+                )
+            if function_body is None and getattr(func, "is_free_function_prototype", False):
+                # A preserved declaration-only free function (cross-file callable).
+                # Emit a forward declaration so callers in other translation units
+                # can reference it; do NOT emit an empty body.
+                visible_attrs = [
+                    attr
+                    for attr in getattr(func, "attributes", []) or []
+                    if getattr(attr, "name", None) == "visible"
+                ]
+                visible_annotation = " [[visible]]" if visible_attrs else ""
+                params = ", ".join(
+                # complete; generators select them per deduced argument tuple.
+                params = ", ".join(
+                    declaration for declaration in parameter_declarations if declaration
+                )
+                    + f"{generic_prefix}{return_type} {function_name}({params}){visible_annotation};\n\n"
                     code
                     + f"{generic_prefix}{return_type} {function_name}({params});\n\n"
                 )

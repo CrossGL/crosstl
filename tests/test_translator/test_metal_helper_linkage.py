@@ -511,3 +511,97 @@ def test_independent_template_operator_modules_link_and_execute(
     (tmp_path / "outputs.json").write_text(
         json.dumps(evidence, indent=2), encoding="utf-8"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-file free-function declaration preservation
+# ---------------------------------------------------------------------------
+
+_PROVIDER = """
+#include <metal_stdlib>
+using namespace metal;
+[[visible]] float shared_external(float value) { return value * 3.0f; }
+"""
+
+_CONSUMER = """
+#include <metal_stdlib>
+using namespace metal;
+[[visible]] float shared_external(float value);
+kernel void consume(device float* output [[buffer(0)]]) {
+    output[0] = shared_external(7.0f);
+}
+"""
+
+_CONSUMER_PLAIN = """
+#include <metal_stdlib>
+using namespace metal;
+float helper_plain(float value);
+kernel void consume_plain(device float* output [[buffer(0)]]) {
+    output[0] = helper_plain(2.0f);
+}
+"""
+
+_SAME_FILE_DECL_DEF = """
+#include <metal_stdlib>
+using namespace metal;
+float fwd_fn(float x);
+float fwd_fn(float x) { return x + 1.0f; }
+kernel void use_fwd(device float* output [[buffer(0)]]) {
+    output[0] = fwd_fn(1.0f);
+}
+"""
+
+
+def _xlat(source, tmp_path, target="metal"):
+    path = tmp_path / "source.metal"
+    path.write_text(source, encoding="utf-8")
+    return translate(str(path), backend=target, format_output=False)
+
+
+def test_cross_file_declaration_preserved_in_translated_metal(tmp_path):
+    generated = _xlat(_CONSUMER, tmp_path)
+    assert "shared_external" in generated
+    # Must have a declaration (semicolon-terminated), not an empty body
+    assert re.search(r"shared_external\s*\([^)]*\)\s*;", generated), (
+        f"Expected forward declaration in:\n{generated}"
+    )
+    assert not re.search(r"shared_external\s*\([^)]*\)\s*\{", generated), (
+        f"Must not emit a body for the declaration:\n{generated}"
+    )
+
+
+def test_cross_file_declaration_no_visible_preserved(tmp_path):
+    generated = _xlat(_CONSUMER_PLAIN, tmp_path)
+    assert "helper_plain" in generated
+    assert re.search(r"helper_plain\s*\([^)]*\)\s*;", generated), (
+        f"Expected forward declaration in:\n{generated}"
+    )
+
+
+def test_same_file_decl_then_def_no_duplicate_body(tmp_path):
+    generated = _xlat(_SAME_FILE_DECL_DEF, tmp_path)
+    assert "fwd_fn" in generated
+    bodies = re.findall(r"fwd_fn\s*\([^)]*\)\s*\{", generated)
+    assert len(bodies) <= 1, f"Expected at most one body, found {len(bodies)}"
+
+
+def test_provider_has_body_in_translated_metal(tmp_path):
+    generated = _xlat(_PROVIDER, tmp_path)
+    assert "shared_external" in generated
+    assert re.search(r"shared_external\s*\([^)]*\)\s*\{", generated), (
+        f"Provider should have a function body:\n{generated}"
+    )
+
+
+def test_consumer_translation_succeeds_without_error(tmp_path):
+    from crosstl.backend.Metal.external_functions import MetalExternalFunctionError
+    generated = _xlat(_CONSUMER, tmp_path)
+    assert generated
+
+
+def test_cross_file_declaration_preserved_in_other_targets(tmp_path):
+    for target in ("directx", "opengl"):
+        generated = _xlat(_CONSUMER, tmp_path, target=target)
+        assert "shared_external" in generated, (
+            f"shared_external missing for target {target}"
+        )

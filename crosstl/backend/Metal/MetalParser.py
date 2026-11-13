@@ -3924,10 +3924,21 @@ class MetalParser:
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
+            # Always record the prototype name so external-function detection can
+            # identify which names were only declared and not defined here.
+            self.function_prototypes.setdefault(name, len(self.function_prototypes))
             if not preserve_declaration:
-                self.function_prototypes.setdefault(name, len(self.function_prototypes))
-                self.pop_declaration_context()
-                return None
+                # For ordinary (non-template) free-function declarations we
+                # preserve the node so the cross-file callable can be emitted as
+                # a forward declaration in the generated output.  Stage-entry
+                # functions (vertex/fragment/kernel/…) have no meaningful
+                # declaration form outside the translation unit they define, so
+                # they are still dropped to avoid emitting an unusable prototype.
+                if qualifier in {"vertex", "fragment", "kernel", "mesh", "object",
+                                  "amplification", "intersection", "anyhit",
+                                  "closesthit", "miss", "callable"}:
+                    self.pop_declaration_context()
+                    return None
             body = None
         elif self.is_defaulted_or_deleted_function_declaration():
             self.skip_defaulted_or_deleted_function_declaration()
@@ -3951,6 +3962,11 @@ class MetalParser:
             method_qualifiers=method_qualifiers,
         )
         self.annotate_declaration_scope(function)
+        # Mark plain (non-template) declaration-only nodes so the code
+        # generator knows to emit a forward declaration rather than a full body.
+        if body is None and not getattr(function, "is_template_prototype", False):
+            function.declaration_kind = "declaration"
+            function.is_free_function_prototype = True
         function.declaration_qualifiers = list(return_qualifiers)
         function.method_qualifiers = list(method_qualifiers)
         function.declaration_source_location = self.source_span_from_tokens(
