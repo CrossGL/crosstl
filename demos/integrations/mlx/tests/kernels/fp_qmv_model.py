@@ -1,9 +1,9 @@
-"""The fp_quantized.metal matrix-vector model the fp_qmv gates share.
+"""The fp_quantized.metal matrix-vector model the fp_qmv and fp_qvm gates share.
 
-Inputs, layouts and expectations for ``fp_qmv``, ``fp_qmv_fast`` and their
-gather twins: quarters in ``[-1, 1]``, E2M1 and E4M3 codes, E4M3 and E8M0
-scales and per-expert global scales; direct dequantized dot products with
-their float32 exactness budget; ``qdot`` and ``adjust_matrix_offsets``
+Inputs, layouts and expectations for ``fp_qmv``, ``fp_qmv_fast``, ``fp_qvm``
+and their gather twins: quarters in ``[-1, 1]``, E2M1 and E4M3 codes, E4M3
+and E8M0 scales and per-expert global scales; direct dequantized dot products
+with their float32 exactness budget; ``qdot`` and ``adjust_matrix_offsets``
 expression for expression; and the translation each entry runs.
 """
 
@@ -226,9 +226,11 @@ def case_data_for(info, entry, case, layout, label, case_global_scale):
     x = [POISON] * (layout["xRows"] * k)
     for start in sorted(used_rows):
         x[start : start + k] = [_signed(draws, 4) / 4 for _ in range(k)]
+    # A weight row holds K codes, or N when transposed for fp_qvm.
+    width = n if layout["transposed"] else k
     codes, scales = [], []
     for _ in range(layout["matrices"] * layout["rows"]):
-        codes.append([_weight_code(draws, bits) for _ in range(k)])
+        codes.append([_weight_code(draws, bits) for _ in range(width)])
         scales += [_scale_byte(draws, mode) for _ in range(layout["groups"])]
     w = []
     for row in codes:
@@ -317,13 +319,19 @@ def _direct(info, data):
         for row in range(m):
             vector = x[batch["x"] + row * k : batch["x"] + (row + 1) * k]
             for col in range(n):
-                line = batch["w"] * n + col
                 total, bound, digits = 0.0, 0.0, 0
                 for index, value in enumerate(vector):
+                    # Weight row and position of (input index, output column):
+                    # N rows of K codes, or K rows of N codes when transposed.
+                    if layout["transposed"]:
+                        line, position = batch["w"] * k + index, col
+                    else:
+                        line, position = batch["w"] * n + col, index
                     scale = _scale_value(
-                        mode, scales[line * groups + index // group_size]
+                        mode, scales[line * groups + position // group_size]
                     )
-                    term = value * _code_value(bits, data["codes"][line][index]) * scale
+                    code = data["codes"][line][position]
+                    term = value * _code_value(bits, code) * scale
                     total += term
                     bound += abs(term)
                     digits = max(digits, _fraction_bits(term))

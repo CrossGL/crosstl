@@ -21,9 +21,10 @@ per byte and the guarded byte writes. Dequantize unpacks random codes,
 including signed zeros and E4M3 subnormals, with E4M3 scales of either sign
 or E8M0 scales. Every word is compared exactly, guards and inputs must be
 unchanged, and Metal also runs the unchanged upstream kernels. fp_qmv and
-fp_gather_qmv have their own gate, test_current_fp_quantized_qmv.py, and
-fp_qmv_fast and fp_gather_qmv_fast theirs, test_current_fp_quantized_qmv_fast.py;
-the other matrix-vector and the matrix-matrix kernels are outside all three.
+fp_gather_qmv have their own gate, test_current_fp_quantized_qmv.py, as do
+fp_qmv_fast and fp_gather_qmv_fast and fp_qvm and fp_gather_qvm
+(fp_quantized_scope.py lists every gate); the other matrix-vector, the
+split-K vector-matrix and the matrix-matrix kernels are outside them all.
 """
 
 import functools
@@ -46,6 +47,12 @@ from crosstl.project import (
     build_native_loader_dispatch_request,
     translate_project,
     validate_project_report,
+)
+from demos.integrations.mlx.tests.kernels.fp_quantized_scope import (
+    EXCLUDED_KERNELS,
+    GATE_ENTRY_COUNTS,
+    UNIT_ENTRY_COUNT,
+    shared_scope,
 )
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
@@ -105,7 +112,6 @@ HEADERS = {
 # bindings and grid the cases follow.
 HOST_SOURCE = "mlx/backend/metal/quantized.cpp"
 HOST_SHA256 = "36b79607ee01bc213511dcdad590b2dc3b96099300551cbc3e7e6c7e13ba5982"
-UNIT_ENTRY_COUNT = 518
 
 # fp_quantized.metal's instantiation order: instantiate_quantized_types walks
 # the element types, then instantiate_quantize_dequantize these modes, each
@@ -119,27 +125,6 @@ MODES = (
     ("mxfp8", 32, 8, False),
     ("mxfp4", 32, 4, False),
 )
-# The 54 fp_qmv and fp_gather_qmv entries have their own gate,
-# test_current_fp_quantized_qmv.py.
-QMV_ENTRY_COUNT = 54
-# The 66 fp_qmv_fast and fp_gather_qmv_fast entries have theirs,
-# test_current_fp_quantized_qmv_fast.py.
-QMV_FAST_ENTRY_COUNT = 66
-# Kernels of fp_quantized.metal no gate covers yet.
-EXCLUDED_KERNELS = (
-    "fp_qvm",
-    "fp_qmm_n",
-    "fp_gather_qvm",
-    "fp_gather_qmm_n",
-    "fp_qmv_quad",
-    "fp_qmv_wide",
-    "fp_qvm_split_k",
-    "fp_qmm_t_splitk",
-    "fp_gather_qmm_t",
-    "fp_qmm_t",
-    "fp_gather_qmm_rhs",
-)
-
 SIMD_SIZE = 32
 WORKGROUP = (64, 1, 1)
 CASES = ("row", "grid")
@@ -840,18 +825,7 @@ def _expected_scope():
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
-        "qmvGateEntryCount": QMV_ENTRY_COUNT,
-        "qmvFastGateEntryCount": QMV_FAST_ENTRY_COUNT,
-        "excludedEntries": {
-            "kernels": list(EXCLUDED_KERNELS),
-            "count": (
-                UNIT_ENTRY_COUNT - len(ENTRIES) - QMV_ENTRY_COUNT - QMV_FAST_ENTRY_COUNT
-            ),
-            "reason": (
-                "the quad, wide and split-K matrix-vector, the vector-matrix "
-                "and the matrix-matrix kernels are not gated yet"
-            ),
-        },
+        **shared_scope("quantize"),
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": len(ENTRIES) * len(CASES),
@@ -902,7 +876,7 @@ def test_current_mlx_fp_quantized_contract_is_exact():
 
 
 def test_fp_quantized_entries_follow_mlx_instantiation():
-    assert len(ENTRIES) == 36 == len(set(ENTRIES))
+    assert len(ENTRIES) == 36 == len(set(ENTRIES)) == GATE_ENTRY_COUNTS["quantize"]
     assert Counter(info["kind"] for info in INFO.values()) == dict.fromkeys(KINDS, 12)
     assert ENTRIES[:3] == (
         "nvfp4_quantize_dequantize_float_gs_16_b_4_hgs_false",

@@ -62,6 +62,11 @@ from demos.integrations.mlx.tests.kernels.fp_qmv_model import (
     config_for,
     translate_entry,
 )
+from demos.integrations.mlx.tests.kernels.fp_quantized_scope import (
+    EXCLUDED_KERNELS,
+    GATE_ENTRY_COUNTS,
+    shared_scope,
+)
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
     _run,
@@ -126,24 +131,6 @@ KERNELS = {"batch_1": "fp_qmv", "batch_0": "fp_qmv", "gather": "fp_gather_qmv"}
 # The 36 fp_quantize, fp_dequantize and fp_quantize_dequantize entries have
 # their own gate, test_current_fp_quantized.py.
 QUANTIZE_ENTRY_COUNT = len(QUANTIZE_ENTRIES)
-# The 66 fp_qmv_fast and fp_gather_qmv_fast entries have their own gate,
-# test_current_fp_quantized_qmv_fast.py.
-QMV_FAST_ENTRY_COUNT = 66
-# Kernels of fp_quantized.metal no gate covers yet.
-EXCLUDED_KERNELS = (
-    "fp_qvm",
-    "fp_qmm_n",
-    "fp_gather_qvm",
-    "fp_gather_qmm_n",
-    "fp_qmv_quad",
-    "fp_qmv_wide",
-    "fp_qvm_split_k",
-    "fp_qmm_t_splitk",
-    "fp_gather_qmm_t",
-    "fp_qmm_t",
-    "fp_gather_qmm_rhs",
-)
-
 
 # Unbatched entries take each of fp_qmv_impl's paths; batched and gather
 # entries combine them with adjust_matrix_offsets' layouts.
@@ -573,21 +560,7 @@ def _expected_scope():
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
-        "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
-        "qmvFastGateEntryCount": QMV_FAST_ENTRY_COUNT,
-        "excludedEntries": {
-            "kernels": list(EXCLUDED_KERNELS),
-            "count": (
-                UNIT_ENTRY_COUNT
-                - QUANTIZE_ENTRY_COUNT
-                - QMV_FAST_ENTRY_COUNT
-                - len(ENTRIES)
-            ),
-            "reason": (
-                "the quad, wide and split-K matrix-vector, the vector-matrix "
-                "and the matrix-matrix kernels are not gated yet"
-            ),
-        },
+        **shared_scope("qmv"),
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": _dispatch_count(),
@@ -642,7 +615,8 @@ def test_current_mlx_fp_quantized_qmv_contract_is_exact():
 def test_fp_quantized_qmv_entries_follow_mlx_instantiation():
     readme = (ROOT / "demos/integrations/mlx/README.md").read_text(encoding="utf-8")
     assert "fp_quantized_qmv.current-tree.translation.json" in readme
-    assert len(ENTRIES) == 54 == len(set(ENTRIES))
+    assert len(ENTRIES) == 54 == len(set(ENTRIES)) == GATE_ENTRY_COUNTS["qmv"]
+    assert QUANTIZE_ENTRY_COUNT == GATE_ENTRY_COUNTS["quantize"]
     assert Counter(info["variant"] for info in INFO.values()) == dict.fromkeys(
         VARIANTS, 18
     )
