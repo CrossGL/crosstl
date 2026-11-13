@@ -159,21 +159,33 @@
     - crosstl/project/*worker*
 - name: area:ci
   color: 1d76db
-  description: Workflows, tests and coverage tooling
+  description: Workflows, repository tools, packaging and test infrastructure
   paths:
     - ".github/workflows/*"
     - ".github/actions/*"
     - ".github/actionlint.yaml"
+    - ".github/codeowners"
+    - ".github/dependabot.yml"
+    - ".github/labels.yml"
     - ".pre-commit-config.yaml"
-    - tools/coverage/*
+    - conftest.py
+    - pyproject.toml
+    - tools/*
     - tests/coverage/*
+    - tests/ci_helpers.py
+    - tests/test_ci_*
 - name: area:docs
   color: 1d76db
-  description: Documentation site and guides
+  description: Documentation site, guides and community files
   paths:
     - docs/*
     - readme.md
     - contributing.md
+    - security.md
+    - changelog.md
+    - citation.cff
+    - ".github/*.md"
+    - ".github/issue_template/*"
 
 - name: coverage
   color: 0e8a16
