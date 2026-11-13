@@ -335,9 +335,12 @@ def _target_options(info):
     return options
 
 
-def _config(directory, target, entry):
-    """The translation of one entry, as the gate and contract run it."""
-    info = INFO[entry]
+def fp_qmm_config(directory, target, entry, info, access_assertions, index_items):
+    """One fp qmm entry's translation with its loader and index assertions.
+
+    ``index_items`` are ``_opengl_index_items``-shaped and asserted on
+    OpenGL only; ``access_assertions`` apply off Metal.
+    """
     index_assertions = ()
     if target == "opengl":
         index_assertions = tuple(
@@ -348,7 +351,7 @@ def _config(directory, target, entry):
                 "minimum": 0,
                 "maximum": maximum,
             }
-            for expression, scope, maximum, _ in _opengl_index_items(entry)
+            for expression, scope, maximum, _ in index_items
         )
     return ProjectConfig(
         root=Path(directory).parent,
@@ -359,9 +362,7 @@ def _config(directory, target, entry):
         output_dir=Path(directory).name + "/out",
         entry_points={SOURCE: (entry,)},
         entry_workgroup_size_rules={SOURCE: {entry: WORKGROUP}},
-        workgroup_access_assertions=(
-            _workgroup_access_assertions(entry) if target != "metal" else ()
-        ),
+        workgroup_access_assertions=access_assertions if target != "metal" else (),
         index_range_assertions=index_assertions,
         metadata_preconditions=[
             dict(
@@ -384,6 +385,18 @@ def _config(directory, target, entry):
                 "target_options": _target_options(info),
             }
         },
+    )
+
+
+def _config(directory, target, entry):
+    """The translation of one entry, as the gate and contract run it."""
+    return fp_qmm_config(
+        directory,
+        target,
+        entry,
+        INFO[entry],
+        _workgroup_access_assertions(entry),
+        _opengl_index_items(entry),
     )
 
 
