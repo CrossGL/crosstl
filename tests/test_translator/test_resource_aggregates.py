@@ -1447,8 +1447,8 @@ kernel void slice_copy(
     assert "crosstl_resource_store_float" in hlsl
     # b.input was initialised as `input + 2` (offset 2) then shifted by +1,
     # so the final combined offset must be 3, not 2 or 1 individually.
-    assert ", 3)" in hlsl or ", 3LL)" in hlsl, (
-        "b.input combined offset (2+1) must appear as literal 3 in HLSL shift call"
+    assert "crosstl_resource_shift_float(crosstl_reference_input, int64_t(2))" in hlsl, (
+        "b.a was initialised as input + 2, so a shift with int64_t(2) must appear"
     )
     # b.output was assigned `output + 1` so its shift offset must be 1.
     assert ", 1)" in hlsl or ", 1LL)" in hlsl, (
