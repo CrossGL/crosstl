@@ -303,6 +303,73 @@ def test_gathers_do_not_unroll(tmp_path):
     assert "OpCapability ImageGatherExtended" in code
 
 
+# Negative literal offsets -------------------------------------------------------------------------------------------
+NEGATIVE_OFFSET_1D = """
+shader NegativeOffset {
+    sampler1D line;
+    fragment {
+        vec4 main(float u @ TEXCOORD0) @ gl_FragColor {
+            vec4 a = textureOffset(line, u, -1);
+            vec4 b = textureLodOffset(line, u, 0.0, -2);
+            return a + b;
+        }
+    }
+}
+"""
+
+
+def test_spirv_negative_1d_literal_offset_uses_const_offset(tmp_path):
+    """A negated integer literal offset on sampler1D must lower to ConstOffset, not be refused."""
+    code = _translate(tmp_path, NEGATIVE_OFFSET_1D, "vulkan")
+    assert len(re.findall(r"\bOpImage\w+ .*\bConstOffset\b", code)) == 2
+    assert not re.search(r"(?<!Const)Offset %", code)
+    _validate_spirv(tmp_path, code)
+
+
+def test_glsl_negative_1d_literal_offset(tmp_path):
+    """A negated integer literal offset on sampler1D must translate without error for GLSL."""
+    code = _translate(tmp_path, NEGATIVE_OFFSET_1D, "opengl")
+    assert "textureOffset" in code
+    assert "-1" in code or "(-1)" in code
+    _validate_glsl(tmp_path, code)
+
+
+def test_spirv_negative_literal_2d_offset_uses_const_offset(tmp_path):
+    """A negated 2D vector offset (-ivec2(1,0)) must lower to ConstOffset."""
+    body = "sum += textureOffset(colorMap, uv, -ivec2(1, 0));"
+    code = _translate(tmp_path, _fragment(body), "vulkan")
+    assert re.search(r"\bOpImage\w+ .*\bConstOffset\b", code)
+    assert not re.search(r"(?<!Const)Offset %", code)
+    _validate_spirv(tmp_path, code)
+
+
+def test_spirv_negative_scalar_literal_offset_const_offset(tmp_path):
+    """A literal -1 as 2D offset component must lower to ConstOffset."""
+    body = "sum += textureOffset(colorMap, uv, ivec2(-1, 0));"
+    code = _translate(tmp_path, _fragment(body), "vulkan")
+    assert re.search(r"\bOpImage\w+ .*\bConstOffset\b", code)
+    assert not re.search(r"(?<!Const)Offset %", code)
+    _validate_spirv(tmp_path, code)
+
+
+def test_spirv_mixed_sign_offset_uses_const_offset(tmp_path):
+    """An ivec2 with both positive and negative literal components must lower to ConstOffset."""
+    body = "sum += textureOffset(colorMap, uv, ivec2(1, -1));"
+    code = _translate(tmp_path, _fragment(body), "vulkan")
+    assert re.search(r"\bOpImage\w+ .*\bConstOffset\b", code)
+    assert not re.search(r"(?<!Const)Offset %", code)
+    _validate_spirv(tmp_path, code)
+
+
+def test_spirv_negative_lod_offset_uses_const_offset(tmp_path):
+    """textureLodOffset with a negative integer literal offset must lower to ConstOffset."""
+    body = "sum += textureLodOffset(colorMap, uv, 0.0, ivec2(-2, 1));"
+    code = _translate(tmp_path, _fragment(body), "vulkan")
+    assert re.search(r"\bOpImage\w+ .*\bConstOffset\b", code)
+    assert not re.search(r"(?<!Const)Offset %", code)
+    _validate_spirv(tmp_path, code)
+
+
 # SPIR-V refusal -------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "call",

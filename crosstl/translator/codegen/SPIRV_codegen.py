@@ -4813,6 +4813,67 @@ class VulkanSPIRVCodeGen(
     def integer_type_width(self, type_name: str) -> Optional[int]:
         return self.INTEGER_TYPE_WIDTHS.get(self.normalize_primitive_name(type_name))
 
+    def _fold_negate_integer_constant(
+        self, operand: SpirvId, result_type: SpirvId
+    ) -> Optional[SpirvId]:
+        """Return a negated copy of a constant signed-integer scalar or vector, or ``None``.
+
+        When the operand is a registered constant (``OpConstant`` / ``OpConstantComposite``),
+        computing ``-operand`` as a new constant avoids emitting ``OpSNegate``, which is not a
+        constant instruction.  ``is_constant_instruction`` checks the constant tables, so the
+        returned id is recognised as a constant by ``image_offset_operand`` and lowered to
+        ``ConstOffset`` rather than refused as a non-constant texel offset.
+
+        Returns ``None`` when the operand is not a recognisable constant so the caller can fall
+        back to emitting ``OpSNegate`` as before.
+        """
+        if not self.is_constant_instruction(operand):
+            return None
+
+        # Scalar: registered in self.constants, its Python value is in constant_values_by_id.
+        scalar_value = self.constant_values_by_id.get(operand.id)
+        if isinstance(scalar_value, int) and not isinstance(scalar_value, bool):
+            return self.register_constant(-scalar_value, result_type)
+
+        # Vector: a composite constant registered in vector_constants.
+        # Retrieve component ids and negate each component constant.
+        for (_type_id, component_ids), registered in list(self.vector_constants.items()):
+            if registered.id != operand.id:
+                continue
+            if not component_ids:
+                return None
+            component_type_id = self.value_types.get(component_ids[0])
+            if component_type_id is None:
+                return None
+            neg_components = []
+            for cid in component_ids:
+                val = self.constant_values_by_id.get(cid)
+                if not (isinstance(val, int) and not isinstance(val, bool)):
+                    return None
+                neg_components.append(self.register_constant(-val, component_type_id))
+            return self.register_vector_constant(result_type, neg_components)
+
+        # composite_constants covers ivecN built by OpConstantComposite (e.g. ivec2(-1, 0)).
+        for (_type_id, component_ids), registered in list(
+            self.composite_constants.items()
+        ):
+            if registered.id != operand.id:
+                continue
+            if not component_ids:
+                return None
+            component_type_id = self.value_types.get(component_ids[0])
+            if component_type_id is None:
+                return None
+            neg_components = []
+            for cid in component_ids:
+                val = self.constant_values_by_id.get(cid)
+                if not (isinstance(val, int) and not isinstance(val, bool)):
+                    return None
+                neg_components.append(self.register_constant(-val, component_type_id))
+            return self.register_vector_constant(result_type, neg_components)
+
+        return None
+
     def unary_operation(
         self, op: str, result_type: Union[SpirvId, SpirvType], operand: SpirvId
     ) -> SpirvId:
@@ -4879,6 +4940,15 @@ class VulkanSPIRVCodeGen(
                 zero = self.default_value_for_type(result_type)
                 return self.binary_operation("-", result_type, zero, operand)
             spv_op = (
+            # Fold negation of a constant signed integer (scalar or vector) into
+            # OpConstant/OpConstantComposite so the result is recognised as a
+            # SPIR-V constant instruction.  Without this, ``textureOffset(t, u, -1)``
+            # emits OpSNegate, which is not a constant and triggers the
+            # VUID-RuntimeSpirv-Offset-10213 refusal in image_offset_operand.
+            if component_type in self.SIGNED_INTEGER_TYPES:
+                folded = self._fold_negate_integer_constant(operand, result_type)
+                if folded is not None:
+                    return folded
                 "OpSNegate"
                 if component_type in self.SIGNED_INTEGER_TYPES
                 else "OpFNegate"
