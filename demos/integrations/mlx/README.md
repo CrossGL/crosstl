@@ -1923,8 +1923,8 @@ including signed zeros and subnormals, with E4M3 scales of either sign or E8M0
 scales from 2^-5 to 2^7. Every word is compared exactly, eight trailing guards
 per output must keep their values and inputs must be unchanged; Metal also runs
 the unchanged upstream kernels, which must produce the same words. The
-matrix-vector and matrix-matrix kernels are outside this gate. This covers
-36/17,832 entries; it does not run the upstream MLX test suite or redirect the
+matrix-vector, vector-matrix and matrix-matrix kernels are outside this gate.
+This covers 36/17,832 entries; it does not run the upstream MLX test suite or redirect the
 MLX host runtime.
 
 `contracts/fp_quantized_qmv.current-tree.translation.json` pins a further 54
@@ -1984,6 +1984,38 @@ sign or the global scale are rejected. Every target must match the model word
 for word and leave the guards untouched; on Metal the translation must also
 match the unchanged upstream kernel. This covers 66/17,832 entries; it does
 not run the upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/fp_quantized_qvm.current-tree.translation.json` pins a further 54
+entries of `fp_quantized.metal` and their 162 artifacts: `fp_qvm` with and
+without batching and `fp_gather_qvm`, each with and without a global scale,
+for the three element types in `nvfp4`, `mxfp8` and `mxfp4`. They share the
+`fp_qmv` gate's target options, index-range preconditions, inputs and
+exactness argument, and run in the same `fp-quantized-qmv-0` and
+`fp-quantized-qmv-1` legs: 144 dispatches and 35,712 checked elements per
+target on Metal, Mesa EGL and Direct3D 12 WARP. Each case is a product
+`quantized.cpp` sends to `qvm` or `gather_qvm`: weights of `K` rows of `N`
+codes quantized along `N`, `M` below 4, `K` below 1024 outside gather and
+fewer than 16 gather batches, and `(32, 2, 1)` threadgroups over a
+`(M, ceil(N / (2 * group_size)), B)` grid. `QuantizedMatmul` passes `qvm` no
+global scale, so the `_hgs` `fp_qvm` entries run with the global scale `qvm`
+binds at buffer 2 when it has one; `gather_qvm` passes `GatherQMM`'s, one per
+expert. `fp_qvm_impl` gives each simdgroup one group of columns and each lane
+one input row per block of 32. Cases reach whole blocks, whole blocks before a
+partial last pass, the second simdgroup's early return and both branches of
+each `adjust_matrix_offsets` overload, and unbatched E2M1 entries a `K` below
+one block. `mxfp8` cases keep `K` at least one block, because there the lanes
+past `K` would decode a `vec_w` they never loaded, and an E4M3 pattern may be
+NaN. A lane-level model of `fp_qvm_impl` must reach direct dequantized dot
+products and store every column once, and mutated models that reverse codes,
+ignore the column offset, the lane's row or the batch or expert offsets, give
+every column the first group's scale, keep the first block's scales, drop the
+last pass, or drop the code sign or the global scale are rejected. Every
+target must match the model word for word and leave the guards untouched; on
+Metal the translation must also match the unchanged upstream kernel.
+`fp_quantized_scope.py` records which gate covers which kernels; the quad,
+wide and split-K matrix-vector, the split-K vector-matrix and the
+matrix-matrix kernels are not gated yet. This covers 54/17,832 entries; it
+does not run the upstream MLX test suite or redirect the MLX host runtime.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with

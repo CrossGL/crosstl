@@ -62,6 +62,11 @@ from demos.integrations.mlx.tests.kernels.fp_qmv_model import (
     config_for,
     translate_entry,
 )
+from demos.integrations.mlx.tests.kernels.fp_quantized_scope import (
+    EXCLUDED_KERNELS,
+    GATE_ENTRY_COUNTS,
+    shared_scope,
+)
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
     _run,
@@ -79,11 +84,6 @@ from demos.integrations.mlx.tests.kernels.test_current_fp_quantized import (
 from demos.integrations.mlx.tests.kernels.test_current_fp_quantized import (
     HOST_SHA256,
     HOST_SOURCE,
-)
-from demos.integrations.mlx.tests.kernels.test_current_fp_quantized import (
-    QMV_FAST_ENTRY_COUNT as QUANTIZE_GATE_FAST_COUNT,
-)
-from demos.integrations.mlx.tests.kernels.test_current_fp_quantized import (
     SOURCE,
     SOURCE_SHA256,
     UNIT_ENTRY_COUNT,
@@ -95,8 +95,6 @@ from demos.integrations.mlx.tests.kernels.test_current_fp_quantized_qmv import (
     ENTRIES as QMV_ENTRIES,
 )
 from demos.integrations.mlx.tests.kernels.test_current_fp_quantized_qmv import (
-    EXCLUDED_KERNELS,
-    QMV_FAST_ENTRY_COUNT,
     QMV_FP_HEADERS,
     QUAD_K,
     REQUIRE_ENV,
@@ -554,18 +552,7 @@ def _expected_scope():
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
-        "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
-        "qmvGateEntryCount": QMV_ENTRY_COUNT,
-        "excludedEntries": {
-            "kernels": list(EXCLUDED_KERNELS),
-            "count": (
-                UNIT_ENTRY_COUNT - QUANTIZE_ENTRY_COUNT - QMV_ENTRY_COUNT - len(ENTRIES)
-            ),
-            "reason": (
-                "the quad, wide and split-K matrix-vector, the vector-matrix "
-                "and the matrix-matrix kernels are not gated yet"
-            ),
-        },
+        **shared_scope("qmvFast"),
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": _dispatch_count(),
@@ -622,7 +609,9 @@ def test_fp_quantized_qmv_fast_entries_follow_mlx_instantiation():
     assert "fp_quantized_qmv_fast.current-tree.translation.json" in readme
     assert len(ENTRIES) == 66 == len(set(ENTRIES))
     # The other fp_quantized.metal gates count these entries as gated here.
-    assert len(ENTRIES) == QMV_FAST_ENTRY_COUNT == QUANTIZE_GATE_FAST_COUNT
+    assert len(ENTRIES) == GATE_ENTRY_COUNTS["qmvFast"]
+    assert QUANTIZE_ENTRY_COUNT == GATE_ENTRY_COUNTS["quantize"]
+    assert QMV_ENTRY_COUNT == GATE_ENTRY_COUNTS["qmv"]
     assert Counter(info["variant"] for info in INFO.values()) == {
         "batch_1": 24,
         "batch_0": 24,
@@ -652,7 +641,6 @@ def test_fp_quantized_qmv_fast_entries_follow_mlx_instantiation():
     assert ENTRIES[-1] == "nvfp4_qmv_fast_float16_t_gs_16_b_4_r_2_batch_0_hgs"
     assert not set(KERNELS.values()) & set(EXCLUDED_KERNELS)
     assert not set(ENTRIES) & (set(QUANTIZE_ENTRIES) | set(QMV_ENTRIES))
-    assert UNIT_ENTRY_COUNT - QUANTIZE_ENTRY_COUNT - QMV_ENTRY_COUNT - 66 == 362
 
 
 def test_fp_quantized_qmv_fast_shards_partition_the_entries(monkeypatch):
