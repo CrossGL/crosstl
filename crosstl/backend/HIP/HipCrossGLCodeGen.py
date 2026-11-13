@@ -10306,6 +10306,14 @@ class HipToCrossGLConverter:
             node.expression, node.target_type, "explicit conversion"
         )
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
+        if isinstance(node.expression, InitializerListNode):
+            # A compound literal (Type){elem1, elem2, ...} becomes Type(elem1, elem2, ...)
+            # so CUDA and Metal targets receive a constructor call rather than an
+            # aggregate initializer wrapped in a constructor, which both reject.
+            elements = ", ".join(
+                self.visit(element) for element in node.expression.elements
+            )
+            return f"{target_type}({elements})"
         expression = self.visit(node.expression)
         return f"{target_type}({expression})"
 

@@ -1745,3 +1745,49 @@ def test_opencl_cast_type_qualifier_split_across_lines():
     one_line_source = split_source.replace("const\n", "const ")
 
     assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+def test_opencl_struct_compound_literal_becomes_constructor_call():
+    """OpenCL compound literals ``(struct Pair){3.0f, 2}`` must import as
+    ``Pair(3.0f, 2)`` – a CrossGL struct constructor call – not as
+    ``Pair({3.0f, 2})`` – which CUDA and Metal targets both reject.
+
+    Reproduced from issue #3410 / commit 2444d82f.
+    """
+    crossgl = generate_crossgl("""
+        struct Pair {
+            float a;
+            int b;
+        };
+
+        __kernel void probe(__global float* outp) {
+            uint i = get_global_id(0);
+            struct Pair u = (struct Pair){3.0f, 2};
+            outp[i] = u.a;
+        }
+        """)
+
+    # The compound literal must become a CrossGL constructor call, not a
+    # constructor wrapping a brace initializer.
+    assert "Pair(3.0f, 2)" in crossgl
+    assert "Pair({" not in crossgl
+
+
+def test_opencl_struct_compound_literal_translates_to_cuda_and_metal(tmp_path):
+    """The compound literal constructor form passes through to CUDA and Metal."""
+    source = """
+        struct Pair { float a; int b; };
+        __kernel void probe(__global float* outp) {
+            uint i = get_global_id(0);
+            struct Pair u = (struct Pair){3.0f, 2};
+            outp[i] = u.a;
+        }
+        """
+    opencl_path = tmp_path / "probe.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+
+    for backend in ("cuda", "metal"):
+        output = crosstl.translate(str(opencl_path), backend=backend, format_output=False)
+        # The struct constructor must use positional arguments, not a brace initializer.
+        assert "Pair({" not in output
+        assert "Pair{{" not in output
