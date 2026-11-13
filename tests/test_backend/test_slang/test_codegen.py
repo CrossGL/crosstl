@@ -1,3 +1,4 @@
+import re
 from typing import List
 
 import pytest
@@ -738,7 +739,7 @@ def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
     generated_code = generate_code(ast)
 
     assert "vec4 position @ gl_Position;" in generated_code
-    assert "vec4 fragmentMain(VertexOutput input) @ Out_Color" in generated_code
+    assert "vec4 fragmentMain(VertexOutput input) @ gl_FragColor" in generated_code
     assert "@ SV_POSITION" not in generated_code
     assert "@ SV_TARGET" not in generated_code
     cgl_translator.parse(generated_code)
@@ -1018,10 +1019,10 @@ def test_target_and_depth_system_semantics_codegen_canonicalizes_dynamic_variant
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 colorMain(vec2 uv @ TexCoord0) @ Out_Color8" in generated_code
-    assert "float depthMain() @ Out_Depth" in generated_code
-    assert "out float depth @ Out_Depth" in generated_code
-    assert "out vec4 color @ Out_Color9" in generated_code
+    assert "vec4 colorMain(vec2 uv @ TexCoord0) @ gl_FragData[8]" in generated_code
+    assert "float depthMain() @ gl_FragDepth" in generated_code
+    assert "out float depth @ gl_FragDepth" in generated_code
+    assert "out vec4 color @ gl_FragData[9]" in generated_code
     assert "@ SV_TARGET8" not in generated_code
     assert "@ SV_TARGET9" not in generated_code
     assert "@ SV_DEPTHGREATEREQUAL" not in generated_code
@@ -1091,7 +1092,7 @@ def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ Out_Color" in generated_code
+    assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ gl_FragColor" in generated_code
     assert (
         "vec4 vertexMain(vec3 position @ in_Position) @ gl_Position" in generated_code
     )
@@ -1144,7 +1145,7 @@ def test_entry_parameter_storage_qualifiers_codegen_matches_directx_signature_sh
     generated_code = generate_code(ast)
 
     assert (
-        "void fragmentMain(in vec2 uv @ TexCoord0, out vec4 color @ Out_Color0)"
+        "void fragmentMain(in vec2 uv @ TexCoord0, out vec4 color @ gl_FragData[0])"
         in generated_code
     )
     cgl_translator.parse(generated_code)
@@ -3053,128 +3054,108 @@ def test_texture_compare_offset_method_call_codegen():
     assert "shadowMap.SampleCmp" not in generated_code
 
 
-def test_gradient_texture_status_overloads_drop_unsupported_extras_codegen():
+def test_gradient_texture_lod_clamp_overloads_keep_the_clamp():
+    # Source: https://shader-slang.org/stdlib-reference/types/0texture-01/samplegrad-06
+    code = """
+    Texture2D<float4> colorMap;
+    TextureCube<float4> skyMap;
+    SamplerState linearSampler;
+
+    float4 main(float2 uv, float3 direction, float2 dx, float2 dy,
+                float3 cubeDx, float3 cubeDy, int2 offset, float lodClamp) {
+        float4 color = colorMap.SampleGrad(
+            linearSampler, uv, dx, dy, offset, lodClamp);
+        float4 sky = skyMap.SampleGrad(
+            linearSampler, direction, cubeDx, cubeDy, lodClamp);
+        return color + sky;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "textureGradOffsetClamp(colorMap, linearSampler, uv, dx, dy, offset, lodClamp)"
+        in generated_code
+    )
+    assert (
+        "textureGradClamp(skyMap, linearSampler, direction, cubeDx, cubeDy, lodClamp)"
+        in generated_code
+    )
+    assert "unsupported" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+@pytest.mark.parametrize(
+    "call, dropped",
+    [
+        (
+            "colorMap.SampleGrad(linearSampler, uv, dx, dy, offset, lodClamp, status)",
+            "SampleGrad: CrossGL has no operand for status output",
+        ),
+        (
+            "skyMap.SampleGrad(linearSampler, direction, cubeDx, cubeDy, lodClamp, status)",
+            "SampleGrad: CrossGL has no operand for status output",
+        ),
+        (
+            "float4(shadowMap.SampleCmpGrad(cmpSampler, uv, depth, dx, dy, offset, status))",
+            "SampleCmpGrad: CrossGL has no operand for status output",
+        ),
+    ],
+)
+def test_gradient_texture_status_overloads_are_refused(call, dropped):
     # Sources:
     # https://shader-slang.org/stdlib-reference/types/0texture-01/samplegrad-06
     # https://shader-slang.org/stdlib-reference/types/0texture-01/samplecmpgrad-069
-    code = """
+    # Dropping the status output left the variable it writes unassigned.
+    code = f"""
     Texture2D<float4> colorMap;
+    TextureCube<float4> skyMap;
     Texture2D<float> shadowMap;
     SamplerState linearSampler;
     SamplerComparisonState cmpSampler;
 
-    float4 main(float2 uv, float depth, float2 dx, float2 dy,
-                int2 offset, float lodClamp) {
-        uint colorStatus;
-        uint shadowStatus;
-        float4 color = colorMap.SampleGrad(
-            linearSampler, uv, dx, dy, offset, lodClamp, colorStatus);
-        float shadow = shadowMap.SampleCmpGrad(
-            cmpSampler, uv, depth, dx, dy, offset, shadowStatus);
-        return color + float4(shadow);
-    }
+    float4 main(float2 uv, float3 direction, float depth, float2 dx, float2 dy,
+                float3 cubeDx, float3 cubeDy, int2 offset, float lodClamp) {{
+        uint status;
+        return {call};
+    }}
     """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
-
-    assert (
-        "unsupported Slang texture overload extras for SampleGrad: "
-        "dropped LOD clamp, status output"
-    ) in generated_code
-    assert (
-        "unsupported Slang texture overload extras for SampleCmpGrad: "
-        "dropped status output"
-    ) in generated_code
-    assert (
-        "vec4 color = /* unsupported Slang texture overload extras for SampleGrad: "
-        "dropped LOD clamp, status output */ textureGradOffset("
-        "colorMap, linearSampler, uv, dx, dy, offset);" in generated_code
-    )
-    assert (
-        "float shadow = /* unsupported Slang texture overload extras for "
-        "SampleCmpGrad: dropped status output */ textureCompareGradOffset("
-        "shadowMap, cmpSampler, uv, depth, dx, dy, offset);" in generated_code
-    )
-    assert (
-        "textureGradOffset(colorMap, linearSampler, uv, dx, dy, offset, lodClamp"
-        not in generated_code
-    )
-    assert (
-        "textureCompareGradOffset("
-        "shadowMap, cmpSampler, uv, depth, dx, dy, offset, shadowStatus"
-        not in generated_code
-    )
-    assert ".SampleGrad(" not in generated_code
-    assert ".SampleCmpGrad(" not in generated_code
-    cgl_translator.parse(generated_code)
+    with pytest.raises(SlangImportRefused, match=re.escape(dropped)):
+        generate_code(parse_code(tokenize_code(code)))
 
 
-def test_texture_compare_bias_method_call_codegen_from_hlsl_overloads():
-    code = """
+@pytest.mark.parametrize(
+    "call, dropped",
+    [
+        ("shadowMap.SampleCmpBias(cmpSampler, uv, depth, bias)", "LOD bias"),
+        (
+            "shadowArray.SampleCmpBias(cmpSampler, uvLayer, depth, bias, offset, 0.0, status)",
+            "LOD bias, LOD clamp, status output",
+        ),
+        (
+            "cubeShadow.SampleCmpBias(cmpSampler, direction, depth, bias, 0.0, status)",
+            "LOD bias, LOD clamp, status output",
+        ),
+    ],
+)
+def test_texture_compare_bias_method_calls_are_refused(call, dropped):
+    # CrossGL's textureCompare operations take no LOD bias, so a biased comparison would sample another level.
+    code = f"""
     Texture2D<float> shadowMap;
     Texture2DArray<float> shadowArray;
     TextureCube<float> cubeShadow;
     SamplerComparisonState cmpSampler;
 
-    float4 main(
-        float2 uv,
-        float3 uvLayer,
-        float3 direction,
-        float depth,
-        float bias,
-        int2 offset
-    ) {
+    float4 main(float2 uv, float3 uvLayer, float3 direction, float depth,
+                float bias, int2 offset) {{
         uint status;
-        float sampled = shadowMap.SampleCmpBias(cmpSampler, uv, depth, bias);
-        float offsetSampled = shadowArray.SampleCmpBias(
-            cmpSampler,
-            uvLayer,
-            depth,
-            bias,
-            offset,
-            0.0,
-            status
-        );
-        float cubeSampled = cubeShadow.SampleCmpBias(
-            cmpSampler,
-            direction,
-            depth,
-            bias,
-            0.0,
-            status
-        );
-        return float4(sampled + offsetSampled + cubeSampled);
-    }
+        return float4({call});
+    }}
     """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
-
-    assert "sampler2D shadowMap;" in generated_code
-    assert "sampler2DArray shadowArray;" in generated_code
-    assert "samplerCube cubeShadow;" in generated_code
-    assert "sampler cmpSampler;" in generated_code
-    assert (
-        "unsupported Slang texture overload extras for SampleCmpBias: "
-        "dropped LOD bias"
-    ) in generated_code
-    assert (
-        "unsupported Slang texture overload extras for SampleCmpBias: "
-        "dropped LOD bias, LOD clamp, status output"
-    ) in generated_code
-    assert "textureCompare(shadowMap, cmpSampler, uv, depth)" in generated_code
-    assert (
-        "textureCompareOffset(shadowArray, cmpSampler, uvLayer, depth, offset)"
-        in generated_code
-    )
-    assert "textureCompare(cubeShadow, cmpSampler, direction, depth)" in generated_code
-    assert ".SampleCmpBias(" not in generated_code
-    assert "textureCompare(shadowMap, cmpSampler, uv, depth, bias)" not in (
-        generated_code
-    )
-    assert "textureCompareOffset(cubeShadow" not in generated_code
-    cgl_translator.parse(generated_code)
+    with pytest.raises(
+        SlangImportRefused,
+        match=re.escape(f"SampleCmpBias: CrossGL has no operand for {dropped}"),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_texture_gather_cmp_method_call_codegen_from_core_module_docs():

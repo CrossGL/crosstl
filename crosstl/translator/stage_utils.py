@@ -1,6 +1,14 @@
-"""Shared shader stage normalization helpers."""
+"""Shared shader stage normalization helpers.
+
+:func:`normalize_stage_name` answers "which shader stage does this name spell?": a :class:`ShaderStage` value, a
+CrossGL stage name or one of the backend aliases in :data:`STAGE_NAME_ALIASES`. Any other name, such as an attribute
+or a qualifier, spells no stage and gives ``None``; it is never returned as if it were a stage name.
+:func:`requested_stage_name` is the same lookup for a stage the caller asked for, where a name that spells no stage is
+refused with :class:`UnknownShaderStageError`.
+"""
 
 from .ast import ShaderStage
+from .diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 STAGE_NAME_ALIASES = {
     "amplification_shader": "amplification",
@@ -61,15 +69,50 @@ SHADER_STAGE_BY_NAME = {stage.value: stage for stage in ShaderStage}
 STAGE_QUALIFIER_NAMES = SHADER_STAGE_NAMES
 
 
-def normalize_stage_name(stage):
-    """Normalize a shader stage enum or string into a canonical stage name."""
-    if stage is None:
-        return None
+class UnknownShaderStageError(TranslationDiagnostic):
+    """A requested shader stage that is neither a CrossGL stage name nor a known alias of one."""
+
+    def __init__(self, stage):
+        self.stage = stage
+        self.missing_capabilities = ("crossgl.shader-stage",)
+        known = ", ".join(sorted(SHADER_STAGE_NAMES))
+        super().__init__(
+            f"{str(stage)!r} names no shader stage; expected one of {known} or a backend alias of one",
+            code=f"{CODE_PREFIX}unknown-shader-stage",
+        )
+
+
+def _stage_spelling(stage):
     if hasattr(stage, "value") and not isinstance(stage, str):
         stage = getattr(stage, "value")
     name = str(stage).split(".")[-1].strip().strip("\"'").lower()
-    name = name.replace("-", "_").replace(" ", "_")
-    return STAGE_NAME_ALIASES.get(name, name)
+    return name.replace("-", "_").replace(" ", "_")
+
+
+def normalize_stage_name(stage):
+    """The canonical name of the shader stage ``stage`` spells, or ``None`` when it spells none."""
+    if stage is None:
+        return None
+    name = _stage_spelling(stage)
+    if name in SHADER_STAGE_NAMES:
+        return name
+    if name in STAGE_NAME_ALIASES:
+        return STAGE_NAME_ALIASES[name]
+    return None
+
+
+def requested_stage_name(stage):
+    """The canonical name of a requested stage; ``None`` requests every stage.
+
+    Raises :class:`UnknownShaderStageError` when ``stage`` spells no shader stage, so that a misspelt request cannot
+    select no stage, or every stage, without a word.
+    """
+    if stage is None:
+        return None
+    name = normalize_stage_name(stage)
+    if name is None:
+        raise UnknownShaderStageError(stage)
+    return name
 
 
 def shader_stage_from_name(name):

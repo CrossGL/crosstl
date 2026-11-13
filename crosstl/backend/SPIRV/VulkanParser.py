@@ -18,6 +18,11 @@ from .buffer_memory_qualifiers import storage_block_memory_qualifiers
 from .function_structure import SpirvFunctionStructure
 from .image_formats import crossgl_image_format
 from .image_texel_atomics import fold_image_texel_atomic
+from .import_exact_lookups import (
+    builtin_variable_name,
+    constant_or_literal,
+    keyword_safe_identifier,
+)
 from .integer_signedness_import import (
     spirv_integer_binary_expression,
     spirv_integer_conversion_expression,
@@ -4889,7 +4894,7 @@ class VulkanParser:
         if value_id in names and names[value_id]:
             return names[value_id]
         fallback = self.spirv_fallback_identifier(value_id, prefix)
-        return self.SPIRV_VALUE_FALLBACK_RENAMES.get(fallback, fallback)
+        return keyword_safe_identifier(self.SPIRV_VALUE_FALLBACK_RENAMES, fallback)
 
     def spirv_assembly_variable_storage_class(self, value_id, variables_by_id, types):
         if not variables_by_id or not types:
@@ -6070,7 +6075,7 @@ class VulkanParser:
         return literal
 
     def spirv_integer_constant_operand(self, operand, constants):
-        value = constants.get(operand, operand)
+        value = constant_or_literal(constants, operand)
         try:
             return int(str(value), 0)
         except (TypeError, ValueError):
@@ -6115,12 +6120,12 @@ class VulkanParser:
     def spirv_fallback_identifier(self, raw_value, prefix):
         identifier = re.sub(r"\W", "_", str(raw_value or "").lstrip("%"))
         if not identifier:
-            return self.SPIRV_VALUE_FALLBACK_RENAMES.get(prefix, prefix)
+            return keyword_safe_identifier(self.SPIRV_VALUE_FALLBACK_RENAMES, prefix)
         if identifier[0].isdigit():
             identifier = f"{prefix}_{identifier}"
         if prefix == "part" and identifier.endswith("_"):
             identifier = identifier.rstrip("_") or prefix
-        return self.SPIRV_VALUE_FALLBACK_RENAMES.get(identifier, identifier)
+        return keyword_safe_identifier(self.SPIRV_VALUE_FALLBACK_RENAMES, identifier)
 
     def spirv_identifier_name(self, raw_name, fallback_value=None, prefix="value"):
         name = str(raw_name or "")
@@ -6615,7 +6620,9 @@ class VulkanParser:
                     # A geometry stage reads the incoming primitive's ID as gl_PrimitiveIDIn and writes the one it
                     # passes on as gl_PrimitiveID (GLSL 4.60 section 7.1.4); both are BuiltIn PrimitiveId.
                     return "gl_PrimitiveIDIn"
-                return self.SPIRV_BUILTIN_VARIABLE_NAMES.get(value, value)
+                return builtin_variable_name(
+                    self.SPIRV_BUILTIN_VARIABLE_NAMES, value, storage_class
+                )
         return fallback_name
 
     def spirv_type_name_and_suffix(self, type_id, types, constants, names=None):
@@ -6772,7 +6779,7 @@ class VulkanParser:
         return "_".join(self.spirv_fallback_identifier(part, "part") for part in parts)
 
     def spirv_cooperative_matrix_dimension_name(self, operand, constants):
-        value = constants.get(operand, operand)
+        value = constant_or_literal(constants, operand)
         text = self.spirv_constant_expression_text(value)
         return self.spirv_fallback_identifier(text, "value")
 
@@ -6791,7 +6798,7 @@ class VulkanParser:
         return rows * columns
 
     def spirv_cooperative_matrix_static_dimension(self, operand, constants):
-        value = constants.get(operand, operand)
+        value = constant_or_literal(constants, operand)
         try:
             return int(str(value), 0)
         except (TypeError, ValueError):

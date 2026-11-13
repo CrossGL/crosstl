@@ -4,19 +4,23 @@ from ..host_workgroup_size import (  # noqa: F401
     function_entry_execution_config,
     require_static_workgroup_size,
 )
-from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from ..stage_utils import (
+    STAGE_QUALIFIER_NAMES,
+    normalize_stage_name,
+    requested_stage_name,
+)
 
 
 def stage_matches(target_stage, stage):
     """Return whether a stage should be emitted for the target stage."""
-    target_stage = normalize_stage_name(target_stage)
+    target_stage = requested_stage_name(target_stage)
     stage = normalize_stage_name(stage)
     return target_stage is None or stage == target_stage
 
 
 def should_emit_qualified_function(target_stage, qualifier):
     """Return whether a qualified function belongs in the target output."""
-    target_stage = normalize_stage_name(target_stage)
+    target_stage = requested_stage_name(target_stage)
     qualifier = normalize_stage_name(qualifier)
     return not (
         target_stage is not None

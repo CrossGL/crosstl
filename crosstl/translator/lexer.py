@@ -425,8 +425,11 @@ def _expand_object_macros(line, macros):
         return line
 
     def replace_identifier(match):
+        # An identifier that names no object-like macro is not replaced (C11 6.10.3p9).
         name = match.group(0)
-        return str(macros.get(name, name))
+        if name in macros:
+            return str(macros[name])
+        return name
 
     parts = []
     start = 0

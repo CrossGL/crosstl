@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.translator.renames import renamed
+
 from ..comma_expressions import crossgl_tuple_literal
 from .MojoAst import *
 from .MojoLexer import *
@@ -1860,7 +1862,8 @@ class MojoToCrossGLConverter:
 
     def resolve_mojo_dtype_type(self, dtype_expr):
         dtype_expr = dtype_expr.strip()
-        dtype_name = self.dtype_aliases.get(dtype_expr, dtype_expr)
+        # ``dtype_aliases`` holds the program's ``alias X = DType.y`` declarations; any other text is a DType itself.
+        dtype_name = renamed(self.dtype_aliases, dtype_expr)
         mapped = self.MOJO_DTYPE_TYPE_MAP.get(dtype_name)
         if mapped:
             return mapped
@@ -2326,7 +2329,9 @@ class MojoToCrossGLConverter:
         return " ".join(mapped_attributes)
 
     def map_attribute(self, attr):
-        name = self.map_identifier_name(self.semantic_map.get(attr.name, attr.name))
+        # ``semantic_map`` renames the Mojo spellings of CrossGL semantics (``vertex_id`` is ``gl_VertexID``); any
+        # other attribute is written under its own name, as CrossGL spells it too.
+        name = self.map_identifier_name(renamed(self.semantic_map, attr.name))
         args = getattr(attr, "args", getattr(attr, "arguments", [])) or []
         if not args:
             return f"@ {name}"
