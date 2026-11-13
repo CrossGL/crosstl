@@ -192,6 +192,9 @@
 - name: stale
   color: 808080
   description: No activity for a long time
+- name: Amazon Q development agent
+  color: ff9900
+  description: Amazon Q Developer implements this issue and opens a pull request
 - name: dependencies
   color: 0366d6
   description: Dependency updates
