@@ -1789,7 +1789,7 @@ class VectorArithmeticMixin:
             arg_type = self.expression_result_type(
                 raw_args[0]
             ) or self.scalar_cast_result_type(raw_args[0])
-            vector_info = self.vector_type_info(arg_type)
+            vector_info = self.geometric_vector_type_info(arg_type)
             if vector_info is not None:
                 if func_name == "length":
                     helper_name = self.require_vector_length_helper(vector_info)
@@ -1856,7 +1856,23 @@ class VectorArithmeticMixin:
                 or len(left_info["components"]) != len(right_info["components"])
                 or left_info["component_type"] != right_info["component_type"]
             ):
-                return None
+                # Try geometric helpers for half2 / native __half2
+                left_geo = self.geometric_vector_type_info(
+                    self.expression_result_type(raw_args[0])
+                )
+                right_geo = self.geometric_vector_type_info(
+                    self.expression_result_type(raw_args[1])
+                )
+                if (
+                    left_geo is not None
+                    and right_geo is not None
+                    and len(left_geo["components"]) == len(right_geo["components"])
+                    and left_geo["component_type"] == right_geo["component_type"]
+                ):
+                    left_info = left_geo
+                    right_info = right_geo
+                else:
+                    return None
             if func_name == "dot":
                 helper_name = self.require_vector_dot_helper(left_info)
             elif func_name == "distance":
@@ -1867,6 +1883,28 @@ class VectorArithmeticMixin:
                 return None
             return f"{helper_name}({args[0]}, {args[1]})"
 
+        return None
+
+    def geometric_vector_type_info(self, type_name):
+        """Return vector type info for geometric builtins, including native half2.
+
+        ``vector_type_info`` deliberately leaves the native ``__half2`` type (which
+        ``f16vec2``, ``half2`` and ``vec2<f16>`` all map to) undescribed so that
+        binary arithmetic and swizzles work through the native operators.  Geometric
+        functions (``length``, ``normalize``, ``distance``, ``dot``) must widen each
+        lane to ``float`` regardless, so we can still lower them with the existing
+        helpers by synthesising a descriptor here.
+        """
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info
+        if self.native_vector_component_type(type_name) == "half":
+            return {
+                "type": "half2",
+                "constructor": "__floats2half2_rn",
+                "component_type": "half",
+                "components": ("x", "y"),
+            }
         return None
 
     def scalar_distance_operand_types(self, raw_args):
