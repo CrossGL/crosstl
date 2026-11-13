@@ -88,7 +88,9 @@ def wgsl_mixed_integer_call_arguments(codegen, arguments):
     if "u32" in arg_scalars:
         for i, arg in enumerate(arguments):
             if arg_scalars[i] == "i32" and not is_abstract_integer_literal(arg):
-                rendered[i] = f"u32({codegen.concrete_negative_integer_literal(arg, rendered[i])})"
+                rendered[i] = (
+                    f"u32({codegen.concrete_negative_integer_literal(arg, rendered[i])})"
+                )
     return rendered
 
 
@@ -111,9 +113,7 @@ def wgsl_mixed_integer_operands(codegen, left, right):
     argument_types = [codegen.expression_type(arg) for arg in arguments]
     shapes = [codegen.vector_shape(arg_type) for arg_type in argument_types]
     scalar_types = [
-        codegen.scalar_type_name(arg_type)
-        if shape is None
-        else shape[0]
+        codegen.scalar_type_name(arg_type) if shape is None else shape[0]
         for arg_type, shape in zip(argument_types, shapes)
     ]
     rendered = [codegen.generate_expression(arg) for arg in arguments]
@@ -127,9 +127,7 @@ def wgsl_mixed_integer_operands(codegen, left, right):
             target_type = (
                 f"vec{vector_shape[1]}<u32>" if vector_shape is not None else "u32"
             )
-            converted = codegen.concrete_negative_integer_literal(
-                arg, rendered[index]
-            )
+            converted = codegen.concrete_negative_integer_literal(arg, rendered[index])
             rendered[index] = f"{target_type}({converted})"
 
     return tuple(rendered)
