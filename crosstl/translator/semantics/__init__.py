@@ -1,9 +1,11 @@
-"""Rule carrying: carry the source language's operation rules through CrossGL and discharge them per target.
+"""Rule carrying: annotate and lower the source language's rules through CrossGL per target.
 
 ``apply_rule_carrying(program, source, target)`` annotates the CrossGL AST with the rules ``source`` defines
-(:mod:`.annotate`) and lowers them for ``target`` (:mod:`.lower`) as the rule table says (:mod:`.rule_table`). It
-runs on every translation between parsing the CrossGL AST and target code generation. See
-docs/source/adr/0001-rule-carrying.md.
+(:mod:`.annotate`) and lowers them for ``target`` (:mod:`.lower`) as the rule table says (:mod:`.rule_table`).
+It runs on every translation between parsing the CrossGL AST and target code generation.  Each semantic pass is
+documented in its own module (see the submodules of :mod:`crosstl.translator.semantics`).  The definitive
+ordered list of passes and their sequencing constraints is :data:`_PASSES` in this module.
+See also docs/source/adr/0001-rule-carrying.md.
 """
 
 from __future__ import annotations
@@ -228,6 +230,149 @@ from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
 from .written_stage_inputs import copy_written_stage_inputs
 
+# ---------------------------------------------------------------------------
+# Ordered sequence of semantic passes run by apply_rule_carrying.
+#
+# Each entry is a ``(function, arg_keys)`` pair where ``arg_keys`` is a tuple
+# of strings drawn from ``{"program", "source", "target"}``.  Using named
+# pairs rather than lambdas means that tracebacks from a failing pass show
+# the real function name instead of ``<lambda>``.
+#
+# To add a new pass: import it at the top of this file and insert a
+# ``(function, arg_keys)`` pair at the right position.  No changes to
+# ``apply_rule_carrying`` itself are needed.
+#
+# Ordering constraints (why each pass sits where it does):
+#   - hoist_local_structs: local structures must move to module scope before
+#     member functions are converted to free functions (lower_struct_methods).
+#   - fill_generic_struct_defaults: generic defaults must be filled before
+#     struct methods are lowered.
+#   - bind_stage_functions: stage binding must precede struct-method lowering
+#     so that stage-bound methods are correctly attributed.
+#   - lower_struct_methods: member functions become free functions before any
+#     pass that relies on a flat function namespace.
+#   - lower_relative_vertex_ids: gl_RelativeVertexID must be resolved before
+#     spell_slang_vertex_indices so that SV_VertexID is spelled correctly.
+#   - legalize_half_floats / legalize_narrow_integers / wrap_narrow_arithmetic:
+#     width-reducing passes run last, after all structural rewrites.
+# ---------------------------------------------------------------------------
+_PASSES = [
+    (hoist_local_structs, ("program", "target")),
+    (fill_generic_struct_defaults, ("program", "target")),
+    (bind_stage_functions, ("program",)),
+    (lower_struct_methods, ("program", "target")),
+    (hoist_stage_constant_blocks, ("program", "target")),
+    (distribute_block_matrix_orders, ("program", "target")),
+    (resolve_template_assertions, ("program", "target")),
+    (refuse_undeclared_types, ("program", "target")),
+    (record_undeclared_identifiers, ("program", "target")),
+    (refuse_undeclared_functions, ("program", "target")),
+    (lower_void_casts, ("program", "target")),
+    (refuse_void_values, ("program", "target")),
+    (resolve_builtin_names, ("program", "target")),
+    (refuse_misplaced_builtins, ("program", "target")),
+    (refuse_misplaced_builtin_identifiers, ("program", "target")),
+    (lower_relative_vertex_ids, ("program", "target")),
+    (refuse_ambiguous_matrix_spellings, ("program", "target")),
+    (refuse_hit_objects, ("program", "target")),
+    (refuse_shader_execution_reordering, ("program", "target")),
+    (refuse_metal_runtime_types, ("program", "target")),
+    (fold_constant_calls, ("program", "target")),
+    (fold_binding_constants, ("program", "target")),
+    (fold_constant_extents, ("program", "target")),
+    (fold_stage_layout_counts, ("program", "target")),
+    (resolve_intrinsic_named_functions, ("program",)),
+    (rename_colliding_functions, ("program",)),
+    (hoist_stage_private_variables, ("program", "target")),
+    (hoist_static_locals, ("program", "target")),
+    (lower_device_private_globals, ("program", "target")),
+    (orient_row_major_buffer_struct_members, ("program", "target")),
+    (store_row_major_members_transposed, ("program", "target")),
+    (store_row_major_constant_members_transposed, ("program", "target")),
+    (legalize_texel_offsets, ("program", "target")),
+    (fold_sizeof_values, ("program", "target")),
+    (resolve_type_aliases, ("program", "target")),
+    (orient_row_major_struct_members, ("program", "target")),
+    (resolve_static_assertions, ("program", "target")),
+    (zero_empty_scalar_initializers, ("program", "target")),
+    (lower_metal_math_spellings, ("program", "target")),
+    (lower_float_relations, ("program", "target")),
+    (lower_enum_values, ("program", "target")),
+    (lower_device_struct_references, ("program", "target")),
+    (separate_initializer_scopes, ("program", "source", "target")),
+    (canonicalize_texture_swizzles, ("program",)),
+    (expand_scalar_swizzles, ("program",)),
+    (lower_aggregate_equality, ("program", "target")),
+    (lower_vector_logic, ("program", "target")),
+    (lower_boolean_reductions, ("program", "target")),
+    (lower_subpass_inputs, ("program", "target")),
+    (strip_non_uniform_qualifiers, ("program", "target")),
+    (canonicalize_atomic_calls, ("program", "target")),
+    (hlsl_out_argument_atomics, ("program", "target")),
+    (lower_shading_rate_flags, ("program", "target")),
+    (refuse_mixed_metal_barycentrics, ("program", "target")),
+    (declare_builtin_outputs, ("program", "target")),
+    (spell_slang_vertex_indices, ("program", "target")),
+    (pass_builtin_inputs, ("program", "target")),
+    (name_fragment_colour_outputs, ("program", "target")),
+    (attribute_vertex_input_positions, ("program", "target")),
+    (canonicalize_builtin_values, ("program", "target")),
+    (deliver_unsigned_system_values, ("program", "target")),
+    (lower_compute_entry_values, ("program", "target")),
+    (adopt_module_stage_outputs, ("program", "target")),
+    (convert_signed_builtin_outputs, ("program", "target")),
+    (gather_stage_interface_variables, ("program", "target")),
+    (fit_tess_factors_to_domain, ("program", "target")),
+    (expand_struct_scalar_splats, ("program", "source", "target")),
+    (convert_metal_vector_scalar_operands, ("program", "source")),
+    (convert_struct_constructor_arguments, ("program",)),
+    (lower_tessellation_patches, ("program", "target")),
+    (lower_geometry_streams, ("program", "target")),
+    (raise_glsl_geometry_streams, ("program", "target")),
+    (raise_glsl_mesh_stages, ("program", "target")),
+    (declare_task_payload_storage, ("program", "target")),
+    (lower_dxr_ray_interfaces, ("program", "target")),
+    (lower_metal_ray_dispatch, ("program", "target")),
+    (declare_interface_block_instances, ("program", "target")),
+    (normalize_spirv_storage_blocks, ("program", "source", "target")),
+    (legalize_unsized_arrays, ("program", "target")),
+    (mark_default_buffer_layouts, ("program", "target")),
+    (legalize_structured_layouts, ("program", "target")),
+    (materialize_buffer_strides, ("program", "target")),
+    (refuse_unplaced_member_offsets, ("program", "target")),
+    (mark_push_constant_layouts, ("program", "target")),
+    (hoist_constant_buffer_layouts, ("program", "target")),
+    (hoist_constant_reference_layouts, ("program", "target")),
+    (refuse_unplaced_packed_members, ("program", "target")),
+    (hoist_array_constructors, ("program", "target")),
+    (copy_written_array_parameters, ("program", "target")),
+    (copy_written_stage_inputs, ("program", "target")),
+    (refuse_per_vertex_inputs, ("program", "target")),
+    (bind_fixed_samplers, ("program", "target")),
+    (refuse_colour_attachment_inputs, ("program", "target")),
+    (legalize_sampler_states, ("program", "target")),
+    (refuse_shader_record_buffers, ("program", "target")),
+    (refuse_debug_printf, ("program", "target")),
+    (refuse_texture_lod_clamp, ("program", "target")),
+    (refuse_texture_residency, ("program", "target")),
+    (refuse_feedback_textures, ("program", "target")),
+    (declare_hlsl_residency_status, ("program", "target")),
+    (fold_array_lengths, ("program", "target")),
+    (refuse_large_constant_buffers, ("program", "target")),
+    (legalize_hlsl_stage_interfaces, ("program", "target")),
+    (annotate_hlsl_ray_payloads, ("program", "target")),
+    (legalize_opaque_struct_members, ("program", "target")),
+    (flatten_descriptor_arrays, ("program", "target")),
+    (legalize_shadow_samples, ("program", "target")),
+    (legalize_implicit_lod, ("program", "target")),
+    (legalize_cuda_warp_intrinsics, ("program", "target")),
+    (legalize_half_floats, ("program", "source", "target")),
+    (legalize_bit_functions, ("program", "source", "target")),
+    (legalize_narrow_integers, ("program", "source", "target")),
+    (wrap_narrow_arithmetic, ("program", "source", "target")),
+    (refuse_spirv_instructions, ("program", "target")),
+]
+
 __all__ = [
     "AggregateEqualityOperandError",
     "AggregateEqualityUnsupportedError",
@@ -332,250 +477,21 @@ class RuleReport:
 def apply_rule_carrying(program, source, target) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
-    Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
-    Shader-scope functions that name a stage's declarations become functions of the stages that call them
-    (:mod:`.stage_bound_functions`).
-    Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
-    A ``gl_`` built-in value attribute CrossGL does not define is refused with :class:`BuiltinValueUnsupportedError`,
-    and the aliases ``gl_IsFrontFace`` and ``gl_FragStencilRefARB`` take their canonical names (:mod:`.builtin_names`).
-    A ``gl_`` built-in used in a stage or direction GLSL does not declare it for is refused (:mod:`.builtin_stages`).
-    So is one that a function body of the stage names directly (:mod:`.builtin_stage_identifiers`).
-    Direct3D's base-exclusive vertex ID ``gl_RelativeVertexID`` (HLSL ``SV_VertexID``) is then spelled for the
-    target: ``SV_VertexID`` on Direct3D and Slang, the vertex index minus the base vertex elsewhere
-    (:mod:`.relative_vertex_ids`).
-    Non-square ``floatNxM`` matrix spellings, whose shape depends on the language, are refused with
-    :class:`AmbiguousMatrixSpellingError` (:mod:`.matrix_spellings`).
-    Calls of program functions in compile-time initializers and ``static_assert`` conditions become their values,
-    evaluated at translation time (:mod:`.constant_calls`).
-    Index attributes that name enumerators or integer constants (``@buffer(BufferIndexVertices)``,
-    ``@location(BASE + 1)``) first become integer literals, and one that names anything else is refused with
-    :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
-    declare (:mod:`.binding_constants`).
-    User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
-    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. ``sizeof``
-    then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
-    layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
-    type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
-    (:mod:`.type_aliases`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
-    refused with :class:`StaticAssertionFailedError` or :class:`StaticAssertionUnresolvedError`
-    (:mod:`.static_assertions`). Scalar brace initializers become zero or their single converted value,
-    and excess scalar values are refused (:mod:`.scalar_brace_values`). GLSL's
-    ``stpq`` swizzles are spelled ``xyzw``, which every target accepts (:mod:`.texture_swizzles`), and swizzles of
-    scalars become vector constructors (:mod:`.scalar_swizzles`). For targets without whole-value equality on
-    structures and arrays, ``==`` and ``!=`` on them compare member by member (:mod:`.aggregate_equality`).
-    ``&&``/``||`` on boolean vectors become ``and``/``or`` for HLSL and GLSL, and both forms ``&``/``|`` for WGSL (:mod:`.vector_logic`). For GLSL, WGSL and MSL, ``any``
-    and ``all`` of a numeric vector reduce its conversion to a boolean vector, and of a scalar become the scalar
-    converted to ``bool`` (:mod:`.boolean_reductions`). For OpenGL, SPIR-V,
-    Metal, CUDA and HIP, HLSL-style atomic calls that return the previous value through an ``out`` argument become the
-    value-returning forms, and for HLSL value-returning atomics on group-shared and other non-buffer destinations take
-    HLSL's ``out`` argument (:mod:`.atomic_forms`). Fragment outputs with a ``COLORn`` semantic become colour
-    attachment ``n`` (``@gl_FragData[n]``, :mod:`.fragment_colour_outputs`). A position built-in on a vertex input
-    names the ``Position`` vertex attribute for targets other than HLSL (:mod:`.vertex_input_positions`). Built-in value
-    attributes (``@builtin(...)``, ``@SV_*``, ``@gl_*``) take the spelling the target's generator reads, a built-in the
-    target cannot express being refused with :class:`BuiltinValueUnsupportedError` (:mod:`.builtin_values`). So is an
-    ``SV_`` semantic Direct3D does not define or an index its kind does not take (:mod:`.system_values`). For HLSL, MSL,
-    SPIR-V and Slang, the plain-value parameters of ``@ compute fn`` entries move into one constant block per entry
-    (:mod:`.compute_entry_values`). For MSL and
-    HLSL, a vertex or fragment stage's stage-level interface variables become the entry point's input and output
-    structures (:mod:`.stage_interface_structs`). A structure an
-    HLSL or Slang program converts from one scalar, ``(S)0``, is written member by member (:mod:`.struct_scalar_splats`).
-    A structure constructor argument whose type converts implicitly to its member's type is converted explicitly
-    (:mod:`.struct_constructor_conversions`).
-    For GLSL and SPIR-V, an HLSL-style geometry stage's input primitive and output stream become GLSL's per-vertex
-    inputs, stage outputs and ``EmitVertex()`` (:mod:`.geometry_streams`); for HLSL a GLSL-style geometry stage
-    becomes the stream form (:mod:`.hlsl_geometry_streams`), and for HLSL and MSL a GLSL-style mesh or task stage's
-    output arrays and task payload become entry parameters (:mod:`.glsl_mesh_stages`), while for GLSL and SPIR-V a
-    module-scope ``groupshared`` task payload is declared in task-payload storage (:mod:`.task_payload_storage`).
-    HLSL-style hull and domain stages become GLSL tessellation stages that exchange per-vertex arrays, patch variables and tessellation levels, the
-    hull's patch-constant function running in invocation 0 after a barrier (:mod:`.tessellation_patches`).
-    SPIR-V storage block variables are then rewritten into the hub's buffer forms (:mod:`.storage_blocks`), and
-    ``buffer T name[]`` declarations into structured buffers or buffer blocks, any other unsized array of values
-    being refused with :class:`UnsizedArrayUnsupportedError` (:mod:`.unsized_arrays`). Buffers with a declared
-    layout the target lays out differently become buffers of words (:mod:`.structured_layouts`), a
-    ``buffer_dimensions`` stride output the target cannot query becomes the element stride as a constant
-    (:mod:`.buffer_strides`), ``ConstantBuffer<T>`` declarations with a layout the target's constant buffers do not
-    give constant blocks holding one ``T`` (:mod:`.constant_buffer_layouts`), push-constant blocks keeping their std430
-    layout for HLSL (:mod:`.push_constant_layouts`), and constant
-    references with a declared layout module constant buffers that keep it (:mod:`.constant_reference_layouts`);
-    storage whose layout would move its packed vector members is refused (:mod:`.packed_members`). For targets that build arrays
-    only in aggregate initializers, other array constructors become initializer lists or named locals
-    (:mod:`.array_values`), and Metal callees that write an ``in`` array parameter get a copy of it
-    (:mod:`.array_parameters`). For GLSL, an entry point's stage inputs and built-in values that its body writes are
-    copied into locals, since GLSL inputs are read-only (:mod:`.written_stage_inputs`). ``a.length()`` of a sized
-    array then becomes its element count for targets without that method (:mod:`.array_length`). Fixed sampler state
-    (``sampler(...)`` constructors) becomes a bound sampler with a host record for Direct3D, Vulkan and OpenGL
-    (:mod:`.fixed_samplers`), and is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
-    Shader Model 6.9 hit objects (``dx::HitObject``) are refused for every target but Direct3D (:mod:`.hit_objects`).
-    Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
-    prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
-    minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`),
-    and texture residency queries for targets that do not lower them (:mod:`.texture_residency`).
-    Sampler feedback textures are refused for every target but Direct3D (:mod:`.feedback_textures`).
-    GLSL-style mesh and ray stage interfaces are rewritten or refused for HLSL (:mod:`.hlsl_stage_interfaces`), and
-    the structures used as ray payloads are declared with payload access qualifiers (:mod:`.hlsl_ray_payloads`).
-    Shader Model 6.9 shader execution reordering (``dx::MaybeReorderThread``) is refused for every target but
-    Direct3D, which writes the call back unchanged (:mod:`.shader_execution_reordering`).
-    Slot attributes that name an integer constant or enumerator are folded to it (:mod:`.binding_constants`).
-    User functions that share a name with a module-scope value are renamed (:mod:`.function_name_collisions`).
-    A block-level ``row_major`` on a constant buffer or block instance is placed on its matrix members
-    (:mod:`.block_matrix_orders`).
-    Row-major struct members are stored as their column-major transpose, with every use rewritten, for targets
-    whose structs cannot carry a matrix layout (:mod:`.row_major_members`), and so are the row-major members of
-    Metal's unmarked constant blocks (:mod:`.row_major_constant_members`).
-    Mutable stage-scope values become module-scope ``static`` variables for the targets that declare per-invocation
-    storage at module scope (:mod:`.stage_private_variables`).
-    For targets whose texel offsets are constant expressions, constant locals are forwarded into the offsets of
-    texel lookups and constant-trip ``for`` loops computing them are unrolled (:mod:`.texel_offsets`).
-    Vulkan subpass inputs become texel fetches at the fragment's pixel for targets without input attachments
-    (:mod:`.subpass_inputs`).
-    Fragment built-in inputs read by name are passed to the HLSL and MSL entry point and its helpers
-    (:mod:`.builtin_input_reads`). For them, the built-in outputs a vertex or fragment stage writes by name and its
-    ``in``/``out`` variables become stage-level interface variables, and ``int`` ones carrying a ``uint`` system value
-    are retyped with conversions at each use (:mod:`.builtin_output_writes`). The GLSL shading-rate flag constants
-    become their values for every target but GLSL, and a Metal fragment stage reading barycentrics with and without
-    perspective is refused (:mod:`.fragment_rate_barycentrics`).
-    Non-uniform resource index qualifiers are dropped for targets that have none (:mod:`.non_uniform_indices`).
-    GLSL sampling functions on shadow samplers become CrossGL's explicit compare forms; for GLSL targets only the
-    gathers and explicit-level samples do (:mod:`.shadow_samples`).
-    Implicit-LOD samples reached from vertex, geometry, tessellation and ray stages take an explicit base level for
-    targets that sample implicitly only in fragment shaders, and bias, derivative and LOD-query operations there are
-    refused (:mod:`.implicit_lod`).
-    Structs holding samplers,
-    textures or images are flattened into separate resources for SPIR-V, or refused with
-    :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
-    one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
-    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). HLSL's
-    ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
-    ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
-    integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width
-    (:mod:`.bit_functions`). Binary16 values
-    (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
-    registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
-    non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
-    operation the importer kept as a call is then refused with :class:`SpirvOperationUnsupportedError` for every
-    target but CrossGL (:mod:`.spirv_instructions`). The AST is
-    rewritten in place. Raises :class:`RuleInexpressibleError` when the target
-    cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
-    exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
+    Runs the ordered sequence of semantic passes in :data:`_PASSES` in turn, then the :class:`.annotate.Annotator`
+    and :class:`.lower.Lowerer`.  Each pass is documented in its own submodule.  The AST is rewritten in place.
+
+    Raises :class:`RuleInexpressibleError` when the target cannot express a rule,
+    :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute exactly,
+    :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
     :class:`CudaWarpIntrinsicUnsupportedError` for a CUDA warp intrinsic it cannot compute with CUDA's lanes.
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     declared_families = take_declared_families(program, report.target)
-    hoist_local_structs(program, report.target)
-    fill_generic_struct_defaults(program, report.target)
-    bind_stage_functions(program)
-    lower_struct_methods(program, report.target)
-    hoist_stage_constant_blocks(program, report.target)
-    distribute_block_matrix_orders(program, report.target)
-    resolve_template_assertions(program, report.target)
-    refuse_undeclared_types(program, report.target)
-    record_undeclared_identifiers(program, report.target)
-    refuse_undeclared_functions(program, report.target)
-    lower_void_casts(program, report.target)
-    refuse_void_values(program, report.target)
-    resolve_builtin_names(program, report.target)
-    refuse_misplaced_builtins(program, report.target)
-    refuse_misplaced_builtin_identifiers(program, report.target)
-    lower_relative_vertex_ids(program, report.target)
-    refuse_ambiguous_matrix_spellings(program, report.target)
-    refuse_hit_objects(program, report.target)
-    refuse_shader_execution_reordering(program, report.target)
-    refuse_metal_runtime_types(program, report.target)
-    fold_constant_calls(program, report.target)
-    fold_binding_constants(program, report.target)
-    fold_constant_extents(program, report.target)
-    fold_stage_layout_counts(program, report.target)
-    resolve_intrinsic_named_functions(program)
-    rename_colliding_functions(program)
-    hoist_stage_private_variables(program, report.target)
-    hoist_static_locals(program, report.target)
-    lower_device_private_globals(program, report.target)
-    orient_row_major_buffer_struct_members(program, report.target)
-    store_row_major_members_transposed(program, report.target)
-    store_row_major_constant_members_transposed(program, report.target)
-    legalize_texel_offsets(program, report.target)
-    fold_sizeof_values(program, report.target)
-    resolve_type_aliases(program, report.target)
-    orient_row_major_struct_members(program, report.target)
-    resolve_static_assertions(program, report.target)
-    zero_empty_scalar_initializers(program, report.target)
-    lower_metal_math_spellings(program, report.target)
-    lower_float_relations(program, report.target)
-    lower_enum_values(program, report.target)
-    lower_device_struct_references(program, report.target)
-    separate_initializer_scopes(program, report.source, report.target)
-    canonicalize_texture_swizzles(program)
-    expand_scalar_swizzles(program)
-    lower_aggregate_equality(program, report.target)
-    lower_vector_logic(program, report.target)
-    lower_boolean_reductions(program, report.target)
-    lower_subpass_inputs(program, report.target)
-    strip_non_uniform_qualifiers(program, report.target)
-    canonicalize_atomic_calls(program, report.target)
-    hlsl_out_argument_atomics(program, report.target)
-    lower_shading_rate_flags(program, report.target)
-    refuse_mixed_metal_barycentrics(program, report.target)
-    declare_builtin_outputs(program, report.target)
-    spell_slang_vertex_indices(program, report.target)
-    pass_builtin_inputs(program, report.target)
-    name_fragment_colour_outputs(program, report.target)
-    attribute_vertex_input_positions(program, report.target)
-    canonicalize_builtin_values(program, report.target)
-    deliver_unsigned_system_values(program, report.target)
-    lower_compute_entry_values(program, report.target)
-    adopt_module_stage_outputs(program, report.target)
-    convert_signed_builtin_outputs(program, report.target)
-    gather_stage_interface_variables(program, report.target)
-    fit_tess_factors_to_domain(program, report.target)
-    expand_struct_scalar_splats(program, report.source, report.target)
-    convert_metal_vector_scalar_operands(program, report.source)
-    convert_struct_constructor_arguments(program)
-    lower_tessellation_patches(program, report.target)
-    lower_geometry_streams(program, report.target)
-    raise_glsl_geometry_streams(program, report.target)
-    raise_glsl_mesh_stages(program, report.target)
-    declare_task_payload_storage(program, report.target)
-    lower_dxr_ray_interfaces(program, report.target)
-    lower_metal_ray_dispatch(program, report.target)
-    declare_interface_block_instances(program, report.target)
-    normalize_spirv_storage_blocks(program, report.source, report.target)
-    legalize_unsized_arrays(program, report.target)
-    mark_default_buffer_layouts(program, report.target)
-    legalize_structured_layouts(program, report.target)
-    materialize_buffer_strides(program, report.target)
-    refuse_unplaced_member_offsets(program, report.target)
-    mark_push_constant_layouts(program, report.target)
-    hoist_constant_buffer_layouts(program, report.target)
-    hoist_constant_reference_layouts(program, report.target)
-    refuse_unplaced_packed_members(program, report.target)
-    hoist_array_constructors(program, report.target)
-    copy_written_array_parameters(program, report.target)
-    copy_written_stage_inputs(program, report.target)
-    refuse_per_vertex_inputs(program, report.target)
-    bind_fixed_samplers(program, report.target)
-    refuse_colour_attachment_inputs(program, report.target)
-    legalize_sampler_states(program, report.target)
-    refuse_shader_record_buffers(program, report.target)
-    refuse_debug_printf(program, report.target)
-    refuse_texture_lod_clamp(program, report.target)
-    refuse_texture_residency(program, report.target)
-    refuse_feedback_textures(program, report.target)
-    declare_hlsl_residency_status(program, report.target)
-    fold_array_lengths(program, report.target)
-    refuse_large_constant_buffers(program, report.target)
-    legalize_hlsl_stage_interfaces(program, report.target)
-    annotate_hlsl_ray_payloads(program, report.target)
-    legalize_opaque_struct_members(program, report.target)
-    flatten_descriptor_arrays(program, report.target)
-    legalize_shadow_samples(program, report.target)
-    legalize_implicit_lod(program, report.target)
-    legalize_cuda_warp_intrinsics(program, report.target)
-    legalize_half_floats(program, report.source, report.target)
-    legalize_bit_functions(program, report.source, report.target)
-    legalize_narrow_integers(program, report.source, report.target)
-    wrap_narrow_arithmetic(program, report.source, report.target)
-    refuse_spirv_instructions(program, report.target)
+    _arg_map = {"program": program, "source": report.source, "target": report.target}
+    for _pass in _PASSES:
+        fn, arg_keys = _pass
+        fn(*(_arg_map[k] for k in arg_keys))
     Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
     annotations = getattr(program, "annotations", None)
