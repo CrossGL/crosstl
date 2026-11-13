@@ -194,6 +194,7 @@ from .unreachable_constrained_callers import (
     materialize_with_unreachable_callers,
     unreachable_caller_scope,
 )
+from .mpp_tensor_ops import rewrite_mpp_tensor_ops_auto_types
 from .unreferenced_constrained_templates import (
     prune_unreferenced_constrained_templates,
 )
@@ -1319,6 +1320,10 @@ class MetalPreprocessor(MetalDirectiveMixin, HLSLPreprocessor):
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         processed = self._canonicalize_metal_library_matrix_typedefs(processed)
+        # Rewrite mpp::tensor_ops::matmul2d cooperative-tensor auto variables to
+        # concrete CrossGL cooperative-matrix type spellings so the translator can
+        # type-infer subscript operations on them.
+        processed = rewrite_mpp_tensor_ops_auto_types(self, processed)
         if "contract" in processed or "FP_CONTRACT" in processed:
             # Inspect active expanded tokens before materialization changes the
             # lexical scope of a directive or prunes its containing template.
