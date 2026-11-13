@@ -10518,5 +10518,5 @@ class TestCudaCodeGen:
         # The compound literal elements must be expanded directly into the
         # constructor call, not wrapped in a brace initializer.
         assert "Pair(3.0f, 2)" in result
-        assert "// Kernel: use_shared" in result
-        assert "fn use_shared(" in result
+        assert "Pair({" not in result
+        assert "Pair{{" not in result
