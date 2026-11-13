@@ -97,3 +97,18 @@ closed 7 days later; any push or comment resets the clock.
 Keep a pull request to one change. Write commit messages and the pull request
 title in the imperative, describing the behavior that changes ("Reject
 recursive functions in the Metal generator"), with a body that says why.
+
+A change that people who install CrossTL would notice adds its changelog entry
+as a new file, `changelog.d/<name>.<kind>.md`, where `<kind>` is `breaking`,
+`added`, `improved`, `fixed` or `removed`. Write one or two sentences on what
+changed for them, for example in `changelog.d/hip-realtime-clock.fixed.md`:
+
+```markdown
+HIP output writes CrossGL's `clockRealtimeEXT()` as `wall_clock64()`, HIP's
+constant-rate device clock. It used to copy the call into the output, where
+hipcc rejected the undeclared identifier (#4414).
+```
+
+Pull requests that edit `CHANGELOG.md` itself conflict with each other in the
+merge queue; new files do not. The entries move into `CHANGELOG.md` when a
+release is prepared, and `python tools/changelog.py check` validates them.
