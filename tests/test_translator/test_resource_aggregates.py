@@ -1500,14 +1500,46 @@ kernel void copy_values(
     assert "crosstl_resource_load_float" in glsl
     assert "Unknown type" not in glsl
 
-    if shutil.which("glslangValidator"):
-        import subprocess
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+    assert "Unknown type" not in spv
 
+    if shutil.which("glslangValidator"):
         glsl_path = tmp_path / "null_cursor.glsl"
         glsl_path.write_text(glsl, encoding="utf-8")
         subprocess.run(
             ["glslangValidator", "-S", "comp", str(glsl_path)],
             check=True,
         )
-    _validate_spirv_assembly(spv, tmp_path)
-    assert "Unknown type" not in spv
+
+
+def test_opengl_index_type_error_still_raised_for_proven_negative_index(tmp_path):
+    """The OpenGL index range check is not bypassed for unproven-range indices.
+
+    An ``int64_t i`` whose value is not derivable from a ``uint`` builtin still
+    triggers ``OpenGLIndexTypeError`` when used to subscript a resource through
+    an aggregate field, so the fix does not silently accept every index.
+    """
+    from crosstl.translator.codegen.GLSL_codegen import OpenGLIndexTypeError
+
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct Cursor { const device float* input; };
+
+kernel void wide_index(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    Cursor cursor;
+    cursor.input = nullptr;
+    cursor.input = input;
+    int64_t i = int64_t(tid) * 2;
+    output[tid] = cursor.input[i];
+}
+"""
+    shader = tmp_path / "wide_index.metal"
+    shader.write_text(source, encoding="utf-8")
+    with pytest.raises(OpenGLIndexTypeError):
+        translate(str(shader), backend="opengl", format_output=False)

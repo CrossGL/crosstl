@@ -2129,7 +2129,7 @@ class _Lowering:
                     self.target_type(target_type),
                 )
                 return _call(
-                    helper,
+                        self._wrap_index_int64(index, env),
                     [
                         self.expression(owner, env),
                         _call("int64_t", [self.expression(index, env)]),
