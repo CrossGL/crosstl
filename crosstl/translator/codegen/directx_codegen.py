@@ -52944,6 +52944,40 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         else:
             expected_count = rows * columns
+            # Detect the column-vector form: every element is a vector of exactly
+            # ``rows`` components, e.g. ``{vec2(1.0, 0.0), vec2(0.0, x)}`` for mat2.
+            # GLSL 4.60 section 4.1.11 permits one vector per column; pass them
+            # directly to the transposed HLSL constructor without decomposing into
+            # scalars or zero-padding, so DXC receives
+            # ``transpose(float2x2(float2(1.0, 0.0), float2(0.0, x)))`` instead of
+            # ``transpose(float2x2(float2(1.0, 0.0), float2(0.0, x), float(0), float(0)))``.
+            column_counts = [
+                self.expression_component_count(element) for element in elements
+            ]
+            all_column_vectors = (
+                all(c == rows for c in column_counts)
+                and len(elements) <= columns
+            )
+            if all_column_vectors and any(c is not None and c > 1 for c in column_counts):
+                if len(elements) > columns:
+                    self.hlsl_aggregate_error(
+                        expr,
+                        expected_type=mapped_type,
+                        reason="element-count-mismatch",
+                        expected_element_count=columns,
+                    )
+                column_type = f"{component_type}{rows}"
+                rendered_cols = [
+                    self.generate_expression_with_expected(element, None)
+                    for element in elements
+                ]
+                rendered_cols.extend(
+                    self.hlsl_value_initialized_expression(expr, column_type)
+                    for _index in range(len(elements), columns)
+                )
+                transposed_type = f"{component_type}{columns}x{rows}"
+                return f"transpose({transposed_type}({', '.join(rendered_cols)}))"
+
             if len(elements) > expected_count:
                 self.hlsl_aggregate_error(
                     expr,

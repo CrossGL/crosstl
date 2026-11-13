@@ -37412,6 +37412,33 @@ complex64_t crossgl_complex64_mod_assign(
                         expected_type=mapped_type,
                         reason="element-count-mismatch",
                         expected_element_count=rows,
+            # Detect the column-vector form: every element is a vector of exactly
+            # ``rows`` components, e.g. ``{vec2(1.0, 0.0), vec2(0.0, x)}`` for mat2.
+            # GLSL 4.60 section 4.1.11 permits one column per vector; treat each
+            # vector element as an entire column so the constructor receives the
+            # right number of columns rather than raising element-count-mismatch.
+            col_counts = []
+            for element in elements:
+                type_info = self.glsl_value_type_info(
+                    self.glsl_source_expression_type(element)
+                )
+                if type_info is None:
+                    type_info = self.glsl_value_type_info(
+                        self.expression_result_type(element)
+                    )
+                col_counts.append(type_info["width"] if type_info is not None else None)
+            all_column_vectors = (
+                all(c == rows for c in col_counts)
+                and len(elements) == columns
+                and any(c is not None and c > 1 for c in col_counts)
+            )
+            if all_column_vectors:
+                rendered_columns = [
+                    f"{column_type}({self.generate_expression_with_expected(element, component_type)})"
+                    for element in elements
+                ]
+                return f"{mapped_type}({', '.join(rendered_columns)})"
+
                     )
         else:
             expected_count = columns * rows
