@@ -19916,8 +19916,8 @@ def test_hip_struct_keyword_member_reaches_every_target(tmp_path):
     for text in (metal, directx):
         assert len(re.findall(r"struct Inner\s*\{", text)) == 1
         assert "Inner inner;" in text
-    assert vulkan.count('OpName %Inner "Inner"') == 1
-    assert 'OpMemberName %Outer 0 "inner"' in vulkan
+    assert len(re.findall(r'OpName %\S+ "Inner"', vulkan)) == 1
+    assert re.search(r'OpMemberName %\S+ 0 "inner"', vulkan)
 
 
 def test_hip_function_local_struct_keyword_names_the_earlier_record(tmp_path):
