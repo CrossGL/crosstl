@@ -68,6 +68,71 @@ class HipSurfaceByteOffsetError(TranslationDiagnostic):
     code = CODE_PREFIX + "hip-surface-byte-offset-unproven"
 
 
+class HipWarpIntrinsicUnsupportedError(TranslationDiagnostic):
+    """A HIP warp intrinsic that cannot be translated to CrossGL.
+
+    HIP warp/wave intrinsics such as ``__shfl_down_sync`` with a partial mask,
+    ``__ballot_sync``, ``__activemask``, and the legacy maskless shuffles have no
+    direct CrossGL equivalent when the mask is not a full-warp literal.
+    """
+
+    code = CODE_PREFIX + "hip-warp-intrinsic-unsupported"
+
+
+class HipDeviceTimerUnsupportedError(TranslationDiagnostic):
+    """A HIP device-timer intrinsic (``clock``, ``clock64``, ``wall_clock64``) that
+    cannot be translated to CrossGL.  CrossGL has no device clock.
+    """
+
+    code = CODE_PREFIX + "hip-device-timer-unsupported"
+
+
+class HipLoadCacheIntrinsicUnsupportedError(TranslationDiagnostic):
+    """A HIP load-cache intrinsic (``__ldg``, ``__ldca``, etc.) called with more than
+    one argument, which CrossGL cannot represent.
+    """
+
+    code = CODE_PREFIX + "hip-load-cache-intrinsic-unsupported"
+
+
+class HipBlockSyncVoteUnsupportedError(TranslationDiagnostic):
+    """A HIP thread-block sync-vote intrinsic (``__syncthreads_count``,
+    ``__syncthreads_and``, ``__syncthreads_or``) that cannot be translated to CrossGL.
+    """
+
+    code = CODE_PREFIX + "hip-block-sync-vote-unsupported"
+
+
+class HipCooperativeGroupUnsupportedError(TranslationDiagnostic):
+    """A cooperative-groups expression (``thread_rank``, ``size``, etc.) whose group
+    kind has no CrossGL equivalent.
+    """
+
+    code = CODE_PREFIX + "hip-cooperative-group-unsupported"
+
+
+class HipResourceUnsupportedError(TranslationDiagnostic):
+    """A HIP texture/surface call feature (e.g. sparse residency, coordinate rank
+    mismatch) that cannot be translated to CrossGL.
+    """
+
+    code = CODE_PREFIX + "hip-resource-unsupported"
+
+
+class HipPlacementNewUnsupportedError(TranslationDiagnostic):
+    """A C++ placement-``new`` expression that cannot be translated to CrossGL."""
+
+    code = CODE_PREFIX + "hip-placement-new-unsupported"
+
+
+class HipDeviceQueryUnsupportedError(TranslationDiagnostic):
+    """A HIP device-query expression (device attribute, device property, etc.) that
+    cannot be translated to CrossGL.
+    """
+
+    code = CODE_PREFIX + "hip-device-query-unsupported"
+
+
 class HipToCrossGLConverter:
     """Serialize HIP backend AST nodes back into CrossGL source."""
 
@@ -8049,9 +8114,8 @@ class HipToCrossGLConverter:
             return None
 
         args_text = ", ".join(args)
-        return (
-            f"(/* HIP device timer {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        raise HipDeviceTimerUnsupportedError(
+            f"HIP device timer {function_name}({args_text}) is not supported in CrossGL"
         )
 
     def format_hip_load_cache_intrinsic_call(
@@ -8077,10 +8141,9 @@ class HipToCrossGLConverter:
         ):
             return self.visit(raw_args[0].operand)
 
-        args_text = ", ".join(formatted_args)
-        return (
-            f"(/* hip load cache intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        raise HipLoadCacheIntrinsicUnsupportedError(
+            f"hip load cache intrinsic {function_name}({args_text}) is not supported in CrossGL"
+        )
         )
 
     def format_hip_warp_intrinsic_call(self, function_name, args):
@@ -8202,10 +8265,9 @@ class HipToCrossGLConverter:
     def format_unsupported_hip_warp_intrinsic(self, function_name, args):
         args_text = ", ".join(args)
         return (
-            f"(/* hip warp intrinsic {function_name}({args_text}) "
-            "not directly supported in CrossGL */ 0)"
+        raise HipWarpIntrinsicUnsupportedError(
+            f"hip warp intrinsic {function_name}({args_text}) is not supported in CrossGL"
         )
-
     def format_cooperative_group_call(self, node):
         if isinstance(node.name, MemberAccessNode):
             member = node.name.member
@@ -8323,10 +8385,9 @@ class HipToCrossGLConverter:
         self, group_kind, member, fallback="0"
     ):
         return (
-            f"(/* cooperative_groups {group_kind}.{member} "
-            f"not directly supported in CrossGL */ {fallback})"
+        raise HipCooperativeGroupUnsupportedError(
+            f"cooperative_groups {group_kind}.{member} is not supported in CrossGL"
         )
-
     def cooperative_group_declaration_metadata(self, node):
         declared_metadata = self.cooperative_group_metadata_from_type(node.vtype)
         factory_metadata = self.cooperative_group_factory_metadata(node.value)
@@ -8741,10 +8802,9 @@ class HipToCrossGLConverter:
 
         args_text = ", ".join(args)
         return (
-            f"(/* HIP block-wide sync vote {function_name} predicate: {args_text} "
-            "not directly supported in CrossGL */ 0)"
+        raise HipBlockSyncVoteUnsupportedError(
+            f"HIP block-wide sync vote {function_name}({args_text}) is not supported in CrossGL"
         )
-
     def format_vector_component_access(self, expression, component):
         text = str(expression).strip()
         if text and all(char.isalnum() or char in "_." for char in text):
@@ -9057,10 +9117,9 @@ class HipToCrossGLConverter:
 
     def format_unsupported_hip_resource_expression(self, kind, member, fallback):
         return (
-            f"(/* hip {kind}.{member} not directly supported in CrossGL */ "
-            f"{fallback})"
+        raise HipResourceUnsupportedError(
+            f"hip {kind}.{member} is not supported in CrossGL"
         )
-
     def format_hip_surface_read(
         self, function_name, args, dimensions, value_type, raw_args=None
     ):
@@ -9760,9 +9819,8 @@ class HipToCrossGLConverter:
             args = ", ".join(self.visit(arg) for arg in node.args)
             placement = ", ".join(self.visit(arg) for arg in placement_args)
             fallback = self.visit(placement_args[0]) if placement_args else "nullptr"
-            return (
-                f"(/* HIP placement new: new({placement}) {target_type}({args}) "
-                f"not directly supported in CrossGL */ {fallback})"
+            raise HipPlacementNewUnsupportedError(
+                f"HIP placement new: new({placement}) {target_type}({args}) is not supported in CrossGL"
             )
 
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
@@ -9960,7 +10018,7 @@ class HipToCrossGLConverter:
 
     def get_member_query_path(self, node):
         path = []
-
+        raise HipDeviceQueryUnsupportedError(f"HIP device query: {query_name} is not supported in CrossGL")
         def collect(current):
             if isinstance(current, str):
                 return current
@@ -10008,9 +10066,9 @@ class HipToCrossGLConverter:
 
         attribute_name, device_id = source
         return (
-            f"(/* HIP device attribute: {attribute_name}, " f"device: {device_id} */ 0)"
+        raise HipDeviceQueryUnsupportedError(
+            f"HIP device attribute: {attribute_name}, device: {device_id} is not supported in CrossGL"
         )
-
     def format_hip_device_query_read(self, name):
         if self.suppress_device_query_value_access != 0:
             return None
@@ -10022,8 +10080,12 @@ class HipToCrossGLConverter:
         query_name, device_id = source
         if device_id is None:
             return f"(/* HIP device query: {query_name} */ 0)"
-        return f"(/* HIP device query: {query_name}, device: {device_id} */ 0)"
-
+            raise HipDeviceQueryUnsupportedError(
+                f"HIP device query: {query_name} is not supported in CrossGL"
+            )
+        raise HipDeviceQueryUnsupportedError(
+            f"HIP device query: {query_name}, device: {device_id} is not supported in CrossGL"
+        )
     def visit_ArrayAccessNode(self, node):
         self.validate_record_subscript(node)
         if self.suppress_device_query_value_access == 0:
