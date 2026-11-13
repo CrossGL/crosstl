@@ -36825,3 +36825,70 @@ class TestSpirvShaderValidation:
             is None
         )
         assert_spirv_module_validates(spv_code, tmp_path)
+
+
+def test_shader_clock_builtins_lower_to_op_read_clock(tmp_path):
+    source_code = """
+    shader Clock {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint64_t* out_buf;
+            buffer uvec2* pair_buf;
+            void main() {
+                out_buf[0] = clockARB() + clockRealtimeEXT();
+                pair_buf[0] = clock2x32ARB() + clockRealtime2x32EXT();
+            }
+        }
+    }
+"""
+    spv_code = VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    assert "OpCapability ShaderClockKHR" in spv_code
+    assert 'OpExtension "SPV_KHR_shader_clock"' in spv_code
+    assert "OpCapability Int64" in spv_code
+    ulong = re.search(r"%(\d+) = OpTypeInt 64 0", spv_code).group(1)
+    reads = re.findall(r"= OpReadClockKHR %(\d+) %(\d+)", spv_code)
+    scopes = {
+        scope: int(value)
+        for scope, value in re.findall(r"%(\d+) = OpConstant %\d+ (\d+)\b", spv_code)
+    }
+    assert len(reads) == 4
+    assert sorted(type_id == ulong for type_id, _ in reads) == [False] * 2 + [True] * 2
+    # The ARB forms read at Subgroup (3) scope, the Realtime forms at Device (1) scope.
+    assert sorted(scopes[scope] for _, scope in reads) == [1, 1, 3, 3]
+    assert "OpFunctionCall" not in spv_code
+    assert_spirv_module_validates(spv_code, tmp_path, "vulkan1.1")
+
+
+def test_shader_clock_builtin_with_arguments_is_refused_for_spirv():
+    source_code = """
+    shader Clock {
+        compute {
+            layout(local_size_x = 1) in;
+            buffer uint64_t* out_buf;
+            void main() {
+                out_buf[0] = clockARB(1);
+            }
+        }
+    }
+    """
+    with pytest.raises(SpirvLoweringRefused, match="clockARB.*requires 0 operands"):
+        VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+
+def test_user_function_named_like_a_shader_clock_is_not_lowered_for_spirv():
+    source_code = """
+    shader Clock {
+        uint clockARB() { return 7u; }
+        compute {
+            layout(local_size_x = 1) in;
+            buffer uint* out_buf;
+            void main() {
+                out_buf[0] = clockARB();
+            }
+        }
+    }
+    """
+    spv_code = VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+    assert "OpReadClockKHR" not in spv_code
+    assert "ShaderClockKHR" not in spv_code

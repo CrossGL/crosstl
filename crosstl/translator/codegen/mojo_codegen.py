@@ -95,6 +95,7 @@ from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
 from .sampler_pairs import canonicalize_separate_textures
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import is_fragment_output_parameter
 
 
@@ -9002,6 +9003,12 @@ class MojoCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+
+            if (
+                func_name in SHADER_CLOCK_BUILTINS
+                and not self.is_user_defined_function(func_name)
+            ):
+                return refuse_shader_clock_call("Mojo", func_name)
 
             numeric_trait_call = generate_numeric_trait_method_call(
                 self,

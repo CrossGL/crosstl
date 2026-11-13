@@ -4343,10 +4343,40 @@ class GLSLCodeGen(
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         if self.uses_glsl_debug_printf(ast):
             lines.append("#extension GL_EXT_debug_printf : require")
+        lines.extend(self.glsl_shader_clock_extension_lines(ast))
         scalar_layout = scalar_block_layout_extension_line(self, ast)
         if scalar_layout is not None:
             lines.append(scalar_layout)
         return lines
+
+    GLSL_SHADER_CLOCK_EXTENSIONS = {
+        "clockARB": "GL_ARB_shader_clock",
+        "clock2x32ARB": "GL_ARB_shader_clock",
+        "clockRealtimeEXT": "GL_EXT_shader_realtime_clock",
+        "clockRealtime2x32EXT": "GL_EXT_shader_realtime_clock",
+    }
+
+    def glsl_shader_clock_extension_lines(self, ast):
+        """The shader clock built-ins are only declared once their extension is requested."""
+        enabled = {
+            extension
+            for extension in set(self.GLSL_SHADER_CLOCK_EXTENSIONS.values())
+            if any(
+                extension in str(getattr(directive, "content", "") or "")
+                for directive in getattr(ast, "preprocessors", []) or []
+            )
+        }
+        needed = {
+            self.GLSL_SHADER_CLOCK_EXTENSIONS[name]
+            for node in self.walk_ast(ast)
+            if isinstance(node, FunctionCallNode)
+            for name in [self.function_call_name(node)]
+            if name in self.GLSL_SHADER_CLOCK_EXTENSIONS
+        }
+        return [
+            f"#extension {extension} : require"
+            for extension in sorted(needed - enabled)
+        ]
 
     def uses_glsl_debug_printf(self, ast):
         """HLSL's ``printf`` (a SPIR-V-only DXC feature) is GLSL's ``debugPrintfEXT``."""

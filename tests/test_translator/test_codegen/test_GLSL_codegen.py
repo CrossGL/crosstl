@@ -49921,3 +49921,49 @@ def test_opengl_stage_block_texture_array_refuses_an_unbounded_index():
     # As for a shader-scope array, no bound reaches the index.
     with pytest.raises(ResourceArrayIndexUnboundedError, match="tex"):
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_glsl_shader_clock_builtins_request_their_extensions(tmp_path):
+    source_code = """
+        shader Probe {
+            uint64_t stamp() { return clockRealtimeEXT(); }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                buffer uvec2* pair_buf;
+                void main() {
+                    uint64_t t = clockRealtimeEXT();
+                    uint64_t u = clockARB();
+                    uvec2 r = clockRealtime2x32EXT();
+                    uvec2 s = clock2x32ARB();
+                    out_buf[0] = t + stamp() + u;
+                    pair_buf[0] = r + s;
+                }
+            }
+        }
+    """
+    glsl_code = generate_code(parse_code(tokenize_code(source_code)))
+
+    assert "#extension GL_ARB_shader_clock : require" in glsl_code
+    assert "#extension GL_EXT_shader_realtime_clock : require" in glsl_code
+    assert_glsl_compute_validates_if_available(
+        glsl_code, tmp_path, "shader_clock_builtins"
+    )
+
+
+def test_glsl_shader_clock_extension_is_requested_only_for_the_clock_used():
+    source_code = """
+    shader Probe {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint64_t* out_buf;
+            void main() {
+                out_buf[0] = clockRealtimeEXT();
+            }
+        }
+    }
+    """
+    glsl_code = generate_code(parse_code(tokenize_code(source_code)))
+
+    assert "#extension GL_EXT_shader_realtime_clock : require" in glsl_code
+    assert "GL_ARB_shader_clock" not in glsl_code

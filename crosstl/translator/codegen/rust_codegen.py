@@ -63,6 +63,7 @@ from .lowering_refusals import LoweringRefusalMixin
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
 from .sampler_pairs import canonicalize_separate_textures
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,
@@ -9057,6 +9058,11 @@ class RustCodeGen(RustOutputParameterMixin, LoweringRefusalMixin):
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+            if (
+                func_name in SHADER_CLOCK_BUILTINS
+                and not self.is_user_defined_function(func_name)
+            ):
+                return refuse_shader_clock_call("Rust", func_name)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
             if isinstance(func_expr, MemberAccessNode):

@@ -242,6 +242,7 @@ from .spirv_row_major_arrays import (
     uniform_block_member_layout_type,
 )
 from .spirv_separate_textures import separate_texture_type_info
+from .spirv_shader_clock import SPIRV_SHADER_CLOCKS, spirv_shader_clock_call
 from .spirv_shading_rate import (
     require_shading_rate_capability,
     shading_rate_builtin_info,
@@ -30605,6 +30606,13 @@ class VulkanSPIRVCodeGen(
                 and not self.has_function_reference(callee_name)
             ):
                 return spirv_debug_printf_call(self, callee_name, expr.args, SpirvId)
+
+            if callee_name in SPIRV_SHADER_CLOCKS and not self.has_function_reference(
+                callee_name
+            ):
+                return spirv_shader_clock_call(
+                    self, callee_name, list(expr.args), SpirvId
+                )
 
             if callee_name == TEXTURE_RESIDENCY_OPERATION and not (
                 self.has_function_reference(callee_name)

@@ -25247,5 +25247,47 @@ def test_slang_keeps_user_nonuniform_ext_function():
     assert "NonUniformResourceIndex" not in generated_code
 
 
+def test_shader_clock_builtins_are_refused_for_slang():
+    source_code = """
+    shader Clock {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint64_t* out_buf;
+            buffer uvec2* pair_buf;
+            void main() {
+                out_buf[0] = clockARB() + clockRealtimeEXT();
+                pair_buf[0] = clock2x32ARB() + clockRealtime2x32EXT();
+            }
+        }
+    }
+"""
+    with pytest.raises(SlangLoweringRefused) as refused:
+        generate_code(parse_code(tokenize_code(source_code)))
+    for name in (
+        "clockARB",
+        "clock2x32ARB",
+        "clockRealtimeEXT",
+        "clockRealtime2x32EXT",
+    ):
+        assert name in str(refused.value)
+    assert "shader clock builtin" in str(refused.value)
+
+
+def test_user_function_named_like_a_shader_clock_is_kept_for_slang():
+    source_code = """
+    shader Clock {
+        uint clockARB() { return 7u; }
+        compute {
+            layout(local_size_x = 1) in;
+            buffer uint* out_buf;
+            void main() {
+                out_buf[0] = clockARB();
+            }
+        }
+    }
+    """
+    assert "clockARB()" in generate_code(parse_code(tokenize_code(source_code)))
+
+
 if __name__ == "__main__":
     pytest.main()
