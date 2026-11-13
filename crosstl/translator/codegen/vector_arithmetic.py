@@ -2360,10 +2360,25 @@ class VectorArithmeticMixin:
             return helper_name
 
         scalar_type = self.vector_scalar_parameter_type(vector_info)
-        terms = [
-            f"(lhs.{component} * rhs.{component})"
-            for component in vector_info["components"]
-        ]
+        component_type = vector_info["component_type"]
+        if component_type == "half":
+            # For native __half2, lanes must be widened before multiplying:
+            # on ROCm 5.7 half2.x/.y are unsigned short bit patterns, not __half.
+            # geometric_component_read with the vector_type handles both CUDA and HIP.
+            terms = []
+            for component in vector_info["components"]:
+                lhs_val = self.geometric_component_read(
+                    component_type, f"lhs.{component}", vector_type
+                )
+                rhs_val = self.geometric_component_read(
+                    component_type, f"rhs.{component}", vector_type
+                )
+                terms.append(f"({lhs_val} * {rhs_val})")
+        else:
+            terms = [
+                f"(lhs.{component} * rhs.{component})"
+                for component in vector_info["components"]
+            ]
         helper = (
             f"__device__ inline {scalar_type} {helper_name}"
             f"({vector_type} lhs, {vector_type} rhs)\n"
