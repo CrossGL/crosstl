@@ -2988,6 +2988,122 @@ class VulkanParser:
                 statements.append(ReturnNode())
                 continue
 
+            if result_id and opcode in {
+                "OpCooperativeMatrixLoadKHR",
+                "OpCooperativeMatrixLoadNV",
+            }:
+                if len(operands) < 4:
+                    raise SpirvInstructionUnsupportedError(
+                        opcode,
+                        f"needs at least 4 operands (type, pointer, layout, stride), "
+                        f"got {len(operands)}",
+                    )
+                args = [
+                    self.spirv_assembly_operand_expression(
+                        operands[1],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                        variables_by_id=variables_by_id,
+                        types=types,
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[2], expressions, names, decorations, constants
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[3], expressions, names, decorations, constants
+                    ),
+                ]
+                for extra in operands[4:]:
+                    args.append(
+                        self.spirv_assembly_operand_expression(
+                            extra, expressions, names, decorations, constants
+                        )
+                    )
+                suffix = "KHR" if opcode.endswith("KHR") else "NV"
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(f"spirvCoopMatLoad{suffix}", args),
+                )
+                continue
+
+            if opcode in {
+                "OpCooperativeMatrixStoreKHR",
+                "OpCooperativeMatrixStoreNV",
+            }:
+                if len(operands) < 4:
+                    raise SpirvInstructionUnsupportedError(
+                        opcode,
+                        f"needs at least 4 operands (pointer, object, layout, stride), "
+                        f"got {len(operands)}",
+                    )
+                args = [
+                    self.spirv_assembly_operand_expression(
+                        operands[0],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                        variables_by_id=variables_by_id,
+                        types=types,
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[1], expressions, names, decorations, constants
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[2], expressions, names, decorations, constants
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[3], expressions, names, decorations, constants
+                    ),
+                ]
+                for extra in operands[4:]:
+                    args.append(
+                        self.spirv_assembly_operand_expression(
+                            extra, expressions, names, decorations, constants
+                        )
+                    )
+                suffix = "KHR" if opcode.endswith("KHR") else "NV"
+                statements.append(FunctionCallNode(f"spirvCoopMatStore{suffix}", args))
+                continue
+
+            if result_id and opcode in {
+                "OpCooperativeMatrixMulAddKHR",
+                "OpCooperativeMatrixMulAddNV",
+            }:
+                if len(operands) < 4:
+                    raise SpirvInstructionUnsupportedError(
+                        opcode,
+                        f"needs at least 4 operands (type, A, B, C), "
+                        f"got {len(operands)}",
+                    )
+                args = [
+                    self.spirv_assembly_operand_expression(
+                        operands[1], expressions, names, decorations, constants
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[2], expressions, names, decorations, constants
+                    ),
+                    self.spirv_assembly_operand_expression(
+                        operands[3], expressions, names, decorations, constants
+                    ),
+                ]
+                for extra in operands[4:]:
+                    args.append(
+                        self.spirv_assembly_operand_expression(
+                            extra, expressions, names, decorations, constants
+                        )
+                    )
+                suffix = "KHR" if opcode.endswith("KHR") else "NV"
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(f"spirvCoopMatMulAdd{suffix}", args),
+                )
+                continue
+
             ray_call = ray_statement(
                 opcode,
                 operands,
