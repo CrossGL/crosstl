@@ -3311,6 +3311,30 @@ def test_wgsl_codegen_refuses_explicit_sampler_texture_bias_in_compute():
     )
 
 
+def test_wgsl_codegen_shadow_texture_with_explicit_comparison_sampler_uses_compare_samples():
+    shader = """
+    shader WGSLExplicitShadowSampler {
+        sampler2DShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec3 coord = vec3(uv, 0.5);
+                float sampled = texture(t, s, coord);
+                float lod = textureLod(t, s, coord, 0.0);
+                float offset = textureOffset(t, s, coord, ivec2(1, 1));
+                return vec4(sampled + lod + offset);
+            }
+        }
+    }
+    """
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+    assert "texture_depth_2d" in generated
+    assert "sampler_comparison" in generated
+    assert "textureSampleCompare(t, s, coord.xy, coord.z)" in generated
+    assert "textureSampleCompareLevel(t, s, coord.xy, coord.z)" in generated
+    assert "textureSampleCompare(t, s, coord.xy, coord.z, vec2<i32>(1, 1))" in generated
+
+
 def test_wgsl_codegen_refuses_explicit_comparison_sampler_texture():
     shader = """
     shader WGSLExplicitComparisonSamplerTexture {

@@ -5275,6 +5275,13 @@ class WGSLCodeGen(
         if len(args) == 3:
             texture, second, third = args
             if self.is_sampler_type(self.expression_type(second)):
+                comparison_args = self.explicit_shadow_comparison_arguments(
+                    function_name, texture, second, third
+                )
+                if comparison_args is not None:
+                    return self.generate_texture_sample_compare_call(
+                        function_name, comparison_args
+                    )
                 sample_function = (
                     "textureSampleLevel"
                     if self._current_stage_name == "compute"
@@ -5418,6 +5425,13 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             texture, sampler, coords, level = args
+            comparison_args = self.explicit_shadow_comparison_arguments(
+                function_name, texture, sampler, coords, (level,)
+            )
+            if comparison_args is not None:
+                return self.generate_texture_sample_compare_level_call(
+                    function_name, comparison_args
+                )
             self.refuse_comparison_sampler(
                 sampler, function_name, texture, "textureSampleLevel"
             )
@@ -5435,6 +5449,13 @@ class WGSLCodeGen(
 
     def generate_texture_sample_level_offset_call(self, function_name, args):
         if len(args) == 5:
+            comparison_args = self.explicit_shadow_comparison_arguments(
+                function_name, args[0], args[1], args[2], args[3:]
+            )
+            if comparison_args is not None:
+                return self.generate_texture_sample_compare_level_offset_call(
+                    function_name, comparison_args
+                )
             self.refuse_comparison_sampler(
                 args[1], function_name, args[0], "textureSampleLevel"
             )
@@ -5467,6 +5488,13 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             if self.is_sampler_type(self.expression_type(args[1])):
+                comparison_args = self.explicit_shadow_comparison_arguments(
+                    function_name, args[0], args[1], args[2], (args[3],)
+                )
+                if comparison_args is not None:
+                    return self.generate_texture_sample_compare_offset_call(
+                        function_name, comparison_args
+                    )
                 self.refuse_comparison_sampler(
                     args[1], function_name, args[0], "textureSample"
                 )
@@ -5498,6 +5526,35 @@ class WGSLCodeGen(
             "texture/sampler/coords/offset, or texture/sampler/coords/offset/bias "
             f"arguments; got {len(args)} argument(s)"
         )
+
+    def explicit_shadow_comparison_arguments(
+        self, function_name, texture, sampler, coords, extra_args=()
+    ):
+        """Split a depth-shadow vec3 coordinate for a comparison-sampler call."""
+        if not (
+            self.is_depth_texture_type(self.expression_type(texture))
+            and self.is_comparison_sampler_type(self.expression_type(sampler))
+        ):
+            return None
+        coordinate_shape = self.vector_shape(self.expression_type(coords))
+        if coordinate_shape is None or coordinate_shape[1] != 3:
+            raise ValueError(
+                f"WGSL target requires {function_name}() on a shadow texture to "
+                "provide vec3 coordinates (uv plus the comparison reference)"
+            )
+        if not self.is_repeatable_matrix_operand(coords):
+            raise ValueError(
+                f"WGSL target splits the {function_name}() shadow coordinate into "
+                "texture coordinates and a comparison reference; assign a "
+                "coordinate with side effects to a local variable first"
+            )
+        return [
+            texture,
+            sampler,
+            MemberAccessNode(coords, "xy"),
+            MemberAccessNode(coords, "z"),
+            *extra_args,
+        ]
 
     def generate_texture_sample_compare_call(self, function_name, args):
         self.require_depth_texture_operand(args[0], function_name)
