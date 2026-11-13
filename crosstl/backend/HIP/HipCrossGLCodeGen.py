@@ -10306,6 +10306,20 @@ class HipToCrossGLConverter:
             node.expression, node.target_type, "explicit conversion"
         )
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
+        if isinstance(node.expression, InitializerListNode):
+            # For struct and vector compound literals, expand elements directly
+            # into the constructor call so CUDA and Metal targets receive a
+            # constructor call rather than a brace initializer wrapped in a
+            # constructor, which both reject.
+            # Array compound literals (target type contains "[") keep the
+            # brace-wrapped form so they remain valid CrossGL array literals.
+            raw_target = str(node.target_type).strip()
+            is_array_type = "[" in raw_target or raw_target.endswith("[]")
+            if not is_array_type:
+                elements = ", ".join(
+                    self.visit(element) for element in node.expression.elements
+                )
+                return f"{target_type}({elements})"
         expression = self.visit(node.expression)
         return f"{target_type}({expression})"
 

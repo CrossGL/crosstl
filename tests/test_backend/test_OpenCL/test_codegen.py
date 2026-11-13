@@ -1,3 +1,6 @@
+import shutil
+import subprocess
+
 import pytest
 
 import crosstl
@@ -1745,3 +1748,88 @@ def test_opencl_cast_type_qualifier_split_across_lines():
     one_line_source = split_source.replace("const\n", "const ")
 
     assert generate_crossgl(split_source) == generate_crossgl(one_line_source)
+
+
+def test_opencl_struct_compound_literal_becomes_constructor_call():
+    """OpenCL compound literals ``(struct Pair){3.0f, 2}`` must import as
+    ``Pair(3.0f, 2)`` – a CrossGL struct constructor call – not as
+    ``Pair({3.0f, 2})`` – which CUDA and Metal targets both reject.
+
+    Reproduced from issue #3570.
+    """
+    crossgl = generate_crossgl("""
+        struct Pair {
+            float a;
+            int b;
+        };
+
+        __kernel void probe(__global float* outp) {
+            uint i = get_global_id(0);
+            struct Pair u = (struct Pair){3.0f, 2};
+            outp[i] = u.a;
+        }
+        """)
+
+    # The compound literal must become a CrossGL constructor call, not a
+    # constructor wrapping a brace initializer.
+    assert "Pair(3.0f, 2)" in crossgl
+    assert "Pair({" not in crossgl
+
+
+def test_opencl_struct_compound_literal_translates_to_cuda_and_metal(tmp_path):
+    """The compound literal constructor form passes through to CUDA and Metal."""
+    source = """
+        struct Pair { float a; int b; };
+        __kernel void probe(__global float* outp) {
+            uint i = get_global_id(0);
+            struct Pair u = (struct Pair){3.0f, 2};
+            outp[i] = u.a;
+        }
+        """
+    opencl_path = tmp_path / "probe.cl"
+    opencl_path.write_text(source, encoding="utf-8")
+    cuda_output = crosstl.translate(
+        str(opencl_path), backend="cuda", format_output=False
+    )
+    # CUDA uses brace construction: Pair{3.0f, 2}
+    assert "Pair{3.0f, 2}" in cuda_output
+    assert "Pair({" not in cuda_output
+    assert "Pair{{" not in cuda_output
+
+    metal_output = crosstl.translate(
+        str(opencl_path), backend="metal", format_output=False
+    )
+    # Metal uses brace construction with float literal: Pair{3.0, 2}
+    assert "Pair{3.0, 2}" in metal_output
+    assert "Pair({" not in metal_output
+    assert "Pair{{" not in metal_output
+
+    # Compile the Metal output with xcrun metal when available.
+    xcrun = shutil.which("xcrun")
+    if xcrun is not None:
+        lookup = subprocess.run(
+            [xcrun, "-sdk", "macosx", "-f", "metal"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if lookup.returncode == 0:
+            metal_src = tmp_path / "probe.metal"
+            metal_air = tmp_path / "probe.air"
+            metal_src.write_text(metal_output, encoding="utf-8")
+            result = subprocess.run(
+                [
+                    xcrun,
+                    "-sdk",
+                    "macosx",
+                    "metal",
+                    "-c",
+                    str(metal_src),
+                    "-o",
+                    str(metal_air),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            assert result.returncode == 0, result.stderr
