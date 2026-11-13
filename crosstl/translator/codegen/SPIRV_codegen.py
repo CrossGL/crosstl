@@ -21385,11 +21385,20 @@ class VulkanSPIRVCodeGen(
             type_source = getattr(
                 node,
                 "var_type",
-                getattr(node, "param_type", getattr(node, "vtype", None)),
+                getattr(
+                    node,
+                    "member_type",
+                    getattr(node, "param_type", getattr(node, "vtype", None)),
+                ),
             )
             type_name = self.type_name_from_value(type_source)
             if type_name is not None:
                 type_names[name] = type_name
+
+        def record_cbuffer(cbuffer):
+            record_variable(cbuffer)
+            for member in getattr(cbuffer, "members", []) or []:
+                record_variable(member)
 
         for node in getattr(ast, "constants", []) or []:
             # Program constants, such as ``const float LUT[3]``, are typed by ``const_type``.
@@ -21399,10 +21408,12 @@ class VulkanSPIRVCodeGen(
         for node in getattr(ast, "global_variables", []) or []:
             record_variable(node)
         for cbuffer in getattr(ast, "cbuffers", []) or []:
-            record_variable(cbuffer)
+            record_cbuffer(cbuffer)
         for stage in (getattr(ast, "stages", None) or {}).values():
             for node in getattr(stage, "local_variables", []) or []:
                 record_variable(node)
+            for cbuffer in getattr(stage, "local_cbuffers", []) or []:
+                record_cbuffer(cbuffer)
 
         return type_names
 
@@ -32955,6 +32966,7 @@ class VulkanSPIRVCodeGen(
             self,
             all_functions,
             global_types=self.source_variable_type_names,
+            ast=ast,
         )
         if generic_function_specializations:
             all_functions = all_functions + list(
