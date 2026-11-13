@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import pytest
 
 import crosstl
@@ -1752,7 +1754,7 @@ def test_opencl_struct_compound_literal_becomes_constructor_call():
     ``Pair(3.0f, 2)`` – a CrossGL struct constructor call – not as
     ``Pair({3.0f, 2})`` – which CUDA and Metal targets both reject.
 
-    Reproduced from issue #3410 / commit 2444d82f.
+    Reproduced from issue #3570.
     """
     crossgl = generate_crossgl("""
         struct Pair {
@@ -1785,13 +1787,17 @@ def test_opencl_struct_compound_literal_translates_to_cuda_and_metal(tmp_path):
         """
     opencl_path = tmp_path / "probe.cl"
     opencl_path.write_text(source, encoding="utf-8")
-    cuda_output = crosstl.translate(str(opencl_path), backend="cuda", format_output=False)
+    cuda_output = crosstl.translate(
+        str(opencl_path), backend="cuda", format_output=False
+    )
     # CUDA uses brace construction: Pair{3.0f, 2}
     assert "Pair{3.0f, 2}" in cuda_output
     assert "Pair({" not in cuda_output
     assert "Pair{{" not in cuda_output
 
-    metal_output = crosstl.translate(str(opencl_path), backend="metal", format_output=False)
+    metal_output = crosstl.translate(
+        str(opencl_path), backend="metal", format_output=False
+    )
     # Metal uses brace construction with float literal: Pair{3.0, 2}
     assert "Pair{3.0, 2}" in metal_output
     assert "Pair({" not in metal_output
@@ -1811,11 +1817,9 @@ def test_opencl_struct_compound_literal_translates_to_cuda_and_metal(tmp_path):
             metal_air = tmp_path / "probe.air"
             metal_src.write_text(metal_output, encoding="utf-8")
             result = subprocess.run(
-                [xcrun, "-sdk", "macosx", "metal", "-c",
-                 str(metal_src), "-o", str(metal_air)],
+                [xcrun, "-sdk", "macosx", "metal", "-c", str(metal_src), "-o", str(metal_air)],
                 capture_output=True,
                 check=False,
                 text=True,
             )
-        assert "Pair{{" not in metal_output
-        assert "Pair{{" not in output
+            assert result.returncode == 0, result.stderr
