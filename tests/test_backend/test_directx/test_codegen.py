@@ -15,8 +15,8 @@ from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.metal_codegen import (
+    MetalCodeGen,
     UnsupportedMetalFeatureError,
 )
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
