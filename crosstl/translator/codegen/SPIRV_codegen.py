@@ -30955,10 +30955,13 @@ class VulkanSPIRVCodeGen(
             "SV_GROUPINDEX": "gl_LocalInvocationIndex",
             "SV_VERTEXID": "gl_VertexID",
             "GL_VERTEXINDEX": "gl_VertexID",
-            "SV_INSTANCEID": "gl_InstanceID",
-            "GL_INSTANCEINDEX": "gl_InstanceID",
+            # SV_VertexID excludes the draw's base vertex (D3D semantics = gl_RelativeVertexID).
+            # gl_VertexIndex is Vulkan's base-inclusive vertex index.
+            "SV_VERTEXID": "gl_RelativeVertexID",
+            "GL_VERTEXINDEX": "gl_VertexIndex",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
-            "SV_VIEWID": "gl_ViewIndex",
+            # gl_InstanceIndex is Vulkan's base-inclusive instance index.
+            "GL_INSTANCEINDEX": "gl_InstanceIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",
             "SV_SAMPLEINDEX": "gl_SampleID",
             "SV_BARYCENTRICS": "gl_BaryCoordEXT",
