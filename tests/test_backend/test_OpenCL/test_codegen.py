@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+
 import pytest
 
 import crosstl
@@ -1817,7 +1818,16 @@ def test_opencl_struct_compound_literal_translates_to_cuda_and_metal(tmp_path):
             metal_air = tmp_path / "probe.air"
             metal_src.write_text(metal_output, encoding="utf-8")
             result = subprocess.run(
-                [xcrun, "-sdk", "macosx", "metal", "-c", str(metal_src), "-o", str(metal_air)],
+                [
+                    xcrun,
+                    "-sdk",
+                    "macosx",
+                    "metal",
+                    "-c",
+                    str(metal_src),
+                    "-o",
+                    str(metal_air),
+                ],
                 capture_output=True,
                 check=False,
                 text=True,
