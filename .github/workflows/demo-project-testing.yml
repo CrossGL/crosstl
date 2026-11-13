@@ -8103,8 +8103,8 @@ jobs:
               --junitxml=mlx-current-results/fp-quantized.xml \
               demos/integrations/mlx/tests/kernels/test_current_fp_quantized.py
 
-      # fp_quantized.metal's 18 fp_qmv entries with batching, 18 without and
-      # 18 fp_gather_qmv entries, half with a global scale, in two shards.
+      # fp_quantized.metal's 54 fp_qmv and fp_gather_qmv entries and its 66
+      # fp_qmv_fast and fp_gather_qmv_fast entries, in two shards.
       - name: Prove current MLX fp quantized matrix-vector native parity
         if: matrix.family == 'fp-quantized-qmv'
         shell: bash
@@ -8133,7 +8133,8 @@ jobs:
             python -m pytest -q -n auto \
               --basetemp=mlx-current-results/${{ matrix.group }} \
               --junitxml=mlx-current-results/${{ matrix.group }}.xml \
-              demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmv.py
+              demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmv.py \
+              demos/integrations/mlx/tests/kernels/test_current_fp_quantized_qmv_fast.py
 
       # quantized.metal's 54 affine_qmv_fast entries with batching, 54 without
       # and 54 affine_gather_qmv_fast entries, in two shards.

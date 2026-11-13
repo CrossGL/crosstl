@@ -126,12 +126,13 @@ KERNELS = {"batch_1": "fp_qmv", "batch_0": "fp_qmv", "gather": "fp_gather_qmv"}
 # The 36 fp_quantize, fp_dequantize and fp_quantize_dequantize entries have
 # their own gate, test_current_fp_quantized.py.
 QUANTIZE_ENTRY_COUNT = len(QUANTIZE_ENTRIES)
+# The 66 fp_qmv_fast and fp_gather_qmv_fast entries have their own gate,
+# test_current_fp_quantized_qmv_fast.py.
+QMV_FAST_ENTRY_COUNT = 66
 # Kernels of fp_quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
-    "fp_qmv_fast",
     "fp_qvm",
     "fp_qmm_n",
-    "fp_gather_qmv_fast",
     "fp_gather_qvm",
     "fp_gather_qmm_n",
     "fp_qmv_quad",
@@ -573,12 +574,18 @@ def _expected_scope():
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
         "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
+        "qmvFastGateEntryCount": QMV_FAST_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
-            "count": UNIT_ENTRY_COUNT - QUANTIZE_ENTRY_COUNT - len(ENTRIES),
+            "count": (
+                UNIT_ENTRY_COUNT
+                - QUANTIZE_ENTRY_COUNT
+                - QMV_FAST_ENTRY_COUNT
+                - len(ENTRIES)
+            ),
             "reason": (
-                "the fast, quad, wide and split-K matrix-vector, the "
-                "vector-matrix and the matrix-matrix kernels are not gated yet"
+                "the quad, wide and split-K matrix-vector, the vector-matrix "
+                "and the matrix-matrix kernels are not gated yet"
             ),
         },
         "runtimeCoveredEntryCount": len(ENTRIES),
