@@ -107,7 +107,32 @@ def mixed_integer_call_is_unsigned(codegen, arguments):
 
 def wgsl_mixed_integer_operands(codegen, left, right):
     """The WGSL spellings of mixed signed/unsigned integer operands."""
-    return tuple(wgsl_mixed_integer_call_arguments(codegen, (left, right)))
+    arguments = (left, right)
+    argument_types = [codegen.expression_type(arg) for arg in arguments]
+    shapes = [codegen.vector_shape(arg_type) for arg_type in argument_types]
+    scalar_types = [
+        codegen.scalar_type_name(arg_type)
+        if shape is None
+        else shape[0]
+        for arg_type, shape in zip(argument_types, shapes)
+    ]
+    rendered = [codegen.generate_expression(arg) for arg in arguments]
+
+    if "u32" in scalar_types:
+        for index, arg in enumerate(arguments):
+            if scalar_types[index] != "i32" or is_abstract_integer_literal(arg):
+                continue
+
+            vector_shape = shapes[index]
+            target_type = (
+                f"vec{vector_shape[1]}<u32>" if vector_shape is not None else "u32"
+            )
+            converted = codegen.concrete_negative_integer_literal(
+                arg, rendered[index]
+            )
+            rendered[index] = f"{target_type}({converted})"
+
+    return tuple(rendered)
 
 
 def wgsl_shift_amount(codegen, amount, shifted_type, rendered=None):

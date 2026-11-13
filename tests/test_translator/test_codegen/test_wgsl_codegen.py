@@ -2153,6 +2153,36 @@ def test_wgsl_codegen_converts_mixed_integer_binary_comparisons_and_arithmetic(
     validate_wgsl_with_naga(tmp_path, generated)
 
 
+def test_wgsl_codegen_converts_mixed_integer_vector_operands(tmp_path):
+    # Signed vectors need a vector conversion; signed scalar swizzles need a scalar
+    # conversion (#4417).
+    shader = """
+    shader Probe {
+        buffer uvec2* uo;
+        buffer ivec2* io;
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uvec2 u = uo[0];
+                ivec2 k = io[0];
+                bvec2 cmp = u < k;
+                uvec2 a = u + k;
+                uvec2 b = u * 2 - k.x;
+                uo[1] = a + b;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "var cmp: vec2<bool> = (u < vec2<u32>(k));" in generated
+    assert "var a: vec2<u32> = (u + vec2<u32>(k));" in generated
+    assert "var b: vec2<u32> = ((u * 2) - u32(k.x));" in generated
+    if shutil.which("naga") is not None:
+        validate_wgsl_with_naga(tmp_path, generated)
+
+
 def test_wgsl_codegen_converts_mixed_integer_min_max_clamp(tmp_path):
     # Built-ins min, max and clamp convert signed arguments to u32 when combined with uint (#3628).
     shader = """
