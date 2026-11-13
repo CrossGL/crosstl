@@ -37,7 +37,9 @@ from ..semantics.builtin_type_names import BUILTIN_TYPE_NAMES
 from .lowering_refusals import refuse_unsupported
 
 __all__ = [
+    "CUDA_TYPE_NAMES",
     "GLSL_TYPE_NAMES",
+    "HIP_TYPE_NAMES",
     "HLSL_TYPE_NAMES",
     "METAL_TYPE_NAMES",
     "sized_float_spelling",
@@ -260,9 +262,86 @@ def _metal():
     return frozenset(names)
 
 
+_C_VECTOR_ELEMENTS = (
+    "char",
+    "uchar",
+    "short",
+    "ushort",
+    "int",
+    "uint",
+    "long",
+    "ulong",
+    "longlong",
+    "ulonglong",
+    "float",
+    "double",
+)
+
+
+def _gpu_cxx(extra):
+    """The plain type names a CUDA or HIP device compilation defines, plus the toolkit's own ``extra`` names.
+
+    C++ fundamental and ``<cstdint>`` types, the built-in vector types of one to four components
+    (CUDA C++ Programming Guide "Built-in Vector Types", HIP ``hip_vector_types.h``) and ``dim3``. ``uint`` and
+    ``ushort`` are the ``<sys/types.h>`` aliases both toolkits' host headers bring in on Linux and macOS; the
+    generators still write them for ``uint`` values.
+    """
+    names = {
+        "void",
+        "auto",
+        "bool",
+        "char",
+        "short",
+        "int",
+        "long",
+        "unsigned",
+        "signed",
+        "float",
+        "double",
+        "size_t",
+        "ptrdiff_t",
+        "uint",
+        "ushort",
+        "dim3",
+        "half",
+        "half2",
+        "__half",
+        "__half2",
+        *extra,
+    }
+    for width in ("8", "16", "32", "64"):
+        names.update((f"int{width}_t", f"uint{width}_t"))
+    for element in _C_VECTOR_ELEMENTS:
+        names.update(f"{element}{count}" for count in (1, *_COUNTS))
+    return frozenset(names)
+
+
 GLSL_TYPE_NAMES = _glsl()
 HLSL_TYPE_NAMES = _hlsl()
 METAL_TYPE_NAMES = _metal()
+# ``cuda_fp16.h``, ``cuda_bf16.h`` and the runtime's texture, surface and driver pointer handles.
+CUDA_TYPE_NAMES = _gpu_cxx(
+    (
+        "nv_bfloat16",
+        "nv_bfloat162",
+        "__nv_bfloat16",
+        "__nv_bfloat162",
+        "cudaTextureObject_t",
+        "cudaSurfaceObject_t",
+        "CUdeviceptr",
+    )
+)
+# ``hip_fp16.h``, ``hip_bf16.h`` and the runtime's texture, surface and device pointer handles.
+HIP_TYPE_NAMES = _gpu_cxx(
+    (
+        "hip_bfloat16",
+        "__hip_bfloat16",
+        "__hip_bfloat162",
+        "hipTextureObject_t",
+        "hipSurfaceObject_t",
+        "hipDeviceptr_t",
+    )
+)
 
 
 # A vector named by a sized scalar and a component count, as HLSL and CUDA-style sources write ``int16_t2`` or

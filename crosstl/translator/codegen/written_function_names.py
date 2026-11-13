@@ -1,4 +1,4 @@
-"""Built-in functions the HLSL and Metal generators may call by name, and the refusal for every other built-in call.
+"""Built-in functions the HLSL, Metal, CUDA and HIP generators may call by name, and the refusal of the rest.
 
 The importers carry the built-in functions of the languages they read into the IR as plain calls
 (:data:`~crosstl.translator.semantics.builtin_function_names.BUILTIN_FUNCTION_NAMES`), and each generator lowers the
@@ -22,6 +22,8 @@ object method (HLSL's ``Sample``, MSL's ``sample``) is called through its object
 - HLSL: the intrinsics DXC declares as free functions, and ``sizeof``, an operator of HLSL 2021. A ray payload
   field's access qualifiers (`` : read(caller, closesthit) : write(miss)``) are not calls
   (:data:`HLSL_PAYLOAD_ACCESS_QUALIFIER`).
+- CUDA and HIP: the device library and runtime functions of the CUDA Math API and runtime headers, which HIP
+  mirrors, the warp intrinsics, and the C++ operators ``sizeof`` and ``alignof``.
 - MSL: the Metal standard library functions, ``as_type``, the ``max_anisotropy`` and ``lod_clamp`` sampler
   constructor arguments, and the C++14 operators ``sizeof`` and ``alignof`` ([expr.sizeof], [expr.alignof]).
 """
@@ -32,6 +34,7 @@ import re
 
 from ..semantics.builtin_function_names import (
     BUILTIN_FUNCTION_NAMES,
+    CUDA_FUNCTION_NAMES,
     HLSL_INTRINSIC_FUNCTION_NAMES,
     METAL_LIBRARY_FUNCTION_NAMES,
 )
@@ -40,6 +43,7 @@ from ..semantics.sampler_states import SAMPLER_STATE_CALL_ARGUMENTS
 from .lowering_refusals import refuse_unsupported
 
 __all__ = [
+    "CUDA_CALLABLE_FUNCTION_NAMES",
     "HLSL_CALLABLE_FUNCTION_NAMES",
     "HLSL_PAYLOAD_ACCESS_QUALIFIER",
     "METAL_CALLABLE_FUNCTION_NAMES",
@@ -48,6 +52,10 @@ __all__ = [
 ]
 
 HLSL_CALLABLE_FUNCTION_NAMES = HLSL_INTRINSIC_FUNCTION_NAMES | frozenset({"sizeof"})
+# CUDA and HIP: the device library and runtime functions ``cuda_runtime.h`` and ``hip/hip_runtime.h`` declare, with
+# the warp intrinsics (:data:`~crosstl.translator.semantics.builtin_function_names.CUDA_FUNCTION_NAMES`), and the C++
+# operators ``sizeof`` and ``alignof`` ([expr.sizeof], [expr.alignof]).
+CUDA_CALLABLE_FUNCTION_NAMES = CUDA_FUNCTION_NAMES | frozenset({"sizeof", "alignof"})
 METAL_CALLABLE_FUNCTION_NAMES = (
     METAL_LIBRARY_FUNCTION_NAMES
     | frozenset(SAMPLER_STATE_CALL_ARGUMENTS)

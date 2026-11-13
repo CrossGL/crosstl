@@ -30,6 +30,7 @@ from ..ast import (
 )
 from ..diagnostics import TranslationDiagnostic
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.declared_types import declared_type_names
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
 )
@@ -85,6 +86,10 @@ from .gpu_device_globals import (
     file_scope_placement,
     is_constant_value_declaration,
 )
+from .gpu_subgroup_builtins import (
+    reserved_builtin_reason,
+    subgroup_builtin_expression,
+)
 from .lowering_refusals import LoweringRefusalMixin
 from .match_utils import (
     generate_match_expression_assignment,
@@ -112,6 +117,15 @@ from .value_array_parameters import (
     value_array_copy_lines,
 )
 from .vector_arithmetic import VectorArithmeticMixin
+from .written_function_names import (
+    CUDA_CALLABLE_FUNCTION_NAMES,
+    refuse_written_foreign_calls,
+)
+from .written_type_names import (
+    CUDA_TYPE_NAMES,
+    refuse_written_foreign_types,
+    written_type_name,
+)
 
 CUDA_WAVE_OP_ARITIES = {
     "WaveGetLaneCount": 0,
@@ -289,6 +303,10 @@ class CudaCodeGen(
         "RWTexture2DMS": "image2DMS",
         "RWTexture2DMSArray": "image2DMSArray",
     }
+    # The type names the program declares, and the foreign built-in type names written so far (``None`` outside
+    # a rendering); see :func:`written_type_name`.
+    program_type_names = frozenset()
+    written_foreign_type_names = None
 
     def __init__(self):
         """Initialize CUDA type maps and per-generation visitor state."""
@@ -411,7 +429,21 @@ class CudaCodeGen(
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
         refuse_cooperative_matrices(ast_node, label="CUDA", target="cuda")
-        return self.refusals.run(self.render_program, ast_node)
+        return self.refusals.run(self.render_checked_program, ast_node)
+
+    def render_checked_program(self, ast_node):
+        """Render the program and refuse each built-in type and function of another language it still names."""
+        self.program_type_names = declared_type_names(ast_node)
+        self.written_foreign_type_names = set()
+        try:
+            output = self.render_program(ast_node)
+            refuse_written_foreign_types(
+                output, self.written_foreign_type_names, "CUDA"
+            )
+            refuse_written_foreign_calls(output, CUDA_CALLABLE_FUNCTION_NAMES, "CUDA")
+        finally:
+            self.written_foreign_type_names = None
+        return output
 
     def render_program(self, ast_node):
         """Render complete CUDA source for a CrossGL AST."""
@@ -573,7 +605,9 @@ class CudaCodeGen(
             "ray_generation": "ray_generation",
             "ray_intersection": "intersection",
             "ray_miss": "miss",
-        }.get(stage_name, stage_name)
+        }[
+            stage_name
+        ]  # only called for cuda_ray_stage_names(), which this table covers
 
     def has_geometry_stage(self, ast_node, target_stage=None):
         if not stage_matches(target_stage, "geometry"):
@@ -1028,7 +1062,7 @@ class CudaCodeGen(
             ray_builtin = self.cuda_ray_builtin_expression(node)
             if ray_builtin is not None and node not in self.variable_types:
                 return ray_builtin
-            return self.builtin_map.get(node, node)
+            return self.cuda_identifier_spelling(node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
         else:
@@ -2014,7 +2048,10 @@ class CudaCodeGen(
             "SV_StartVertexLocation": "start_vertex_location",
             "SV_VertexID": "vertex_id",
         }
-        return generic_semantics.get(semantic_name, semantic_name)
+        if semantic_name in generic_semantics:
+            return generic_semantics[semantic_name]
+        # Only stage metadata comments record the semantic; a user semantic is recorded as written.
+        return semantic_name
 
     def cuda_semantic_output_kind(self, semantic):
         if semantic is None:
@@ -2297,8 +2334,12 @@ class CudaCodeGen(
     def cuda_mesh_task_stage_label(self, stage_name):
         return {
             "amplification": "amplification/task",
+            "mesh": "mesh",
             "object": "object/task",
-        }.get(stage_name, stage_name)
+            "task": "task",
+        }[
+            stage_name
+        ]  # only called for cuda_mesh_task_stage_names(), which this table covers
 
     def cuda_mesh_task_positive_attribute(self, func, attribute_name, stage_name):
         value = self.cuda_stage_attribute_value(func, attribute_name, stage_name)
@@ -3045,7 +3086,26 @@ class CudaCodeGen(
         enum_constant = self.enum_variant_constants.get(name)
         if enum_constant is not None:
             return enum_constant
-        return self.builtin_map.get(name, name)
+        return self.cuda_identifier_spelling(name)
+
+    def cuda_identifier_spelling(self, name):
+        """The CUDA spelling of an identifier: a mapped built-in, or a program name as it is declared.
+
+        A name in the reserved ``gl_`` namespace that is neither mapped nor declared by the program is a built-in
+        variable with no CUDA equivalent, and is refused (:mod:`.gpu_subgroup_builtins`).
+        """
+        if name in self.builtin_map:
+            return self.builtin_map[name]
+        if name not in self.variable_types:
+            subgroup = subgroup_builtin_expression(
+                name, self.cuda_warp_lane_index_expression()
+            )
+            if subgroup is not None:
+                return subgroup
+            reason = reserved_builtin_reason(name, "CUDA")
+            if reason is not None:
+                return self.refuse_lowering(reason, name)
+        return name
 
     def cuda_ray_builtin_expression(self, name):
         helper_name = {
@@ -3745,12 +3805,20 @@ class CudaCodeGen(
         return f"{func_name}({args_str})"
 
     def cuda_math_function_name(self, func_name):
-        return {"inverseSqrt": "inversesqrt", "rsqrt": "inversesqrt"}.get(
-            func_name, func_name
-        )
+        """The math lowering's name for ``func_name``: ``inverseSqrt`` and ``rsqrt`` are spellings of ``inversesqrt``.
+
+        Any other name is its own math lowering name; the math lowerings return ``None`` for a name they do not
+        handle, and the call is then refused if it names another language's built-in function.
+        """
+        if func_name in {"inverseSqrt", "rsqrt"}:
+            return "inversesqrt"
+        return func_name
 
     def normalize_cuda_integer_bit_function(self, func_name):
-        return CUDA_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
+        if func_name in CUDA_INTEGER_BIT_FUNCTION_ALIASES:
+            return CUDA_INTEGER_BIT_FUNCTION_ALIASES[func_name]
+        # Already the CrossGL spelling, or not an integer bit function; callers check the result.
+        return func_name
 
     def cuda_bitcast_result_type(self, func_name, raw_args):
         wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
@@ -6002,12 +6070,19 @@ class CudaCodeGen(
             if value_info is not None
             else self.scalar_component_type(value_type)
         )
-        if component_type not in {"float", "double"}:
-            return None
-        return self.generate_clamp_call(
-            [raw_args[0], None, None],
-            [args[0], "0.0", "1.0"],
-        )
+        if component_type in {"float", "double"}:
+            return self.generate_clamp_call(
+                [raw_args[0], None, None],
+                [args[0], "0.0", "1.0"],
+            )
+        if component_type in {"int", "uint", "unsigned int"}:
+            # saturate keeps its argument's type (semantics.hub_types), so an integer clamps to 0 and 1 as the
+            # GLSL output's clamp(n, 0, 1) does.
+            return self.generate_clamp_call(
+                [raw_args[0], None, None],
+                [args[0], "0", "1"],
+            )
+        return None
 
     def generate_step_call(self, raw_args, args):
         if len(raw_args) != 2 or len(args) != 2:
@@ -7064,6 +7139,20 @@ class CudaCodeGen(
             "u64": "unsigned long long",
             "int64": "long long",
             "uint64": "unsigned long long",
+            # The other sized and minimum-precision scalar spellings of the IR (hub_types): exact widths, except
+            # that a minimum-precision type may be computed at full precision (HLSL "Minimum precision").
+            "int8": "char",
+            "uint8": "unsigned char",
+            "uchar": "unsigned char",
+            "int16": "short",
+            "uint16": "unsigned short",
+            "int32": "int",
+            "uint32": "unsigned int",
+            "ulong": "unsigned long long",
+            "float16_t": "half",
+            "min16float": "float",
+            "min16int": "int",
+            "min16uint": "unsigned int",
             "f16": "half",
             "f32": "float",
             "f64": "double",
@@ -7232,13 +7321,14 @@ class CudaCodeGen(
             ),
         }
 
+        # Every spelling the two alias tables produce, with its i/u image variants, is a type_mapping key.
         sampled_resource_type = self.canonical_sampled_resource_type(crossgl_type)
         if sampled_resource_type:
-            return type_mapping.get(sampled_resource_type, sampled_resource_type)
+            return type_mapping[sampled_resource_type]
 
         storage_resource_type = self.canonical_storage_resource_type(crossgl_type)
         if storage_resource_type:
-            return type_mapping.get(storage_resource_type, storage_resource_type)
+            return type_mapping[storage_resource_type]
 
         ray_resource_type = self.canonical_ray_resource_type(crossgl_type)
         if ray_resource_type:
@@ -7266,8 +7356,17 @@ class CudaCodeGen(
         if wide_vector_type is not None:
             return wide_vector_type
 
+        if crossgl_type in type_mapping:
+            return self.cuda_mapped_type_result(type_mapping[crossgl_type])
+        # A program type or a CUDA type is written as it is; a built-in type of another language is recorded and
+        # refused by render_checked_program if the output still names it.
         return self.cuda_mapped_type_result(
-            type_mapping.get(crossgl_type, crossgl_type)
+            written_type_name(
+                crossgl_type,
+                CUDA_TYPE_NAMES,
+                self.program_type_names,
+                self.written_foreign_type_names,
+            )
         )
 
     def cuda_mapped_type_result(self, mapped_type):
@@ -10534,7 +10633,11 @@ class CudaCodeGen(
             "textureGrad": "tex2DGrad",
         }
 
-        return function_mapping.get(func_name, func_name)
+        if func_name in function_mapping:
+            return function_mapping[func_name]
+        # A program function or a CUDA library function, spelled as it is; a built-in function of another
+        # language left in the output is refused by render_checked_program.
+        return func_name
 
     def attribute_value_to_string(self, value):
         if value is None:

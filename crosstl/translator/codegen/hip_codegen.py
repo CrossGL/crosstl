@@ -38,6 +38,7 @@ from ..ast import (
     WaveOpNode,
 )
 from ..matrix_shape import matrix_type_spelling
+from ..semantics.declared_types import declared_type_names
 from ..semantics.structured_buffer_counters import (
     materialize_structured_buffer_counters,
 )
@@ -128,6 +129,11 @@ from .gpu_device_globals import (
     constant_in_device_memory,
     file_scope_placement,
 )
+from .gpu_subgroup_builtins import (
+    reserved_builtin_reason,
+    subgroup_builtin_expression,
+    warp_lane_index_expression,
+)
 from .hip_library_calls import ffs64_argument, generate_hip_library_call
 from .hip_refusals import HipLoweringRefused
 from .lowering_refusals import LoweringRefusalMixin
@@ -157,6 +163,15 @@ from .value_array_parameters import (
     value_array_copy_lines,
 )
 from .vector_arithmetic import VectorArithmeticMixin
+from .written_function_names import (
+    CUDA_CALLABLE_FUNCTION_NAMES,
+    refuse_written_foreign_calls,
+)
+from .written_type_names import (
+    HIP_TYPE_NAMES,
+    refuse_written_foreign_types,
+    written_type_name,
+)
 
 HIP_WAVE_OP_ARITIES = {
     "WaveGetLaneCount": 0,
@@ -355,6 +370,10 @@ class HipCodeGen(
         "SamplerState": "sampler",
         "SamplerComparisonState": "sampler",
     }
+    # The type names the program declares, and the foreign built-in type names written so far (``None`` outside
+    # a rendering); see :func:`written_type_name`.
+    program_type_names = frozenset()
+    written_foreign_type_names = None
 
     def __init__(self):
         """Initialize HIP type maps and per-generation visitor state."""
@@ -426,6 +445,20 @@ class HipCodeGen(
             "u64": "unsigned long long",
             "int64": "long long",
             "uint64": "unsigned long long",
+            # The other sized and minimum-precision scalar spellings of the IR (hub_types): exact widths, except
+            # that a minimum-precision type may be computed at full precision (HLSL "Minimum precision").
+            "int8": "char",
+            "uint8": "unsigned char",
+            "uchar": "unsigned char",
+            "int16": "short",
+            "uint16": "unsigned short",
+            "int32": "int",
+            "uint32": "unsigned int",
+            "ulong": "unsigned long long",
+            "float16_t": "half",
+            "min16float": "float",
+            "min16int": "int",
+            "min16uint": "unsigned int",
             "f16": "half",
             "f32": "float",
             "f64": "double",
@@ -856,7 +889,19 @@ class HipCodeGen(
         pending, and a rendered program that still carries a ``/* unsupported ... */`` loss marker is refused.
         """
         refuse_cooperative_matrices(node, label="HIP", target="hip")
-        return self.refusals.run(self.render_program, node)
+        return self.refusals.run(self.render_checked_program, node)
+
+    def render_checked_program(self, node):
+        """Render the program and refuse each built-in type and function of another language it still names."""
+        self.program_type_names = declared_type_names(node)
+        self.written_foreign_type_names = set()
+        try:
+            output = self.render_program(node)
+            refuse_written_foreign_types(output, self.written_foreign_type_names, "HIP")
+            refuse_written_foreign_calls(output, CUDA_CALLABLE_FUNCTION_NAMES, "HIP")
+        finally:
+            self.written_foreign_type_names = None
+        return output
 
     def render_program(self, node: ASTNode) -> str:
         """Render complete HIP source for a CrossGL AST."""
@@ -1092,7 +1137,9 @@ class HipCodeGen(
             "ray_generation": "ray_generation",
             "ray_intersection": "intersection",
             "ray_miss": "miss",
-        }.get(stage_name, stage_name)
+        }[
+            stage_name
+        ]  # only called for hip_ray_stage_names(), which this table covers
 
     def has_geometry_stage(self, ast_node, target_stage=None):
         if not stage_matches(target_stage, "geometry"):
@@ -2482,7 +2529,10 @@ class HipCodeGen(
             "SV_StartVertexLocation": "start_vertex_location",
             "SV_VertexID": "vertex_id",
         }
-        return generic_semantics.get(semantic_name, semantic_name)
+        if semantic_name in generic_semantics:
+            return generic_semantics[semantic_name]
+        # Only stage metadata comments record the semantic; a user semantic is recorded as written.
+        return semantic_name
 
     def hip_semantic_output_kind(self, semantic):
         if semantic is None:
@@ -2836,8 +2886,12 @@ class HipCodeGen(
     def hip_mesh_task_stage_label(self, stage_name):
         return {
             "amplification": "amplification/task",
+            "mesh": "mesh",
             "object": "object/task",
-        }.get(stage_name, stage_name)
+            "task": "task",
+        }[
+            stage_name
+        ]  # only called for hip_mesh_task_stage_names(), which this table covers
 
     def hip_mesh_task_positive_attribute(self, func, attribute_name, stage_name):
         value = self.hip_stage_attribute_value(func, attribute_name, stage_name)
@@ -4458,9 +4512,16 @@ class HipCodeGen(
             return f"{self.map_type(func_name)}{{{', '.join(args)}}}"
 
         func_name = generic_narrow_vector_spelling(func_name) or func_name
-        mapped_name = wide_integer_vector_constructor(
-            func_name
-        ) or self.function_map.get(func_name, func_name)
+        mapped_name = wide_integer_vector_constructor(func_name)
+        if mapped_name is None:
+            # A name function_map does not rename is a program function or a HIP library function, spelled as
+            # it is; a built-in function of another language left in the output is refused by
+            # render_checked_program.
+            mapped_name = (
+                self.function_map[func_name]
+                if func_name in self.function_map
+                else func_name
+            )
 
         reduction_call = generate_vector_reduction_call(
             self, "HIP", func_name, raw_args, args
@@ -4590,12 +4651,20 @@ class HipCodeGen(
         return f"{target}({args_str})"
 
     def hip_math_function_name(self, func_name):
-        return {"inverseSqrt": "inversesqrt", "rsqrt": "inversesqrt"}.get(
-            func_name, func_name
-        )
+        """The math lowering's name for ``func_name``: ``inverseSqrt`` and ``rsqrt`` are spellings of ``inversesqrt``.
+
+        Any other name is its own math lowering name; the math lowerings return ``None`` for a name they do not
+        handle, and the call is then refused if it names another language's built-in function.
+        """
+        if func_name in {"inverseSqrt", "rsqrt"}:
+            return "inversesqrt"
+        return func_name
 
     def normalize_hip_integer_bit_function(self, func_name):
-        return HIP_INTEGER_BIT_FUNCTION_ALIASES.get(func_name, func_name)
+        if func_name in HIP_INTEGER_BIT_FUNCTION_ALIASES:
+            return HIP_INTEGER_BIT_FUNCTION_ALIASES[func_name]
+        # Already the CrossGL spelling, or not an integer bit function; callers check the result.
+        return func_name
 
     def hip_bitcast_result_type(self, func_name, raw_args):
         wide_bitcast = HIP_64BIT_BITCAST_FUNCTIONS.get(func_name)
@@ -5080,7 +5149,8 @@ class HipCodeGen(
         elif operation == "ReportHit" and len(generated_args) == 2:
             generated_args.append("CglBuiltInTriangleIntersectionAttributes{}")
 
-        helper_name = self.function_map.get(operation, operation)
+        # function_map names a runtime helper for each of the five operations accepted above.
+        helper_name = self.function_map[operation]
         return f"{helper_name}({', '.join(generated_args)})"
 
     def visit_RayQueryOpNode(self, node: RayQueryOpNode) -> str:
@@ -5110,9 +5180,10 @@ class HipCodeGen(
         if operation == "WaveGetLaneCount":
             return "warpSize"
         if operation == "WaveGetLaneIndex":
-            return "(threadIdx.x & (warpSize - 1))"
+            # Warps are formed from linear thread IDs, so a block of more than one dimension needs all three.
+            return warp_lane_index_expression()
         if operation == "WaveIsFirstLane":
-            return "((threadIdx.x & (warpSize - 1)) == 0)"
+            return f"({warp_lane_index_expression()} == 0)"
 
         diagnostic = self.wave_operation_diagnostic(operation, raw_args)
         if diagnostic is not None:
@@ -5640,6 +5711,18 @@ class HipCodeGen(
             if value_info is not None
             else self.scalar_component_type(value_type)
         )
+        if component_type in {"int", "uint", "unsigned int"}:
+            # saturate keeps its argument's type (semantics.hub_types), so an integer clamps to 0 and 1 as the
+            # GLSL output's clamp(n, 0, 1) does.
+            integer_type = PrimitiveType(component_type)
+            return self.generate_clamp_call(
+                [
+                    raw_args[0],
+                    LiteralNode(0, integer_type),
+                    LiteralNode(1, integer_type),
+                ],
+                [args[0], "0", "1"],
+            )
         if component_type not in {"float", "double"}:
             return None
 
@@ -9189,7 +9272,9 @@ class HipCodeGen(
             for index, _ in enumerate(components)
         ]
         value_type = self.byte_address_buffer_value_type(component_count)
-        constructor = self.function_map.get(value_type, value_type)
+        constructor = self.function_map[
+            value_type
+        ]  # make_uint2, make_uint3 or make_uint4
         helper = (
             f"__device__ inline {value_type} "
             f"{helper_name}(const unsigned char* buffer, uint offset)\n"
@@ -9529,7 +9614,15 @@ class HipCodeGen(
             ray_builtin = self.hip_ray_builtin_expression(name)
             if ray_builtin is not None:
                 return ray_builtin
-            return self.builtin_map.get(name, name)
+            if name in self.builtin_map:
+                return self.builtin_map[name]
+            subgroup = subgroup_builtin_expression(name)
+            if subgroup is not None:
+                return subgroup
+            reason = reserved_builtin_reason(name, "HIP")
+            if reason is not None:
+                return self.refuse_lowering(reason, name)
+        # A program name, written as it is declared.
         return name
 
     def hip_ray_builtin_expression(self, name):
@@ -9760,8 +9853,21 @@ class HipCodeGen(
             return f"{self.map_type(type_str[4:-1])}*"
 
         canonical_type = self.canonical_resource_type(type_str)
-        mapped_type = self.type_map.get(canonical_type or type_str, type_str)
-        return self.hip_mapped_type_result(mapped_type)
+        if canonical_type is not None:
+            # Every canonical resource spelling is a type_map key.
+            return self.hip_mapped_type_result(self.type_map[canonical_type])
+        if type_str in self.type_map:
+            return self.hip_mapped_type_result(self.type_map[type_str])
+        # A program type or a HIP type is written as it is; a built-in type of another language is recorded and
+        # refused by render_checked_program if the output still names it.
+        return self.hip_mapped_type_result(
+            written_type_name(
+                type_str,
+                HIP_TYPE_NAMES,
+                self.program_type_names,
+                self.written_foreign_type_names,
+            )
+        )
 
     def hip_geometry_stream_info(self, type_name):
         if type_name is None:
@@ -9990,7 +10096,10 @@ class HipCodeGen(
 
         canonical = self.canonical_resource_type(base_name) or base_name
         canonical = canonical.rsplit("::", 1)[-1]
-        mapped_type = self.type_map.get(canonical, canonical)
+        # Classification only: a type type_map does not rename is classified by its own spelling.
+        mapped_type = (
+            self.type_map[canonical] if canonical in self.type_map else canonical
+        )
         mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
         if mapped_base == "CglRayTracingAccelerationStructure":
             return "acceleration_structure"
