@@ -10489,5 +10489,34 @@ class TestCudaCodeGen:
         assert "// define BUILD_SHAREDMEMORY_TYPE" in result
         assert "template <> struct SharedMemory<t>" in result
         assert "struct SharedMemory {" in result
+
+    def test_cuda_compound_literal_struct_becomes_constructor_call(self):
+        # A CUDA compound literal `(Pair){3.0f, 2}` must become the CrossGL
+        # constructor call `Pair(3.0f, 2)`, not `Pair({3.0f, 2})`, which both
+        # nvcc and Metal reject (#3570).
+        code = """
+        struct Pair {
+            float a;
+            int b;
+        };
+
+        __global__ void probe(float* outp) {
+            Pair u = (Pair){3.0f, 2};
+            outp[0] = u.a;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        # The compound literal elements must be expanded directly into the
+        # constructor call, not wrapped in a brace initializer.
+        assert "Pair(3.0f, 2)" in result
+        assert "Pair({" not in result
+        assert "Pair{{" not in result
         assert "// Kernel: use_shared" in result
         assert "fn use_shared(" in result

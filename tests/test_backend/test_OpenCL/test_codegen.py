@@ -1789,5 +1789,6 @@ def test_opencl_struct_compound_literal_translates_to_cuda_and_metal(tmp_path):
     for backend in ("cuda", "metal"):
         output = crosstl.translate(str(opencl_path), backend=backend, format_output=False)
         # The struct constructor must use positional arguments, not a brace initializer.
+        assert "Pair(3.0f, 2)" in output
         assert "Pair({" not in output
         assert "Pair{{" not in output
