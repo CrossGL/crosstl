@@ -3495,6 +3495,8 @@ class GLSLCodeGen(
             "sampler2DMSArray": "sampler2DMSArray",
             "samplerExternalOES": "samplerExternalOES",
             "__samplerExternal2DY2YEXT": "__samplerExternal2DY2YEXT",
+            "sampler1DShadow": "sampler1DShadow",
+            "sampler1DArrayShadow": "sampler1DArrayShadow",
             "sampler2DShadow": "sampler2DShadow",
             "sampler2DArrayShadow": "sampler2DArrayShadow",
             "samplerCubeShadow": "samplerCubeShadow",
@@ -38290,7 +38292,7 @@ complex64_t crossgl_complex64_mod_assign(
         texture_type = self.resource_base_type(self.texture_resource_type(texture_arg))
         if not texture_type:
             return None
-        if texture_type.endswith(("1D", "Buffer")):
+        if texture_type.endswith(("1D", "1DShadow", "Buffer")):
             return "int"
         if texture_type.endswith(
             (
@@ -48276,6 +48278,8 @@ complex64_t crossgl_complex64_mod_assign(
             offset_dimension = {
                 "sampler1D": 1,
                 "sampler1DArray": 1,
+                "sampler1DShadow": 1,
+                "sampler1DArrayShadow": 1,
                 "sampler2D": 2,
                 "sampler2DArray": 2,
                 "sampler2DShadow": 2,
@@ -48301,6 +48305,8 @@ complex64_t crossgl_complex64_mod_assign(
                 gradient_dimension = {
                     "sampler1D": 1,
                     "sampler1DArray": 1,
+                    "sampler1DShadow": 1,
+                    "sampler1DArrayShadow": 1,
                     "sampler2D": 2,
                     "sampler2DArray": 2,
                     "sampler2DShadow": 2,
@@ -48323,6 +48329,8 @@ complex64_t crossgl_complex64_mod_assign(
             query_lod_coordinate_dimension = {
                 "sampler1D": 1,
                 "sampler1DArray": 2,
+                "sampler1DShadow": 1,
+                "sampler1DArrayShadow": 2,
                 "sampler2D": 2,
                 "sampler2DArray": 3,
                 "sampler2DShadow": 2,
@@ -48944,8 +48952,14 @@ complex64_t crossgl_complex64_mod_assign(
             "sampler2DArrayShadow",
         }
         compare_offset_types = {"sampler2DShadow", "sampler2DArrayShadow"}
-        compare_lod_types = {"sampler2DShadow"}
+        compare_lod_types = {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
+            "sampler2DShadow",
+        }
         compare_grad_types = {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
             "sampler2DShadow",
             "sampler2DArrayShadow",
             "samplerCubeShadow",
@@ -49377,6 +49391,10 @@ complex64_t crossgl_complex64_mod_assign(
         texture_type = self.resource_base_type(texture_type)
         if texture_type == "samplerCubeArrayShadow":
             return None
+        if texture_type == "sampler1DShadow":
+            # GLSL 4.60 section 8.9.2: texture(sampler1DShadow, vec3 P)
+            # takes (u, unused, Dref); the second component is unused.
+            return f"vec3({coord}, 0.0, {compare})"
         constructor = (
             "vec4"
             if texture_type in {
@@ -58708,6 +58726,8 @@ complex64_t crossgl_complex64_mod_assign(
             "samplerCube",
             "sampler2DArray",
             "samplerCubeArray",
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
             "sampler2DShadow",
             "sampler2DArrayShadow",
             "samplerCubeShadow",

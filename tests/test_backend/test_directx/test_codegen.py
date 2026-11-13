@@ -16,6 +16,9 @@ from crosstl.translator.codegen.directx_codegen import (
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_codegen import (
+    UnsupportedMetalFeatureError,
+)
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -6387,6 +6390,71 @@ def test_codegen_sample_cmp_infers_shadow_1d_textures_for_translator_roundtrip()
     assert (
         "shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth)" in hlsl
     )
+
+
+def test_codegen_sample_cmp_1d_shadow_textures_translate_to_glsl_and_metal_refuses():
+    # Regression test for CrossGL/crosstl #4428: the HLSL fix in #4421 left
+    # GLSL and Metal behind. GLSL must declare sampler1DShadow and
+    # sampler1DArrayShadow and emit texture, textureLod and textureGrad with
+    # the reference in the coordinate (GLSL 4.60 section 8.9.2; the 1D
+    # shadow coordinate is vec3(u, unused, Dref)). Metal has no
+    # one-dimensional depth texture, so it refuses with a typed diagnostic
+    # naming the type.
+    code = textwrap.dedent("""
+        Texture1D<float> shadowLine : register(t0);
+        Texture1DArray<float> shadowLineArray : register(t1);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float lookup(Texture1D<float> t, SamplerComparisonState s, float u, float ref) {
+            return t.SampleCmp(s, u, ref);
+        }
+
+        float4 main(float coord : TEXCOORD0, float2 coordLayer : TEXCOORD1, float depth : TEXCOORD2, float ddx : TEXCOORD3, float ddy : TEXCOORD4) : SV_Target {
+            float a = lookup(shadowLine, compareSampler, coord, depth);
+            float b = shadowLine.SampleCmp(compareSampler, coord, depth);
+            float c = shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth);
+            float g = shadowLine.SampleCmpGrad(compareSampler, coord, depth, ddx, ddy);
+            float h = shadowLineArray.SampleCmpGrad(compareSampler, coordLayer, depth, ddx, ddy);
+            return float4(a + b + c + g + h);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "texture1DShadow shadowLine;" in crossgl
+    assert "texture1DArrayShadow shadowLineArray;" in crossgl
+    assert "textureCompare(shadowLine, compareSampler, coord, depth)" in crossgl
+    assert (
+        "textureCompareLod(shadowLineArray, compareSampler, coordLayer, depth, 0.0)"
+        in crossgl
+    )
+    assert (
+        "textureCompareGrad(shadowLine, compareSampler, coord, depth, ddx, ddy)"
+        in crossgl
+    )
+    assert (
+        "textureCompareGrad(shadowLineArray, compareSampler, coordLayer, depth, ddx, ddy)"
+        in crossgl
+    )
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "layout(binding = 0) uniform sampler1DShadow shadowLine;" in glsl
+    assert "layout(binding = 1) uniform sampler1DArrayShadow shadowLineArray;" in glsl
+    assert "texture(shadowLine, vec3(coord, 0.0, depth))" in glsl
+    assert "textureLod(shadowLineArray, vec3(coordLayer, depth), 0.0)" in glsl
+    assert "textureGrad(shadowLine, vec3(coord, 0.0, depth), ddx, ddy)" in glsl
+    assert "textureGrad(shadowLineArray, vec3(coordLayer, depth), ddx, ddy)" in glsl
+    assert "lookup(shadowLine, coord, depth)" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
+
+    # Metal has no one-dimensional depth texture: the first compare the
+    # generator reaches (inside the helper, on its parameter `t`) refuses
+    # with a typed diagnostic naming the type.
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        MetalCodeGen().generate(ast)
+    assert "one-dimensional depth texture" in str(exc_info.value)
+    assert "of type 'sampler1DShadow'" in str(exc_info.value)
 
 
 def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
