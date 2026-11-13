@@ -9489,7 +9489,23 @@ class MetalCodeGen(
                 getattr(expr, "false_expr", None)
             )
         root = self.assignment_target_root_name(expr)
-        return root in getattr(self, "current_readonly_metal_parameters", set())
+        if root in getattr(self, "current_readonly_metal_parameters", set()):
+            return True
+        if root in getattr(self, "current_readonly_raw_buffer_parameters", set()):
+            return True
+        # A CrossGL ``ptr<T>`` local may also be initialized from a structured
+        # buffer parameter whose read-only status is recorded in
+        # ``local_variable_types`` (as ``StructuredBuffer<...>``) but not in
+        # ``current_readonly_metal_parameters``, because structured buffer
+        # parameters bypass the pointer-qualifier path that fills that set.
+        # Detect the read-only case directly from the tracked type.
+        if root is not None:
+            local_type = self.local_variable_types.get(root)
+            if (local_type is not None
+                    and self.structured_buffer_type_name(local_type)
+                    == "StructuredBuffer"):
+                return True
+        return False
 
     def local_variable_is_array_alias(self, node):
         raw_type = self.local_variable_type_node(node)
