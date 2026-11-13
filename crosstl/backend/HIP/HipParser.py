@@ -2984,7 +2984,7 @@ class HipParser:
         """
         end = self.line_split_type_qualifiers_end(self.pos)
         qualifiers = []
-        while self.pos < end:
+        while self.current_token and self.pos < end:
             if not self.match("NEWLINE"):
                 qualifiers.append(self.current_token.value)
             self.advance()

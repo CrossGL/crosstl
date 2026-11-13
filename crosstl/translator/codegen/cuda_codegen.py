@@ -327,6 +327,8 @@ class CudaCodeGen(
         self.cuda_function_capture_params = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -472,6 +474,8 @@ class CudaCodeGen(
         )
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -1190,9 +1194,18 @@ class CudaCodeGen(
             for var in global_vars
             if getattr(var, "name", None)
         }
-        for stage in (getattr(node, "stages", {}) or {}).values():
+        for stage_type, stage in (getattr(node, "stages", {}) or {}).items():
+            stage_name = (
+                str(stage_type).split(".")[-1].lower()
+                if hasattr(stage_type, "name")
+                else str(stage_type).lower()
+            )
             for var in getattr(stage, "local_variables", []) or []:
                 if self.is_cuda_shared_variable(var):
+                    continue
+                if self.cuda_stage_local_builtin_role(stage_name, var) is not None:
+                    # A stage-local input that names a compute built-in is the
+                    # built-in itself, not a variable to declare.
                     continue
                 var_name = getattr(var, "name", None)
                 var_type = self.type_name_string(self.get_variable_node_type(var))
@@ -2645,6 +2658,33 @@ class CudaCodeGen(
             "workgroup_id",
         }:
             return role
+        return None
+
+    def cuda_stage_local_builtin_role(self, stage_name, var):
+        """Return the compute built-in role for a stage-local input variable.
+
+        A stage-local ``@input`` variable carrying a compute built-in semantic
+        (``uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;``, the
+        shape the SPIR-V importer writes for a GLSL compute shader that reads
+        ``gl_GlobalInvocationID``) is the built-in itself, not a variable to
+        declare: CUDA has no such global, and a file-scope declaration would
+        be an uninitialised host global that the kernel must not read. A
+        variable whose name is a compute built-in and which is declared as a
+        stage input is the same built-in even when the semantic spelling is
+        missing.
+        """
+        if stage_name != "compute":
+            return None
+        role = self.cuda_compute_builtin_parameter_role(stage_name, var)
+        if role is not None:
+            return role
+        if self.cuda_compute_builtin_role_for_name(getattr(var, "name", None)) is None:
+            return None
+        if any(
+            str(getattr(attr, "name", "")).lower() == "input"
+            for attr in getattr(var, "attributes", []) or []
+        ):
+            return self.cuda_compute_builtin_role_for_name(var.name)
         return None
 
     def cuda_compute_builtin_expression(self, role, component=None):
@@ -6473,17 +6513,70 @@ class CudaCodeGen(
             diagnostic = self.structured_buffer_element_read_diagnostic(node, "load")
             if diagnostic is not None:
                 return diagnostic
+        builtin_component = self.cuda_compute_builtin_index_component(node)
+        if builtin_component is not None:
+            return builtin_component
         if hasattr(node, "array_expr"):
             array = self.visit(node.array_expr)
         else:
             array = self.visit(node.array)
 
-        if hasattr(node, "index_expr"):
-            index = self.visit(node.index_expr)
-        else:
-            index = self.visit(node.index)
+        self.subscript_index_depth += 1
+        try:
+            if hasattr(node, "index_expr"):
+                index = self.visit(node.index_expr)
+            else:
+                index = self.visit(node.index)
+        finally:
+            self.subscript_index_depth -= 1
 
         return f"{array}[{index}]"
+
+    def cuda_compute_builtin_index_component(self, node):
+        """Return the component expression for a constant subscript of a compute built-in.
+
+        ``gl_GlobalInvocationID[0]`` reads the ``.x`` component: a CUDA
+        ``uint3`` has no subscript operator, so the ``make_uint3(...)[0]`` the
+        generic path would emit does not compile. A user symbol with a
+        built-in name shadows the built-in and keeps the generic subscript. A
+        non-constant or out-of-range subscript, a subscript of the scalar
+        local-invocation index, or a write to a built-in component has no
+        faithful CUDA lowering and is refused instead.
+        """
+        array_node = getattr(node, "array_expr", getattr(node, "array", None))
+        if not isinstance(array_node, IdentifierNode):
+            return None
+        name = getattr(array_node, "name", None)
+        if name in self.stage_builtin_aliases:
+            role = self.stage_builtin_aliases[name]
+        elif self.cuda_identifier_shadows_compute_builtin(name):
+            return None
+        else:
+            role = self.cuda_compute_builtin_role_for_name(name)
+        if role is None:
+            return None
+        if self.assignment_lhs_depth > 0 and self.subscript_index_depth == 0:
+            raise CudaLoweringRefused(
+                [f"cannot assign to a component of compute built-in '{name}' in CUDA"]
+            )
+        index_node = getattr(node, "index_expr", getattr(node, "index", None))
+        index = self.literal_int_value(index_node)
+        if index is None or index not in (0, 1, 2):
+            raise CudaLoweringRefused(
+                [
+                    (
+                        f"cannot subscript compute built-in '{name}' with a "
+                        "non-constant index in CUDA; use .x, .y or .z"
+                    )
+                ]
+            )
+        component = "xyz"[index]
+        expression = self.cuda_compute_builtin_expression(role, component)
+        if expression is None:
+            raise CudaLoweringRefused(
+                [f"compute built-in '{name}' has no '.{component}' component in CUDA"]
+            )
+        return expression
 
     def visit_ArrayLiteralNode(self, node):
         elements = ", ".join(self.visit(element) for element in node.elements)

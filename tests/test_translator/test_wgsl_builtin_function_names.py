@@ -71,6 +71,38 @@ def test_glsl_builtins_use_wgsl_names(tmp_path):
         assert name in wgsl
 
 
+ZERO_COUNT_SHADER = """shader Probe {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* uin;
+        buffer uint* uout;
+        buffer ivec3* iout;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            uint x = uin[i];
+            ivec3 s = ivec3(int(x), 2, 3);
+            uout[i] = clz(x) + ctz(x);
+            iout[i] = clz(s) + ctz(s);
+        }
+    }
+}
+"""
+
+
+def test_zero_counts_use_wgsl_names(tmp_path):
+    path = tmp_path / "probe.cgl"
+    path.write_text(ZERO_COUNT_SHADER)
+    wgsl = crosstl.translate(str(path), backend="wgsl", format_output=False)
+    if shutil.which("naga"):
+        (tmp_path / "out.wgsl").write_text(wgsl)
+        checked = subprocess.run(
+            ["naga", "out.wgsl"], cwd=tmp_path, capture_output=True, text=True
+        )
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "(countLeadingZeros(x) + countTrailingZeros(x))" in wgsl
+    assert "(countLeadingZeros(s) + countTrailingZeros(s))" in wgsl
+
+
 REFUSAL_SHADER = """shader Probe {
     compute {
         layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
