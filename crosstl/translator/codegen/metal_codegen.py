@@ -419,6 +419,19 @@ from .metal_constant_initializers import (
 from .metal_debug_printf import metal_debug_printf_statement, uses_debug_printf
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
+from .metal_entry_return import (
+    metal_entry_return_attribute,
+    metal_entry_return_semantic_key,
+    refuse_unreturnable_metal_entry_semantic,
+)
+from .metal_exact_lookups import (
+    METAL_MATRIX_ORDER_ATTRIBUTES,
+    metal_semantic_index,
+    metal_semantic_key,
+    metal_spirv_builtin_semantic,
+    metal_unmapped_semantic_attribute,
+    metal_unrenamed_identifier,
+)
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_hlsl_functions import MetalHlslFunctionMixin
 from .metal_hlsl_matrix import (
@@ -512,6 +525,7 @@ from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
+    requested_stage_name,
     requests_early_fragment_tests,
     should_emit_qualified_function,
     stage_matches,
@@ -628,25 +642,6 @@ class MetalEntryPointSelectionError(ValueError):
         self.reason = reason
         self.stage = stage
         self.source_location = source_location
-
-
-class CharTypeMapper:
-    """Normalize CrossGL char-like scalar and vector types for Metal output."""
-
-    def map_char_type(self, vtype):
-        """Return the Metal-compatible integer type for a char-like type."""
-        char_type_mapping = {
-            "char": "int",
-            "signed char": "int",
-            "unsigned char": "uint",
-            "char2": "int2",
-            "char3": "int3",
-            "char4": "int4",
-            "uchar2": "uint2",
-            "uchar3": "uint3",
-            "uchar4": "uint4",
-        }
-        return char_type_mapping.get(vtype, vtype)
 
 
 # Entry stages whose threadgroup memory Metal declares inside the entry function, so a
@@ -1091,7 +1086,6 @@ class MetalCodeGen(
         self.vertex_item = None
         self.fragment_item = None
         self.gl_position = False
-        self.char_mapper = CharTypeMapper()
         self.texture_variables = []
         self.metal_device_coherent_textures = frozenset()
         self.metal_inherited_buffer_contracts = {}
@@ -2153,7 +2147,7 @@ class MetalCodeGen(
         return fallback
 
     def render_program(self, ast, target_stage=None):
-        target_stage = normalize_stage_name(target_stage)
+        target_stage = requested_stage_name(target_stage)
         ast = fold_workgroup_size_extents(ast, "Metal", self.refuse_lowering)
         ast = lower_constant_buffer_resources(
             ast,
@@ -5852,6 +5846,11 @@ class MetalCodeGen(
                 if shader_type == "vertex"
                 else None
             )
+            if param_attr is None and self.metal_vertex_input_takes_next_attribute(
+                raw_param_type, shader_type, p, semantic
+            ):
+                # The [[stage_in]] structure gives a user-semantic input the next free [[attribute(n)]].
+                param_attr = ""
             if param_attr is None:
                 param_attr = self.parameter_attribute(
                     raw_param_type, semantic, shader_type, p
@@ -6092,6 +6091,22 @@ class MetalCodeGen(
             self.validate_function_return_semantic_type(
                 func, raw_return_type, shader_type
             )
+            if (
+                return_type != "void"
+                and str(raw_return_type) not in self.structs_by_name
+            ):
+                return_semantic = self.function_return_semantic(func)
+                refuse_unreturnable_metal_entry_semantic(
+                    self,
+                    func,
+                    shader_type,
+                    return_semantic,
+                    metal_entry_return_semantic_key(
+                        self, func, return_semantic, shader_type
+                    ),
+                    return_type,
+                    in_structure=bool(stage_output_parameters),
+                )
             if stage_output_parameters and return_type != "void":
                 stage_output_parameters.append(
                     self.metal_stage_return_value_output(
@@ -6479,7 +6494,7 @@ class MetalCodeGen(
                 "miss": "miss",
                 "callable": "callable",
             }
-            stage_keyword = rt_stage_map.get(shader_type, shader_type)
+            stage_keyword = rt_stage_map[shader_type]
             function_name = entry_name or f"{stage_keyword}_{func.name}"
             code += f"[[visible]] {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["ray_intersection", "intersection"]:
@@ -6766,9 +6781,10 @@ class MetalCodeGen(
         return None
 
     def metal_compute_builtin_expression_name(self, name):
+        """The compute entry parameter that carries built-in ``name``, or None when the entry has none."""
         if name is None:
-            return name
-        return self.current_metal_compute_builtin_parameter_names.get(name, name)
+            return None
+        return self.current_metal_compute_builtin_parameter_names.get(name)
 
     def metal_glsl_subgroup_lane_builtin_diagnostic(self, name):
         if name in self.local_variable_types:
@@ -6784,20 +6800,23 @@ class MetalCodeGen(
         )
 
     def metal_graphics_builtin_expression_name(self, name):
+        """The graphics entry parameter that carries built-in ``name``, or None when the entry has none."""
         if name is None or name in self.local_variable_types:
-            return name
-        parameter = self.current_metal_graphics_builtin_parameter_names.get(name, name)
-        if name == "gl_ViewIndex" and parameter != name:
+            return None
+        parameter = self.current_metal_graphics_builtin_parameter_names.get(name)
+        if parameter is None:
+            return None
+        if name == "gl_ViewIndex":
             # GLSL's view index is an int; Metal's amplification_id is a uint.
             return f"int({parameter})"
         return parameter
 
     def metal_builtin_expression_name(self, name):
         graphics_name = self.metal_graphics_builtin_expression_name(name)
-        if graphics_name != name:
+        if graphics_name is not None and graphics_name != name:
             return graphics_name
         compute_name = self.metal_compute_builtin_expression_name(name)
-        if compute_name != name:
+        if compute_name is not None and compute_name != name:
             return compute_name
         lane_mask = metal_subgroup_lane_mask_expression(self, name)
         if lane_mask is not None:
@@ -7533,15 +7552,7 @@ class MetalCodeGen(
         return self.map_semantic(semantic) if semantic is not None else ""
 
     def spirv_builtin_semantic(self, builtin):
-        if builtin is None:
-            return None
-        return {
-            "Position": "gl_Position",
-            "PointSize": "gl_PointSize",
-            "ClipDistance": "gl_ClipDistance",
-            "FragCoord": "gl_FragCoord",
-            "FragDepth": "gl_FragDepth",
-        }.get(str(builtin), str(builtin))
+        return metal_spirv_builtin_semantic(self, builtin)
 
     def metal_graphics_builtin_parameter_lowering(
         self,
@@ -7818,6 +7829,8 @@ class MetalCodeGen(
             location = frag_data_attachment_index(func)
             if location is not None:
                 attribute = f" [[color({location})]]"
+        if attribute is None and semantic is not None and shader_type == "vertex":
+            attribute = metal_varying_attribute(self, func, semantic)
         if attribute is None and semantic is not None:
             attribute = self.map_semantic(semantic)
         if not attribute:
@@ -7914,7 +7927,9 @@ class MetalCodeGen(
         self, func, raw_return_type, mapped_return_type, stage_name, function_name
     ):
         semantic = self.function_return_semantic(func)
-        metal_semantic = self.canonical_metal_semantic(semantic)
+        metal_semantic = metal_entry_return_semantic_key(
+            self, func, semantic, stage_name
+        )
         # MSL has no attribute on a return value, so an invariant position is returned through a structure.
         invariant_attr = metal_invariant_attribute_suffix(self, func, semantic)
         if not invariant_attr and not self.function_return_semantic_requires_wrapper(
@@ -7934,7 +7949,10 @@ class MetalCodeGen(
             "field_type": mapped_return_type,
             "field_name": self.return_wrapper_field_name(semantic, metal_semantic),
             "source_type": raw_return_type,
-            "semantic_attr": self.map_semantic(semantic) + invariant_attr,
+            "semantic_attr": (
+                metal_entry_return_attribute(self, semantic, metal_semantic)
+                + invariant_attr
+            ),
         }
 
     def function_return_semantic_requires_wrapper(self, semantic, metal_semantic):
@@ -7996,7 +8014,9 @@ class MetalCodeGen(
                 f"return semantic '{semantic}' with void return type"
             )
 
-        metal_semantic = self.canonical_metal_semantic(semantic)
+        metal_semantic = metal_entry_return_semantic_key(
+            self, func, semantic, stage_name
+        )
         self.validate_function_return_semantic_stage(
             stage_name, semantic, metal_semantic
         )
@@ -8091,12 +8111,8 @@ class MetalCodeGen(
         return None
 
     def canonical_metal_semantic(self, semantic):
-        if semantic is None:
-            return None
-        mapped_semantic = self.semantic_map.get(str(semantic), str(semantic))
-        if mapped_semantic.startswith("[[") and mapped_semantic.endswith("]]"):
-            return mapped_semantic[2:-2]
-        return mapped_semantic
+        """The key a semantic is classified by; see :func:`.metal_exact_lookups.metal_semantic_key`."""
+        return metal_semantic_key(self, semantic)
 
     def append_global_resource_parameters(
         self, params_str, func_name=None, func=None, filter_writable_textures=False
@@ -12540,7 +12556,11 @@ class MetalCodeGen(
                     return f"{self.METAL_RAY_FLAG_VALUES[expr.name]}u"
                 if expr.name in self.local_variable_types:
                     return self.metal_local_identifier_name(expr.name)
-                return enum_value_expression(self, expr.name)
+                enum_value = enum_value_expression(self, expr.name)
+                if enum_value is not None:
+                    return enum_value
+                # Not an enum value: a variable this program declares keeps its declared spelling.
+                return expr.name
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -20102,28 +20122,10 @@ class MetalCodeGen(
         return not self.is_resource_parameter_type(mapped_type)
 
     def metal_color_index_from_semantic(self, semantic):
-        if semantic is None:
-            return None
-        mapped_semantic = self.semantic_map.get(semantic, semantic)
-        mapped_semantic = str(mapped_semantic)
-        if not mapped_semantic.startswith("color("):
-            return None
-        if not mapped_semantic.endswith(")"):
-            return None
-        index = mapped_semantic[len("color(") : -1]
-        return int(index) if index.isdigit() else None
+        return metal_semantic_index(self, semantic, "color")
 
     def metal_attribute_index_from_semantic(self, semantic):
-        if semantic is None:
-            return None
-        mapped_semantic = self.semantic_map.get(semantic, semantic)
-        mapped_semantic = str(mapped_semantic)
-        if not mapped_semantic.startswith("attribute("):
-            return None
-        if not mapped_semantic.endswith(")"):
-            return None
-        index = mapped_semantic[len("attribute(") : -1]
-        return int(index) if index.isdigit() else None
+        return metal_semantic_index(self, semantic, "attribute")
 
     def metal_attribute_index_from_attribute(self, attribute):
         if not attribute:
@@ -21605,7 +21607,11 @@ class MetalCodeGen(
         return remaps
 
     def metal_local_identifier_name(self, name):
-        return self.current_local_identifier_remaps.get(name, name)
+        """The Metal spelling of identifier ``name``: its local rename, or the name itself if Metal can spell it."""
+        renamed = self.current_local_identifier_remaps.get(name)
+        if renamed is not None:
+            return renamed
+        return metal_unrenamed_identifier(self, name)
 
     def metal_parameter_mapped_type(self, parameter):
         return self.map_type(self.metal_parameter_raw_type(parameter))
@@ -21719,6 +21725,14 @@ class MetalCodeGen(
         ):
             return False
         return True
+
+    def metal_vertex_input_takes_next_attribute(
+        self, raw_param_type, shader_type, parameter, semantic
+    ):
+        """Whether a vertex input with a user semantic gets its attribute from the ``[[stage_in]]`` structure."""
+        return self.should_wrap_metal_vertex_stage_input_parameter(
+            raw_param_type, shader_type, parameter
+        ) and self.is_metal_user_stage_io_semantic(semantic)
 
     def is_metal_resource_or_buffer_parameter(
         self, raw_param_type, parameter, shader_type=None
@@ -23388,6 +23402,10 @@ class MetalCodeGen(
                 or str(getattr(attr, "name", "")).lower()
                 in (BUFFER_LAYOUT_ATTRIBUTE, "packed")
                 or str(getattr(attr, "name", "")).lower() in MEMBER_LAYOUT_QUALIFIERS
+                # Matrix order (GLSL 4.60 section 4.4.5, HLSL row_major/column_major) is layout, not a semantic;
+                # Metal lays such a matrix out transposed (semantics/row_major_struct_members.py).
+                or str(getattr(attr, "name", "")).lower()
+                in METAL_MATRIX_ORDER_ATTRIBUTES
                 # DXR payload access qualifiers; a Metal payload is a ray_data reference every stage may access.
                 or str(getattr(attr, "name", "")).lower() in PAYLOAD_ACCESS_ATTRIBUTES
             ):
@@ -29302,8 +29320,8 @@ class MetalCodeGen(
             hlsl_attribute = self.metal_hlsl_attribute_semantic(semantic)
             if hlsl_attribute is not None:
                 return f" [[{hlsl_attribute}]]"
-            mapped_semantic = self.semantic_map.get(str(semantic), str(semantic))
-            if mapped_semantic.startswith("attribute("):
+            mapped_semantic = self.semantic_map.get(str(semantic))
+            if mapped_semantic is not None and mapped_semantic.startswith("attribute("):
                 # A classic vertex semantic keeps the location every target gives it.
                 return f" [[{mapped_semantic}]]"
             hlsl_color = self.metal_hlsl_color_semantic(semantic)
@@ -29314,6 +29332,10 @@ class MetalCodeGen(
                 and mapped_semantic != "primitive_id"
             ):
                 return ""
+            if mapped_semantic is None:
+                mapped_semantic = metal_unmapped_semantic_attribute(self, semantic)
+                if mapped_semantic is None:
+                    return ""
             if mapped_semantic.startswith("[[") and mapped_semantic.endswith("]]"):
                 return f" {mapped_semantic}"
             else:

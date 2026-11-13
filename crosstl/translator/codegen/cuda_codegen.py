@@ -4284,7 +4284,9 @@ class CudaCodeGen(
     def unsupported_cuda_wave_operation(self, operation, raw_args, reason):
         result_type = self.wave_result_type(operation, raw_args)
         fallback = self.diagnostic_zero_value_for_type(result_type)
-        return f"/* unsupported CUDA wave intrinsic {operation}: {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"CUDA wave intrinsic {operation}: {reason}", fallback
+        )
 
     def cuda_wave_scalar_kind(self, type_name):
         mapped_type = self.map_type(type_name)
@@ -5220,10 +5222,10 @@ class CudaCodeGen(
         return None
 
     def unsupported_plain_atomic_call(self, operation, reason, fallback):
-        """Return diagnostic code for unsupported plain CUDA atomics."""
-        return (
-            f"/* unsupported {self.resource_backend_name()} atomic call: "
-            f"{operation} {reason} */ {fallback}"
+        """Refuse unsupported plain CUDA atomics; the returned value stands in until the refusal is raised."""
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} atomic call: {operation} {reason}",
+            fallback,
         )
 
     def structured_buffer_atomic_target(self, target_expr):
@@ -5297,11 +5299,11 @@ class CudaCodeGen(
     def unsupported_structured_buffer_atomic_call(
         self, operation, buffer_type, reason, fallback
     ):
-        """Return diagnostic code for unsupported structured-buffer atomics."""
+        """Refuse unsupported structured-buffer atomics; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} structured buffer atomic: "
-            f"{operation} on {buffer_type} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} structured buffer atomic: {operation} on {buffer_type} {reason}",
+            fallback,
         )
 
     def generate_byte_address_buffer_call(
@@ -5620,11 +5622,11 @@ class CudaCodeGen(
         return helper_name
 
     def unsupported_byte_address_buffer_call(self, operation, buffer_type, fallback):
-        """Return diagnostic code for unsupported byte-address buffer operations."""
+        """Refuse unsupported byte-address buffer operations; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} byte-address buffer call: "
-            f"{operation} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} byte-address buffer call: {operation} on {buffer_type}",
+            fallback,
         )
 
     def structured_buffer_member_call(self, function_expr):
@@ -5649,11 +5651,11 @@ class CudaCodeGen(
         return f"{buffer_name}[{args[0]}]"
 
     def unsupported_structured_buffer_call(self, operation, buffer_type, fallback):
-        """Return diagnostic code for unsupported structured-buffer operations."""
+        """Refuse unsupported structured-buffer operations; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} structured buffer call: "
-            f"{operation} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} structured buffer call: {operation} on {buffer_type}",
+            fallback,
         )
 
     def generate_lambda_expression(self, args):
@@ -6794,10 +6796,7 @@ class CudaCodeGen(
             raise
         except ValueError as error:
             reason = self.cuda_match_error_reason(error)
-            code = (
-                f"{'    ' * self.indent_level}"
-                f"/* unsupported CUDA match statement: {reason} */\n"
-            )
+            code = self.refuse_lowering(f"CUDA match statement: {reason}")
         self.emit_generated_code(code)
 
     def cuda_match_error_reason(self, error):
@@ -6815,11 +6814,11 @@ class CudaCodeGen(
         self, target_variable, target_type, reason, indent, _target_name
     ):
         indent_str = "    " * indent
-        fallback = self.diagnostic_zero_value_for_type(target_type)
-        return (
-            f"{indent_str}{target_variable} = /* unsupported CUDA match "
-            f"expression: {reason} */ {fallback};\n"
+        fallback = self.refuse_lowering(
+            f"CUDA match expression: {reason}",
+            self.diagnostic_zero_value_for_type(target_type),
         )
+        return f"{indent_str}{target_variable} = {fallback};\n"
 
     def generate_switch_case(self, label, body, indent, auto_break=False):
         indent_str = "    " * indent
@@ -7807,9 +7806,9 @@ class CudaCodeGen(
         resource_type = self.resource_base_type(type_name) or "unknown resource"
         fallback = "nullptr" if "[" in type_name else "CglResourceQueryInfo{}"
         param_label = f" argument {param_name}" if param_name else " argument"
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"metadata unavailable for {resource_type}{param_label} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: metadata unavailable for {resource_type}{param_label}",
+            fallback,
         )
 
     def diagnostic_zero_value_for_type(self, type_name):
@@ -9817,9 +9816,9 @@ class CudaCodeGen(
             if metadata_expr is None:
                 resource_type = self.resource_base_type(target_type) or target_type
                 resource_type = resource_type or "resource"
-                metadata_expr = (
-                    "/* unsupported CUDA resource query: metadata unavailable for "
-                    f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
+                metadata_expr = self.refuse_lowering(
+                    f"CUDA resource query: metadata unavailable for {resource_type} assignment",
+                    "CglResourceQueryInfo{}",
                 )
             return f"{self.query_metadata_name(target_name)} = {metadata_expr}"
 
@@ -9835,9 +9834,9 @@ class CudaCodeGen(
         if metadata_expr is None:
             resource_type = self.resource_base_type(target_type) or target_type
             resource_type = resource_type or "resource"
-            metadata_expr = (
-                "/* unsupported CUDA resource query: metadata unavailable for "
-                f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
+            metadata_expr = self.refuse_lowering(
+                f"CUDA resource query: metadata unavailable for {resource_type} assignment",
+                "CglResourceQueryInfo{}",
             )
         return f"{target_metadata} = {metadata_expr}"
 
@@ -10949,9 +10948,9 @@ class CudaCodeGen(
     def glsl_buffer_block_diagnostic(self, operation, expr, reason, fallback):
         _, resource_name = self.glsl_buffer_block_access(expr)
         resource_name = resource_name or "unknown"
-        return (
-            f"/* unsupported {self.resource_backend_name()} GLSL buffer block "
-            f"{operation}: resource '{resource_name}' {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} GLSL buffer block {operation}: resource '{resource_name}' {reason}",
+            fallback,
         )
 
     def glsl_buffer_block_read_diagnostic(self, expr, operation):
@@ -11077,9 +11076,9 @@ class CudaCodeGen(
         self, resource_label, operation, buffer_type, reason, fallback
     ):
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} {resource_label} "
-            f"access: {operation} {reason} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} {resource_label} access: {operation} {reason} on {buffer_type}",
+            fallback,
         )
 
     def structured_buffer_access_diagnostic(
@@ -11384,9 +11383,9 @@ class CudaCodeGen(
         self, func_name, resource_type, fallback
     ):
         resource_type = resource_type or "unknown resource"
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} metadata unavailable on {resource_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} metadata unavailable on {resource_type}",
+            fallback,
         )
 
     def unsupported_dimension_metadata_query_call(self, func_name, resource_type):
@@ -11416,9 +11415,9 @@ class CudaCodeGen(
             return_type,
             ["0"] * len(spec["dimensions"]),
         )
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} on {resource_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} on {resource_type}",
+            fallback,
         )
 
     def generate_dimension_query(self, func_name, raw_args, args):
@@ -12689,9 +12688,9 @@ class CudaCodeGen(
         fallback = "((void)0)"
         if func_name == "imageLoad":
             fallback = self.zero_value_for_type(self.image_value_type(image_type))
-        return (
-            f"/* unsupported CUDA image resource call: "
-            f"{func_name} coordinate rank on {image_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"CUDA image resource call: {func_name} coordinate rank on {image_type}",
+            fallback,
         )
 
     def image_resource_access(self, image_arg):
@@ -12784,9 +12783,8 @@ class CudaCodeGen(
         fallback = "((void)0)"
         if func_name == "imageLoad":
             fallback = self.zero_value_for_type(self.image_value_type(image_type))
-        return (
-            f"/* unsupported CUDA image access: "
-            f"{func_name} {reason} on {image_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"CUDA image access: {func_name} {reason} on {image_type}", fallback
         )
 
     def image_access_diagnostic(self, func_name, image_type, raw_image):
@@ -12818,18 +12816,16 @@ class CudaCodeGen(
 
     def unsupported_image_atomic_coordinate_rank_call(self, func_name, image_type):
         image_type = image_type or "unknown resource"
-        return (
-            f"/* unsupported CUDA image atomic resource call: "
-            f"{func_name} coordinate rank on {image_type} */ "
-            f"{self.image_atomic_zero_value(image_type)}"
+        return self.refuse_lowering(
+            f"CUDA image atomic resource call: {func_name} coordinate rank on {image_type}",
+            self.image_atomic_zero_value(image_type),
         )
 
     def unsupported_image_atomic_access_call(self, func_name, image_type):
         image_type = image_type or "unknown resource"
-        return (
-            f"/* unsupported CUDA image atomic resource call: "
-            f"{func_name} requires readwrite image resource on {image_type} */ "
-            f"{self.image_atomic_zero_value(image_type)}"
+        return self.refuse_lowering(
+            f"CUDA image atomic resource call: {func_name} requires readwrite image resource on {image_type}",
+            self.image_atomic_zero_value(image_type),
         )
 
     def image_atomic_access_diagnostic(self, func_name, image_type, raw_image):
@@ -12852,9 +12848,9 @@ class CudaCodeGen(
 
     def unsupported_scalar_resource_query_call(self, func_name, resource_type):
         resource_type = resource_type or "unknown resource"
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} on {resource_type} */ 0"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} on {resource_type}",
+            "0",
         )
 
     def generate_resource_call(self, func_name, raw_args, args):

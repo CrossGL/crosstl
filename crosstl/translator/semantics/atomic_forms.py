@@ -12,7 +12,7 @@ HLSL's argument list for any other destination (a group-shared variable, a membe
 generator printed those calls as they were, which glslang rejects, the Metal and SPIR-V generators refused them, and
 the CUDA and HIP generators replaced them with a comment and ``0``, so the operation never ran.
 
-:func:`canonicalize_atomic_calls` rewrites, for the OpenGL, SPIR-V, Metal, CUDA and HIP targets:
+:func:`canonicalize_atomic_calls` rewrites, for the OpenGL, SPIR-V, Metal, CUDA, HIP and Rust targets:
 
 * the statement ``atomicOp(dest, value, original)`` into ``original = atomicOp(dest, value)`` for ``atomicAdd``,
   ``atomicMin``, ``atomicMax``, ``atomicAnd``, ``atomicOr``, ``atomicXor`` and ``atomicExchange``;
@@ -63,7 +63,9 @@ _RETURNING_OUT_ORIGINAL = frozenset(
 _COMPARE_SWAP = "atomicCompSwap"
 _COMPARE_EXCHANGE = "atomicCompareExchange"
 _COMPARE_STORE = "InterlockedCompareStore"
-TARGETS = frozenset({"opengl", "glsl", "vulkan", "spirv", "metal", "cuda", "hip"})
+TARGETS = frozenset(
+    {"opengl", "glsl", "vulkan", "spirv", "metal", "cuda", "hip", "rust"}
+)
 HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
 
 

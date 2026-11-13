@@ -5119,9 +5119,9 @@ class HipCodeGen(
         fallback = self.diagnostic_zero_value_for_type(
             self.wave_result_type(operation, raw_args)
         )
-        return (
-            f"/* unsupported {self.resource_backend_name()} wave intrinsic: "
-            f"{operation} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} wave intrinsic: {operation} {reason}",
+            fallback,
         )
 
     def unsupported_wave_operation_reason(self, operation, raw_args):
@@ -6956,9 +6956,9 @@ class HipCodeGen(
         fallback = "((void)0)"
         if func_name == "imageLoad":
             fallback = self.zero_value_for_type(self.image_value_type(image_type))
-        return (
-            f"/* unsupported {self.resource_backend_name()} image resource call: "
-            f"{func_name} coordinate rank on {image_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} image resource call: {func_name} coordinate rank on {image_type}",
+            fallback,
         )
 
     def image_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
@@ -6989,9 +6989,9 @@ class HipCodeGen(
         fallback = "((void)0)"
         if func_name == "imageLoad":
             fallback = self.zero_value_for_type(self.image_value_type(image_type))
-        return (
-            f"/* unsupported {self.resource_backend_name()} image access: "
-            f"{func_name} {reason} on {image_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} image access: {func_name} {reason} on {image_type}",
+            fallback,
         )
 
     def image_access_diagnostic(self, func_name, image_type, raw_image):
@@ -7012,10 +7012,9 @@ class HipCodeGen(
 
     def unsupported_image_atomic_coordinate_rank_call(self, func_name, image_type):
         image_type = image_type or "unknown resource"
-        return (
-            f"/* unsupported {self.resource_backend_name()} image atomic resource call: "
-            f"{func_name} coordinate rank on {image_type} */ "
-            f"{self.image_atomic_zero_value(image_type)}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} image atomic resource call: {func_name} coordinate rank on {image_type}",
+            self.image_atomic_zero_value(image_type),
         )
 
     def image_atomic_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
@@ -7033,10 +7032,9 @@ class HipCodeGen(
 
     def unsupported_image_atomic_access_call(self, func_name, image_type):
         image_type = image_type or "unknown resource"
-        return (
-            f"/* unsupported {self.resource_backend_name()} image atomic resource call: "
-            f"{func_name} requires readwrite image resource on {image_type} */ "
-            f"{self.image_atomic_zero_value(image_type)}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} image atomic resource call: {func_name} requires readwrite image resource on {image_type}",
+            self.image_atomic_zero_value(image_type),
         )
 
     def image_atomic_access_diagnostic(self, func_name, image_type, raw_image):
@@ -7074,9 +7072,9 @@ class HipCodeGen(
 
     def unsupported_scalar_resource_query_call(self, func_name, resource_type):
         resource_type = resource_type or "unknown resource"
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} on {resource_type} */ 0"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} on {resource_type}",
+            "0",
         )
 
     def unsupported_dimension_resource_query_call(self, func_name, resource_type):
@@ -7088,9 +7086,9 @@ class HipCodeGen(
             return_type,
             ["0"] * len(spec["dimensions"]),
         )
-        return (
-            f"/* unsupported {self.resource_backend_name()} resource query: "
-            f"{func_name} on {resource_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} resource query: {func_name} on {resource_type}",
+            fallback,
         )
 
     def generate_dimension_query(self, func_name, raw_args, args):
@@ -8452,10 +8450,9 @@ class HipCodeGen(
         return expr
 
     def unsupported_plain_atomic_call(self, operation, reason, fallback):
-        """Return diagnostic code for unsupported ordinary HIP atomics."""
-        return (
-            f"/* unsupported {self.resource_backend_name()} atomic: "
-            f"{operation} {reason} */ {fallback}"
+        """Refuse unsupported ordinary HIP atomics; the returned value stands in until the refusal is raised."""
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} atomic: {operation} {reason}", fallback
         )
 
     def structured_buffer_atomic_target(self, target_expr):
@@ -8562,11 +8559,11 @@ class HipCodeGen(
     def unsupported_structured_buffer_atomic_call(
         self, operation, buffer_type, reason, fallback
     ):
-        """Return diagnostic code for unsupported structured-buffer atomics."""
+        """Refuse unsupported structured-buffer atomics; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} structured buffer atomic: "
-            f"{operation} on {buffer_type} {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} structured buffer atomic: {operation} on {buffer_type} {reason}",
+            fallback,
         )
 
     def generate_byte_address_buffer_dimensions(
@@ -8609,21 +8606,21 @@ class HipCodeGen(
         return f"{buffer_name}[{args[0]}]"
 
     def structured_buffer_diagnostic_call(self, operation, buffer_type, fallback):
-        """Return diagnostic code for rejected structured-buffer operations."""
+        """Refuse unsupported structured-buffer operations; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} structured buffer call: "
-            f"{operation} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} structured buffer call: {operation} on {buffer_type}",
+            fallback,
         )
 
     def structured_buffer_access_diagnostic_call(
         self, operation, buffer_type, reason, fallback
     ):
-        """Return diagnostic code for rejected structured-buffer access metadata."""
+        """Refuse unsupported structured-buffer access metadata; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} structured buffer "
-            f"access: {operation} {reason} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} structured buffer access: {operation} {reason} on {buffer_type}",
+            fallback,
         )
 
     def structured_buffer_read_diagnostic(
@@ -9229,21 +9226,21 @@ class HipCodeGen(
         return helper_name
 
     def byte_address_buffer_diagnostic_call(self, operation, buffer_type, fallback):
-        """Return diagnostic code for rejected byte-address buffer operations."""
+        """Refuse unsupported byte-address buffer operations; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} byte-address buffer call: "
-            f"{operation} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} byte-address buffer call: {operation} on {buffer_type}",
+            fallback,
         )
 
     def byte_address_buffer_access_diagnostic_call(
         self, operation, buffer_type, reason, fallback
     ):
-        """Return diagnostic code for rejected byte-address access metadata."""
+        """Refuse unsupported byte-address access metadata; the returned value stands in until the refusal is raised."""
         buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
-        return (
-            f"/* unsupported {self.resource_backend_name()} byte-address buffer "
-            f"access: {operation} {reason} on {buffer_type} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} byte-address buffer access: {operation} {reason} on {buffer_type}",
+            fallback,
         )
 
     def byte_address_buffer_read_diagnostic(
@@ -10249,9 +10246,9 @@ class HipCodeGen(
     def glsl_buffer_block_diagnostic(self, operation, expr, reason, fallback):
         _, resource_name = self.glsl_buffer_block_access(expr)
         resource_name = resource_name or "unknown"
-        return (
-            f"/* unsupported {self.resource_backend_name()} GLSL buffer block "
-            f"{operation}: resource '{resource_name}' {reason} */ {fallback}"
+        return self.refuse_lowering(
+            f"{self.resource_backend_name()} GLSL buffer block {operation}: resource '{resource_name}' {reason}",
+            fallback,
         )
 
     def glsl_buffer_block_read_diagnostic(self, expr, operation):

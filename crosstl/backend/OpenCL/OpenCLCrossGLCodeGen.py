@@ -26,6 +26,7 @@ from ..assignment_operands import grouped_operand
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
+from .sizeof_scopes import OpenCLSizeofScopeMixin
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
 _OPENCL_WORK_ITEM_QUERIES = frozenset(
@@ -78,13 +79,31 @@ class OpenCLImageWriteUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-image-write-unsupported"
 
 
+class OpenCLBlockUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C block (``^(float x) { ... }``, OpenCL C 3.0, "Blocks"), which CrossGL has no closure for."""
+
+    code = CODE_PREFIX + "opencl-block-unsupported"
+
+
+class OpenCLSizeofUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``sizeof`` whose operand the importer cannot size."""
+
+    code = CODE_PREFIX + "opencl-sizeof-unsupported"
+
+
+class OpenCLAtomicFunctionUnsupportedError(TranslationDiagnostic):
+    """A call to an atomic function OpenCL C does not define, which no CrossGL atomic replaces."""
+
+    code = CODE_PREFIX + "opencl-atomic-function-unsupported"
+
+
 class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
     """An OpenCL C ``read_imagef`` call or ``sampler_t`` value that CrossGL cannot carry exactly."""
 
     code = CODE_PREFIX + "opencl-image-read-unsupported"
 
 
-class OpenCLToCrossGLConverter(HipToCrossGLConverter):
+class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
     """Serialize OpenCL backend AST nodes into CrossGL source."""
 
     SOURCE_LANGUAGE_NAME = "OpenCL"
@@ -575,7 +594,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         self.emit(f"// OpenCL macro block: {node.name}{suffix}")
 
     def visit_OpenCLBlockLiteralNode(self, node):
-        return "0 /* unsupported OpenCL block literal */"
+        raise OpenCLBlockUnsupportedError(
+            "OpenCL block literals have no CrossGL equivalent: CrossGL has no closures "
+            "or function values"
+        )
 
     def visit_StructNode(self, node):
         materialized = self.clone_ast_node(node)
@@ -657,6 +679,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             self.push_type_alias_scope()
             self.push_unique_ptr_scope()
             self.push_cooperative_group_scope()
+            sizeof_symbols = dict(getattr(self, "opencl_sizeof_symbols", {}) or {})
+            self.register_opencl_parameter_sizeof_symbols(kernel)
             try:
                 for param in getattr(kernel, "params", []) or []:
                     self.register_unique_ptr_parameter(param)
@@ -664,6 +688,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 for stmt in getattr(kernel, "body", []) or []:
                     self.emit_statement(stmt)
             finally:
+                self.opencl_sizeof_symbols = sizeof_symbols
                 self.pop_cooperative_group_scope()
                 self.pop_unique_ptr_scope()
                 self.pop_type_alias_scope()
@@ -779,8 +804,11 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         ):
             return
         if self.is_opencl_block_declaration(node):
-            self.emit(f"// unsupported OpenCL block declaration: {node.name}")
-            return
+            # Dropping the declaration would leave every use of the block naming nothing.
+            raise OpenCLBlockUnsupportedError(
+                f"OpenCL block variable '{node.name}' has no CrossGL equivalent: CrossGL "
+                "has no closures or function values"
+            )
         if self.is_host_embedded_source_string(node):
             self.emit(f"// skipped host OpenCL source string: {node.name}")
             return
@@ -862,6 +890,8 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         sampler_states = dict(self.opencl_sampler_states)
         original_body = getattr(node, "body", None)
         materialized_op = False
+        sizeof_symbols = dict(getattr(self, "opencl_sizeof_symbols", {}) or {})
+        self.register_opencl_parameter_sizeof_symbols(node)
         if self.should_materialize_opencl_sdk_op_helper(node):
             lhs, rhs = (self.opencl_parameter_name(param) for param in node.params[:2])
             node.body = [ReturnNode(FunctionCallNode("min", [lhs, rhs]))]
@@ -873,6 +903,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 node.body = original_body
             self.opencl_current_function_name = previous_function_name
             self.opencl_sampler_states = sampler_states
+            self.opencl_sizeof_symbols = sizeof_symbols
 
     def should_materialize_opencl_sdk_op_helper(self, node):
         return (
@@ -944,7 +975,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 sizeof_value = self.format_opencl_sizeof_call(raw_args)
                 if sizeof_value is not None:
                     return str(sizeof_value)
-                return self.format_unsupported_opencl_sizeof_expression(raw_args)
+                self.refuse_opencl_sizeof_expression(raw_args)
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
@@ -1462,10 +1493,37 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         size, element_size = self.opencl_variable_sizeof_info(
             vtype, getattr(node, "value", None)
         )
-        if size is None and element_size is None:
-            return
+        self.record_opencl_sizeof_symbol(name, size, element_size)
 
+    def register_opencl_parameter_sizeof_symbols(self, node):
+        """Record the size of each parameter of ``node``, so that ``sizeof(*p)`` and ``sizeof(p)`` are known.
+
+        A parameter declared as an array is a pointer to its element (C17 6.7.6.3p7, which OpenCL C follows).
+        """
+        for parameter in getattr(node, "params", []) or []:
+            name = self.opencl_parameter_name(parameter)
+            vtype = self.opencl_parameter_type(parameter)
+            if not name or not vtype:
+                continue
+            base_type, dimensions, _pointer_depth = self.opencl_sizeof_type_parts(vtype)
+            if dimensions:
+                element_size = self.opencl_sizeof_type_with_dimensions(
+                    base_type, dimensions[1:]
+                )
+                self.record_opencl_sizeof_symbol(
+                    name, self.OPENCL_SIZEOF_POINTER_SIZE, element_size
+                )
+                continue
+            size, element_size = self.opencl_variable_sizeof_info(vtype)
+            self.record_opencl_sizeof_symbol(name, size, element_size)
+
+    def record_opencl_sizeof_symbol(self, name, size, element_size):
         symbols = getattr(self, "opencl_sizeof_symbols", None)
+        if size is None and element_size is None:
+            # An unknown size must not leave an outer declaration of the same name in force.
+            if symbols:
+                symbols.pop(name, None)
+            return
         if symbols is None:
             symbols = {}
             self.opencl_sizeof_symbols = symbols
@@ -1498,15 +1556,25 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             return None
         return self.opencl_sizeof_operand(args[0])
 
-    def format_unsupported_opencl_sizeof_expression(self, args):
-        operand = "unknown"
-        if args:
+    def refuse_opencl_sizeof_expression(self, args):
+        """Refuse a ``sizeof`` the importer cannot size, which a neutral ``0`` in its place would silently change."""
+        if len(args) != 1:
+            raise OpenCLSizeofUnsupportedError(
+                f"sizeof takes one operand, got {len(args)}"
+            )
+        operand = args[0]
+        if not isinstance(operand, str):
             try:
-                operand = self.visit(args[0])
-            except Exception:  # noqa: BLE001 - best-effort diagnostic text only.
+                operand = self.visit(operand)
+            except (
+                Exception
+            ):  # noqa: BLE001 - the operand only names the refused query.
                 operand = str(args[0])
-        operand = " ".join(str(operand).replace("*/", "* /").split())
-        return f"(/* unsupported OpenCL size query: {operand} */ 0)"
+        operand = " ".join(str(operand).split())
+        raise OpenCLSizeofUnsupportedError(
+            f"cannot determine sizeof({operand}): the operand is not a type or value "
+            "whose OpenCL C size the importer knows"
+        )
 
     def opencl_sizeof_operand(self, operand):
         if isinstance(operand, UnaryOpNode) and operand.op == "*":
@@ -1641,8 +1709,14 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         node_args = list(node.args)
         if node.operation.endswith("_explicit"):
             node_args = self.opencl_relaxed_atomic_arguments(node.operation, node_args)
+        if node.operation not in self.OPENCL_ATOMIC_MAP:
+            # The parser shares HIP's atomic names; atomicAdd, atomicCAS_system and the like are CUDA and HIP
+            # functions, not OpenCL C built-ins (OpenCL C 3.0, "Atomic Functions").
+            raise OpenCLAtomicFunctionUnsupportedError(
+                f"{node.operation} is not an OpenCL C atomic function"
+            )
         args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node_args)]
-        operation = self.OPENCL_ATOMIC_MAP.get(node.operation, node.operation)
+        operation = self.OPENCL_ATOMIC_MAP[node.operation]
         if node.operation == "atomic_inc" and len(args) == 1:
             args.append("1")
         elif node.operation == "atomic_dec" and len(args) == 1:

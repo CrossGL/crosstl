@@ -3,6 +3,7 @@
 from ...translator.codegen.image_access_contracts import SUPPORTED_IMAGE_FORMATS
 from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
+from .import_exact_lookups import SpirvBuiltinUnsupportedError
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
 from .statement_import import (
     EXPRESSION_STATEMENT_TYPES,
@@ -1410,7 +1411,7 @@ class VulkanToCrossGLConverter:
         mapped_name = mapped_builtins.get(str(builtin_name))
         if mapped_name:
             return f"@{mapped_name}"
-        return f"@builtin({str(builtin_name).lower()})"
+        raise SpirvBuiltinUnsupportedError(str(builtin_name), storage_class)
 
     def flattened_uniform_block_field_aliases(self, node):
         aliases = {}
@@ -1445,8 +1446,8 @@ class VulkanToCrossGLConverter:
         return alias
 
     def flattened_uniform_block_field_name(self, field_name, field_aliases):
-        field_base = self.declaration_base_name(field_name)
-        generated_base = field_aliases.get(field_base, field_base)
+        # flattened_uniform_block_field_aliases names every field of the block.
+        generated_base = field_aliases[self.declaration_base_name(field_name)]
         return f"{generated_base}{self.declaration_array_suffix(field_name)}"
 
     def record_flattened_uniform_block_instance(self, node, field_aliases=None):
@@ -1944,7 +1945,11 @@ class VulkanToCrossGLConverter:
         return [case]
 
     def map_type(self, vulkan_type):
-        """Map a Vulkan/SPIR-V type name to the closest CrossGL type name."""
+        """The CrossGL spelling of a type name the SPIR-V parser produced.
+
+        ``type_map`` holds the names CrossGL spells differently. Any other name is a structure the module declares
+        or a type CrossGL spells the same way; a name that is neither is refused by ``refuse_undeclared_types``.
+        """
         bracket_index = vulkan_type.find("[")
         if bracket_index > 0:
             base_type = vulkan_type[:bracket_index]
@@ -1958,7 +1963,6 @@ class VulkanToCrossGLConverter:
         if len(type_parts) > 1:
             qualifiers = type_parts[:-1]
             base_type = type_parts[-1]
-            mapped_base = self.type_map.get(base_type, base_type)
-            return " ".join([*qualifiers, mapped_base])
+            return " ".join([*qualifiers, self.map_type(base_type)])
 
         return vulkan_type
