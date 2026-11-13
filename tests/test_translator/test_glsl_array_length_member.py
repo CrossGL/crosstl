@@ -34,9 +34,17 @@ def validate(tmp_path, glsl):
     path = tmp_path / "out.comp"
     path.write_text(glsl)
     checked = subprocess.run(
-        ["glslangValidator", "--target-env", "vulkan1.2", str(path)],
+        [
+            "glslangValidator",
+            "--target-env",
+            "vulkan1.2",
+            str(path),
+            "-o",
+            str(tmp_path / "out.spv"),
+        ],
         capture_output=True,
         text=True,
+        cwd=tmp_path,
     )
     assert checked.returncode == 0, checked.stdout + checked.stderr
 

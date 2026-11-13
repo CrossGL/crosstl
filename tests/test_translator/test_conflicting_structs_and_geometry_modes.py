@@ -158,6 +158,35 @@ def test_spirv_refuses_an_invalid_max_vertices_once(tmp_path):
     assert "states no max_vertices" not in message
 
 
+CONTROL = """
+shader S {
+    tessellation_control {
+        LAYOUTS
+        void main() {
+            gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+        }
+    }
+}
+"""
+
+
+def test_a_tessellation_control_stage_keeps_its_patch_size(tmp_path):
+    output = crosstl.translate(
+        write(tmp_path, CONTROL.replace("LAYOUTS", "layout(vertices = 4) out;")),
+        backend="vulkan",
+    )
+    assert re.search(r"OpExecutionMode %\d+ OutputVertices 4\b", output)
+
+
+def test_spirv_refuses_a_tessellation_control_stage_without_a_patch_size(tmp_path):
+    # OutputVertices 1 used to be written for a stage that stated no output patch size.
+    with pytest.raises(SpirvLoweringRefused) as refusal:
+        crosstl.translate(
+            write(tmp_path, CONTROL.replace("LAYOUTS", "")), backend="vulkan"
+        )
+    assert "states no output patch size" in str(refusal.value)
+
+
 CONSTANTS = """
 shader S {
     FIRST

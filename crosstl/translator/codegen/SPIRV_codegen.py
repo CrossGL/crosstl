@@ -32179,10 +32179,20 @@ class VulkanSPIRVCodeGen(
 
     def tessellation_control_output_vertices(self, stage) -> int:
         """Return tessellation-control output control-point count."""
+        names = ("outputcontrolpoints", "vertices")
+        if all(self.stage_attribute_value(stage, name) is None for name in names) and (
+            self.stage_layout_direction_value(stage, "out", names) is None
+        ):
+            # The output patch size sizes gl_out and OutputVertices. GLSL requires layout(vertices) (4.60
+            # 4.4.2.1) and HLSL outputcontrolpoints, so a stage that states none cannot be given one.
+            self.refuse_lowering(
+                "SPIR-V tessellation control stage states no output patch size (layout(vertices) or "
+                "outputcontrolpoints), which OutputVertices needs"
+            )
         return self.stage_positive_int_metadata(
             stage,
             "tessellation_control OutputVertices",
-            attribute_names=("outputcontrolpoints", "vertices"),
+            attribute_names=names,
             layout_direction="out",
             layout_names=("vertices", "outputcontrolpoints"),
         )
