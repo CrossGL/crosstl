@@ -60,10 +60,10 @@ from .comma_expressions import is_comma_expression, refuse_comma_expression
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .lowering_refusals import LoweringRefusalMixin
-from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .rust_output_parameters import RustOutputParameterMixin
 from .rust_refusals import RustEnumEmptyBraceError, RustLoweringRefused
 from .sampler_pairs import canonicalize_separate_textures
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import (
     is_fragment_output_parameter,
     normalize_stage_name,

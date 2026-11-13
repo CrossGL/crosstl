@@ -158,7 +158,6 @@ from .hlsl_image_formats import (
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .image_access_contracts import numeric_expression_component_count
 from .lowering_refusals import LoweringRefusalMixin
-from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -174,6 +173,7 @@ from .push_constant_blocks import (
 )
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .slang_buffer_lengths import slang_glsl_buffer_block_length
 from .slang_byte_address_words import (
     SlangThreeComponentAccess,

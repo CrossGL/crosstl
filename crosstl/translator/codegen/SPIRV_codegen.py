@@ -242,6 +242,7 @@ from .spirv_row_major_arrays import (
     uniform_block_member_layout_type,
 )
 from .spirv_separate_textures import separate_texture_type_info
+from .spirv_shader_clock import SPIRV_SHADER_CLOCKS, spirv_shader_clock_call
 from .spirv_shading_rate import (
     require_shading_rate_capability,
     shading_rate_builtin_info,
@@ -288,7 +289,6 @@ from .spirv_struct_varyings import (
     load_flattened_struct_varying,
     store_flattened_struct_varying,
 )
-from .spirv_shader_clock import SPIRV_SHADER_CLOCKS, spirv_shader_clock_call
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_swizzle_reference_arguments import (
     prepare_swizzle_reference_binding,

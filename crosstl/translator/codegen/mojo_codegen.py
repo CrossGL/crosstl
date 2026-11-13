@@ -91,11 +91,11 @@ from .image_access_contracts import (
     image_format_channel_count,
     image_format_component_kind,
 )
-from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
 from .sampler_pairs import canonicalize_separate_textures
+from .shader_clock_refusals import SHADER_CLOCK_BUILTINS, refuse_shader_clock_call
 from .stage_utils import is_fragment_output_parameter
 
 
