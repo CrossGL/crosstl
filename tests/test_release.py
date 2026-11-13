@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.fake_commands import write_python_command
 from tools import check_release
 from tools.check_release import (
     check_distributions,
@@ -286,9 +287,8 @@ def test_github_release_verifies_uploaded_bytes(
     remote = tmp_path / "remote"
     remote.mkdir()
     log = tmp_path / "calls.jsonl"
-    gh = tmp_path / "gh"
-    gh.write_text(
-        f"#!{sys.executable}\n"
+    write_python_command(
+        tmp_path / "gh",
         "import json, os, shutil, sys, zipfile\n"
         "from pathlib import Path\n"
         "args = sys.argv[1:]\n"
@@ -309,9 +309,7 @@ def test_github_release_verifies_uploaded_bytes(
         "        with zipfile.ZipFile(remote / 'crosstl-1.2.3-py3-none-any.whl', 'a') as archive: archive.comment = b'different archive bytes'\n"
         "    for path in remote.iterdir(): shutil.copyfile(path, Path(args[4]) / path.name)\n"
         "else: assert action == 'edit'\n",
-        encoding="utf-8",
     )
-    gh.chmod(0o755)
     (tmp_path / "python").symlink_to(sys.executable)
     command = _workflow()["jobs"]["github-release"]["steps"][-1]["run"]
     result = subprocess.run(
@@ -616,16 +614,14 @@ def test_release_gate_requires_successful_main_push_at_exact_commit(
         "deferred-native-compilation.yml",
         "demo-project-testing.yml",
     )
-    gh = tmp_path / "gh"
     log = tmp_path / "calls.jsonl"
-    gh.write_text(
-        f"#!{sys.executable}\nimport json, os, sys\n"
+    write_python_command(
+        tmp_path / "gh",
+        "import json, os, sys\n"
         "with open(os.environ['CALLS'], 'a') as output: output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
         "workflow = sys.argv[sys.argv.index('--workflow') + 1]\n"
         "print(os.environ['RUN_STATUS'] if workflow == os.environ['WORKFLOW'] else 'completed\\tsuccess\\turl')\n",
-        encoding="utf-8",
     )
-    gh.chmod(0o755)
     env = dict(
         os.environ,
         PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
@@ -718,22 +714,18 @@ def test_release_notes_shell_extraction_matches_checked_section(tmp_path):
 def test_release_tag_must_match_version_and_belong_to_main(
     tmp_path, comparison, tag, success
 ):
-    gh = tmp_path / "gh"
-    gh.write_text(
-        f"#!{sys.executable}\nimport os, sys\n"
+    write_python_command(
+        tmp_path / "gh",
+        "import os, sys\n"
         "assert sys.argv[1:] == ['api', 'repos/CrossGL/crosstl/compare/tag-commit...main', '--jq', '.status']\n"
         "print(os.environ['COMPARISON'])\n",
-        encoding="utf-8",
     )
-    python = tmp_path / "python"
-    python.write_text(
-        f"#!{sys.executable}\nimport sys\n"
+    write_python_command(
+        tmp_path / "python",
+        "import sys\n"
         "assert sys.argv[1:] == ['tools/check_release.py', 'version']\n"
         "print('1.2.3')\n",
-        encoding="utf-8",
     )
-    for path in (gh, python):
-        path.chmod(0o755)
     result = subprocess.run(
         [
             "bash",
