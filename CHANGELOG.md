@@ -7,6 +7,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 ### Fixed
 
 - WGSL output writes HLSL's `f32tof16` and `f16tof32` with `pack2x16float` and `unpack2x16float`: `f32tof16(x)` becomes `pack2x16float(vec2<f32>(x, 0.0))`, which keeps the half in the low 16 bits, and `f16tof32(h)` becomes `unpack2x16float(h).x`, with helpers for vectors. It used to copy both calls into the output, which naga rejects (`no definition in scope for identifier: f32tof16`) (#4407).
+- HLSL output declares a 1D shadow texture, which HLSL input imports from a `Texture1D` or `Texture1DArray` used only with `SampleCmp`, `SampleCmpLevel`, `SampleCmpLevelZero` or `SampleCmpGrad`, as `Texture1D` or `Texture1DArray` again. The round trip used to fail with `ValueError: DirectX texture operation 'textureCompare' requires a declared texture or image resource argument` (#2639, #2640, #2641).
 - GLSL output counts the `length()` of a reinterpreted buffer view, such as `(uint16_t*)words` or `(float*)(words + 2)` held in a local, written inline or passed to a helper, in the view's elements: `words.length() * 2` for a `uint16_t` view of `uint` words, less the view's byte and element offsets. It used to call `.length()` on one element read from the buffer, which glslang rejects (`'length' : does not operate on this type`). A view whose element layout is unknown is refused with `OpenGLStoragePointerError` (#3758).
 
 ---
