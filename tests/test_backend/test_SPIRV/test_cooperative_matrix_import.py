@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import pytest
 
+from crosstl.backend.SPIRV.ray_tracing_import import SpirvInstructionUnsupportedError
+from crosstl.backend.SPIRV.VulkanAst import FunctionCallNode, ShaderNode
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
-from crosstl.backend.SPIRV.VulkanAst import FunctionCallNode, ShaderNode
-from crosstl.backend.SPIRV.ray_tracing_import import SpirvInstructionUnsupportedError
-
 
 # ---------------------------------------------------------------------------
 # Helpers
