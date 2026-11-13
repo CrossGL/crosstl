@@ -2140,7 +2140,6 @@ class _Lowering:
                         *self.resource_arguments(),
                     ],
                 )
-                )
             target = self.expression(node.target, env)
             value = self.expression(
                 node.value, env, target_type if node.operator == "=" else None
