@@ -26,7 +26,7 @@ shader main {
     const int gl_MaxImageUnits @constant_id(24) = 8;
 
     vertex {
-    void foo(vec4 p[arraySize]) {
+    void foo(in vec4 p[arraySize]) {
         output.color += input.dupUcol[2];
         output.size += dupArraySize;
         if (spDupBool) {
