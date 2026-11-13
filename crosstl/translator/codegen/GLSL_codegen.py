@@ -48951,7 +48951,15 @@ complex64_t crossgl_complex64_mod_assign(
             "sampler2DShadow",
             "sampler2DArrayShadow",
         }
-        compare_offset_types = {"sampler2DShadow", "sampler2DArrayShadow"}
+        # GLSL 4.60 section 8.9.2: textureOffset and textureGradOffset take
+        # every 1D and 2D shadow sampler; textureGatherOffset only the 2D ones.
+        compare_offset_types = {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
+            "sampler2DShadow",
+            "sampler2DArrayShadow",
+        }
+        gather_compare_offset_types = {"sampler2DShadow", "sampler2DArrayShadow"}
         compare_lod_types = {
             "sampler1DShadow",
             "sampler1DArrayShadow",
@@ -48974,7 +48982,7 @@ complex64_t crossgl_complex64_mod_assign(
             "compare_grad": texture_type in compare_grad_types,
             "compare_lod_offset": texture_type in compare_lod_types,
             "compare_grad_offset": texture_type in compare_offset_types,
-            "gather_compare_offset": texture_type in compare_offset_types,
+            "gather_compare_offset": texture_type in gather_compare_offset_types,
         }
 
     def texture_gather_supported(self, texture_type):

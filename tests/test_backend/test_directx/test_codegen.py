@@ -6457,6 +6457,32 @@ def test_codegen_sample_cmp_1d_shadow_textures_translate_to_glsl_and_metal_refus
     assert "of type 'sampler1DShadow'" in str(exc_info.value)
 
 
+def test_codegen_sample_cmp_offsets_on_1d_shadow_textures_translate_to_glsl():
+    # GLSL 4.60 section 8.9.2 defines textureOffset and textureLodOffset for
+    # sampler1DShadow and sampler1DArrayShadow with an int offset (#4428).
+    code = textwrap.dedent("""
+        Texture1D<float> shadowLine : register(t0);
+        Texture1DArray<float> shadowLineArray : register(t1);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float4 main(float coord : TEXCOORD0, float2 coordLayer : TEXCOORD1, float depth : TEXCOORD2) : SV_Target {
+            float a = shadowLine.SampleCmp(compareSampler, coord, depth, 1);
+            float b = shadowLineArray.SampleCmp(compareSampler, coordLayer, depth, 2);
+            float c = shadowLine.SampleCmpLevelZero(compareSampler, coord, depth, 3);
+            float d = shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth, 4);
+            return float4(a + b + c + d);
+        }
+    """).strip()
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(generate_crossgl(code)))
+
+    assert "textureOffset(shadowLine, vec3(coord, 0.0, depth), 1)" in glsl
+    assert "textureOffset(shadowLineArray, vec3(coordLayer, depth), 2)" in glsl
+    assert "textureLodOffset(shadowLine, vec3(coord, 0.0, depth), 0.0, 3)" in glsl
+    assert "textureLodOffset(shadowLineArray, vec3(coordLayer, depth), 0.0, 4)" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
+
+
 def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     code = textwrap.dedent("""
         Texture2DArray<float> shadowArray : register(t0);
