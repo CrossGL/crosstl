@@ -40,7 +40,8 @@ STANDARDS = (
     ("metal4.1", "4.1"),
 )
 NODE = re.compile(r"^(?P<indent>(?:[| ] )*)[|`]-(?P<kind>[A-Za-z]+)(?P<rest>.*)$")
-FILE = re.compile(r"(/[^\s:<>,']+|<scratch space>|<built-in>|<command line>):\d+:\d+")
+# Clang writes a path as it is, spaces included, so a header under "/Volumes/My Disk" keeps its whole path.
+FILE = re.compile(r"(/[^:<>,'\n]+?|<scratch space>|<built-in>|<command line>):\d+:\d+")
 LOCATION = re.compile(
     r"^\s*(?:<invalid sloc>|\S+:\d+(?::\d+)?)(?:\s*<Spelling=[^>]*>)?"
 )
