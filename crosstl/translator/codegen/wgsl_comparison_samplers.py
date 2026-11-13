@@ -17,15 +17,23 @@ __all__ = ["WGSLComparisonSamplerUnsupportedError"]
 class WGSLComparisonSamplerUnsupportedError(TranslationDiagnostic):
     """A regular texture lookup paired with a comparison sampler, which no WGSL sample built-in accepts."""
 
-    def __init__(self, function_name, texture, builtin_name, sampler_name):
+    def __init__(self, function_name, texture, builtin_name, sampler_name, reason=None):
         self.function_name = function_name
         self.texture = texture
         self.builtin_name = builtin_name
         self.sampler_name = sampler_name
         self.missing_capabilities = ("wgsl.comparison-sampler",)
+        if reason is None:
+            message = (
+                f"WGSL target cannot lower {function_name}() on {texture}: "
+                f"{builtin_name} takes a sampler, but {sampler_name} is a comparison sampler"
+            )
+        else:
+            message = (
+                f"WGSL target cannot lower {function_name}() on {texture}: {reason}"
+            )
         super().__init__(
-            f"WGSL target cannot lower {function_name}() on {texture}: "
-            f"{builtin_name} takes a sampler, but {sampler_name} is a comparison sampler",
+            message,
             target="wgsl",
             code=f"{CODE_PREFIX}wgsl-comparison-sampler-unsupported",
         )

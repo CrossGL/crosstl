@@ -220,6 +220,7 @@ def test_block_package_recipe_uses_the_pinned_source_and_explicit_profiles(
         assert config.workgroup_size == (group, 1, 1)
         options = config.source_options["metal"]
         assert options["binary32_multiplication_profile"] == "rne-flush"
+        assert options["binary32_comparison_profile"] == "flush-subnormals"
         assert options["binary32_log2_operand_profile"] == "flush-subnormals"
         assert options["binary32_log2_accuracy_profile"] == "portable-finite"
         if target != "metal":
