@@ -2213,6 +2213,7 @@ class HipParser:
             name, members, self.current_record_layout_attributes(attributes)
         )
         struct_node.is_final = is_final
+        struct_node.has_body = has_body
         struct_node.base_classes = base_classes
         self.skip_newlines()
         declarations = self.parse_record_trailing_declarators("struct", name)
@@ -2258,6 +2259,7 @@ class HipParser:
             name, members, self.current_record_layout_attributes(attributes)
         )
         union_node.is_union = True
+        union_node.has_body = has_body
 
         self.skip_newlines()
         declarations = self.parse_record_trailing_declarators("union", name)
@@ -2531,6 +2533,7 @@ class HipParser:
         )
         class_node.is_class = True
         class_node.is_final = is_final
+        class_node.has_body = has_body
         class_node.base_classes = base_classes
         self.skip_newlines()
         declarations = self.parse_record_trailing_declarators("class", name)

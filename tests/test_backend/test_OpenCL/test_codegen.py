@@ -9,6 +9,7 @@ from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
     OpenCLFenceScopeUnsupportedError,
     OpenCLImageReadUnsupportedError,
     OpenCLImageWriteUnsupportedError,
+    OpenCLRecordSemanticError,
     OpenCLToCrossGLConverter,
 )
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
@@ -1761,6 +1762,58 @@ __kernel void probe(__global float* outp) {
     assert crossgl.count("struct Inner {") == 1
     assert "    Inner inner;" in crossgl
     assert "    i32 k;" in crossgl
+
+
+@pytest.mark.parametrize(
+    "source, declared",
+    [
+        (
+            "struct Never;\nstruct Outer { struct Never n; float k; };\n"
+            "__kernel void probe(__global float* outp) {\n"
+            "    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;\n}\n",
+            "'n' in 'Outer'",
+        ),
+        (
+            "struct Never;\n"
+            "__kernel void probe(__global float* outp) {\n"
+            "    struct Never v; outp[get_global_id(0)] = 1.0f;\n}\n",
+            "'v' in 'probe'",
+        ),
+    ],
+)
+def test_opencl_record_without_a_body_is_refused_when_used_by_value(source, declared):
+    with pytest.raises(OpenCLRecordSemanticError) as raised:
+        generate_crossgl(source)
+
+    assert raised.value.record_name == "Never"
+    assert declared in str(raised.value)
+
+
+def test_opencl_record_without_a_body_stays_accepted_behind_a_pointer():
+    crossgl = generate_crossgl("""
+struct Never;
+struct Outer { struct Never* n; float k; };
+__kernel void probe(__global float* outp) {
+    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;
+}
+""")
+
+    assert "struct Outer {" in crossgl
+
+
+def test_opencl_function_local_struct_keyword_names_the_earlier_record():
+    crossgl = generate_crossgl("""
+struct Inner { float x; };
+__kernel void probe(__global float* outp) {
+    struct Inner a;
+    a.x = 2.0f;
+    outp[get_global_id(0)] = a.x;
+}
+""")
+
+    assert crossgl.count("struct Inner {") == 1
+    assert "var a: Inner;" in crossgl
+    assert "probe_Inner" not in crossgl
 
 
 def test_opencl_struct_keyword_member_matches_the_typedef_spelling():

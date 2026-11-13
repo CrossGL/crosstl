@@ -19909,8 +19909,96 @@ def test_hip_struct_keyword_member_reaches_every_target(tmp_path):
     source = tmp_path / "probe.hip"
     source.write_text(STRUCT_KEYWORD_MEMBER_HIP, encoding="utf-8")
 
-    for backend in ("metal", "directx", "vulkan"):
-        assert translate(str(source), backend=backend, save_shader=None)
+    metal = translate(str(source), backend="metal", save_shader=None)
+    directx = translate(str(source), backend="directx", save_shader=None)
+    vulkan = translate(str(source), backend="vulkan", save_shader=None)
+
+    for text in (metal, directx):
+        assert text.count("struct Inner {") == 1
+        assert "Inner inner;" in text
+    assert vulkan.count('OpName %Inner "Inner"') == 1
+    assert 'OpMemberName %Outer 0 "inner"' in vulkan
+
+
+def test_hip_function_local_struct_keyword_names_the_earlier_record(tmp_path):
+    source = tmp_path / "probe.hip"
+    source.write_text(
+        """
+struct Inner { float x; };
+__global__ void probe(float* outp) {
+    struct Inner a;
+    a.x = 2.0f;
+    outp[threadIdx.x] = a.x;
+}
+""",
+        encoding="utf-8",
+    )
+
+    crossgl = translate(str(source), backend="cgl", save_shader=None)
+    metal = translate(str(source), backend="metal", save_shader=None)
+
+    assert crossgl.count("struct Inner {") == 1
+    assert "var a: Inner;" in crossgl
+    assert "probe_Inner" not in crossgl
+    assert "probe_Inner" not in metal
+    assert "Inner a;" in metal
+
+
+@pytest.mark.parametrize(
+    "source_text, record, declared",
+    [
+        (
+            "struct Never;\nstruct Outer { struct Never n; float k; };\n"
+            "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
+            "Never",
+            "'n' in 'Outer'",
+        ),
+        (
+            "union Never;\n"
+            "__global__ void probe(float* outp) { union Never v; outp[0] = 1.0f; }\n",
+            "Never",
+            "'v' in 'probe'",
+        ),
+        (
+            "struct Never;\nstruct Never g;\n"
+            "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
+            "Never",
+            "'g'",
+        ),
+    ],
+)
+def test_hip_record_without_a_body_is_refused_when_used_by_value(
+    tmp_path, source_text, record, declared
+):
+    source = tmp_path / "probe.hip"
+    source.write_text(source_text, encoding="utf-8")
+
+    with pytest.raises(HipRecordSemanticError) as raised:
+        translate(str(source), backend="cgl", save_shader=None)
+
+    assert raised.value.record_name == record
+    assert declared in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "source_text",
+    [
+        "struct Never;\nstruct Outer { struct Never* n; float k; };\n"
+        "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
+        "struct Later;\nstruct Outer { struct Later n; float k; };\n"
+        "struct Later { float x; };\n"
+        "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
+        "struct Never;\n"
+        "__global__ void probe(float* outp, struct Never* p) { outp[0] = 1.0f; }\n",
+    ],
+)
+def test_hip_record_without_a_body_stays_accepted_behind_a_pointer_or_once_completed(
+    tmp_path, source_text
+):
+    source = tmp_path / "probe.hip"
+    source.write_text(source_text, encoding="utf-8")
+
+    assert translate(str(source), backend="cgl", save_shader=None)
 
 
 def test_hip_record_with_a_body_and_declarators_is_still_declared(tmp_path):

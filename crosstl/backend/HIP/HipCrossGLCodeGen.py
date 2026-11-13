@@ -648,6 +648,7 @@ class HipToCrossGLConverter(ImportRefusalMixin):
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
         self.prepare_record_definitions(ast_node)
+        self.refuse_incomplete_record_values(ast_node)
         self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
@@ -702,6 +703,82 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                     statement
                 )
                 self.register_function_return_nodes(statement)
+
+    def refuse_incomplete_record_values(self, ast_node):
+        """Refuse a record that is declared without a body, never completed and used by value.
+
+        ``struct Never;`` followed by a ``struct Never n;`` member, local or global has no size,
+        and the C family compilers reject it. A pointer or reference to it is fine.
+        """
+        bodiless = {}
+        completed = set()
+        stack = [ast_node]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, (list, tuple)):
+                stack.extend(current)
+                continue
+            if not hasattr(current, "__dict__") or isinstance(
+                current, (str, int, float, bool)
+            ):
+                continue
+            if isinstance(current, StructNode) and current.name:
+                if getattr(current, "has_body", True):
+                    completed.add(current.name)
+                else:
+                    bodiless.setdefault(current.name, current)
+            stack.extend(
+                value
+                for value in vars(current).values()
+                if isinstance(value, (list, tuple)) or hasattr(value, "__dict__")
+            )
+        incomplete = set(bodiless) - completed
+        if not incomplete:
+            return
+
+        def incomplete_record(vtype):
+            if not isinstance(vtype, str):
+                return None
+            compact = vtype.replace(" ", "")
+            if any(mark in compact for mark in ("*", "&", "ptr<")):
+                return None
+            words = [
+                word
+                for word in re.split(r"[\s\[]", vtype.split("[", 1)[0])
+                if word
+                and word not in {"const", "volatile", "struct", "union", "class"}
+            ]
+            if len(words) == 1 and words[0] in incomplete:
+                return words[0]
+            return None
+
+        def visit(current, owner):
+            if isinstance(current, (list, tuple)):
+                for item in current:
+                    visit(item, owner)
+                return
+            if not hasattr(current, "__dict__") or isinstance(
+                current, (str, int, float, bool)
+            ):
+                return
+            if isinstance(current, StructNode):
+                owner = current.name or owner
+            elif isinstance(current, FunctionNode):
+                owner = current.name or owner
+            if isinstance(current, VariableNode):
+                record = incomplete_record(current.vtype)
+                if record is not None:
+                    context = f"the declaration of '{current.name}'"
+                    if owner:
+                        context += f" in '{owner}'"
+                    raise self.RECORD_SEMANTIC_ERROR(
+                        "incomplete record type", record, context
+                    )
+            for value in vars(current).values():
+                if isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
+                    visit(value, owner)
+
+        visit(ast_node, None)
 
     def materialized_record_type_names(self):
         return {
