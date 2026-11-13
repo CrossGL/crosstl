@@ -49323,8 +49323,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return (
                 self.is_scalar_value_type(func_name)
                 or self.hlsl_type_constructor_name(func_name) is not None
+                or self.hlsl_crossgl_vector_constructor(func_name) is not None
             ) and all(self.hlsl_expression_is_repeatable(arg) for arg in args)
         return False
+
+    def hlsl_crossgl_vector_constructor(self, name):
+        """The HLSL vector type spelled by a CrossGL constructor such as ``vec3``, or ``None``."""
+        if not isinstance(name, str):
+            return None
+        mapped = self.map_type(name)
+        if isinstance(mapped, str) and re.fullmatch(
+            r"(?:float|half|int|uint|bool|double)[234]", mapped
+        ):
+            return mapped
+        return None
 
     def hlsl_scalar_splat_cast(self, constructor_type, rendered_arg):
         return f"(({self.map_type(constructor_type)})({rendered_arg}))"
@@ -50347,31 +50359,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             args[1], self.generate_expression(args[1])
         )
         rendered_coords = self.generate_expression(coords)
-        call_args = [
-            sampler_name,
-            self.vector_component(rendered_coords, "xy"),
-            self.vector_component(rendered_coords, "z"),
-        ]
-        method = "SampleCmp"
-        if is_texture_sample_lod_operation(func_name):
-            lod = args[3]
-            method = (
-                "SampleCmpLevelZero"
-                if self.hlsl_is_zero_literal(lod)
-                else "SampleCmpLevel"
-            )
-            if method == "SampleCmpLevel":
-                call_args.append(self.generate_expression(lod))
+        texture_coord = self.vector_component(rendered_coords, "xy")
+        compare = self.vector_component(rendered_coords, "z")
+        offset = None
         if is_texture_sample_offset_operation(func_name):
-            call_args.append(
-                self.hlsl_immediate_texture_offset(
-                    func_name,
-                    args[-1],
-                    self.texture_resource_type(args[0]),
-                    "SampleCmp",
-                )
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                args[-1],
+                self.texture_resource_type(args[0]),
+                "SampleCmp",
             )
-        return f"{texture_name}.{method}({', '.join(call_args)})"
+        if is_texture_sample_lod_operation(func_name):
+            return self.hlsl_sample_cmp_level(
+                texture_name, sampler_name, texture_coord, compare, args[3], offset
+            )
+        call_args = [sampler_name, texture_coord, compare]
+        if offset is not None:
+            call_args.append(offset)
+        return f"{texture_name}.SampleCmp({', '.join(call_args)})"
 
     def generate_texture_compare_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)

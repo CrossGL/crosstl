@@ -5275,13 +5275,11 @@ class WGSLCodeGen(
         if len(args) == 3:
             texture, second, third = args
             if self.is_sampler_type(self.expression_type(second)):
-                comparison_args = self.explicit_shadow_comparison_arguments(
+                comparison_call = self.explicit_shadow_comparison_call(
                     function_name, texture, second, third
                 )
-                if comparison_args is not None:
-                    return self.generate_texture_sample_compare_call(
-                        function_name, comparison_args
-                    )
+                if comparison_call is not None:
+                    return comparison_call
                 sample_function = (
                     "textureSampleLevel"
                     if self._current_stage_name == "compute"
@@ -5425,13 +5423,11 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             texture, sampler, coords, level = args
-            comparison_args = self.explicit_shadow_comparison_arguments(
-                function_name, texture, sampler, coords, (level,)
+            comparison_call = self.explicit_shadow_comparison_call(
+                function_name, texture, sampler, coords, lod=level
             )
-            if comparison_args is not None:
-                return self.generate_texture_sample_compare_level_call(
-                    function_name, comparison_args
-                )
+            if comparison_call is not None:
+                return comparison_call
             self.refuse_comparison_sampler(
                 sampler, function_name, texture, "textureSampleLevel"
             )
@@ -5449,13 +5445,11 @@ class WGSLCodeGen(
 
     def generate_texture_sample_level_offset_call(self, function_name, args):
         if len(args) == 5:
-            comparison_args = self.explicit_shadow_comparison_arguments(
-                function_name, args[0], args[1], args[2], args[3:]
+            comparison_call = self.explicit_shadow_comparison_call(
+                function_name, args[0], args[1], args[2], lod=args[3], offset=args[4]
             )
-            if comparison_args is not None:
-                return self.generate_texture_sample_compare_level_offset_call(
-                    function_name, comparison_args
-                )
+            if comparison_call is not None:
+                return comparison_call
             self.refuse_comparison_sampler(
                 args[1], function_name, args[0], "textureSampleLevel"
             )
@@ -5488,13 +5482,11 @@ class WGSLCodeGen(
             )
         if len(args) == 4:
             if self.is_sampler_type(self.expression_type(args[1])):
-                comparison_args = self.explicit_shadow_comparison_arguments(
-                    function_name, args[0], args[1], args[2], (args[3],)
+                comparison_call = self.explicit_shadow_comparison_call(
+                    function_name, args[0], args[1], args[2], offset=args[3]
                 )
-                if comparison_args is not None:
-                    return self.generate_texture_sample_compare_offset_call(
-                        function_name, comparison_args
-                    )
+                if comparison_call is not None:
+                    return comparison_call
                 self.refuse_comparison_sampler(
                     args[1], function_name, args[0], "textureSample"
                 )
@@ -5527,34 +5519,84 @@ class WGSLCodeGen(
             f"arguments; got {len(args)} argument(s)"
         )
 
-    def explicit_shadow_comparison_arguments(
-        self, function_name, texture, sampler, coords, extra_args=()
+    def explicit_shadow_comparison_call(
+        self, function_name, texture, sampler, coords, *, lod=None, offset=None
     ):
-        """Split a depth-shadow vec3 coordinate for a comparison-sampler call."""
+        """Lower a shadow lookup that pairs a depth texture with a comparison_sampler.
+
+        Returns ``None`` when the call is not such a pairing, so the caller keeps its
+        ordinary path. Otherwise the vec3 coordinate is split into the texture
+        coordinate (``xy``) and the comparison reference (``z``). Outside the fragment
+        stage, and for a literal zero LOD, the level-zero ``textureSampleCompareLevel``
+        is used, since ``textureSampleCompare`` needs implicit derivatives.
+        """
         if not (
             self.is_depth_texture_type(self.expression_type(texture))
             and self.is_comparison_sampler_type(self.expression_type(sampler))
         ):
             return None
+        texture_text = self.generate_expression(texture)
+        sampler_text = self.generate_expression(sampler)
+        texture_type = self.expression_type(texture)
+        type_name = self.resource_type_name(texture_type)
+        type_label = (
+            texture_type.name if isinstance(texture_type, NamedType) else type_name
+        )
+
+        def refuse(reason):
+            raise WGSLComparisonSamplerUnsupportedError(
+                function_name,
+                texture_text,
+                "textureSampleCompare",
+                sampler_text,
+                reason=reason,
+            )
+
+        if "cube" in type_name or "array" in type_name:
+            refuse(
+                f"{type_label} lookups take a vec4 coordinate, and WGSL output "
+                "lowers only 2D shadow textures through a comparison_sampler"
+            )
         coordinate_shape = self.vector_shape(self.expression_type(coords))
         if coordinate_shape is None or coordinate_shape[1] != 3:
-            raise ValueError(
-                f"WGSL target requires {function_name}() on a shadow texture to "
-                "provide vec3 coordinates (uv plus the comparison reference)"
+            refuse(
+                f"{type_label} lookups need a vec3 coordinate (uv plus the "
+                "comparison reference)"
             )
         if not self.is_repeatable_matrix_operand(coords):
-            raise ValueError(
-                f"WGSL target splits the {function_name}() shadow coordinate into "
-                "texture coordinates and a comparison reference; assign a "
-                "coordinate with side effects to a local variable first"
+            refuse(
+                "the coordinate is split into a texture coordinate and a comparison "
+                "reference, so a coordinate with side effects must be assigned to a "
+                "local variable first"
             )
-        return [
+        if lod is not None and not (
+            isinstance(lod, LiteralNode) and lod.value in {0, 0.0}
+        ):
+            refuse(
+                "textureSampleCompareLevel samples mip level 0, so only a literal "
+                "0 LOD can be lowered"
+            )
+
+        arguments = [
             texture,
             sampler,
             MemberAccessNode(coords, "xy"),
             MemberAccessNode(coords, "z"),
-            *extra_args,
         ]
+        if offset is not None:
+            arguments.append(offset)
+        level_only = lod is not None or self._current_stage_name in {
+            "compute",
+            "vertex",
+        }
+        builtin = "textureSampleCompareLevel" if level_only else "textureSampleCompare"
+        return self.generate_texture_builtin_call(
+            builtin,
+            function_name,
+            arguments,
+            implicit=len(arguments) - 1,
+            explicit=len(arguments),
+        )
 
     def generate_texture_sample_compare_call(self, function_name, args):
         self.require_depth_texture_operand(args[0], function_name)

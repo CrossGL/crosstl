@@ -45359,6 +45359,53 @@ def test_directx_shadow_texture_with_explicit_comparison_sampler_uses_compare_sa
     assert "t.SampleCmp(s, coord.xy, coord.z, int2(1, 1))" in generated_code
 
 
+def test_directx_shadow_texture_with_inline_vec3_coordinate_uses_compare_samples():
+    shader = """
+    shader InlineExplicitShadowSampler {
+        sampler2DShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                float sampled = texture(t, s, vec3(uv, 0.5));
+                float lod = textureLod(t, s, vec3(uv, 0.5), 0.0);
+                float offset = textureOffset(t, s, vec3(uv, 0.5), ivec2(1, 0));
+                return vec4(sampled + lod + offset);
+            }
+        }
+    }
+    """
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "t.SampleCmp(s, (float3(uv, 0.5)).xy, (float3(uv, 0.5)).z)" in generated_code
+    assert (
+        "t.SampleCmpLevelZero(s, (float3(uv, 0.5)).xy, (float3(uv, 0.5)).z)"
+        in generated_code
+    )
+    assert (
+        "t.SampleCmp(s, (float3(uv, 0.5)).xy, (float3(uv, 0.5)).z, int2(1, 0))"
+        in generated_code
+    )
+    assert "DirectX cannot lower" not in generated_code
+
+
+def test_directx_shadow_texture_explicit_nonzero_lod_uses_sample_cmp_level():
+    shader = """
+    shader ExplicitShadowNonzeroLod {
+        sampler2DShadow t;
+        comparison_sampler s;
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec3 coord = vec3(uv, 0.5);
+                float lod = textureLod(t, s, coord, 1.0);
+                return vec4(lod);
+            }
+        }
+    }
+    """
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "t.SampleCmpLevel(s, coord.xy, coord.z, 1.0)" in generated_code
+    assert "SampleCmpLevelZero" not in generated_code
+
+
 def test_directx_implicit_comparison_sampler_for_shadow_texture_parameter():
     shader = """
     shader ShadowParameter {
