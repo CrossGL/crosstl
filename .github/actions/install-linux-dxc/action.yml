@@ -19,7 +19,7 @@ runs:
         archive="$RUNNER_TEMP/dxc.tar.gz"
         dxc_root="$RUNNER_TEMP/dxc"
         urls=(
-          "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/linux_dxc_2026_05_26.x86_64.tar.gz"
+          "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/linux_dxc_2026_09_28.x86_x64.tar.gz"
           "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/linux_dxc_2026_02_20.x86_64.tar.gz"
           "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/linux_dxc_2025_07_14.x86_64.tar.gz"
         )
@@ -43,7 +43,7 @@ runs:
             --connect-timeout 30 \
             "$url"; then
             if [ "$DXC_PINNED" = "true" ]; then
-              echo "928b3e9986d11dc4279050e02340950c29bcbd1e5efb9d3ded9669dade37639d  $archive" | sha256sum --check --strict
+              echo "96faadc7f5c282d2ffda49804beb4c3ee38127bc252b723234e3c5cdf7aa39a1  $archive" | sha256sum --check --strict
             fi
             if tar -tzf "$archive" >/dev/null; then
               download_ok=true
