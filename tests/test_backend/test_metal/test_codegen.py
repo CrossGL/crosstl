@@ -552,7 +552,8 @@ def test_codegen_preserves_hex_float_literals_from_msl_cxx_base():
     generated = convert(code)
 
     assert "float tiny = 0x1.0p-14f;" in generated
-    assert "float16 one = 0x1p+0h;" in generated
+    # A half literal becomes a float16 conversion of the same value, as decimal half literals do.
+    assert "float16 one = float16(0x1p+0);" in generated
     assert "float separated = 0x10.8p+2f;" in generated
     assert parse_crossgl(generated) is not None
 
@@ -6893,8 +6894,9 @@ def test_codegen_local_enum_declaration_from_metal_function_body():
     assert "enum Mode {" in crossgl
     assert "ModeA = 0" in crossgl
     assert "ModeB = 1" in crossgl
-    assert "Mode mode = ModeA;" in crossgl
-    assert "return mode == ModeA ? color : vec4(0.0);" in crossgl
+    # The block-scope enum moves to module scope, and its enumerators are written E::A as for any unscoped enum.
+    assert "Mode mode = Mode::ModeA;" in crossgl
+    assert "return mode == Mode::ModeA ? color : vec4(0.0);" in crossgl
     assert "Unhandled statement type: EnumNode" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
@@ -7138,9 +7140,7 @@ def test_codegen_preserves_function_local_uint8_array_layout(tmp_path):
     canonical = "MetalLocal_copy_bytes_vec_w"
     assert f"@metal_alignas(1)\n    struct {canonical}" in crossgl
     assert "uint8[12] wi;" in crossgl
-    strict_ast = CrossGLParser(
-        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
-    ).parse()
+    strict_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     metal = MetalCodeGen().generate(strict_ast)
     normalized = normalize(metal)
     assert f"struct alignas(1) {canonical}" in normalized
@@ -7199,9 +7199,7 @@ def test_codegen_hoists_named_local_struct_with_qualified_pointer_cast():
         f"(*(const device {canonical}*)input);" in crossgl
     )
     assert "const device WordBlock" not in crossgl
-    strict_ast = CrossGLParser(
-        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
-    ).parse()
+    strict_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     assert strict_ast is not None
 
 
@@ -7663,9 +7661,7 @@ def test_codegen_parses_materialized_owner_alias_pointer_casts():
     assert "return (const thread float*)self.values;" in crossgl
     assert "return (thread int*)self.values;" in crossgl
     assert "return (const thread int*)self.values;" in crossgl
-    strict_ast = CrossGLParser(
-        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
-    ).parse()
+    strict_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     assert strict_ast is not None
 
 
@@ -7699,9 +7695,7 @@ def test_codegen_parses_materialized_struct_alias_template_vectors():
     assert "vec4 BaseFrag__make__float(float value)" in crossgl
     assert "vec4 result;" in crossgl
     assert "dtype_frag_t" not in crossgl
-    strict_ast = CrossGLParser(
-        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
-    ).parse()
+    strict_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
     assert strict_ast is not None
 
 
@@ -13370,7 +13364,8 @@ def test_codegen_component_updates_accept_enum_and_ptrdiff_contracts():
 
     assert f"uint {helper}(inout uvec4 value, uint lane, int64 right)" in normalized
     assert f"uint {helper}(inout uvec4 value, uint lane, uint right)" in normalized
-    assert f"{helper}(values, lane, LocalStep);" in normalized
+    # The block-scope enum moves to module scope, so its enumerator is written LocalDelta::LocalStep.
+    assert f"{helper}(values, lane, LocalDelta::LocalStep);" in normalized
     assert f"{helper}(values, lane, delta);" in normalized
     # Unscoped enumerators are written as CrossGL's scoped E::A.
     assert (

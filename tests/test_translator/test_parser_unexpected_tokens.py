@@ -65,7 +65,7 @@ def test_unreadable_tokens_are_refused(source, message):
 def test_an_expression_cannot_start_with_punctuation():
     source = _shader(stage="void f() { float x = ); }")
     with pytest.raises(SyntaxError, match="Unexpected RPAREN"):
-        Parser(Lexer(source).get_tokens(), strict_function_bodies=True).parse()
+        Parser(Lexer(source).get_tokens()).parse()
 
 
 def test_switch_body_before_the_first_case_is_refused():
@@ -73,13 +73,13 @@ def test_switch_body_before_the_first_case_is_refused():
         stage="void f(int k) { switch (k) { + case 0: break; } }",
     )
     with pytest.raises(SyntaxError, match="switch body before its first case"):
-        Parser(Lexer(source).get_tokens(), strict_function_bodies=True).parse()
+        Parser(Lexer(source).get_tokens()).parse()
 
 
 def test_unterminated_switch_body_is_refused():
     source = "void f(int k) { switch (k) {"
     with pytest.raises(SyntaxError):
-        Parser(Lexer(source).get_tokens(), strict_function_bodies=True).parse()
+        Parser(Lexer(source).get_tokens()).parse()
 
 
 def test_empty_declarations_and_forward_declarations_are_accepted():
@@ -101,7 +101,6 @@ def test_member_default_values_still_parse():
 def test_keywords_spelled_like_names_are_still_expressions():
     ast = Parser(
         Lexer(_shader(stage="vec4 f(float x) { return vec4(float(x)); }")).get_tokens(),
-        strict_function_bodies=True,
     ).parse()
     assert ast is not None
 

@@ -1,3 +1,5 @@
+import pytest
+
 from crosstl.backend.HIP.HipAst import (
     AtomicOperationNode,
     BinaryOpNode,
@@ -19,6 +21,7 @@ from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
 from tests.lowering_refusal_helpers import (
     hip_import_partial_output,
@@ -1173,7 +1176,11 @@ def test_external_rocm_reduction_nested_template_static_for_crossgl_reparse():
     }
     """
 
-    ast, crossgl = assert_crossgl_reparses(source)
+    ast, crossgl = generate_crossgl_from_hip(source)
+    # A template metaprogram called with a templated lambda has no CrossGL form, so the body is refused rather
+    # than read as empty.
+    with pytest.raises(CrossGLFunctionBodyParseError):
+        CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
 
     static_for = ast.statements[0].body[1]
     assert isinstance(static_for, FunctionCallNode)

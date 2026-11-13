@@ -173,6 +173,8 @@ class RustParser:
         self.current_token = tokens[0] if tokens else None
         self.expression_stops_at_lbrace = False
         self.pattern_parameter_counter = 0
+        # Items declared in blocks, as ``(kind, item)``; :meth:`parse` moves them to module scope.
+        self.hoisted_local_items = []
 
     def current_starts_block_expression(self):
         if self.current_token[0] == "CONST":
@@ -397,6 +399,15 @@ class RustParser:
             else:
                 self.eat(self.current_token[0])
 
+        self.merge_hoisted_local_items(
+            {
+                "structs": structs,
+                "enums": enums,
+                "traits": traits,
+                "type_aliases": type_aliases,
+                "impl_blocks": impl_blocks,
+            }
+        )
         return ShaderNode(
             structs,
             functions,
@@ -3849,28 +3860,59 @@ class RustParser:
         )
 
     def parse_local_item(self):
-        if self.current_token[0] == "STRUCT":
-            self.parse_struct()
-        elif self.current_token[0] == "ENUM":
-            self.parse_enum()
-        elif self.current_token[0] == "TRAIT":
-            self.parse_trait()
-        elif self.current_token[0] == "TYPE":
-            self.parse_type_alias()
-        elif self.current_token[0] == "IMPL":
-            self.parse_impl_block()
-        elif self.current_token[0] == "MOD":
-            self.skip_module_item()
-        elif self.current_token[0] == "EXTERN":
-            self.skip_extern_block()
-        elif self.current_token[0] == "UNSAFE" and self.peek_token_type() == "IMPL":
+        """Parse an item declared in a block and keep it for module scope.
+
+        An item in a block is an ordinary item whose name is visible only in that block (the Rust Reference,
+        "Statements": item declarations), so it can move to module scope when its name is not declared there
+        too; :meth:`parse` refuses the clash. Modules and extern blocks are skipped, as at module scope.
+        """
+        token_type = self.current_token[0]
+        if token_type == "STRUCT":
+            self.hoist_local_item("structs", self.parse_struct())
+        elif token_type == "ENUM":
+            self.hoist_local_item("enums", self.parse_enum())
+        elif token_type == "TRAIT":
+            self.hoist_local_item("traits", self.parse_trait())
+        elif token_type == "TYPE":
+            self.hoist_local_item("type_aliases", self.parse_type_alias())
+        elif token_type == "IMPL":
+            self.hoist_local_item("impl_blocks", self.parse_impl_block())
+        elif token_type == "UNSAFE" and self.peek_token_type() == "IMPL":
             self.eat("UNSAFE")
-            self.parse_impl_block(is_unsafe=True)
-        elif self.current_token[0] == "UNSAFE" and self.peek_token_type() == "EXTERN":
+            self.hoist_local_item("impl_blocks", self.parse_impl_block(is_unsafe=True))
+        elif token_type == "MOD":
+            # As at module scope, a module's items are not read; a use of one is then an undeclared name.
+            self.skip_module_item()
+        elif token_type == "EXTERN":
+            self.skip_extern_block()
+        elif token_type == "UNSAFE" and self.peek_token_type() == "EXTERN":
             self.eat("UNSAFE")
             self.skip_extern_block()
         else:
             raise RustSyntaxError(f"Expected local item, got {self.current_token[0]}")
+
+    def hoist_local_item(self, kind, item):
+        self.hoisted_local_items.append((kind, item))
+
+    def merge_hoisted_local_items(self, items):
+        """Add the items declared in blocks to the module's ``items`` lists, refusing a name declared twice."""
+        hoisted = self.hoisted_local_items
+        if not hoisted:
+            return
+        declared = {}
+        for kind in ("structs", "enums", "traits", "type_aliases"):
+            for item in items[kind]:
+                declared.setdefault(getattr(item, "name", None), kind)
+        for kind, item in hoisted:
+            name = getattr(item, "name", None)
+            if kind != "impl_blocks":
+                if name in declared:
+                    raise RustSyntaxError(
+                        f"The item '{name}' declared in a function body has the name of another item, "
+                        "so it cannot move to module scope"
+                    )
+                declared[name] = kind
+            items[kind].append(item)
 
     def try_parse_block_final_expression(self):
         start_index = self.current_index

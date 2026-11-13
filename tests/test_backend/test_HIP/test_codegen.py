@@ -15,6 +15,7 @@ from crosstl.backend.HIP.HipCrossGLCodeGen import (
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
 from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
 from tests.lowering_refusal_helpers import hip_import_partial_output
 
@@ -365,7 +366,9 @@ class TestHipCodeGen:
 
         assert "ptr<T> make_unique(Args args)" in result
         assert "Args ... args" not in result
-        CrossGLParser(CrossGLLexer(result).tokens).parse()
+        # CrossGL has no new-expressions or pack expansions; the body is refused rather than read as empty.
+        with pytest.raises(CrossGLFunctionBodyParseError):
+            CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_basic_kernel_conversion(self):
         code = """
@@ -18020,12 +18023,10 @@ class TestHipCodeGen:
 
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
-        CrossGLParser(CrossGLLexer(result).tokens).parse()
+        # CrossGL cannot compute a type with std::conditional_t; the body is refused rather than read as empty.
+        with pytest.raises(CrossGLFunctionBodyParseError):
+            CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-        assert (
-            "typedef std::conditional_t<sizeof(InDataType)<sizeof(WeiDataType), "
-            "InDataType, WeiDataType> ComputeType;"
-        ) in result
         assert "if ((s.log_level_ > 0)) {" in result
 
     def test_public_rocm_top_level_conditional_member_alias_codegen_reparse(self):

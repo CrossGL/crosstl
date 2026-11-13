@@ -1900,16 +1900,16 @@ def test_attributed_subscript_set_accessor_from_upstream_bug_sample_codegen():
     }
     """
 
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
-    generated_code = generate_code(ast)
+    ast = parse_code(tokenize_code(code))
 
-    assert "struct Test" in generated_code
-    assert "RWStructuredBuffer<int> val;" in generated_code
-    assert "Test test;" in generated_code
-    assert "test[0, 0] = 1;" in generated_code
-    assert "nonmutating" not in generated_code
-    cgl_translator.parse(generated_code)
+    # The __subscript was dropped, so ``test[0, 0] = 1`` indexed a structure; the import is refused instead.
+    with pytest.raises(
+        SlangImportRefused,
+        match=re.escape(
+            "the __subscript of Slang structure 'Test' has no CrossGL form"
+        ),
+    ):
+        generate_code(ast)
 
 
 def test_logical_not_codegen():

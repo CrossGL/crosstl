@@ -356,9 +356,7 @@ def test_linearized_size_is_defined_only_for_shapes_the_target_cannot_declare():
 
 def _parse_crossgl(source):
     register_default_sources()
-    return SOURCE_REGISTRY.get("cgl").parse(
-        source, source_options={"strict_function_bodies": True}
-    )
+    return SOURCE_REGISTRY.get("cgl").parse(source)
 
 
 def test_programs_naming_shape_builtins_directly_are_left_to_the_generator():

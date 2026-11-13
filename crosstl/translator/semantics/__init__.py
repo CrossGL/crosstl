@@ -216,6 +216,7 @@ from .texel_offsets import legalize_texel_offsets
 from .texture_lod_clamp import refuse_texture_lod_clamp
 from .texture_residency import declare_hlsl_residency_status, refuse_texture_residency
 from .texture_swizzles import canonicalize_texture_swizzles
+from .tuple_fields import TupleFieldUnsupportedError, refuse_tuple_fields
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
 from .unsized_arrays import (
     StorageBufferParameterUnsupportedError,
@@ -296,6 +297,7 @@ __all__ = [
     "VertexInputPositionUnsupportedError",
     "TARGET_ENTRIES",
     "TessellationPatchUnsupportedError",
+    "TupleFieldUnsupportedError",
     "TypeAliasUnsupportedError",
     "UndeclaredFunctionError",
     "UndeclaredIdentifierError",
@@ -480,6 +482,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
         refuse_undeclared_functions(program, report.target)
     lower_void_casts(program, report.target)
     refuse_void_values(program, report.target)
+    refuse_tuple_fields(program, report.target)
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)

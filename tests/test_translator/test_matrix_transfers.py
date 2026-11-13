@@ -63,6 +63,7 @@ from crosstl.translator.codegen.metal_codegen import (
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+from tests.cooperative_matrix_parsing import keeping_untyped_cooperative_matrices
 from tests.runtime_helpers import _validate
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_metal_builtin_ownership import _compile
@@ -641,10 +642,12 @@ def test_parser_types_fills_and_matrix_array_elements_from_context():
 def test_parser_rejects_fills_with_other_arities():
     source = PARSER_SHADER.replace("float(lane)", "float(lane), 1.0")
     with pytest.raises(SyntaxError, match="fill expects 1 argument, got 2"):
-        Parser(tokenize_code(source), strict_function_bodies=True).parse()
-    # Permissive parses keep the call for the target's diagnostic.
+        Parser(tokenize_code(source)).parse()
+    # The generator also refuses such a call in a tree the parser did not check.
+    with keeping_untyped_cooperative_matrices():
+        tree = parse(source)
     with pytest.raises(UnsupportedMetalFeatureError, match="fill requires one value"):
-        MetalCodeGen().generate(parse(source))
+        MetalCodeGen().generate(tree)
 
 
 def test_backends_reject_fills_without_a_matrix_context():

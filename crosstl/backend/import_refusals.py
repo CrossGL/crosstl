@@ -21,6 +21,8 @@ __all__ = [
     "ImportRefusalMixin",
     "ImportRefused",
     "MetalImportRefused",
+    "MojoImportRefused",
+    "RustImportRefused",
     "SlangImportRefused",
 ]
 
@@ -78,6 +80,22 @@ class MetalImportRefused(ImportRefused):
     source_name = "metal"
     label = "Metal"
     code = f"{CODE_PREFIX}metal-import-unsupported"
+
+
+class MojoImportRefused(ImportRefused):
+    """One or more Mojo constructs have no faithful CrossGL representation."""
+
+    source_name = "mojo"
+    label = "Mojo"
+    code = f"{CODE_PREFIX}mojo-import-unsupported"
+
+
+class RustImportRefused(ImportRefused):
+    """One or more Rust constructs have no faithful CrossGL representation."""
+
+    source_name = "rust"
+    label = "Rust"
+    code = f"{CODE_PREFIX}rust-import-unsupported"
 
 
 class SlangImportRefused(ImportRefused):

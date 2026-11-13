@@ -2094,6 +2094,8 @@ def _is_texture_descriptor_type(type_node):
             "sampler1d",
             "sampler2d",
             "sampler3d",
+            # A texel buffer is a texture resource; ``isamplerBuffer`` and ``usamplerBuffer`` match above.
+            "samplerbuffer",
             "samplercube",
             "texture",
             "usampler",

@@ -1,6 +1,4 @@
 {
  "schemaVersion": 1,
- "sites": {
-  "crosstl/translator/parser.py::Parser.parse_function::empty-block-recovery": 1
- }
+ "sites": {}
 }

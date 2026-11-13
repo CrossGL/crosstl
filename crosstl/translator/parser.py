@@ -376,12 +376,11 @@ WGSL_STYLE_SCALAR_SPELLINGS = {
 class Parser:
     """Recursive-descent parser for CrossGL Universal IR tokens."""
 
-    def __init__(self, tokens, strict_function_bodies=False):
+    def __init__(self, tokens):
         self.tokens = tokens
         # Every in-place token edit, as (position, replaced token), so that a
         # lookahead can undo its edits without copying the whole token list.
         self.token_edits = []
-        self.strict_function_bodies = strict_function_bodies
         self.anonymous_buffer_blocks = []
         # static_assert declarations outside blocks, attached to the ShaderNode by finalize_shader.
         self.static_assertions = []
@@ -1875,8 +1874,6 @@ class Parser:
 
             body = None
             if self.current_token[0] == "LBRACE":
-                body_start_pos = self.pos
-                body_start_token = self.current_token
                 parameter_types = {
                     parameter.name: parameter.param_type for parameter in parameters
                 }
@@ -1887,16 +1884,13 @@ class Parser:
                     try:
                         body = self.parse_block()
                     except SyntaxError as exc:
-                        if self.strict_function_bodies:
-                            raise CrossGLFunctionBodyParseError(
-                                name,
-                                exc,
-                                self.current_token,
-                            ) from exc
-                        self.pos = body_start_pos
-                        self.current_token = body_start_token
-                        self.skip_balanced_declaration()
-                        body = BlockNode([])
+                        # A body that does not parse is refused: an empty body in its place would be a function
+                        # that returns an undefined value.
+                        raise CrossGLFunctionBodyParseError(
+                            name,
+                            exc,
+                            self.current_token,
+                        ) from exc
                 finally:
                     self.restore_value_type_scope()
                     self.current_function_return_type = previous_return_type
@@ -2659,7 +2653,13 @@ class Parser:
             if token_type == "BITWISE_AND" and self.peek(offset)[0] == "MUT":
                 offset += 1
 
-        if self.peek(offset)[0] != "IDENTIFIER":
+        declarator_type, declarator_value = self.peek(offset)
+        if declarator_type != "IDENTIFIER" and not (
+            # ``device float* local = p;``: a contextual keyword names the variable, as it may without the pointer.
+            isinstance(declarator_value, str)
+            and declarator_value.isidentifier()
+            and self.peek(offset + 1)[0] in {"EQUALS", "SEMICOLON", "COMMA", "LBRACKET"}
+        ):
             return False
 
         next_token = self.peek(offset + 1)[0]
@@ -3594,34 +3594,6 @@ class Parser:
         operation.set_result_contract(matrix_type)
         return operation
 
-    def infer_cooperative_matrix_operation_or_preserve(self, operation_node):
-        """Preserve operations for target diagnostics in permissive parse mode."""
-        try:
-            return self.infer_cooperative_matrix_operation(operation_node)
-        except SyntaxError as error:
-            if self.strict_function_bodies:
-                raise
-            self.record_cooperative_matrix_inference_error(operation_node, error)
-            return operation_node
-
-    @staticmethod
-    def record_cooperative_matrix_inference_error(expression, error):
-        expression.annotations.setdefault(
-            "cooperative_matrix_inference_errors", []
-        ).append(str(error))
-
-    def apply_cooperative_matrix_result_constraint(
-        self, expression, expected_type, context
-    ):
-        """Apply a result constraint without discarding permissively parsed bodies."""
-        try:
-            self.constrain_cooperative_matrix_result(expression, expected_type, context)
-        except SyntaxError as error:
-            if self.strict_function_bodies:
-                raise
-            if isinstance(expression, CooperativeMatrixOpNode):
-                self.record_cooperative_matrix_inference_error(expression, error)
-
     @staticmethod
     def type_is_inferred_declaration(value_type):
         return value_type is None or (
@@ -3671,7 +3643,7 @@ class Parser:
     def finish_variable_contract(self, variable):
         """Constrain an initializer and register its effective lexical type."""
         if variable.initial_value is not None:
-            self.apply_cooperative_matrix_result_constraint(
+            self.constrain_cooperative_matrix_result(
                 variable.initial_value,
                 variable.var_type,
                 f"declaration {variable.name!r}",
@@ -4465,6 +4437,13 @@ class Parser:
             return self.parse_variable_declaration()
         else:
             expr = self.parse_expression()
+            if self.current_token[0] == "COMMA":
+                # ``a(), b();``: the comma operator at statement level, the same node as ``(a(), b());``.
+                operands = [expr]
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    operands.append(self.parse_expression())
+                expr = CommaExpressionNode(operands)
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 return ExpressionStatementNode(expr)
@@ -5005,7 +4984,7 @@ class Parser:
         value = None
         if self.current_token[0] != "SEMICOLON":
             value = self.parse_expression()
-            self.apply_cooperative_matrix_result_constraint(
+            self.constrain_cooperative_matrix_result(
                 value,
                 self.current_function_return_type,
                 "function return type",
@@ -5067,7 +5046,7 @@ class Parser:
                 stop_at_generic_close, reject_logical_at_top_level
             )
             if op == "=":
-                self.apply_cooperative_matrix_result_constraint(
+                self.constrain_cooperative_matrix_result(
                     right,
                     self.cooperative_matrix_expression_type(left),
                     "assignment target",
@@ -5476,6 +5455,16 @@ class Parser:
         """Return whether ``token`` is a resource address-space qualifier."""
         return str(token[1]).lower() in RESOURCE_ADDRESS_SPACE_NAMES
 
+    def current_token_is_tuple_field_number(self):
+        """Return whether the current token is ``.N``, a float token that follows an operand as a tuple field."""
+        token_type, token_value = self.current_token
+        if token_type != "FLOAT_NUMBER":
+            return False
+        digits = str(token_value)[1:]
+        return (
+            str(token_value).startswith(".") and digits.isascii() and digits.isdigit()
+        )
+
     def parse_postfix_expression(self):
         """Parse member, call, index, and postfix unary expressions."""
         left = self.parse_primary_expression()
@@ -5484,6 +5473,11 @@ class Parser:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
                 member = self.parse_binding_identifier()
+                left = MemberAccessNode(left, member)
+            elif self.current_token_is_tuple_field_number():
+                # ``t.1`` lexes as ``t`` and the float ``.1``; after an operand it can only be tuple field 1.
+                member = str(self.current_token[1])[1:]
+                self.eat("FLOAT_NUMBER")
                 left = MemberAccessNode(left, member)
             elif self.is_arrow_token():
                 self.eat_arrow()
@@ -5575,7 +5569,7 @@ class Parser:
                         # CrossGL also accepts the GL_KHR_shader_subgroup spelling of a wave operation.
                         left = WaveOpNode(GLSL_SUBGROUP_FUNCTIONS[left.name], arguments)
                     elif left.name in COOPERATIVE_MATRIX_INTRINSICS:
-                        left = self.infer_cooperative_matrix_operation_or_preserve(
+                        left = self.infer_cooperative_matrix_operation(
                             CooperativeMatrixOpNode(
                                 COOPERATIVE_MATRIX_INTRINSICS[left.name],
                                 arguments,
@@ -6682,6 +6676,10 @@ class Parser:
                 depth = 1
                 self.eat("LESS_THAN")
                 while depth > 0 and self.current_token[0] != "EOF":
+                    if self.current_token[0] == "LPAREN":
+                        # ``Loc<N, (N > 2)>``: a parenthesized value argument's ``<`` and ``>`` are comparisons.
+                        self.parse_balanced_parenthesized_token_text()
+                        continue
                     if self.current_token[0] == "LESS_THAN":
                         depth += 1
                         self.eat("LESS_THAN")

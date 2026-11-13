@@ -2,6 +2,8 @@ import re
 import shutil
 import subprocess
 
+import pytest
+
 from crosstl.backend.CUDA.CudaAst import (
     AssignmentNode,
     AtomicOperationNode,
@@ -25,6 +27,7 @@ from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import CrossGLFunctionBodyParseError
 from crosstl.translator.parser import Parser as CrossGLParser
 from tests.lowering_refusal_helpers import (
     cuda_import_partial_output,
@@ -598,8 +601,10 @@ def test_tiny_cuda_nn_fmt_named_argument_string_literal_suffix_parse():
     assert isinstance(dfmt_call.args[2], AssignmentNode)
     assert dfmt_call.args[2].left == '"DEVICE_FUNCTION"_a'
     assert dfmt_call.args[2].right == "device_function"
-    assert '"DEVICE_FUNCTION"_a = device_function' in crossgl
-    assert_crossgl_reparse(crossgl)
+    # CrossGL has no raw strings or user-defined literals; the host call is refused rather than read as an empty
+    # body.
+    with pytest.raises(CrossGLFunctionBodyParseError):
+        assert_crossgl_reparse(crossgl)
 
 
 def test_cccl_libcudacxx_concept_emulation_declaration_is_skipped():
@@ -3616,8 +3621,9 @@ def test_current_cccl_thrust_variable_template_ternary_codegen_reparse():
 
     assert ast.global_variables[0].name == "is_proxy_reference_v"
     assert ast.functions[0].body[0].value.condition == "is_proxy_reference_v<int>"
-    assert "return (is_proxy_reference_v<int> ? 1 : 0);" in crossgl
-    assert_crossgl_reparse(crossgl)
+    # CrossGL has no variable templates; the specialization is refused rather than read as an empty body.
+    with pytest.raises(CrossGLFunctionBodyParseError):
+        assert_crossgl_reparse(crossgl)
 
 
 def test_current_cccl_forceinline_function_annotation_codegen_reparse():

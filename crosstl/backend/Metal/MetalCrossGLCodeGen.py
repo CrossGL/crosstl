@@ -112,6 +112,7 @@ from .local_aggregate_declarators import (
     union_layout,
     unnamed_aggregate_display_name,
 )
+from .local_enums import hoist_local_enums
 from .matrix_arithmetic import NOT_MATRIX, matrix_arithmetic_shape
 from .matrix_columns import MetalMatrixColumnsError, matrix_columns_object
 from .mesh_import import MetalMeshImport
@@ -3718,6 +3719,7 @@ class MetalToCrossGLConverter(
         )
         self.local_aggregate_reserved_names.update(self.struct_name_map.values())
         self.local_aggregate_reserved_names.update(self.wide_vector_reserved_names)
+        hoist_local_enums(ast, self.refuse_import)
         enums = getattr(ast, "enums", []) or []
         for enum in enums:
             if isinstance(enum, EnumNode):
@@ -12730,7 +12732,11 @@ class MetalToCrossGLConverter(
     def normalize_literal_string(self, value):
         if "'" in value and re.match(r"^(?:0[xX][0-9a-fA-F]|0[bB][01]|\d|\.\d)", value):
             value = value.replace("'", "")
-        if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
+        if re.fullmatch(
+            r"(?:(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?"
+            r"|0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)[pP][+-]?\d+)[hH]",
+            value,
+        ):
             # A half literal keeps its type: `h * 0.5h` is half arithmetic, `h * 0.5` float (MSL section 2.1).
             return f"float16({value[:-1]})"
         if re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|0[bB][01]+|\d+)[uUlL]*", value):

@@ -15,6 +15,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLCooperativeMatrixError,
     OpenGLSoftwareSubgroupError,
 )
+from tests.cooperative_matrix_parsing import keeping_untyped_cooperative_matrices
 from tests.test_translator.test_directx_cooperative_matrix import (
     MATRIX,
     _project_request,
@@ -118,11 +119,11 @@ def test_matrix_checks_transitive_helper_control_flow(tmp_path):
     ],
 )
 def test_matrix_rejects_invalid_operands(arguments, reason):
+    # The parser refuses an operand without a contract; the generator checks the tree it is given as well.
+    with keeping_untyped_cooperative_matrices():
+        tree = parse(_source(f"cooperative_matrix_multiply_accumulate({arguments});"))
     with pytest.raises(OpenGLCooperativeMatrixError) as error:
-        _codegen().generate_stage(
-            parse(_source(f"cooperative_matrix_multiply_accumulate({arguments});")),
-            "compute",
-        )
+        _codegen().generate_stage(tree, "compute")
     assert error.value.reason == reason
 
 
