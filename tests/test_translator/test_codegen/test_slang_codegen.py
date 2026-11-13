@@ -626,7 +626,7 @@ def test_vertex_position_and_point_size_outputs_rewrite_to_slang_output_struct()
 
     assert "struct CGLVSMainOutput" in generated_code
     assert "float4 cgl_Position : SV_Position;" in generated_code
-    assert "float cgl_PointSize : PSIZE;" in generated_code
+    assert "float cgl_PointSize : SV_PointSize;" in generated_code
     assert "CGLVSMainOutput main()" in generated_code
     assert "cgl_Output.cgl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
     assert "cgl_Output.cgl_PointSize = 4.0;" in generated_code
