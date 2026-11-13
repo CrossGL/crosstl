@@ -4,6 +4,10 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ## [Unreleased]
 
+### Fixed
+
+- HLSL output declares a 1D shadow texture, which HLSL input imports from a `Texture1D` or `Texture1DArray` used only with `SampleCmp`, `SampleCmpLevel`, `SampleCmpLevelZero` or `SampleCmpGrad`, as `Texture1D` or `Texture1DArray` again. The round trip used to fail with `ValueError: DirectX texture operation 'textureCompare' requires a declared texture or image resource argument` (#2639, #2640, #2641).
+
 ---
 
 ## [3.7.0] - 2026-11-13
