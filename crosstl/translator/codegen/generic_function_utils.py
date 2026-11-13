@@ -715,7 +715,7 @@ def _call_argument_type_accepts_expected(generator, expected_type, actual_type):
 def _generic_function_candidate_call_match(
     generator, func, func_name, args, explicit_types=None
 ):
-    generic_params = generic_function_parameters(func)
+    generic_params = generic_function_parameters(func)  # collect
     if not generic_params:
         return None
 
@@ -740,6 +740,19 @@ def _generic_function_candidate_call_match(
         if explicit_substitutions is not None:
             substitutions.update(explicit_substitutions)
         else:
+            # When ``_explicit_generic_call_parts`` could not read leading
+            # arguments as type parameters for *this* overload (because the
+            # total argument count does not equal this overload's parameter
+            # count plus its generic-parameter count), check whether those
+            # leading arguments look like type names.  If they do, the call
+            # was written as an overloaded explicit generic call — e.g.
+            # ``sel(Foo, f)`` targeting a one-parameter overload — and this
+            # overload (which has more value parameters) must not consume
+            # ``Foo`` as a plain value argument.
+            if _call_args_have_leading_type_arguments(
+                generator, generic_params, call_args
+            ):
+                return None
             value_args = call_args
 
     # A generic overload matches a call only when the argument count lies
@@ -902,6 +915,24 @@ def _explicit_generic_call_parts(generator, generic_params, param_list, args):
         )
 
     return substitutions, args[generic_count:]
+
+
+def _call_args_have_leading_type_arguments(generator, generic_params, args):
+    """Return ``True`` when the leading ``len(generic_params)`` args are type names.
+
+    Used to detect ``sel(Foo, f)`` as an overloaded explicit generic call when
+    the total argument count does not match this particular overload's expected
+    count (value parameters + generic parameters).  Returns ``False`` when
+    there are no generic parameters, when the argument list is too short, or
+    when any leading argument is not a known type name.
+    """
+    generic_count = len(generic_params)
+    if generic_count == 0 or len(args) < generic_count:
+        return False
+    for arg in args[:generic_count]:
+        if _type_argument_name(generator, arg) is None:
+            return False
+    return True
 
 
 def generate_numeric_trait_method_call(generator, func_expr, args):
