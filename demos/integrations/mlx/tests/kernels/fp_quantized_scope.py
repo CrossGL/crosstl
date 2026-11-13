@@ -23,21 +23,20 @@ GATE_ENTRY_COUNTS = {
     "qmvQuad": 36,
     # test_current_fp_quantized_qmv_wide.py: fp_qmv_wide.
     "qmvWide": 72,
+    # test_current_fp_quantized_qvm_split_k.py: fp_qvm_split_k.
+    "qvmSplitK": 18,
 }
 
 # Kernels of fp_quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
     "fp_qmm_n",
     "fp_gather_qmm_n",
-    "fp_qvm_split_k",
     "fp_qmm_t_splitk",
     "fp_gather_qmm_t",
     "fp_qmm_t",
     "fp_gather_qmm_rhs",
 )
-EXCLUDED_REASON = (
-    "the split-K vector-matrix and the matrix-matrix kernels are not gated yet"
-)
+EXCLUDED_REASON = "the matrix-matrix kernels are not gated yet"
 
 
 def shared_scope(gate):

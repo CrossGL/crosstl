@@ -284,18 +284,18 @@
     "qvmGateEntryCount": 54,
     "qmvQuadGateEntryCount": 36,
     "qmvWideGateEntryCount": 72,
+    "qvmSplitKGateEntryCount": 18,
     "excludedEntries": {
       "kernels": [
         "fp_qmm_n",
         "fp_gather_qmm_n",
-        "fp_qvm_split_k",
         "fp_qmm_t_splitk",
         "fp_gather_qmm_t",
         "fp_qmm_t",
         "fp_gather_qmm_rhs"
       ],
-      "count": 200,
-      "reason": "the split-K vector-matrix and the matrix-matrix kernels are not gated yet"
+      "count": 182,
+      "reason": "the matrix-matrix kernels are not gated yet"
     },
     "runtimeCoveredEntryCount": 66,
     "artifactCountByTarget": 66,
