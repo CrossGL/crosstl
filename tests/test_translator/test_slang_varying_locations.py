@@ -181,7 +181,27 @@ void main() { uv = pos.xy; gl_Position = vec4(pos, 1.0); gl_PointSize = 2.0; }
 """
 
 
-def test_unnumbered_user_semantic_takes_a_free_location(tmp_path):
+CGL_FOG = """
+shader main {
+    struct VSOut {
+        vec4 position @gl_Position;
+        vec2 uv @location(0);
+        float fog @FOG;
+    }
+    vertex {
+        VSOut main(vec3 p @location(0)) {
+            VSOut o;
+            o.position = vec4(p, 1.0);
+            o.uv = p.xy;
+            o.fog = p.x;
+            return o;
+        }
+    }
+}
+"""
+
+
+def test_point_size_is_a_system_value_without_a_location(tmp_path):
     # gl_PointSize maps to SV_PointSize (a system value with BuiltIn PointSize in SPIR-V),
     # so it correctly gets no vk::location. uv keeps its explicit location 0.
     code = _flat(_slang(tmp_path, GLSL_POINT_SIZE, ".vert"))
@@ -193,6 +213,18 @@ def test_unnumbered_user_semantic_takes_a_free_location(tmp_path):
     )
     assert _spirv_locations(spirv)["uv"] == 0
     assert "BuiltIn PointSize" in spirv, spirv
+
+
+def test_unnumbered_user_semantic_takes_a_free_location(tmp_path):
+    # FOG is an unnumbered user semantic; with uv pinned at location 0, fog takes the next free slot (1).
+    code = _flat(_slang(tmp_path, CGL_FOG, ".cgl"))
+    assert "[[vk::location(1)]] float fog : FOG;" in code, code
+    assert "[[vk::location(0)]] float2 uv : TEXCOORD0;" in code, code
+    spirv = _slangc(
+        tmp_path, _slang(tmp_path, CGL_FOG, ".cgl"), "vertex", "spirv-asm"
+    )
+    assert _spirv_locations(spirv)["fog"] == 1
+    assert _spirv_locations(spirv)["uv"] == 0
 
 
 GLSL_INTEGER_OUTPUT = """#version 450
