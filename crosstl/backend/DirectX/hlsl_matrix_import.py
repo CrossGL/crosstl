@@ -471,7 +471,11 @@ class HLSLMatrixImportMixin:
             and value == 0
         ):
             return f"{target}({rendered})"
-        if raw_type not in _SCALAR_TYPES and not isinstance(value, (int, float, bool)):
+        if (
+            raw_type not in _SCALAR_TYPES
+            and not isinstance(value, (int, float, bool))
+            and self.hlsl_value_kind(value) != "scalar"
+        ):
             return self.refuse_import(
                 "HLSL matrix conversion from a value whose type the importer cannot determine",
                 f"{target}({rendered})",
@@ -499,16 +503,62 @@ class HLSLMatrixImportMixin:
             return None
         if self.matrix_expression_shape(value) is not None:
             return None
-        if not isinstance(value, (int, float)):
-            try:
-                raw_type = self.resolve_integer_alias(
-                    self.expression_value_raw_type(value)
-                )
-            except ValueError:
-                return None
-            if raw_type not in _SCALAR_TYPES:
-                return None
+        if self.hlsl_value_kind(value) == "other":
+            return None
+        # A value whose type cannot be worked out is refused by the conversion.
         return self.matrix_conversion_expression(shape, value, is_main)
+
+    def hlsl_value_kind(self, expr):
+        """``"scalar"`` or ``"other"`` for a value of known type, ``None`` when the type cannot be told.
+
+        ``expression_value_raw_type`` only types integer arithmetic, so float expressions such as ``x * 2.0 + 1.0``,
+        ``c ? x : 1.0`` and ``sin(x)`` are typed here from their operands.
+        """
+        if isinstance(expr, bool):
+            return "other"
+        if isinstance(expr, (int, float)):
+            return "scalar"
+        if isinstance(expr, CastNode):
+            target = self.resolve_integer_alias(str(expr.target_type).strip())
+            if target in _SCALAR_TYPES:
+                return "scalar"
+        elif isinstance(expr, UnaryOpNode):
+            if _operator_text(expr.op) not in {"++", "--"}:
+                return self.hlsl_value_kind(expr.operand)
+        elif isinstance(expr, BinaryOpNode):
+            if _operator_text(
+                expr.op
+            ) in _ARITHMETIC_OPERATORS | _BITWISE_OPERATORS | _COMPARISON_OPERATORS | {
+                "&&",
+                "||",
+            }:
+                return self._combined_value_kind([expr.left, expr.right])
+        elif isinstance(expr, TernaryOpNode):
+            return self._combined_value_kind(
+                [expr.condition, expr.true_expr, expr.false_expr]
+            )
+        elif isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            name = self.normalize_hlsl_intrinsic_name(expr.name)
+            if name not in self.source_function_names:
+                if name in _SCALAR_TYPES:
+                    return "scalar"
+                if name in _ELEMENTWISE_INTRINSICS:
+                    return self._combined_value_kind(list(expr.args or []))
+        try:
+            raw_type = self.resolve_integer_alias(self.expression_value_raw_type(expr))
+        except ValueError:
+            return None
+        if raw_type is None:
+            return None
+        return "scalar" if raw_type in _SCALAR_TYPES else "other"
+
+    def _combined_value_kind(self, operands):
+        kinds = [self.hlsl_value_kind(operand) for operand in operands]
+        if "other" in kinds:
+            return "other"
+        if None in kinds:
+            return None
+        return "scalar"
 
     def scalar_matrix_assignment_value(self, node, is_main):
         """The splat for ``m = scalar;``, or ``None`` when ``node`` is anything else."""
@@ -774,6 +824,20 @@ class HLSLMatrixImportMixin:
                 "++",
                 "--",
             } and self.matrix_operand_is_pure(expr.operand)
+        if isinstance(expr, CastNode):
+            return self.matrix_operand_is_pure(expr.expression)
+        if isinstance(expr, TernaryOpNode):
+            return all(
+                self.matrix_operand_is_pure(part)
+                for part in (expr.condition, expr.true_expr, expr.false_expr)
+            )
+        if isinstance(expr, FunctionCallNode) and isinstance(expr.name, str):
+            name = self.normalize_hlsl_intrinsic_name(expr.name)
+            return (
+                name in _ELEMENTWISE_INTRINSICS
+                and name not in self.source_function_names
+                and all(self.matrix_operand_is_pure(arg) for arg in expr.args or [])
+            )
         return False
 
     def matrix_row_setter_name(self, shape):

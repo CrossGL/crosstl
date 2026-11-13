@@ -107,6 +107,38 @@ def test_scalar_stored_to_a_matrix_fills_every_component():
     assert "return mat3(vec3(s), vec3(s), vec3(s));" in output
 
 
+def test_scalar_expressions_are_splatted_like_single_operands():
+    output = to_crossgl("""
+        float x = o[0];
+        float3x3 r = x * 2.0 + 1.0;
+        float3x3 t = id.x > 0 ? x : 1.0;
+        float3x3 c = (float)id.x;
+        float3x3 n = -x;
+        float3x3 s = sin(x);
+        o[1] = r[0][0] + t[1][1] + c[2][2] + n[0][0] + s[1][2];
+    """)
+    assert "mat3 r = mat3(vec3((x * 2.0) + 1.0)," in output
+    assert "mat3 t = mat3(vec3(id.x > 0 ? x : 1.0)," in output
+    assert (
+        "mat3 c = mat3(vec3(float(id.x)), vec3(float(id.x)), vec3(float(id.x)));"
+        in output
+    )
+    assert "mat3 n = mat3(vec3(-x), vec3(-x), vec3(-x));" in output
+    assert "mat3 s = mat3(vec3(sin(x)), vec3(sin(x)), vec3(sin(x)));" in output
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["float3x3 m = x++;", "float3x3 m = f(x);", "float3x3 m = (float)(x++);"],
+)
+def test_scalar_stores_that_cannot_be_repeated_are_refused(statement):
+    with pytest.raises(DirectXImportRefused):
+        to_crossgl(
+            "float x = o[0];\n" + statement + "\no[1] = m[0][0];",
+            "float f(float v) { return v; }\n",
+        )
+
+
 def test_matrix_values_are_not_splatted():
     output = to_crossgl("""
         float3x3 a = (float3x3)1.0;
