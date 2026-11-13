@@ -6,6 +6,7 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ### Fixed
 
+- WGSL output writes HLSL's `f32tof16` and `f16tof32` with `pack2x16float` and `unpack2x16float`: `f32tof16(x)` becomes `pack2x16float(vec2<f32>(x, 0.0))`, which keeps the half in the low 16 bits, and `f16tof32(h)` becomes `unpack2x16float(h).x`, with helpers for vectors. It used to copy both calls into the output, which naga rejects (`no definition in scope for identifier: f32tof16`) (#4407).
 - SPIR-V output counts the `length()` of a buffer view with an offset from the offset on, as GLSL output does: `data + 2` passed to a `buffer float*` or `StructuredBuffer<float>` parameter, or held in a local or a chain of locals, gives the buffer's `OpArrayLength` less the offset, as a signed `int`. It used to apply `OpArrayLength` to the element pointer, which spirv-val rejects (`The Structure's type in OpArrayLength must be a pointer to an OpTypeStruct`). The `length()` of a reinterpreted view, or of an array member of a buffer element, is refused with `BufferLengthUnsupportedError` (`project.translate.spirv-buffer-length-unsupported`) (#3757).
 
 ---
