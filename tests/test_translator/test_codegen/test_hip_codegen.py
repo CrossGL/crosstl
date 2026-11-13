@@ -339,6 +339,90 @@ class TestHipCodeGen:
 
         assert "__global__ void compute_main()" in hip_code
 
+    def test_realtime_clock_builtin_lowers_to_wall_clock64(self):
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                void main() {
+                    uint64_t t = clockRealtimeEXT();
+                    out_buf[0] = t;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "uint64_t t = wall_clock64();" in hip_code
+        assert "clockRealtimeEXT" not in hip_code
+
+    def test_shader_clock_builtins_lower_to_hip_clocks(self):
+        source_code = """
+        shader Probe {
+            uint64_t stamp() { return clockRealtimeEXT(); }
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint64_t* out_buf;
+                buffer uvec2* pair_buf;
+                void main() {
+                    uint64_t t = clockRealtimeEXT();
+                    uint64_t u = clockARB();
+                    uvec2 r = clockRealtime2x32EXT();
+                    uvec2 s = clock2x32ARB();
+                    out_buf[0] = t + stamp() + u;
+                    pair_buf[0] = r + s;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint64_t t = wall_clock64();" in hip_code
+        assert "uint64_t u = clock64();" in hip_code
+        assert "uint2 r = cgl_hip_realtime_clock2x32();" in hip_code
+        assert "uint2 s = cgl_hip_clock2x32();" in hip_code
+        assert "unsigned long long ticks = wall_clock64();" in hip_code
+        assert "unsigned long long ticks = clock64();" in hip_code
+        for name in (
+            "clockRealtimeEXT",
+            "clockARB",
+            "clockRealtime2x32EXT",
+            "clock2x32ARB",
+        ):
+            assert name not in hip_code
+
+    def test_shader_clock_pair_arithmetic_uses_uint2_helpers_for_hip(self):
+        # HIP's uint2 has no operators either: a 2x32 clock read used directly
+        # as an operand goes through the uint2 helpers.
+        source_code = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uvec2* pair_buf;
+                void main() {
+                    pair_buf[0] = clock2x32ARB() + clockRealtime2x32EXT();
+                    pair_buf[1] = clock2x32ARB() * 2u;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+        compact = "".join(hip_code.split())
+
+        assert (
+            "pair_buf[0]=cgl_uint2_add(cgl_hip_clock2x32(),cgl_hip_realtime_clock2x32());"
+            in compact
+        )
+        assert "pair_buf[1]=cgl_uint2_mul_scalar(cgl_hip_clock2x32(),2u);" in compact
+
     def test_non_void_compute_entry_point_lowers_to_void_kernel(self, tmp_path):
         ast = ShaderNode(
             name="NonVoidHipKernel",
@@ -4974,6 +5058,116 @@ class TestHipCodeGen:
         ) not in hip_code
         assert "unsigned int groupY = blockIdx.y;" not in hip_code
         assert "cgl_ray_launch_id().z" not in hip_code
+
+    def test_stage_input_global_invocation_id_reads_as_hip_builtin(self):
+        # CrossGL #4193: the SPIR-V importer writes a compute shader's
+        # gl_GlobalInvocationID as a stage-scope @input variable. HIP has no
+        # such global, so the variable must not be declared as a host global
+        # and its reads must lower to the built-in expression.
+        source_code = """
+        shader main {
+            struct B0 {
+                float fin[];
+            };
+            RWStructuredBuffer<B0> b0 @set(0) @binding(0);
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;
+                void main() {
+                    uint i;
+                    i = gl_GlobalInvocationID[0];
+                    b0[0].fin[i] = b0[0].fin[i] * 2.0;
+                    return;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint3 gl_GlobalInvocationID;" not in hip_code
+        assert "gl_GlobalInvocationID" not in hip_code
+        assert "i = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+        assert "make_uint3(" not in hip_code.split("compute_main()")[1]
+        assert "b0[0].fin[i] = (b0[0].fin[i] * 2.0f);" in hip_code
+
+    def test_compute_builtin_constant_subscripts_read_components(self):
+        # A uint3 built-in has no subscript operator, so a constant subscript
+        # reads the matching component instead of emitting make_uint3(...)[0].
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    uint a = gl_GlobalInvocationID[0];
+                    uint b = gl_GlobalInvocationID[1];
+                    uint c = gl_GlobalInvocationID[2];
+                    uint d = gl_LocalInvocationID[2];
+                    uint3 g = gl_GlobalInvocationID;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "a = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+        assert "b = (blockIdx.y * blockDim.y + threadIdx.y);" in hip_code
+        assert "c = (blockIdx.z * blockDim.z + threadIdx.z);" in hip_code
+        assert "d = threadIdx.z;" in hip_code
+        assert (
+            "g = make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z));"
+        ) in hip_code
+        assert ")[0]" not in hip_code
+        assert ")[1]" not in hip_code
+        assert ")[2]" not in hip_code
+
+    def test_compute_builtin_subscripts_refuse_non_constant_index_and_writes(self):
+        non_constant_source = """
+        shader TestShader {
+            compute {
+                void main(uint i) {
+                    uint a = gl_GlobalInvocationID[i];
+                }
+            }
+        }
+        """
+        with pytest.raises(HipLoweringRefused, match="non-constant index"):
+            HipCodeGen().generate(Parser(Lexer(non_constant_source).tokens).parse())
+
+        write_source = """
+        shader TestShader {
+            compute {
+                void main() {
+                    gl_GlobalInvocationID[0] = 1u;
+                }
+            }
+        }
+        """
+        with pytest.raises(HipLoweringRefused, match="cannot assign to a component"):
+            HipCodeGen().generate(Parser(Lexer(write_source).tokens).parse())
+
+    def test_compute_builtin_subscript_in_an_assigned_index_is_read(self):
+        # The built-in subscript is the index of the assigned element, a read, not the assignment's target.
+        source_code = """
+        shader TestShader {
+            buffer float* outp;
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    outp[gl_GlobalInvocationID[0]] = 1.0;
+                    outp[outp_index(gl_LocalInvocationID[1])] += 2.0;
+                }
+            }
+            uint outp_index(uint i) { return i; }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "outp[(blockIdx.x * blockDim.x + threadIdx.x)] = 1.0f;" in hip_code
+        assert "outp[outp_index(threadIdx.y)] += 2.0f;" in hip_code
 
     def test_hlsl_compute_builtin_parameters_lower_to_hip_expressions(self):
         source_code = """

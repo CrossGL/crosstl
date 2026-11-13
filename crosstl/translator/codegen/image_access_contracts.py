@@ -516,18 +516,20 @@ def texture_resource_dimension_descriptor(
         sampling, "gather_offset", 2
     )
     compare_offset_dimension = _offset_dimension_from_capability(
-        sampling, "compare_offset", 2
+        sampling,
+        "compare_offset",
+        offset_dimension if offset_dimension is not None else 2,
     )
     compare_lod_offset_dimension = _offset_dimension_from_capability(
         sampling,
         "compare_lod_offset",
-        2,
+        offset_dimension if offset_dimension is not None else 2,
         fallback_dimension=compare_offset_dimension,
     )
     compare_grad_offset_dimension = _offset_dimension_from_capability(
         sampling,
         "compare_grad_offset",
-        2,
+        offset_dimension if offset_dimension is not None else 2,
         fallback_dimension=compare_offset_dimension,
     )
     gather_compare_offset_dimension = _offset_dimension_from_capability(
@@ -2074,6 +2076,7 @@ def texture_query_lod_coordinate_swizzle(backend_name, texture_type):
     if backend_name == "GLSL":
         if texture_type in {
             "sampler1DArray",
+            "sampler1DArrayShadow",
             "isampler1DArray",
             "usampler1DArray",
         }:

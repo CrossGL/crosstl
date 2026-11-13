@@ -111,6 +111,7 @@ from .generic_function_utils import (
     raise_unresolved_generic_function_call,
     reject_unresolved_generic_function_call,
 )
+from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
@@ -387,6 +388,8 @@ class HipCodeGen(
         self.hip_function_capture_params = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -746,6 +749,8 @@ class HipCodeGen(
             "atomicCompSwap": "atomicCAS",
             # Synchronization
             "barrier": "__syncthreads",
+            # GL_EXT_shader_realtime_clock's device-scope counter is HIP's constant-rate wall clock.
+            "clockRealtimeEXT": "wall_clock64",
             "groupMemoryBarrier": "__threadfence_block",
             "memoryBarrier": "__threadfence",
             "memoryBarrierShared": "__threadfence_block",
@@ -885,6 +890,8 @@ class HipCodeGen(
         self.helper_functions = {}
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        # Subscripts visited as the index of another subscript: reads, even on an assignment's left side.
+        self.subscript_index_depth = 0
         self.stage_builtin_aliases = {}
         self.stage_builtin_alias_types = {}
         self.current_function_is_kernel_entry = False
@@ -900,6 +907,8 @@ class HipCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             list(iter_function_nodes(node)),
+            collect_constant_and_cbuffer_member_types(self, node),
+            ast=node,
         )
         self.function_return_types.update(
             {
@@ -1808,9 +1817,18 @@ class HipCodeGen(
             for var in global_vars
             if getattr(var, "name", None)
         }
-        for stage in (getattr(node, "stages", {}) or {}).values():
+        for stage_type, stage in (getattr(node, "stages", {}) or {}).items():
+            stage_name = (
+                str(stage_type).split(".")[-1].lower()
+                if hasattr(stage_type, "name")
+                else str(stage_type).lower()
+            )
             for var in getattr(stage, "local_variables", []) or []:
                 if self.is_hip_shared_variable(var):
+                    continue
+                if self.hip_stage_local_builtin_role(stage_name, var) is not None:
+                    # A stage-local input that names a compute built-in is the
+                    # built-in itself, not a variable to declare.
                     continue
                 var_name = getattr(var, "name", None)
                 var_type = self.type_name_string(self.get_variable_node_type(var))
@@ -3194,6 +3212,33 @@ class HipCodeGen(
             return role
         return None
 
+    def hip_stage_local_builtin_role(self, stage_name, var):
+        """Return the compute built-in role for a stage-local input variable.
+
+        A stage-local ``@input`` variable carrying a compute built-in semantic
+        (``uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;``, the
+        shape the SPIR-V importer writes for a GLSL compute shader that reads
+        ``gl_GlobalInvocationID``) is the built-in itself, not a variable to
+        declare: HIP has no such global, and a file-scope declaration would
+        be an uninitialised host global that the kernel must not read. A
+        variable whose name is a compute built-in and which is declared as a
+        stage input is the same built-in even when the semantic spelling is
+        missing.
+        """
+        if stage_name != "compute":
+            return None
+        role = self.hip_compute_builtin_parameter_role(stage_name, var)
+        if role is not None:
+            return role
+        if self.hip_compute_builtin_role_for_name(getattr(var, "name", None)) is None:
+            return None
+        if any(
+            str(getattr(attr, "name", "")).lower() == "input"
+            for attr in getattr(var, "attributes", []) or []
+        ):
+            return self.hip_compute_builtin_role_for_name(var.name)
+        return None
+
     def hip_compute_builtin_expression(self, role, component=None):
         """Return the HIP expression for a CrossGL compute built-in role."""
         local_index = (
@@ -4382,6 +4427,10 @@ class HipCodeGen(
             if integer_bit_call is not None:
                 return integer_bit_call
 
+            shader_clock_call = self.generate_hip_shader_clock_call(func_name, raw_args)
+            if shader_clock_call is not None:
+                return shader_clock_call
+
         if is_user_function:
             args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
@@ -4711,6 +4760,52 @@ class HipCodeGen(
         if self.scalar_component_type(type_name) in {"int", "uint"}:
             return type_name
         return None
+
+    HIP_SHADER_CLOCK_SOURCES = {
+        # GL_ARB_shader_clock reads a per-multiprocessor counter that does not run at a constant rate.
+        "clockARB": "clock64()",
+        "clock2x32ARB": "clock64()",
+        # GL_EXT_shader_realtime_clock reads the device-wide, constant-rate counter.
+        "clockRealtimeEXT": "wall_clock64()",
+        "clockRealtime2x32EXT": "wall_clock64()",
+    }
+
+    # The CrossGL result types, so arithmetic on a 2x32 pair goes through the
+    # uint2 helpers as it does for any other uvec2 value.
+    HIP_SHADER_CLOCK_RESULT_TYPES = {
+        "clockARB": "uint64_t",
+        "clock2x32ARB": "uvec2",
+        "clockRealtimeEXT": "uint64_t",
+        "clockRealtime2x32EXT": "uvec2",
+    }
+
+    def generate_hip_shader_clock_call(self, func_name, raw_args):
+        """The shader clock built-ins; the 2x32 forms return the 64-bit counter as a uint2 (low, high)."""
+        source = self.HIP_SHADER_CLOCK_SOURCES.get(func_name)
+        if source is None:
+            return None
+        if raw_args:
+            raise ValueError(
+                f"HIP shader clock builtin {func_name} requires 0 arguments; "
+                f"got {len(raw_args)}"
+            )
+        if not func_name.endswith("2x32ARB") and not func_name.endswith("2x32EXT"):
+            return source
+        helper_name = (
+            "cgl_hip_clock2x32"
+            if func_name == "clock2x32ARB"
+            else "cgl_hip_realtime_clock2x32"
+        )
+        if helper_name not in self.helper_functions:
+            self.helper_functions[helper_name] = (
+                f"__device__ inline uint2 {helper_name}()\n"
+                "{\n"
+                f"    unsigned long long ticks = {source};\n"
+                "    return make_uint2((unsigned int)ticks, "
+                "(unsigned int)(ticks >> 32));\n"
+                "}"
+            )
+        return f"{helper_name}()"
 
     def require_hip_integer_bit_vector_helper(
         self,
@@ -9205,9 +9300,62 @@ class HipCodeGen(
             diagnostic = self.structured_buffer_element_read_diagnostic(node, "load")
             if diagnostic is not None:
                 return diagnostic
+        builtin_component = self.hip_compute_builtin_index_component(node)
+        if builtin_component is not None:
+            return builtin_component
         array = self.visit(node.array)
-        index = self.visit(node.index)
+        self.subscript_index_depth += 1
+        try:
+            index = self.visit(node.index)
+        finally:
+            self.subscript_index_depth -= 1
         return f"{array}[{index}]"
+
+    def hip_compute_builtin_index_component(self, node):
+        """Return the component expression for a constant subscript of a compute built-in.
+
+        ``gl_GlobalInvocationID[0]`` reads the ``.x`` component: a HIP
+        ``uint3`` has no subscript operator, so the ``make_uint3(...)[0]`` the
+        generic path would emit does not compile. A user symbol with a
+        built-in name shadows the built-in and keeps the generic subscript. A
+        non-constant or out-of-range subscript, a subscript of the scalar
+        local-invocation index, or a write to a built-in component has no
+        faithful HIP lowering and is refused instead.
+        """
+        array_node = getattr(node, "array_expr", getattr(node, "array", None))
+        if not isinstance(array_node, IdentifierNode):
+            return None
+        name = getattr(array_node, "name", None)
+        if name in self.stage_builtin_aliases:
+            role = self.stage_builtin_aliases[name]
+        elif self.source_identifier_shadows_builtin(name):
+            return None
+        else:
+            role = self.hip_compute_builtin_role_for_name(name)
+        if role is None:
+            return None
+        if self.assignment_lhs_depth > 0 and self.subscript_index_depth == 0:
+            raise HipLoweringRefused(
+                [f"cannot assign to a component of compute built-in '{name}' in HIP"]
+            )
+        index_node = getattr(node, "index_expr", getattr(node, "index", None))
+        index = self.literal_int_value(index_node)
+        if index is None or index not in (0, 1, 2):
+            raise HipLoweringRefused(
+                [
+                    (
+                        f"cannot subscript compute built-in '{name}' with a "
+                        "non-constant index in HIP; use .x, .y or .z"
+                    )
+                ]
+            )
+        component = "xyz"[index]
+        expression = self.hip_compute_builtin_expression(role, component)
+        if expression is None:
+            raise HipLoweringRefused(
+                [f"compute built-in '{name}' has no '.{component}' component in HIP"]
+            )
+        return expression
 
     def visit_ArrayLiteralNode(self, node: ArrayLiteralNode) -> str:
         elements = ", ".join(self.visit(element) for element in node.elements)
@@ -10408,6 +10556,8 @@ class HipCodeGen(
                 )
             if func_name == "ReportHit":
                 return "bool"
+            if func_name in self.HIP_SHADER_CLOCK_RESULT_TYPES:
+                return self.HIP_SHADER_CLOCK_RESULT_TYPES[func_name]
             if (
                 func_name in {"inverseSqrt", "rsqrt"}
                 and raw_args

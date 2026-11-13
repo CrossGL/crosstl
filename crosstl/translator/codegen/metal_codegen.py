@@ -2676,7 +2676,12 @@ class MetalCodeGen(
         generic_function_specializations = prepare_generic_function_specializations(
             self,
             all_functions,
-            metal_generic_global_types(self, global_vars),
+            {
+                **getattr(self, "metal_program_scope_constant_types", {}),
+                **getattr(self, "metal_cbuffer_member_types", {}),
+                **metal_generic_global_types(self, global_vars),
+            },
+            ast=ast,
         )
         self.function_return_types.update(
             {
@@ -25336,6 +25341,25 @@ class MetalCodeGen(
             return
 
         texture_name = self.expression_name(args[0]) or str(args[0])
+        shadow_type = self.resource_base_type(arg_type)
+        if shadow_type in {
+            "sampler1DShadow",
+            "sampler1DArrayShadow",
+            "texture1DShadow",
+            "texture1DArrayShadow",
+        }:
+            # Metal has no one-dimensional depth texture: refuse with a
+            # typed diagnostic naming the type instead of the untyped
+            # "requires a declared texture" ValueError below.
+            raise UnsupportedMetalFeatureError(
+                "1d-depth-texture",
+                "Metal has no one-dimensional depth texture for "
+                f"'{texture_name}' of type '{shadow_type}'",
+                missing_capabilities=("metal.1d-depth-texture",),
+                operation=func_name,
+                reason="unsupported-type",
+                source_location=getattr(args[0], "source_location", None),
+            )
         raise ValueError(
             f"Metal texture operation '{func_name}' requires a declared "
             f"texture or image resource argument: {texture_name}"

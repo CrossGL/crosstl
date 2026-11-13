@@ -322,6 +322,7 @@ jobs:
         run: >-
           dotnet build adapted-computesharp/tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
           -c Release -p:CrossTLTrustedCorpusBaseline=true
+          -p:EnforceCodeStyleInBuild=false
           "-p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets"
       - name: Export the test cases and generated HLSL
         run: >-
@@ -410,6 +411,7 @@ jobs:
         run: >-
           dotnet build adapted-computesharp/tests/ComputeSharp.Tests/ComputeSharp.Tests.csproj
           -c Release -p:CrossTLTrustedCorpusBaseline=true
+          -p:EnforceCodeStyleInBuild=false
           "-p:CustomAfterMicrosoftCommonTargets=$GITHUB_WORKSPACE/demos/integrations/computesharp/runtime/Portable.targets"
       - name: Export the test cases and generated HLSL
         run: >-

@@ -81,3 +81,11 @@ def test_hip_function_parameter_qualifier_split_across_lines():
 
     assert "f32 twice(f32 v)" in crossgl
     assert crossgl == generate_crossgl(one_line_source)
+
+
+def test_hip_line_split_qualifiers_at_eof_without_crash():
+    # The qualifier scan used to read past the last token when blanks followed the line break (#4371).
+    def parse_type(source):
+        return HipParser(HipLexer(source).tokenize()).parse_type()
+
+    assert parse_type("const\n ") == parse_type("const\n")
