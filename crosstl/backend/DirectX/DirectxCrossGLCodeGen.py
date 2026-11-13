@@ -233,6 +233,7 @@ class HLSLToCrossGLConverter(
         self.hlsl_static_const_initializers = {}
         self.constant_initializer_depth = 0
         self.function_return_types = {}
+        self.current_function_return_type = None
         self.function_overloads = {}
         self.source_function_names = set()
         self.source_functions = {}
@@ -4510,7 +4511,10 @@ class HLSLToCrossGLConverter(
             f"{return_type} "
             f"{function_name}({params}){semantic}{stage_entry_attribute} {{\n"
         )
+        previous_return_type = self.current_function_return_type
+        self.current_function_return_type = func.return_type
         code += self.generate_function_body(func.body, indent=indent + 1)
+        self.current_function_return_type = previous_return_type
         code += "    " * indent + "}\n\n"
         self.current_variable_types = previous_variable_types
         self.current_resource_array_dims = previous_resource_array_dims
@@ -4657,7 +4661,12 @@ class HLSLToCrossGLConverter(
                 if stmt.value is None:
                     code += "return;\n"
                 elif not is_main:
-                    code += f"return {self.generate_expression(stmt.value, is_main)};\n"
+                    value = self.generate_expression(
+                        stmt.value,
+                        is_main,
+                        expected_type=self.current_function_return_type,
+                    )
+                    code += f"return {value};\n"
             elif isinstance(stmt, ForNode):
                 code += self.generate_for_loop(stmt, indent, is_main)
             elif isinstance(stmt, WhileNode):
@@ -5360,13 +5369,21 @@ class HLSLToCrossGLConverter(
         if matrix_assignment is not None:
             return matrix_assignment
         lhs = self.generate_expression(node.left, is_main)
-        rhs = self.generate_expression(node.right, is_main)
-        rhs = self.truncated_assignment_value(node, rhs)
+        rhs = self.scalar_matrix_assignment_value(node, is_main)
+        if rhs is None:
+            rhs = self.generate_expression(node.right, is_main)
+            rhs = self.truncated_assignment_value(node, rhs)
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
     def generate_expression(self, expr, is_main=False, expected_type=None):
         """Render a DirectX backend expression node as CrossGL syntax."""
+        if expected_type is not None:
+            splat = self.scalar_matrix_splat_expression(
+                self.hlsl_matrix_shape(expected_type), expr, is_main
+            )
+            if splat is not None:
+                return splat
         if isinstance(expr, str):
             receiver_member = self.struct_method_context_identifier(expr)
             if receiver_member is not None:
@@ -5403,8 +5420,10 @@ class HLSLToCrossGLConverter(
             if matrix_assignment is not None:
                 return matrix_assignment
             left = self.generate_expression(expr.left, is_main)
-            right = self.generate_expression(expr.right, is_main)
-            right = self.truncated_assignment_value(expr, right)
+            right = self.scalar_matrix_assignment_value(expr, is_main)
+            if right is None:
+                right = self.generate_expression(expr.right, is_main)
+                right = self.truncated_assignment_value(expr, right)
             op = expr.operator
             return f"{left} {op} {right}"
 
@@ -5519,7 +5538,10 @@ class HLSLToCrossGLConverter(
                 ]
             else:
                 rendered_args = [
-                    self.generate_expression(arg, is_main) for arg in expr.args
+                    self.generate_expression(arg, is_main, expected_type=param_type)
+                    for arg, param_type in zip(
+                        expr.args, self.source_parameter_types(func_name, expr.args)
+                    )
                 ]
             legacy_texture_call = self.legacy_texture_function_call(
                 func_name, expr.args, rendered_args, is_main

@@ -488,6 +488,58 @@ class HLSLMatrixImportMixin:
         columns = ", ".join(f"{column_type}({rendered})" for _ in range(column_count))
         return f"{target}({columns})"
 
+    def scalar_matrix_splat_expression(self, shape, value, is_main):
+        """The splat of a scalar ``value`` stored to a matrix of ``shape``, or ``None`` for any other value.
+
+        HLSL repeats a scalar into every component of the matrix it is stored to, so ``float3x3 m = 1.0;`` is the
+        all-ones matrix. CrossGL reads ``mat3 m = 1.0;`` as a type error and ``mat3(1.0)`` as the identity, so the
+        importer writes the same splat the cast ``(float3x3)v`` gets.
+        """
+        if shape is None or isinstance(value, (bool, InitializerListNode)):
+            return None
+        if self.matrix_expression_shape(value) is not None:
+            return None
+        if not isinstance(value, (int, float)):
+            try:
+                raw_type = self.resolve_integer_alias(
+                    self.expression_value_raw_type(value)
+                )
+            except ValueError:
+                return None
+            if raw_type not in _SCALAR_TYPES:
+                return None
+        return self.matrix_conversion_expression(shape, value, is_main)
+
+    def scalar_matrix_assignment_value(self, node, is_main):
+        """The splat for ``m = scalar;``, or ``None`` when ``node`` is anything else."""
+        if node.operator != "=":
+            return None
+        target = node.left
+        if isinstance(target, MemberAccessNode) and self.matrix_element_members(
+            target.member
+        ):
+            # ``m._m01 = s`` writes one element; the matrix_assignment path owns it.
+            return None
+        shape = self.matrix_expression_shape(target)
+        return self.scalar_matrix_splat_expression(shape, node.right, is_main)
+
+    def source_parameter_types(self, name, args):
+        """Declared parameter types of the one source function ``name(args)`` calls.
+
+        Every entry is ``None`` when the call is not to a source function or the
+        overload set is ambiguous, so callers keep the argument as written.
+        """
+        unknown = [None] * len(args)
+        candidates = [
+            f for f in self.source_functions.get(name, []) if len(f.params) == len(args)
+        ]
+        if not candidates:
+            return unknown
+        signatures = {tuple(p.vtype for p in f.params) for f in candidates}
+        if len(signatures) != 1:
+            return unknown
+        return list(signatures.pop())
+
     def matrix_initializer_expression(self, expected_type, initializer, is_main):
         """A brace initializer of an HLSL matrix lists its rows; render the equal CrossGL constructor."""
         shape = self.hlsl_matrix_shape(expected_type)

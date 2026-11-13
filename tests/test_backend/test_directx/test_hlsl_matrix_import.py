@@ -85,6 +85,43 @@ def test_casts_truncate_matrices_and_splat_scalars():
     assert "mat2 d = mat2(vec2(o[0]), vec2(o[0]));" in output
 
 
+def test_scalar_stored_to_a_matrix_fills_every_component():
+    output = to_crossgl(
+        """
+        float x = o[0];
+        float3x3 a = 1.0;
+        float3x3 b = x;
+        float3x3 m;
+        m = 2.0;
+        o[1] = a[0][0] + b[1][1] + m[2][2] + total(4.0);
+    """,
+        """
+        float total(float3x3 v) { return v[0][0]; }
+        float3x3 filled(float s) { return s; }
+        """,
+    )
+    assert "mat3 a = mat3(vec3(1.0), vec3(1.0), vec3(1.0));" in output
+    assert "mat3 b = mat3(vec3(x), vec3(x), vec3(x));" in output
+    assert "m = mat3(vec3(2.0), vec3(2.0), vec3(2.0));" in output
+    assert "total(mat3(vec3(4.0), vec3(4.0), vec3(4.0)))" in output
+    assert "return mat3(vec3(s), vec3(s), vec3(s));" in output
+
+
+def test_matrix_values_are_not_splatted():
+    output = to_crossgl("""
+        float3x3 a = (float3x3)1.0;
+        float3x3 b = a;
+        float3x3 c;
+        c = b;
+        c *= 2.0;
+        c._m00 = 3.0;
+        o[0] = c[0][0];
+    """)
+    assert "mat3 b = a;" in output
+    assert "c = b;" in output
+    assert "c[0][0] = 3.0;" in output
+
+
 def test_rows_elements_and_swizzles():
     output = to_crossgl("""
         float2x3 m = (float2x3)0;
