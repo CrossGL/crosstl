@@ -20,8 +20,9 @@ encoders bit for bit, the neighbouring-lane shuffle that packs two E2M1 codes
 per byte and the guarded byte writes. Dequantize unpacks random codes,
 including signed zeros and E4M3 subnormals, with E4M3 scales of either sign
 or E8M0 scales. Every word is compared exactly, guards and inputs must be
-unchanged, and Metal also runs the unchanged upstream kernels. The
-matrix-vector and matrix-matrix kernels are outside this gate.
+unchanged, and Metal also runs the unchanged upstream kernels. fp_qmv and
+fp_gather_qmv have their own gate, test_current_fp_quantized_qmv.py; the other
+matrix-vector and the matrix-matrix kernels are outside both.
 """
 
 import functools
@@ -117,14 +118,15 @@ MODES = (
     ("mxfp8", 32, 8, False),
     ("mxfp4", 32, 4, False),
 )
-# Kernels of fp_quantized.metal this gate does not cover.
+# The 54 fp_qmv and fp_gather_qmv entries have their own gate,
+# test_current_fp_quantized_qmv.py.
+QMV_ENTRY_COUNT = 54
+# Kernels of fp_quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
     "fp_qmv_fast",
-    "fp_qmv",
     "fp_qvm",
     "fp_qmm_n",
     "fp_gather_qmv_fast",
-    "fp_gather_qmv",
     "fp_gather_qvm",
     "fp_gather_qmm_n",
     "fp_qmv_quad",
@@ -836,11 +838,13 @@ def _expected_scope():
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
+        "qmvGateEntryCount": QMV_ENTRY_COUNT,
         "excludedEntries": {
             "kernels": list(EXCLUDED_KERNELS),
-            "count": UNIT_ENTRY_COUNT - len(ENTRIES),
+            "count": UNIT_ENTRY_COUNT - len(ENTRIES) - QMV_ENTRY_COUNT,
             "reason": (
-                "the matrix-vector and matrix-matrix kernels are outside this gate"
+                "the fast, quad, wide and split-K matrix-vector, the "
+                "vector-matrix and the matrix-matrix kernels are not gated yet"
             ),
         },
         "runtimeCoveredEntryCount": len(ENTRIES),

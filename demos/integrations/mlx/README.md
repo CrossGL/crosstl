@@ -1927,6 +1927,39 @@ matrix-vector and matrix-matrix kernels are outside this gate. This covers
 36/17,832 entries; it does not run the upstream MLX test suite or redirect the
 MLX host runtime.
 
+`contracts/fp_quantized_qmv.current-tree.translation.json` pins a further 54
+entries of `fp_quantized.metal` and their 162 artifacts: `fp_qmv` with and
+without batching and `fp_gather_qmv`, each with and without a global scale
+(`_hgs`), for the three element types in `nvfp4`, `mxfp8` and `mxfp4`. Their
+`simd_sum` lowers to 32-lane software subgroups on OpenGL and DirectX, the
+global-scale entries select `binary32_division_profile = "rne-flush"` for
+`g / 2688`, and OpenGL is given 5 batched and 7 gather index-range
+preconditions, each reached by some case and shown by the model to name an
+element inside its buffer. Required CI executes 162 dispatches and 6,408
+checked elements per target on Metal, Mesa EGL and Direct3D 12 WARP in the
+`fp-quantized-qmv-0` and `fp-quantized-qmv-1` legs, following
+`quantized.cpp`'s `qmv` and `gather_qmv`: `(32, 2, 1)` threadgroups over a
+`(M, ceil(N / 8), B)` grid, with `K` grown by a group until the host picks
+`fp_qmv` over `fp_qmv_fast` and `qmv_quad`. Without a global scale
+`dispatch_qmv` sends two or more vectors to `qmv_wide`, so those entries run
+one vector. Unbatched entries reach the guarded rows, the early return, the
+moved-back last tile, whole tiles and whole-block and partial lane tails;
+batched and gather entries reach both branches of each
+`adjust_matrix_offsets` overload, and gather's global scale is read per
+expert. Inputs are quarters in [-1, 1], every E2M1 code and E4M3 codes of
+either sign from subnormal to 15, with E4M3 scales from 1/4 to 3.75 for
+`nvfp4` and E8M0 scales from 1/8 to 2 for `mx`: every product is a multiple
+of 2^-f whose magnitudes sum below 2^(24 - f), so only the global scale's
+product and `static_cast<T>` round. A lane-level model of `fp_qmv_impl` must
+reach direct dequantized dot products, and mutated models that give lanes the
+wrong scale, reverse codes, ignore the row, batch or expert offsets, drop the
+tail, the code sign or the global scale are rejected. Every target must match
+the model word for word and leave the guards untouched; on Metal the
+translation must also match the unchanged upstream kernel. The other
+matrix-vector, vector-matrix and matrix-matrix kernels are outside this gate.
+This covers 54/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with
 and without batching and `affine_gather_qmv_fast`, for the same three element
