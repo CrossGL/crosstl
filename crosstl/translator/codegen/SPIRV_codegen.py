@@ -77,6 +77,7 @@ from .array_utils import (
 )
 from .ast_walk import walk_ast_values
 from .bitfield_builtins import BITFIELD_ARITIES, spirv_bitfield_call
+from .buffer_length import BufferLengthUnsupportedError
 from .call_graph import validate_recursion_free
 from .comma_expressions import is_comma_expression, spirv_comma_expression
 from .enum_utils import (
@@ -25907,19 +25908,43 @@ class VulkanSPIRVCodeGen(
         pointer = self.variable_pointer_from_expression(object_expr)
         if pointer is None:
             return None
-        metadata = self.structured_buffer_metadata_for_pointer(pointer)
+        if pointer in self.storage_pointer_reinterpretations:
+            raise BufferLengthUnsupportedError(
+                "spirv",
+                f"cannot determine length() of reinterpreted buffer view '{getattr(object_expr, 'name', object_expr)}'",
+            )
+        offset_alias = self.storage_buffer_pointer_offset_aliases.get(
+            self.storage_buffer_pointer_alias_key(pointer)
+        )
+        base_pointer = (
+            offset_alias.root_pointer if offset_alias is not None else pointer
+        )
+        metadata = self.structured_buffer_metadata_for_pointer(base_pointer)
         if metadata is None or metadata.get("runtime_array_type") is None:
             return None
+        if metadata.get("_access_path") in {"element", "member"}:
+            raise BufferLengthUnsupportedError(
+                "spirv",
+                f"cannot recover base storage block for '{getattr(object_expr, 'name', object_expr)}.length()'",
+            )
         member_index = metadata.get("member_index", 0)
         uint_type = self.register_primitive_type("uint")
         int_type = self.register_primitive_type("int")
         id_value = self.get_id()
         self.emit(
-            f"%{id_value} = OpArrayLength %{uint_type.id} %{pointer.id} {member_index}"
+            f"%{id_value} = OpArrayLength %{uint_type.id} %{base_pointer.id} {member_index}"
         )
         self.value_types[id_value] = uint_type
         length = SpirvId(id_value, uint_type.type)
-        return self.convert_value_to_type(length, int_type)
+        length_int = self.convert_value_to_type(length, int_type)
+        if offset_alias is not None and offset_alias.offset_variable is not None:
+            offset_type = self.variable_value_types[offset_alias.offset_variable.id]
+            offset_val = self.load_from_variable(
+                offset_alias.offset_variable, offset_type
+            )
+            offset_int = self.convert_value_to_type(offset_val, int_type)
+            return self.binary_operation("-", int_type, length_int, offset_int)
+        return length_int
 
     def single_struct_buffer_zero_index_alias(
         self, buffer_pointer: SpirvId, index_expr
