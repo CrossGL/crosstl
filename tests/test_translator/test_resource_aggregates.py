@@ -1511,7 +1511,7 @@ kernel void copy_values(
         )
 
 
-def test_opengl_index_type_error_still_raised_for_proven_negative_index(tmp_path):
+def test_opengl_index_type_error_still_raised_for_unproven_index(tmp_path):
     """The OpenGL index range check is not bypassed for unproven-range indices.
 
     An ``int64_t i`` whose value is not derivable from a ``uint`` builtin still
