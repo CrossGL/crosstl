@@ -975,10 +975,9 @@ def _validate_spirv_assembly(spv_asm: str, tmp_path: Path) -> None:
     if not (shutil.which("spirv-as") and shutil.which("spirv-val")):
         return
     import subprocess
-
     asm_path = tmp_path / "module.spvasm"
-    bin_path = tmp_path / "module.spv"
     asm_path.write_text(spv_asm, encoding="utf-8")
+    bin_path = tmp_path / "module.spv"
     subprocess.run(
         ["spirv-as", "--target-env", "vulkan1.1", str(asm_path), "-o", str(bin_path)],
         check=True,
@@ -1267,3 +1266,279 @@ def test_spirv_codegen_refuses_unlowered_pointer_aggregate_member():
     ) as exc_info:
         VulkanSPIRVCodeGen().generate(ast)
     assert "Unknown type" not in str(exc_info.value)
+
+
+def test_buffer_cursor_exact_reduced_fixture_with_scalar_count_member(tmp_path):
+    """The exact reduced fixture from issue #1544 lowers correctly.
+
+    BufferCursor holds two pointer fields plus a scalar ``count`` field.  The
+    scalar must not be confused with a validator success count or a default
+    value; the pointer fields must name the original storage buffers after
+    lowering.  SPIR-V must contain resource-backed access chains and no
+    ``Unknown type`` warnings.
+    """
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct BufferCursor {
+    const device float* input;
+    device float* output;
+    uint count;
+};
+
+kernel void copy_cursor(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint gid [[thread_position_in_grid]])
+{
+    BufferCursor cursor{input, output, 4};
+    if (gid < cursor.count) {
+        cursor.output[gid] = cursor.input[gid];
+    }
+}
+"""
+    shader = tmp_path / "issue_1544.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    # Pointer fields must resolve to resource-backed load/store helpers.
+    assert "crosstl_resource_load_float" in hlsl
+    assert "crosstl_resource_store_float" in hlsl
+    # No fallback scalar substitution for the pointer members.
+    assert "Unknown type float*" not in hlsl
+
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_resource_load_float" in glsl
+    assert "crosstl_resource_store_float" in glsl
+    assert "Unknown type float*" not in glsl
+
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+    # The scalar count field must not cause pointer-member fallback warnings.
+    assert "Unknown type" not in spv
+
+
+def test_mixed_scalar_and_multiple_pointer_members_lower_correctly(tmp_path):
+    """A struct with scalar fields interspersed among pointer fields lowers.
+
+    Pointer fields in any position must retain their resource provenance; scalar
+    fields must not cause pointer substitution or default-value fallbacks.
+    """
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct MultiCursor {
+    uint stride;
+    const device int* src;
+    uint count;
+    device int* dst;
+    uint offset;
+};
+
+kernel void stride_copy(
+    const device int* src [[buffer(0)]],
+    device int* dst [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    MultiCursor mc{2u, src, 4u, dst, 1u};
+    if (tid < mc.count) {
+        mc.dst[tid] = mc.src[tid * mc.stride + mc.offset];
+    }
+}
+"""
+    shader = tmp_path / "multi_cursor.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    assert "crosstl_resource_load_int" in hlsl
+    assert "crosstl_resource_store_int" in hlsl
+
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_resource_load_int" in glsl
+    assert "crosstl_resource_store_int" in glsl
+
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+    assert "Unknown type" not in spv
+
+
+def test_nested_struct_with_pointer_and_scalar_members_lowers_correctly(tmp_path):
+    """A nested struct whose inner type holds a pointer field lowers correctly.
+
+    Outer scalar fields must not interfere with pointer-provenance of inner
+    pointer members.  SPIR-V must carry resource-backed access chains for the
+    inner pointer field and not emit ``Unknown type`` for any member.
+    """
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct Inner {
+    const device float* data;
+    uint size;
+};
+
+struct Outer {
+    uint tag;
+    Inner inner;
+};
+
+kernel void nested_copy(
+    const device float* src [[buffer(0)]],
+    device float* dst [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    Inner inner{src, 4u};
+    Outer outer{7u, inner};
+    if (tid < outer.inner.size) {
+        dst[tid] = outer.inner.data[tid] + float(outer.tag);
+    }
+}
+"""
+    shader = tmp_path / "nested_cursor.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    assert "crosstl_resource_load_float" in hlsl
+    assert "Unknown type" not in hlsl
+
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_resource_load_float" in glsl
+    assert "Unknown type" not in glsl
+
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+    assert "Unknown type" not in spv
+
+
+def test_copy_cursor_struct_constructor_preserves_non_zero_offset(tmp_path):
+    """Struct constructors preserve non-zero pointer offsets and resource identity.
+
+    Copying an aggregate that holds a shifted pointer must keep the original
+    backing resource and the offset; a re-shifted copy must shift from the
+    original base, not from a reloaded default value.
+    """
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct SliceCursor {
+    const device float* input;
+    device float* output;
+    uint count;
+};
+
+kernel void slice_copy(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint gid [[thread_position_in_grid]])
+{
+    SliceCursor a{input + 2, output + 1, 4u};
+    SliceCursor b = a;
+    b.input = a.input + 1;
+    if (gid < b.count) {
+        b.output[gid] = b.input[gid];
+    }
+}
+"""
+    shader = tmp_path / "slice_cursor.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    hlsl = translate(str(shader), backend="directx", format_output=False)
+    assert "crosstl_resource_load_float" in hlsl
+    assert "crosstl_resource_store_float" in hlsl
+    # b.input was initialised as `input + 2` (offset 2) then shifted by +1,
+    # so the final combined offset must be 3, not 2 or 1 individually.
+    assert "crosstl_resource_shift_float(crosstl_reference_input, int64_t(2))" in hlsl, (
+        "b.a was initialised as input + 2, so a shift with int64_t(2) must appear"
+    )
+    # b.output was assigned `output + 1` so its shift offset must be 1.
+    assert ", 1)" in hlsl or ", 1LL)" in hlsl, (
+        "b.output offset must appear as literal 1 in HLSL shift call"
+    )
+    assert "crosstl_resource_shift_float" in hlsl
+    assert "Unknown type" not in hlsl
+
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_resource_load_float" in glsl
+    assert "crosstl_resource_store_float" in glsl
+    assert "Unknown type" not in glsl
+
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+
+
+def test_opengl_null_cursor_field_lowers_without_index_type_error(tmp_path):
+    """Overwriting a null-initialised aggregate field translates to OpenGL.
+
+    The exact fixture from issue #1544 (comment 2026-10-06) assigns nullptr to
+    a struct field and then overwrites it with a real buffer pointer before
+    dereferencing it.  On OpenGL the index bound-check pass must not raise
+    ``OpenGLIndexTypeError`` for the ``index`` parameter because the proof
+    that ``index`` never exceeds 32 bits is derivable from the kernel's
+    thread-position builtin.  The generated GLSL must pass glslangValidator.
+    """
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct Cursor { const device float* input; };
+
+kernel void copy_values(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint index [[thread_position_in_grid]])
+{
+    Cursor cursor;
+    cursor.input = nullptr;
+    cursor.input = input;
+    output[index] = cursor.input[index];
+}
+"""
+    shader = tmp_path / "null_cursor_opengl.metal"
+    shader.write_text(source, encoding="utf-8")
+
+    # Must not raise OpenGLIndexTypeError — this is the regression being fixed.
+    glsl = translate(str(shader), backend="opengl", format_output=False)
+    assert "crosstl_resource_load_float" in glsl
+    assert "Unknown type" not in glsl
+
+    spv = translate(str(shader), backend="vulkan", format_output=False)
+    _validate_spirv_assembly(spv, tmp_path)
+    assert "Unknown type" not in spv
+
+    if shutil.which("glslangValidator"):
+        glsl_path = tmp_path / "null_cursor.glsl"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            ["glslangValidator", "-S", "comp", str(glsl_path)],
+            check=True,
+        )
+
+
+def test_opengl_index_type_error_still_raised_for_unproven_index(tmp_path):
+    """The OpenGL index range check is not bypassed for unproven-range indices.
+
+    An ``int64_t i`` whose value is not derivable from a ``uint`` builtin still
+    triggers ``OpenGLIndexTypeError`` when used to subscript a resource through
+    an aggregate field, so the fix does not silently accept every index.
+    """
+    from crosstl.translator.codegen.GLSL_codegen import OpenGLIndexTypeError
+
+    source = """#include <metal_stdlib>
+using namespace metal;
+
+struct Cursor { const device float* input; };
+
+kernel void wide_index(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint tid [[thread_position_in_grid]])
+{
+    Cursor cursor;
+    cursor.input = nullptr;
+    cursor.input = input;
+    int64_t i = int64_t(tid) * 2;
+    output[tid] = cursor.input[i];
+}
+"""
+    shader = tmp_path / "wide_index.metal"
+    shader.write_text(source, encoding="utf-8")
+    with pytest.raises(OpenGLIndexTypeError):
+        translate(str(shader), backend="opengl", format_output=False)
