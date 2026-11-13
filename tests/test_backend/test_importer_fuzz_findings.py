@@ -106,6 +106,13 @@ def test_complete_programs_still_parse_to_the_end():
         parser_class(tokens(lexer_class, code)).parse()
 
 
+def test_opencl_unterminated_comment_after_parameter_qualifier_is_rejected(tmp_path):
+    source = tmp_path / "k.cl"
+    source.write_text("__kernel void k(__global /* a\nb\n")
+    error = finishes(lambda: crosstl.translate(str(source), backend="directx"))
+    assert isinstance(error, SyntaxError), repr(error)
+
+
 def test_directx_stray_hash_after_tokens_is_rejected(tmp_path):
     source = tmp_path / "stray.hlsl"
     source.write_text(
