@@ -6351,6 +6351,44 @@ def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():
     assert "shadowMap.SampleCmpLevelZero(compareSampler, uv, depth)" in hlsl
 
 
+def test_codegen_sample_cmp_infers_shadow_1d_textures_for_translator_roundtrip():
+    # Regression test for CrossGL/crosstl #2640 (also #2639, #2641): a
+    # Texture1D/Texture1DArray used only with SampleCmp* is imported as a
+    # 1D shadow texture, and the HLSL generator must recognise the combined
+    # sampler1DShadow/sampler1DArrayShadow resource type.
+    code = textwrap.dedent("""
+        Texture1D<float> shadowLine : register(t0);
+        Texture1DArray<float> shadowLineArray : register(t1);
+        SamplerComparisonState compareSampler : register(s0);
+
+        float4 main(float coord : TEXCOORD0, float2 coordLayer : TEXCOORD1, float depth : TEXCOORD2) : SV_Target {
+            float a = shadowLine.SampleCmp(compareSampler, coord, depth);
+            float b = shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth);
+            return float4(a + b);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "texture1DShadow shadowLine;" in crossgl
+    assert "texture1DArrayShadow shadowLineArray;" in crossgl
+    assert "textureCompare(shadowLine, compareSampler, coord, depth)" in crossgl
+    assert (
+        "textureCompareLod(shadowLineArray, compareSampler, coordLayer, depth, 0.0)"
+        in crossgl
+    )
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "Texture1D shadowLine" in hlsl
+    assert "Texture1DArray shadowLineArray" in hlsl
+    assert "SamplerComparisonState compareSampler" in hlsl
+    assert "shadowLine.SampleCmp(compareSampler, coord, depth)" in hlsl
+    assert (
+        "shadowLineArray.SampleCmpLevelZero(compareSampler, coordLayer, depth)" in hlsl
+    )
+
+
 def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     code = textwrap.dedent("""
         Texture2DArray<float> shadowArray : register(t0);
