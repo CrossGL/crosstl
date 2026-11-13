@@ -27,11 +27,12 @@ GATE_ENTRY_COUNTS = {
     "qvmSplitK": 18,
     # test_current_fp_quantized_qmm_t.py: fp_qmm_t.
     "qmmT": 38,
+    # test_current_fp_quantized_qmm_n.py: fp_qmm_n.
+    "qmmN": 36,
 }
 
 # Kernels of fp_quantized.metal no gate covers yet.
 EXCLUDED_KERNELS = (
-    "fp_qmm_n",
     "fp_gather_qmm_n",
     "fp_qmm_t_splitk",
     "fp_gather_qmm_t",

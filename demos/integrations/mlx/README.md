@@ -2147,9 +2147,45 @@ scales or activations, ignore a tile offset, transpose the weight tile, store
 whole tiles, ignore the batch offsets, drop the tail or keep its activations
 past `K`, or drop or move the global scale to the sums are rejected. Every
 target must match the model word for word and leave the guards untouched; on
-Metal the translation must also match the unchanged upstream kernel. The
-other matrix-matrix kernels are not gated yet. This covers 38/17,832 entries;
-it does not run the upstream MLX test suite or redirect the MLX host runtime.
+Metal the translation must also match the unchanged upstream kernel. This
+covers 38/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
+
+`contracts/fp_quantized_qmm_n.current-tree.translation.json` pins a further 36
+entries of `fp_quantized.metal` and their 108 artifacts: `fp_qmm_n` with and
+without batching, each with its `_hgs` twin, for the three element types in
+`nvfp4`, `mxfp8` and `mxfp4`. Without transposition the vector limit is 4
+and there is no split-K route, so for `M >= 4` `QuantizedMatmul` calls `qmm`,
+which has no NAX kernel for the fp modes without transposition and
+dispatches `fp_qmm_n` over `(32, 2, 2)` threadgroups and a
+`(ceil(N / 32), ceil(M / 32), B)` grid. `fp_qmm_n` passes `fp_qmm_n_impl` no
+global scale, so an `_hgs` twin computes what its plain entry does, and `qmm`
+takes a global scale only with transposed weights, so the host dispatches
+only the plain entries. The entries run in the `fp-quantized-qmm-0` and
+`fp-quantized-qmm-1` legs beside `fp_qmm_t`, with its options and the
+`fp_qvm` gate's inputs. Per block of 32 reduction rows a four-element
+`BlockLoader` copies the activations and the row-reducing fp
+`QuantizedBlockLoader` dequantizes 32 weight rows, one scale per thread's
+eight codes, rounding each weight to the element type; a `K` that is not a
+multiple of 32 ends in a pass over the remaining rows. Groups of 16 let `N`
+end in a tile of 16 columns, whose weight loads bound only rows: the threads
+past `N` dequantize the next row's first bytes and scale, or the guards after
+the last row, into columns `store_result_safe` never writes. The cases reach
+whole and partial row tiles, whole blocks and a last pass of `K`, and, for
+`nvfp4`, whole and partial column tiles, with and without batching. A
+tile-level model replays both loaders, the last pass and `BlockMMA`'s
+float32 fragment products, must reach direct dot products of the dequantized
+weights and store every output once, and records the reads past `N` apart
+from the in-row ones. Mutated models that reverse a byte's codes, drop the
+sign bit, give every thread its row's first group, ignore the column tile's
+group offset, keep the first block's scales or activations, step the scales
+one group per block, drop or unmask the last pass, ignore a tile offset,
+transpose the weight tile, store whole tiles or ignore the batch offsets are
+rejected. Every target must match the model word for word and leave the
+guards untouched; on Metal the translation must also match the unchanged
+upstream kernel. The other matrix-matrix kernels are not gated yet. This
+covers 36/17,832 entries; it does not run the upstream MLX test suite or
+redirect the MLX host runtime.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162
 entries of `quantized.metal` and their 486 artifacts: `affine_qmv_fast` with
