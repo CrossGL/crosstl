@@ -2073,8 +2073,42 @@ stream the tile's first vector for every vector, ignore each lane's row,
 sum all 32 lanes, store the clamped rows or vectors, or ignore the batch
 offsets are rejected. Every target must match the model word for word and
 leave the guards untouched; on Metal the translation must also match the
-unchanged upstream kernel. The split-K vector-matrix and the matrix-matrix
-kernels are not gated yet. This covers 72/17,832 entries; it does not run the
+unchanged upstream kernel. This covers 72/17,832 entries; it does not run the
+upstream MLX test suite or redirect the MLX host runtime.
+
+`contracts/fp_quantized_qvm_split_k.current-tree.translation.json` pins a
+further 18 entries of `fp_quantized.metal` and their 54 artifacts:
+`fp_qvm_split_k` with `split_k` 8 and 32 for the three element types in
+`nvfp4`, `mxfp8` and `mxfp4`. `QuantizedMatmul` sends fewer than four vectors
+with `K` of 1,024 or more against weights that are not transposed to
+`qvm_split_k`, which splits `K` into `split_k` parts of
+`split_D = ceil(K / split_k)` rows, the last of
+`final_block_size = K - (split_k - 1) * split_D`, adds a `split_k` batch
+dimension to the activation, weight and scale views, and writes each part's
+partial products to an intermediate that a reduction sums. The fp modes have
+no biases, so the host binds the kernel's fourteen buffers in declaration
+order. The entries share the `fp_qmv` gate's target options, index-range
+preconditions, inputs and exactness argument, and run in the same
+`fp-quantized-qmv-0` and `fp-quantized-qmv-1` legs, over `(32, 2, 1)`
+threadgroups and an `(M, ceil(N / (2 * group_size)), B * split_k)` grid. The
+kernel runs `fp_qvm_impl` without a global scale, with the part's size as
+`in_vec_size` and the whole `K` as the activation row stride, so the `fp_qvm`
+gate's lane-level model replays it part by part. Cases bind the host's own
+views and reach parts of whole blocks, of blocks and a last pass, and a final
+part of another size, with one or two rows, stacked and broadcast weights and
+a second simdgroup past `N`. E2M1 entries also run parts below one block,
+where the lanes past the part decode a record they never loaded, times zeros;
+an E4M3 pattern may be NaN, so `mxfp8` entries skip those cases, and the host
+never sends such parts, since `K` of 1,024 or more gives every part at least
+121 rows. `quantized.cpp` picks `split_k` 32 only above `K = 8,192`; those
+entries run the same formulas at smaller `K`, which the kernel cannot tell
+apart. A lane-level model must reach direct dequantized partial products and
+store every output once, and mutated models that give every part the final part's size, step activation
+rows by the part's size instead of `K`, or carry any of the `fp_qvm` gate's
+defects that apply without a global scale are rejected. Every target must
+match the model word for word and leave the guards untouched; on Metal the
+translation must also match the unchanged upstream kernel. The matrix-matrix
+kernels are not gated yet. This covers 18/17,832 entries; it does not run the
 upstream MLX test suite or redirect the MLX host runtime.
 
 `contracts/quantized_qmv.current-tree.translation.json` pins a further 162

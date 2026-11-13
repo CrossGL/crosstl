@@ -391,9 +391,14 @@ def _lane(context, lane, out_col, mutation):
     return result, reads
 
 
-def _simulate(entry, data, mutation=None):
-    """fp_qvm_impl lane by lane; returns outputs, stores, reads, offsets, paths."""
-    info = INFO[entry]
+def _simulate(entry, data, mutation=None, info=None, sizes=None):
+    """fp_qvm_impl lane by lane; returns outputs, stores, reads, offsets, paths.
+
+    ``sizes(storage, z, mutation)`` gives ``tid.z``'s ``in_vec_size`` and
+    ``in_vec_stride``, which fp_qvm and fp_gather_qvm pass as ``in_vec_size``
+    twice.
+    """
+    info = info or INFO[entry]
     geometry = _geometry(info["bits"], info["groupSize"])
     storage = {name: values for name, (_, values) in data["values"].items()}
     in_vec_size, out_vec_size = storage["in_vec_size"][0], storage["out_vec_size"][0]
@@ -417,6 +422,9 @@ def _simulate(entry, data, mutation=None):
         if info["variant"] != "batch_0":
             bases = _adjust(info, storage, z, mutation, records)
         expert, y_base = bases[3], bases[4]
+        size = stride = in_vec_size
+        if sizes is not None:
+            size, stride = sizes(storage, z, mutation)
         for tid_x in range(grid_x):
             context = {
                 "info": info,
@@ -425,10 +433,9 @@ def _simulate(entry, data, mutation=None):
                 "byte": byte,
                 "bases": bases[:3],
                 "tid_x": tid_x,
-                # fp_qvm and fp_gather_qvm pass in_vec_size as in_vec_stride.
-                "stride": in_vec_size,
+                "stride": stride,
                 "sizes": (
-                    in_vec_size,
+                    size,
                     out_vec_size * geometry["bytesPerPack"] // geometry["packFactor"],
                     out_vec_size // info["groupSize"],
                 ),
@@ -454,11 +461,11 @@ def _simulate(entry, data, mutation=None):
                         result, tail = _lane(context, lane, out_col, mutation)
                         lanes.append(result)
                         tails += tail
-                    if in_vec_size % BLOCK == 0:
+                    if size % BLOCK == 0:
                         paths.add("whole")
                     else:
-                        paths.add("blocks-tail" if in_vec_size > BLOCK else "tail-only")
-                        assert tails == in_vec_size % BLOCK or mutation == "tail"
+                        paths.add("blocks-tail" if size > BLOCK else "tail-only")
+                        assert tails == size % BLOCK or mutation == "tail"
                     for column in range(columns):
                         # simd_sum: exact in any order; lane 0 stores
                         # static_cast<T>(sum * inv_scale_enc).
