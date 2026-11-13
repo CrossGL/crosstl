@@ -19965,6 +19965,20 @@ __global__ void probe(float* outp) {
             "Never",
             "'g'",
         ),
+        (
+            "struct Later;\nstruct Outer { struct Later n; float k; };\n"
+            "struct Later { float x; };\n"
+            "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
+            "Later",
+            "'n' in 'Outer'",
+        ),
+        (
+            "struct Never;\n"
+            "__device__ float use(struct Never n) { return 1.0f; }\n"
+            "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
+            "Never",
+            "'n' in 'use'",
+        ),
     ],
 )
 def test_hip_record_without_a_body_is_refused_when_used_by_value(
@@ -19985,11 +19999,12 @@ def test_hip_record_without_a_body_is_refused_when_used_by_value(
     [
         "struct Never;\nstruct Outer { struct Never* n; float k; };\n"
         "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
-        "struct Later;\nstruct Outer { struct Later n; float k; };\n"
-        "struct Later { float x; };\n"
+        "struct Later;\nstruct Later { float x; };\nstruct Outer { struct Later n; float k; };\n"
         "__global__ void probe(float* outp) { Outer o; o.k = 3.0f; outp[0] = o.k; }\n",
         "struct Never;\n"
         "__global__ void probe(float* outp, struct Never* p) { outp[0] = 1.0f; }\n",
+        "struct Never;\n__device__ float use(struct Never n);\n"
+        "__global__ void probe(float* outp) { outp[0] = 1.0f; }\n",
     ],
 )
 def test_hip_record_without_a_body_stays_accepted_behind_a_pointer_or_once_completed(

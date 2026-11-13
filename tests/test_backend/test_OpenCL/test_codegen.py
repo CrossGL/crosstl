@@ -1765,28 +1765,60 @@ __kernel void probe(__global float* outp) {
 
 
 @pytest.mark.parametrize(
-    "source, declared",
+    "source, record, declared",
     [
         (
             "struct Never;\nstruct Outer { struct Never n; float k; };\n"
             "__kernel void probe(__global float* outp) {\n"
             "    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;\n}\n",
+            "Never",
             "'n' in 'Outer'",
         ),
         (
             "struct Never;\n"
             "__kernel void probe(__global float* outp) {\n"
             "    struct Never v; outp[get_global_id(0)] = 1.0f;\n}\n",
+            "Never",
             "'v' in 'probe'",
+        ),
+        (
+            "struct Later;\nstruct Outer { struct Later n; float k; };\n"
+            "struct Later { float x; };\n"
+            "__kernel void probe(__global float* outp) {\n"
+            "    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;\n}\n",
+            "Later",
+            "'n' in 'Outer'",
+        ),
+        (
+            "struct Never;\nfloat use(struct Never n) { return 1.0f; }\n"
+            "__kernel void probe(__global float* outp) { outp[0] = 1.0f; }\n",
+            "Never",
+            "'n' in 'use'",
         ),
     ],
 )
-def test_opencl_record_without_a_body_is_refused_when_used_by_value(source, declared):
+def test_opencl_record_without_a_body_is_refused_when_used_by_value(
+    source, record, declared
+):
     with pytest.raises(OpenCLRecordSemanticError) as raised:
         generate_crossgl(source)
 
-    assert raised.value.record_name == "Never"
+    assert raised.value.record_name == record
     assert declared in str(raised.value)
+
+
+def test_opencl_record_completed_before_its_use_is_accepted():
+    crossgl = generate_crossgl("""
+struct Later;
+struct Later { float x; };
+struct Outer { struct Later n; float k; };
+float use(struct Later n);
+__kernel void probe(__global float* outp) {
+    struct Outer o; o.k = 3.0f; outp[get_global_id(0)] = o.k;
+}
+""")
+
+    assert "struct Outer {" in crossgl
 
 
 def test_opencl_record_without_a_body_stays_accepted_behind_a_pointer():

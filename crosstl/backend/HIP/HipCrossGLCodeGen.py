@@ -705,36 +705,24 @@ class HipToCrossGLConverter(ImportRefusalMixin):
                 self.register_function_return_nodes(statement)
 
     def refuse_incomplete_record_values(self, ast_node):
-        """Refuse a record that is declared without a body, never completed and used by value.
+        """Refuse a by-value use of a record that is declared without a body but not yet completed.
 
-        ``struct Never;`` followed by a ``struct Never n;`` member, local or global has no size,
-        and the C family compilers reject it. A pointer or reference to it is fine.
+        A record is incomplete from ``struct Never;`` until its closing brace (C11 6.7.2.3), so a member,
+        local, global or function parameter of that type that comes before the body, or in a program that
+        never gives one, has no size and the C family compilers reject it. A pointer or reference to it, and
+        the parameter of a prototype, are fine.
         """
-        bodiless = {}
+        forward_declared = set()
         completed = set()
-        stack = [ast_node]
-        while stack:
-            current = stack.pop()
-            if isinstance(current, (list, tuple)):
-                stack.extend(current)
-                continue
-            if not hasattr(current, "__dict__") or isinstance(
-                current, (str, int, float, bool)
-            ):
-                continue
-            if isinstance(current, StructNode) and current.name:
-                if getattr(current, "has_body", True):
-                    completed.add(current.name)
-                else:
-                    bodiless.setdefault(current.name, current)
-            stack.extend(
-                value
-                for value in vars(current).values()
-                if isinstance(value, (list, tuple)) or hasattr(value, "__dict__")
-            )
-        incomplete = set(bodiless) - completed
-        if not incomplete:
-            return
+        words_to_skip = {
+            "const",
+            "volatile",
+            "struct",
+            "union",
+            "class",
+            "private",
+            "__private",
+        }
 
         def incomplete_record(vtype):
             if not isinstance(vtype, str):
@@ -745,12 +733,17 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             words = [
                 word
                 for word in re.split(r"[\s\[]", vtype.split("[", 1)[0])
-                if word
-                and word not in {"const", "volatile", "struct", "union", "class"}
+                if word and word not in words_to_skip
             ]
-            if len(words) == 1 and words[0] in incomplete:
+            if len(words) == 1 and words[0] in forward_declared - completed:
                 return words[0]
             return None
+
+        def refuse(record, name, owner):
+            context = f"the declaration of '{name}'"
+            if owner:
+                context += f" in '{owner}'"
+            raise self.RECORD_SEMANTIC_ERROR("incomplete record type", record, context)
 
         def visit(current, owner):
             if isinstance(current, (list, tuple)):
@@ -762,23 +755,35 @@ class HipToCrossGLConverter(ImportRefusalMixin):
             ):
                 return
             if isinstance(current, StructNode):
+                name = current.name
+                if not getattr(current, "has_body", True):
+                    if name and name not in completed:
+                        forward_declared.add(name)
+                    return
+                for member in current.members or []:
+                    visit(member, name or owner)
+                if name:
+                    completed.add(name)
+                return
+            if isinstance(current, FunctionNode):
                 owner = current.name or owner
-            elif isinstance(current, FunctionNode):
-                owner = current.name or owner
+                if current.body is not None:
+                    for param in current.params or []:
+                        if isinstance(param, dict):
+                            record = incomplete_record(param.get("type"))
+                            if record is not None:
+                                refuse(record, param.get("name"), owner)
+                visit(current.body, owner)
+                return
             if isinstance(current, VariableNode):
                 record = incomplete_record(current.vtype)
                 if record is not None:
-                    context = f"the declaration of '{current.name}'"
-                    if owner:
-                        context += f" in '{owner}'"
-                    raise self.RECORD_SEMANTIC_ERROR(
-                        "incomplete record type", record, context
-                    )
+                    refuse(record, current.name, owner)
             for value in vars(current).values():
                 if isinstance(value, (list, tuple)) or hasattr(value, "__dict__"):
                     visit(value, owner)
 
-        visit(ast_node, None)
+        visit(getattr(ast_node, "statements", ast_node), None)
 
     def materialized_record_type_names(self):
         return {
