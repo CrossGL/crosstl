@@ -32097,6 +32097,12 @@ class VulkanSPIRVCodeGen(
         for flag in self.stage_layout_flag_names(stage, "in"):
             if flag in mode_map:
                 return mode_map[flag]
+        # A Geometry entry point declares exactly one input primitive mode (SPIR-V specification, Execution
+        # Mode); writing InputPoints for a stage that states none would read its vertices as points.
+        self.refuse_lowering(
+            "SPIR-V geometry stage states no input primitive: it needs points, lines, lines_adjacency, "
+            "triangles or triangles_adjacency as a GLSL input layout or a stage attribute"
+        )
         return "InputPoints"
 
     def geometry_output_mode(self, stage) -> str:
@@ -32124,18 +32130,36 @@ class VulkanSPIRVCodeGen(
         for flag in self.stage_layout_flag_names(stage, "out"):
             if flag in mode_map:
                 return mode_map[flag]
+        # A Geometry entry point declares exactly one output primitive mode (SPIR-V specification, Execution
+        # Mode); writing OutputPoints for a stage that states none would draw its strips as points.
+        self.refuse_lowering(
+            "SPIR-V geometry stage states no output primitive: it needs points, line_strip or triangle_strip "
+            "as a GLSL output layout or an outputtopology attribute"
+        )
         return "OutputPoints"
 
     def emit_geometry_execution_modes(self, function_id: SpirvId, stage):
         """Emit geometry capability and execution modes."""
         self.require_capability("Geometry")
+        vertex_count_names = ("max_vertices", "maxvertexcount")
         max_vertices = self.stage_positive_int_metadata(
             stage,
             "geometry OutputVertices",
-            attribute_names=("max_vertices", "maxvertexcount"),
+            attribute_names=vertex_count_names,
             layout_direction="out",
-            layout_names=("max_vertices", "maxvertexcount"),
+            layout_names=vertex_count_names,
         )
+        if all(
+            self.stage_attribute_value(stage, name) is None
+            for name in vertex_count_names
+        ) and (
+            self.stage_layout_direction_value(stage, "out", vertex_count_names) is None
+        ):
+            # OutputVertices bounds the vertices the stage emits, and a vertex past it is discarded; a stage that
+            # states no bound cannot be given one.
+            self.refuse_lowering(
+                "SPIR-V geometry stage states no max_vertices (or maxvertexcount), which OutputVertices needs"
+            )
         invocations = self.stage_positive_int_metadata(
             stage,
             "geometry Invocations",

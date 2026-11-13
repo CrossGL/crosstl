@@ -167,9 +167,9 @@ def test_site_refusal_without_recorded_refusals_propagates():
 GEOMETRY = "shader S { geometry { void main() { } } }"
 TESSELLATION_CONTROL = "shader S { tessellation_control { void main() { } } }"
 MESH = "shader S { mesh { void main() { SetMeshOutputCounts(1); } } }"
-DUPLICATE_STRUCT = (
-    "shader S { struct A { float x; } struct A { float y; } "
-    "compute { void main() { } } }"
+DUPLICATE_UNIFORM = (
+    "shader S { uniform float A; uniform int A; "
+    "compute { void main() { float b = A; } } }"
 )
 DUPLICATE_SPEC_ID = """
 shader S {
@@ -202,7 +202,7 @@ TRANSLATIONS = [
     ("geometry.cgl", GEOMETRY, "rust", "rust-refused"),
     ("control.cgl", TESSELLATION_CONTROL, "slang", "slang-refused"),
     ("mesh.cgl", MESH, "opengl", "opengl-refused"),
-    ("duplicate.cgl", DUPLICATE_STRUCT, "directx", "target-refused"),
+    ("duplicate.cgl", DUPLICATE_UNIFORM, "directx", "target-refused"),
     ("spec.cgl", DUPLICATE_SPEC_ID, "vulkan", "vulkan-refused"),
     ("constants.cgl", DUPLICATE_FUNCTION_CONSTANT, "metal", "metal-refused"),
     (
