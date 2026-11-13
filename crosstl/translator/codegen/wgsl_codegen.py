@@ -193,7 +193,6 @@ from .wgsl_vector_initializers import (
 from .wgsl_workgroup_locals import WORKGROUP_QUALIFIERS, hoist_workgroup_locals
 from .wgsl_workgroup_size_inputs import lower_workgroup_size_inputs
 
-
 # Component-wise numeric built-in functions whose return type equals the type of
 # their first argument.  These are the WGSL / CrossGL / GLSL / HLSL names whose
 # ``semantic_key`` (lower-case, no punctuation) is listed here.  ``expression_type``
