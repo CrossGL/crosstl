@@ -136,6 +136,7 @@ def test_release_validates_pull_requests_without_publishing():
         assert workflow["jobs"][job]["needs"] == dependency
     for name in (
         "Verify tag belongs to main and matches package version",
+        "Verify changelog entries are in CHANGELOG.md",
         "Verify required main CI succeeded",
     ):
         assert _step(name)["if"] == TAG_ONLY
@@ -147,9 +148,14 @@ def test_release_validates_pull_requests_without_publishing():
         "crosstl/**",
         "pyproject.toml",
         "tools/check_release.py",
+        "tools/changelog.py",
         "tests/test_release.py",
     ):
         assert path in paths
+    assert (
+        _step("Verify changelog entries are in CHANGELOG.md")["run"]
+        == "python tools/changelog.py check --folded"
+    )
 
 
 def test_release_checks_and_publishes_the_same_distributions():

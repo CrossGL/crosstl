@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to CrossTL for people who install and use it, newest first. Internal refactors, test and CI changes are left out; the commit history has them.
+Notable changes to CrossTL for people who install and use it, newest first. Internal refactors, test and CI changes are left out; the commit history has them. Entries for newer changes wait in `changelog.d/` until the next release is prepared.
 
 ## [Unreleased]
 

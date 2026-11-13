@@ -17,6 +17,7 @@ on:
       - ".zenodo.json"
       - "CHANGELOG.md"
       - "tools/check_release.py"
+      - "tools/changelog.py"
       - "tests/test_release.py"
       - ".github/workflows/release.yml"
   workflow_dispatch:
@@ -76,6 +77,10 @@ jobs:
 
           package_version="$(python tools/check_release.py version)"
           test "v${package_version}" = "${GITHUB_REF_NAME}"
+
+      - name: Verify changelog entries are in CHANGELOG.md
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: python tools/changelog.py check --folded
 
       - name: Verify required main CI succeeded
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
