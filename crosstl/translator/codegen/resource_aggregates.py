@@ -2128,8 +2128,7 @@ class _Lowering:
                     node.operator,
                     self.target_type(target_type),
                 )
-                return _call(
-                        self._wrap_index_int64(index, env),
+                    helper,
                     [
                         self.expression(owner, env),
                         _call("int64_t", [self.expression(index, env)]),
@@ -2140,6 +2139,7 @@ class _Lowering:
                         ),
                         *self.resource_arguments(),
                     ],
+                )
                 )
             target = self.expression(node.target, env)
             value = self.expression(
